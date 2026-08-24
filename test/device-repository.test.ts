@@ -64,6 +64,8 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
         jobReconciliation: true,
         notifications: true,
         retailerShadow: true,
+        communityReadOnlyEvidence: true,
+        exactSelectedOfferEvidence: true,
         durableAdapterDiagnostics: true,
         walmartDrawReadOnly: true,
         trackalackerPush: true,
@@ -83,6 +85,8 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
     assert.equal(heartbeat.capabilities.retailerMutation, false);
     assert.equal(heartbeat.capabilities.notifications, true);
     assert.equal(heartbeat.capabilities.retailerShadow, true);
+    assert.equal(heartbeat.capabilities.communityReadOnlyEvidence, true);
+    assert.equal(heartbeat.capabilities.exactSelectedOfferEvidence, true);
     assert.equal(heartbeat.capabilities.durableAdapterDiagnostics, true);
     assert.equal(heartbeat.capabilities.walmartDrawReadOnly, true);
     assert.equal(heartbeat.capabilities.trackalackerPush, true);

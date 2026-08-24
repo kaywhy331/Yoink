@@ -247,6 +247,13 @@ function observerRecipeFixture(options: {
     }
   };
 }
+const selectedOffer = (childOfferKey: string, selectionState = "exact") => ({
+  schemaVersion: 1,
+  selectionState,
+  childOfferKey,
+  attributes: {}
+});
+
 const OBSERVATION = {
   adapterVersion: "target-observer-v1",
   contractVersion: 1,
@@ -263,6 +270,7 @@ const OBSERVATION = {
   addControlActionable: true,
   securityChallenge: false,
   interactiveBlock: "",
+  selectedOffer: selectedOffer("1011483414"),
   url: `${PRODUCT_URL}?private=DO_NOT_SEND`,
   cookie: "DO_NOT_SEND"
 };
@@ -284,7 +292,8 @@ const AMAZON_OBSERVATION = {
   interactiveBlock: "",
   purchaseRouteKind: "amazon_buy_now",
   purchaseRouteReady: true,
-  routeReasonCode: "offer_route_verified"
+  routeReasonCode: "offer_route_verified",
+  selectedOffer: selectedOffer("B0GYTRYV7P")
 };
 const WALMART_OBSERVATION = {
   adapterVersion: "walmart-observer-v4",
@@ -301,7 +310,8 @@ const WALMART_OBSERVATION = {
   fulfillment: "shipping",
   addControlActionable: true,
   securityChallenge: false,
-  interactiveBlock: ""
+  interactiveBlock: "",
+  selectedOffer: selectedOffer("17354421975")
 };
 const BESTBUY_OBSERVATION = {
   adapterVersion: "bestbuy-observer-v4",
@@ -318,7 +328,8 @@ const BESTBUY_OBSERVATION = {
   fulfillment: "shipping",
   addControlActionable: true,
   securityChallenge: false,
-  interactiveBlock: ""
+  interactiveBlock: "",
+  selectedOffer: selectedOffer("6588149")
 };
 const DISNEY_OBSERVATION = {
   adapterVersion: "disney-observer-v1",
@@ -339,7 +350,8 @@ const DISNEY_OBSERVATION = {
   interactiveBlock: "",
   purchaseRouteKind: "none",
   purchaseRouteReady: false,
-  routeReasonCode: "not_applicable"
+  routeReasonCode: "not_applicable",
+  selectedOffer: selectedOffer("409914998395", "listing_only")
 };
 const PBANDAI_OBSERVATION = {
   ...DISNEY_OBSERVATION,
@@ -349,7 +361,8 @@ const PBANDAI_OBSERVATION = {
   canonicalUrl: PBANDAI_PRODUCT_URL,
   availability: "preorder",
   unitPriceCents: 8900,
-  sellerName: "Premium Bandai"
+  sellerName: "Premium Bandai",
+  selectedOffer: selectedOffer("N2884150001")
 };
 const POKEMONCENTER_OBSERVATION = {
   ...DISNEY_OBSERVATION,
@@ -358,7 +371,8 @@ const POKEMONCENTER_OBSERVATION = {
   retailerSku: "10-10320-101",
   canonicalUrl: POKEMONCENTER_PRODUCT_URL,
   unitPriceCents: 2999,
-  sellerName: "Pokémon Center"
+  sellerName: "Pokémon Center",
+  selectedOffer: selectedOffer("10-10320-101")
 };
 const WALMART_DRAW_SCAN = {
   adapterVersion: "walmart-draw-observer-v1",
@@ -953,6 +967,7 @@ function harness(options: HarnessOptions = {}) {
           url: undefined,
           cookie: undefined,
           canonicalUrl: "https://www.target.com/p/-/A-1011483414",
+          selectedOffer: { ...OBSERVATION.selectedOffer, fingerprint: "a".repeat(64) },
           observationState: "actionable_candidate"
         }
       }), { status: 201 });
@@ -973,6 +988,7 @@ function harness(options: HarnessOptions = {}) {
           ...AMAZON_OBSERVATION,
           id: "shadow_observation_amazon_fixture",
           canonicalUrl: "https://www.amazon.com/dp/B0GYTRYV7P",
+          selectedOffer: { ...AMAZON_OBSERVATION.selectedOffer, fingerprint: "b".repeat(64) },
           observationState: "actionable_candidate"
         }
       }), { status: 201 });
@@ -983,6 +999,7 @@ function harness(options: HarnessOptions = {}) {
           ...WALMART_OBSERVATION,
           id: "shadow_observation_walmart_fixture",
           canonicalUrl: "https://www.walmart.com/ip/17354421975",
+          selectedOffer: { ...WALMART_OBSERVATION.selectedOffer, fingerprint: "c".repeat(64) },
           observationState: "actionable_candidate"
         }
       }), { status: 201 });
@@ -993,6 +1010,7 @@ function harness(options: HarnessOptions = {}) {
           ...BESTBUY_OBSERVATION,
           id: "shadow_observation_bestbuy_fixture",
           canonicalUrl: "https://www.bestbuy.com/site/-/6588149.p",
+          selectedOffer: { ...BESTBUY_OBSERVATION.selectedOffer, fingerprint: "d".repeat(64) },
           observationState: "actionable_candidate"
         }
       }), { status: 201 });
@@ -1002,18 +1020,29 @@ function harness(options: HarnessOptions = {}) {
         observation: {
           ...DISNEY_OBSERVATION,
           id: "shadow_observation_disney_fixture",
+          selectedOffer: { ...DISNEY_OBSERVATION.selectedOffer, fingerprint: "e".repeat(64) },
           observationState: "actionable_candidate"
         }
       }), { status: 201 });
     }
     if (url.endsWith("/devices/self/shadow-observations/pbandai")) {
       return new Response(JSON.stringify({
-        observation: { ...PBANDAI_OBSERVATION, id: "shadow_observation_pbandai_fixture", observationState: "actionable_candidate" }
+        observation: {
+          ...PBANDAI_OBSERVATION,
+          id: "shadow_observation_pbandai_fixture",
+          selectedOffer: { ...PBANDAI_OBSERVATION.selectedOffer, fingerprint: "f".repeat(64) },
+          observationState: "actionable_candidate"
+        }
       }), { status: 201 });
     }
     if (url.endsWith("/devices/self/shadow-observations/pokemoncenter")) {
       return new Response(JSON.stringify({
-        observation: { ...POKEMONCENTER_OBSERVATION, id: "shadow_observation_pokemoncenter_fixture", observationState: "actionable_candidate" }
+        observation: {
+          ...POKEMONCENTER_OBSERVATION,
+          id: "shadow_observation_pokemoncenter_fixture",
+          selectedOffer: { ...POKEMONCENTER_OBSERVATION.selectedOffer, fingerprint: "9".repeat(64) },
+          observationState: "actionable_candidate"
+        }
       }), { status: 201 });
     }
     if (url.includes("/devices/self/adapter-diagnostics/")) {

@@ -544,7 +544,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/community/status") {
           json(response, 200, {
-            capable: device.capabilities.communityReadOnlyEvidence,
+            capable: device.capabilities.communityReadOnlyEvidence && device.capabilities.exactSelectedOfferEvidence,
             consents: community.consents(),
             counts: community.counts()
           });
@@ -552,7 +552,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }
         const communityNonceMatch = /^\/api\/v1\/devices\/self\/community\/nonces\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && communityNonceMatch) {
-          if (!device.capabilities.communityReadOnlyEvidence) {
+          if (!device.capabilities.communityReadOnlyEvidence || !device.capabilities.exactSelectedOfferEvidence) {
             throw new Error("Upgrade the Chrome companion before sharing read-only community evidence.");
           }
           const retailerId = communityNonceMatch[1] as SupportedRetailerId;
@@ -561,7 +561,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }
         const communityContributionMatch = /^\/api\/v1\/devices\/self\/community\/contributions\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && communityContributionMatch) {
-          if (!device.capabilities.communityReadOnlyEvidence) {
+          if (!device.capabilities.communityReadOnlyEvidence || !device.capabilities.exactSelectedOfferEvidence) {
             throw new Error("Upgrade the Chrome companion before sharing read-only community evidence.");
           }
           const retailerId = communityContributionMatch[1] as SupportedRetailerId;
@@ -795,6 +795,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           community: {
             privacyVersion: "community-readonly-v1",
             advisoryOnly: true,
+            selectedOfferScopeVersion: 1,
+            unresolvedPublicationEnabled: false,
             consents: community.consents(),
             assertions: community.listRecent(100),
             aggregates: community.aggregates()
@@ -855,6 +857,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             privacyClassifiedOperatorAlerts: true,
             operatorAlertMutationAuthority: false,
             communityReadOnlyEvidence: true,
+            exactSelectedOfferCommunityEvidence: true,
             communityAdvisoryOnly: true,
             identityClaimGovernance: true,
             automaticCatalogRemapping: false,

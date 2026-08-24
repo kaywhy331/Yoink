@@ -373,6 +373,15 @@ function communityScopeParts(scope) {
   return { kind: "country", value: value.startsWith("country:") ? value.slice(8) : "US" };
 }
 
+function communitySelectedOfferLabel(item) {
+  const selected = item?.selectedOffer || {};
+  const stateLabel = String(selected.selectionState || "unresolved").replaceAll("_", " ");
+  const attributes = Object.entries(selected.attributes || {})
+    .map(([key, value]) => `${key} ${value}`)
+    .join(" · ");
+  return attributes ? `${stateLabel} · ${attributes}` : stateLabel;
+}
+
 function renderCommunity() {
   const community = state.snapshot.community || {};
   const counts = state.snapshot.counts || {};
@@ -405,12 +414,12 @@ function renderCommunity() {
     const stateLabel = String(item.publicationState || "insufficient_quorum").replaceAll("_", " ");
     const kind = item.publicationState === "advisory" ? "good" : item.publicationState === "quarantined" ? "bad" : "warning";
     const confidence = item.confidence || {};
-    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</h3><p>${escapeHtml(String(item.availability || "unknown").replaceAll("_", " "))} · ${formatMoney(item.unitPriceCents, item.currency)} · ${escapeHtml(item.sellerName || "Seller unknown")} · ${escapeHtml(item.fulfillment || "unknown")}</p></div><span class="tag ${kind}">${escapeHtml(stateLabel)}</span></div><div class="card-meta"><span class="tag">${Number(item.independentUserCount || 0)} users</span><span class="tag">${Number(item.independentDeviceCount || 0)} devices</span><span class="tag">Availability ${Math.round(Number(confidence.availability || 0) * 100)}%</span><span class="tag">Price ${Math.round(Number(confidence.price || 0) * 100)}%</span><span class="tag">Expires ${escapeHtml(relativeTime(item.expiresAt))}</span></div></article>`;
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</h3><p>${escapeHtml(String(item.availability || "unknown").replaceAll("_", " "))} · ${formatMoney(item.unitPriceCents, item.currency)} · ${escapeHtml(item.sellerName || "Seller unknown")} · ${escapeHtml(item.fulfillment || "unknown")}</p></div><span class="tag ${kind}">${escapeHtml(stateLabel)}</span></div><div class="card-meta"><span class="tag">${escapeHtml(communitySelectedOfferLabel(item))}</span><span class="tag">${Number(item.independentUserCount || 0)} users</span><span class="tag">${Number(item.independentDeviceCount || 0)} devices</span><span class="tag">Availability ${Math.round(Number(confidence.availability || 0) * 100)}%</span><span class="tag">Price ${Math.round(Number(confidence.price || 0) * 100)}%</span><span class="tag">Expires ${escapeHtml(relativeTime(item.expiresAt))}</span></div></article>`;
   }).join("") : empty("No current community projections. The local pilot cannot manufacture independent-user quorum.");
 
   $("#communityAssertionList").innerHTML = assertions.length ? assertions.map((item) => {
     const kind = item.assertionState === "quarantined" ? "bad" : "good";
-    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</h3><p>${escapeHtml(String(item.availability).replaceAll("_", " "))} · ${formatMoney(item.unitPriceCents, item.currency)} · ${escapeHtml(item.sellerName || "Seller unknown")} · ${escapeHtml(item.fulfillment)} · ${escapeHtml(item.locationScope)}</p></div><span class="tag ${kind}">${escapeHtml(String(item.assertionState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">Observer ${escapeHtml(item.observerVersion)}</span><span class="tag">Expires ${escapeHtml(relativeTime(item.expiresAt))}</span>${item.quarantineReason ? `<span class="tag bad">${escapeHtml(String(item.quarantineReason).replaceAll("_", " "))}</span>` : ""}</div></article>`;
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</h3><p>${escapeHtml(String(item.availability).replaceAll("_", " "))} · ${formatMoney(item.unitPriceCents, item.currency)} · ${escapeHtml(item.sellerName || "Seller unknown")} · ${escapeHtml(item.fulfillment)} · ${escapeHtml(item.locationScope)}</p></div><span class="tag ${kind}">${escapeHtml(String(item.assertionState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">${escapeHtml(communitySelectedOfferLabel(item))}</span><span class="tag">Observer ${escapeHtml(item.observerVersion)}</span><span class="tag">Expires ${escapeHtml(relativeTime(item.expiresAt))}</span>${item.quarantineReason ? `<span class="tag bad">${escapeHtml(String(item.quarantineReason).replaceAll("_", " "))}</span>` : ""}</div></article>`;
   }).join("") : empty("You have not shared any community evidence.");
   $("#deleteAllCommunityButton").disabled = assertions.length === 0;
 }

@@ -307,6 +307,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           readiness: true,
           jobReconciliation: true,
           communityReadOnlyEvidence: true,
+          exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
           targetAddAdapterVersion: "target-add-v1",
@@ -345,6 +346,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           readiness: true,
           jobReconciliation: true,
           communityReadOnlyEvidence: true,
+          exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
           targetAddAdapterVersion: "target-add-v1",
@@ -390,6 +392,12 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         addControlActionable: true,
         securityChallenge: false,
         interactiveBlock: "",
+        selectedOffer: {
+          schemaVersion: 1,
+          selectionState: "exact",
+          childOfferKey: "1011483414",
+          attributes: {}
+        },
         cookie: "DO_NOT_STORE"
       })
     });

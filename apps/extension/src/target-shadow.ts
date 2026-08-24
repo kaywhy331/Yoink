@@ -1,5 +1,9 @@
 import { TARGET_OBSERVER_VERSION, type TargetShadowObservationInput } from "../../../packages/contracts/src/index.js";
-import { extractTargetSku, observeTargetOffer } from "../../../packages/browser-adapters/src/target.js";
+import {
+  extractTargetSku,
+  observeTargetOffer,
+  observeTargetSelectedOfferScope
+} from "../../../packages/browser-adapters/src/target.js";
 
 export function collectTargetShadowObservation(
   documentValue: Document = globalThis.document,
@@ -30,7 +34,8 @@ export function collectTargetShadowObservation(
     fulfillment,
     addControlActionable: observation.addControlActionable,
     securityChallenge: observation.securityChallenge,
-    interactiveBlock: observation.interactiveBlock
+    interactiveBlock: observation.interactiveBlock,
+    selectedOffer: observeTargetSelectedOfferScope(documentValue, urlValue, retailerSku, "either")
   });
 }
 

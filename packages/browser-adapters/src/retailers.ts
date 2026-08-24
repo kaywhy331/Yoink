@@ -10,6 +10,7 @@ import {
   type SellerType,
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
+import { selectedOfferScope } from "./selected-offer.js";
 
 export { AMAZON_OBSERVER_VERSION, BESTBUY_OBSERVER_VERSION, WALMART_OBSERVER_VERSION };
 
@@ -1441,6 +1442,24 @@ export function observeRetailerOffer(
     securityChallenge: retailerSecurityChallenge(document),
     interactiveBlock: blocked
   };
+}
+
+export function observeRetailerSelectedOfferScope(
+  document: Document,
+  urlValue: string,
+  retailerId: Exclude<SupportedRetailerId, "target">,
+  expectedSku: string,
+  requiredFulfillment: Fulfillment = "either"
+) {
+  const pageSku = extractRetailerSku(retailerId, urlValue);
+  if (!pageSku || pageSku !== expectedSku) throw new Error("The exact retailer listing identity is unavailable.");
+  const selected = selectedControl(document, CONFIGS[retailerId], requiredFulfillment, expectedSku);
+  return selectedOfferScope(
+    document,
+    retailerId,
+    pageSku,
+    selected.offerRoot || selected.control?.closest("form, main") || document
+  );
 }
 
 function cleanAmazonOfferId(value: unknown): string {

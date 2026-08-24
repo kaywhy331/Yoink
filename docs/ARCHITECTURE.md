@@ -294,6 +294,18 @@ retailer execution authority. The remaining production gap is an independently
 witnessed transparency checkpoint; the local server is not treated as its own
 external witness.
 
+Yoink 0.25.0 adds migration 27 and a separate, versioned selected-offer scope
+to sanitized browser observations and read-only community assertions. The
+Chrome package extracts a public retailer child key plus only size, color,
+edition, language, pack, condition, finish, and style. The server revalidates
+the child key against its canonical retailer SKU, normalizes the selected
+dimensions, and derives the fingerprint; the browser cannot choose a durable
+community key. Seller, fulfillment, and consented locality remain independent
+dimensions. `listing_only` and `unresolved` evidence is retained for repair and
+review but receives zero identity confidence and cannot publish stock. Opaque
+offer tokens, checkout fields, and every mutation capability remain outside
+this contract.
+
 The application bundles now reflect those trust domains. `/` is the user
 product surface over existing missions, targets, listings, jobs, and settings;
 `/admin` is independently permission-gated and owns diagnostics, retailer

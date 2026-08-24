@@ -181,6 +181,7 @@ function targetCapabilities() {
     bestBuyAddAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
     retailerShadow: true,
     communityReadOnlyEvidence: true,
+    exactSelectedOfferEvidence: true,
     observerRecipeShadow: true,
     sanitizedAdapterDiagnostics: true,
     durableAdapterDiagnostics: true,
@@ -282,6 +283,44 @@ function targetSkuFromUrl(value) {
   }
 }
 
+const SELECTED_OFFER_ATTRIBUTE_KEYS = new Set([
+  "size", "color", "edition", "language", "pack", "condition", "finish", "style"
+]);
+
+function selectedOfferPayload(value, retailerSku) {
+  if (!value || typeof value !== "object"
+    || value.schemaVersion !== 1
+    || !["exact", "listing_only", "unresolved"].includes(value.selectionState)
+    || !value.attributes || typeof value.attributes !== "object" || Array.isArray(value.attributes)) {
+    throw new Error("The retailer observer returned invalid selected-offer identity.");
+  }
+  const childOfferKey = String(value.childOfferKey || "").toUpperCase();
+  if (childOfferKey !== retailerSku || !/^[A-Z0-9][A-Z0-9._-]{1,119}$/.test(childOfferKey)) {
+    throw new Error("The retailer observer returned an unbound child offer.");
+  }
+  const attributes = {};
+  for (const key of Object.keys(value.attributes).sort()) {
+    if (!SELECTED_OFFER_ATTRIBUTE_KEYS.has(key)) {
+      throw new Error("The retailer observer returned an unsupported variant dimension.");
+    }
+    const normalized = String(value.attributes[key] || "")
+      .replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+    if (!normalized || /[<>]/.test(normalized)) {
+      throw new Error("The retailer observer returned invalid variant evidence.");
+    }
+    attributes[key] = normalized;
+  }
+  if (value.selectionState === "listing_only" && Object.keys(attributes).length) {
+    throw new Error("Listing-only evidence cannot include selected variant dimensions.");
+  }
+  return {
+    schemaVersion: 1,
+    selectionState: value.selectionState,
+    childOfferKey,
+    attributes
+  };
+}
+
 function targetObservationPayload(value) {
   if (!value || typeof value !== "object") throw new Error("The Target observer returned no evidence.");
   const availability = ["in_stock", "preorder", "out_of_stock", "unknown"].includes(value.availability)
@@ -310,6 +349,7 @@ function targetObservationPayload(value) {
   if (unitPriceCents !== null && (!Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0)) {
     throw new Error("The Target observer returned invalid price evidence.");
   }
+  const selectedOffer = selectedOfferPayload(value.selectedOffer, retailerSku);
   return {
     adapterVersion: TARGET_OBSERVER_VERSION,
     contractVersion: 1,
@@ -328,7 +368,8 @@ function targetObservationPayload(value) {
     interactiveBlock,
     purchaseRouteKind,
     purchaseRouteReady: value.purchaseRouteReady === true,
-    routeReasonCode
+    routeReasonCode,
+    selectedOffer
   };
 }
 
@@ -375,6 +416,7 @@ function retailerObservationPayload(value, retailerId) {
   if (unitPriceCents !== null && (!Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0)) {
     throw new Error("The retailer observer returned invalid price evidence.");
   }
+  const selectedOffer = selectedOfferPayload(value.selectedOffer, retailerSku);
   return {
     adapterVersion: expectedVersion,
     contractVersion: 1,
@@ -394,7 +436,8 @@ function retailerObservationPayload(value, retailerId) {
     interactiveBlock,
     purchaseRouteKind,
     purchaseRouteReady: retailerId === "amazon" && value.purchaseRouteReady === true,
-    routeReasonCode
+    routeReasonCode,
+    selectedOffer
   };
 }
 
@@ -572,7 +615,8 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   "add_control_selector_miss", "add_control_missing", "add_control_ambiguous", "add_control_disabled",
   "explicit_sku_binding_missing", "explicit_sku_binding_ambiguous",
   "offer_binding_missing", "offer_binding_ambiguous", "price_binding_missing",
-  "seller_binding_missing", "fulfillment_binding_missing", "offer_scope_not_actionable",
+  "seller_binding_missing", "fulfillment_binding_missing", "selected_offer_binding_unresolved",
+  "offer_scope_not_actionable",
   "not_applicable", "offer_not_actionable", "offer_id_missing_or_ambiguous",
   "offer_route_verified", "route_validation_failed", "route_binding_failed",
   "rehearsal_failed", "runner_unavailable", "runner_failed", "runner_no_result",
@@ -2332,7 +2376,18 @@ async function contributeRetailerTab() {
   const evidence = retailerId === "target" ? await inspectTargetTab() : await inspectRetailerTab();
   const retailerSku = String(evidence.observation?.retailerSku || "");
   if (!retailerSku) throw new Error("The server did not accept an exact product identity.");
-  const rateKey = `${retailerId}:${retailerSku}`;
+  const selectedOfferFingerprint = String(evidence.observation?.selectedOffer?.fingerprint || "");
+  if (!/^[a-f0-9]{64}$/.test(selectedOfferFingerprint)) {
+    throw new Error("The server did not accept an exact selected-offer identity.");
+  }
+  const rateKey = [
+    retailerId,
+    retailerSku,
+    selectedOfferFingerprint,
+    String(evidence.observation?.sellerType || "unknown"),
+    String(evidence.observation?.sellerName || "").toLocaleLowerCase("en-US"),
+    String(evidence.observation?.fulfillment || "unknown")
+  ].join(":");
   const storedTimes = (await chrome.storage.local.get(COMMUNITY_CONTRIBUTION_TIMES_KEY))[COMMUNITY_CONTRIBUTION_TIMES_KEY];
   const contributionTimes = storedTimes && typeof storedTimes === "object" && !Array.isArray(storedTimes)
     ? storedTimes : {};

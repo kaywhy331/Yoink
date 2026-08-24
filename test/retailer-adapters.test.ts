@@ -15,6 +15,7 @@ import {
   retailerInteractiveBlock,
   retailerSecurityChallenge
 } from "../packages/browser-adapters/src/retailers.js";
+import { selectedOfferScope } from "../packages/browser-adapters/src/selected-offer.js";
 import { collectRetailerShadowAttempt, collectRetailerShadowObservation } from "../apps/extension/src/retailer-shadow.js";
 
 const require = createRequire(import.meta.url);
@@ -190,6 +191,49 @@ test("new read-only observers capture bounded offer evidence without enabling mu
     assert.equal(attempt.observation.purchaseRouteKind, "none", example.retailerId);
     assert.equal(attempt.observation.purchaseRouteReady, false, example.retailerId);
   }
+});
+
+test("selected-offer scope captures allowlisted variants and fails closed on ambiguous selection", () => {
+  const url = "https://www.macys.com/shop/product/example?ID=16569610";
+  const selected = new JSDOM(`<!doctype html><body>
+    <fieldset><legend>Size</legend>
+      <label><input type="radio" name="size" value="Medium" checked> Medium</label>
+      <label><input type="radio" name="size" value="Large"> Large</label>
+    </fieldset>
+  </body>`, { url }).window.document;
+  assert.deepEqual(selectedOfferScope(selected, "macys", "16569610"), {
+    schemaVersion: 1,
+    selectionState: "exact",
+    childOfferKey: "16569610",
+    attributes: { size: "Medium" }
+  });
+
+  const ambiguous = new JSDOM(`<!doctype html><body>
+    <fieldset><legend>Color</legend>
+      <label><input type="radio" name="color" value="Red"> Red</label>
+      <label><input type="radio" name="color" value="Blue"> Blue</label>
+    </fieldset>
+  </body>`, { url }).window.document;
+  assert.deepEqual(selectedOfferScope(ambiguous, "macys", "16569610"), {
+    schemaVersion: 1,
+    selectionState: "unresolved",
+    childOfferKey: "16569610",
+    attributes: {}
+  });
+
+  assert.equal(selectedOfferScope(fixture("macys-marketplace.html", url), "macys", "16569610").selectionState, "listing_only");
+  const liveAmbiguous = fixture("macys-marketplace.html", url);
+  liveAmbiguous.querySelector("form")?.insertAdjacentHTML("afterbegin", `
+    <fieldset><legend>Size</legend>
+      <label><input type="radio" name="size" value="Medium"> Medium</label>
+      <label><input type="radio" name="size" value="Large"> Large</label>
+    </fieldset>
+  `);
+  const attempt = collectRetailerShadowAttempt(liveAmbiguous, url, "macys", "shipping");
+  assert.equal(attempt.observation.selectedOffer?.selectionState, "unresolved");
+  assert.equal(attempt.diagnostic.outcome, "failed");
+  assert.equal(attempt.diagnostic.failureStage, "offer_binding");
+  assert.equal(attempt.diagnostic.reasonCode, "selected_offer_binding_unresolved");
 });
 
 test("new read-only observers fail closed on ambiguous controls and unnamed marketplace fulfillment", () => {
@@ -399,9 +443,15 @@ test("Amazon observer binds ASIN, seller, price, and keeps offer IDs ephemeral",
   assert.equal(route.searchParams.get("offerListingID"), offer);
   assert.equal(route.searchParams.get("quantity"), "1");
   assert.equal(route.searchParams.get("tag"), "pokemon-restocks-20");
-  assert.equal(Object.keys(firstParty).some((key) => /offer/i.test(key)), false);
+  assert.equal(Object.keys(firstParty).some((key) => /offerlisting|token/i.test(key)), false);
 
   const routeEvidence = collectRetailerShadowObservation(document, url, "amazon", "shipping");
+  assert.deepEqual(routeEvidence.selectedOffer, {
+    schemaVersion: 1,
+    selectionState: "exact",
+    childOfferKey: "B0GYTRYV7P",
+    attributes: {}
+  });
   assert.equal(routeEvidence.purchaseRouteKind, "amazon_buy_now");
   assert.equal(routeEvidence.purchaseRouteReady, true);
   assert.equal(routeEvidence.routeReasonCode, "offer_route_verified");

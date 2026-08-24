@@ -64,6 +64,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /amazonAddAdapterVersion/);
   assert.match(background, /bestBuyAddAdapterVersion/);
   assert.match(background, /communityReadOnlyEvidence: true/);
+  assert.match(background, /exactSelectedOfferEvidence: true/);
   assert.match(background, /observerRecipeShadow: true/);
   assert.match(background, /durableAdapterDiagnostics: true/);
   assert.match(background, /walmartDrawReadOnly: true/);

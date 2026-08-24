@@ -35,6 +35,10 @@ test("authenticated Chrome posts a sanitized Walmart Draw scan to user and admin
     const html = readFileSync(join(process.cwd(), "test", "fixtures", "retailers", "walmart-draw-hub.html"), "utf8");
     const document = new JSDOM(html, { url: "https://www.walmart.com/shop/collectibles/draw" }).window.document;
     const payload = observeWalmartDrawHub(document, "https://www.walmart.com/shop/collectibles/draw");
+    payload.items = payload.items.map((item) => ({
+      ...item,
+      closesAt: new Date(Date.now() + 60 * 60_000).toISOString()
+    }));
     const posted = await fetch(`${baseUrl}/api/v1/devices/self/walmart-draw/scans`, {
       method: "POST",
       headers: {

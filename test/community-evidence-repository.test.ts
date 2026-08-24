@@ -44,11 +44,20 @@ function targetObservation(
     addControlActionable: true,
     securityChallenge: false,
     interactiveBlock: "",
+    selectedOffer: {
+      schemaVersion: 1,
+      selectionState: "exact",
+      childOfferKey: "1011483414",
+      attributes: {}
+    },
     ...overrides
   };
 }
 
-function amazonObservation(observedAt: number): RetailerShadowObservationInput {
+function amazonObservation(
+  observedAt: number,
+  overrides: Partial<RetailerShadowObservationInput> = {}
+): RetailerShadowObservationInput {
   return {
     adapterVersion: AMAZON_OBSERVER_VERSION,
     contractVersion: 1,
@@ -68,7 +77,14 @@ function amazonObservation(observedAt: number): RetailerShadowObservationInput {
     interactiveBlock: "",
     purchaseRouteKind: "amazon_buy_now",
     purchaseRouteReady: true,
-    routeReasonCode: "offer_route_verified"
+    routeReasonCode: "offer_route_verified",
+    selectedOffer: {
+      schemaVersion: 1,
+      selectionState: "exact",
+      childOfferKey: "B002OB49L4",
+      attributes: {}
+    },
+    ...overrides
   };
 }
 
@@ -162,6 +178,12 @@ test("community evidence requires explicit per-retailer consent, a one-use nonce
     assert.equal(contribution.assertion.retailerSku, "B002OB49L4");
     assert.equal(contribution.assertion.unitPriceCents, 1368);
     assert.match(String(contribution.assertion.variantFingerprint), /^[a-f0-9]{64}$/);
+    assert.deepEqual(contribution.assertion.selectedOffer, {
+      selectionState: "exact",
+      childOfferKey: "B002OB49L4",
+      attributes: {},
+      fingerprint: contribution.assertion.variantFingerprint
+    });
     assert.throws(() => community.contribute(device.id, "amazon", {
       contractVersion: COMMUNITY_EVIDENCE_CONTRACT_VERSION,
       nonce: issued.nonce,
@@ -171,6 +193,72 @@ test("community evidence requires explicit per-retailer consent, a one-use nonce
     const durable = JSON.stringify(db.all("SELECT * FROM community_inventory_assertions"));
     assert.equal(durable.includes("DO_NOT_STORE"), false);
     assert.equal(durable.includes(device.token), false);
+  } finally {
+    db.close();
+  }
+});
+
+test("selected variants remain isolated and listing-only evidence is quarantined", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const community = new CommunityEvidenceRepository(db);
+    const shadows = new ShadowObservationRepository(db);
+    const diagnostics = new AdapterDiagnosticRepository(db);
+    enable(community, "amazon");
+
+    const contribute = (
+      observedAt: number,
+      overrides: Partial<RetailerShadowObservationInput>
+    ): { assertion: Record<string, unknown> } => {
+      const shadow = shadows.record(device.id, amazonObservation(observedAt, overrides), observedAt + 500);
+      const diagnostic = diagnostics.record(device.id, amazonDiagnostic(observedAt), observedAt + 500);
+      const nonce = community.issueNonce(device.id, "amazon", observedAt + 700);
+      return community.contribute(device.id, "amazon", {
+        contractVersion: COMMUNITY_EVIDENCE_CONTRACT_VERSION,
+        nonce: nonce.nonce,
+        shadowObservationId: shadow.id,
+        adapterDiagnosticId: diagnostic.id
+      }, observedAt + 900);
+    };
+
+    const red = contribute(NOW + 2_000, {
+      selectedOffer: {
+        schemaVersion: 1,
+        selectionState: "exact",
+        childOfferKey: "B002OB49L4",
+        attributes: { color: " Red " }
+      }
+    });
+    const blue = contribute(NOW + 12_000, {
+      availability: "out_of_stock",
+      addControlActionable: false,
+      selectedOffer: {
+        schemaVersion: 1,
+        selectionState: "exact",
+        childOfferKey: "B002OB49L4",
+        attributes: { color: "BLUE" }
+      }
+    });
+    assert.equal(red.assertion.assertionState, "accepted");
+    assert.equal(blue.assertion.assertionState, "accepted");
+    assert.notEqual(red.assertion.variantFingerprint, blue.assertion.variantFingerprint);
+    assert.notEqual(red.assertion.observationKey, blue.assertion.observationKey);
+
+    const listingOnly = contribute(NOW + 22_000, {
+      selectedOffer: {
+        schemaVersion: 1,
+        selectionState: "listing_only",
+        childOfferKey: "B002OB49L4",
+        attributes: {}
+      }
+    });
+    assert.equal(listingOnly.assertion.assertionState, "quarantined");
+    assert.equal(listingOnly.assertion.quarantineReason, "selected_offer_listing_only");
+    const listingAggregate = community.aggregates(NOW + 23_000)
+      .find((item) => item.observationKey === listingOnly.assertion.observationKey);
+    assert.equal(listingAggregate?.publicationState, "quarantined");
+    assert.equal((listingAggregate?.confidence as Record<string, number>).identity, 0);
   } finally {
     db.close();
   }

@@ -4,6 +4,8 @@ import {
   BESTBUY_ADD_ADAPTER_VERSION,
   BESTBUY_OBSERVER_VERSION,
   RETAILER_OBSERVER_VERSIONS,
+  SELECTED_OFFER_ATTRIBUTE_KEYS,
+  SELECTED_OFFER_SCOPE_VERSION,
   TARGET_ADD_ADAPTER_VERSION,
   TARGET_OBSERVER_VERSION,
   WALMART_ADD_ADAPTER_VERSION,
@@ -11,11 +13,13 @@ import {
   type Availability,
   type RetailerObserverVersion,
   type RetailerShadowObservationInput,
+  type SelectedOfferAttributeKey,
+  type SelectedOfferSelectionState,
   type SellerType,
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
-import { cleanText, positiveCents } from "../../domain/src/normalize.js";
+import { cleanText, normalizedKey, positiveCents } from "../../domain/src/normalize.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 
@@ -35,6 +39,75 @@ const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const MAX_OBSERVATION_AGE_MS = 10 * 60_000;
 const QUALIFICATION_EVIDENCE_WINDOW_MS = 30 * 24 * 60 * 60_000;
 const RETENTION_LIMIT = 1_000;
+const EXACT_RETAILER_SKUS = new Set<SupportedRetailerId>([
+  "target", "walmart", "amazon", "bestbuy", "ravensburger",
+  "booksamillion", "pbandai", "pokemoncenter"
+]);
+const SELECTED_OFFER_STATES = new Set<SelectedOfferSelectionState>(["exact", "listing_only", "unresolved"]);
+const SELECTED_OFFER_KEYS = new Set<SelectedOfferAttributeKey>(SELECTED_OFFER_ATTRIBUTE_KEYS);
+
+interface StoredSelectedOfferScope {
+  schemaVersion: typeof SELECTED_OFFER_SCOPE_VERSION;
+  selectionState: SelectedOfferSelectionState;
+  childOfferKey: string;
+  attributes: Partial<Record<SelectedOfferAttributeKey, string>>;
+  fingerprint: string;
+}
+
+function selectedOfferScope(
+  input: RetailerShadowObservationInput["selectedOffer"],
+  retailerId: SupportedRetailerId,
+  retailerSku: string
+): StoredSelectedOfferScope {
+  if (!input) {
+    const selectionState = "unresolved" as const;
+    return {
+      schemaVersion: SELECTED_OFFER_SCOPE_VERSION,
+      selectionState,
+      childOfferKey: retailerSku,
+      attributes: {},
+      fingerprint: stableHash(
+        "selected-offer-scope-v1", retailerId, retailerSku, retailerSku, "{}", selectionState
+      )
+    };
+  }
+  if (input.schemaVersion !== SELECTED_OFFER_SCOPE_VERSION || !SELECTED_OFFER_STATES.has(input.selectionState)
+    || !input.attributes || typeof input.attributes !== "object" || Array.isArray(input.attributes)) {
+    throw new Error("The selected-offer identity scope is invalid.");
+  }
+  const childOfferKey = cleanText(input.childOfferKey, 120).toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9._-]{1,119}$/.test(childOfferKey) || childOfferKey !== retailerSku) {
+    throw new Error("The selected child offer must match the server-verified public retailer SKU.");
+  }
+  const attributes: Partial<Record<SelectedOfferAttributeKey, string>> = {};
+  for (const rawKey of Object.keys(input.attributes).sort()) {
+    if (!SELECTED_OFFER_KEYS.has(rawKey as SelectedOfferAttributeKey)) {
+      throw new Error("The selected-offer identity contains an unsupported variant dimension.");
+    }
+    const key = rawKey as SelectedOfferAttributeKey;
+    const value = normalizedKey(input.attributes[key], 120);
+    if (!value || /[<>]/.test(value)) throw new Error("The selected-offer variant value is invalid.");
+    attributes[key] = value;
+  }
+  const hasAttributes = Object.keys(attributes).length > 0;
+  if (input.selectionState === "exact" && !hasAttributes && !EXACT_RETAILER_SKUS.has(retailerId)) {
+    throw new Error("This retailer requires an exact selected variant before community identity is complete.");
+  }
+  if (input.selectionState === "listing_only" && hasAttributes) {
+    throw new Error("A listing-only selected-offer scope cannot contain selected variant dimensions.");
+  }
+  const attributesJson = JSON.stringify(attributes);
+  return {
+    schemaVersion: SELECTED_OFFER_SCOPE_VERSION,
+    selectionState: input.selectionState,
+    childOfferKey,
+    attributes,
+    fingerprint: stableHash(
+      "selected-offer-scope-v1", retailerId, retailerSku, childOfferKey,
+      attributesJson, input.selectionState
+    )
+  };
+}
 
 function suppliedProductUrl(
   value: unknown,
@@ -188,6 +261,7 @@ export interface StoredShadowObservation {
   purchaseRouteKind: "none" | "amazon_buy_now";
   purchaseRouteReady: boolean;
   routeReasonCode: NonNullable<RetailerShadowObservationInput["routeReasonCode"]>;
+  selectedOffer: StoredSelectedOfferScope;
   observationState: ShadowObservationState;
   evidenceHash: string;
   observedAt: string;
@@ -380,6 +454,11 @@ interface ObservationRow {
   purchaseRouteKind: "none" | "amazon_buy_now";
   purchaseRouteReady: number;
   routeReasonCode: NonNullable<RetailerShadowObservationInput["routeReasonCode"]>;
+  selectedOfferSchemaVersion: 0 | 1;
+  selectedOfferState: SelectedOfferSelectionState;
+  childOfferKey: string;
+  variantAttributesJson: string;
+  selectedOfferFingerprint: string;
   observationState: ShadowObservationState;
   evidenceHash: string;
   observedAt: string;
@@ -416,11 +495,28 @@ function requiredBoolean(value: unknown, label: string): boolean {
 }
 
 function rowToObservation(row: ObservationRow): StoredShadowObservation {
+  let attributes: StoredSelectedOfferScope["attributes"] = {};
+  try { attributes = JSON.parse(row.variantAttributesJson) as StoredSelectedOfferScope["attributes"]; } catch { attributes = {}; }
+  const {
+    selectedOfferSchemaVersion, selectedOfferState, childOfferKey,
+    variantAttributesJson: _variantAttributesJson,
+    selectedOfferFingerprint, ...observation
+  } = row;
   return {
-    ...row,
+    ...observation,
     addControlActionable: row.addControlActionable === 1,
     securityChallenge: row.securityChallenge === 1,
-    purchaseRouteReady: row.purchaseRouteReady === 1
+    purchaseRouteReady: row.purchaseRouteReady === 1,
+    selectedOffer: {
+      schemaVersion: SELECTED_OFFER_SCOPE_VERSION,
+      selectionState: selectedOfferSchemaVersion === 1 ? selectedOfferState : "unresolved",
+      childOfferKey: childOfferKey || row.retailerSku,
+      attributes,
+      fingerprint: selectedOfferFingerprint || stableHash(
+        "selected-offer-scope-v1", row.retailerId, row.retailerSku,
+        childOfferKey || row.retailerSku, JSON.stringify(attributes), "unresolved"
+      )
+    }
   };
 }
 
@@ -482,6 +578,7 @@ export class ShadowObservationRepository {
     const receivedAt = nowIso(now);
     const canonicalUrl = rules.canonicalUrl(retailerSku, input.canonicalUrl);
     if (!canonicalUrl) throw new Error("The exact canonical retailer product URL is invalid.");
+    const selectedOffer = selectedOfferScope(input.selectedOffer, retailerId, retailerSku);
     const observationState: ShadowObservationState = securityChallenge || input.interactiveBlock
       ? "manual_block"
       : ["in_stock", "preorder"].includes(input.availability)
@@ -510,6 +607,7 @@ export class ShadowObservationRepository {
       purchaseRouteKind,
       purchaseRouteReady,
       routeReasonCode,
+      selectedOffer,
       observationState,
       observedAt
     };
@@ -524,8 +622,10 @@ export class ShadowObservationRepository {
            availability, unit_price_cents, currency, seller_name, seller_type,
            fulfillment, add_control_actionable, security_challenge,
            interactive_block, purchase_route_kind, purchase_route_ready,
-           route_reason_code, observation_state, evidence_hash, observed_at, received_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           route_reason_code, selected_offer_schema_version, selected_offer_state,
+           child_offer_key, variant_attributes_json, selected_offer_fingerprint,
+           observation_state, evidence_hash, observed_at, received_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
@@ -548,6 +648,11 @@ export class ShadowObservationRepository {
         normalized.purchaseRouteKind,
         normalized.purchaseRouteReady ? 1 : 0,
         normalized.routeReasonCode,
+        normalized.selectedOffer.schemaVersion,
+        normalized.selectedOffer.selectionState,
+        normalized.selectedOffer.childOfferKey,
+        JSON.stringify(normalized.selectedOffer.attributes),
+        normalized.selectedOffer.fingerprint,
         normalized.observationState,
         evidenceHash,
         normalized.observedAt,
@@ -588,6 +693,11 @@ export class ShadowObservationRepository {
               purchase_route_kind AS purchaseRouteKind,
               purchase_route_ready AS purchaseRouteReady,
               route_reason_code AS routeReasonCode,
+              selected_offer_schema_version AS selectedOfferSchemaVersion,
+              selected_offer_state AS selectedOfferState,
+              child_offer_key AS childOfferKey,
+              variant_attributes_json AS variantAttributesJson,
+              selected_offer_fingerprint AS selectedOfferFingerprint,
               observation_state AS observationState, evidence_hash AS evidenceHash,
               observed_at AS observedAt, received_at AS receivedAt
        FROM retailer_shadow_observations

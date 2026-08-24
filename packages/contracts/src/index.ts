@@ -103,6 +103,7 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "price_binding_missing",
   "seller_binding_missing",
   "fulfillment_binding_missing",
+  "selected_offer_binding_unresolved",
   "offer_scope_not_actionable",
   "not_applicable",
   "offer_not_actionable",
@@ -309,6 +310,27 @@ export interface BestBuyAddActivationInput {
   confirmation: typeof BESTBUY_ADD_ACTIVATION_CONFIRMATION;
 }
 
+export const SELECTED_OFFER_SCOPE_VERSION = 1;
+export const SELECTED_OFFER_SELECTION_STATES = ["exact", "listing_only", "unresolved"] as const;
+export type SelectedOfferSelectionState = (typeof SELECTED_OFFER_SELECTION_STATES)[number];
+export const SELECTED_OFFER_ATTRIBUTE_KEYS = [
+  "size", "color", "edition", "language", "pack", "condition", "finish", "style"
+] as const;
+export type SelectedOfferAttributeKey = (typeof SELECTED_OFFER_ATTRIBUTE_KEYS)[number];
+
+/**
+ * Public, normalized identity for the offer selected on a product page. This
+ * contract deliberately excludes opaque offer tokens, DOM, form values, and
+ * account/location data. A listing-only or unresolved scope is evidence, but
+ * can never be promoted as exact community inventory.
+ */
+export interface SelectedOfferScopeInput {
+  schemaVersion: typeof SELECTED_OFFER_SCOPE_VERSION;
+  selectionState: SelectedOfferSelectionState;
+  childOfferKey: string;
+  attributes: Partial<Record<SelectedOfferAttributeKey, string>>;
+}
+
 export interface RetailerShadowObservationInput {
   adapterVersion: RetailerObserverVersion;
   contractVersion: 1;
@@ -329,6 +351,8 @@ export interface RetailerShadowObservationInput {
   purchaseRouteKind?: "none" | "amazon_buy_now";
   purchaseRouteReady?: boolean;
   routeReasonCode?: "not_applicable" | "offer_not_actionable" | "offer_id_missing_or_ambiguous" | "offer_route_verified" | "route_validation_failed";
+  /** Optional only so previously packaged observers remain fail-closed and ingestible. */
+  selectedOffer?: SelectedOfferScopeInput;
 }
 
 export interface TargetShadowObservationInput extends RetailerShadowObservationInput {

@@ -52,6 +52,11 @@ interface ObservationRow {
   securityChallenge: number;
   interactiveBlock: string;
   observationState: string;
+  selectedOfferSchemaVersion: number;
+  selectedOfferState: "exact" | "listing_only" | "unresolved";
+  childOfferKey: string;
+  variantAttributesJson: string;
+  selectedOfferFingerprint: string;
   evidenceHash: string;
   observedAt: string;
   receivedAt: string;
@@ -73,6 +78,10 @@ interface AssertionRow {
   retailerId: SupportedRetailerId;
   retailerSku: string;
   variantFingerprint: string;
+  selectedOfferState: "exact" | "listing_only" | "unresolved";
+  childOfferKey: string;
+  variantAttributesJson: string;
+  selectedOfferFingerprint: string;
   observationKey: string;
   availability: "in_stock" | "preorder" | "out_of_stock";
   unitPriceCents: number | null;
@@ -149,11 +158,24 @@ function nonceHash(value: string): string {
 }
 
 function assertionProjection(row: AssertionRow): Record<string, unknown> {
+  let attributes: Record<string, string> = {};
+  try {
+    const parsed = JSON.parse(row.variantAttributesJson) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) attributes = parsed as Record<string, string>;
+  } catch {
+    attributes = {};
+  }
   return {
     id: row.id,
     retailerId: row.retailerId,
     retailerSku: row.retailerSku,
     variantFingerprint: row.variantFingerprint,
+    selectedOffer: {
+      selectionState: row.selectedOfferState,
+      childOfferKey: row.childOfferKey,
+      attributes,
+      fingerprint: row.selectedOfferFingerprint
+    },
     observationKey: row.observationKey,
     availability: row.availability,
     unitPriceCents: row.unitPriceCents,
@@ -332,6 +354,11 @@ export class CommunityEvidenceRepository {
               security_challenge AS securityChallenge,
               interactive_block AS interactiveBlock,
               observation_state AS observationState,
+              selected_offer_schema_version AS selectedOfferSchemaVersion,
+              selected_offer_state AS selectedOfferState,
+              child_offer_key AS childOfferKey,
+              variant_attributes_json AS variantAttributesJson,
+              selected_offer_fingerprint AS selectedOfferFingerprint,
               evidence_hash AS evidenceHash, observed_at AS observedAt,
               received_at AS receivedAt
        FROM retailer_shadow_observations
@@ -378,10 +405,15 @@ export class CommunityEvidenceRepository {
     }
     const layoutFingerprint = diagnostic?.layoutFingerprint
       ?? stableHash("community-bundled-target-layout-v1", observation.adapterVersion);
-    const variantFingerprint = stableHash("community-exact-listing-variant-v1", retailerId, observation.retailerSku);
+    const selectedFingerprintValid = observation.selectedOfferSchemaVersion === 1
+      && /^[a-f0-9]{64}$/.test(observation.selectedOfferFingerprint);
+    const selectedOfferState = selectedFingerprintValid ? observation.selectedOfferState : "unresolved";
+    const variantFingerprint = selectedFingerprintValid
+      ? observation.selectedOfferFingerprint
+      : stableHash("community-unresolved-selected-offer-v1", retailerId, observation.retailerSku, observation.id);
     const normalizedSeller = cleanText(observation.sellerName, 160).toLocaleLowerCase("en-US");
     const observationKey = stableHash(
-      "community-observation-key-v1",
+      "community-observation-key-v2",
       retailerId,
       observation.retailerSku,
       variantFingerprint,
@@ -417,6 +449,10 @@ export class CommunityEvidenceRepository {
         `SELECT id, user_id AS userId, device_id AS deviceId,
                 retailer_id AS retailerId, retailer_sku AS retailerSku,
                 variant_fingerprint AS variantFingerprint,
+                selected_offer_state AS selectedOfferState,
+                child_offer_key AS childOfferKey,
+                variant_attributes_json AS variantAttributesJson,
+                selected_offer_fingerprint AS selectedOfferFingerprint,
                 observation_key AS observationKey, availability,
                 unit_price_cents AS unitPriceCents, currency,
                 seller_name AS sellerName, seller_type AS sellerType, fulfillment,
@@ -442,34 +478,39 @@ export class CommunityEvidenceRepository {
         const receipt = this.insertReceipt(cleanDeviceId, duplicate.id, "deduped", now);
         return { receipt, assertion: assertionProjection(duplicate) };
       }
-      const active = this.db.all<Pick<AssertionRow, "availability" | "unitPriceCents">>(
+      const active = selectedOfferState === "exact" ? this.db.all<Pick<AssertionRow, "availability" | "unitPriceCents">>(
         `SELECT availability, unit_price_cents AS unitPriceCents
          FROM community_inventory_assertions
          WHERE tenant_id = ? AND observation_key = ? AND deleted_at = '' AND expires_at >= ?`,
         currentRequestScope().tenantId,
         observationKey,
         timestamp
-      );
+      ) : [];
       const availabilityConflict = active.some((row) => row.availability !== observation.availability);
       const priceConflict = active.some((row) => {
         if (row.unitPriceCents === null || observation.unitPriceCents === null) return false;
         const threshold = Math.max(500, Math.round(Math.min(row.unitPriceCents, observation.unitPriceCents) * 0.2));
         return Math.abs(row.unitPriceCents - observation.unitPriceCents) > threshold;
       });
-      const assertionState = availabilityConflict || priceConflict ? "quarantined" : "accepted";
-      const quarantineReason = availabilityConflict ? "availability_conflict" : priceConflict ? "price_conflict" : "";
+      const identityQuarantine = selectedOfferState !== "exact";
+      const assertionState = identityQuarantine || availabilityConflict || priceConflict ? "quarantined" : "accepted";
+      const quarantineReason = identityQuarantine
+        ? selectedOfferState === "listing_only" ? "selected_offer_listing_only" : "selected_offer_unresolved"
+        : availabilityConflict ? "availability_conflict" : priceConflict ? "price_conflict" : "";
       const assertionId = newId("community_assertion");
       const expiresAt = nowIso(now + (observation.availability === "out_of_stock" ? OUT_OF_STOCK_TTL_MS : IN_STOCK_TTL_MS));
       this.db.run(
         `INSERT INTO community_inventory_assertions(
            id, tenant_id, user_id, device_id, shadow_observation_id,
            adapter_diagnostic_id, retailer_id, retailer_sku, variant_fingerprint,
+           selected_offer_state, child_offer_key, variant_attributes_json,
+           selected_offer_fingerprint,
            observation_key, availability, unit_price_cents, currency,
            seller_name, seller_type, fulfillment, location_scope,
            observer_version, layout_fingerprint, assertion_state,
            quarantine_reason, evidence_hash, observed_at, received_at,
            expires_at, deleted_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')`,
         assertionId,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
@@ -479,6 +520,10 @@ export class CommunityEvidenceRepository {
         retailerId,
         observation.retailerSku,
         variantFingerprint,
+        selectedOfferState,
+        selectedFingerprintValid ? observation.childOfferKey : "",
+        selectedFingerprintValid ? observation.variantAttributesJson : "{}",
+        selectedFingerprintValid ? observation.selectedOfferFingerprint : "",
         observationKey,
         observation.availability,
         observation.unitPriceCents,
@@ -541,6 +586,10 @@ export class CommunityEvidenceRepository {
       `SELECT id, user_id AS userId, device_id AS deviceId,
               retailer_id AS retailerId, retailer_sku AS retailerSku,
               variant_fingerprint AS variantFingerprint,
+              selected_offer_state AS selectedOfferState,
+              child_offer_key AS childOfferKey,
+              variant_attributes_json AS variantAttributesJson,
+              selected_offer_fingerprint AS selectedOfferFingerprint,
               observation_key AS observationKey, availability,
               unit_price_cents AS unitPriceCents, currency,
               seller_name AS sellerName, seller_type AS sellerType, fulfillment,
@@ -563,6 +612,10 @@ export class CommunityEvidenceRepository {
       `SELECT a.id, a.user_id AS userId, a.device_id AS deviceId,
               a.retailer_id AS retailerId, a.retailer_sku AS retailerSku,
               a.variant_fingerprint AS variantFingerprint,
+              a.selected_offer_state AS selectedOfferState,
+              a.child_offer_key AS childOfferKey,
+              a.variant_attributes_json AS variantAttributesJson,
+              a.selected_offer_fingerprint AS selectedOfferFingerprint,
               a.observation_key AS observationKey, a.availability,
               a.unit_price_cents AS unitPriceCents, a.currency,
               a.seller_name AS sellerName, a.seller_type AS sellerType,
@@ -593,7 +646,8 @@ export class CommunityEvidenceRepository {
       const prices = group.map((row) => row.unitPriceCents).filter((value): value is number => Number.isSafeInteger(value));
       const priceSpread = prices.length ? Math.max(...prices) - Math.min(...prices) : 0;
       const priceConflict = prices.length > 1 && priceSpread > Math.max(500, Math.round(Math.min(...prices) * 0.2));
-      const conflict = group.some((row) => row.assertionState === "quarantined") || availabilities.size > 1 || priceConflict;
+      const conflict = group.some((row) => row.assertionState === "quarantined" || row.selectedOfferState !== "exact")
+        || availabilities.size > 1 || priceConflict;
       const quorumMet = !conflict && users.size >= 3 && devices.size >= 3;
       const confidence = conflict ? 0 : Math.min(1, devices.size / 3);
       return {
@@ -601,6 +655,7 @@ export class CommunityEvidenceRepository {
         retailerId: latest.retailerId,
         retailerSku: latest.retailerSku,
         variantFingerprint: latest.variantFingerprint,
+        selectedOffer: (assertionProjection(latest).selectedOffer as Record<string, unknown>),
         sellerName: latest.sellerName,
         sellerType: latest.sellerType,
         fulfillment: latest.fulfillment,
@@ -614,7 +669,7 @@ export class CommunityEvidenceRepository {
         conflict,
         publicationState: conflict ? "quarantined" : quorumMet ? "advisory" : "insufficient_quorum",
         confidence: {
-          identity: 1,
+          identity: latest.selectedOfferState === "exact" ? 1 : 0,
           availability: confidence,
           price: prices.length ? confidence : 0,
           seller: latest.sellerType === "unknown" ? 0 : confidence,
@@ -700,6 +755,10 @@ export class CommunityEvidenceRepository {
       `SELECT id, user_id AS userId, device_id AS deviceId,
               retailer_id AS retailerId, retailer_sku AS retailerSku,
               variant_fingerprint AS variantFingerprint,
+              selected_offer_state AS selectedOfferState,
+              child_offer_key AS childOfferKey,
+              variant_attributes_json AS variantAttributesJson,
+              selected_offer_fingerprint AS selectedOfferFingerprint,
               observation_key AS observationKey, availability,
               unit_price_cents AS unitPriceCents, currency,
               seller_name AS sellerName, seller_type AS sellerType, fulfillment,

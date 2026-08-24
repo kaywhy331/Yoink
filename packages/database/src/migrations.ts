@@ -1795,5 +1795,41 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
       BEGIN SELECT RAISE(ABORT, 'observer recipe transparency is append-only'); END;
     `
+  },
+  {
+    version: 27,
+    name: "exact_selected_offer_community_scope",
+    sql: `
+      ALTER TABLE retailer_shadow_observations
+        ADD COLUMN selected_offer_schema_version INTEGER NOT NULL DEFAULT 0
+          CHECK (selected_offer_schema_version IN (0, 1));
+      ALTER TABLE retailer_shadow_observations
+        ADD COLUMN selected_offer_state TEXT NOT NULL DEFAULT 'unresolved'
+          CHECK (selected_offer_state IN ('exact', 'listing_only', 'unresolved'));
+      ALTER TABLE retailer_shadow_observations
+        ADD COLUMN child_offer_key TEXT NOT NULL DEFAULT '';
+      ALTER TABLE retailer_shadow_observations
+        ADD COLUMN variant_attributes_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE retailer_shadow_observations
+        ADD COLUMN selected_offer_fingerprint TEXT NOT NULL DEFAULT '';
+      CREATE INDEX retailer_shadow_observations_selected_offer_idx
+        ON retailer_shadow_observations(
+          user_id, retailer_id, selected_offer_fingerprint, received_at DESC
+        );
+
+      ALTER TABLE community_inventory_assertions
+        ADD COLUMN selected_offer_state TEXT NOT NULL DEFAULT 'unresolved'
+          CHECK (selected_offer_state IN ('exact', 'listing_only', 'unresolved'));
+      ALTER TABLE community_inventory_assertions
+        ADD COLUMN child_offer_key TEXT NOT NULL DEFAULT '';
+      ALTER TABLE community_inventory_assertions
+        ADD COLUMN variant_attributes_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE community_inventory_assertions
+        ADD COLUMN selected_offer_fingerprint TEXT NOT NULL DEFAULT '';
+      CREATE INDEX community_inventory_assertions_selected_offer_idx
+        ON community_inventory_assertions(
+          selected_offer_fingerprint, location_scope, expires_at DESC, received_at DESC
+        );
+    `
   }
 ]);

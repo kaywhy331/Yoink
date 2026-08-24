@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.24.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.25.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,19 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.25.0 adds migration 27 and an exact selected-offer identity spine for
+read-only community evidence. The packaged observers emit only the
+server-verified public retailer SKU plus normalized selected size, color,
+edition, language, pack, condition, finish, and style values. The server
+re-normalizes those fields, rejects child-ID mismatch or unapproved dimensions,
+and derives the durable fingerprint itself. Exact variants now receive separate
+observation keys even when they share one retailer listing; listing-only or
+ambiguous selection is visibly quarantined and cannot publish community stock.
+Seller, fulfillment, and country/region/one-way store scope remain separate key
+dimensions. Opaque Amazon offer IDs remain ephemeral, and this release changes
+no retailer mutation qualification or authority. See the
+[selected-offer identity contract](docs/SELECTED_OFFER_IDENTITY.md).
 
 Version 0.24.0 replaces observer-recipe trust-on-first-use with a public offline
 root pinned independently in the API package and Chrome companion. Migration 26
@@ -56,11 +69,13 @@ lane and remains manual pending a separately designed high-risk capability.
 
 The community pilot is explicit and read-only: users opt in per retailer
 and deliberately share one server-reconstructed sanitized observation at a
-time. Exact product-equivalence claims require strong identifiers and never
-remap the private catalog. Signed expiring observer recipes can evaluate five
-fixed read-only fields in shadow/canary mode; packaged code verifies the
-offline-root chain, revocation state, signature, and schema, and downloaded
-data can never click or navigate.
+time. Exact selected variants are isolated by a server-derived fingerprint;
+listing-only or unresolved selections stay quarantined. Exact
+product-equivalence claims require strong identifiers and never remap the
+private catalog. Signed expiring observer recipes can evaluate five fixed
+read-only fields in shadow/canary mode; packaged code verifies the offline-root
+chain, revocation state, signature, and schema, and downloaded data can never
+click or navigate.
 
 Hosted portability now includes request-bound tenant/user repositories,
 replay-protected signed proxy scopes, automatic paired-device scope resolution,

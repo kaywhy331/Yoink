@@ -76,6 +76,101 @@ var YoinkRetailerShadowModule = (() => {
     pbandai: PBANDAI_OBSERVER_VERSION,
     pokemoncenter: POKEMONCENTER_OBSERVER_VERSION
   };
+  var SELECTED_OFFER_SCOPE_VERSION = 1;
+
+  // packages/browser-adapters/src/selected-offer.ts
+  var EXACT_RETAILER_SKUS = /* @__PURE__ */ new Set([
+    "target",
+    "walmart",
+    "amazon",
+    "bestbuy",
+    "ravensburger",
+    "booksamillion",
+    "pbandai",
+    "pokemoncenter"
+  ]);
+  var DIMENSIONS = [
+    ["size", /(?:^|[^a-z])size(?:$|[^a-z])/i],
+    ["color", /(?:^|[^a-z])colou?r(?:$|[^a-z])/i],
+    ["edition", /(?:^|[^a-z])edition(?:$|[^a-z])/i],
+    ["language", /(?:^|[^a-z])language(?:$|[^a-z])/i],
+    ["pack", /(?:^|[^a-z])(?:pack(?:\s*count)?|multipack)(?:$|[^a-z])/i],
+    ["condition", /(?:^|[^a-z])condition(?:$|[^a-z])/i],
+    ["finish", /(?:^|[^a-z])finish(?:$|[^a-z])/i],
+    ["style", /(?:^|[^a-z])style(?:$|[^a-z])/i]
+  ];
+  var CONTROL_SELECTOR = "select, input[type='radio'], [role='radio'], [role='option'], button[aria-pressed], [aria-selected], [aria-checked], [data-selected]";
+  function visible(element) {
+    if (element.closest("[hidden], [aria-hidden='true']")) return false;
+    const style = element.style;
+    return style?.display !== "none" && style?.visibility !== "hidden";
+  }
+  function clean(value, maximum = 120) {
+    return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
+  }
+  function associatedLabel(element) {
+    const id = clean(element.getAttribute("id"), 100);
+    const explicit = id ? [...element.ownerDocument.querySelectorAll("label[for]")].find((label) => label.getAttribute("for") === id) : null;
+    return clean(explicit?.textContent || element.closest("label")?.textContent, 240);
+  }
+  function dimension(element) {
+    const fieldset = element.closest("fieldset");
+    const context = [
+      element.getAttribute("name"),
+      element.getAttribute("id"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("data-testid"),
+      element.getAttribute("data-attribute"),
+      fieldset?.querySelector("legend")?.textContent,
+      associatedLabel(element)
+    ].map((value) => clean(value, 240)).filter(Boolean).join(" ");
+    return DIMENSIONS.find(([, pattern]) => pattern.test(context))?.[0] ?? null;
+  }
+  function isSelected(element) {
+    if (element.tagName === "SELECT") return true;
+    if (element.tagName === "INPUT") return element.checked;
+    return element.getAttribute("aria-selected") === "true" || element.getAttribute("aria-checked") === "true" || element.getAttribute("aria-pressed") === "true" || element.getAttribute("data-selected") === "true";
+  }
+  function selectedValue(element) {
+    if (element.tagName === "SELECT") {
+      const select = element;
+      return clean(select.selectedOptions.length === 1 ? select.selectedOptions[0]?.textContent || select.value : "");
+    }
+    const inputValue = element.tagName === "INPUT" ? element.value : "";
+    return clean(
+      element.getAttribute("data-value") || element.getAttribute("aria-label") || inputValue || associatedLabel(element) || element.textContent
+    );
+  }
+  function selectedOfferScope(document, retailerId, retailerSku, root = document) {
+    const observed = /* @__PURE__ */ new Map();
+    for (const control of [...root.querySelectorAll(CONTROL_SELECTOR)].filter(visible).slice(0, 200)) {
+      const key = dimension(control);
+      if (!key) continue;
+      const state = observed.get(key) ?? { controls: 0, values: /* @__PURE__ */ new Set() };
+      state.controls += 1;
+      if (isSelected(control)) {
+        const value = selectedValue(control);
+        if (value) state.values.add(value);
+      }
+      observed.set(key, state);
+    }
+    const attributes = {};
+    let unresolved = false;
+    for (const [key, state] of [...observed].sort(([left], [right]) => left.localeCompare(right))) {
+      if (state.values.size !== 1) {
+        unresolved = true;
+        continue;
+      }
+      attributes[key] = [...state.values][0];
+    }
+    const hasAttributes = Object.keys(attributes).length > 0;
+    return {
+      schemaVersion: SELECTED_OFFER_SCOPE_VERSION,
+      selectionState: unresolved ? "unresolved" : hasAttributes || EXACT_RETAILER_SKUS.has(retailerId) ? "exact" : "listing_only",
+      childOfferKey: clean(retailerSku, 120),
+      attributes
+    };
+  }
 
   // packages/browser-adapters/src/retailers.ts
   function fanaticsProductId(url) {
@@ -472,7 +567,7 @@ var YoinkRetailerShadowModule = (() => {
       }
       if (node.nodeType === 1) {
         const element = node;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !visible(element)) return;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !visible2(element)) return;
       }
       for (const child of [...node.childNodes]) visit(child);
     };
@@ -484,7 +579,7 @@ var YoinkRetailerShadowModule = (() => {
     const fragments = [observableText(value, maximum)];
     const elements = [value, ...value.querySelectorAll("[aria-label], [alt], [title], [data-seller-name]")];
     for (const element of elements) {
-      if (!visible(element)) continue;
+      if (!visible2(element)) continue;
       for (const attribute of ["aria-label", "alt", "title", "data-seller-name"]) {
         const candidate = String(element.getAttribute(attribute) || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
         if (candidate) fragments.push(candidate);
@@ -492,7 +587,7 @@ var YoinkRetailerShadowModule = (() => {
     }
     return fragments.join(" ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible(element) {
+  function visible2(element) {
     if (!element) return false;
     let current = element;
     while (current) {
@@ -504,11 +599,11 @@ var YoinkRetailerShadowModule = (() => {
     return true;
   }
   function actionable(element) {
-    return visible(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text(element, 300));
+    return visible2(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text(element, 300));
   }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(visible);
+      const found = [...root.querySelectorAll(selector)].find(visible2);
       if (found) return found;
     }
     return null;
@@ -574,7 +669,7 @@ var YoinkRetailerShadowModule = (() => {
   function readPrice(root, selectors) {
     for (const selector of selectors) {
       for (const element of root.querySelectorAll(selector)) {
-        if (element.tagName !== "META" && !visible(element)) continue;
+        if (element.tagName !== "META" && !visible2(element)) continue;
         const price = parseRetailerPriceElement(element);
         if (price !== null) return price;
       }
@@ -696,7 +791,7 @@ var YoinkRetailerShadowModule = (() => {
     return { sellerName: "", sellerType: "unknown" };
   }
   function fulfillmentEvidence(root, control, retailer) {
-    const selected = [...root.querySelectorAll("[aria-selected='true'], [data-selected='true'], input:checked")].filter(visible).map((element) => text(element.closest("label, [role='tab'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i]") || element, 800));
+    const selected = [...root.querySelectorAll("[aria-selected='true'], [data-selected='true'], input:checked")].filter(visible2).map((element) => text(element.closest("label, [role='tab'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i]") || element, 800));
     const evidence = [text(control, 500), ...selected].join(" ");
     const shipping = retailer.shippingPattern.test(evidence);
     const pickup = retailer.pickupPattern.test(evidence);
@@ -725,10 +820,10 @@ var YoinkRetailerShadowModule = (() => {
   function candidateControls(root, retailer) {
     const candidates = retailer.addSelectors.flatMap((selector) => [...root.querySelectorAll(selector)]);
     const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
-    return [...new Set(candidates)].filter((element) => visible(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
+    return [...new Set(candidates)].filter((element) => visible2(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
   }
   function genericAddIntentControls(root) {
-    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
+    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible2(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
   }
   var WALMART_PRIMARY_SCOPE = [
     "[data-testid*='buy-box' i]",
@@ -787,7 +882,7 @@ var YoinkRetailerShadowModule = (() => {
     const desktopName = kind === "merchant" ? "desktop-merchant-info" : "desktop-fulfiller-info";
     const features = [...root.querySelectorAll(
       `#${featureName}_feature_div, [data-feature-name='${featureName}']`
-    )].filter(visible);
+    )].filter(visible2);
     for (const feature of features) {
       const label = text(queryVisible(feature, [
         `.offer-display-feature-label[offer-display-feature-name='${desktopName}']`,
@@ -858,7 +953,7 @@ var YoinkRetailerShadowModule = (() => {
     return Math.max(0, Math.min(50, Math.trunc(value)));
   }
   function visibleSelectorCount(root, selector) {
-    return boundedCount([...root.querySelectorAll(selector)].filter((element) => element.tagName === "META" || visible(element)).length);
+    return boundedCount([...root.querySelectorAll(selector)].filter((element) => element.tagName === "META" || visible2(element)).length);
   }
   function fulfillmentShape(root) {
     const evidence = observableText(root, 3e4);
@@ -969,7 +1064,7 @@ var YoinkRetailerShadowModule = (() => {
   function amazonQuantityOne(root) {
     const controls = [...root.querySelectorAll(
       "select#quantity, select[name='quantity'], input[name='quantity'], input[name='items[0.base][quantity]']"
-    )].filter((element) => element.tagName === "INPUT" || visible(element));
+    )].filter((element) => element.tagName === "INPUT" || visible2(element));
     if (!controls.length) return true;
     return controls.every((control) => {
       const value = String(control.value || "").trim();
@@ -1114,7 +1209,7 @@ var YoinkRetailerShadowModule = (() => {
     };
     const selected = [...root.querySelectorAll(
       "[aria-selected='true'], [aria-checked='true'], [data-selected='true'], [data-state='selected'], input:checked"
-    )].filter(visible).map(evidenceFor);
+    )].filter(visible2).map(evidenceFor);
     const selectedShipping = selected.some((value) => CONFIGS.bestbuy.shippingPattern.test(value));
     const selectedPickup = selected.some((value) => CONFIGS.bestbuy.pickupPattern.test(value));
     if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
@@ -1132,7 +1227,7 @@ var YoinkRetailerShadowModule = (() => {
   function bestBuyQuantityOne(root) {
     const controls = [...root.querySelectorAll(
       "select[name*='quantity' i], select[aria-label*='quantity' i], input[name*='quantity' i], input[aria-label*='quantity' i]"
-    )].filter((element) => element.tagName === "INPUT" || visible(element));
+    )].filter((element) => element.tagName === "INPUT" || visible2(element));
     if (!controls.length) return true;
     return controls.every((control) => String(control.value || "").trim() === "1");
   }
@@ -1219,6 +1314,17 @@ var YoinkRetailerShadowModule = (() => {
       securityChallenge: retailerSecurityChallenge(document),
       interactiveBlock: blocked
     };
+  }
+  function observeRetailerSelectedOfferScope(document, urlValue, retailerId, expectedSku, requiredFulfillment = "either") {
+    const pageSku = extractRetailerSku(retailerId, urlValue);
+    if (!pageSku || pageSku !== expectedSku) throw new Error("The exact retailer listing identity is unavailable.");
+    const selected = selectedControl(document, CONFIGS[retailerId], requiredFulfillment, expectedSku);
+    return selectedOfferScope(
+      document,
+      retailerId,
+      pageSku,
+      selected.offerRoot || selected.control?.closest("form, main") || document
+    );
   }
   function cleanAmazonOfferId(value) {
     const candidate = String(value ?? "").replace(/^`+|`+$/g, "").trim();
@@ -1582,6 +1688,13 @@ var YoinkRetailerShadowModule = (() => {
       addControlActionable: observation.addControlActionable,
       securityChallenge: observation.securityChallenge,
       interactiveBlock: observation.interactiveBlock,
+      selectedOffer: observeRetailerSelectedOfferScope(
+        documentValue,
+        urlValue,
+        exactRetailer,
+        retailerSku,
+        requiredFulfillment
+      ),
       ...routeEvidence
     };
   }
@@ -1592,6 +1705,13 @@ var YoinkRetailerShadowModule = (() => {
         outcome: "rejected",
         failureStage: "interactive_block",
         reasonCode: layout.securityChallenge ? "security_challenge" : `interactive_${layout.interactiveBlock}`
+      };
+    }
+    if (observation.selectedOffer?.selectionState === "unresolved") {
+      return {
+        outcome: "failed",
+        failureStage: "offer_binding",
+        reasonCode: "selected_offer_binding_unresolved"
       };
     }
     if (layout.addControlCount === 0) {

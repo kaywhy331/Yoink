@@ -45,7 +45,13 @@ test("the browser bundle executes the shared Target observer and returns only th
     fulfillment: "shipping",
     addControlActionable: true,
     securityChallenge: false,
-    interactiveBlock: ""
+    interactiveBlock: "",
+    selectedOffer: {
+      schemaVersion: 1,
+      selectionState: "exact",
+      childOfferKey: "1011483414",
+      attributes: {}
+    }
   });
   assert.equal("url" in result, false);
   assert.equal("pageText" in result, false);

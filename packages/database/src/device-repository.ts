@@ -22,6 +22,7 @@ export interface DeviceCapabilities {
   notifications: boolean;
   retailerShadow: boolean;
   communityReadOnlyEvidence: boolean;
+  exactSelectedOfferEvidence: boolean;
   observerRecipeShadow: boolean;
   durableAdapterDiagnostics: boolean;
   walmartDrawReadOnly: boolean;
@@ -103,6 +104,7 @@ function capabilities(input: Partial<DeviceCapabilities> | undefined): DeviceCap
     notifications: input?.notifications === true,
     retailerShadow: input?.retailerShadow === true,
     communityReadOnlyEvidence: input?.communityReadOnlyEvidence === true,
+    exactSelectedOfferEvidence: input?.exactSelectedOfferEvidence === true,
     observerRecipeShadow: input?.observerRecipeShadow === true,
     durableAdapterDiagnostics: input?.durableAdapterDiagnostics === true,
     walmartDrawReadOnly: input?.walmartDrawReadOnly === true,

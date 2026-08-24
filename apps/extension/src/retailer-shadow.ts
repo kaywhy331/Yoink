@@ -4,6 +4,7 @@ import {
   observeRetailerOffer,
   extractRetailerSku,
   canonicalRetailerProductUrl,
+  observeRetailerSelectedOfferScope,
   retailerAdapterLayoutEvidence,
   retailerObserverVersion
 } from "../../../packages/browser-adapters/src/retailers.js";
@@ -88,6 +89,9 @@ export function collectRetailerShadowObservation(
     addControlActionable: observation.addControlActionable,
     securityChallenge: observation.securityChallenge,
     interactiveBlock: observation.interactiveBlock,
+    selectedOffer: observeRetailerSelectedOfferScope(
+      documentValue, urlValue, exactRetailer, retailerSku, requiredFulfillment
+    ),
     ...routeEvidence
   };
 }
@@ -102,6 +106,13 @@ function observationDiagnosticState(
       outcome: "rejected",
       failureStage: "interactive_block",
       reasonCode: layout.securityChallenge ? "security_challenge" : `interactive_${layout.interactiveBlock}`
+    };
+  }
+  if (observation.selectedOffer?.selectionState === "unresolved") {
+    return {
+      outcome: "failed",
+      failureStage: "offer_binding",
+      reasonCode: "selected_offer_binding_unresolved"
     };
   }
   if (layout.addControlCount === 0) {

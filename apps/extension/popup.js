@@ -305,8 +305,10 @@ $("#shareCommunity").addEventListener("click", async () => {
     render(response.state);
     if (retailerId === "target") renderTargetObservation(response.observation);
     else renderRetailerObservation(response.observation);
-    const disposition = response.receipt?.disposition === "deduped" ? "Deduplicated" : "Accepted";
-    $("#communityMessage").textContent = `${disposition}: one sanitized, read-only assertion was recorded. No page text, account data, or offer token was sent.`;
+    const disposition = response.receipt?.disposition === "deduped" ? "Deduplicated"
+      : response.receipt?.disposition === "quarantined" ? "Held for review" : "Accepted";
+    const selectionState = String(response.assertion?.selectedOffer?.selectionState || "unresolved").replaceAll("_", " ");
+    $("#communityMessage").textContent = `${disposition}: one sanitized, read-only ${selectionState} assertion was recorded. No page text, account data, or offer token was sent.`;
   } catch (error) {
     $("#communityMessage").textContent = error.message || "The evidence could not be shared.";
     await check();

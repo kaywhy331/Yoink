@@ -5,6 +5,7 @@ import {
   type LiveOfferObservation
 } from "../../browser-safety/src/index.js";
 import { TARGET_OBSERVER_VERSION, type Fulfillment, type SellerType } from "../../contracts/src/index.js";
+import { selectedOfferScope } from "./selected-offer.js";
 
 export { TARGET_OBSERVER_VERSION };
 
@@ -249,6 +250,23 @@ export function observeTargetOffer(
     securityChallenge: targetSecurityChallenge(document),
     interactiveBlock: blocked
   };
+}
+
+export function observeTargetSelectedOfferScope(
+  document: Document,
+  urlValue: string,
+  expectedSku: string,
+  requiredFulfillment: Fulfillment = "either"
+) {
+  const pageSku = extractTargetSku(urlValue);
+  if (!pageSku || pageSku !== expectedSku) throw new Error("The exact Target listing identity is unavailable.");
+  const selected = selectedAddControl(document, expectedSku, requiredFulfillment);
+  return selectedOfferScope(
+    document,
+    "target",
+    pageSku,
+    selected.control?.closest("[data-test='product-detail'], main") || document
+  );
 }
 
 function lineSku(line: Element): string {

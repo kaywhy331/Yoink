@@ -26,6 +26,7 @@ var YoinkTargetShadowModule = (() => {
 
   // packages/contracts/src/index.ts
   var TARGET_OBSERVER_VERSION = "target-observer-v1";
+  var SELECTED_OFFER_SCOPE_VERSION = 1;
 
   // packages/browser-safety/src/index.ts
   var BROWSER_SAFETY_CONTRACT_VERSION = 1;
@@ -47,13 +48,107 @@ var YoinkTargetShadowModule = (() => {
     pokemoncenter: ["pokemoncenter.com"]
   });
 
+  // packages/browser-adapters/src/selected-offer.ts
+  var EXACT_RETAILER_SKUS = /* @__PURE__ */ new Set([
+    "target",
+    "walmart",
+    "amazon",
+    "bestbuy",
+    "ravensburger",
+    "booksamillion",
+    "pbandai",
+    "pokemoncenter"
+  ]);
+  var DIMENSIONS = [
+    ["size", /(?:^|[^a-z])size(?:$|[^a-z])/i],
+    ["color", /(?:^|[^a-z])colou?r(?:$|[^a-z])/i],
+    ["edition", /(?:^|[^a-z])edition(?:$|[^a-z])/i],
+    ["language", /(?:^|[^a-z])language(?:$|[^a-z])/i],
+    ["pack", /(?:^|[^a-z])(?:pack(?:\s*count)?|multipack)(?:$|[^a-z])/i],
+    ["condition", /(?:^|[^a-z])condition(?:$|[^a-z])/i],
+    ["finish", /(?:^|[^a-z])finish(?:$|[^a-z])/i],
+    ["style", /(?:^|[^a-z])style(?:$|[^a-z])/i]
+  ];
+  var CONTROL_SELECTOR = "select, input[type='radio'], [role='radio'], [role='option'], button[aria-pressed], [aria-selected], [aria-checked], [data-selected]";
+  function visible(element) {
+    if (element.closest("[hidden], [aria-hidden='true']")) return false;
+    const style = element.style;
+    return style?.display !== "none" && style?.visibility !== "hidden";
+  }
+  function clean(value, maximum = 120) {
+    return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
+  }
+  function associatedLabel(element) {
+    const id = clean(element.getAttribute("id"), 100);
+    const explicit = id ? [...element.ownerDocument.querySelectorAll("label[for]")].find((label) => label.getAttribute("for") === id) : null;
+    return clean(explicit?.textContent || element.closest("label")?.textContent, 240);
+  }
+  function dimension(element) {
+    const fieldset = element.closest("fieldset");
+    const context = [
+      element.getAttribute("name"),
+      element.getAttribute("id"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("data-testid"),
+      element.getAttribute("data-attribute"),
+      fieldset?.querySelector("legend")?.textContent,
+      associatedLabel(element)
+    ].map((value) => clean(value, 240)).filter(Boolean).join(" ");
+    return DIMENSIONS.find(([, pattern]) => pattern.test(context))?.[0] ?? null;
+  }
+  function isSelected(element) {
+    if (element.tagName === "SELECT") return true;
+    if (element.tagName === "INPUT") return element.checked;
+    return element.getAttribute("aria-selected") === "true" || element.getAttribute("aria-checked") === "true" || element.getAttribute("aria-pressed") === "true" || element.getAttribute("data-selected") === "true";
+  }
+  function selectedValue(element) {
+    if (element.tagName === "SELECT") {
+      const select = element;
+      return clean(select.selectedOptions.length === 1 ? select.selectedOptions[0]?.textContent || select.value : "");
+    }
+    const inputValue = element.tagName === "INPUT" ? element.value : "";
+    return clean(
+      element.getAttribute("data-value") || element.getAttribute("aria-label") || inputValue || associatedLabel(element) || element.textContent
+    );
+  }
+  function selectedOfferScope(document, retailerId, retailerSku, root = document) {
+    const observed = /* @__PURE__ */ new Map();
+    for (const control of [...root.querySelectorAll(CONTROL_SELECTOR)].filter(visible).slice(0, 200)) {
+      const key = dimension(control);
+      if (!key) continue;
+      const state = observed.get(key) ?? { controls: 0, values: /* @__PURE__ */ new Set() };
+      state.controls += 1;
+      if (isSelected(control)) {
+        const value = selectedValue(control);
+        if (value) state.values.add(value);
+      }
+      observed.set(key, state);
+    }
+    const attributes = {};
+    let unresolved = false;
+    for (const [key, state] of [...observed].sort(([left], [right]) => left.localeCompare(right))) {
+      if (state.values.size !== 1) {
+        unresolved = true;
+        continue;
+      }
+      attributes[key] = [...state.values][0];
+    }
+    const hasAttributes = Object.keys(attributes).length > 0;
+    return {
+      schemaVersion: SELECTED_OFFER_SCOPE_VERSION,
+      selectionState: unresolved ? "unresolved" : hasAttributes || EXACT_RETAILER_SKUS.has(retailerId) ? "exact" : "listing_only",
+      childOfferKey: clean(retailerSku, 120),
+      attributes
+    };
+  }
+
   // packages/browser-adapters/src/target.ts
   var MARKETPLACE_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+(?!target\b)|sold\s+by\s+(?!target\b)|target\s*plus|marketplace\s+seller/i;
   var FIRST_PARTY_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+target\b|sold\s+by\s+target\b/i;
   function text(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible(element) {
+  function visible2(element) {
     if (!element) return false;
     let current = element;
     while (current) {
@@ -65,11 +160,11 @@ var YoinkTargetShadowModule = (() => {
     return true;
   }
   function actionable(element) {
-    return visible(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable/i.test(text(element, 300));
+    return visible2(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable/i.test(text(element, 300));
   }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
-      const match = [...root.querySelectorAll(selector)].find(visible);
+      const match = [...root.querySelectorAll(selector)].find(visible2);
       if (match) return match;
     }
     return null;
@@ -100,7 +195,7 @@ var YoinkTargetShadowModule = (() => {
   function readPrice(root, selectors) {
     for (const selector of selectors) {
       for (const element of root.querySelectorAll(selector)) {
-        if (!visible(element)) continue;
+        if (!visible2(element)) continue;
         for (const candidate of [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)]) {
           const price = parseUsPrice(candidate);
           if (price !== null) return price;
@@ -145,7 +240,7 @@ var YoinkTargetShadowModule = (() => {
     const own = `${control.getAttribute("data-test") || ""} ${control.getAttribute("data-fulfillment") || ""} ${text(control, 300)}`;
     if (/ship it|shipping|delivery/i.test(own)) return "shipping";
     if (/pick it up|pickup|pick-up/i.test(own)) return "pickup";
-    const selected = [...document.querySelectorAll("[aria-selected='true'], [data-selected='true'], input:checked")].filter((element) => visible(element)).map((element) => text(element.closest("label, [role='tab'], [data-test*='fulfillment' i]") || element, 500));
+    const selected = [...document.querySelectorAll("[aria-selected='true'], [data-selected='true'], input:checked")].filter((element) => visible2(element)).map((element) => text(element.closest("label, [role='tab'], [data-test*='fulfillment' i]") || element, 500));
     const shipping = selected.some((value) => /ship it|shipping|delivery/i.test(value));
     const pickup = selected.some((value) => /pick it up|pickup|pick-up/i.test(value));
     return shipping === pickup ? "unknown" : shipping ? "shipping" : "pickup";
@@ -157,7 +252,7 @@ var YoinkTargetShadowModule = (() => {
       ...document.querySelectorAll("button[data-test='shipItButton'], button[data-test='orderPickupButton'], button[data-test*='addToCart' i]")
     ].filter((value) => Boolean(value));
     return [...new Set(candidates)].filter((candidate) => {
-      if (!visible(candidate)) return false;
+      if (!visible2(candidate)) return false;
       if (candidate.closest("[data-test*='recommend' i], [data-testid*='carousel' i], [aria-label*='similar items' i]")) return false;
       const scopedSku = candidate.closest("[data-tcin]")?.getAttribute("data-tcin");
       return !scopedSku || scopedSku === sku;
@@ -230,6 +325,17 @@ var YoinkTargetShadowModule = (() => {
       interactiveBlock: blocked
     };
   }
+  function observeTargetSelectedOfferScope(document, urlValue, expectedSku, requiredFulfillment = "either") {
+    const pageSku = extractTargetSku(urlValue);
+    if (!pageSku || pageSku !== expectedSku) throw new Error("The exact Target listing identity is unavailable.");
+    const selected = selectedAddControl(document, expectedSku, requiredFulfillment);
+    return selectedOfferScope(
+      document,
+      "target",
+      pageSku,
+      selected.control?.closest("[data-test='product-detail'], main") || document
+    );
+  }
 
   // apps/extension/src/target-shadow.ts
   function collectTargetShadowObservation(documentValue = globalThis.document, urlValue = globalThis.location?.href ?? "") {
@@ -256,7 +362,8 @@ var YoinkTargetShadowModule = (() => {
       fulfillment,
       addControlActionable: observation.addControlActionable,
       securityChallenge: observation.securityChallenge,
-      interactiveBlock: observation.interactiveBlock
+      interactiveBlock: observation.interactiveBlock,
+      selectedOffer: observeTargetSelectedOfferScope(documentValue, urlValue, retailerSku, "either")
     });
   }
   Object.defineProperty(globalThis, "YoinkTargetShadow", {

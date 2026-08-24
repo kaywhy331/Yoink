@@ -14,13 +14,14 @@ import { ShadowObservationRepository } from "../packages/database/src/shadow-obs
 const NOW = new Date("2026-08-23T01:00:00.000Z").getTime();
 
 function observation(overrides: Partial<TargetShadowObservationInput> = {}): TargetShadowObservationInput {
+  const retailerSku = overrides.retailerSku ?? "1011483414";
   return {
     adapterVersion: TARGET_OBSERVER_VERSION,
     contractVersion: 1,
     observedAt: new Date(NOW).toISOString(),
     pageKind: "product",
     retailerId: "target",
-    retailerSku: "1011483414",
+    retailerSku,
     availability: "in_stock",
     unitPriceCents: 5999,
     currency: "USD",
@@ -30,6 +31,12 @@ function observation(overrides: Partial<TargetShadowObservationInput> = {}): Tar
     addControlActionable: true,
     securityChallenge: false,
     interactiveBlock: "",
+    selectedOffer: {
+      schemaVersion: 1,
+      selectionState: "exact",
+      childOfferKey: retailerSku,
+      attributes: {}
+    },
     ...overrides
   };
 }
@@ -46,7 +53,15 @@ test("a paired device records only normalized Target shadow evidence", () => {
     const device = pairedDevice(db);
     const repository = new ShadowObservationRepository(db);
     const input = {
-      ...observation({ observedAt: new Date(NOW + 1_000).toISOString() }),
+      ...observation({
+        observedAt: new Date(NOW + 1_000).toISOString(),
+        selectedOffer: {
+          schemaVersion: 1,
+          selectionState: "exact",
+          childOfferKey: "1011483414",
+          attributes: { color: "  RED  " }
+        }
+      }),
       url: "https://www.target.com/p/-/A-1011483414?secret=DO_NOT_STORE",
       cookie: "DO_NOT_STORE",
       pageText: "DO_NOT_STORE"
@@ -55,6 +70,9 @@ test("a paired device records only normalized Target shadow evidence", () => {
     assert.equal(stored.observationState, "actionable_candidate");
     assert.equal(stored.canonicalUrl, "https://www.target.com/p/-/A-1011483414");
     assert.match(stored.evidenceHash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(stored.selectedOffer.attributes, { color: "red" });
+    assert.equal(stored.selectedOffer.selectionState, "exact");
+    assert.match(stored.selectedOffer.fingerprint, /^[a-f0-9]{64}$/);
     assert.equal(repository.count(), 1);
     const durable = JSON.stringify(db.all("SELECT * FROM retailer_shadow_observations"));
     assert.equal(durable.includes("DO_NOT_STORE"), false);
@@ -73,6 +91,22 @@ test("Target shadow evidence rejects stale, malformed, and unpaired input", () =
     assert.throws(() => repository.record(device.id, observation({ observedAt: new Date(NOW - 11 * 60_000).toISOString() }), NOW), /stale/);
     assert.throws(() => repository.record("device_missing", observation(), NOW), /unavailable/);
     assert.throws(() => repository.record(device.id, observation({ sellerName: "", sellerType: "third_party" }), NOW), /identified/);
+    assert.throws(() => repository.record(device.id, observation({
+      selectedOffer: {
+        schemaVersion: 1,
+        selectionState: "exact",
+        childOfferKey: "9999999999",
+        attributes: {}
+      }
+    }), NOW), /child offer/);
+    assert.throws(() => repository.record(device.id, observation({
+      selectedOffer: {
+        schemaVersion: 1,
+        selectionState: "exact",
+        childOfferKey: "1011483414",
+        attributes: { offerToken: "DO_NOT_STORE" } as never
+      }
+    }), NOW), /unsupported variant/);
     assert.equal(repository.count(), 0);
   } finally {
     db.close();
