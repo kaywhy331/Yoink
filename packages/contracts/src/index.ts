@@ -75,6 +75,87 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_STAGES = [
   "runner"
 ] as const;
 export type RetailerAdapterDiagnosticStage = (typeof RETAILER_ADAPTER_DIAGNOSTIC_STAGES)[number];
+export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
+  "verified",
+  "dom_hydration_recovered",
+  "observer_bundle_injection_failed",
+  "observer_execution_failed",
+  "observer_top_frame_missing",
+  "observer_runtime_unavailable",
+  "observer_collection_failed",
+  "observer_contract_invalid",
+  "product_identity_missing",
+  "security_challenge",
+  "interactive_auth",
+  "interactive_mfa",
+  "interactive_location",
+  "interactive_membership",
+  "interactive_queue",
+  "interactive_unknown",
+  "add_control_selector_miss",
+  "add_control_missing",
+  "add_control_ambiguous",
+  "add_control_disabled",
+  "explicit_sku_binding_missing",
+  "explicit_sku_binding_ambiguous",
+  "offer_binding_missing",
+  "offer_binding_ambiguous",
+  "price_binding_missing",
+  "seller_binding_missing",
+  "fulfillment_binding_missing",
+  "offer_scope_not_actionable",
+  "not_applicable",
+  "offer_not_actionable",
+  "offer_id_missing_or_ambiguous",
+  "offer_route_verified",
+  "route_validation_failed",
+  "route_binding_failed",
+  "rehearsal_failed",
+  "runner_unavailable",
+  "runner_failed",
+  "runner_no_result",
+  "adapter_version_mismatch",
+  "unsupported_action",
+  "quantity_not_supported",
+  "seller_policy_not_supported",
+  "fulfillment_not_supported",
+  "contract_version_mismatch",
+  "job_identity_invalid",
+  "canonical_url_invalid",
+  "quantity_invalid",
+  "unit_cap_invalid",
+  "total_cap_invalid",
+  "job_expired",
+  "offer_stale",
+  "listing_mismatch",
+  "product_page_unverified",
+  "manual_action_required",
+  "out_of_stock",
+  "add_control_unavailable",
+  "currency_mismatch",
+  "seller_unverified",
+  "third_party_seller",
+  "signal_seller_mismatch",
+  "price_unavailable",
+  "over_unit_cap",
+  "fulfillment_unverified",
+  "authorization_missing",
+  "authorization_expired",
+  "add_control_changed",
+  "offer_binding_changed",
+  "click_failed",
+  "offer_unverified",
+  "click_uncertain",
+  "cart_page_unverified",
+  "cart_unverified",
+  "foreign_cart_line",
+  "verified_empty",
+  "cart_evidence_stale",
+  "offer_proof_mismatch",
+  "quantity_unavailable",
+  "clicked"
+] as const;
+export type RetailerAdapterDiagnosticReasonCode = (typeof RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES)[number];
 
 export interface RetailerAdapterLayoutEvidence {
   schemaVersion: 1;
@@ -112,6 +193,56 @@ export interface RetailerAdapterDiagnosticInput {
   attemptCount: number;
   domChanged: boolean;
   layout: RetailerAdapterLayoutEvidence;
+}
+
+export const OPERATOR_ALERT_EVENT_FAMILIES = ["adapter_repair"] as const;
+export type OperatorAlertEventFamily = (typeof OPERATOR_ALERT_EVENT_FAMILIES)[number];
+export const OPERATOR_ALERT_SEVERITIES = ["info", "warning", "error", "critical"] as const;
+export type OperatorAlertSeverity = (typeof OPERATOR_ALERT_SEVERITIES)[number];
+export const OPERATOR_ALERT_ROUTES = ["dashboard", "audit_outbox"] as const;
+export type OperatorAlertRoute = (typeof OPERATOR_ALERT_ROUTES)[number];
+export const SAVE_OPERATOR_ALERT_RULE_CONFIRMATION = "SAVE_OPERATOR_ALERT_RULE";
+export const ACKNOWLEDGE_OPERATOR_ALERT_CONFIRMATION = "ACKNOWLEDGE_OPERATOR_ALERT";
+export const RESOLVE_OPERATOR_ALERT_CONFIRMATION = "RESOLVE_OPERATOR_ALERT";
+export const OPERATOR_ALERT_ACKNOWLEDGEMENT_REASON_CODES = ["operator_investigating"] as const;
+export type OperatorAlertAcknowledgementReasonCode = (typeof OPERATOR_ALERT_ACKNOWLEDGEMENT_REASON_CODES)[number];
+export const OPERATOR_ALERT_RESOLUTION_REASON_CODES = [
+  "maintainer_resolved",
+  "maintainer_triaged",
+  "false_positive",
+  "superseded_by_release"
+] as const;
+export type OperatorAlertResolutionReasonCode = (typeof OPERATOR_ALERT_RESOLUTION_REASON_CODES)[number];
+
+/**
+ * Operator alerts are deliberately limited to sanitized aggregate diagnostics.
+ * They are separate from end-user product notifications and cannot authorize
+ * retailer mutation.
+ */
+export interface OperatorAlertRuleInput {
+  eventFamily: OperatorAlertEventFamily;
+  name: string;
+  enabled: boolean;
+  severity: OperatorAlertSeverity;
+  minimumOccurrences: number;
+  dedupeWindowSeconds: number;
+  escalationAfterSeconds: number;
+  retailerScope: SupportedRetailerId | "*";
+  operationScope: RetailerAdapterDiagnosticOperation | "*";
+  routes: OperatorAlertRoute[];
+  confirmation: typeof SAVE_OPERATOR_ALERT_RULE_CONFIRMATION;
+}
+
+export interface OperatorAlertAcknowledgeInput {
+  reasonCode: OperatorAlertAcknowledgementReasonCode;
+  note?: string;
+  confirmation: typeof ACKNOWLEDGE_OPERATOR_ALERT_CONFIRMATION;
+}
+
+export interface OperatorAlertResolveInput {
+  reasonCode: OperatorAlertResolutionReasonCode;
+  note: string;
+  confirmation: typeof RESOLVE_OPERATOR_ALERT_CONFIRMATION;
 }
 
 export interface TargetAddRehearsalInput {

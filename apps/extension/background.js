@@ -561,6 +561,31 @@ const OBSERVER_RUNTIME_FAILURE_REASONS = new Set([
   "observer_collection_failed",
   "observer_contract_invalid"
 ]);
+const DIAGNOSTIC_REASON_CODES = new Set([
+  "verified", "dom_hydration_recovered",
+  ...OBSERVER_RUNTIME_FAILURE_REASONS,
+  "product_identity_missing", "security_challenge",
+  "interactive_auth", "interactive_mfa", "interactive_location", "interactive_membership",
+  "interactive_queue", "interactive_unknown",
+  "add_control_selector_miss", "add_control_missing", "add_control_ambiguous", "add_control_disabled",
+  "explicit_sku_binding_missing", "explicit_sku_binding_ambiguous",
+  "offer_binding_missing", "offer_binding_ambiguous", "price_binding_missing",
+  "seller_binding_missing", "fulfillment_binding_missing", "offer_scope_not_actionable",
+  "not_applicable", "offer_not_actionable", "offer_id_missing_or_ambiguous",
+  "offer_route_verified", "route_validation_failed", "route_binding_failed",
+  "rehearsal_failed", "runner_unavailable", "runner_failed", "runner_no_result",
+  "adapter_version_mismatch", "unsupported_action", "quantity_not_supported",
+  "seller_policy_not_supported", "fulfillment_not_supported", "contract_version_mismatch",
+  "job_identity_invalid", "canonical_url_invalid", "quantity_invalid", "unit_cap_invalid",
+  "total_cap_invalid", "job_expired", "offer_stale", "listing_mismatch",
+  "product_page_unverified", "manual_action_required", "out_of_stock", "add_control_unavailable",
+  "currency_mismatch", "seller_unverified", "third_party_seller", "signal_seller_mismatch",
+  "price_unavailable", "over_unit_cap", "fulfillment_unverified", "authorization_missing",
+  "authorization_expired", "add_control_changed", "offer_binding_changed", "click_failed",
+  "offer_unverified", "click_uncertain", "cart_page_unverified", "cart_unverified",
+  "foreign_cart_line", "verified_empty", "cart_evidence_stale", "offer_proof_mismatch",
+  "quantity_unavailable", "clicked"
+]);
 
 function diagnosticCount(value) {
   const count = Number(value);
@@ -582,6 +607,7 @@ function retailerDiagnosticPayload(value, retailerId, overrides = {}) {
   if (!DIAGNOSTIC_OPERATIONS.has(operation)
     || !DIAGNOSTIC_OUTCOMES.has(outcome)
     || !DIAGNOSTIC_STAGES.has(failureStage)
+    || !DIAGNOSTIC_REASON_CODES.has(reasonCode)
     || !expectedAdapterVersion
     || ((outcome === "passed") !== (failureStage === "complete"))) {
     throw new Error("The retailer observer returned an invalid adapter diagnostic.");

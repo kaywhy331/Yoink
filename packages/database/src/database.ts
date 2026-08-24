@@ -161,6 +161,22 @@ export class YoinkDatabase {
         timestamp,
         timestamp
       );
+      this.run(
+        `INSERT OR IGNORE INTO operator_alert_rules(
+           id, tenant_id, event_family, name, enabled, severity,
+           minimum_occurrences, dedupe_window_seconds, escalation_after_seconds,
+           retailer_scope, operation_scope, routes_json, privacy_classification,
+           created_by_actor_id, updated_by_actor_id, created_at, updated_at
+         ) VALUES (
+           'alert_rule_adapter_repair_local', ?, 'adapter_repair',
+           'All adapter repair failures', 1, 'warning', 1, 900, 3600,
+           '*', '*', '["dashboard","audit_outbox"]', 'operational_configuration',
+           'local_bootstrap', 'local_bootstrap', ?, ?
+         )`,
+        LOCAL_TENANT_ID,
+        timestamp,
+        timestamp
+      );
       const retailers = [
         ["target", "Target", 1, ["target.com"]],
         ["walmart", "Walmart", 0, ["walmart.com"]],

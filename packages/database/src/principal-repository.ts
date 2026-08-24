@@ -116,6 +116,22 @@ export class PrincipalRepository {
         timestamp,
         timestamp
       );
+      this.db.run(
+        `INSERT OR IGNORE INTO operator_alert_rules(
+           id, tenant_id, event_family, name, enabled, severity,
+           minimum_occurrences, dedupe_window_seconds, escalation_after_seconds,
+           retailer_scope, operation_scope, routes_json, privacy_classification,
+           created_by_actor_id, updated_by_actor_id, created_at, updated_at
+         ) VALUES (?, ?, 'adapter_repair', 'All adapter repair failures', 1, 'warning',
+                   1, 900, 3600, '*', '*', '["dashboard","audit_outbox"]',
+                   'operational_configuration', ?, ?, ?, ?)`,
+        ownedIdForUser("alert_rule_adapter_repair", principal.userId, "alert_rule_adapter_repair_local"),
+        principal.tenantId,
+        actor.actorId,
+        actor.actorId,
+        timestamp,
+        timestamp
+      );
       for (const [source, name, trust, autoCreate] of SOURCE_DEFAULTS) {
         this.db.run(
           `INSERT OR IGNORE INTO source_connections(
@@ -200,6 +216,7 @@ export class PrincipalRepository {
       privateSourceConnections: SOURCE_DEFAULTS.length,
       privateAttributionPolicies: ATTRIBUTION_DEFAULTS.length,
       defaultStrategies: 1,
+      operatorAlertRulesInitialized: 1,
       roles: ["yoink_user"]
     };
   }

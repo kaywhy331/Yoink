@@ -55,6 +55,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
     return "admin.read";
   }
   if (pathname.startsWith("/api/v1/admin/catalog/")) return "catalog.review";
+  if (pathname === "/api/v1/alerts") return "admin.read";
+  if (pathname.startsWith("/api/v1/alerts/")) return method === "GET" ? "admin.read" : "alert.manage";
 
   if (pathname === "/api/v1/user/overview" || pathname === "/api/v1/user/authorization") return "user.read";
   if (pathname.startsWith("/api/v1/user/purchase-intents")) return "user.intent.manage";

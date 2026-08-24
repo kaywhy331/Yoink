@@ -143,6 +143,12 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 80
 .shadow-evidence-panel { margin-top: 16px; }
 .shadow-evidence-panel .panel-heading p { max-width: 680px; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .adapter-repair-panel { margin-top: 16px; }
+.operator-alert-panel { margin-top: 16px; }
+.operator-alert-panel .panel-heading p { max-width: 760px; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.operator-alert-card.bad { border-color: rgba(255,117,136,.34); }
+.operator-alert-card.warning { border-color: rgba(255,202,107,.3); }
+.operator-alert-card.good { border-color: rgba(85,230,177,.24); }
+.operator-alert-detail { margin: 10px 0 0; color: var(--subtle); font-size: 9px; line-height: 1.55; }
 .community-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
 .community-panel { margin-top: 16px; }
 .community-panel .panel-heading p { max-width: 760px; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }

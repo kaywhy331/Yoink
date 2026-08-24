@@ -20,6 +20,7 @@
       <button class="nav-button" data-view="signals" type="button">Opportunities</button>
       <button class="nav-button" data-view="actions" type="button">Actions</button>
       <button class="nav-button" data-view="activity" type="button">Activity</button>
+      <button class="nav-button" data-view="alerts" type="button">Alerts</button>
       <button class="nav-button" data-view="community" type="button">Community</button>
       <button class="nav-button" data-view="connections" type="button">Connections</button>
       <button class="nav-button" data-view="access" type="button">Access</button>
@@ -137,6 +138,24 @@
       <div class="filter-bar"><input id="auditSearch" type="search" placeholder="Search event, reason, message, or correlation ID" aria-label="Search activity"><span id="auditCount"></span></div>
       <div class="timeline full-timeline" id="auditList"></div>
       <div class="collection-more"><button class="button secondary" id="auditMoreButton" type="button" hidden>Load more activity</button></div>
+    </section>
+
+    <section class="view" id="view-alerts" data-view-panel="alerts">
+      <div class="page-heading"><div><p class="eyebrow">Operational control plane</p><h1>Alerts</h1><p>Sanitized extension failures become deduplicated operator incidents immediately. This queue is separate from product notifications and has no purchase authority.</p></div><button class="button primary" id="addOperatorAlertRuleButton" type="button">Add alert rule</button></div>
+      <div class="safety-banner compact"><span class="safety-icon">◈</span><div><strong>Operational aggregates only</strong><p>Alert rows contain bounded enums, counts, pseudonymous cohorts, and structural fingerprints. Page HTML, text, exact product IDs, account data, cookies, offer tokens, forms, and payment data are never copied into this subsystem.</p></div></div>
+      <section class="metric-grid" id="operatorAlertMetricGrid" aria-label="Operator alert totals"></section>
+      <section class="panel operator-alert-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Dedupe and escalation</p><h2>Incident queue</h2><p>Acknowledgement records ownership without hiding the incident. Resolution is audited, and the same historical failure cannot reopen itself.</p></div><span class="mode-chip" id="operatorAlertGate">CHECKING</span></div>
+        <div class="card-list" id="operatorAlertIncidentList"></div>
+      </section>
+      <section class="panel operator-alert-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Permission: alert.manage</p><h2>Routing rules</h2><p>Rules can narrow by retailer and diagnostic operation. Dashboard delivery is immediate; audit-outbox routing is durable and remains distinct from user notifications.</p></div></div>
+        <div class="card-list" id="operatorAlertRuleList"></div>
+      </section>
+      <section class="panel operator-alert-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Immutable receipts</p><h2>Delivery history</h2><p>Every routed lifecycle event records the route and current durable-outbox state.</p></div></div>
+        <div class="card-list" id="operatorAlertDeliveryList"></div>
+      </section>
     </section>
 
     <section class="view" id="view-community" data-view-panel="community">
@@ -407,6 +426,30 @@
       </div>
       <p class="fine-print">Titles, images, similar URLs, and prices are never merge evidence. Multi-tenant hosted catalog mutation remains closed until a global curator authority exists.</p>
       <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Submit for review</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="operatorAlertRuleDialog">
+    <form id="operatorAlertRuleForm">
+      <input name="id" type="hidden">
+      <div class="dialog-heading"><div><p class="eyebrow">Privacy-classified operations</p><h2 id="operatorAlertRuleDialogTitle">Add alert rule</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="form-grid">
+        <label class="wide"><span>Rule name</span><input name="name" maxlength="120" required></label>
+        <label><span>Severity</span><select name="severity"><option value="info">Info</option><option value="warning">Warning</option><option value="error">Error</option><option value="critical">Critical</option></select></label>
+        <label><span>Event family</span><select name="eventFamily"><option value="adapter_repair">Adapter repair</option></select></label>
+        <label><span>Retailer scope</span><select name="retailerScope"><option value="*">All retailers</option><option value="target">Target</option><option value="walmart">Walmart</option><option value="amazon">Amazon</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option></select></label>
+        <label><span>Operation scope</span><select name="operationScope"><option value="*">All operations</option><option value="observe">Observe</option><option value="rehearse_add">No-click rehearsal</option><option value="live_add">Guarded live add</option></select></label>
+        <label><span>Minimum occurrences</span><input name="minimumOccurrences" type="number" min="1" max="100" value="1" required></label>
+        <label><span>Dedupe window</span><div class="money-input"><input name="dedupeWindowSeconds" type="number" min="60" max="86400" value="900" required><span>sec</span></div></label>
+        <label><span>Escalate after</span><div class="money-input"><input name="escalationAfterSeconds" type="number" min="0" max="604800" value="3600" required><span>sec</span></div></label>
+        <label class="check-label"><input name="enabled" type="checkbox" checked><span>Rule enabled</span></label>
+        <fieldset class="wide selection-field"><legend>Routes</legend><div class="choice-grid">
+          <label class="check-label"><input name="route" type="checkbox" value="dashboard" checked><span>Admin dashboard</span></label>
+          <label class="check-label"><input name="route" type="checkbox" value="audit_outbox" checked><span>Durable audit outbox</span></label>
+        </div></fieldset>
+      </div>
+      <p class="fine-print">Escalation may be 0 (disabled) or at least 300 seconds. Remote alert configuration cannot widen an observer or mutation runner.</p>
+      <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save alert rule</button></div>
     </form>
   </dialog>
 

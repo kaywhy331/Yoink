@@ -59,6 +59,10 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
       body: "{}"
     });
     assert.equal(deniedIdentityProposal.status, 403);
+    const deniedAlerts = await fetch(`${baseUrl}/api/v1/admin/alerts`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(deniedAlerts.status, 403);
 
     const userLibrary = await fetch(`${baseUrl}/api/v1/user/library`, {
       headers: { "X-Test-Principal": "user" }
@@ -111,6 +115,20 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     assert.equal(allowedIdentityRead.status, 200);
     assert.equal(allowedIdentityRead.headers.get("x-yoink-api-surface"), "admin");
     assert.deepEqual(await allowedIdentityRead.json(), { items: [] });
+    const allowedAlertRead = await fetch(`${baseUrl}/api/v1/admin/alerts`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(allowedAlertRead.status, 200);
+    const deniedAlertMutation = await fetch(`${baseUrl}/api/v1/admin/alerts/rules`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: "{}"
+    });
+    assert.equal(deniedAlertMutation.status, 403);
     const readonlyIdentityProposal = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
       method: "POST",
       headers: {
@@ -147,6 +165,19 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     });
     assert.equal(curatorProposal.status, 400);
     assert.equal((await curatorProposal.json() as { error: string }).error, "catalog_identity_confirmation_required");
+
+    runWithRequestScope(LOCAL_REQUEST_SCOPE, () => authorization.grantRole(LOCAL_USER_ID, "security_admin"));
+    const permittedAlertMutation = await fetch(`${baseUrl}/api/v1/admin/alerts/rules`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: "{}"
+    });
+    assert.equal(permittedAlertMutation.status, 400);
+    assert.equal((await permittedAlertMutation.json() as { error: string }).error, "operator_alert_confirmation_required");
   } finally {
     server.close();
     await once(server, "close");

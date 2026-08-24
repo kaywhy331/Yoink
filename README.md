@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.22.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.23.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,20 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.23.0 adds a tenant-scoped, privacy-classified operator alert path for
+adapter repair failures. An accepted sanitized companion diagnostic and its
+matching alert reconciliation commit atomically. Configurable rules can narrow
+by retailer and operation, set severity, threshold, dedupe and escalation
+windows, and route immutable receipts to the admin dashboard and durable audit
+outbox. Operators with `alert.manage` can acknowledge or resolve an incident;
+the same structural group auto-resolves when its diagnostic recovers, while a
+strictly later failure may open new work. Alert projections expose only stable
+allowlisted reason codes, structural fingerprints, bounded counts, and a
+pseudonymous contributor cohort—never exact product IDs, page content, URLs,
+tokens, account data, or operator notes. Alert rules carry no retailer mutation
+authority, and external paging plus background escalation workers remain
+roadmap work.
 
 Version 0.22.0 adds a separate read-only Walmart Collectibles Draw lifecycle.
 An explicit companion action observes only the exact draw hub, extracts bounded
@@ -159,9 +173,10 @@ The user dashboard stays focused on exact products, purchase plans, recent
 actions, and preferences. Track a known exact listing, then edit its store,
 seller, fulfillment, quantity, and maximum-price preferences. Catalog
 suggestions remain pending until reviewed in the admin control center. Detailed
-source health, diagnostics, retailer qualification, recipes, affiliate setup,
-catalog review, reversible merge/split/compensation history, and role membership
-are intentionally isolated under `/admin`.
+source health, diagnostics, privacy-classified operator alerts, retailer
+qualification, recipes, affiliate setup, catalog review, reversible
+merge/split/compensation history, and role membership are intentionally
+isolated under `/admin`.
 
 There is no separate Signals start switch:
 
@@ -221,6 +236,14 @@ failures recover automatically. Zero-layout observer-runtime incidents recover
 only after every affected exact SKU later completes a successful inspection;
 persistent parser failures still require a
 reviewed adapter release rather than remotely supplied or self-modifying code.
+Each newly opened repair group is also reconciled against tenant-owned operator
+alert rules in the same database transaction as diagnostic ingestion. The
+admin Alerts view exposes redacted incidents, rule configuration, immutable
+lifecycle events, dashboard/audit-outbox delivery receipts, acknowledgement,
+and resolution. Arbitrary diagnostic reason strings are rejected by both the
+companion and server against one parity-tested contract, closing that field as
+a channel for raw errors or exact product data. This operational path cannot
+create, qualify, lease, or execute a purchase job.
 
 Companion 0.17.0 also makes eligible adapter diagnostics durable across a
 temporary local-server outage. Only the already-normalized payload is retained:

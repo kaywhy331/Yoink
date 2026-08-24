@@ -3,6 +3,7 @@ import {
   BESTBUY_ADD_ADAPTER_VERSION,
   RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS,
   RETAILER_ADAPTER_DIAGNOSTIC_OUTCOMES,
+  RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES,
   RETAILER_ADAPTER_DIAGNOSTIC_STAGES,
   RETAILER_OBSERVER_VERSIONS,
   TARGET_ADD_ADAPTER_VERSION,
@@ -22,6 +23,7 @@ import { currentRequestScope } from "./request-scope.js";
 const OPERATIONS = new Set(RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS);
 const OUTCOMES = new Set(RETAILER_ADAPTER_DIAGNOSTIC_OUTCOMES);
 const STAGES = new Set(RETAILER_ADAPTER_DIAGNOSTIC_STAGES);
+const REASON_CODES = new Set<string>(RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES);
 const PAGE_KINDS = new Set(["product", "other"] as const);
 const SCOPE_KINDS = new Set(["none", "form", "buybox", "qualified_buybox", "accordion", "other"] as const);
 const SELLER_SHAPES = new Set(["none", "legacy", "offer_display_combined", "offer_display_split"] as const);
@@ -210,7 +212,7 @@ export class AdapterDiagnosticRepository {
       throw new Error("Adapter diagnostic outcome and failure stage are inconsistent.");
     }
     const reasonCode = cleanText(input.reasonCode, 80).toLowerCase();
-    if (!/^[a-z][a-z0-9_]{1,79}$/.test(reasonCode)) throw new Error("The adapter diagnostic reason code is invalid.");
+    if (!REASON_CODES.has(reasonCode)) throw new Error("The adapter diagnostic reason code is not allowlisted.");
     const attemptCount = Number(input.attemptCount);
     if (!Number.isInteger(attemptCount) || attemptCount < 1 || attemptCount > 3) throw new Error("Adapter diagnostic attempt count must be 1 through 3.");
     if (input.outcome === "recovered" && attemptCount < 2) throw new Error("A recovered diagnostic requires a retry attempt.");

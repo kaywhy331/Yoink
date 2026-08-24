@@ -134,6 +134,7 @@ test("adapter diagnostics reject malformed, stale, secret-shaped, and inconsiste
     const device = pairedDevice(db);
     const repository = new AdapterDiagnosticRepository(db);
     assert.throws(() => repository.record(device.id, diagnostic({ reasonCode: "raw error: secret" }), NOW + 2_000), /reason code/);
+    assert.throws(() => repository.record(device.id, diagnostic({ reasonCode: "b0fb21526x" }), NOW + 2_000), /allowlisted/);
     assert.throws(() => repository.record(device.id, diagnostic({ observedAt: new Date(NOW - 11 * 60_000).toISOString() }), NOW), /stale/);
     assert.throws(() => repository.record(device.id, diagnostic({ outcome: "passed" }), NOW + 2_000), /inconsistent/);
     assert.throws(() => repository.record(device.id, diagnostic({ layout: layout({ canonicalOfferDistinctCount: 3 }) }), NOW + 2_000), /counts/);

@@ -1576,5 +1576,139 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       CREATE INDEX walmart_draw_items_close_idx
         ON walmart_draw_items(user_id, draw_state, closes_at, observed_at DESC);
     `
+  },
+  {
+    version: 25,
+    name: "privacy_classified_operator_alerts",
+    sql: `
+      CREATE TABLE operator_alert_rules (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        event_family TEXT NOT NULL CHECK (event_family = 'adapter_repair'),
+        name TEXT NOT NULL,
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'error', 'critical')),
+        minimum_occurrences INTEGER NOT NULL CHECK (minimum_occurrences BETWEEN 1 AND 100),
+        dedupe_window_seconds INTEGER NOT NULL CHECK (dedupe_window_seconds BETWEEN 60 AND 86400),
+        escalation_after_seconds INTEGER NOT NULL CHECK (
+          escalation_after_seconds = 0 OR escalation_after_seconds BETWEEN 300 AND 604800
+        ),
+        retailer_scope TEXT NOT NULL DEFAULT '*',
+        operation_scope TEXT NOT NULL DEFAULT '*',
+        routes_json TEXT NOT NULL,
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_configuration'
+          CHECK (privacy_classification = 'operational_configuration'),
+        created_by_actor_id TEXT NOT NULL,
+        updated_by_actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(tenant_id, event_family, name)
+      ) STRICT;
+      CREATE INDEX operator_alert_rules_tenant_enabled_idx
+        ON operator_alert_rules(tenant_id, enabled, event_family, updated_at DESC);
+
+      CREATE TABLE operator_alert_incidents (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        subject_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        rule_id TEXT NOT NULL REFERENCES operator_alert_rules(id) ON DELETE RESTRICT,
+        event_family TEXT NOT NULL CHECK (event_family = 'adapter_repair'),
+        incident_key_hash TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'error', 'critical')),
+        status TEXT NOT NULL CHECK (status IN ('open', 'acknowledged', 'resolved')),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        retailer_id TEXT NOT NULL REFERENCES retailers(id) ON DELETE RESTRICT,
+        operation TEXT NOT NULL CHECK (operation IN ('observe', 'rehearse_add', 'live_add')),
+        failure_stage TEXT NOT NULL,
+        reason_code TEXT NOT NULL,
+        layout_fingerprint TEXT NOT NULL,
+        occurrence_count INTEGER NOT NULL CHECK (occurrence_count >= 1),
+        affected_entity_count INTEGER NOT NULL CHECK (affected_entity_count >= 1),
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        last_failure_at TEXT NOT NULL,
+        last_routed_at TEXT NOT NULL DEFAULT '',
+        escalated_at TEXT NOT NULL DEFAULT '',
+        acknowledged_by_actor_id TEXT NOT NULL DEFAULT '',
+        acknowledged_at TEXT NOT NULL DEFAULT '',
+        resolved_by_actor_id TEXT NOT NULL DEFAULT '',
+        resolved_at TEXT NOT NULL DEFAULT '',
+        resolution_code TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE UNIQUE INDEX operator_alert_incidents_active_unique
+        ON operator_alert_incidents(tenant_id, subject_user_id, rule_id, incident_key_hash)
+        WHERE status IN ('open', 'acknowledged');
+      CREATE INDEX operator_alert_incidents_queue_idx
+        ON operator_alert_incidents(tenant_id, status, severity, last_seen_at DESC, id DESC);
+
+      CREATE TABLE operator_alert_events (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        incident_id TEXT NOT NULL REFERENCES operator_alert_incidents(id) ON DELETE RESTRICT,
+        rule_id TEXT NOT NULL REFERENCES operator_alert_rules(id) ON DELETE RESTRICT,
+        event_type TEXT NOT NULL CHECK (event_type IN (
+          'opened', 'repeated', 'escalated', 'acknowledged', 'resolved', 'auto_resolved'
+        )),
+        severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'error', 'critical')),
+        reason_code TEXT NOT NULL,
+        actor_kind TEXT NOT NULL CHECK (actor_kind IN ('maintainer', 'user', 'device', 'service')),
+        actor_id TEXT NOT NULL,
+        correlation_id TEXT NOT NULL,
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX operator_alert_events_incident_idx
+        ON operator_alert_events(incident_id, created_at DESC, id DESC);
+
+      CREATE TABLE operator_alert_deliveries (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        incident_id TEXT NOT NULL REFERENCES operator_alert_incidents(id) ON DELETE RESTRICT,
+        event_id TEXT NOT NULL REFERENCES operator_alert_events(id) ON DELETE RESTRICT,
+        route_kind TEXT NOT NULL CHECK (route_kind IN ('dashboard', 'audit_outbox')),
+        delivery_state TEXT NOT NULL CHECK (delivery_state IN ('delivered', 'queued')),
+        outbox_event_id TEXT REFERENCES outbox_events(id) ON DELETE RESTRICT,
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX operator_alert_deliveries_incident_idx
+        ON operator_alert_deliveries(incident_id, created_at DESC, id DESC);
+
+      CREATE TRIGGER operator_alert_events_no_update
+      BEFORE UPDATE ON operator_alert_events
+      BEGIN SELECT RAISE(ABORT, 'operator alert events are append-only'); END;
+      CREATE TRIGGER operator_alert_events_no_delete
+      BEFORE DELETE ON operator_alert_events
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'operator alert events are append-only'); END;
+      CREATE TRIGGER operator_alert_deliveries_no_update
+      BEFORE UPDATE ON operator_alert_deliveries
+      BEGIN SELECT RAISE(ABORT, 'operator alert deliveries are append-only'); END;
+      CREATE TRIGGER operator_alert_deliveries_no_delete
+      BEFORE DELETE ON operator_alert_deliveries
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'operator alert deliveries are append-only'); END;
+
+      INSERT INTO operator_alert_rules(
+        id, tenant_id, event_family, name, enabled, severity,
+        minimum_occurrences, dedupe_window_seconds, escalation_after_seconds,
+        retailer_scope, operation_scope, routes_json, privacy_classification,
+        created_by_actor_id, updated_by_actor_id, created_at, updated_at
+      )
+      SELECT 'alert_rule_' || lower(hex(randomblob(16))), id, 'adapter_repair',
+             'All adapter repair failures', 1, 'warning', 1, 900, 3600,
+             '*', '*', '["dashboard","audit_outbox"]', 'operational_configuration',
+             'migration_25', 'migration_25',
+             strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      FROM tenants;
+    `
   }
 ]);

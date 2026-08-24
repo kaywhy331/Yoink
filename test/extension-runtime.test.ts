@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
 import test from "node:test";
+import { RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES } from "../packages/contracts/src/index.js";
 
 const TOKEN = "T".repeat(43);
 const PRODUCT_URL = "https://www.target.com/p/fixture/-/A-1011483414";
@@ -1029,6 +1030,10 @@ function harness(options: HarnessOptions = {}) {
     clearTimeout
   });
   runInContext(readFileSync(join(process.cwd(), "apps", "extension", "background.js"), "utf8"), context);
+  const diagnosticReasonCodes = JSON.parse(String(runInContext(
+    "JSON.stringify([...DIAGNOSTIC_REASON_CODES].sort())",
+    context
+  ))) as string[];
   if (!messageListener) throw new Error("The extension message listener was not registered.");
   const send = (message: unknown) => new Promise<Record<string, unknown>>((resolve) => {
     assert.equal(messageListener?.(message, {}, (response) => resolve(response as Record<string, unknown>)), true);
@@ -1052,6 +1057,7 @@ function harness(options: HarnessOptions = {}) {
     closeNotification: (id: string, byUser = true) => notificationClosedListener?.(id, byUser),
     fireStartup: () => startupListener?.(),
     adapterDiagnosticQueueDrained,
+    diagnosticReasonCodes,
     firePush: (payload: Record<string, unknown>) => new Promise<void>((resolve, reject) => {
       const listener = serviceWorkerListeners.get("push");
       if (!listener) return reject(new Error("The push listener was not registered."));
@@ -1063,6 +1069,14 @@ function harness(options: HarnessOptions = {}) {
     tabUrls: () => [...tabs.values()].map((tab) => tab.url)
   };
 }
+
+test("the packaged extension diagnostic reason allowlist matches the server contract exactly", () => {
+  const runtime = harness();
+  assert.deepEqual(
+    runtime.diagnosticReasonCodes,
+    [...RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES].sort()
+  );
+});
 
 test("the service worker performs one authenticated, sanitized, isolated Target inspection", async () => {
   const runtime = harness();

@@ -21,6 +21,9 @@ import {
   type CatalogIdentityOperationProposalInput,
   type JobState,
   type MissionUpdateInput,
+  type OperatorAlertAcknowledgeInput,
+  type OperatorAlertResolveInput,
+  type OperatorAlertRuleInput,
   type SpendPolicyUpdateInput,
   type RetailerAdapterDiagnosticInput,
   type RetailerShadowObservationInput,
@@ -59,6 +62,7 @@ import {
 import { IdentityClaimRepository } from "../../../packages/database/src/identity-claim-repository.js";
 import { NotificationRepository } from "../../../packages/database/src/notification-repository.js";
 import { ObserverRecipeRepository } from "../../../packages/database/src/observer-recipe-repository.js";
+import { OperatorAlertRepository } from "../../../packages/database/src/operator-alert-repository.js";
 import { MutationLaneRepository } from "../../../packages/database/src/mutation-lane-repository.js";
 import { PORTABILITY_FORMAT } from "../../../packages/database/src/portability.js";
 import {
@@ -235,11 +239,23 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const notifications = new NotificationRepository(db);
   const mutationLanes = new MutationLaneRepository(db);
   const observerRecipes = new ObserverRecipeRepository(db, dependencies.observerRecipeSigner ?? ObserverRecipeSigner.ephemeral());
+  const operatorAlerts = new OperatorAlertRepository(db);
   const principals = new PrincipalRepository(db);
   const qualifications = new QualificationRepository(db);
   const shadowObservations = new ShadowObservationRepository(db);
   const sourceRuntime = new SourceRepository(db);
   const walmartDraws = new WalmartDrawRepository(db);
+
+  // Local startup is an explicit reconciliation boundary so open, sanitized
+  // repair groups that predate migration 25 receive their default operator
+  // alert without turning a GET request into a hidden write. Hosted workers
+  // will perform this per tenant once Phase 2 transport is deployed.
+  if (dependencies.requestScopeResolver === undefined) {
+    operatorAlerts.reconcileAdapterRepairs(
+      adapterDiagnostics.listRepairQueue(2_000),
+      "local_startup_alert_reconciliation"
+    );
+  }
 
   return createServer(async (request, response) => {
     const suppliedCorrelationId = String(request.headers["x-request-id"] ?? "").trim();
@@ -280,6 +296,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const purchaseIntentOffersMatch = /^\/api\/v1\/user\/purchase-intents\/([A-Za-z0-9_-]{3,120})\/offers$/.exec(requestUrl.pathname);
       const catalogIdentityOperationDetailMatch = /^\/api\/v1\/admin\/catalog\/identity-operations\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
       const catalogIdentityOperationDecisionMatch = /^\/api\/v1\/admin\/catalog\/identity-operations\/([A-Za-z0-9_-]{3,120})\/decision$/.exec(requestUrl.pathname);
+      const operatorAlertRuleMatch = /^\/api\/v1\/alerts\/rules\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
+      const operatorAlertIncidentActionMatch = /^\/api\/v1\/alerts\/incidents\/([A-Za-z0-9_-]{3,120})\/(acknowledge|resolve)$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
         const settings = control.settings();
@@ -436,6 +454,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/alerts") {
+        json(response, 200, operatorAlerts.snapshot());
+        return;
+      }
+
       const authorizationMembershipMatch = /^\/api\/v1\/admin\/authorization\/users\/([A-Za-z0-9_-]{3,120})\/roles\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
       const catalogProposalDecisionMatch = /^\/api\/v1\/admin\/catalog\/proposals\/(catalog_proposal_[A-Za-z0-9_-]{16,120})\/decision$/.exec(requestUrl.pathname);
 
@@ -504,8 +527,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && adapterDiagnosticMatch) {
           const body = await readJson(request);
           if (body.retailerId !== adapterDiagnosticMatch[1]) throw new Error("The adapter diagnostic route and payload must match.");
+          const recorded = db.transaction(() => {
+            const diagnostic = adapterDiagnostics.record(device.id, body as unknown as RetailerAdapterDiagnosticInput);
+            const alertReconciliation = operatorAlerts.reconcileAdapterRepairs(
+              adapterDiagnostics.listRepairQueue(2_000),
+              correlationId
+            );
+            return { diagnostic, alertReconciliation };
+          });
           json(response, 201, {
-            diagnostic: adapterDiagnostics.record(device.id, body as unknown as RetailerAdapterDiagnosticInput)
+            ...recorded
           });
           return;
         }
@@ -703,6 +734,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/snapshot") {
         const pairedDevices = devices.listDevices();
+        const operatorAlertCounts = operatorAlerts.counts();
+        const operatorAlertSnapshot = operatorAlerts.snapshot();
         const targetQualification = shadowObservations.targetQualificationReadiness();
         const walmartQualification = shadowObservations.walmartQualificationReadiness();
         const amazonQualification = shadowObservations.amazonQualificationReadiness();
@@ -734,7 +767,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ...observerRecipes.counts(),
             ...catalogGovernance.counts(),
             ...catalogIdentityGovernance.counts(),
-            ...hostedDelivery.counts()
+            ...hostedDelivery.counts(),
+            ...operatorAlertCounts
           },
           sources: control.listSources(),
           strategies: control.listStrategies(),
@@ -789,6 +823,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             memberships: authorization.memberships(),
             roleAdministrationEnabled: authorization.has("security.manage")
           },
+          operatorAlerts: operatorAlertSnapshot,
           retailerEvidence: shadowObservations.retailerEvidenceReadiness(),
           targetQualification,
           walmartQualification,
@@ -814,6 +849,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             retailerReadOnlyShadow: true,
             sanitizedAdapterDiagnostics: true,
             durableAdapterDiagnosticDelivery: true,
+            privacyClassifiedOperatorAlerts: true,
+            operatorAlertMutationAuthority: false,
             communityReadOnlyEvidence: true,
             communityAdvisoryOnly: true,
             identityClaimGovernance: true,
@@ -936,6 +973,32 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             authorizationMembershipMatch[2] ?? ""
           )
         });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/alerts/rules") {
+        const body = await readJson(request);
+        const rule = operatorAlerts.saveRule(body as unknown as OperatorAlertRuleInput);
+        const reconciliation = operatorAlerts.reconcileAdapterRepairs(adapterDiagnostics.listRepairQueue(2_000), correlationId);
+        json(response, 201, { rule, reconciliation });
+        return;
+      }
+
+      if (request.method === "PATCH" && operatorAlertRuleMatch) {
+        const body = await readJson(request);
+        const rule = operatorAlerts.saveRule(body as unknown as OperatorAlertRuleInput, operatorAlertRuleMatch[1] ?? "");
+        const reconciliation = operatorAlerts.reconcileAdapterRepairs(adapterDiagnostics.listRepairQueue(2_000), correlationId);
+        json(response, 200, { rule, reconciliation });
+        return;
+      }
+
+      if (request.method === "POST" && operatorAlertIncidentActionMatch) {
+        const body = await readJson(request);
+        const incidentId = operatorAlertIncidentActionMatch[1] ?? "";
+        const incident = operatorAlertIncidentActionMatch[2] === "acknowledge"
+          ? operatorAlerts.acknowledge(incidentId, body as unknown as OperatorAlertAcknowledgeInput, correlationId)
+          : operatorAlerts.resolve(incidentId, body as unknown as OperatorAlertResolveInput, correlationId);
+        json(response, 200, { incident });
         return;
       }
 

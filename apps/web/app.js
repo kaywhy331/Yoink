@@ -7,6 +7,7 @@ const state = {
   attributionDirty: false,
   identityDirty: false,
   observerRecipeDirty: false,
+  editingOperatorAlertRuleId: "",
   pairing: null,
   libraryItems: [],
   libraryTotal: 0,
@@ -689,8 +690,53 @@ function renderAuthorization() {
   $("#authorizationRoleList").innerHTML = state.authorizationRoles.map((role) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(role.displayName)}</h3><p>${escapeHtml(role.description)}</p></div><span class="tag">${role.permissions.length} permissions</span></div><div class="card-meta">${role.permissions.map((permission) => `<span class="tag">${escapeHtml(permission)}</span>`).join("")}</div></article>`).join("");
 }
 
+function renderOperatorAlerts() {
+  const alerts = state.snapshot.operatorAlerts || {};
+  const counts = alerts.counts || {};
+  const incidents = alerts.incidents || [];
+  const rules = alerts.rules || [];
+  const deliveries = alerts.deliveries || [];
+  const activeCount = Number(counts.openOperatorAlerts || 0) + Number(counts.acknowledgedOperatorAlerts || 0);
+  const gate = $("#operatorAlertGate");
+  gate.textContent = activeCount ? `${activeCount} ACTIVE` : "CLEAR";
+  gate.classList.toggle("danger", activeCount > 0);
+  const addButton = $("#addOperatorAlertRuleButton");
+  addButton.disabled = alerts.canManage !== true;
+  addButton.title = alerts.canManage === true ? "Create a bounded operator alert rule." : "Permission alert.manage is required.";
+  const metrics = [
+    ["Open", counts.openOperatorAlerts, `${Number(counts.acknowledgedOperatorAlerts || 0)} acknowledged`],
+    ["Critical", counts.criticalOperatorAlerts, "Active incidents only"],
+    ["Rules", counts.enabledOperatorAlertRules, `${Number(counts.operatorAlertRules || 0)} configured`],
+    ["Deliveries", counts.operatorAlertDeliveries, "Dashboard and durable outbox"]
+  ];
+  $("#operatorAlertMetricGrid").innerHTML = metrics.map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong><small>${escapeHtml(note)}</small></article>`).join("");
+  $("#operatorAlertIncidentList").innerHTML = incidents.length ? incidents.map((incident) => {
+    const severityKind = ["critical", "error"].includes(incident.severity) ? "bad" : incident.severity === "warning" ? "warning" : "good";
+    const statusKind = incident.status === "resolved" ? "good" : incident.status === "acknowledged" ? "warning" : severityKind;
+    const actions = alerts.canManage === true && incident.status !== "resolved"
+      ? `<div class="card-actions">${incident.status === "open" ? `<button class="button secondary" data-operator-alert-acknowledge="${escapeHtml(incident.id)}" type="button">Acknowledge</button>` : ""}<button class="button primary" data-operator-alert-resolve="${escapeHtml(incident.id)}" type="button">Resolve</button></div>`
+      : "";
+    return `<article class="card operator-alert-card ${escapeHtml(statusKind)}">
+      <div class="card-top"><div><h3>${escapeHtml(incident.title)}</h3><p>${escapeHtml(incident.summary)}</p></div><span class="tag ${statusKind}">${escapeHtml(incident.status)}</span></div>
+      <div class="card-meta"><span class="tag ${severityKind}">${escapeHtml(incident.severity)}</span><span class="tag">${escapeHtml(retailerName(incident.retailerId))}</span><span class="tag">${escapeHtml(String(incident.operation).replaceAll("_", " "))}</span><span class="tag">${Number(incident.occurrenceCount || 0).toLocaleString()} occurrences</span><span class="tag">${Number(incident.affectedEntityCount || 0).toLocaleString()} products</span>${incident.escalationDue ? '<span class="tag bad">Escalation due</span>' : incident.escalatedAt ? '<span class="tag bad">Escalated</span>' : ""}</div>
+      <p class="operator-alert-detail">Reason ${escapeHtml(String(incident.reasonCode).replaceAll("_", " "))} · stage ${escapeHtml(String(incident.failureStage).replaceAll("_", " "))} · layout ${escapeHtml(String(incident.layoutFingerprint).slice(0, 12))} · cohort ${escapeHtml(incident.sourceCohort)} · last seen ${escapeHtml(relativeTime(incident.lastSeenAt))}</p>
+      ${actions}
+    </article>`;
+  }).join("") : empty("No operator alert incidents have been recorded. Sanitized extension failures will appear here immediately when a matching rule is enabled.");
+  $("#operatorAlertRuleList").innerHTML = rules.length ? rules.map((rule) => `<article class="card">
+    <div class="card-top"><div><h3>${escapeHtml(rule.name)}</h3><p>${escapeHtml(rule.eventFamily.replaceAll("_", " "))} · ${rule.retailerScope === "*" ? "all retailers" : escapeHtml(retailerName(rule.retailerScope))} · ${rule.operationScope === "*" ? "all operations" : escapeHtml(rule.operationScope.replaceAll("_", " "))}</p></div><span class="tag ${rule.enabled ? "good" : "warning"}">${rule.enabled ? "enabled" : "disabled"}</span></div>
+    <div class="card-meta"><span class="tag ${["critical", "error"].includes(rule.severity) ? "bad" : rule.severity === "warning" ? "warning" : "good"}">${escapeHtml(rule.severity)}</span><span class="tag">after ${Number(rule.minimumOccurrences)} occurrence${Number(rule.minimumOccurrences) === 1 ? "" : "s"}</span><span class="tag">dedupe ${Number(rule.dedupeWindowSeconds)}s</span><span class="tag">${Number(rule.escalationAfterSeconds) ? `escalate ${Number(rule.escalationAfterSeconds)}s` : "no escalation"}</span>${(rule.routes || []).map((route) => `<span class="tag">${escapeHtml(String(route).replaceAll("_", " "))}</span>`).join("")}</div>
+    ${alerts.canManage === true ? `<div class="card-actions"><button class="button secondary" data-operator-alert-rule-edit="${escapeHtml(rule.id)}" type="button">Edit rule</button></div>` : ""}
+  </article>`).join("") : empty("No alert rules are configured.");
+  const incidentNames = new Map(incidents.map((incident) => [incident.id, incident.title]));
+  $("#operatorAlertDeliveryList").innerHTML = deliveries.length ? deliveries.slice(0, 100).map((delivery) => {
+    const kind = delivery.deliveryState === "delivered" ? "good" : delivery.deliveryState === "dead_letter" ? "bad" : "warning";
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(incidentNames.get(delivery.incidentId) || "Operator alert")}</h3><p>${escapeHtml(String(delivery.eventType).replaceAll("_", " "))} routed to ${escapeHtml(String(delivery.routeKind).replaceAll("_", " "))}</p></div><span class="tag ${kind}">${escapeHtml(String(delivery.deliveryState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">operational aggregate</span><span>${escapeHtml(relativeTime(delivery.createdAt))}</span></div></article>`;
+  }).join("") : empty("No operator alert delivery receipts exist yet.");
+}
+
 function render() {
-  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization();
+  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts();
 }
 
 async function storeFingerprint(retailerId, localStoreId) {
@@ -867,6 +913,26 @@ function openCatalogIdentityForm(kind) {
   $("#catalogIdentityDialog").showModal();
 }
 
+function openOperatorAlertRule(rule = null) {
+  const form = $("#operatorAlertRuleForm");
+  form.reset();
+  state.editingOperatorAlertRuleId = rule?.id || "";
+  form.elements.id.value = rule?.id || "";
+  form.elements.name.value = rule?.name || "";
+  form.elements.eventFamily.value = rule?.eventFamily || "adapter_repair";
+  form.elements.severity.value = rule?.severity || "warning";
+  form.elements.retailerScope.value = rule?.retailerScope || "*";
+  form.elements.operationScope.value = rule?.operationScope || "*";
+  form.elements.minimumOccurrences.value = rule?.minimumOccurrences || 1;
+  form.elements.dedupeWindowSeconds.value = rule?.dedupeWindowSeconds || 900;
+  form.elements.escalationAfterSeconds.value = rule?.escalationAfterSeconds ?? 3600;
+  form.elements.enabled.checked = rule?.enabled !== false;
+  const selectedRoutes = new Set(rule?.routes || ["dashboard", "audit_outbox"]);
+  $$('input[name="route"]', form).forEach((input) => { input.checked = selectedRoutes.has(input.value); });
+  $("#operatorAlertRuleDialogTitle").textContent = rule ? "Edit alert rule" : "Add alert rule";
+  $("#operatorAlertRuleDialog").showModal();
+}
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -879,6 +945,31 @@ document.addEventListener("click", async (event) => {
     if (button.id === "addStrategyButton") openStrategy();
     if (button.id === "proposeCatalogMergeButton") openCatalogIdentityForm("merge_variants");
     if (button.id === "proposeCatalogSplitButton") openCatalogIdentityForm("split_variant");
+    if (button.id === "addOperatorAlertRuleButton") openOperatorAlertRule();
+    if (button.dataset.operatorAlertRuleEdit) {
+      const rule = (state.snapshot.operatorAlerts?.rules || []).find((item) => item.id === button.dataset.operatorAlertRuleEdit);
+      if (!rule) throw new Error("The operator alert rule is unavailable.");
+      openOperatorAlertRule(rule);
+    }
+    if (button.dataset.operatorAlertAcknowledge) {
+      const note = prompt("Optional non-sensitive acknowledgement note. Do not include page text, account data, product IDs, tokens, or personal information.", "Investigating the sanitized repair group.");
+      if (note === null) return;
+      await api(`/api/v1/admin/alerts/incidents/${encodeURIComponent(button.dataset.operatorAlertAcknowledge)}/acknowledge`, {
+        method: "POST",
+        body: JSON.stringify({ reasonCode: "operator_investigating", note, confirmation: "ACKNOWLEDGE_OPERATOR_ALERT" })
+      });
+      await refresh(false); toast("Operator alert acknowledged and audited.");
+    }
+    if (button.dataset.operatorAlertResolve) {
+      const note = prompt("Describe the non-sensitive resolution. Do not include page text, account data, product IDs, tokens, or personal information.");
+      if (!note?.trim()) return;
+      if (!confirm("Resolve this operator alert? The same historical failure will stay closed; a strictly later failure may open a new incident.")) return;
+      await api(`/api/v1/admin/alerts/incidents/${encodeURIComponent(button.dataset.operatorAlertResolve)}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ reasonCode: "maintainer_resolved", note, confirmation: "RESOLVE_OPERATOR_ALERT" })
+      });
+      await refresh(false); toast("Operator alert resolved with an immutable receipt.");
+    }
     if (button.dataset.missionEdit) await openMission(button.dataset.missionEdit);
     if (button.id === "createPairingButton") {
       const result = await api("/api/v1/user/devices/pairing-code", { method: "POST", body: "{}" });
@@ -1199,6 +1290,37 @@ $("#signalMoreButton").addEventListener("click", async () => {
 });
 $("#jobMoreButton").addEventListener("click", async () => {
   try { await loadJobs(false); renderJobs(); } catch (error) { toast(error.message || "More actions could not be loaded.", true); }
+});
+$("#operatorAlertRuleForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const form = event.currentTarget;
+    const values = formObject(form);
+    const routes = $$('input[name="route"]:checked', form).map((input) => input.value);
+    if (!routes.length) throw new Error("Choose at least one operator alert route.");
+    const payload = {
+      eventFamily: values.eventFamily,
+      name: values.name,
+      enabled: form.elements.enabled.checked,
+      severity: values.severity,
+      minimumOccurrences: Number(values.minimumOccurrences),
+      dedupeWindowSeconds: Number(values.dedupeWindowSeconds),
+      escalationAfterSeconds: Number(values.escalationAfterSeconds),
+      retailerScope: values.retailerScope,
+      operationScope: values.operationScope,
+      routes,
+      confirmation: "SAVE_OPERATOR_ALERT_RULE"
+    };
+    const id = String(values.id || "");
+    await api(id ? `/api/v1/admin/alerts/rules/${encodeURIComponent(id)}` : "/api/v1/admin/alerts/rules", {
+      method: id ? "PATCH" : "POST",
+      body: JSON.stringify(payload)
+    });
+    state.editingOperatorAlertRuleId = "";
+    form.closest("dialog").close();
+    await refresh(false);
+    toast("Operator alert rule saved and audited.");
+  } catch (error) { toast(error.message || "Operator alert rule could not be saved.", true); }
 });
 $("#catalogIdentityForm").elements.kind.addEventListener("change", (event) => {
   configureCatalogIdentityForm(event.currentTarget.value);

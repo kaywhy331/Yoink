@@ -260,6 +260,18 @@ evidence plane and are read through explicit user/admin projections. Their
 exact item-ID mission join is advisory: it cannot create a stock incident,
 action job, add qualification, community assertion, or spend reservation.
 
+Yoink 0.23.0 adds migration 25 and a privacy-classified operations plane for
+the fixed `adapter_repair` event family. Sanitized diagnostic ingestion and
+alert reconciliation commit atomically. Tenant-owned rules apply bounded
+retailer/operation scopes, thresholds, dedupe and escalation windows, then
+append lifecycle and dashboard/audit-outbox delivery receipts. Admin
+projections replace user/device identity with a tenant-scoped pseudonymous
+cohort and exclude exact SKUs, URLs, DOM/text, tokens, free-form notes, and raw
+errors. A recovered diagnostic resolves matching work; manual resolution
+suppresses historical replay but permits a strictly later failure to reopen.
+Alert management has a distinct permission and cannot widen an observer,
+qualification, action job, or packaged runner.
+
 The application bundles now reflect those trust domains. `/` is the user
 product surface over existing missions, targets, listings, jobs, and settings;
 `/admin` is independently permission-gated and owns diagnostics, retailer
