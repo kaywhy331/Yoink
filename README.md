@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.26.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.27.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,23 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.27.0 adds migration 29 and a deployment-pinned external-witness seam
+for observer-recipe transparency. The server publishes only a bounded public
+checkpoint (root/manifest hashes and the current append-only transparency
+sequence/hash) to a separately operated HTTPS endpoint. It verifies the
+returned Ed25519 signature, exact checkpoint, witness sequence, predecessor
+receipt, lifetime, and deployment-pinned public key before storing immutable
+receipt/check rows. Hosted mode now requires witness configuration and returns
+a correlated `503` instead of distributing an active recipe until its newest
+transparency tip has a fresh valid receipt; every new manifest install or
+recipe signature advances that tip. `/admin` and `/api/v1/health` expose
+healthy, pending, degraded, stale, or inconsistent state and fixed-code alarms.
+Local/offline mode remains compatible and does not require a witness. Yoink
+does not include or operate the independent service or its private key, so a
+production operator must still deploy and monitor that separate trust domain.
+No selector, product, browsing, user, account, token, or mutation data enters
+the witness contract, and this release changes no retailer capability.
 
 Version 0.25.0 adds migration 27 and an exact selected-offer identity spine for
 read-only community evidence. The packaged observers emit only the

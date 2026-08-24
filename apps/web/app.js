@@ -459,10 +459,21 @@ function renderObserverRegistry() {
     : rootKeyId ? "ROOT PINNED · INSTALL REQUIRED" : "KEY UNAVAILABLE";
   const manifests = Array.isArray(trust.manifests) ? trust.manifests : [];
   const transparency = Array.isArray(trust.transparency) ? trust.transparency : [];
+  const witness = trust.witness || {};
+  const witnessState = String(witness.state || "disabled");
+  const witnessHealthy = witness.healthy === true;
+  const witnessConfigured = witness.configured === true;
+  const witnessKind = witnessHealthy ? "good" : witnessState === "disabled" ? "warning" : "bad";
   $("#observerTrustSummary").innerHTML = `
     <article class="community-evidence-row">
       <div class="card-top"><div><h3>Package-rooted observer trust</h3><p>Root ${escapeHtml(rootKeyId.slice(0, 16) || "unavailable")} · generation ${generation} · ${Number(trust.revokedKeyCount || 0)} revoked keys · expires ${escapeHtml(trust.expiresAt ? relativeTime(trust.expiresAt) : "not installed")}</p></div><span class="tag ${trust.signingReady ? "good" : "bad"}">${trust.signingReady ? "SIGNING READY" : "DISTRIBUTION CLOSED"}</span></div>
       <div class="card-meta"><span class="tag">${manifests.length} manifest receipts</span><span class="tag">${transparency.length} transparency events</span><span class="tag">Mutation capable: never</span>${trust.manifestHash ? `<span class="tag">Manifest ${escapeHtml(String(trust.manifestHash).slice(0, 12))}</span>` : ""}</div>
+    </article>
+    <article class="community-evidence-row">
+      <div class="card-top"><div><h3>Independent transparency witness</h3><p>${witnessConfigured ? `${escapeHtml(witness.endpointOrigin || "Independent endpoint")} · log ${escapeHtml(witness.logId || "unknown")} · key ${escapeHtml(String(witness.witnessKeyId || "").slice(0, 12))}` : "Local/offline mode has no external witness configured."}</p></div><span class="tag ${witnessKind}">${escapeHtml(witnessState.replaceAll("_", " ").toUpperCase())}</span></div>
+      <div class="card-meta"><span class="tag">${Number(witness.witnessReceiptCount || 0)} signed receipts</span><span class="tag ${Number(witness.failedWitnessCheckCount || 0) ? "bad" : ""}">${Number(witness.failedWitnessCheckCount || 0)} failed checks</span><span class="tag">${witness.required ? "Hosted delivery gate" : witnessConfigured ? "Advisory local validation" : "Disabled locally"}</span>${witness.latestReceipt?.validUntil ? `<span class="tag ${witnessHealthy ? "good" : "bad"}">Valid ${escapeHtml(relativeTime(witness.latestReceipt.validUntil))}</span>` : ""}</div>
+      ${witness.alarmCode ? `<p class="identity-conflict">Alarm: ${escapeHtml(String(witness.alarmCode).replaceAll("_", " "))}</p>` : ""}
+      ${witnessConfigured && witness.checkpoint ? `<div class="card-actions"><button class="button secondary" id="publishObserverWitnessButton" type="button">Publish current checkpoint</button></div>` : ""}
     </article>`;
   const form = $("#observerRecipeForm");
   if (!state.observerRecipeDirty) {
@@ -1140,6 +1151,16 @@ document.addEventListener("click", async (event) => {
       await api("/api/v1/user/identity/claims", { method: "DELETE" });
       await refresh(false);
       toast("Identity claim history deleted.");
+    }
+    if (button.id === "publishObserverWitnessButton") {
+      if (!confirm("Publish the current public cryptographic checkpoint to the configured independent witness?\n\nNo selector data, browsing evidence, product data, user identity, or mutation authority is sent. Hosted recipe delivery remains closed unless the signed receipt is valid and fresh.")) return;
+      button.disabled = true;
+      await api("/api/v1/admin/observer-recipes/witness/publish", {
+        method: "POST",
+        body: JSON.stringify({ confirmation: "PUBLISH_OBSERVER_RECIPE_CHECKPOINT" })
+      });
+      await refresh(false);
+      toast("Independent witness receipt verified and pinned.");
     }
     if (button.dataset.observerPromote && button.dataset.observerTarget) {
       const approved = confirm(`Promote this signed observer-only recipe to ${button.dataset.observerTarget.replaceAll("_", " ")}?\n\nThe extension still uses only its packaged interpreter. This recipe cannot execute code, decide product identity, navigate, click, fill forms, check out, or submit an order.`);

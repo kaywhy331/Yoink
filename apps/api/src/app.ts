@@ -88,6 +88,10 @@ import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
 import { newId } from "../../../packages/domain/src/ids.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
+import {
+  ObserverRecipeWitnessError,
+  type ObserverRecipeWitnessPublisher
+} from "../../../packages/observer-registry/src/witness.js";
 import { resolveExtensionRelease } from "./extension-release.js";
 import { ApiError, apiErrorPayload } from "./api-error.js";
 import { resolveApiRoutePolicy } from "./api-route-policy.js";
@@ -110,6 +114,8 @@ export interface AppDependencies {
   webRoot: string;
   releaseRoot?: string;
   observerRecipeTrust?: ObserverRecipeTrustAuthority;
+  observerRecipeWitness?: ObserverRecipeWitnessPublisher;
+  observerRecipeWitnessRequired?: boolean;
   requestScopeResolver?: (request: IncomingMessage) => RequestScope | Promise<RequestScope>;
   hostValidator?: (request: IncomingMessage) => boolean;
   mutationOriginValidator?: (request: IncomingMessage) => boolean;
@@ -240,7 +246,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const identityClaims = new IdentityClaimRepository(db);
   const notifications = new NotificationRepository(db);
   const mutationLanes = new MutationLaneRepository(db);
-  const observerRecipes = new ObserverRecipeRepository(db, dependencies.observerRecipeTrust ?? ObserverRecipeTrustAuthority.ephemeral());
+  const observerRecipes = new ObserverRecipeRepository(
+    db,
+    dependencies.observerRecipeTrust ?? ObserverRecipeTrustAuthority.ephemeral(),
+    {
+      ...(dependencies.observerRecipeWitness ? {
+        witnessVerifier: dependencies.observerRecipeWitness.verifier,
+        witnessEndpointOrigin: dependencies.observerRecipeWitness.endpointOrigin
+      } : {}),
+      witnessRequired: dependencies.observerRecipeWitnessRequired === true
+    }
+  );
   const operatorAlerts = new OperatorAlertRepository(db);
   const principals = new PrincipalRepository(db);
   const qualifications = new QualificationRepository(db);
@@ -307,6 +323,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const walmartAddQualified = qualifications.walmartAddQualified();
         const amazonAddQualified = qualifications.amazonAddQualified();
         const bestBuyAddQualified = qualifications.bestBuyAddQualified();
+        const witness = observerRecipes.witnessStatus() as {
+          required?: boolean;
+          state?: string;
+          healthy?: boolean;
+          deliveryAllowed?: boolean;
+        };
         json(response, 200, {
           status: "ready",
           version,
@@ -320,7 +342,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           targetAddExecutionEnabled: targetAddQualified,
           walmartAddExecutionEnabled: walmartAddQualified,
           amazonAddExecutionEnabled: amazonAddQualified,
-          bestBuyAddExecutionEnabled: bestBuyAddQualified
+          bestBuyAddExecutionEnabled: bestBuyAddQualified,
+          observerRecipeWitnessRequired: witness.required === true,
+          observerRecipeWitnessState: String(witness.state ?? "disabled"),
+          observerRecipeWitnessHealthy: witness.healthy === true,
+          observerRecipeDeliveryWitnessSatisfied: witness.deliveryAllowed === true
         });
         return;
       }
@@ -579,7 +605,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             throw new Error("Upgrade the Chrome companion before requesting observer recipes.");
           }
           const retailerId = observerRecipeMatch[1] as SupportedRetailerId;
-          json(response, 200, { trust: observerRecipes.trustBundle(), recipe: observerRecipes.active(retailerId) });
+          const recipe = observerRecipes.active(retailerId);
+          const witness = observerRecipes.witnessStatus() as { deliveryAllowed?: boolean; state?: string };
+          if (recipe && witness.deliveryAllowed !== true) {
+            throw new ApiError(
+              "observer_recipe_witness_required",
+              503,
+              `Observer recipe delivery is closed until the current transparency checkpoint is independently witnessed (${String(witness.state ?? "unavailable")}).`
+            );
+          }
+          json(response, 200, { trust: observerRecipes.trustBundle(), recipe });
           return;
         }
         const observerTrialMatch = /^\/api\/v1\/devices\/self\/observer-recipe-trials\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
@@ -738,6 +773,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const pairedDevices = devices.listDevices();
         const operatorAlertCounts = operatorAlerts.counts();
         const operatorAlertSnapshot = operatorAlerts.snapshot();
+        const observerTrust = observerRecipes.trustStatus();
+        const observerWitness = (observerTrust.witness ?? {}) as {
+          required?: boolean;
+          healthy?: boolean;
+          deliveryAllowed?: boolean;
+        };
         const targetQualification = shadowObservations.targetQualificationReadiness();
         const walmartQualification = shadowObservations.walmartQualificationReadiness();
         const amazonQualification = shadowObservations.amazonQualificationReadiness();
@@ -811,7 +852,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           },
           observerRegistry: {
             key: observerRecipes.keyInfo(),
-            trust: observerRecipes.trustStatus(),
+            trust: observerTrust,
             mutationCapable: false,
             recipes: observerRecipes.list()
           },
@@ -864,6 +905,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             reversibleCatalogIdentityGovernance: true,
             hostedGlobalCatalogAuthority: false,
             signedObserverRecipeRegistry: true,
+            externallyWitnessedObserverRecipeTransparency: observerWitness.healthy === true,
+            hostedObserverRecipeWitnessRequired: observerWitness.required === true,
+            observerRecipeDeliveryWitnessSatisfied: observerWitness.deliveryAllowed === true,
             observerRecipeMutation: false,
             pickupMutation: false,
             prepareCheckoutMutation: false,
@@ -1164,6 +1208,34 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/observer-recipes/trust") {
         json(response, 200, observerRecipes.trustStatus());
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/observer-recipes/witness/publish") {
+        const body = await readJson(request);
+        if (body.confirmation !== "PUBLISH_OBSERVER_RECIPE_CHECKPOINT") {
+          throw new Error("Explicit observer recipe witness publication confirmation is required.");
+        }
+        const publisher = dependencies.observerRecipeWitness;
+        const checkpoint = observerRecipes.witnessCheckpoint();
+        if (!publisher || !checkpoint) {
+          throw new ApiError(
+            "observer_recipe_witness_not_configured",
+            409,
+            "Configure an independent observer recipe witness and install rooted trust before publishing a checkpoint."
+          );
+        }
+        try {
+          const receipt = await publisher.publish(checkpoint, observerRecipes.previousWitnessReceiptHash());
+          json(response, 201, { witness: observerRecipes.acceptWitnessReceipt(receipt) });
+        } catch (error) {
+          const code = error instanceof ObserverRecipeWitnessError ? error.code : "unavailable";
+          observerRecipes.recordWitnessFailure(code);
+          throw new ApiError(
+            `observer_recipe_witness_${code}`,
+            code === "unavailable" || code === "stale_receipt" ? 503 : 502,
+            "The independent observer recipe witness did not return a valid chain-extending receipt; delivery remains closed."
+          );
+        }
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/observer-recipes/trust-manifests") {

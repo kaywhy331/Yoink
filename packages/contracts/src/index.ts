@@ -588,6 +588,42 @@ export interface ObserverRecipeTrustTransparencyReceipt {
   createdAt: string;
 }
 
+export const OBSERVER_RECIPE_WITNESS_CONTRACT_VERSION = 1;
+
+export interface ObserverRecipeWitnessCheckpoint {
+  contractVersion: typeof OBSERVER_RECIPE_WITNESS_CONTRACT_VERSION;
+  logId: string;
+  rootKeyId: string;
+  manifestGeneration: number;
+  manifestHash: string;
+  transparencySequence: number;
+  transparencyEventHash: string;
+}
+
+export interface ObserverRecipeWitnessPublishRequest {
+  contractVersion: typeof OBSERVER_RECIPE_WITNESS_CONTRACT_VERSION;
+  checkpoint: ObserverRecipeWitnessCheckpoint;
+  checkpointHash: string;
+  previousReceiptHash: string;
+}
+
+export interface ObserverRecipeWitnessReceiptPayload {
+  contractVersion: typeof OBSERVER_RECIPE_WITNESS_CONTRACT_VERSION;
+  checkpoint: ObserverRecipeWitnessCheckpoint;
+  checkpointHash: string;
+  witnessSequence: number;
+  previousReceiptHash: string;
+  witnessedAt: string;
+  validUntil: string;
+}
+
+export interface SignedObserverRecipeWitnessReceipt {
+  algorithm: "Ed25519";
+  keyId: string;
+  payload: ObserverRecipeWitnessReceiptPayload;
+  signature: string;
+}
+
 export type MissionStatus = "active" | "paused" | "satisfied" | "archived";
 export type ResolutionStatus = "matched" | "unresolved" | "ambiguous";
 export const JOB_STATES = [

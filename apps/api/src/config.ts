@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import {
+  ObserverRecipeWitnessClient,
+  type ObserverRecipeWitnessClientOptions
+} from "../../../packages/observer-registry/src/witness.js";
 
 export interface YoinkConfig {
   host: "127.0.0.1";
@@ -14,6 +18,7 @@ export interface YoinkConfig {
     allowedHosts: string[];
     allowedOrigins: string[];
   } | null;
+  observerRecipeWitness: Omit<ObserverRecipeWitnessClientOptions, "fetch" | "requestTimeoutMs"> | null;
 }
 
 function port(value: string | undefined): number {
@@ -46,6 +51,35 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
   if (hostedRequested && (Buffer.byteLength(proxySecret, "utf8") < 32 || !allowedHosts.length || !allowedOrigins.length)) {
     throw new Error("Hosted mode requires a 32-byte YOINK_HOSTED_PROXY_SECRET plus explicit YOINK_HOSTED_HOSTS and YOINK_HOSTED_ORIGINS.");
   }
+  const witnessValues = {
+    endpoint: String(env.YOINK_OBSERVER_RECIPE_WITNESS_URL ?? "").trim(),
+    logId: String(env.YOINK_OBSERVER_RECIPE_WITNESS_LOG_ID ?? "").trim(),
+    keyId: String(env.YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID ?? "").trim(),
+    publicKeySpki: String(env.YOINK_OBSERVER_RECIPE_WITNESS_PUBLIC_KEY_SPKI ?? "").trim()
+  };
+  const witnessRequested = Object.values(witnessValues).some(Boolean);
+  const maxAgeSeconds = Number(env.YOINK_OBSERVER_RECIPE_WITNESS_MAX_AGE_SECONDS ?? 900);
+  let observerRecipeWitness: YoinkConfig["observerRecipeWitness"] = null;
+  if (witnessRequested) {
+    if (Object.values(witnessValues).some((value) => !value)) {
+      throw new Error("Observer recipe witness configuration requires URL, log ID, key ID, and public key SPKI together.");
+    }
+    observerRecipeWitness = {
+      endpoint: witnessValues.endpoint,
+      logId: witnessValues.logId,
+      key: {
+        algorithm: "Ed25519",
+        keyId: witnessValues.keyId,
+        publicKeySpki: witnessValues.publicKeySpki
+      },
+      maxAgeSeconds
+    };
+    // Constructor validation keeps configuration and runtime URL/key rules identical.
+    new ObserverRecipeWitnessClient(observerRecipeWitness);
+  }
+  if (hostedRequested && !observerRecipeWitness) {
+    throw new Error("Hosted mode requires an independently operated observer recipe witness configuration.");
+  }
   return {
     host: "127.0.0.1",
     port: port(env.YOINK_PORT),
@@ -54,6 +88,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     webRoot: join(projectRoot, "apps", "web"),
     releaseRoot: join(projectRoot, "release"),
     version: projectVersion(projectRoot),
-    hosted: hostedRequested ? { proxySecret, allowedHosts, allowedOrigins } : null
+    hosted: hostedRequested ? { proxySecret, allowedHosts, allowedOrigins } : null,
+    observerRecipeWitness
   };
 }

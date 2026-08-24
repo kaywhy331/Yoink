@@ -290,9 +290,14 @@ and checkpoint, so later server replay or a conflicting root generation fails
 closed. A new root-authorized intermediate requires process restart to load its
 named private key and explicit maintainer re-signing of reviewed recipes.
 Neither manifest installation nor re-signing changes recipe review state or
-retailer execution authority. The remaining production gap is an independently
-witnessed transparency checkpoint; the local server is not treated as its own
-external witness.
+retailer execution authority. Yoink 0.27.0 adds a separate HTTPS witness client
+and migration-29 receipt/check ledger. It sends only the public root/manifest
+hashes and current transparency sequence/hash, pins the witness Ed25519 key,
+and verifies an exact chain-extending, expiring receipt. Hosted delivery of an
+active recipe fails closed until the latest local transparency tip is freshly
+witnessed. The local server is never treated as its own witness; this repository
+does not ship the independent service/private key or production refresh and
+public-consistency monitors.
 
 Yoink 0.25.0 adds migration 27 and a separate, versioned selected-offer scope
 to sanitized browser observations and read-only community assertions. The
@@ -317,6 +322,16 @@ offer remains manual and non-actionable. Preorders are excluded from Best Buy
 qualification readiness and are rejected again by `bestbuy-add-v3` before an
 authorization is created. The diagnostic path accepts only the structural
 `interactive_high_demand` code and fixed counts; page content remains local.
+
+The witness publisher is deliberately asynchronous at the API boundary while
+receipt acceptance remains a deterministic database transaction. A verified
+receipt and its accepted check/audit/outbox records commit together. Transport,
+schema, signature, checkpoint, chain, or lifetime failures record only a fixed
+sanitized outcome and keep delivery closed; response bodies and network details
+are never persisted. Local mode has no witness requirement. Hosted boundary
+configuration requires an explicit HTTPS endpoint, public log ID, public key
+pin, and maximum age, but that staged seam is not a substitute for independent
+operation, PostgreSQL, workers, IdP, or production monitoring.
 
 The application bundles now reflect those trust domains. `/` is the user
 product surface over existing missions, targets, listings, jobs, and settings;

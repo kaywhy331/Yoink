@@ -14,6 +14,11 @@ an identity-aware reverse proxy, explicit Host/Origin allowlists, principal
 lifecycle management, backups, monitoring, and a PostgreSQL implementation
 before treating a deployment as production hosted.
 
+Version 0.27 adds the client side of an independently operated observer-recipe
+transparency witness. Hosted boundary mode now refuses startup without its
+public endpoint/log/key configuration. The repository still does not provide
+that independent service, its private key, refresh worker, or public monitor.
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting
@@ -32,11 +37,57 @@ YOINK_HOSTED_MODE=1
 YOINK_HOSTED_PROXY_SECRET=<at least 32 random bytes>
 YOINK_HOSTED_HOSTS=yoink.example.com
 YOINK_HOSTED_ORIGINS=https://yoink.example.com
+YOINK_OBSERVER_RECIPE_WITNESS_URL=https://witness.example.net/v1/checkpoints
+YOINK_OBSERVER_RECIPE_WITNESS_LOG_ID=yoink-production
+YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID=<sha256 of witness Ed25519 SPKI>
+YOINK_OBSERVER_RECIPE_WITNESS_PUBLIC_KEY_SPKI=<base64url DER SPKI>
+YOINK_OBSERVER_RECIPE_WITNESS_MAX_AGE_SECONDS=900
 ```
 
 The Node process still binds to loopback. Put an authenticated TLS reverse proxy
 on the same host in front of it. Do not expose port 32991 directly and do not
 rewrite untrusted client headers into Yoink scope headers.
+
+## Observer-recipe transparency witness
+
+Operate the witness under a different administrative and signing trust domain.
+Its Ed25519 private key must never be placed on the Yoink API host, in SQLite,
+in an extension package, in an API request, or in the portability archive. Pin
+the public key and stable public log namespace through deployment configuration.
+Yoink derives a separate stable pseudonymous log ID for each tenant so tenant
+chains cannot compete for one witness sequence; the raw tenant ID is not sent.
+The witness URL must be HTTPS, contain an explicit path, and contain no
+credentials, query, or fragment.
+
+`POST /api/v1/admin/observer-recipes/witness/publish` sends an exact bounded
+contract containing only:
+
+- contract/log identifiers;
+- packaged root key ID;
+- current manifest generation and hash;
+- current local transparency sequence and event hash;
+- the previous independent receipt hash.
+
+The endpoint returns an exact-schema Ed25519 receipt with its own monotonic
+sequence, predecessor hash, witnessed time, and expiry. Yoink validates the
+pinned key, signature, current checkpoint, both hashes, sequence, predecessor,
+and lifetime, then commits the receipt plus sanitized check/audit/outbox rows.
+It never sends selector definitions, retailer/product facts, URLs, browsing
+history, tenant/user/device IDs, credentials, tokens, or mutation data.
+
+Hosted delivery of an active observer recipe returns a correlated `503` until
+the current transparency tip has a fresh receipt. Installing a manifest or
+signing/re-signing a recipe advances that tip and therefore requires another
+receipt. Availability or consistency failures expose fixed-code alarms in
+`/admin`, `/api/v1/admin/snapshot`, and `/api/v1/health`; raw response and
+transport details are discarded. A prior fresh receipt may remain usable until
+its configured maximum age during a degraded refresh, then delivery closes.
+
+The admin button is an explicit staging/local operation. Production must invoke
+the same authenticated route from an idempotent scheduled worker, monitor
+witness availability and public log consistency independently, rotate pins via
+reviewed deployment changes, and alert before receipt expiry. Do not weaken the
+gate or point the URL back at the Yoink process to claim independence.
 
 ## Authenticated request scope
 

@@ -1,6 +1,32 @@
 # Yoink roadmap
 
-## Shipped through 0.26.0
+## Shipped through 0.27.0
+
+### External observer-recipe witness seam (0.27.0)
+
+- Migration 29 adds tenant-scoped append-only external-witness receipts and
+  sanitized check outcomes with immutable update/delete guards; it changes no
+  retailer execution or qualification state
+- A separately operated HTTPS witness receives only the public root/manifest
+  hashes and current transparency sequence/event hash. The server pins its
+  Ed25519 public key and verifies the exact response schema, signature,
+  checkpoint hash, witness sequence, predecessor receipt, and bounded lifetime
+- Hosted configuration now requires an explicit witness URL, log namespace, key pin,
+  and maximum receipt age. An active recipe is not delivered to Chrome unless
+  the current transparency tip has a fresh valid receipt; a new manifest or
+  recipe signature makes the prior checkpoint insufficient
+- `/admin`, the snapshot, and health API expose disabled, pending, healthy,
+  degraded, stale, inconsistent, or configuration-missing states plus fixed
+  availability/consistency alarm codes. Publication is explicit and audited;
+  failures retain no response bodies or transport details
+- Local/offline mode remains backward-compatible and advisory. This repository
+  deliberately does not contain the independent witness service or its private
+  key; external deployment, scheduling, public monitoring, and consistency
+  canaries remain production infrastructure work
+- Each tenant receives a stable pseudonymous derived witness log so independent
+  chains cannot compete for one sequence. Checkpoints contain no selectors,
+  DOM/page text, products, browsing history, URLs, raw tenant/user/device IDs,
+  account data, tokens, or mutation authority
 
 ### Best Buy lifecycle layout coverage (0.26.0)
 
@@ -430,9 +456,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.26.0
+## Architecture assessment after 0.27.0
 
-Yoink 0.26.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.27.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -444,11 +470,11 @@ behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-28 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
+| Primary backend database | Transactional migration-29 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, role administration, diagnostics, privacy-classified adapter-repair alerts, retailer/source/affiliate controls, and audit | No production IdP/step-up, secret references, external alert connectors/background escalation worker, break-glass workflow, cross-tenant global curator, or retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard for exact products, revisioned intent, store/seller/fulfillment/unit/all-in limits, action ceiling, expiry/cooldown/substitution preferences, periodic spend caps, activity, pause, pairing, and source/review status | Some style-level retailers still report `listing_only`; region/store scope is consent-derived rather than verified from each live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
-| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts; observer recipes now use offline-root manifests, rotation/revocation, rollback pins, and transparency receipts | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; transparency is not yet externally witnessed |
+| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; the independent witness service, scheduler, and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
 | Automatic purchasing | Target and Walmart can perform guarded first-party shipping add-to-cart behind current intent/snapshot/reservation checks; Amazon and Best Buy are implemented but separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 | Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
@@ -507,10 +533,12 @@ privacy-classified adapter-repair alert path with allowlisted inputs, redacted
 projections, immutable receipts, and separate management permission. 0.24.0
 completes the local package-rooted observer-recipe trust slice with monotonic
 rotation/revocation, extension rollback protection, and transparency receipts.
+0.27.0 adds the deployment-pinned external-witness protocol, immutable signed
+receipts/checks, health alarms, and a hosted fail-closed delivery gate.
 The phase exit gate remains **open**: the current shared catalog has no
 cross-tenant global curator; general structured metrics/log retention,
-externally witnessed transparency, and production IdP step-up are not
-implemented.
+an independently operated witness deployment/scheduler/public consistency
+monitor, and production IdP step-up are not implemented.
 
 - Persist operator memberships and granular permissions; deny every route by
   default and explicitly authorize user, device, support, catalog-curator,
@@ -523,9 +551,10 @@ implemented.
   SKU's URL, status, variant, or execution flag
 - Add structured server error classes, correct 4xx/5xx behavior, correlation
   IDs, privacy-classified logs, metrics, and sanitized aggregate diagnostics
-- Publish production trust checkpoints to an independently witnessed log and
-  integrate its availability/consistency alarms; the local append-only receipt
-  chain and companion rollback pin are shipped
+- Deploy the shipped signed-checkpoint integration against an independently
+  operated witness log, schedule refresh, and monitor public consistency. The
+  local append-only chain, companion rollback pin, external receipt verifier,
+  health alarms, and hosted delivery gate are shipped
 - Pause implementation or activation of any new mutation retailer beyond the
   four already packaged until this exit gate passes. Existing Amazon/Best Buy
   qualification work and additional read-only observer coverage may continue
@@ -891,14 +920,16 @@ and [optional permission guidance](https://developer.chrome.com/docs/extensions/
    isolation. Exact selected-variation isolation remains open.
 4. **Local pilot implemented:** tenant-scoped aggregate availability appears in
    the control center. It is not a production cross-account community result.
-5. **Shadow-validation prototype implemented:** manually proposed signed
+5. **Shadow-validation and witness seam implemented:** manually proposed signed
    declarative selectors, trial counts, lifecycle labels, kill switch,
-   rollback, and bundled fallback. Cohorted canaries, independent oracles,
-   autonomous candidate generation, production key management, and automatic
-   correction remain open.
-6. **Production blocked:** trusted-read-only delivery requires RBAC, signing-
-   root hardening, real staged canaries, privacy/security review, and Chrome Web
-   Store approval. Mutation and checkout remain outside this registry
+   rollback, bundled fallback, package-rooted signing, and a deployment-pinned
+   external witness gate are present. Cohorted canaries, independent observer
+   oracles, autonomous candidate generation, external witness operation, and
+   automatic correction remain open.
+6. **Production blocked:** trusted-read-only delivery still requires a deployed
+   independent witness/monitor, production IdP and key management, real staged
+   canaries, privacy/security review, and Chrome Web Store approval. Mutation
+   and checkout remain outside this registry
    permanently.
 
 ## Hosted multi-user evolution

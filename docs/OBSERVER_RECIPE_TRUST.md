@@ -93,3 +93,28 @@ The development ZIP feed packages `observer-recipe-root.js` but never any
 private key or manifest private material. Production extension release and an
 independently witnessed transparency checkpoint remain separate deployment
 controls.
+
+## Independent witness operation
+
+Yoink 0.27.0 contains the publisher, verifier, immutable receipt/check ledger,
+health alarms, and hosted delivery gate—not the independently operated witness
+or its private key. Configure its HTTPS publish URL, stable public log namespace,
+Ed25519 key ID/base64url SPKI pin, and maximum receipt age as documented in
+[HOSTED_DEPLOYMENT.md](HOSTED_DEPLOYMENT.md). Hosted mode refuses startup when
+that public configuration is absent or malformed.
+
+After installing a manifest or signing/re-signing a recipe, `/admin` reports
+`WITNESS PENDING`. Use **Publish current checkpoint** in staged operation, or
+invoke the authenticated publish route from the production scheduler. Confirm
+that it becomes `HEALTHY`, the external witness sequence advanced exactly once,
+the predecessor receipt hash matches, and the expiry comfortably exceeds the
+refresh interval. A transport failure may show `DEGRADED` while the prior
+receipt is still fresh; `STALE`, `INCONSISTENT`, or a missing receipt closes
+hosted active-recipe delivery.
+
+The published payload is public cryptographic metadata only. Never add recipe
+selectors, product/retailer evidence, tenant/user/device IDs, URLs, browsing
+history, account data, credentials, tokens, or mutation state to the witness
+contract. Run independent availability and fork/consistency monitoring outside
+the Yoink trust domain; pointing the witness URL back to the API process does
+not satisfy the roadmap gate.

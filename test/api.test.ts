@@ -51,7 +51,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
       targetAddExecutionEnabled: false,
       walmartAddExecutionEnabled: false,
       amazonAddExecutionEnabled: false,
-      bestBuyAddExecutionEnabled: false
+      bestBuyAddExecutionEnabled: false,
+      observerRecipeWitnessRequired: false,
+      observerRecipeWitnessState: "disabled",
+      observerRecipeWitnessHealthy: false,
+      observerRecipeDeliveryWitnessSatisfied: true
     });
 
     const listingResponse = await fetch(`${baseUrl}/api/v1/user/catalog/proposals`, {

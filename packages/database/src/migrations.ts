@@ -1842,5 +1842,70 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE retailer_id = 'bestbuy';
     `
+  },
+  {
+    version: 29,
+    name: "externally_witnessed_observer_recipe_checkpoints",
+    sql: `
+      CREATE TABLE observer_recipe_witness_receipts (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        log_id TEXT NOT NULL,
+        witness_key_id TEXT NOT NULL,
+        witness_sequence INTEGER NOT NULL CHECK (witness_sequence > 0),
+        checkpoint_hash TEXT NOT NULL,
+        manifest_generation INTEGER NOT NULL CHECK (manifest_generation > 0),
+        manifest_hash TEXT NOT NULL,
+        transparency_sequence INTEGER NOT NULL CHECK (transparency_sequence > 0),
+        transparency_event_hash TEXT NOT NULL,
+        previous_receipt_hash TEXT NOT NULL DEFAULT '',
+        receipt_hash TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        witnessed_at TEXT NOT NULL,
+        valid_until TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, transparency_event_hash)
+          REFERENCES observer_recipe_transparency_events(tenant_id, event_hash) ON DELETE RESTRICT,
+        UNIQUE(tenant_id, log_id, witness_sequence),
+        UNIQUE(tenant_id, receipt_hash)
+      ) STRICT;
+      CREATE INDEX observer_recipe_witness_receipts_current_idx
+        ON observer_recipe_witness_receipts(tenant_id, log_id, witness_sequence DESC);
+      CREATE INDEX observer_recipe_witness_receipts_checkpoint_idx
+        ON observer_recipe_witness_receipts(
+          tenant_id, log_id, transparency_event_hash, valid_until DESC
+        );
+
+      CREATE TABLE observer_recipe_witness_checks (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        log_id TEXT NOT NULL,
+        checkpoint_hash TEXT NOT NULL DEFAULT '',
+        transparency_event_hash TEXT NOT NULL DEFAULT '',
+        outcome TEXT NOT NULL CHECK (outcome IN ('accepted', 'unavailable', 'invalid', 'conflict', 'stale')),
+        reason_code TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL DEFAULT '',
+        checked_by_actor_id TEXT NOT NULL,
+        checked_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX observer_recipe_witness_checks_recent_idx
+        ON observer_recipe_witness_checks(tenant_id, log_id, checked_at DESC, id DESC);
+
+      CREATE TRIGGER observer_recipe_witness_receipts_no_update
+      BEFORE UPDATE ON observer_recipe_witness_receipts
+      BEGIN SELECT RAISE(ABORT, 'observer recipe witness receipts are append-only'); END;
+      CREATE TRIGGER observer_recipe_witness_receipts_no_delete
+      BEFORE DELETE ON observer_recipe_witness_receipts
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'observer recipe witness receipts are append-only'); END;
+      CREATE TRIGGER observer_recipe_witness_checks_no_update
+      BEFORE UPDATE ON observer_recipe_witness_checks
+      BEGIN SELECT RAISE(ABORT, 'observer recipe witness checks are append-only'); END;
+      CREATE TRIGGER observer_recipe_witness_checks_no_delete
+      BEFORE DELETE ON observer_recipe_witness_checks
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'observer recipe witness checks are append-only'); END;
+    `
   }
 ]);

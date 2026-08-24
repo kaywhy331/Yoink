@@ -3,6 +3,7 @@ import { createYoinkServer } from "./app.js";
 import { loadConfig } from "./config.js";
 import { YoinkDatabase } from "../../../packages/database/src/database.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
+import { ObserverRecipeWitnessClient } from "../../../packages/observer-registry/src/witness.js";
 import {
   allowHostedHosts,
   allowHostedMutationOrigins,
@@ -17,12 +18,19 @@ const hostedDependencies = config.hosted ? {
   hostValidator: allowHostedHosts(config.hosted.allowedHosts),
   mutationOriginValidator: allowHostedMutationOrigins(config.hosted.allowedOrigins)
 } : {};
+const witnessDependencies = config.observerRecipeWitness ? {
+  observerRecipeWitness: new ObserverRecipeWitnessClient(config.observerRecipeWitness),
+  observerRecipeWitnessRequired: config.hosted !== null
+} : {
+  observerRecipeWitnessRequired: false
+};
 const server = createYoinkServer({
   db,
   webRoot: config.webRoot,
   releaseRoot: config.releaseRoot,
   observerRecipeTrust: ObserverRecipeTrustAuthority.persistent(config.dataDirectory),
   version: config.version,
+  ...witnessDependencies,
   ...hostedDependencies
 });
 

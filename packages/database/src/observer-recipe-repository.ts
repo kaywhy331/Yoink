@@ -13,6 +13,8 @@ import {
   type ObserverRecipeTrialInput,
   type ObserverRecipeTrustManifestInstallInput,
   type ObserverRecipeTrustTransparencyReceipt,
+  type ObserverRecipeWitnessCheckpoint,
+  type SignedObserverRecipeWitnessReceipt,
   type SignedObserverRecipeEnvelope,
   type SignedObserverRecipeTrustManifest,
   type SignedObserverRecipePayload,
@@ -25,6 +27,14 @@ import {
   validateObserverRecipeTrustManifest,
   type ValidatedObserverRecipeTrustManifest
 } from "../../observer-registry/src/trust.js";
+import {
+  ObserverRecipeWitnessError,
+  ObserverRecipeWitnessVerifier,
+  observerRecipeWitnessCheckpointHash,
+  observerRecipeWitnessReceiptHash,
+  observerRecipeWitnessScopedLogId,
+  type ObserverRecipeWitnessFailureCode
+} from "../../observer-registry/src/witness.js";
 import { AuditRepository } from "./audit-repository.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -97,6 +107,40 @@ interface TrialSummary {
   failed: number;
   distinctSkus: number;
   distinctLayouts: number;
+}
+
+interface WitnessReceiptRow {
+  id: string;
+  logId: string;
+  witnessKeyId: string;
+  witnessSequence: number;
+  checkpointHash: string;
+  manifestGeneration: number;
+  manifestHash: string;
+  transparencySequence: number;
+  transparencyEventHash: string;
+  previousReceiptHash: string;
+  receiptHash: string;
+  payloadJson: string;
+  signature: string;
+  witnessedAt: string;
+  validUntil: string;
+  receivedAt: string;
+}
+
+interface WitnessCheckRow {
+  outcome: "accepted" | "unavailable" | "invalid" | "conflict" | "stale";
+  reasonCode: string;
+  checkpointHash: string;
+  transparencyEventHash: string;
+  receiptHash: string;
+  checkedAt: string;
+}
+
+export interface ObserverRecipeRepositoryOptions {
+  witnessVerifier?: ObserverRecipeWitnessVerifier;
+  witnessRequired?: boolean;
+  witnessEndpointOrigin?: string;
 }
 
 function selector(value: unknown): string {
@@ -211,12 +255,19 @@ function recipeProjection(row: RecipeRow, trials: TrialSummary): Record<string, 
 
 export class ObserverRecipeRepository {
   private readonly audit: AuditRepository;
+  private readonly witnessVerifier: ObserverRecipeWitnessVerifier | null;
+  private readonly witnessRequired: boolean;
+  private readonly witnessEndpointOrigin: string;
 
   constructor(
     private readonly db: YoinkDatabase,
-    private readonly trust: ObserverRecipeTrustAuthority
+    private readonly trust: ObserverRecipeTrustAuthority,
+    options: ObserverRecipeRepositoryOptions = {}
   ) {
     this.audit = new AuditRepository(db);
+    this.witnessVerifier = options.witnessVerifier ?? null;
+    this.witnessRequired = options.witnessRequired === true;
+    this.witnessEndpointOrigin = String(options.witnessEndpointOrigin ?? "");
   }
 
   keyInfo(now = Date.now()): Record<string, unknown> {
@@ -318,8 +369,242 @@ export class ObserverRecipeRepository {
   trustStatus(now = Date.now()): Record<string, unknown> {
     return {
       ...this.keyInfo(now),
+      witness: this.witnessStatus(now),
       transparency: this.transparencyEvents(100),
       manifests: this.trustManifests(50)
+    };
+  }
+
+  witnessCheckpoint(): ObserverRecipeWitnessCheckpoint | null {
+    if (!this.witnessVerifier) return null;
+    const event = this.latestTransparencyEvent();
+    if (!event) return null;
+    return {
+      contractVersion: 1,
+      logId: this.witnessLogId(),
+      rootKeyId: this.trust.root.keyId,
+      manifestGeneration: event.manifestGeneration,
+      manifestHash: event.manifestHash,
+      transparencySequence: event.sequence,
+      transparencyEventHash: event.eventHash
+    };
+  }
+
+  previousWitnessReceiptHash(): string {
+    return this.latestWitnessReceipt()?.receiptHash ?? "";
+  }
+
+  acceptWitnessReceipt(value: unknown, now = Date.now()): Record<string, unknown> {
+    const verifier = this.witnessVerifier;
+    const checkpoint = this.witnessCheckpoint();
+    if (!verifier || !checkpoint) {
+      throw new ObserverRecipeWitnessError("checkpoint_conflict", "No configured observer recipe checkpoint is available to witness.");
+    }
+    const prior = this.latestWitnessReceipt();
+    const candidateHash = value && typeof value === "object" && !Array.isArray(value)
+      ? observerRecipeWitnessReceiptHash(value as SignedObserverRecipeWitnessReceipt)
+      : "";
+    const existing = this.db.get<{ receiptHash: string }>(
+      `SELECT receipt_hash AS receiptHash FROM observer_recipe_witness_receipts
+       WHERE tenant_id = ? AND receipt_hash = ?`,
+      currentRequestScope().tenantId,
+      candidateHash
+    );
+    if (existing) return this.witnessStatus(now);
+    const receipt = verifier.validate(value, checkpoint, prior?.receiptHash ?? "", now);
+    if (!verifier.receiptFresh(receipt, now)) {
+      throw new ObserverRecipeWitnessError("stale_receipt", "The observer recipe witness receipt is outside the configured freshness window.");
+    }
+    const receiptHash = observerRecipeWitnessReceiptHash(receipt);
+    const expectedSequence = Number(prior?.witnessSequence ?? 0) + 1;
+    if (receipt.payload.witnessSequence !== expectedSequence) {
+      throw new ObserverRecipeWitnessError("chain_conflict", "The observer recipe witness sequence does not extend the pinned witness chain.");
+    }
+    const scope = currentRequestScope();
+    const receivedAt = nowIso(now);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO observer_recipe_witness_receipts(
+           id, tenant_id, log_id, witness_key_id, witness_sequence,
+           checkpoint_hash, manifest_generation, manifest_hash,
+           transparency_sequence, transparency_event_hash, previous_receipt_hash,
+           receipt_hash, payload_json, signature, witnessed_at, valid_until, received_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        newId("observer_recipe_witness_receipt"),
+        scope.tenantId,
+        this.witnessLogId(),
+        receipt.keyId,
+        receipt.payload.witnessSequence,
+        receipt.payload.checkpointHash,
+        receipt.payload.checkpoint.manifestGeneration,
+        receipt.payload.checkpoint.manifestHash,
+        receipt.payload.checkpoint.transparencySequence,
+        receipt.payload.checkpoint.transparencyEventHash,
+        receipt.payload.previousReceiptHash,
+        receiptHash,
+        JSON.stringify(receipt.payload),
+        receipt.signature,
+        receipt.payload.witnessedAt,
+        receipt.payload.validUntil,
+        receivedAt
+      );
+      this.recordWitnessCheck(
+        "accepted",
+        "witness_receipt_accepted",
+        receipt.payload.checkpointHash,
+        receipt.payload.checkpoint.transparencyEventHash,
+        receiptHash,
+        now
+      );
+      this.audit.record({
+        correlationId: receiptHash,
+        aggregateType: "observer_recipe_witness",
+        eventType: "observer_recipe_checkpoint_witnessed",
+        reasonCode: "independent_signature_verified",
+        message: "An independently signed observer recipe transparency checkpoint was verified and pinned.",
+        data: {
+          logId: this.witnessLogId(),
+          witnessKeyId: receipt.keyId,
+          witnessSequence: receipt.payload.witnessSequence,
+          checkpointHash: receipt.payload.checkpointHash,
+          transparencySequence: receipt.payload.checkpoint.transparencySequence,
+          transparencyEventHash: receipt.payload.checkpoint.transparencyEventHash,
+          validUntil: receipt.payload.validUntil,
+          privacyClassification: "public_cryptographic_metadata",
+          mutationCapable: false
+        }
+      }, now);
+    });
+    return this.witnessStatus(now);
+  }
+
+  recordWitnessFailure(code: ObserverRecipeWitnessFailureCode, now = Date.now()): Record<string, unknown> {
+    const checkpoint = this.witnessCheckpoint();
+    const outcome: WitnessCheckRow["outcome"] = code === "unavailable"
+      ? "unavailable"
+      : code === "stale_receipt" ? "stale"
+        : ["checkpoint_conflict", "chain_conflict"].includes(code) ? "conflict" : "invalid";
+    const checkpointHash = checkpoint ? observerRecipeWitnessCheckpointHash(checkpoint) : "";
+    const eventHash = checkpoint?.transparencyEventHash ?? "";
+    this.db.transaction(() => {
+      this.recordWitnessCheck(outcome, `witness_${code}`, checkpointHash, eventHash, "", now);
+      this.audit.record({
+        correlationId: checkpointHash || "observer_recipe_witness",
+        aggregateType: "observer_recipe_witness",
+        eventType: "observer_recipe_witness_check_failed",
+        reasonCode: `witness_${code}`,
+        message: "The observer recipe witness check failed closed.",
+        data: {
+          logId: this.witnessLogId(),
+          checkpointHash,
+          transparencyEventHash: eventHash,
+          outcome,
+          privacyClassification: "public_cryptographic_metadata",
+          distributionAllowed: false,
+          mutationCapable: false
+        }
+      }, now);
+    });
+    return this.witnessStatus(now);
+  }
+
+  witnessStatus(now = Date.now()): Record<string, unknown> {
+    const verifier = this.witnessVerifier;
+    const counts = this.witnessCounts();
+    if (!verifier) {
+      return {
+        required: this.witnessRequired,
+        configured: false,
+        enforcement: this.witnessRequired ? "required" : "disabled",
+        state: this.witnessRequired ? "configuration_missing" : "disabled",
+        healthy: false,
+        deliveryAllowed: !this.witnessRequired,
+        alarmCode: this.witnessRequired ? "observer_recipe_witness_configuration_missing" : "",
+        mutationCapable: false,
+        ...counts
+      };
+    }
+    const checkpoint = this.witnessCheckpoint();
+    const latest = this.latestWitnessReceipt();
+    const matching = checkpoint ? this.receiptForCheckpoint(checkpoint.transparencyEventHash) : undefined;
+    const latestCheck = this.latestWitnessCheck();
+    let state = "awaiting_checkpoint";
+    let healthy = false;
+    let alarmCode = "observer_recipe_witness_checkpoint_missing";
+    if (checkpoint && !matching) {
+      state = "witness_pending";
+      alarmCode = latestCheck && latestCheck.outcome !== "accepted"
+        ? `observer_recipe_witness_${latestCheck.outcome}`
+        : "observer_recipe_witness_receipt_missing";
+    } else if (checkpoint && matching) {
+      const envelope = this.witnessReceiptFromRow(matching);
+      if (!envelope) {
+        state = "inconsistent";
+        alarmCode = "observer_recipe_witness_receipt_corrupt";
+      } else {
+        const historicalNow = Math.min(
+          now,
+          Math.max(new Date(envelope.payload.witnessedAt).getTime(), new Date(envelope.payload.validUntil).getTime() - 1)
+        );
+        try {
+          verifier.validate(envelope, checkpoint, envelope.payload.previousReceiptHash, historicalNow);
+          if (verifier.receiptFresh(envelope, now)) {
+            const failedOutcome = latestCheck && latestCheck.outcome !== "accepted"
+              && new Date(latestCheck.checkedAt).getTime() > new Date(matching.receivedAt).getTime()
+              ? latestCheck.outcome : "";
+            state = failedOutcome ? "degraded" : "healthy";
+            healthy = true;
+            alarmCode = failedOutcome ? `observer_recipe_witness_${failedOutcome}` : "";
+          } else {
+            state = "stale";
+            alarmCode = "observer_recipe_witness_receipt_stale";
+          }
+        } catch {
+          state = "inconsistent";
+          alarmCode = "observer_recipe_witness_receipt_invalid";
+        }
+      }
+    }
+    return {
+      required: this.witnessRequired,
+      configured: true,
+      enforcement: this.witnessRequired ? "required" : "advisory",
+      endpointOrigin: this.witnessEndpointOrigin,
+      logId: this.witnessLogId(),
+      witnessKeyId: verifier.key.keyId,
+      maxAgeSeconds: verifier.maxAgeSeconds,
+      state,
+      healthy,
+      deliveryAllowed: !this.witnessRequired || healthy,
+      alarmCode,
+      checkpoint: checkpoint ? {
+        manifestGeneration: checkpoint.manifestGeneration,
+        manifestHash: checkpoint.manifestHash,
+        transparencySequence: checkpoint.transparencySequence,
+        transparencyEventHash: checkpoint.transparencyEventHash,
+        checkpointHash: observerRecipeWitnessCheckpointHash(checkpoint)
+      } : null,
+      latestReceipt: latest ? {
+        witnessSequence: latest.witnessSequence,
+        checkpointHash: latest.checkpointHash,
+        transparencySequence: latest.transparencySequence,
+        transparencyEventHash: latest.transparencyEventHash,
+        receiptHash: latest.receiptHash,
+        witnessedAt: latest.witnessedAt,
+        validUntil: latest.validUntil,
+        receivedAt: latest.receivedAt,
+        privacyClassification: "public_cryptographic_metadata"
+      } : null,
+      latestCheck: latestCheck ? {
+        outcome: latestCheck.outcome,
+        reasonCode: latestCheck.reasonCode,
+        checkpointHash: latestCheck.checkpointHash,
+        transparencyEventHash: latestCheck.transparencyEventHash,
+        receiptHash: latestCheck.receiptHash,
+        checkedAt: latestCheck.checkedAt
+      } : null,
+      mutationCapable: false,
+      ...counts
     };
   }
 
@@ -668,6 +953,7 @@ export class ObserverRecipeRepository {
     const row = this.db.get<{
       candidates: number; active: number; disabled: number; trials: number; failedTrials: number;
       trustManifests: number; transparencyEvents: number;
+      witnessReceipts: number; witnessChecks: number; failedWitnessChecks: number;
     }>(
       `SELECT
          (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?) AS candidates,
@@ -678,12 +964,18 @@ export class ObserverRecipeRepository {
          (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ?) AS trials,
          (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND outcome = 'failed') AS failedTrials,
          (SELECT COUNT(*) FROM observer_recipe_trust_manifests WHERE tenant_id = ?) AS trustManifests,
-         (SELECT COUNT(*) FROM observer_recipe_transparency_events WHERE tenant_id = ?) AS transparencyEvents`,
+         (SELECT COUNT(*) FROM observer_recipe_transparency_events WHERE tenant_id = ?) AS transparencyEvents,
+         (SELECT COUNT(*) FROM observer_recipe_witness_receipts WHERE tenant_id = ?) AS witnessReceipts,
+         (SELECT COUNT(*) FROM observer_recipe_witness_checks WHERE tenant_id = ?) AS witnessChecks,
+         (SELECT COUNT(*) FROM observer_recipe_witness_checks WHERE tenant_id = ? AND outcome <> 'accepted') AS failedWitnessChecks`,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       nowIso(now),
       currentTrust?.generation ?? 0,
       currentTrust?.manifestHash ?? "",
+      currentRequestScope().tenantId,
+      currentRequestScope().tenantId,
+      currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
@@ -697,7 +989,10 @@ export class ObserverRecipeRepository {
       observerRecipeTrials: Number(row?.trials ?? 0),
       failedObserverRecipeTrials: Number(row?.failedTrials ?? 0),
       observerRecipeTrustManifests: Number(row?.trustManifests ?? 0),
-      observerRecipeTransparencyEvents: Number(row?.transparencyEvents ?? 0)
+      observerRecipeTransparencyEvents: Number(row?.transparencyEvents ?? 0),
+      observerRecipeWitnessReceipts: Number(row?.witnessReceipts ?? 0),
+      observerRecipeWitnessChecks: Number(row?.witnessChecks ?? 0),
+      failedObserverRecipeWitnessChecks: Number(row?.failedWitnessChecks ?? 0)
     };
   }
 
@@ -739,6 +1034,143 @@ export class ObserverRecipeRepository {
        ORDER BY sequence DESC LIMIT ?`,
       currentRequestScope().tenantId,
       safeLimit
+    );
+  }
+
+  private latestTransparencyEvent(): ObserverRecipeTrustTransparencyReceipt | undefined {
+    return this.db.get<ObserverRecipeTrustTransparencyReceipt>(
+      `SELECT sequence, event_type AS eventType, manifest_generation AS manifestGeneration,
+              manifest_hash AS manifestHash, signing_key_id AS signingKeyId,
+              subject_hash AS subjectHash, previous_event_hash AS previousEventHash,
+              event_hash AS eventHash, created_at AS createdAt
+       FROM observer_recipe_transparency_events WHERE tenant_id = ?
+       ORDER BY sequence DESC LIMIT 1`,
+      currentRequestScope().tenantId
+    );
+  }
+
+  private witnessLogId(): string {
+    return this.witnessVerifier
+      ? observerRecipeWitnessScopedLogId(this.witnessVerifier.logId, currentRequestScope().tenantId)
+      : "";
+  }
+
+  private latestWitnessReceipt(): WitnessReceiptRow | undefined {
+    if (!this.witnessVerifier) return undefined;
+    return this.db.get<WitnessReceiptRow>(
+      `SELECT id, log_id AS logId, witness_key_id AS witnessKeyId,
+              witness_sequence AS witnessSequence, checkpoint_hash AS checkpointHash,
+              manifest_generation AS manifestGeneration, manifest_hash AS manifestHash,
+              transparency_sequence AS transparencySequence,
+              transparency_event_hash AS transparencyEventHash,
+              previous_receipt_hash AS previousReceiptHash, receipt_hash AS receiptHash,
+              payload_json AS payloadJson, signature, witnessed_at AS witnessedAt,
+              valid_until AS validUntil, received_at AS receivedAt
+       FROM observer_recipe_witness_receipts
+       WHERE tenant_id = ? AND log_id = ?
+       ORDER BY witness_sequence DESC LIMIT 1`,
+      currentRequestScope().tenantId,
+      this.witnessLogId()
+    );
+  }
+
+  private receiptForCheckpoint(transparencyEventHash: string): WitnessReceiptRow | undefined {
+    if (!this.witnessVerifier) return undefined;
+    return this.db.get<WitnessReceiptRow>(
+      `SELECT id, log_id AS logId, witness_key_id AS witnessKeyId,
+              witness_sequence AS witnessSequence, checkpoint_hash AS checkpointHash,
+              manifest_generation AS manifestGeneration, manifest_hash AS manifestHash,
+              transparency_sequence AS transparencySequence,
+              transparency_event_hash AS transparencyEventHash,
+              previous_receipt_hash AS previousReceiptHash, receipt_hash AS receiptHash,
+              payload_json AS payloadJson, signature, witnessed_at AS witnessedAt,
+              valid_until AS validUntil, received_at AS receivedAt
+       FROM observer_recipe_witness_receipts
+       WHERE tenant_id = ? AND log_id = ? AND transparency_event_hash = ?
+       ORDER BY witness_sequence DESC LIMIT 1`,
+      currentRequestScope().tenantId,
+      this.witnessLogId(),
+      transparencyEventHash
+    );
+  }
+
+  private witnessReceiptFromRow(row: WitnessReceiptRow): SignedObserverRecipeWitnessReceipt | null {
+    try {
+      const payload = JSON.parse(row.payloadJson) as SignedObserverRecipeWitnessReceipt["payload"];
+      return { algorithm: "Ed25519", keyId: row.witnessKeyId, payload, signature: row.signature };
+    } catch {
+      return null;
+    }
+  }
+
+  private latestWitnessCheck(): WitnessCheckRow | undefined {
+    if (!this.witnessVerifier) return undefined;
+    return this.db.get<WitnessCheckRow>(
+      `SELECT outcome, reason_code AS reasonCode, checkpoint_hash AS checkpointHash,
+              transparency_event_hash AS transparencyEventHash,
+              receipt_hash AS receiptHash, checked_at AS checkedAt
+       FROM observer_recipe_witness_checks
+       WHERE tenant_id = ? AND log_id = ?
+       ORDER BY checked_at DESC, id DESC LIMIT 1`,
+      currentRequestScope().tenantId,
+      this.witnessLogId()
+    );
+  }
+
+  private witnessCounts(): {
+    witnessReceiptCount: number;
+    witnessCheckCount: number;
+    failedWitnessCheckCount: number;
+  } {
+    if (!this.witnessVerifier) {
+      return { witnessReceiptCount: 0, witnessCheckCount: 0, failedWitnessCheckCount: 0 };
+    }
+    const row = this.db.get<{ receipts: number; checks: number; failures: number }>(
+      `SELECT
+         (SELECT COUNT(*) FROM observer_recipe_witness_receipts
+            WHERE tenant_id = ? AND log_id = ?) AS receipts,
+         (SELECT COUNT(*) FROM observer_recipe_witness_checks
+            WHERE tenant_id = ? AND log_id = ?) AS checks,
+         (SELECT COUNT(*) FROM observer_recipe_witness_checks
+            WHERE tenant_id = ? AND log_id = ? AND outcome <> 'accepted') AS failures`,
+      currentRequestScope().tenantId,
+      this.witnessLogId(),
+      currentRequestScope().tenantId,
+      this.witnessLogId(),
+      currentRequestScope().tenantId,
+      this.witnessLogId()
+    );
+    return {
+      witnessReceiptCount: Number(row?.receipts ?? 0),
+      witnessCheckCount: Number(row?.checks ?? 0),
+      failedWitnessCheckCount: Number(row?.failures ?? 0)
+    };
+  }
+
+  private recordWitnessCheck(
+    outcome: WitnessCheckRow["outcome"],
+    reasonCode: string,
+    checkpointHash: string,
+    transparencyEventHash: string,
+    receiptHash: string,
+    now: number
+  ): void {
+    const scope = currentRequestScope();
+    this.db.run(
+      `INSERT INTO observer_recipe_witness_checks(
+         id, tenant_id, log_id, checkpoint_hash, transparency_event_hash,
+         outcome, reason_code, receipt_hash, checked_by_actor_id, checked_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      newId("observer_recipe_witness_check"),
+      scope.tenantId,
+      this.witnessLogId() || "unconfigured",
+      checkpointHash,
+      transparencyEventHash,
+      outcome,
+      reasonCode,
+      receiptHash,
+      scope.actorId,
+      nowIso(now)
     );
   }
 
