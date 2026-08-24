@@ -1,6 +1,28 @@
 # Yoink roadmap
 
-## Shipped through 0.25.0
+## Shipped through 0.26.0
+
+### Best Buy lifecycle layout coverage (0.26.0)
+
+- Migration 28 retires inherited Best Buy qualification, retailer execution,
+  and listing execution flags without changing any other retailer lane
+- `bestbuy-observer-v5` recognizes standalone Pre-order controls and preserves
+  exact bounded price, seller, selected fulfillment, and SKU evidence
+- High-demand product gates and active queues are distinct manual states. A
+  high-demand page can contribute safe read-only evidence, but its Add control
+  is never actionable and no queue interaction is attempted
+- Pickup-selected limited-stock and ordinary pickup-selected layouts remain
+  valid observation evidence; neither can satisfy selected-shipping checks
+- Best Buy qualification counts only in-stock actionable candidates. Preorders
+  are read-only, and `bestbuy-add-v3` rejects them again inside the isolated
+  page runner before any authorization or click
+- The companion explains preorder, high-demand, queue, and pickup boundaries,
+  while sanitized `interactive_high_demand` results reach the diagnostic ledger
+  immediately. No DOM, page text, URL, account data, or token is transmitted
+
+The future Best Buy preorder and high-demand mutation lanes remain separate
+roadmap work requiring explicit policies for release dates, delayed charges,
+quantity limits, queue lifecycle, cancellation, and order reconciliation.
 
 ### Exact selected-offer community identity (0.25.0)
 
@@ -281,14 +303,15 @@
 - Qualification-ready `bestbuy-add-v3`: explicit Best Buy-sold, selected
   shipping, exact-SKU, quantity-one add-to-cart only; live activation remains
   evidence-gated
-- Best Buy observer v4 supports current `/product/.../sku/<SKU>`, compact
+- Best Buy observer v5 supports current `/product/.../sku/<SKU>`, compact
   `/product/.../<SKU>`, legacy `/site/.../<SKU>.p`, and consistent `skuId`
   identities while rejecting opaque product tokens and conflicting SKU
   evidence. Current `data-testid`, `data-test-id`, automation, native-button,
-  and accessible Add-control layouts are covered. Seller names carried by
+  standalone Pre-order, and accessible Add-control layouts are covered. Seller names carried by
   bounded accessibility metadata inside the exact seller element are accepted;
   explicit in-store-only pages are manual/local unknown evidence rather than
-  false global out-of-stock assertions
+  false global out-of-stock assertions. High-demand gates preserve bounded
+  read-only offer evidence while queues and mutation remain closed
 - Best Buy current/legacy scoped-offer coverage, marketplace and pickup
   rejection, high-demand/interactive-block restraint, empty-cart preflight,
   no-click rehearsal, at-most-once click, exact cart proof, independent
@@ -407,9 +430,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.25.0
+## Architecture assessment after 0.26.0
 
-Yoink 0.25.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.26.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -421,7 +444,7 @@ behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-27 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
+| Primary backend database | Transactional migration-28 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, role administration, diagnostics, privacy-classified adapter-repair alerts, retailer/source/affiliate controls, and audit | No production IdP/step-up, secret references, external alert connectors/background escalation worker, break-glass workflow, cross-tenant global curator, or retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard for exact products, revisioned intent, store/seller/fulfillment/unit/all-in limits, action ceiling, expiry/cooldown/substitution preferences, periodic spend caps, activity, pause, pairing, and source/review status | Some style-level retailers still report `listing_only`; region/store scope is consent-derived rather than verified from each live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |

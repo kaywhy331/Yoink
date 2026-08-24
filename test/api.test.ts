@@ -730,7 +730,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           Authorization: `Bearer ${paired.token}`
         },
         body: JSON.stringify({
-          adapterVersion: "bestbuy-observer-v4",
+          adapterVersion: "bestbuy-observer-v5",
           contractVersion: 1,
           observedAt: new Date().toISOString(),
           pageKind: "product",
@@ -759,7 +759,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       },
       body: JSON.stringify({
         adapterVersion: "bestbuy-add-v3",
-        observerVersion: "bestbuy-observer-v4",
+        observerVersion: "bestbuy-observer-v5",
         contractVersion: 1,
         shadowObservationId: bestBuyShadowIds[0],
         observedAt: new Date().toISOString(),

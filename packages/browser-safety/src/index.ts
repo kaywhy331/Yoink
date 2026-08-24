@@ -54,7 +54,7 @@ export interface LiveOfferObservation {
   fulfillment: Fulfillment;
   addControlActionable: boolean;
   securityChallenge: boolean;
-  interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "unknown";
+  interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "high_demand" | "unknown";
 }
 
 export interface LiveOfferProof {

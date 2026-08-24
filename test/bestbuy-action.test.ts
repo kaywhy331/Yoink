@@ -108,6 +108,18 @@ test("Best Buy v3 accepts only Best Buy-sold, selected-shipping, quantity-one ad
   const marketplaceJob = job({ canonicalUrl: MARKETPLACE_URL, retailerSku: "12716513", expectedSeller: "Shopville Inc", maxUnitPriceCents: 26799, maxOrderTotalCents: 26799 });
   assert.equal(prepareBestBuyAdd(marketplace, MARKETPLACE_URL, marketplaceJob, NOW).reason, "third_party_seller");
   assert.equal(prepareBestBuyAdd(fixture("bestbuy-pickup-selected.html", PRODUCT_URL), PRODUCT_URL, job(), NOW).reason, "out_of_stock");
+
+  const preorderUrl = "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-reality-fracture-play-booster-box-30-packs/JJ8VP7Z65T/sku/6678193";
+  const preorderJob = job({
+    canonicalUrl: preorderUrl,
+    retailerSku: "6678193",
+    maxUnitPriceCents: 15499,
+    maxOrderTotalCents: 15499
+  });
+  assert.equal(
+    prepareBestBuyAdd(fixture("bestbuy-reality-fracture-preorder.html", preorderUrl), preorderUrl, preorderJob, NOW).reason,
+    "preorder_not_supported"
+  );
 });
 
 test("Best Buy v3 reaches the no-click boundary on the modern fulfillment layout", () => {

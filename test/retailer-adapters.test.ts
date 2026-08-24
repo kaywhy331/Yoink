@@ -718,7 +718,7 @@ test("Best Buy observer binds exact first-party shipping and rejects marketplace
   assert.equal(sellerMissing.addControlActionable, false);
 });
 
-test("Best Buy v4 recognizes modern fulfillment and accessible seller controls while retaining shipping-only boundaries", () => {
+test("Best Buy observer recognizes modern fulfillment and accessible seller controls while retaining shipping-only boundaries", () => {
   const shippingUrl = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const shippingDocument = fixture("bestbuy-modern-first-party.html", shippingUrl);
   const shipping = observeRetailerOffer(shippingDocument, shippingUrl, "bestbuy", "6670797", "shipping", NOW);
@@ -772,6 +772,67 @@ test("Best Buy v4 recognizes modern fulfillment and accessible seller controls w
   assert.equal(selectorMiss.diagnostic.layout.genericAddIntentCount, 1);
   assert.equal(selectorMiss.diagnostic.outcome, "failed");
   assert.equal(selectorMiss.diagnostic.reasonCode, "add_control_selector_miss");
+});
+
+test("Best Buy v5 classifies the supplied preorder, high-demand, and pickup-selected layouts without widening mutation scope", () => {
+  const preorderUrl = "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-reality-fracture-play-booster-box-30-packs/JJ8VP7Z65T/sku/6678193";
+  const preorderDocument = fixture("bestbuy-reality-fracture-preorder.html", preorderUrl);
+  const preorder = observeRetailerOffer(preorderDocument, preorderUrl, "bestbuy", "6678193", "either", NOW);
+  assert.deepEqual({
+    availability: preorder.availability,
+    price: preorder.unitPriceCents,
+    seller: preorder.sellerName,
+    fulfillment: preorder.fulfillment,
+    actionable: preorder.addControlActionable,
+    block: preorder.interactiveBlock
+  }, {
+    availability: "preorder",
+    price: 15499,
+    seller: "Best Buy",
+    fulfillment: "shipping",
+    actionable: true,
+    block: ""
+  });
+
+  const highDemandUrl = "https://www.bestbuy.com/product/cardsmiths-mega-man-series-1-collectors-box-2-pack/J39HKFSVZK/sku/6669782";
+  const highDemandDocument = fixture("bestbuy-mega-man-high-demand.html", highDemandUrl);
+  const highDemand = observeRetailerOffer(highDemandDocument, highDemandUrl, "bestbuy", "6669782", "either", NOW);
+  assert.deepEqual({
+    availability: highDemand.availability,
+    price: highDemand.unitPriceCents,
+    seller: highDemand.sellerName,
+    fulfillment: highDemand.fulfillment,
+    actionable: highDemand.addControlActionable,
+    block: highDemand.interactiveBlock
+  }, {
+    availability: "in_stock",
+    price: 1449,
+    seller: "Best Buy",
+    fulfillment: "shipping",
+    actionable: false,
+    block: "high_demand"
+  });
+  const highDemandAttempt = collectRetailerShadowAttempt(highDemandDocument, highDemandUrl, "bestbuy", "either");
+  assert.equal(highDemandAttempt.diagnostic.outcome, "rejected");
+  assert.equal(highDemandAttempt.diagnostic.failureStage, "interactive_block");
+  assert.equal(highDemandAttempt.diagnostic.reasonCode, "interactive_high_demand");
+
+  const pickupCases = [
+    ["6612619", "bestbuy-pikachu-pickup-selected.html", "https://www.bestbuy.com/product/ultra-pro-pikachu-playmat-for-pokemon/J79X4L6RHZ/sku/6612619", 1949],
+    ["6669690", "bestbuy-hoth-pickup-selected.html", "https://www.bestbuy.com/product/asmodee-star-wars-unlimited-trading-card-game-intro-battle-hoth/J394C9ZSYW/sku/6669690", 1549]
+  ] as const;
+  for (const [sku, fixtureName, url, price] of pickupCases) {
+    const document = fixture(fixtureName, url);
+    const observation = observeRetailerOffer(document, url, "bestbuy", sku, "either", NOW);
+    assert.deepEqual({
+      price: observation.unitPriceCents,
+      seller: observation.sellerName,
+      fulfillment: observation.fulfillment,
+      actionable: observation.addControlActionable
+    }, { price, seller: "Best Buy", fulfillment: "pickup", actionable: true }, sku);
+    assert.equal(retailerAddControl(document, url, "bestbuy", sku, "shipping"), null, sku);
+    assert.ok(retailerAddControl(document, url, "bestbuy", sku, "pickup"), sku);
+  }
 });
 
 test("Best Buy in-store-only products remain manual unknown evidence rather than global out-of-stock", () => {

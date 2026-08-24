@@ -79,6 +79,9 @@ export function prepareBestBuyAdd(
     job.fulfillment,
     new Date(now).toISOString()
   );
+  if (observation.availability === "preorder" && !observation.securityChallenge && !observation.interactiveBlock) {
+    return { ok: false, reason: "preorder_not_supported" };
+  }
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return verified;
   const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment);
@@ -124,6 +127,9 @@ export function commitBestBuyAdd(
     job.fulfillment,
     new Date(now).toISOString()
   );
+  if (observation.availability === "preorder" && !observation.securityChallenge && !observation.interactiveBlock) {
+    return { ok: false, reason: "preorder_not_supported", clicked: false };
+  }
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ...verified, clicked: false };
   const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment);

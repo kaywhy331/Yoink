@@ -160,7 +160,15 @@ function renderRetailerObservation(observation) {
       ? " · exact ephemeral offer binding verified; token discarded"
       : ` · offer binding closed: ${String(observation.routeReasonCode || "not ready").replaceAll("_", " ")}`
     : "";
-  $("#retailerMessage").textContent = `${retailer}: ${evidence} · ${observation?.retailerSku || "unknown SKU"} · ${price} · ${observation?.sellerName || "seller unknown"} · ${observation?.fulfillment || "fulfillment unknown"}${route}.`;
+  const boundaries = [];
+  if (observation?.availability === "preorder") boundaries.push("preorder read-only");
+  if (observation?.interactiveBlock === "high_demand") boundaries.push("high-demand gate closed");
+  else if (observation?.interactiveBlock === "queue") boundaries.push("queue handling closed");
+  if (observation?.retailerId === "bestbuy" && observation?.fulfillment === "pickup") {
+    boundaries.push("select Shipping to qualify");
+  }
+  const boundary = boundaries.length ? ` · ${boundaries.join(" · ")}` : "";
+  $("#retailerMessage").textContent = `${retailer}: ${evidence} · ${observation?.retailerSku || "unknown SKU"} · ${price} · ${observation?.sellerName || "seller unknown"} · ${observation?.fulfillment || "fulfillment unknown"}${route}${boundary}.`;
 }
 
 function renderWalmartDrawScan(scan) {

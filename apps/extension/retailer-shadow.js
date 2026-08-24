@@ -51,7 +51,7 @@ var YoinkRetailerShadowModule = (() => {
   var WALMART_OBSERVER_VERSION = "walmart-observer-v4";
   var WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
   var AMAZON_OBSERVER_VERSION = "amazon-observer-v6";
-  var BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v4";
+  var BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v5";
   var DISNEY_OBSERVER_VERSION = "disney-observer-v1";
   var RAVENSBURGER_OBSERVER_VERSION = "ravensburger-observer-v1";
   var RIOT_OBSERVER_VERSION = "riot-observer-v1";
@@ -253,6 +253,7 @@ var YoinkRetailerShadowModule = (() => {
         "input[type='submit'][value*='add to cart' i]",
         "button"
       ],
+      addIntentPattern: /\b(?:add(?:\s+(?:item\s+)?to)?\s+(?:cart|bag)|pre[ -]?order(?:\s+now|\s+(?:item\s+)?to\s+(?:cart|bag))?|atc)\b/i,
       priceSelectors: [
         "[data-testid='customer-price']",
         "[data-testid*='customer-price' i]",
@@ -758,13 +759,16 @@ var YoinkRetailerShadowModule = (() => {
     if (bestBuyPage && /\b(?:available\s+)?in[ -]store only\b/i.test(page) && genericAddIntentControls(document).length === 0) return "location";
     const membershipEvidence = dialogText || page;
     if (/membership (?:is )?(?:required|needed)|invitation[- ]only|invite required|(?:prime|walmart\+) members? only|requires? (?:a )?(?:prime|walmart\+) membership/i.test(membershipEvidence) || dialog && /\bjoin (?:walmart\+|prime)\b/i.test(dialogText) || /\bjoin (?:walmart\+|prime)\b.{0,80}\b(?:to|in order to)\b.{0,80}\b(?:add|buy|purchase|continue)\b/i.test(page)) return "membership";
-    if (/you(?:’|')?re in line|virtual queue|waiting room|high demand|place in line/i.test(page) || (() => {
+    if (/you(?:’|')?re in line|virtual queue|waiting room|place in line/i.test(page) || (() => {
       try {
         return new URL(urlValue).pathname === "/qp";
       } catch {
         return false;
       }
     })()) return "queue";
+    if (bestBuyPage && /\b(?:high[ -]demand product|this item is (?:currently )?in high demand|due to high demand)\b/i.test(page)) {
+      return "high_demand";
+    }
     if (retailerSecurityChallenge(document)) return "unknown";
     return "";
   }
@@ -1291,12 +1295,14 @@ var YoinkRetailerShadowModule = (() => {
     const pageSku = extractRetailerSku(retailerId, urlValue);
     const blocked = retailerInteractiveBlock(document, urlValue);
     const selected = pageSku === expectedSku ? selectedControl(document, retailer, requiredFulfillment, expectedSku) : { control: null, fulfillment: "unknown", offerRoot: null };
-    const seller2 = blocked ? { sellerName: "", sellerType: "unknown" } : sellerEvidence(document, selected.control, retailer, selected.offerRoot);
+    const retainBoundManualEvidence = blocked === "high_demand" && pageSku === expectedSku && Boolean(selected.offerRoot);
+    const seller2 = blocked && !retainBoundManualEvidence ? { sellerName: "", sellerType: "unknown" } : sellerEvidence(document, selected.control, retailer, selected.offerRoot);
     const priceRoot = selected.offerRoot || selected.control?.closest("form, [data-testid*='buy-box' i], [data-automation-id*='buy-box' i], #buybox, main") || null;
-    const unitPriceCents = !blocked && priceRoot ? readPrice(priceRoot, retailer.priceSelectors) ?? readPrice(document, retailer.priceSelectors) : null;
-    const canAdd = pageSku === expectedSku && actionable(selected.control) && !blocked;
+    const unitPriceCents = (!blocked || retainBoundManualEvidence) && priceRoot ? readPrice(priceRoot, retailer.priceSelectors) ?? readPrice(document, retailer.priceSelectors) : null;
+    const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
+    const canAdd = selectedControlActionable && !blocked;
     const controlText = text(selected.control, 300);
-    const availability = blocked ? "unknown" : canAdd ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock" : "out_of_stock";
+    const availability = blocked && !(retainBoundManualEvidence && selectedControlActionable) ? "unknown" : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock" : "out_of_stock";
     return {
       contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
       observedAt,
@@ -1309,7 +1315,7 @@ var YoinkRetailerShadowModule = (() => {
       currency: "USD",
       sellerName: seller2.sellerName,
       sellerType: seller2.sellerType,
-      fulfillment: blocked ? "unknown" : selected.fulfillment,
+      fulfillment: blocked && !retainBoundManualEvidence ? "unknown" : selected.fulfillment,
       addControlActionable: canAdd,
       securityChallenge: retailerSecurityChallenge(document),
       interactiveBlock: blocked

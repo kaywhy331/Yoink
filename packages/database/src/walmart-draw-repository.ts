@@ -16,7 +16,7 @@ import { currentRequestScope } from "./request-scope.js";
 const OUTCOMES = new Set(WALMART_DRAW_SCAN_OUTCOMES);
 const STATES = new Set(WALMART_DRAW_STATES);
 const SELLER_TYPES = new Set<SellerType>(["first_party", "third_party", "unknown"]);
-const INTERACTIVE_BLOCKS = new Set(["", "auth", "mfa", "location", "membership", "queue", "unknown"] as const);
+const INTERACTIVE_BLOCKS = new Set(["", "auth", "mfa", "location", "membership", "queue", "high_demand", "unknown"] as const);
 const REASON_CODES = new Set([
   "verified",
   "no_active_drawings",

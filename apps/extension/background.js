@@ -47,7 +47,7 @@ const TARGET_OBSERVER_VERSION = "target-observer-v1";
 const RETAILER_OBSERVER_VERSIONS = {
   walmart: "walmart-observer-v4",
   amazon: "amazon-observer-v6",
-  bestbuy: "bestbuy-observer-v4",
+  bestbuy: "bestbuy-observer-v5",
   disney: "disney-observer-v1",
   ravensburger: "ravensburger-observer-v1",
   riot: "riot-observer-v1",
@@ -329,7 +329,7 @@ function targetObservationPayload(value) {
     ? value.sellerType : "unknown";
   const fulfillment = ["shipping", "pickup", "unknown"].includes(value.fulfillment)
     ? value.fulfillment : "unknown";
-  const interactiveBlock = ["", "auth", "mfa", "location", "membership", "queue", "unknown"].includes(value.interactiveBlock)
+  const interactiveBlock = ["", "auth", "mfa", "location", "membership", "queue", "high_demand", "unknown"].includes(value.interactiveBlock)
     ? value.interactiveBlock : "unknown";
   const purchaseRouteKind = ["none", "amazon_buy_now"].includes(value.purchaseRouteKind)
     ? value.purchaseRouteKind : "none";
@@ -382,7 +382,7 @@ function retailerObservationPayload(value, retailerId) {
     ? value.sellerType : "unknown";
   const fulfillment = ["shipping", "pickup", "unknown"].includes(value.fulfillment)
     ? value.fulfillment : "unknown";
-  const interactiveBlock = ["", "auth", "mfa", "location", "membership", "queue", "unknown"].includes(value.interactiveBlock)
+  const interactiveBlock = ["", "auth", "mfa", "location", "membership", "queue", "high_demand", "unknown"].includes(value.interactiveBlock)
     ? value.interactiveBlock : "unknown";
   const purchaseRouteKind = retailerId === "amazon" && value.purchaseRouteKind === "amazon_buy_now"
     ? "amazon_buy_now" : "none";
@@ -466,7 +466,7 @@ function walmartDrawScanPayload(value) {
   }
   const outcome = String(value.outcome || "");
   const reasonCode = String(value.reasonCode || "").toLocaleLowerCase("en-US");
-  const interactiveBlock = ["", "auth", "mfa", "location", "membership", "queue", "unknown"].includes(value.interactiveBlock)
+  const interactiveBlock = ["", "auth", "mfa", "location", "membership", "queue", "high_demand", "unknown"].includes(value.interactiveBlock)
     ? value.interactiveBlock : "unknown";
   const expectedCardCount = Number(value.expectedCardCount);
   const observedCardCount = Number(value.observedCardCount);
@@ -592,7 +592,7 @@ const DIAGNOSTIC_STAGES = new Set([
 const DIAGNOSTIC_SCOPE_KINDS = new Set(["none", "form", "buybox", "qualified_buybox", "accordion", "other"]);
 const DIAGNOSTIC_SELLER_SHAPES = new Set(["none", "legacy", "offer_display_combined", "offer_display_split"]);
 const DIAGNOSTIC_FULFILLMENT_SHAPES = new Set(["none", "shipping", "pickup", "mixed"]);
-const DIAGNOSTIC_BLOCKS = new Set(["", "auth", "mfa", "location", "membership", "queue", "unknown"]);
+const DIAGNOSTIC_BLOCKS = new Set(["", "auth", "mfa", "location", "membership", "queue", "high_demand", "unknown"]);
 const DIAGNOSTIC_COUNT_FIELDS = [
   "addControlCount", "genericAddIntentCount", "scopedControlCount", "explicitSkuInputCount", "exactSkuInputCount",
   "variationSkuCount", "canonicalOfferInputCount", "canonicalOfferDistinctCount",
@@ -611,7 +611,7 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   ...OBSERVER_RUNTIME_FAILURE_REASONS,
   "product_identity_missing", "security_challenge",
   "interactive_auth", "interactive_mfa", "interactive_location", "interactive_membership",
-  "interactive_queue", "interactive_unknown",
+  "interactive_queue", "interactive_high_demand", "interactive_unknown",
   "add_control_selector_miss", "add_control_missing", "add_control_ambiguous", "add_control_disabled",
   "explicit_sku_binding_missing", "explicit_sku_binding_ambiguous",
   "offer_binding_missing", "offer_binding_ambiguous", "price_binding_missing",
@@ -624,7 +624,7 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   "seller_policy_not_supported", "fulfillment_not_supported", "contract_version_mismatch",
   "job_identity_invalid", "canonical_url_invalid", "quantity_invalid", "unit_cap_invalid",
   "total_cap_invalid", "job_expired", "offer_stale", "listing_mismatch",
-  "product_page_unverified", "manual_action_required", "out_of_stock", "add_control_unavailable",
+  "product_page_unverified", "manual_action_required", "preorder_not_supported", "out_of_stock", "add_control_unavailable",
   "currency_mismatch", "seller_unverified", "third_party_seller", "signal_seller_mismatch",
   "price_unavailable", "over_unit_cap", "fulfillment_unverified", "authorization_missing",
   "authorization_expired", "add_control_changed", "offer_binding_changed", "click_failed",
@@ -869,7 +869,7 @@ function operationDiagnostic(base, retailerId, operation, outcome, failureStage,
 }
 
 const EXPECTED_LIVE_REJECTIONS = new Set([
-  "manual_action_required", "out_of_stock", "third_party_seller", "signal_seller_mismatch",
+  "manual_action_required", "preorder_not_supported", "out_of_stock", "third_party_seller", "signal_seller_mismatch",
   "over_unit_cap", "fulfillment_not_supported", "seller_policy_not_supported",
   "quantity_not_supported", "unsupported_action", "job_expired"
 ]);
@@ -2711,12 +2711,24 @@ function bestBuyRehearsalJob(observation) {
   if (!observation?.id
     || observation.retailerId !== "bestbuy"
     || !/^\d{5,20}$/.test(String(observation.retailerSku || ""))
+    || observation.availability !== "in_stock"
+    || observation.addControlActionable !== true
+    || Boolean(observation.securityChallenge || observation.interactiveBlock)
     || !Number.isSafeInteger(price)
     || price <= 0
     || observation.fulfillment !== "shipping"
     || observation.sellerType !== "first_party"
     || observation.sellerName !== "Best Buy") {
-    throw new Error("Open an in-stock offer explicitly sold by Best Buy with shipping selected before running the no-click rehearsal.");
+    if (observation?.interactiveBlock === "high_demand" || observation?.interactiveBlock === "queue") {
+      throw new Error("Best Buy high-demand or queue evidence was recorded, but automated demand-gate handling remains closed.");
+    }
+    if (observation?.availability === "preorder") {
+      throw new Error("Best Buy preorder evidence was recorded, but preorder adds remain closed. Use an in-stock Best Buy-sold offer with Shipping selected.");
+    }
+    if (observation?.fulfillment === "pickup") {
+      throw new Error("Best Buy pickup evidence was recorded. Select Shipping on an in-stock Best Buy-sold offer before rehearsing.");
+    }
+    throw new Error("Open an in-stock offer explicitly sold by Best Buy, select Shipping, and verify a usable Add to cart control before rehearsing.");
   }
   return {
     adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
@@ -2747,15 +2759,18 @@ async function rehearseBestBuyTab() {
     job = bestBuyRehearsalJob(observation);
   } catch (error) {
     const expectedPolicyRejection = observation.sellerType === "third_party"
+      || observation.availability === "preorder"
       || observation.fulfillment === "pickup"
       || Boolean(observation.securityChallenge || observation.interactiveBlock);
-    const reasonCode = observation.sellerType === "third_party"
-      ? "third_party_seller"
-      : observation.fulfillment === "pickup"
-        ? "fulfillment_not_supported"
-        : observation.securityChallenge || observation.interactiveBlock
-          ? "manual_action_required"
-          : safeReasonCode(inspection.diagnostic?.reasonCode || "offer_not_actionable");
+    const reasonCode = observation.securityChallenge || observation.interactiveBlock
+      ? "manual_action_required"
+      : observation.availability === "preorder"
+        ? "preorder_not_supported"
+        : observation.sellerType === "third_party"
+          ? "third_party_seller"
+          : observation.fulfillment === "pickup"
+            ? "fulfillment_not_supported"
+            : safeReasonCode(inspection.diagnostic?.reasonCode || "offer_not_actionable");
     await postRetailerDiagnostic(device, operationDiagnostic(
       inspection.diagnostic,
       "bestbuy",

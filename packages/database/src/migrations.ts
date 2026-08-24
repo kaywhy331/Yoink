@@ -1831,5 +1831,16 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
           selected_offer_fingerprint, location_scope, expires_at DESC, received_at DESC
         );
     `
+  },
+  {
+    version: 28,
+    name: "bestbuy_v5_requalification_boundary",
+    sql: `
+      UPDATE retailers SET execution_supported = 0 WHERE id = 'bestbuy';
+      UPDATE listings SET execution_supported = 0 WHERE retailer_id = 'bestbuy';
+      UPDATE retailer_adapter_qualifications
+        SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE retailer_id = 'bestbuy';
+    `
   }
 ]);

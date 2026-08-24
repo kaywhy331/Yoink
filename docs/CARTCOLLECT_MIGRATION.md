@@ -155,7 +155,7 @@ not retain raw errors, URLs, DOM, or any value outside the diagnostic contract.
 
 ## Current Best Buy boundary
 
-`bestbuy-observer-v4` binds one exact numeric SKU, price, first-party seller,
+`bestbuy-observer-v5` binds one exact numeric SKU, price, first-party seller,
 selected shipping state, and Add control inside a bounded offer scope. It
 supports current and legacy product routes plus current test/automation and
 accessible native-button layouts. Its diagnostic reports a sanitized generic
@@ -166,7 +166,10 @@ at-most-once click, exact cart-line proof, queue/interactive restraint, and
 marketplace/pickup rejection boundaries. Accessibility-backed seller names are
 read only inside the already-bound seller element, and in-store-only products
 remain manual/local evidence with unknown global availability. Migration 19
-retires prior Best Buy qualifications. Activation requires a fresh v4 dossier,
+retires prior Best Buy qualifications; observer-version binding also excludes
+pre-v5 evidence from current qualification. Preorders and high-demand gates are
+retained as read-only evidence but cannot satisfy or execute the in-stock lane.
+Activation requires a fresh v5 dossier,
 no-click rehearsal, capable companion, exact evidence hash, and local
 confirmation.
 

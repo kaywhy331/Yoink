@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.25.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.26.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -27,6 +27,21 @@ Seller, fulfillment, and country/region/one-way store scope remain separate key
 dimensions. Opaque Amazon offer IDs remain ephemeral, and this release changes
 no retailer mutation qualification or authority. See the
 [selected-offer identity contract](docs/SELECTED_OFFER_IDENTITY.md).
+
+Version 0.26.0 introduces `bestbuy-observer-v5` for the four supplied Best Buy
+layouts: preorder, high-demand/manual gate, pickup-selected limited stock, and
+ordinary inventory. Standalone visible Pre-order controls are now recognized,
+and an exact high-demand offer may retain its bounded SKU, price, seller, and
+selected fulfillment as read-only evidence while the control remains
+non-actionable. Actual queues remain separate manual boundaries. Popup guidance
+identifies preorder, high-demand, queue, and pickup states instead of asking for
+the same generic retry. Preorders cannot satisfy Best Buy's in-stock
+qualification checks or pass `bestbuy-add-v3`; pickup, high-demand handling,
+queues, checkout, and order submission remain closed. Sanitized
+`interactive_high_demand` diagnostics reach the server without DOM, page text,
+URLs, account data, or tokens. Migration 28 retires only inherited Best Buy
+qualification and execution flags so v4 evidence cannot authorize the v5
+boundary; fresh v5 evidence and explicit review are required.
 
 Version 0.24.0 replaces observer-recipe trust-on-first-use with a public offline
 root pinned independently in the API package and Chrome companion. Migration 26

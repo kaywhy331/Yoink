@@ -26,7 +26,7 @@ import { currentRequestScope } from "./request-scope.js";
 const AVAILABILITY = new Set<Availability>(["in_stock", "preorder", "out_of_stock", "unknown"]);
 const SELLER_TYPES = new Set<SellerType>(["first_party", "third_party", "unknown"]);
 const FULFILLMENTS = new Set(["shipping", "pickup", "unknown"] as const);
-const INTERACTIVE_BLOCKS = new Set(["", "auth", "mfa", "location", "membership", "queue", "unknown"] as const);
+const INTERACTIVE_BLOCKS = new Set(["", "auth", "mfa", "location", "membership", "queue", "high_demand", "unknown"] as const);
 const PURCHASE_ROUTE_KINDS = new Set(["none", "amazon_buy_now"] as const);
 const ROUTE_REASON_CODES = new Set([
   "not_applicable",
@@ -1242,7 +1242,7 @@ export class ShadowObservationRepository {
       BESTBUY_OBSERVER_VERSION,
       cutoff
     );
-    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate" && row.availability === "in_stock");
     const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
     const rehearsals = this.db.all<QualificationTrialRow>(
       `SELECT evidence_hash AS evidenceHash FROM retailer_adapter_trials

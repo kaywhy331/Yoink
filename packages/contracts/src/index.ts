@@ -19,7 +19,7 @@ export const TARGET_OBSERVER_VERSION = "target-observer-v1";
 export const WALMART_OBSERVER_VERSION = "walmart-observer-v4";
 export const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 export const AMAZON_OBSERVER_VERSION = "amazon-observer-v6";
-export const BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v4";
+export const BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v5";
 export const DISNEY_OBSERVER_VERSION = "disney-observer-v1";
 export const RAVENSBURGER_OBSERVER_VERSION = "ravensburger-observer-v1";
 export const RIOT_OBSERVER_VERSION = "riot-observer-v1";
@@ -91,6 +91,7 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "interactive_location",
   "interactive_membership",
   "interactive_queue",
+  "interactive_high_demand",
   "interactive_unknown",
   "add_control_selector_miss",
   "add_control_missing",
@@ -131,6 +132,7 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "listing_mismatch",
   "product_page_unverified",
   "manual_action_required",
+  "preorder_not_supported",
   "out_of_stock",
   "add_control_unavailable",
   "currency_mismatch",
@@ -178,7 +180,7 @@ export interface RetailerAdapterLayoutEvidence {
   priceCandidateCount: number;
   quantityControlCount: number;
   securityChallenge: boolean;
-  interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "unknown";
+  interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "high_demand" | "unknown";
 }
 
 export interface RetailerAdapterDiagnosticInput {
@@ -347,7 +349,7 @@ export interface RetailerShadowObservationInput {
   fulfillment: "shipping" | "pickup" | "unknown";
   addControlActionable: boolean;
   securityChallenge: boolean;
-  interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "unknown";
+  interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "high_demand" | "unknown";
   purchaseRouteKind?: "none" | "amazon_buy_now";
   purchaseRouteReady?: boolean;
   routeReasonCode?: "not_applicable" | "offer_not_actionable" | "offer_id_missing_or_ambiguous" | "offer_route_verified" | "route_validation_failed";
@@ -401,7 +403,7 @@ export interface WalmartDrawScanInput {
   expectedCardCount: number;
   observedCardCount: number;
   securityChallenge: boolean;
-  interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "unknown";
+  interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "high_demand" | "unknown";
   items: WalmartDrawItemObservationInput[];
 }
 

@@ -306,6 +306,18 @@ review but receives zero identity confidence and cannot publish stock. Opaque
 offer tokens, checkout fields, and every mutation capability remain outside
 this contract.
 
+Yoink 0.26.0 advances Best Buy observation to `bestbuy-observer-v5` without a
+broader action capability. Migration 28 retires inherited Best Buy
+qualification and execution flags while leaving every other retailer
+untouched. The observer models standalone
+preorders, high-demand product gates, active queues, pickup-selected limited
+stock, and ordinary inventory separately. An exact high-demand scope may retain
+bounded public offer evidence for monitoring and diagnostics, but the live
+offer remains manual and non-actionable. Preorders are excluded from Best Buy
+qualification readiness and are rejected again by `bestbuy-add-v3` before an
+authorization is created. The diagnostic path accepts only the structural
+`interactive_high_demand` code and fixed counts; page content remains local.
+
 The application bundles now reflect those trust domains. `/` is the user
 product surface over existing missions, targets, listings, jobs, and settings;
 `/admin` is independently permission-gated and owns diagnostics, retailer

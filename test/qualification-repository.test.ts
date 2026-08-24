@@ -408,6 +408,14 @@ test("Best Buy activation requires two explicitly first-party selected-shipping 
       }
     }, NOW + 1_000);
     const shadows = new ShadowObservationRepository(db);
+    shadows.record(device.id, {
+      ...bestBuyObservation(new Date(NOW + 1_500).toISOString(), "6678193"),
+      availability: "preorder"
+    }, NOW + 1_750);
+    const preorderOnly = shadows.bestBuyQualificationReadiness(NOW + 1_800);
+    assert.equal(preorderOnly.checks.find((check) => check.id === "first_party_actionable")?.observed, 0);
+    assert.equal(preorderOnly.checks.find((check) => check.id === "shipping_actionable")?.observed, 0);
+    assert.equal(preorderOnly.liveEvidenceReady, false);
     const first = shadows.record(device.id, bestBuyObservation(new Date(NOW + 2_000).toISOString()), NOW + 3_000);
     shadows.record(device.id, bestBuyObservation(new Date(NOW + 4_000).toISOString(), "6588152"), NOW + 5_000);
     const repository = new QualificationRepository(db);

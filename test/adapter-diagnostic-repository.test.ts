@@ -82,6 +82,40 @@ function runtimeLayout(): RetailerAdapterLayoutEvidence {
   });
 }
 
+test("Best Buy high-demand evidence reaches the server as a deliberate manual policy result", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const repository = new AdapterDiagnosticRepository(db);
+    const stored = repository.record(device.id, diagnostic({
+      retailerId: "bestbuy",
+      retailerSku: "6669782",
+      adapterVersion: BESTBUY_OBSERVER_VERSION,
+      outcome: "rejected",
+      failureStage: "interactive_block",
+      reasonCode: "interactive_high_demand",
+      layout: layout({
+        scopeKind: "buybox",
+        addControlCount: 1,
+        scopedControlCount: 1,
+        explicitSkuInputCount: 0,
+        exactSkuInputCount: 0,
+        variationSkuCount: 0,
+        canonicalOfferInputCount: 0,
+        canonicalOfferDistinctCount: 0,
+        alternateOfferInputCount: 0,
+        alternateOfferDistinctCount: 0,
+        interactiveBlock: "high_demand"
+      })
+    }), NOW + 2_000);
+    assert.equal(stored.reasonCode, "interactive_high_demand");
+    assert.equal(stored.layout.interactiveBlock, "high_demand");
+    assert.equal(repository.listRepairQueue().length, 0);
+  } finally {
+    db.close();
+  }
+});
+
 test("adapter diagnostics persist only normalized structural evidence and group repair incidents", () => {
   const db = new YoinkDatabase();
   try {

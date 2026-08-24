@@ -85,11 +85,15 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /Idempotency-Key/);
   assert.match(background, /trackalacker-sync\.js/);
   assert.match(background, /retailerMutation: false/);
+  assert.match(background, /preorder_not_supported/);
+  assert.match(background, /high_demand/);
   assert.doesNotMatch(background, /\.click\s*\(|dispatchEvent\s*\(/);
   assert.match(popup, /chrome\.permissions\.request/);
   assert.match(popup, /chrome\.permissions\.remove/);
   assert.match(popup, /Share current page evidence once|yoink:contribute-retailer/);
   assert.match(popup, /yoink:inspect-walmart-draw/);
+  assert.match(popup, /preorder read-only/);
+  assert.match(popup, /high-demand gate closed/);
   assert.doesNotMatch(targetBundle, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
   assert.doesNotMatch(retailerBundle, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
   assert.match(targetActionBundle, /\.click\s*\(/);
@@ -100,6 +104,8 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.doesNotMatch(amazonActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
   assert.doesNotMatch(amazonActionBundle, /checkout\/entry\/buynow/);
   assert.match(bestBuyActionBundle, /\.click\s*\(/);
+  assert.match(bestBuyActionBundle, /preorder_not_supported/);
+  assert.match(bestBuyActionBundle, /high_demand/);
   assert.doesNotMatch(bestBuyActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
   assert.doesNotMatch(trackalackerPush, /console\./);
   assert.doesNotMatch(trackalackerPush, /endpoint\s*:\s*["']https:\/\/fcm\.googleapis\.com/);
