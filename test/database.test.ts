@@ -10,7 +10,7 @@ import { MIGRATIONS } from "../packages/database/src/migrations.js";
 test("initial migration creates the normalized graph and safe local defaults", () => {
   const db = new YoinkDatabase();
   try {
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 23);
     assert.equal(db.get<{ name: string }>("SELECT name FROM tenants WHERE id = ?", LOCAL_TENANT_ID)?.name, "Local");
     assert.equal(db.get<{ display_name: string }>("SELECT display_name FROM users WHERE id = ?", LOCAL_USER_ID)?.display_name, "Local user");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailers")?.count, 13);
@@ -33,7 +33,7 @@ test("initial migration creates the normalized graph and safe local defaults", (
         'observer_recipe_lifecycle_events', 'inbox_messages',
         'hosted_delivery_receipts', 'hosted_request_nonces'
       )`)?.count, 12);
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM authorization_permissions")?.count, 22);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM authorization_permissions")?.count, 24);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM authorization_roles")?.count, 7);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM authorization_memberships WHERE user_id = ? AND role_id = 'yoink_user' AND status = 'active'",
@@ -70,7 +70,7 @@ test("a file database reopens idempotently", () => {
     const second = new YoinkDatabase(filePath);
     try {
       assert.equal(second.get<{ pause_reason: string }>("SELECT pause_reason FROM app_settings WHERE user_id = ?", LOCAL_USER_ID)?.pause_reason, "Preserved");
-      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
+      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 23);
       second.assertIntegrity();
     } finally {
       second.close();
@@ -98,7 +98,7 @@ test("an existing 0.2 database upgrades transactionally to shadow observations a
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 23);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_trials")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics")?.count, 0);
@@ -149,7 +149,7 @@ test("migration 11 closes any inherited Best Buy execution and qualification sta
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 23);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>("SELECT status FROM retailer_adapter_qualifications WHERE retailer_id = 'bestbuy'")?.status, "retired");
       assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name IN (
@@ -193,7 +193,7 @@ test("migration 19 retires Best Buy v2 qualification before the v4/v3 boundary",
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 23);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>(
         "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'bestbuy'"
@@ -264,6 +264,141 @@ test("migration 22 backfills existing missions into immutable intent and spend p
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("migration 23 adds reversible catalog identity governance without changing existing catalog topology", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-catalog-identity-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 22)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        "2026-08-24T00:00:00.000Z"
+      );
+    }
+    legacy.exec(`
+      INSERT INTO retailers(id, display_name, execution_supported, domains_json, created_at, updated_at)
+      VALUES ('target', 'Target', 0, '["target.com"]', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO product_families(id, title, brand, created_at, updated_at)
+      VALUES ('family_identity_upgrade', 'Preserved product', 'Example', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+      VALUES ('variant_identity_upgrade', 'family_identity_upgrade', 'Preserved product', '{"edition":"Standard"}', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO listings(id, variant_id, retailer_id, retailer_sku, canonical_url, status, execution_supported, currency, created_at, updated_at)
+      VALUES ('listing_identity_upgrade', 'variant_identity_upgrade', 'target', '92345678', 'https://www.target.com/p/-/A-92345678', 'out_of_stock', 0, 'USD', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 23 AND name = 'reversible_catalog_identity_governance'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master
+        WHERE type = 'table' AND name IN (
+          'catalog_identity_operations', 'catalog_identity_operation_snapshots', 'catalog_identity_operation_events'
+        )`)?.count, 3);
+      assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master
+        WHERE type = 'trigger' AND name IN (
+          'catalog_identity_operation_snapshots_no_update', 'catalog_identity_operation_snapshots_no_delete',
+          'catalog_identity_operation_events_no_update', 'catalog_identity_operation_events_no_delete'
+        )`)?.count, 4);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authorization_permissions WHERE id IN ('catalog.identity.propose', 'catalog.identity.approve')"
+      )?.count, 2);
+      assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM authorization_role_permissions
+        WHERE role_id IN ('catalog_curator', 'tenant_admin')
+          AND permission_id IN ('catalog.identity.propose', 'catalog.identity.approve')`)?.count, 4);
+      assert.equal(upgraded.get<{ variantId: string }>(
+        "SELECT variant_id AS variantId FROM listings WHERE id = 'listing_identity_upgrade'"
+      )?.variantId, "variant_identity_upgrade");
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("catalog identity history is immutable during normal operation and purges with its tenant", () => {
+  const db = new YoinkDatabase();
+  const tenantId = "tenant_identity_lifecycle";
+  const at = "2026-08-24T23:00:00.000Z";
+  try {
+    db.run("INSERT INTO tenants(id, name, created_at) VALUES (?, ?, ?)", tenantId, "Identity lifecycle", at);
+    db.run(
+      `INSERT INTO catalog_identity_operations(
+         id, tenant_id, operation_kind, requested_by_user_id,
+         requested_by_actor_kind, requested_by_actor_id, payload_json,
+         payload_hash, base_state_hash, status, created_at, updated_at
+       ) VALUES (
+         'catalog_identity_lifecycle_original', ?, 'split_variant', 'deleted_user',
+         'user', 'deleted_actor', '{}', 'lifecycle-original', 'before-state',
+         'applied', ?, ?
+       )`,
+      tenantId,
+      at,
+      at
+    );
+    db.run(
+      `INSERT INTO catalog_identity_operations(
+         id, tenant_id, operation_kind, requested_by_user_id,
+         requested_by_actor_kind, requested_by_actor_id, payload_json,
+         payload_hash, base_state_hash, status, reversed_operation_id,
+         created_at, updated_at
+       ) VALUES (
+         'catalog_identity_lifecycle_rollback', ?, 'rollback', 'deleted_user',
+         'user', 'deleted_actor', '{}', 'lifecycle-rollback', 'after-state',
+         'applied', 'catalog_identity_lifecycle_original', ?, ?
+       )`,
+      tenantId,
+      at,
+      at
+    );
+    db.run(
+      "UPDATE catalog_identity_operations SET reverted_by_operation_id = 'catalog_identity_lifecycle_rollback' WHERE id = 'catalog_identity_lifecycle_original'"
+    );
+    db.run(
+      `INSERT INTO catalog_identity_operation_snapshots(
+         id, tenant_id, operation_id, phase, snapshot_json, snapshot_hash, created_at
+       ) VALUES ('catalog_identity_lifecycle_snapshot', ?, 'catalog_identity_lifecycle_original', 'before', '{}', 'before-state', ?)`,
+      tenantId,
+      at
+    );
+    db.run(
+      `INSERT INTO catalog_identity_operation_events(
+         id, tenant_id, operation_id, sequence, event_type, actor_kind, actor_id,
+         reason_code, state_hash, data_json, created_at
+       ) VALUES ('catalog_identity_lifecycle_event', ?, 'catalog_identity_lifecycle_original', 1, 'proposed', 'user', 'deleted_actor',
+         'lifecycle_test', 'before-state', '{}', ?)`,
+      tenantId,
+      at
+    );
+    assert.throws(
+      () => db.run("DELETE FROM catalog_identity_operations WHERE id = 'catalog_identity_lifecycle_original'"),
+      /immutable|append-only/
+    );
+    db.run("DELETE FROM tenants WHERE id = ?", tenantId);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM catalog_identity_operations WHERE tenant_id = ?",
+      tenantId
+    )?.count, 0);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM catalog_identity_operation_snapshots WHERE tenant_id = ?",
+      tenantId
+    )?.count, 0);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM catalog_identity_operation_events WHERE tenant_id = ?",
+      tenantId
+    )?.count, 0);
+    db.assertIntegrity();
+  } finally {
+    db.close();
   }
 });
 

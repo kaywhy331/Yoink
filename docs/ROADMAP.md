@@ -1,6 +1,35 @@
 # Yoink roadmap
 
-## Shipped through 0.20.0
+## Shipped through 0.21.0
+
+### Reversible local catalog identity governance (0.21.0)
+
+- Migration 23 adds separately authorized `catalog.identity.propose` and
+  `catalog.identity.approve` capabilities plus tenant-scoped merge, split, and
+  compensating-operation records
+- Every proposal freezes a deterministic catalog topology hash. Approval
+  rechecks the current topology and rejects stale state, active purchase jobs,
+  active spend reservations, ambiguous mission targets, and shared-catalog
+  mutation when more than one tenant exists
+- Merge is deliberately narrow: it requires a reviewed, conflict-free strong
+  identifier claim bound to the exact listing/variant pair, equal allowlisted
+  variant dimensions, and approval by a different authorized user and actor.
+  Titles, images, prices, and similar URLs remain insufficient evidence
+- Split moves only explicitly selected listings, matching source-listing
+  candidates, preferred routes, and wholly selected missions into a new exact
+  variant. It requires a changed allowlisted dimension and leaves broad source
+  product references on the original identity rather than guessing
+- Immutable before/after snapshots and append-only per-operation sequence
+  events make every applied change auditable. A compensating operation restores
+  exact recorded row IDs only when the applied topology has not drifted;
+  re-expanding a prior split requires independent approval
+- The admin catalog screen exposes proposals, review, rejection, history, and
+  compensating rollback. HTTP authorization, error taxonomy, upgrade,
+  portability, immutable-ledger, stale-state, active-work, and exact-restore
+  tests cover the boundary
+- This is a local single-tenant governance slice, not global catalog authority.
+  Production IdP/step-up, privacy-classified operations, package-rooted recipe
+  trust, and cross-tenant global curation remain Phase 0 exit requirements
 
 ### Exact intent and spending safety (0.20.0)
 
@@ -261,21 +290,21 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.20.0
+## Architecture assessment after 0.21.0
 
-Yoink 0.20.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.21.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
 diagnostic ledger, and outbox are valuable foundations; the next work should
-finish the remaining governed catalog/recipe trust work and propagate stable
-child-offer/location identity before adding checkout or more autonomous
-behavior.
+finish production catalog/recipe trust, privacy operations, and step-up
+authority while propagating stable child-offer/location identity before adding
+checkout or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-22 SQLite schema plus deterministic portability, immutable offer/intent evidence, and append-only spend events | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
-| Admin control plane | Separate permission-gated `/admin`, persisted roles, catalog review, role administration, diagnostics, retailer/source/affiliate controls, and audit | No production IdP/step-up or two-person approval, secret references, operator alert model, break-glass workflow, cross-tenant operations, or complete retailer/catalog rollback tooling |
+| Primary backend database | Transactional migration-23 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, and append-only spend/catalog events | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
+| Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, role administration, diagnostics, retailer/source/affiliate controls, and audit | No production IdP/step-up, secret references, operator alert model, break-glass workflow, cross-tenant global curator, or retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard for exact products, revisioned intent, store/seller/fulfillment/unit/all-in limits, action ceiling, expiry/cooldown/substitution preferences, periodic spend caps, activity, pause, pairing, and source/review status | Stable child-offer/region/store dimensions are not yet supplied by every observer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound assertions, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, selected-variation key, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups and manually entered signed selector recipes exist | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an oracle when that parser is wrong; canary is not cohort deployment; production signing starts with trust-on-first-use |
@@ -329,11 +358,13 @@ development channel.
 
 #### Phase 0 — correct trust boundaries and roadmap claims
 
-0.19.0 completes the persisted RBAC, explicit API-surface, correlated-error,
-split-bundle, and initial catalog candidate/accept-reject portions of this
-phase. The phase exit gate remains **open**: catalog merge/split/compensating
-rollback, privacy-classified operational metrics/logs, production recipe root
-rotation/revocation/transparency, and step-up approval are not implemented.
+0.19.0 completed persisted RBAC, explicit API surfaces, correlated errors,
+split bundles, and initial catalog candidate review. 0.21.0 adds authorized,
+reversible, topology-bound local merge/split/compensation. The phase exit gate
+remains **open**: the current shared catalog has no cross-tenant global curator;
+privacy-classified operational metrics/logs, production recipe root
+rotation/revocation/transparency, and production IdP step-up are not
+implemented.
 
 - Persist operator memberships and granular permissions; deny every route by
   default and explicitly authorize user, device, support, catalog-curator,
@@ -703,10 +734,10 @@ Shipped local/hosted seams:
   ownership
 - Per-user private follows/sources, strategies, missions, settings/order-total
   guardrails, notifications, attribution policy, and mutation qualification.
-  A real periodic spending budget/reservation ledger is not implemented.
-  Normalized catalog proposal and accept/reject governance is implemented;
-  merge/split, compensating rollback, and independent production curation remain
-  open
+  Periodic spending policy, transactional reservations, and an append-only
+  ledger are implemented. Normalized catalog proposal/review and reversible
+  single-tenant merge/split/compensation are implemented; independent
+  production global curation remains open
 - Inbox/outbox delivery, idempotent device/job queues, signed short-lived
   capabilities, durable wake/reconcile, and bounded source reliability scoring
 - Streaming logical export, exact fresh-SQLite restore, table-level parity, and

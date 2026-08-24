@@ -498,7 +498,7 @@ function renderLibrary() {
   const items = state.libraryItems;
   $("#libraryCount").textContent = `${items.length.toLocaleString()} of ${Number(state.libraryTotal || 0).toLocaleString()} matching listings`;
   $("#libraryMoreButton").hidden = items.length >= state.libraryTotal;
-  $("#libraryList").innerHTML = items.length ? items.map((item) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.retailerName)} · ${escapeHtml(item.retailerSku)}</p></div>${statusDot(item.executionSupported ? "good" : "warning")}</div><div class="card-meta"><span class="tag ${item.status === "in_stock" ? "good" : ""}">${escapeHtml(String(item.status).replaceAll("_", " "))}</span><span class="tag">MSRP ${formatMoney(item.msrpCents, item.currency)}</span><span class="tag ${item.executionSupported ? "good" : "warning"}">${item.executionSupported ? "Executable mapping" : "Catalog only"}</span><span class="tag">${item.sourceMappingCount} source map</span></div><a class="canonical-link" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.canonicalUrl)}</a></article>`).join("") : empty("No matching retailer listings.");
+  $("#libraryList").innerHTML = items.length ? items.map((item) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.retailerName)} · ${escapeHtml(item.retailerSku)}</p></div>${statusDot(item.executionSupported ? "good" : "warning")}</div><div class="card-meta"><span class="tag ${item.status === "in_stock" ? "good" : ""}">${escapeHtml(String(item.status).replaceAll("_", " "))}</span><span class="tag">MSRP ${formatMoney(item.msrpCents, item.currency)}</span><span class="tag ${item.executionSupported ? "good" : "warning"}">${item.executionSupported ? "Executable mapping" : "Catalog only"}</span><span class="tag">${item.sourceMappingCount} source map</span><span class="tag">Variant ${escapeHtml(item.variantId)}</span><span class="tag">Listing ${escapeHtml(item.listingId)}</span></div><a class="canonical-link" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.canonicalUrl)}</a></article>`).join("") : empty("No matching retailer listings.");
 }
 
 function pricePolicyLabel(strategy) {
@@ -605,16 +605,46 @@ function renderJobs() {
 
 function renderCatalogGovernance() {
   const governance = state.snapshot.catalogGovernance || {};
-  const panel = $("#catalogGovernancePanel");
-  panel.hidden = governance.reviewCapable !== true;
-  if (panel.hidden) return;
   const proposals = governance.pending || [];
-  $("#catalogGovernanceGate").textContent = proposals.length ? `${proposals.length} PENDING` : "QUEUE CLEAR";
-  $("#catalogProposalList").innerHTML = proposals.length ? proposals.map((proposal) => `<article class="card">
+  const operations = governance.identityOperations || [];
+  const panel = $("#catalogGovernancePanel");
+  panel.hidden = governance.reviewCapable !== true
+    && governance.identityProposalCapable !== true
+    && governance.identityApprovalCapable !== true
+    && proposals.length === 0
+    && operations.length === 0;
+  if (panel.hidden) return;
+  const pendingOperations = operations.filter((operation) => operation.status === "pending");
+  $("#catalogGovernanceGate").textContent = proposals.length || pendingOperations.length
+    ? `${proposals.length + pendingOperations.length} PENDING` : "QUEUE CLEAR";
+  $("#catalogProposalList").innerHTML = governance.reviewCapable !== true
+    ? ""
+    : proposals.length ? proposals.map((proposal) => `<article class="card">
     <div class="card-top"><div><h3>${escapeHtml(proposal.payload?.title || "Catalog listing change")}</h3><p>${escapeHtml(retailerName(proposal.retailerId))} · ${escapeHtml(proposal.retailerSku)} · proposed by ${escapeHtml(proposal.proposerUserId)}</p></div><span class="tag warning">pending review</span></div>
     <div class="card-meta"><span class="tag">${escapeHtml(proposal.payload?.canonicalUrl || "No URL")}</span><span class="tag">${formatMoney(proposal.payload?.msrpCents, proposal.payload?.currency || "USD")}</span><span class="tag">${escapeHtml(proposal.payloadHash?.slice(0, 12) || "no hash")}</span></div>
     <div class="card-actions"><button class="button secondary" data-catalog-reject="${escapeHtml(proposal.id)}" type="button">Reject</button><button class="button primary" data-catalog-approve="${escapeHtml(proposal.id)}" type="button">Approve exact listing</button></div>
   </article>`).join("") : empty("No catalog changes are waiting for review.");
+  $("#catalogIdentityHeading").hidden = governance.identityProposalCapable !== true && !operations.length;
+  $("#proposeCatalogMergeButton").hidden = governance.identityProposalCapable !== true;
+  $("#proposeCatalogSplitButton").hidden = governance.identityProposalCapable !== true;
+  $("#catalogIdentityOperationList").innerHTML = operations.length ? operations.map((operation) => {
+    const payload = operation.payload || {};
+    const kind = String(operation.kind || "unknown").replaceAll("_", " ");
+    const subject = operation.kind === "merge_variants"
+      ? `${payload.sourceVariantId || "source"} → ${payload.targetVariantId || "target"}`
+      : operation.kind === "split_variant"
+        ? `${payload.sourceVariantId || "variant"} · ${(payload.listingIds || []).length} listing split`
+        : `Compensate ${payload.reversedOperationId || "operation"}`;
+    const statusKind = operation.status === "applied" ? "good" : operation.status === "rejected" ? "bad" : "warning";
+    const canRollback = governance.identityProposalCapable === true
+      && operation.status === "applied" && operation.kind !== "rollback" && !operation.revertedByOperationId;
+    return `<article class="card">
+      <div class="card-top"><div><h3>${escapeHtml(kind)}</h3><p>${escapeHtml(subject)}</p></div><span class="tag ${statusKind}">${escapeHtml(operation.status)}</span></div>
+      <div class="card-meta"><span class="tag">${escapeHtml(payload.reasonCode || "no reason")}</span><span class="tag">base ${escapeHtml(String(operation.baseStateHash || "").slice(0, 12))}</span>${operation.requiresDistinctApprover ? '<span class="tag warning">Independent approver required</span>' : '<span class="tag">Single curator review</span>'}${operation.revertedByOperationId ? '<span class="tag warning">Compensated</span>' : ""}</div>
+      <p>Proposed by ${escapeHtml(operation.requestedByActorId)} ${escapeHtml(relativeTime(operation.createdAt))}.${operation.reviewedByActorId ? ` Reviewed by ${escapeHtml(operation.reviewedByActorId)}.` : ""}</p>
+      <div class="card-actions">${operation.status === "pending" && governance.identityApprovalCapable === true ? `<button class="button secondary" data-catalog-identity-reject="${escapeHtml(operation.id)}" type="button">Reject</button><button class="button primary" data-catalog-identity-approve="${escapeHtml(operation.id)}" type="button">Review and apply</button>` : ""}${canRollback ? `<button class="button secondary" data-catalog-identity-rollback="${escapeHtml(operation.id)}" type="button">Propose rollback</button>` : ""}</div>
+    </article>`;
+  }).join("") : empty("No catalog identity operations have been proposed.");
 }
 
 function renderAuthorization() {
@@ -801,6 +831,21 @@ async function saveStrategies(strategies) {
   await refresh();
 }
 
+function configureCatalogIdentityForm(kind) {
+  const form = $("#catalogIdentityForm");
+  form.elements.kind.value = kind;
+  $$('[data-catalog-merge-field]', form).forEach((field) => { field.hidden = kind !== "merge_variants"; });
+  $$('[data-catalog-split-field]', form).forEach((field) => { field.hidden = kind !== "split_variant"; });
+}
+
+function openCatalogIdentityForm(kind) {
+  const form = $("#catalogIdentityForm");
+  form.reset();
+  configureCatalogIdentityForm(kind);
+  form.elements.reasonCode.value = kind === "merge_variants" ? "reviewed_exact_identifier" : "incorrect_variant_grouping";
+  $("#catalogIdentityDialog").showModal();
+}
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -811,6 +856,8 @@ document.addEventListener("click", async (event) => {
     if (button.id === "addListingButton") $("#listingDialog").showModal();
     if (button.id === "sendSignalButton") { $("#signalForm").reset(); $("#signalDialog").showModal(); }
     if (button.id === "addStrategyButton") openStrategy();
+    if (button.id === "proposeCatalogMergeButton") openCatalogIdentityForm("merge_variants");
+    if (button.id === "proposeCatalogSplitButton") openCatalogIdentityForm("split_variant");
     if (button.dataset.missionEdit) await openMission(button.dataset.missionEdit);
     if (button.id === "createPairingButton") {
       const result = await api("/api/v1/user/devices/pairing-code", { method: "POST", body: "{}" });
@@ -846,6 +893,40 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({ outcome: "reject", note, confirmation: "REJECT_CATALOG_PROPOSAL" })
       });
       await refresh(); toast("Catalog proposal rejected.");
+    }
+    if (button.dataset.catalogIdentityApprove) {
+      const note = prompt("Record the independent evidence or safety rationale used for this catalog identity decision.");
+      if (!note?.trim()) return;
+      if (!confirm("Apply this exact topology operation? The live catalog must still match its immutable proposal hash, and active purchase work will fail closed.")) return;
+      await api(`/api/v1/admin/catalog/identity-operations/${encodeURIComponent(button.dataset.catalogIdentityApprove)}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "approve", note, confirmation: "APPROVE_CATALOG_IDENTITY_OPERATION" })
+      });
+      await refresh(); toast("Catalog identity operation reviewed and applied.");
+    }
+    if (button.dataset.catalogIdentityReject) {
+      const note = prompt("Why is this catalog identity operation being rejected?");
+      if (!note?.trim()) return;
+      await api(`/api/v1/admin/catalog/identity-operations/${encodeURIComponent(button.dataset.catalogIdentityReject)}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "reject", note, confirmation: "REJECT_CATALOG_IDENTITY_OPERATION" })
+      });
+      await refresh(); toast("Catalog identity operation rejected without changing topology.");
+    }
+    if (button.dataset.catalogIdentityRollback) {
+      const reasonCode = prompt("Enter a short non-sensitive compensation reason code.", "compensating_catalog_rollback");
+      if (!reasonCode?.trim()) return;
+      if (!confirm("Propose a compensating rollback? It will not apply until reviewed, and any topology drift will block it.")) return;
+      await api("/api/v1/admin/catalog/identity-operations", {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "rollback",
+          reversedOperationId: button.dataset.catalogIdentityRollback,
+          reasonCode,
+          confirmation: "PROPOSE_CATALOG_IDENTITY_OPERATION"
+        })
+      });
+      await refresh(); toast("Compensating catalog operation submitted for review.");
     }
     if (button.dataset.roleGrant) {
       const select = $(`[data-role-selection="${CSS.escape(button.dataset.roleGrant)}"]`);
@@ -1097,6 +1178,49 @@ $("#signalMoreButton").addEventListener("click", async () => {
 });
 $("#jobMoreButton").addEventListener("click", async () => {
   try { await loadJobs(false); renderJobs(); } catch (error) { toast(error.message || "More actions could not be loaded.", true); }
+});
+$("#catalogIdentityForm").elements.kind.addEventListener("change", (event) => {
+  configureCatalogIdentityForm(event.currentTarget.value);
+});
+$("#catalogIdentityForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const values = formObject(event.currentTarget);
+    let payload;
+    if (values.kind === "merge_variants") {
+      if (!values.targetVariantId || !values.reviewedIdentityClaimId) {
+        throw new Error("A merge requires the target variant and reviewed exact-identifier claim IDs.");
+      }
+      payload = {
+        kind: values.kind,
+        sourceVariantId: values.sourceVariantId,
+        targetVariantId: values.targetVariantId,
+        reviewedIdentityClaimId: values.reviewedIdentityClaimId,
+        reasonCode: values.reasonCode,
+        confirmation: "PROPOSE_CATALOG_IDENTITY_OPERATION"
+      };
+    } else {
+      const listingIds = String(values.listingIds || "").split(",").map((value) => value.trim()).filter(Boolean);
+      if (!listingIds.length || !values.newTitle || !values.attributeValue) {
+        throw new Error("A split requires listing IDs, a new exact-variant title, and an explicit variant dimension.");
+      }
+      payload = {
+        kind: values.kind,
+        sourceVariantId: values.sourceVariantId,
+        listingIds,
+        newTitle: values.newTitle,
+        newBrand: values.newBrand,
+        newVariantAttributes: { [values.attributeKey]: values.attributeValue },
+        reasonCode: values.reasonCode,
+        confirmation: "PROPOSE_CATALOG_IDENTITY_OPERATION"
+      };
+    }
+    if (!confirm("Submit this immutable topology proposal for catalog review? No catalog row changes until approval.")) return;
+    await api("/api/v1/admin/catalog/identity-operations", { method: "POST", body: JSON.stringify(payload) });
+    $("#catalogIdentityDialog").close();
+    await refresh();
+    toast("Catalog identity operation submitted for governed review.");
+  } catch (error) { toast(error.message || "Catalog identity proposal failed.", true); }
 });
 $("#listingForm").addEventListener("submit", async (event) => {
   event.preventDefault();

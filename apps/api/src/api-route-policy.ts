@@ -15,6 +15,8 @@ const ADMIN_PERMISSIONS = new Set<AuthorizationPermission>([
   "admin.read",
   "support.read",
   "catalog.review",
+  "catalog.identity.propose",
+  "catalog.identity.approve",
   "identity.review",
   "affiliate.manage",
   "retailer.manage",
@@ -47,6 +49,11 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (/^\/api\/v1\/identity\/claims\/[A-Za-z0-9_-]{3,120}\/review$/.test(pathname)) return "identity.review";
   if (pathname.startsWith("/api/v1/observer-recipes")) return "recipe.manage";
   if (pathname.startsWith("/api/v1/qualifications/")) return "qualification.manage";
+  if (pathname.startsWith("/api/v1/admin/catalog/identity-operations")) {
+    if (/\/decision$/.test(pathname)) return "catalog.identity.approve";
+    if (method === "POST") return "catalog.identity.propose";
+    return "admin.read";
+  }
   if (pathname.startsWith("/api/v1/admin/catalog/")) return "catalog.review";
 
   if (pathname === "/api/v1/user/overview" || pathname === "/api/v1/user/authorization") return "user.read";

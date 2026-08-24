@@ -214,8 +214,25 @@ content-hash deduplicated, and audited before it enters a pending queue. Only a
 catalog curator may accept or reject it; the global listing write occurs inside
 the acceptance transaction and retains all existing exact-identity conflict and
 retailer-domain checks. Trusted exact source ingestion remains a separate
-provenance path. Merge/split and compensating rollback workflows are still
-roadmap work and are not implied by this first review queue.
+provenance path.
+
+Yoink 0.21.0 completes the local reversible identity slice with migration 23.
+Catalog identity proposals freeze a deterministic topology containing the
+affected variants, listings, identifiers, source mappings, preferred routes,
+missions, identity claims, historical resolution references, active jobs, and
+spend reservations. Approval reconstitutes and hashes that topology inside the
+write transaction; drift or active work rejects the operation. Merge requires
+a reviewed exact-identifier claim, equal explicit variant dimensions, and a
+different authorized user/actor. Split requires a partial exact listing set and
+a changed allowlisted dimension, and it cannot divide one mission's targets.
+Applied operations retain immutable before/after snapshots plus append-only
+sequenced events. Rollback is a new compensating operation that restores exact
+row identities only from the recorded topology and refuses drift.
+
+These operations are intentionally limited to a database containing exactly
+one tenant. The catalog tables are still shared, so tenant-local authority must
+not become de facto global authority in hosted mode. A separately authenticated
+global curator, production step-up, and cross-tenant policy remain roadmap work.
 
 The application bundles now reflect those trust domains. `/` is the user
 product surface over existing missions, targets, listings, jobs, and settings;
@@ -286,6 +303,8 @@ activation writes the exact qualification record.
 - Source-product and source-listing mappings
 - Sanitized offer observations
 - Pending and reviewed catalog change proposals with provenance hashes
+- Reviewed merge, split, and compensating operations with immutable topology
+  snapshots and append-only sequenced history
 
 ### User-owned intent
 
@@ -319,7 +338,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 22. Foreign keys are mandatory.
+numbered; the current schema is migration 23. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 

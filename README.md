@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.20.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.21.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -50,6 +50,21 @@ reserve, release, and future verified purchase commit. Leasing fails closed
 when the intent revision or reservation is stale. Add-to-cart confirmation now
 releases its reservation and never counts as a completed purchase. Checkout
 and order submission remain closed.
+
+Version 0.21.0 adds reversible local catalog identity governance. Migration 23
+introduces separately authorized proposal and approval permissions, immutable
+before/after topology snapshots, and an append-only sequenced operation ledger.
+A merge requires a reviewed conflict-free exact-identifier claim for the exact
+variant pair, matching explicit variant dimensions, and a different authorized
+user and actor for approval. A split moves only named listings into a newly
+identified variant, requires an explicit changed dimension, and refuses to
+divide one purchase intent across both sides. Active purchase jobs or spend
+reservations, stale topology, and ambiguous downstream mappings all fail
+closed. Compensation restores exact recorded row identities only when the
+post-operation topology has not drifted. Because the current commerce graph is
+shared, application of these operations is disabled as soon as more than one
+tenant exists; production hosted curation still needs a separate global
+authority and step-up approval plane.
 
 Disney Store, Ravensburger, Riot Games Merch, Books-A-Million, Fanatics,
 Kohl's, Macy's, Premium Bandai, and Pokémon Center are recognized as
@@ -132,7 +147,8 @@ actions, and preferences. Track a known exact listing, then edit its store,
 seller, fulfillment, quantity, and maximum-price preferences. Catalog
 suggestions remain pending until reviewed in the admin control center. Detailed
 source health, diagnostics, retailer qualification, recipes, affiliate setup,
-catalog review, and role membership are intentionally isolated under `/admin`.
+catalog review, reversible merge/split/compensation history, and role membership
+are intentionally isolated under `/admin`.
 
 There is no separate Signals start switch:
 

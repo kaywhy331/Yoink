@@ -35,6 +35,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /Target add-only qualification/);
     assert.match(adminPageBody, /Adapter repair queue/);
     assert.match(adminPageBody, /Catalog review queue/);
+    assert.match(adminPageBody, /Merge, split, and compensation/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.deepEqual(health, {
@@ -125,11 +126,15 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.counts.pendingCatalogProposals, 0);
     assert.equal(snapshot.counts.signals, 1);
     assert.equal(snapshot.counts.actionJobs, 0);
+    assert.equal(snapshot.counts.catalogIdentityOperations, 0);
+    assert.equal(snapshot.counts.pendingCatalogIdentityOperations, 0);
     assert.equal(snapshot.capabilities.retailerMutation, false);
     assert.equal(snapshot.capabilities.communityReadOnlyEvidence, true);
     assert.equal(snapshot.capabilities.storageEngine, "sqlite");
     assert.equal(snapshot.capabilities.freshDatabaseRestoreParity, true);
     assert.equal(snapshot.capabilities.productionPostgresReady, false);
+    assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
+    assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);
 
     const libraryPage = await fetch(`${baseUrl}/api/v1/library?limit=1&offset=0&q=Yoink%20API`).then((response) => response.json()) as {
       items: Array<Record<string, unknown>>;

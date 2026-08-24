@@ -15,6 +15,8 @@ export const AUTHORIZATION_PERMISSIONS = Object.freeze([
   "admin.read",
   "support.read",
   "catalog.review",
+  "catalog.identity.propose",
+  "catalog.identity.approve",
   "identity.review",
   "affiliate.manage",
   "retailer.manage",

@@ -45,6 +45,20 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     assert.match(await userDashboard.text(), /My purchase assistant/);
     const deniedAdminUi = await fetch(`${baseUrl}/admin`, { headers: { "X-Test-Principal": "user" } });
     assert.equal(deniedAdminUi.status, 403);
+    const deniedIdentityRead = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(deniedIdentityRead.status, 403);
+    const deniedIdentityProposal = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: "{}"
+    });
+    assert.equal(deniedIdentityProposal.status, 403);
 
     const userLibrary = await fetch(`${baseUrl}/api/v1/user/library`, {
       headers: { "X-Test-Principal": "user" }
@@ -91,12 +105,48 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     const allowedAdminUi = await fetch(`${baseUrl}/admin`, { headers: { "X-Test-Principal": "user" } });
     assert.equal(allowedAdminUi.status, 200);
     assert.match(await allowedAdminUi.text(), /Admin control center/);
+    const allowedIdentityRead = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(allowedIdentityRead.status, 200);
+    assert.equal(allowedIdentityRead.headers.get("x-yoink-api-surface"), "admin");
+    assert.deepEqual(await allowedIdentityRead.json(), { items: [] });
+    const readonlyIdentityProposal = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: "{}"
+    });
+    assert.equal(readonlyIdentityProposal.status, 403);
 
     const selfAuthorization = await fetch(`${baseUrl}/api/v1/user/authorization`, {
       headers: { "X-Test-Principal": "user" }
     }).then((response) => response.json()) as { permissions: string[] };
     assert.equal(selfAuthorization.permissions.includes("admin.read"), true);
     assert.equal(selfAuthorization.permissions.includes("security.manage"), false);
+    assert.equal(selfAuthorization.permissions.includes("catalog.identity.propose"), false);
+    assert.equal(selfAuthorization.permissions.includes("catalog.identity.approve"), false);
+
+    runWithRequestScope(LOCAL_REQUEST_SCOPE, () => authorization.grantRole(LOCAL_USER_ID, "catalog_curator"));
+    const curatorAuthorization = await fetch(`${baseUrl}/api/v1/user/authorization`, {
+      headers: { "X-Test-Principal": "user" }
+    }).then((response) => response.json()) as { permissions: string[] };
+    assert.equal(curatorAuthorization.permissions.includes("catalog.identity.propose"), true);
+    assert.equal(curatorAuthorization.permissions.includes("catalog.identity.approve"), true);
+    const curatorProposal = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: "{}"
+    });
+    assert.equal(curatorProposal.status, 400);
+    assert.equal((await curatorProposal.json() as { error: string }).error, "catalog_identity_confirmation_required");
   } finally {
     server.close();
     await once(server, "close");

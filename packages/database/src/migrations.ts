@@ -1430,5 +1430,93 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
              'migration_22', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       FROM missions m;
     `
+  },
+  {
+    version: 23,
+    name: "reversible_catalog_identity_governance",
+    sql: `
+      INSERT INTO authorization_permissions(id, description, created_at) VALUES
+        ('catalog.identity.propose', 'Propose governed catalog merge, split, and compensating rollback operations.', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('catalog.identity.approve', 'Approve or reject governed catalog identity operations.', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+      INSERT INTO authorization_role_permissions(role_id, permission_id, created_at) VALUES
+        ('catalog_curator', 'catalog.identity.propose', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('catalog_curator', 'catalog.identity.approve', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('tenant_admin', 'catalog.identity.propose', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('tenant_admin', 'catalog.identity.approve', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+      CREATE TABLE catalog_identity_operations (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        operation_kind TEXT NOT NULL CHECK (operation_kind IN ('merge_variants', 'split_variant', 'rollback')),
+        requested_by_user_id TEXT NOT NULL,
+        requested_by_actor_kind TEXT NOT NULL,
+        requested_by_actor_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        base_state_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'applied', 'rejected')),
+        requires_distinct_approver INTEGER NOT NULL DEFAULT 0 CHECK (requires_distinct_approver IN (0, 1)),
+        review_note TEXT NOT NULL DEFAULT '',
+        reviewed_by_actor_id TEXT NOT NULL DEFAULT '',
+        decided_at TEXT NOT NULL DEFAULT '',
+        applied_at TEXT NOT NULL DEFAULT '',
+        reversed_operation_id TEXT REFERENCES catalog_identity_operations(id) ON DELETE CASCADE,
+        reverted_by_operation_id TEXT REFERENCES catalog_identity_operations(id) ON DELETE CASCADE,
+        result_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE UNIQUE INDEX catalog_identity_operations_pending_payload_idx
+        ON catalog_identity_operations(tenant_id, payload_hash) WHERE status = 'pending';
+      CREATE UNIQUE INDEX catalog_identity_operations_one_rollback_idx
+        ON catalog_identity_operations(reversed_operation_id)
+        WHERE reversed_operation_id IS NOT NULL AND status = 'applied';
+      CREATE INDEX catalog_identity_operations_review_idx
+        ON catalog_identity_operations(tenant_id, status, created_at, id);
+
+      CREATE TABLE catalog_identity_operation_snapshots (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        operation_id TEXT NOT NULL REFERENCES catalog_identity_operations(id) ON DELETE CASCADE,
+        phase TEXT NOT NULL CHECK (phase IN ('before', 'after')),
+        snapshot_json TEXT NOT NULL,
+        snapshot_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(operation_id, phase)
+      ) STRICT;
+
+      CREATE TABLE catalog_identity_operation_events (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        operation_id TEXT NOT NULL REFERENCES catalog_identity_operations(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK (sequence >= 1),
+        event_type TEXT NOT NULL CHECK (event_type IN ('proposed', 'approved', 'rejected', 'applied', 'compensated')),
+        actor_kind TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        reason_code TEXT NOT NULL,
+        state_hash TEXT NOT NULL,
+        data_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        UNIQUE(operation_id, sequence)
+      ) STRICT;
+      CREATE INDEX catalog_identity_operation_events_history_idx
+        ON catalog_identity_operation_events(operation_id, sequence);
+
+      CREATE TRIGGER catalog_identity_operation_snapshots_no_update
+      BEFORE UPDATE ON catalog_identity_operation_snapshots
+      BEGIN SELECT RAISE(ABORT, 'catalog identity snapshots are immutable'); END;
+      CREATE TRIGGER catalog_identity_operation_snapshots_no_delete
+      BEFORE DELETE ON catalog_identity_operation_snapshots
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'catalog identity snapshots are immutable'); END;
+      CREATE TRIGGER catalog_identity_operation_events_no_update
+      BEFORE UPDATE ON catalog_identity_operation_events
+      BEGIN SELECT RAISE(ABORT, 'catalog identity events are append-only'); END;
+      CREATE TRIGGER catalog_identity_operation_events_no_delete
+      BEFORE DELETE ON catalog_identity_operation_events
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'catalog identity events are append-only'); END;
+    `
   }
 ]);

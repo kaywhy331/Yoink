@@ -6,10 +6,18 @@ drill. Both preserve the local-first default. They do **not** silently turn
 the current SQLite process into a public service. Version 0.19 adds persisted
 application roles and split API/UI surfaces; 0.20 adds tenant/user-owned intent
 revisions, offer snapshots, spend policy, transactional reservations, and an
-append-only spend ledger. A hosted operator must still provide TLS termination,
+append-only spend ledger. Version 0.21 adds reversible topology-bound catalog
+identity operations but deliberately refuses to apply them when the database
+contains more than one tenant; tenant roles are not global catalog authority.
+A hosted operator must still provide TLS termination,
 an identity-aware reverse proxy, explicit Host/Origin allowlists, principal
 lifecycle management, backups, monitoring, and a PostgreSQL implementation
 before treating a deployment as production hosted.
+
+Production catalog curation requires a separately authenticated global-curator
+plane with step-up/two-person approval, cross-tenant policy, privacy operations,
+and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting
+tenant roles or deleting tenant records.
 
 ## Runtime modes
 

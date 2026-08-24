@@ -79,6 +79,11 @@
       <section class="panel" id="catalogGovernancePanel">
         <div class="panel-heading"><div><p class="eyebrow">Governed shared data</p><h2>Catalog review queue</h2><p>User suggestions are normalized and held here. The shared commerce graph changes only after an authorized review.</p></div><span class="mode-chip" id="catalogGovernanceGate">CHECKING</span></div>
         <div class="card-list" id="catalogProposalList"></div>
+        <div class="panel-heading governance-heading" id="catalogIdentityHeading">
+          <div><p class="eyebrow">Reversible exact identity</p><h2>Merge, split, and compensation</h2><p>Operations bind immutable topology hashes. Merge requires reviewed exact-identifier evidence and independent approval; stale or active purchase state fails closed.</p></div>
+          <div class="card-actions"><button class="button secondary" id="proposeCatalogMergeButton" type="button">Propose merge</button><button class="button secondary" id="proposeCatalogSplitButton" type="button">Propose split</button></div>
+        </div>
+        <div class="card-list" id="catalogIdentityOperationList"></div>
       </section>
       <div class="filter-bar"><input id="librarySearch" type="search" placeholder="Search title, retailer, or SKU" aria-label="Search library"><span id="libraryCount"></span></div>
       <div class="card-list" id="libraryList"></div>
@@ -375,6 +380,26 @@
         <label class="check-label"><input name="enabled" type="checkbox" checked><span>Strategy enabled</span></label>
       </div>
       <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save strategy</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="catalogIdentityDialog">
+    <form id="catalogIdentityForm">
+      <div class="dialog-heading"><div><p class="eyebrow">Immutable reviewed topology</p><h2>Propose catalog identity operation</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="form-grid">
+        <label><span>Operation</span><select name="kind"><option value="merge_variants">Merge exact variants</option><option value="split_variant">Split selected listings</option></select></label>
+        <label><span>Reason code</span><input name="reasonCode" pattern="[a-z][a-z0-9_]{2,79}" placeholder="reviewed_exact_identifier" required></label>
+        <label><span>Source variant ID</span><input name="sourceVariantId" required></label>
+        <label data-catalog-merge-field><span>Target variant ID</span><input name="targetVariantId"></label>
+        <label class="wide" data-catalog-merge-field><span>Reviewed exact-identifier claim ID</span><input name="reviewedIdentityClaimId"></label>
+        <label class="wide" data-catalog-split-field hidden><span>Listing IDs to split (comma separated)</span><input name="listingIds" placeholder="listing_one, listing_two"></label>
+        <label class="wide" data-catalog-split-field hidden><span>New exact-variant title</span><input name="newTitle"></label>
+        <label data-catalog-split-field hidden><span>Brand</span><input name="newBrand"></label>
+        <label data-catalog-split-field hidden><span>Variant dimension</span><select name="attributeKey"><option value="edition">Edition</option><option value="size">Size</option><option value="color">Color</option><option value="language">Language</option><option value="pack">Pack</option><option value="condition">Condition</option><option value="finish">Finish</option><option value="style">Style</option></select></label>
+        <label data-catalog-split-field hidden><span>Variant value</span><input name="attributeValue" placeholder="Collector"></label>
+      </div>
+      <p class="fine-print">Titles, images, similar URLs, and prices are never merge evidence. Multi-tenant hosted catalog mutation remains closed until a global curator authority exists.</p>
+      <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Submit for review</button></div>
     </form>
   </dialog>
 

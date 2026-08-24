@@ -17,6 +17,8 @@ import {
   type AppSettingsUpdateInput,
   type AttributionPolicyUpdateInput,
   type CatalogListingInput,
+  type CatalogIdentityOperationDecisionInput,
+  type CatalogIdentityOperationProposalInput,
   type JobState,
   type MissionUpdateInput,
   type SpendPolicyUpdateInput,
@@ -39,6 +41,7 @@ import {
   CatalogGovernanceRepository,
   type CatalogProposalDecisionInput
 } from "../../../packages/database/src/catalog-governance-repository.js";
+import { CatalogIdentityGovernanceRepository } from "../../../packages/database/src/catalog-identity-governance-repository.js";
 import { AttributionRepository } from "../../../packages/database/src/attribution-repository.js";
 import { AdapterDiagnosticRepository } from "../../../packages/database/src/adapter-diagnostic-repository.js";
 import { AuthorizationRepository } from "../../../packages/database/src/authorization-repository.js";
@@ -212,6 +215,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const mutationOriginValidator = dependencies.mutationOriginValidator ?? sameOriginMutation;
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
+  const catalogIdentityGovernance = new CatalogIdentityGovernanceRepository(db);
   const attribution = new AttributionRepository(db);
   const adapterDiagnostics = new AdapterDiagnosticRepository(db);
   const authorization = new AuthorizationRepository(db);
@@ -271,6 +275,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       const purchaseIntentDetailMatch = /^\/api\/v1\/user\/purchase-intents\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
       const purchaseIntentOffersMatch = /^\/api\/v1\/user\/purchase-intents\/([A-Za-z0-9_-]{3,120})\/offers$/.exec(requestUrl.pathname);
+      const catalogIdentityOperationDetailMatch = /^\/api\/v1\/admin\/catalog\/identity-operations\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
+      const catalogIdentityOperationDecisionMatch = /^\/api\/v1\/admin\/catalog\/identity-operations\/([A-Za-z0-9_-]{3,120})\/decision$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
         const settings = control.settings();
@@ -394,6 +400,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
         const status = String(requestUrl.searchParams.get("status") ?? "pending") as Parameters<typeof catalogGovernance.listForReview>[0];
         json(response, 200, { items: catalogGovernance.listForReview(status, limit, offset) });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/catalog/identity-operations") {
+        const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
+        const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
+        const status = String(requestUrl.searchParams.get("status") ?? "pending") as "pending" | "applied" | "rejected" | "all";
+        json(response, 200, { items: catalogIdentityGovernance.list(status, limit, offset) });
+        return;
+      }
+
+      if (request.method === "GET" && catalogIdentityOperationDetailMatch) {
+        json(response, 200, catalogIdentityGovernance.detail(catalogIdentityOperationDetailMatch[1] ?? ""));
         return;
       }
 
@@ -696,6 +715,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ...identityClaims.counts(),
             ...observerRecipes.counts(),
             ...catalogGovernance.counts(),
+            ...catalogIdentityGovernance.counts(),
             ...hostedDelivery.counts()
           },
           sources: control.listSources(),
@@ -720,6 +740,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           },
           identityGovernance: {
             catalogRemappingEnabled: false,
+            reversibleLocalCatalogOperations: true,
+            hostedGlobalCatalogAuthority: false,
             siblingAvailabilityRequiresIndependentValidation: true,
             claims: identityClaims.list(100),
             projections: identityClaims.projections()
@@ -732,7 +754,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           catalogGovernance: {
             directUserWritesEnabled: false,
             reviewCapable: authorization.has("catalog.review"),
-            pending: authorization.has("catalog.review") ? catalogGovernance.listForReview("pending", 100, 0) : []
+            identityProposalCapable: authorization.has("catalog.identity.propose"),
+            identityApprovalCapable: authorization.has("catalog.identity.approve"),
+            pending: authorization.has("catalog.review") ? catalogGovernance.listForReview("pending", 100, 0) : [],
+            identityOperations: catalogIdentityGovernance.list("all", 100, 0)
           },
           authorization: {
             permissions: authorization.permissions(),
@@ -765,6 +790,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             communityAdvisoryOnly: true,
             identityClaimGovernance: true,
             automaticCatalogRemapping: false,
+            reversibleCatalogIdentityGovernance: true,
+            hostedGlobalCatalogAuthority: false,
             signedObserverRecipeRegistry: true,
             observerRecipeMutation: false,
             pickupMutation: false,
@@ -916,6 +943,22 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/catalog/proposals") {
         const body = await readJson(request);
         json(response, 202, catalogGovernance.proposeListing(body as unknown as CatalogListingInput));
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/admin/catalog/identity-operations") {
+        const body = await readJson(request);
+        const result = catalogIdentityGovernance.propose(body as unknown as CatalogIdentityOperationProposalInput);
+        json(response, result.disposition === "created" ? 201 : 200, result);
+        return;
+      }
+
+      if (request.method === "POST" && catalogIdentityOperationDecisionMatch) {
+        const body = await readJson(request);
+        json(response, 200, catalogIdentityGovernance.decide(
+          catalogIdentityOperationDecisionMatch[1] ?? "",
+          body as unknown as CatalogIdentityOperationDecisionInput
+        ));
         return;
       }
 

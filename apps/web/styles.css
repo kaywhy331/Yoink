@@ -80,6 +80,7 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 80
 .panel { padding: 20px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: 0 16px 55px rgba(0,0,0,.12); }
 .panel-heading, .page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .panel-heading { margin-bottom: 15px; }
+.governance-heading { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
 .panel-heading h2, .companion-panel h2 { margin: 2px 0 0; font-size: 19px; letter-spacing: -.02em; }
 .page-heading { align-items: end; min-height: 150px; margin-bottom: 24px; padding: 8px; }
 .page-heading h1 { font-size: clamp(38px, 4vw, 58px); }

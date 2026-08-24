@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ApiError, apiErrorPayload } from "../apps/api/src/api-error.js";
 import { AuthorizationError } from "../packages/database/src/authorization-repository.js";
+import { CatalogIdentityGovernanceError } from "../packages/database/src/catalog-identity-governance-repository.js";
 
 test("API problems preserve safe status taxonomy and correlation IDs", () => {
   const correlationId = "request_taxonomy_001";
@@ -12,6 +13,17 @@ test("API problems preserve safe status taxonomy and correlation IDs", () => {
   assert.deepEqual(apiErrorPayload(new AuthorizationError("permission_denied", 403, "Denied."), correlationId), {
     status: 403,
     payload: { error: "permission_denied", message: "Denied.", correlationId }
+  });
+  assert.deepEqual(apiErrorPayload(
+    new CatalogIdentityGovernanceError("catalog_identity_topology_stale", 409, "Submit a fresh operation."),
+    correlationId
+  ), {
+    status: 409,
+    payload: {
+      error: "catalog_identity_topology_stale",
+      message: "Submit a fresh operation.",
+      correlationId
+    }
   });
   assert.equal(apiErrorPayload(new Error("The request body is invalid."), correlationId).status, 400);
   assert.equal(apiErrorPayload(new Error("The authenticated request scope is invalid."), correlationId).status, 401);

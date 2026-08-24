@@ -410,6 +410,50 @@ export interface CatalogListingInput {
   observedAt?: string;
 }
 
+export const CATALOG_IDENTITY_OPERATION_CONFIRMATION = "PROPOSE_CATALOG_IDENTITY_OPERATION";
+export const CATALOG_IDENTITY_APPROVAL_CONFIRMATION = "APPROVE_CATALOG_IDENTITY_OPERATION";
+export const CATALOG_IDENTITY_REJECTION_CONFIRMATION = "REJECT_CATALOG_IDENTITY_OPERATION";
+
+export interface CatalogVariantMergeInput {
+  kind: "merge_variants";
+  sourceVariantId: string;
+  targetVariantId: string;
+  reviewedIdentityClaimId: string;
+  reasonCode: string;
+  confirmation: typeof CATALOG_IDENTITY_OPERATION_CONFIRMATION;
+}
+
+export interface CatalogVariantSplitInput {
+  kind: "split_variant";
+  sourceVariantId: string;
+  listingIds: string[];
+  newTitle: string;
+  newBrand?: string;
+  newVariantAttributes: Record<string, string>;
+  reasonCode: string;
+  confirmation: typeof CATALOG_IDENTITY_OPERATION_CONFIRMATION;
+}
+
+export interface CatalogIdentityRollbackInput {
+  kind: "rollback";
+  reversedOperationId: string;
+  reasonCode: string;
+  confirmation: typeof CATALOG_IDENTITY_OPERATION_CONFIRMATION;
+}
+
+export type CatalogIdentityOperationProposalInput =
+  | CatalogVariantMergeInput
+  | CatalogVariantSplitInput
+  | CatalogIdentityRollbackInput;
+
+export interface CatalogIdentityOperationDecisionInput {
+  outcome: "approve" | "reject";
+  note: string;
+  confirmation:
+    | typeof CATALOG_IDENTITY_APPROVAL_CONFIRMATION
+    | typeof CATALOG_IDENTITY_REJECTION_CONFIRMATION;
+}
+
 export interface TrackalackerPushEnvelope {
   schemaVersion: 1;
   signalId: string;
