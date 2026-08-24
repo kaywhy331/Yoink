@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yoink · My products</title>
+  <link rel="stylesheet" href="/user.css">
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="Yoink home"><span class="brand-mark">Y</span><span><strong>Yoink</strong><small>My purchase assistant</small></span></a>
+    <div class="header-actions">
+      <a class="admin-link" id="adminLink" href="/admin" hidden>Admin</a>
+      <span class="mode-pill" id="modePill">Loading</span>
+      <button class="button quiet" id="pauseButton" type="button">Pause actions</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Products, price, and purchase preferences</p>
+        <h1>Tell Yoink what you want. Keep every action bounded.</h1>
+        <p>Choose an exact product, select the stores you trust, and set the most you will pay. Yoink handles the signal and browser details without hiding the final limits from you.</p>
+      </div>
+      <div class="hero-state" id="heroState" aria-live="polite"></div>
+    </section>
+
+    <section class="metrics" id="metrics" aria-label="Your Yoink totals"></section>
+
+    <nav class="tabs" aria-label="Workspace">
+      <button class="tab active" data-tab="products" type="button">Products</button>
+      <button class="tab" data-tab="plans" type="button">Purchase plans</button>
+      <button class="tab" data-tab="activity" type="button">Recent actions</button>
+      <button class="tab" data-tab="preferences" type="button">Preferences</button>
+    </nav>
+
+    <section class="workspace active" data-panel="products">
+      <div class="section-heading">
+        <div><p class="eyebrow">Exact catalog matches</p><h2>Products</h2><p>Track a listing to create one private purchase plan for its exact product.</p></div>
+        <label class="search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label>
+      </div>
+      <div class="card-grid" id="productList"></div>
+    </section>
+
+    <section class="workspace" data-panel="plans">
+      <div class="section-heading"><div><p class="eyebrow">Your private intent</p><h2>Purchase plans</h2><p>Price caps, seller choice, fulfillment, and quantity stay explicit per product and store.</p></div></div>
+      <div class="stack" id="planList"></div>
+    </section>
+
+    <section class="workspace" data-panel="activity">
+      <div class="section-heading"><div><p class="eyebrow">What Yoink did</p><h2>Recent actions</h2><p>Each action shows the product, store, cap, and current outcome.</p></div></div>
+      <div class="stack" id="actionList"></div>
+    </section>
+
+    <section class="workspace" data-panel="preferences">
+      <div class="section-heading"><div><p class="eyebrow">Simple global controls</p><h2>Preferences</h2><p>Retailer-specific price and seller choices belong to each purchase plan.</p></div></div>
+      <div class="preference-grid">
+        <article class="preference-card"><span class="icon">Ⅱ</span><div><h3>Action state</h3><p id="actionStateCopy">Loading your action state…</p><button class="button secondary" id="preferencePauseButton" type="button">Change action state</button></div></article>
+        <article class="preference-card"><span class="icon">⌁</span><div><h3>Chrome companion</h3><p>Pair Chrome with a one-time code. The extension remains the only component allowed to perform a qualified retailer click.</p><button class="button secondary" id="pairButton" type="button">Create pairing code</button><div class="pairing" id="pairing" hidden></div></div></article>
+        <article class="preference-card"><span class="icon">✓</span><div><h3>Catalog review</h3><p id="proposalCopy">Checking your pending product suggestions…</p><div class="mini-list" id="proposalList"></div></div></article>
+        <article class="preference-card"><span class="icon">◎</span><div><h3>Signal connections</h3><p>Your sources discover opportunities; they never raise your plan limits.</p><div class="mini-list" id="sourceList"></div></div></article>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="planDialog">
+    <form id="planForm">
+      <div class="dialog-heading"><div><p class="eyebrow">Purchase preferences</p><h2 id="planDialogTitle">Product</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <input name="id" type="hidden">
+      <div class="form-row">
+        <label><span>Plan state</span><select name="status"><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option><option value="archived">Archived</option></select></label>
+        <label><span>Quantity wanted</span><input name="targetQuantity" type="number" min="1" max="99" required></label>
+      </div>
+      <div class="target-list" id="targetEditors"></div>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save preferences</button></div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/user.js"></script>
+</body>
+</html>

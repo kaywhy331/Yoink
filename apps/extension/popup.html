@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yoink Companion</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header><span class="mark">Y</span><div><h1>Yoink</h1><p>Chrome companion</p></div></header>
+    <section class="status-card" aria-live="polite">
+      <span class="status-dot" id="statusDot"></span>
+      <div><strong id="statusTitle">Checking local app…</strong><p id="statusCopy">One moment.</p></div>
+    </section>
+    <dl>
+      <div><dt>Device</dt><dd id="device">Not paired</dd></div>
+      <div><dt>Mode</dt><dd id="mode">—</dd></div>
+      <div><dt>Actions</dt><dd id="actions">—</dd></div>
+      <div><dt>Retailer execution</dt><dd id="mutation">Disabled</dd></div>
+      <div><dt>Last check</dt><dd id="checkedAt">—</dd></div>
+    </dl>
+    <section class="pair-card" id="pairCard" hidden>
+      <label for="pairCode">One-time pairing code</label>
+      <div class="pair-row"><input id="pairCode" inputmode="text" autocomplete="off" maxlength="20" placeholder="XXXX-XXXX-XXXX"><button id="pair" class="primary" type="button">Pair</button></div>
+      <p id="pairMessage">Create a code in Yoink → Connections, then enter it here within five minutes.</p>
+    </section>
+    <section class="shadow-card" aria-labelledby="trackalackerTitle">
+      <div class="shadow-heading"><div><strong id="trackalackerTitle">TrackaLacker signals</strong><p id="trackalackerStatus">Not connected</p></div><span class="read-only">PUSH</span></div>
+      <p id="trackalackerMessage">Connect once from your signed-in TrackaLacker browser session. Yoink listens for Web Push; it does not poll product pages.</p>
+      <button id="connectTrackalacker" class="primary wide" type="button">Connect TrackaLacker push</button>
+      <button id="syncTrackalacker" class="wide stacked" type="button">Sync followed library</button>
+    </section>
+    <section class="shadow-card" aria-labelledby="retailerTitle">
+      <div class="shadow-heading"><div><strong id="retailerTitle">Retailer evidence</strong><p>Four guarded lanes · nine additional read-only stores</p></div><span class="read-only">BOUNDED</span></div>
+      <p id="retailerMessage">Open an exact retailer product page to capture a sanitized, non-mutating offer observation.</p>
+      <button id="inspectRetailer" class="primary wide" type="button">Inspect current store page</button>
+      <button id="rehearseWalmart" class="wide stacked" type="button">Run Walmart qualification rehearsal</button>
+      <button id="rehearseAmazon" class="wide stacked" type="button">Run Amazon qualification rehearsal</button>
+      <button id="rehearseBestBuy" class="wide stacked" type="button">Run Best Buy qualification rehearsal</button>
+    </section>
+    <section class="shadow-card" aria-labelledby="communityTitle">
+      <div class="shadow-heading"><div><strong id="communityTitle">Community evidence</strong><p>Explicit opt-in · read-only · advisory</p></div><span class="read-only">PRIVATE PILOT</span></div>
+      <p id="communityMessage">Enable one store in Yoink first. This button shares one server-validated stock assertion; sharing never runs automatically.</p>
+      <button id="shareCommunity" class="primary wide" type="button">Share current page evidence once</button>
+    </section>
+    <section class="shadow-card" aria-labelledby="targetTitle">
+      <div class="shadow-heading"><div><strong id="targetTitle">Target safety check</strong><p id="targetAccess">Target page access not granted</p></div><span class="read-only">GUARDED</span></div>
+      <p id="targetMessage">Open an exact Target product page, then inspect its visible offer once.</p>
+      <button id="inspectTarget" class="primary wide" type="button">Enable and inspect Target</button>
+      <button id="rehearseTarget" class="wide stacked" type="button">Run safe qualification rehearsal</button>
+      <button id="removeTarget" class="text-button" type="button" hidden>Remove Target access</button>
+    </section>
+    <section class="shadow-card" aria-labelledby="updateTitle">
+      <div class="shadow-heading"><div><strong id="updateTitle">Companion updates</strong><p id="updateVersions">Checking versions…</p></div><span class="read-only">LOCAL</span></div>
+      <p id="updateMessage">The local Yoink app provides a verified unpacked-extension package when a newer build is available.</p>
+      <button id="checkUpdate" class="wide" type="button">Check for updates</button>
+      <button id="reloadExtension" class="text-button" type="button" hidden>Reload after overwriting the folder</button>
+    </section>
+    <p class="notice">Inspection and rehearsal never click. After separate per-store activation in Yoink, the companion can add one verified first-party shipping item to an empty Target, Walmart, Amazon, or Best Buy cart; checkout and order submission stay disabled.</p>
+    <div class="buttons">
+      <button id="check" type="button">Check now</button>
+      <button id="open" class="primary" type="button">Open Yoink</button>
+    </div>
+    <button id="forget" class="forget" type="button" hidden>Forget local pairing</button>
+  </main>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

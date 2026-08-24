@@ -1,0 +1,280 @@
+# Yoink
+
+Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
+commerce control plane whose only retailer-session executor is a paired Chrome
+extension.
+
+Yoink 0.19.0 continuously accepts TrackaLacker Web Push, preserves the complete
+followed-product catalog (including unavailable and unsupported listings),
+resolves exact product/listing identity, creates one mission per variant,
+evaluates ordered user strategies, deduplicates competing source events, and
+records every decision in SQLite. Target, Walmart, Amazon, and Best Buy now have
+separate, exact-version add-to-cart lanes. Each lane requires its own current evidence,
+no-click rehearsal, and explicit local activation; upgrading never activates a
+new lane. Every lane is restricted to first-party shipping offers, quantity one.
+Amazon additionally requires a unique ASIN-bound offer token that remains only
+in page memory. Buy Now, checkout, and order submission are not authorized.
+
+The community pilot is explicit and read-only: users opt in per retailer
+and deliberately share one server-reconstructed sanitized observation at a
+time. Exact product-equivalence claims require strong identifiers and never
+remap the private catalog. Signed expiring observer recipes can evaluate five
+fixed read-only fields in shadow/canary mode; packaged code verifies the
+signature and schema, and downloaded data can never click or navigate.
+
+Hosted portability now includes request-bound tenant/user repositories,
+replay-protected signed proxy scopes, automatic paired-device scope resolution,
+idempotent principal provisioning, and leased inbox/outbox delivery with
+dead-letter receipts. A streaming, checksummed portability archive can be
+verified, restored into a fresh SQLite database, and reconciled table by table
+without an item-count cap. Local mode remains the default; see the hosted
+deployment contract before enabling the boundary mode.
+
+Version 0.19.0 adds the first production-shaped application spine without
+changing retailer mutation authority. Persisted roles and granular permissions
+now authorize explicit user, admin, device, and internal API surfaces; an
+`actorKind` label alone grants nothing. Every HTTP failure has a correlation ID
+and safe status taxonomy. Manual catalog changes enter a normalized review
+queue and cannot update the shared commerce graph until an authorized curator
+approves them. The root page is now a minimal product and purchase-preference
+dashboard, while the permission-gated operations console lives at `/admin`.
+
+Disney Store, Ravensburger, Riot Games Merch, Books-A-Million, Fanatics,
+Kohl's, Macy's, Premium Bandai, and Pokémon Center are recognized as
+exact-identity catalog and browser observation stores. Their observers send
+the same sanitized structural diagnostics, but all nine stores' mutation paths
+remain closed. Premium Bandai distinguishes preorder, in-stock, and closed
+item pages; Pokémon Center retains the complete hyphenated product/variant ID.
+Observer v2 rejects Premium Bandai unavailable-page shells and Pokémon Center
+Imperva frames as manual/security blocks, clears all offer fields, and never
+publishes either response as out-of-stock evidence.
+
+## Requirements
+
+- Node.js 22.5 or newer
+- Chrome 121 or newer for silent extension Web Push
+- A normal signed-in TrackaLacker Chrome session for initial enrollment and
+  manual followed-library synchronization
+
+## Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+Open <http://127.0.0.1:32991> for the user dashboard. The separate admin control
+center is at <http://127.0.0.1:32991/admin>. Either page may be closed after
+setup; the API process and paired Chrome companion continue handling push and
+qualified work. Local data is stored under `data/` unless `YOINK_DATA_DIR`
+points to another explicit directory.
+
+SQLite migrations are transactional. An existing file is integrity-checked and
+backed up with a `.before-vN.<timestamp>.sqlite` suffix before a pending schema
+migration is applied.
+
+For an offline, exact export/restore/reconciliation drill, use `npm run
+portability -- drill ...` and follow the [data portability
+contract](docs/DATA_PORTABILITY.md). Archives contain private state, are never
+served over HTTP, and do not include the observer-recipe signing key files.
+
+## Load and pair the Chrome companion
+
+1. Open `chrome://extensions` and enable **Developer mode**.
+2. Select **Load unpacked**.
+3. Choose `apps/extension` from this repository.
+4. Open Yoink → **Preferences** and create a one-time pairing code (or use
+   **Connections** in `/admin`).
+5. Enter the code in the extension popup within five minutes.
+
+Pairing stores a hashed device credential in Yoink and the runtime credential in
+Chrome extension storage. The extension has no cookie API access and no
+persistent retailer content script.
+
+## Connect TrackaLacker
+
+Stay signed in on a normal TrackaLacker tab, open the Yoink popup, and choose
+**Connect TrackaLacker push**. The extension creates a real PushSubscription and
+a minimal MAIN-world function submits the confirmed nested device contract from
+the signed-in TrackaLacker origin. Push endpoint/key material, cookies, CSRF
+values, Cloudflare/session values, and signed notification URLs never enter the
+Yoink database, queue, telemetry, or logs.
+
+Chrome 121+ supports a silent extension subscription, so TrackaLacker's normal
+browser notification remains the visible alert. If Chrome reports that silent
+push is unavailable, the popup states that the fallback can produce an extra
+visible notification. Yoink still deduplicates signal incidents and action jobs
+independently of desktop toast presentation.
+
+Choose **Sync followed library** for a user-requested catalog pass. It has no
+application product or mission-count limit and imports every source listing
+returned by TrackaLacker, including out-of-stock, Best Buy, unsupported-store,
+and alternate same-retailer records. Progress and per-product receipts are
+durable. This is catalog synchronization, not stock polling; live inventory
+events continue to arrive through Web Push.
+
+## Configure behavior
+
+The user dashboard stays focused on exact products, purchase plans, recent
+actions, and preferences. Track a known exact listing, then edit its store,
+seller, fulfillment, quantity, and maximum-price preferences. Catalog
+suggestions remain pending until reviewed in the admin control center. Detailed
+source health, diagnostics, retailer qualification, recipes, affiliate setup,
+catalog review, and role membership are intentionally isolated under `/admin`.
+
+There is no separate Signals start switch:
+
+- Connected sources continuously ingest signals.
+- The default catchall strategy produces notifications.
+- An exact trusted signal can create a new mission and attach all known retailer
+  listings without overwriting user settings.
+- Higher strategy rows win. Empty keywords mean catchall; quoted phrases, `+`
+  terms, alternatives, and exclusions are supported.
+- MSRP policies are maximums and include every lower price.
+- Seller policy, allowed seller names, fulfillment, quantity, signal age, price
+  cap, and exact source/store selections are evaluated before a job is created.
+- **Pause Actions** persists and prevents new purchase jobs and leases while
+  signal intake and history continue.
+
+When two stores or sources report the same product, one active purchase job
+claims the mission. Corroborating signals are recorded but cannot create a
+second purchase. A verified rejection or pre-mutation cancellation releases the
+claim for a legitimate later re-signal. A potentially mutated or uncertain job
+stays locked until the user explicitly reviews the retailer session.
+
+## Retailer safety
+
+Walmart, Amazon, Best Buy, Disney Store, Ravensburger, Riot Games Merch,
+Books-A-Million, Fanatics, Kohl's, Macy's, Premium Bandai, and Pokémon Center
+have read-only visible-DOM observers; Target uses its separate observer. Only
+the first four retailers'
+evidence can feed independent add-only qualification dossiers. Amazon
+inspection also proves that one unique live offer token is bound to the exact
+ASIN and Add control. The token and any constructed validation route remain in
+page memory and are discarded; only readiness and a reason code are persisted.
+These observations never authorize mutation by themselves.
+
+Every explicit retailer inspection now sends a second, authenticated adapter
+diagnostic to the local server. If the packaged observer cannot be injected,
+executed, found, collected, or contract-validated after an exact SKU and host
+permission are established, the extension immediately sends a stable failure
+code with an all-zero structural layout. Raw browser errors and page URLs are
+never forwarded, and attempts before optional permission produce no telemetry.
+Amazon, Best Buy, and the nine added read-only
+inspections that stop at a binding boundary are retried across a
+short, bounded hydration window before the result is returned. Diagnostics contain only allowlisted counts and enums describing
+the layout and failure stage; page HTML/text, offer tokens, cookies, CSRF
+values, addresses, and account data are rejected from this ledger. The control
+center groups stable layout fingerprints into an adapter repair queue and marks
+a group recovered when the same structure later passes. Transient hydration
+failures recover automatically. Zero-layout observer-runtime incidents recover
+only after every affected exact SKU later completes a successful inspection;
+persistent parser failures still require a
+reviewed adapter release rather than remotely supplied or self-modifying code.
+
+Companion 0.17.0 also makes eligible adapter diagnostics durable across a
+temporary local-server outage. Only the already-normalized payload is retained:
+the outbox is bound to the paired device, deduplicated, limited to 50 entries,
+expires entries before the server's acceptance window, and drains on startup
+and the one-minute health cycle. Network failures, HTTP 408/429, and server
+errors are retried; permanent client rejection is dropped. Exact retry
+idempotency on ingestion prevents an ambiguous response from incrementing an
+incident twice. This adds no page permission or retailer mutation capability.
+
+Target's qualified `target-add-v1` runner requires:
+
+- live execution mode, Actions unpaused, an online paired device, and a current
+  adapter qualification;
+- an immutable exact TCIN job with unit/total caps;
+- quantity one, Target as seller, and shipping fulfillment;
+- a provably empty cart;
+- immediate live SKU, stock, seller, price, and fulfillment revalidation;
+- a durable `adding` receipt before one click;
+- exact cart-line verification afterward.
+
+Walmart's separately gated `walmart-add-v3` runner applies the same immutable
+job, empty-cart, at-most-once, cart-proof, and recovery boundaries. In addition,
+shipping must be explicit in the live buy box, Walmart must be the seller, and
+virtual queues, memberships, location prompts, authentication, MFA, or security
+challenges stop the job before mutation.
+
+Amazon's separately gated `amazon-add-v5` runner requires an exact ASIN,
+Amazon.com as both first-party seller identity and shipping offer, quantity one,
+a provably empty Amazon cart, and a unique offer token scoped with the price,
+seller evidence, shipping evidence, and Add control. Observer v6 binds the
+nearest exact product form before considering bounded local fallbacks, including
+when Amazon deeply nests the Add control. Canonical `offerListingID` checkout
+fields take precedence when they agree; `offeringID.1` is used only when the
+canonical family is absent. Explicit checkout ASIN inputs take precedence over
+variation-swatch `data-asin` markers. It recognizes both a combined visible
+`Shipper / Seller` field and separate `Ships from` / `Sold by` fields. A split
+offer is first-party only when both values are Amazon; Amazon-fulfilled offers
+sold by another merchant remain named marketplace evidence. Fulfillment ignores
+script, style, template, and hidden text, and the volatile offer token comes
+only from the selected Add form rather than unrelated same-ASIN forms. The raw
+token stays inside the isolated page runner and must be unchanged at the final
+pre-click check. Only the Add-to-Cart control can be clicked; Buy Now navigation
+is never used. The resulting cart must contain one exact ASIN at quantity one.
+
+Best Buy's separately gated `bestbuy-add-v3` runner requires an exact numeric
+SKU from a current or legacy product URL, explicit visible `Sold by Best Buy`
+evidence in the same bounded offer scope as one Add-to-Cart control and price,
+selected shipping, and quantity one. `Sold & shipped by` marketplace offers,
+pickup-selected offers, high-demand queues, location/account/security blocks,
+and ambiguous or conflicting SKU evidence stop before mutation. Observer v4
+recognizes current Best Buy test/automation attributes and safely reports when
+a native Add-intent control exists outside the known selector set, allowing the
+sanitized repair queue to distinguish selector drift from a genuinely missing
+control. It also binds a seller name represented by bounded accessibility
+metadata inside the exact seller element. Explicit in-store-only products are
+manual/local evidence with unknown global availability rather than false
+out-of-stock evidence. Migration 19 retires every earlier Best Buy
+qualification, requiring fresh v4 evidence and a v3 rehearsal before explicit
+activation. Its empty-cart, at-most-once receipt, immediate offer revalidation,
+and exact single-line cart proof match the other guarded lanes. A historical
+repair group is superseded only by a strictly newer packaged adapter's later
+non-failure result for that same exact SKU.
+
+A generic retailer-mutation capability cannot authorize Target, Walmart,
+Amazon, Best Buy, or any future lane.
+
+Pickup add, prepare-checkout, and submit-order are displayed as twelve
+independent future qualification lanes. They have no packaged runner or
+activation endpoint. Prepare/submit strategies remain non-leasable rehearsal
+records even when add-only execution is live; destination/payment fingerprints,
+final-total proof, confirmation evidence, and uncertain-submit recovery remain
+mandatory future submit prerequisites.
+
+Chrome restart behavior is fail-closed for all four implemented lanes. Pre-Add work cancels without clicking.
+Post-receipt work verifies the cart and never repeats the click. Any ambiguous
+post-click result moves to manual review.
+
+## Local companion updates
+
+Build the exact-version update artifact with:
+
+```bash
+npm run package:extension
+```
+
+The popup's **Check for updates** button compares semantic versions against the
+local Yoink release, validates exact filename/hash/size metadata, and downloads
+the packaged ZIP when newer. Chrome does not allow an unpacked extension to
+replace its own source directory. Extract the ZIP over the same companion
+folder, then choose **Reload after overwriting the folder** in the popup (or
+Reload on `chrome://extensions`). Pairing and local extension state remain in
+Chrome storage.
+
+## Verify
+
+```bash
+npm run verify
+```
+
+The suite type-checks the app, rebuilds all browser bundles, and runs database,
+signal, source, attribution, notification, adapter, service-worker recovery,
+and API tests.
+
+See [Architecture](docs/ARCHITECTURE.md), [Hosted deployment
+contract](docs/HOSTED_DEPLOYMENT.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
+migration](docs/CARTCOLLECT_MIGRATION.md), and [Roadmap](docs/ROADMAP.md).

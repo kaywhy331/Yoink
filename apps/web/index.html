@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yoink · Admin control center</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/admin" aria-label="Yoink admin home">
+      <span class="brand-mark" aria-hidden="true">Y</span>
+      <span><strong>Yoink</strong><small>Admin control center</small></span>
+    </a>
+    <nav class="primary-nav" aria-label="Main navigation">
+      <button class="nav-button active" data-view="overview" type="button">Home</button>
+      <button class="nav-button" data-view="library" type="button">Library</button>
+      <button class="nav-button" data-view="strategies" type="button">Strategies</button>
+      <button class="nav-button" data-view="missions" type="button">Missions</button>
+      <button class="nav-button" data-view="signals" type="button">Opportunities</button>
+      <button class="nav-button" data-view="actions" type="button">Actions</button>
+      <button class="nav-button" data-view="activity" type="button">Activity</button>
+      <button class="nav-button" data-view="community" type="button">Community</button>
+      <button class="nav-button" data-view="connections" type="button">Connections</button>
+      <button class="nav-button" data-view="access" type="button">Access</button>
+      <button class="nav-button" data-view="settings" type="button">Settings</button>
+    </nav>
+    <div class="topbar-actions">
+      <a class="text-button" href="/">User dashboard</a>
+      <span class="mode-chip" id="modeChip">Shadow mode</span>
+      <button class="pause-button" id="actionsToggle" type="button">Actions paused</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="view active" id="view-overview" data-view-panel="overview">
+      <div class="hero">
+        <div>
+          <p class="eyebrow">Always listening. Precisely bounded.</p>
+          <h1>Turn trusted signals into clear, verifiable action.</h1>
+          <p class="hero-copy">Yoink keeps product identity, your intent, source evidence, and browser execution separate—so opportunities move quickly without becoming blind orders.</p>
+        </div>
+        <div class="hero-status" id="heroStatus" aria-live="polite"></div>
+      </div>
+
+      <div class="safety-banner" id="safetyBanner">
+        <span class="safety-icon" aria-hidden="true">◇</span>
+        <div><strong id="safetyTitle">Qualification-gated execution</strong><p id="safetyCopy">Target, Walmart, Amazon, and Best Buy add-only lanes are independently gated by live evidence, a no-click rehearsal, and explicit activation.</p></div>
+      </div>
+
+      <section class="metric-grid" id="metricGrid" aria-label="System totals"></section>
+
+      <section class="panel readiness-panel" aria-labelledby="readinessTitle">
+        <div class="panel-heading"><div><p class="eyebrow">One clear start point</p><h2 id="readinessTitle">Ready-to-act checklist</h2><p id="readinessSummary">Checking the signal and action path…</p></div><span class="mode-chip" id="readinessGate">CHECKING</span></div>
+        <div class="readiness-grid" id="readinessGuide"></div>
+      </section>
+
+      <div class="dashboard-grid">
+        <section class="panel span-two">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Latest decisions</p><h2>Opportunity timeline</h2></div>
+            <button class="text-button" data-open-view="signals" type="button">View all</button>
+          </div>
+          <div id="recentSignals" class="timeline"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">Readiness</p><h2>Connections</h2></div></div>
+          <div id="sourceSummary" class="status-list"></div>
+          <button class="button secondary full" data-open-view="connections" type="button">Manage connections</button>
+        </section>
+      </div>
+    </section>
+
+    <section class="view" id="view-library" data-view-panel="library">
+      <div class="page-heading">
+        <div><p class="eyebrow">Commerce graph</p><h1>Library</h1><p>Every known retailer listing stays here, even when unavailable or not yet executable.</p></div>
+        <button class="button primary" id="addListingButton" type="button">Add exact listing</button>
+      </div>
+      <section class="panel" id="catalogGovernancePanel">
+        <div class="panel-heading"><div><p class="eyebrow">Governed shared data</p><h2>Catalog review queue</h2><p>User suggestions are normalized and held here. The shared commerce graph changes only after an authorized review.</p></div><span class="mode-chip" id="catalogGovernanceGate">CHECKING</span></div>
+        <div class="card-list" id="catalogProposalList"></div>
+      </section>
+      <div class="filter-bar"><input id="librarySearch" type="search" placeholder="Search title, retailer, or SKU" aria-label="Search library"><span id="libraryCount"></span></div>
+      <div class="card-list" id="libraryList"></div>
+      <div class="collection-more"><button class="button secondary" id="libraryMoreButton" type="button" hidden>Load more listings</button></div>
+    </section>
+
+    <section class="view" id="view-strategies" data-view-panel="strategies">
+      <div class="page-heading">
+        <div><p class="eyebrow">First matching rule wins</p><h1>Strategies</h1><p>Higher rules take precedence. An empty keyword rule is a catchall.</p></div>
+        <button class="button primary" id="addStrategyButton" type="button">Add strategy</button>
+      </div>
+      <div class="safety-banner compact"><span class="safety-icon">≤</span><div><strong>Price bands are maximums</strong><p>MSRP includes every lower price. Purchase actions always require a trusted numeric cap and a live signal price.</p></div></div>
+      <div class="strategy-list" id="strategyList"></div>
+    </section>
+
+    <section class="view" id="view-missions" data-view-panel="missions">
+      <div class="page-heading"><div><p class="eyebrow">User intent</p><h1>Missions</h1><p>One exact variant, with every known retailer listing as an independently configurable target. There is no mission-count cap.</p></div></div>
+      <div class="filter-bar"><input id="missionSearch" type="search" placeholder="Search mission title, origin, or status" aria-label="Search missions"><span id="missionCount"></span></div>
+      <div class="card-list" id="missionList"></div>
+      <div class="collection-more"><button class="button secondary" id="missionMoreButton" type="button" hidden>Load more missions</button></div>
+    </section>
+
+    <section class="view" id="view-signals" data-view-panel="signals">
+      <div class="page-heading">
+        <div><p class="eyebrow">Signals → incidents → decisions</p><h1>Opportunities</h1><p>Every accepted signal explains how it resolved and why Yoink did or did not qualify it.</p></div>
+        <button class="button primary" id="sendSignalButton" type="button">Send test signal</button>
+      </div>
+      <div class="filter-bar"><input id="signalSearch" type="search" placeholder="Search product, source, retailer, SKU, or decision" aria-label="Search opportunities"><span id="signalCount"></span></div>
+      <div class="timeline full-timeline" id="signalList"></div>
+      <div class="collection-more"><button class="button secondary" id="signalMoreButton" type="button" hidden>Load more opportunities</button></div>
+    </section>
+
+    <section class="view" id="view-actions" data-view-panel="actions">
+      <div class="page-heading"><div><p class="eyebrow">Immutable job snapshots</p><h1>Actions</h1><p>Qualified work, final caps, seller policy, and execution state in one place.</p></div></div>
+      <div class="filter-bar"><input id="jobSearch" type="search" placeholder="Search product, retailer, SKU, action, or state" aria-label="Search actions"><span id="jobCount"></span></div>
+      <div class="card-list" id="jobList"></div>
+      <div class="collection-more"><button class="button secondary" id="jobMoreButton" type="button" hidden>Load more actions</button></div>
+      <section class="panel action-delivery-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Chrome delivery ledger</p><h2>Notifications</h2><p>Every Notify strategy match is leased once to a paired Chrome companion and acknowledged durably.</p></div></div>
+        <div class="card-list" id="notificationList"></div>
+      </section>
+      <section class="panel action-delivery-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Attribution ledger</p><h2>Affiliate routes</h2><p>Every job records whether it used a validated affiliate route, canonical fallback, or a fail-closed required-route decision.</p></div></div>
+        <div class="card-list" id="attributionReceiptList"></div>
+      </section>
+    </section>
+
+    <section class="view" id="view-activity" data-view-panel="activity">
+      <div class="page-heading"><div><p class="eyebrow">Durable decision history</p><h1>Activity</h1><p>Signals, mission changes, safety decisions, browser results, source syncs, and configuration changes share one sanitized audit stream.</p></div></div>
+      <div class="safety-banner compact"><span class="safety-icon">↗</span><div><strong id="outboxSummary">Durable event outbox ready</strong><p>Each new audit event also receives a tenant-scoped outbox record for a future hosted control plane. Pending local records are expected and are not network retries.</p></div></div>
+      <div class="filter-bar"><input id="auditSearch" type="search" placeholder="Search event, reason, message, or correlation ID" aria-label="Search activity"><span id="auditCount"></span></div>
+      <div class="timeline full-timeline" id="auditList"></div>
+      <div class="collection-more"><button class="button secondary" id="auditMoreButton" type="button" hidden>Load more activity</button></div>
+    </section>
+
+    <section class="view" id="view-community" data-view-panel="community">
+      <div class="page-heading"><div><p class="eyebrow">Private read-only pilot</p><h1>Community evidence</h1><p>Share one server-validated stock observation at a time. Every store is opt-in, every assertion expires, and community state is advisory only.</p></div></div>
+      <div class="safety-banner"><span class="safety-icon" aria-hidden="true">◎</span><div><strong>No automatic recording or checkout learning</strong><p>Yoink never captures clicks, keystrokes, form values, page HTML, account data, payment fields, or offer tokens. The extension can submit only references to sanitized evidence already accepted by this server.</p></div></div>
+      <div class="community-summary" id="communitySummary"></div>
+      <section class="panel community-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Consent by store</p><h2>Sharing controls</h2><p>Enabling a store permits only deliberate “Share current page evidence once” actions in the extension. Passive inspections remain private.</p></div></div>
+        <div class="community-consent-grid" id="communityConsentList"></div>
+      </section>
+      <section class="panel community-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Exact product governance</p><h2>Cross-store identity claims</h2><p>A title, image, price, or similar URL is never enough. Propose equivalence only with a valid GTIN, UPC, EAN, ISBN, or brand plus MPN; claims never remap the catalog or move a mission automatically.</p></div><button class="button danger" id="deleteIdentityClaimsButton" type="button">Delete identity claims</button></div>
+        <form id="identityClaimForm" class="identity-claim-form">
+          <div class="form-grid">
+            <label><span>Listing being evaluated</span><select name="listingId" required></select></label>
+            <label><span>Reference listing for the claimed variant</span><select name="referenceListingId" required></select></label>
+            <label><span>Exact identifier kind</span><select name="identifierKind"><option value="upc">UPC</option><option value="gtin">GTIN</option><option value="ean">EAN</option><option value="isbn">ISBN</option><option value="brand_mpn">Brand + MPN</option></select></label>
+            <label><span>Identifier value</span><input name="identifierValue" autocomplete="off" placeholder="Check-digit validated code"></label>
+            <label><span>Brand (brand + MPN only)</span><input name="brand" autocomplete="off"></label>
+            <label><span>Manufacturer part number</span><input name="mpn" autocomplete="off"></label>
+            <label><span>Size</span><input name="size" autocomplete="off"></label>
+            <label><span>Color</span><input name="color" autocomplete="off"></label>
+            <label><span>Edition</span><input name="edition" autocomplete="off"></label>
+            <label><span>Language</span><input name="language" autocomplete="off"></label>
+            <label><span>Pack count</span><input name="packCount" type="number" min="1" max="999"></label>
+            <label><span>Condition</span><select name="condition"><option value="">Unspecified</option><option value="new">New</option><option value="used">Used</option><option value="refurbished">Refurbished</option><option value="collectible">Collectible</option><option value="unknown">Unknown</option></select></label>
+          </div>
+          <p class="fine-print">Selected child variants must remain distinct. Local review records provenance but cannot satisfy independent multi-user and paired-device validation.</p>
+          <div class="dialog-actions"><button class="button primary" type="submit">Propose exact equivalence</button></div>
+        </form>
+        <div class="identity-projection-list" id="identityProjectionList"></div>
+        <div class="identity-claim-list" id="identityClaimList"></div>
+      </section>
+      <section class="panel community-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Consensus projections</p><h2>Advisory inventory</h2><p>Exact listing, seller, fulfillment, and location scopes must agree. Conflicts quarantine the projection; fewer than three independent users and devices never reaches advisory quorum.</p></div><span class="mode-chip">NEVER EXECUTES</span></div>
+        <div class="community-aggregate-list" id="communityAggregateList"></div>
+      </section>
+      <section class="panel community-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Signed declarative maintenance</p><h2>Observer recipe registry</h2><p>Recipes are CSS selector data for five fixed read-only fields. They cannot contain code, XPath, regex, identity rules, navigation, events, forms, credentials, checkout, or mutations.</p></div><span class="mode-chip" id="observerRegistryKey">KEY UNAVAILABLE</span></div>
+        <form id="observerRecipeForm" class="identity-claim-form">
+          <div class="form-grid">
+            <label><span>Retailer</span><select name="retailerId"></select></label>
+            <label><span>Recipe version</span><input name="recipeVersion" pattern="[a-z0-9][a-z0-9._-]{1,39}" placeholder="amazon-layout-2" required></label>
+            <label><span>Minimum extension version</span><input name="minimumExtensionVersion" pattern="\d+\.\d+\.\d+.*" placeholder="0.13.0" required></label>
+            <label><span>Lifetime</span><select name="lifetimeDays"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option></select></label>
+            <label><span>Rollback recipe ID (optional)</span><input name="rollbackRecipeId" autocomplete="off"></label>
+            <label><span>Provenance reason code</span><input name="provenanceCode" value="sanitized_layout_repair" pattern="[a-z][a-z0-9_]{1,79}" required></label>
+            <label class="wide"><span>Allowlisted field definitions (JSON)</span><textarea name="fieldsJson" spellcheck="false" required>{"availability":{"mode":"text","selectors":["#availability"]}}</textarea></label>
+          </div>
+          <p class="fine-print">New recipes always enter quarantine. Promotion must proceed one stage at a time; canary and trusted-read-only require passing multi-SKU/layout trials with no failures. The packaged observer remains the fallback.</p>
+          <div class="dialog-actions"><button class="button primary" type="submit">Propose quarantined recipe</button></div>
+        </form>
+        <div class="observer-recipe-list" id="observerRecipeList"></div>
+      </section>
+      <section class="panel community-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Your expiring assertions</p><h2>Contribution ledger</h2><p>These rows contain normalized inventory facts only. You can physically delete one store’s rows or your complete contribution ledger.</p></div><button class="button danger" id="deleteAllCommunityButton" type="button">Delete all contributions</button></div>
+        <div class="community-assertion-list" id="communityAssertionList"></div>
+      </section>
+    </section>
+
+    <section class="view" id="view-settings" data-view-panel="settings">
+      <div class="page-heading"><div><p class="eyebrow">Guardrails</p><h1>Settings</h1><p>These values bound deduplication and final order totals. Retailer mutation still requires its independent adapter qualification.</p></div></div>
+      <section class="panel settings-panel">
+        <form id="settingsForm">
+          <div class="form-grid">
+            <label><span>Signal dedupe window</span><div class="money-input"><input name="dedupeWindowSeconds" type="number" min="30" max="3600" required><span>sec</span></div></label>
+            <label><span>Tax reserve</span><div class="money-input"><input name="taxPercent" inputmode="decimal" required><span>%</span></div></label>
+            <label><span>Affiliate fallback behavior</span><select name="affiliateMode"><option value="prefer_fallback">Prefer affiliate, fall back safely</option><option value="require">Require a valid affiliate route</option><option value="disabled">Use canonical retailer URLs</option></select></label>
+            <label><span>Target total allowance</span><div class="money-input"><span>$</span><input name="targetAllowance" inputmode="decimal" required></div></label>
+            <label><span>Walmart total allowance</span><div class="money-input"><span>$</span><input name="walmartAllowance" inputmode="decimal" required></div></label>
+            <label><span>Amazon total allowance</span><div class="money-input"><span>$</span><input name="amazonAllowance" inputmode="decimal" required></div></label>
+            <label><span>Best Buy total allowance</span><div class="money-input"><span>$</span><input name="bestbuyAllowance" inputmode="decimal" required></div></label>
+          </div>
+          <p class="fine-print">The total allowance covers tax and retailer-specific variance; it never raises the item-level price cap.</p>
+          <div class="dialog-actions"><button class="button primary" type="submit">Save guardrails</button></div>
+        </form>
+      </section>
+      <section class="panel settings-panel attribution-settings-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Attribution</p><h2>Affiliate routing</h2><p>Howl routes are constructed dynamically from the exact retailer URL. Amazon Associate tags are safe metadata; volatile offer IDs remain browser-memory only.</p></div></div>
+        <form id="attributionForm">
+          <div class="attribution-policy-editors" id="attributionPolicyEditors"></div>
+          <p class="fine-print">Leave a policy disabled until its values are correct. “Require” in the guardrails above blocks browser mutation when no valid route exists; the opportunity still becomes a notification.</p>
+          <div class="dialog-actions"><button class="button primary" type="submit">Save affiliate routing</button></div>
+        </form>
+      </section>
+    </section>
+
+    <section class="view" id="view-access" data-view-panel="access">
+      <div class="page-heading"><div><p class="eyebrow">Persisted deny-by-default authorization</p><h1>Users and roles</h1><p>Actor labels do not grant privileges. Tenant permissions come from explicit role memberships; device and service capabilities remain independently fixed.</p></div></div>
+      <div class="safety-banner compact"><span class="safety-icon">⌾</span><div><strong>Tenant-scoped administration</strong><p>Cross-tenant user identifiers are treated as not found. Every role grant and revocation is written to the audit and outbox ledgers.</p></div></div>
+      <section class="panel">
+        <div class="panel-heading"><div><p class="eyebrow">Memberships</p><h2>Tenant users</h2></div><span class="mode-chip" id="authorizationGate">CHECKING</span></div>
+        <div class="card-list" id="authorizationUserList"></div>
+      </section>
+      <section class="panel action-delivery-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Permission bundles</p><h2>Built-in roles</h2></div></div>
+        <div class="card-list" id="authorizationRoleList"></div>
+      </section>
+    </section>
+
+    <section class="view" id="view-connections" data-view-panel="connections">
+      <div class="page-heading"><div><p class="eyebrow">Source and executor health</p><h1>Connections</h1><p>Source collection, retailer evidence, qualification, and browser execution remain independently gated.</p></div></div>
+      <div class="connection-grid" id="connectionList"></div>
+      <section class="panel companion-panel">
+        <p class="eyebrow">Primary signal source</p>
+        <div class="panel-heading"><div><h2>TrackaLacker browser push</h2><p>TrackaLacker detects the event and sends Web Push directly to Chrome. Yoink does not poll TrackaLacker for stock changes.</p></div><span class="mode-chip" id="trackalackerGate">NOT CONNECTED</span></div>
+        <div class="inline-status" id="trackalackerConnectionStatus"><span class="status-dot warning"></span><strong>Open the Yoink extension to connect</strong></div>
+        <ol class="pair-steps"><li>Stay signed in to TrackaLacker in Chrome.</li><li>Open the Yoink extension popup.</li><li>Choose <strong>Connect TrackaLacker push</strong> once and allow TrackaLacker page access.</li></ol>
+        <p id="trackalackerConnectionDetail">The extension registers as “Desktop - Windows - Chrome.” Subscription keys remain inside the enrollment request and are never stored by Yoink.</p>
+        <div class="sync-run-list" id="trackalackerSyncRuns"></div>
+      </section>
+      <section class="panel companion-panel">
+        <p class="eyebrow">Chrome executor</p>
+        <h2>Yoink Companion</h2>
+        <p>Pair the browser once with an expiring code. The companion sends an authenticated local heartbeat; retailer page access remains optional and can be revoked in Chrome.</p>
+        <div class="inline-status" id="targetExecutorStatus"><span class="status-dot warning"></span><strong>Retailer add-only gates closed</strong></div>
+        <ol class="pair-steps"><li>Create a one-time code below.</li><li>Open the Yoink extension popup.</li><li>Enter the code within five minutes.</li></ol>
+        <div class="companion-actions"><button class="button primary" id="createPairingButton" type="button">Create pairing code</button><button class="button secondary" id="refreshDevicesButton" type="button">Refresh status</button></div>
+        <div class="pairing-code-panel" id="pairingCodePanel" hidden><span>One-time code</span><strong id="pairingCode"></strong><small id="pairingExpiry"></small><button class="text-button" id="copyPairingCodeButton" type="button">Copy code</button></div>
+        <div class="device-list" id="deviceList"></div>
+        <p class="fine-print">Credentials are displayed only once and stored as hashes by Yoink. Chrome is the only component allowed to execute a qualified retailer action.</p>
+      </section>
+      <section class="panel companion-panel qualification-panel">
+        <p class="eyebrow">Controlled qualification</p>
+        <div class="panel-heading"><div><h2>Target add-only qualification</h2><p>The initial adapter is intentionally narrow: Target-sold, shipping, quantity one, add-to-cart only. Marketplace, pickup, checkout, and order submission stay closed.</p></div><span class="mode-chip" id="targetQualificationGate">GATE CLOSED</span></div>
+        <div id="targetQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateTargetAddButton" type="button" disabled>Enable guarded Target adds</button>
+          <p id="activateTargetAddHelp">Complete the required checks below first.</p>
+        </div>
+        <div id="targetQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel">
+        <p class="eyebrow">Controlled qualification</p>
+        <div class="panel-heading"><div><h2>Walmart add-only qualification</h2><p>This separate adapter is limited to Walmart-sold, explicitly verified shipping, quantity one, add-to-cart only. Marketplace, pickup, checkout, virtual queues, and order submission stay closed.</p></div><span class="mode-chip" id="walmartQualificationGate">GATE CLOSED</span></div>
+        <div id="walmartQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateWalmartAddButton" type="button" disabled>Enable guarded Walmart adds</button>
+          <p id="activateWalmartAddHelp">Complete the required checks below first.</p>
+        </div>
+        <div id="walmartQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel">
+        <p class="eyebrow">Controlled qualification</p>
+        <div class="panel-heading"><div><h2>Amazon add-only qualification</h2><p>This adapter is limited to Amazon.com-sold offers with an exact ephemeral offer binding, explicitly verified shipping, quantity one, and add-to-cart only. Marketplace, pickup, Buy Now, checkout, queues, and order submission stay closed.</p></div><span class="mode-chip" id="amazonQualificationGate">GATE CLOSED</span></div>
+        <div id="amazonQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateAmazonAddButton" type="button" disabled>Enable guarded Amazon adds</button>
+          <p id="activateAmazonAddHelp">Complete the required checks below first.</p>
+        </div>
+        <div id="amazonQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel">
+        <p class="eyebrow">Controlled qualification</p>
+        <div class="panel-heading"><div><h2>Best Buy add-only qualification</h2><p>This adapter is limited to offers explicitly labeled Sold by Best Buy, with shipping selected, quantity one, and add-to-cart only. Marketplace, pickup, high-demand queues, checkout, and order submission stay closed.</p></div><span class="mode-chip" id="bestbuyQualificationGate">GATE CLOSED</span></div>
+        <div id="bestbuyQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateBestBuyAddButton" type="button" disabled>Enable guarded Best Buy adds</button>
+          <p id="activateBestBuyAddHelp">Complete the required checks below first.</p>
+        </div>
+        <div id="bestbuyQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel">
+        <p class="eyebrow">Independent future gates</p>
+        <div class="panel-heading"><div><h2>Pickup, checkout review, and order submission</h2><p>These are twelve separate per-retailer lanes—not extensions of add-only qualification. The matrix records prerequisites and live pickup evidence, but no packaged runner or activation endpoint exists.</p></div><span class="mode-chip">ALL CLOSED</span></div>
+        <div class="retailer-readiness-grid" id="futureMutationLaneList"></div>
+        <p class="fine-print">Prepare-checkout and submit-order strategies remain durable rehearsal records even in live mode. They cannot be leased to Chrome. Remote observer recipes are permanently unable to authorize or implement mutation.</p>
+      </section>
+      <section class="panel companion-panel adapter-repair-panel">
+        <p class="eyebrow">Automatic diagnostics</p>
+        <div class="panel-heading"><div><h2>Adapter repair queue</h2><p>Extension inspections, observer startup, rehearsals, and guarded live adds report allowlisted failures immediately. Yoink groups matching structural layouts and marks a group recovered after that layout passes.</p></div><span class="mode-chip" id="adapterRepairGate">CLEAR</span></div>
+        <div class="adapter-repair-summary" id="adapterRepairSummary"></div>
+        <div class="adapter-repair-list" id="adapterRepairList"></div>
+        <p class="fine-print">Stored diagnostics contain bounded counts and enums only—never page HTML or text, offer tokens, cookies, CSRF values, addresses, or account data.</p>
+      </section>
+      <section class="panel companion-panel shadow-evidence-panel">
+        <p class="eyebrow">Read-only evidence</p>
+        <div class="panel-heading"><div><h2>Retailer browser evidence</h2><p>Each row came from one explicit extension inspection. Target, Walmart, Amazon, and Best Buy evidence can qualify only their separate guarded lanes; nine additional stores remain read-only. An observation alone never authorizes an action.</p></div><span class="mode-chip">SANITIZED</span></div>
+        <div class="retailer-readiness-grid" id="retailerReadinessList"></div>
+        <div class="shadow-evidence-list" id="targetShadowList"></div>
+      </section>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <dialog id="listingDialog">
+    <form id="listingForm">
+      <div class="dialog-heading"><div><p class="eyebrow">Catalog evidence</p><h2>Add exact listing</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="form-grid">
+        <label><span>Source connection</span><select name="sourceConnectionId" id="listingSourceConnection"></select></label>
+        <label><span>Source product ID</span><input name="sourceProductId" required></label>
+        <label><span>Source listing ID</span><input name="sourceListingId" required></label>
+        <label class="wide"><span>Exact product title</span><input name="title" required></label>
+        <label><span>Retailer</span><select name="retailerId"><option value="target">Target</option><option value="walmart">Walmart</option><option value="amazon">Amazon</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option></select></label>
+        <label><span>Retailer SKU</span><input name="retailerSku" required></label>
+        <label class="wide"><span>Canonical retailer URL</span><input name="canonicalUrl" type="url" required></label>
+        <label><span>Availability</span><select name="listingStatus"><option value="out_of_stock">Out of stock</option><option value="in_stock">In stock</option><option value="preorder">Preorder</option><option value="unknown">Unknown</option></select></label>
+        <label><span>MSRP</span><div class="money-input"><span>$</span><input name="msrp" inputmode="decimal" placeholder="69.99"></div></label>
+        <label class="check-label"><input name="executionSupported" type="checkbox"><span>Retailer adapter is executable</span></label>
+      </div>
+      <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save listing</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="strategyDialog">
+    <form id="strategyForm">
+      <input name="id" type="hidden">
+      <input name="revision" type="hidden">
+      <div class="dialog-heading"><div><p class="eyebrow">Ordered decision policy</p><h2 id="strategyDialogTitle">Add strategy</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="form-grid">
+        <label class="wide"><span>Name</span><input name="name" maxlength="100" required></label>
+        <label><span>Priority position</span><input name="position" type="number" min="1" max="10000" required></label>
+        <label><span>Price maximum</span><select name="priceKind"><option value="below_msrp">Below MSRP</option><option value="at_or_below_msrp">MSRP or lower</option><option value="slightly_above_msrp">Slightly above MSRP</option><option value="absolute_max">Absolute maximum</option><option value="above_msrp">Above MSRP with cap</option><option value="any">Any price (Notify unless mission has cap)</option></select></label>
+        <label><span>Absolute maximum</span><div class="money-input"><span>$</span><input name="maxPrice" inputmode="decimal" placeholder="79.99"></div></label>
+        <label><span>Slightly-above tolerance</span><div class="money-input"><input name="tolerancePercent" inputmode="decimal" value="10"><span>%</span></div></label>
+        <label><span>Seller policy</span><select name="sellerPolicy"><option value="first_party_only">First party only</option><option value="allow_third_party">Allow third party</option></select></label>
+        <label class="wide"><span>Allowed seller names (comma separated; blank = any seller allowed by policy)</span><input name="allowedSellers" placeholder="Amazon.com, Target"></label>
+        <label><span>Action</span><select name="action"><option value="notify">Notify</option><option value="add_to_cart">Add to cart</option><option value="prepare_checkout">Prepare checkout</option><option value="submit_order">Submit order</option></select></label>
+        <label><span>Quantity</span><select name="quantity"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option value="max">Max allowed</option></select></label>
+        <label><span>Fulfillment</span><select name="fulfillment"><option value="shipping">Shipping</option><option value="pickup">Pickup</option><option value="either">Either</option><option value="manual">Manual review</option></select></label>
+        <label><span>Maximum signal age</span><div class="money-input"><input name="maxSignalAgeSeconds" type="number" min="10" max="3600" value="120"><span>sec</span></div></label>
+        <fieldset class="wide selection-field"><legend>Sources (none selected = all)</legend><div class="choice-grid" id="strategySourceOptions"></div></fieldset>
+        <fieldset class="wide selection-field"><legend>Stores (none selected = all)</legend><div class="choice-grid" id="strategyRetailerOptions">
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="target"><span>Target</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="walmart"><span>Walmart</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="amazon"><span>Amazon</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="bestbuy"><span>Best Buy</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="disney"><span>Disney Store</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="ravensburger"><span>Ravensburger</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="riot"><span>Riot Games Merch</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="booksamillion"><span>Books-A-Million</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="fanatics"><span>Fanatics</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="kohls"><span>Kohl's</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="macys"><span>Macy's</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="pbandai"><span>Premium Bandai</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="pokemoncenter"><span>Pokémon Center</span></label>
+        </div></fieldset>
+        <label class="wide"><span>Include keywords</span><textarea name="includeKeywords" rows="2" placeholder="pokemon + &quot;elite trainer box&quot; | 'booster bundle'"></textarea></label>
+        <label class="wide"><span>Exclude keywords</span><textarea name="excludeKeywords" rows="2" placeholder="used | refurbished | &quot;open box&quot;"></textarea></label>
+        <label class="check-label"><input name="enabled" type="checkbox" checked><span>Strategy enabled</span></label>
+      </div>
+      <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save strategy</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="missionDialog">
+    <form id="missionForm">
+      <input name="id" type="hidden">
+      <div class="dialog-heading"><div><p class="eyebrow">Exact product intent</p><h2 id="missionDialogTitle">Edit mission</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="form-grid">
+        <label><span>Status</span><select name="status"><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option><option value="archived">Archived</option></select></label>
+        <label><span>Desired total quantity</span><input name="targetQuantity" type="number" min="1" max="99" required></label>
+      </div>
+      <div class="mission-target-editors" id="missionTargetEditors"></div>
+      <p class="fine-print">A store can be disabled without deleting its catalog relationship. A target cap can only tighten the winning strategy cap.</p>
+      <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save mission</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="signalDialog">
+    <form id="signalForm">
+      <div class="dialog-heading"><div><p class="eyebrow">Production pipeline, dry-run optional</p><h2>Send source-neutral signal</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="form-grid">
+        <label><span>Source connection</span><select name="sourceConnectionId" id="signalSourceConnection"></select></label>
+        <label><span>Event type</span><select name="eventType"><option value="restock">Restock</option><option value="preorder">Preorder</option><option value="in_stock">In stock</option><option value="price_change">Price change</option></select></label>
+        <label><span>External event ID</span><input name="externalEventId" required></label>
+        <label><span>Source product ID</span><input name="sourceProductId"></label>
+        <label><span>Source listing ID</span><input name="sourceListingId"></label>
+        <label><span>Retailer</span><select name="retailerId"><option value="amazon">Amazon</option><option value="target">Target</option><option value="walmart">Walmart</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option></select></label>
+        <label><span>Retailer SKU</span><input name="retailerSku"></label>
+        <label class="wide"><span>Exact product title</span><input name="title" required></label>
+        <label class="wide"><span>Canonical URL (required for a brand-new exact listing)</span><input name="canonicalUrl" type="url"></label>
+        <label><span>Signal price</span><div class="money-input"><span>$</span><input name="price" inputmode="decimal"></div></label>
+        <label><span>Availability</span><select name="availability"><option value="in_stock">In stock</option><option value="preorder">Preorder</option><option value="out_of_stock">Out of stock</option></select></label>
+        <label><span>Seller</span><input name="sellerName" placeholder="Amazon.com"></label>
+        <label><span>Seller type</span><select name="sellerType"><option value="unknown">Unknown</option><option value="first_party">First party</option><option value="third_party">Third party</option></select></label>
+        <label><span>Order limit</span><input name="orderLimit" type="number" min="1" max="99"></label>
+        <label><span>Fulfillment</span><select name="fulfillment"><option value="unknown">Unknown</option><option value="shipping">Shipping</option><option value="pickup">Pickup</option><option value="either">Either</option></select></label>
+        <label class="wide"><span>Amazon offer ID (ephemeral, never stored)</span><input name="offerId" autocomplete="off"></label>
+        <label class="check-label"><input name="test" type="checkbox" checked><span>Dry-run connectivity test</span></label>
+      </div>
+      <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Send signal</button></div>
+    </form>
+  </dialog>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "yoink",
+  "version": "0.19.0",
+  "private": true,
+  "type": "module",
+  "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",
+  "scripts": {
+    "dev": "tsx apps/api/src/server.ts",
+    "build": "npm run build:extension && npm run build:types",
+    "build:extension": "esbuild apps/extension/src/target-shadow.ts --bundle --format=iife --global-name=YoinkTargetShadowModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/target-shadow.js && esbuild apps/extension/src/target-action.ts --bundle --format=iife --global-name=YoinkTargetActionModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/target-action.js && esbuild apps/extension/src/retailer-shadow.ts --bundle --format=iife --global-name=YoinkRetailerShadowModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/retailer-shadow.js && esbuild apps/extension/src/walmart-action.ts --bundle --format=iife --global-name=YoinkWalmartActionModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/walmart-action.js && esbuild apps/extension/src/amazon-action.ts --bundle --format=iife --global-name=YoinkAmazonActionModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/amazon-action.js && esbuild apps/extension/src/bestbuy-action.ts --bundle --format=iife --global-name=YoinkBestBuyActionModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/bestbuy-action.js && esbuild apps/extension/src/trackalacker-sync.ts --bundle --format=iife --global-name=YoinkTrackalackerSyncModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/trackalacker-sync.js",
+    "build:types": "tsc -p tsconfig.build.json",
+    "start": "node dist/apps/api/src/server.js",
+    "check": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts",
+    "verify": "npm run check && npm run build && npm test",
+    "package:extension": "npm run build:extension && node scripts/package-extension.mjs",
+    "portability": "npm run build:types && node scripts/portability.mjs"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "esbuild": "^0.28.2",
+    "jsdom": "^26.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}

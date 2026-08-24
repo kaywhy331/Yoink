@@ -1,0 +1,48 @@
+<!doctype html><body><main>
+  <div id="desktop_buybox" data-feature-name="desktop_buybox">
+    <div id="buybox">
+      <form id="addToCart" action="/gp/product/handle-buy-box">
+        <input name="items[0.base][asin]" type="hidden" value="B0DCGQ6CJD">
+        <input name="items[0.base][offerListingId]" type="hidden" value="FIXTURE_ODF_FIRST_PARTY_OFFER">
+        <style>
+          /* Amazon includes this non-evidence text in the live buy box. */
+          .quantity-discount-message { display: none; }
+          /* Only display on the qualified buy box, excluding pickup and other buy boxes. */
+        </style>
+        <div id="corePrice_feature_div"><span class="a-offscreen">$10.60</span></div>
+        <div id="deliveryBlock_feature_div" data-feature-name="deliveryBlock">Deliver to 98101</div>
+        <div id="prime-promotion">Join Prime for fast, free delivery</div>
+        <div id="addToCart_feature_div" data-feature-name="addToCart">
+          <div class="buybox-layer-01"><div class="buybox-layer-02"><div class="buybox-layer-03">
+            <div class="buybox-layer-04"><div class="buybox-layer-05"><div class="buybox-layer-06">
+              <div class="buybox-layer-07"><div class="buybox-layer-08"><div class="buybox-layer-09">
+                <div class="buybox-layer-10"><div class="buybox-layer-11"><div class="buybox-layer-12">
+                  <div class="buybox-layer-13"><div class="buybox-layer-14"><div class="buybox-layer-15">
+                    <div class="a-button-stack"><span id="atc-declarative"><span id="submit.add-to-cart"><span class="a-button-inner">
+                      <input id="add-to-cart-button" name="submit.add-to-cart" type="submit" value="Add to cart">
+                    </span></span></span></div>
+                  </div></div></div>
+                </div></div></div>
+              </div></div></div>
+            </div></div></div>
+          </div></div></div>
+        </div>
+        <div id="merchantInfoFeature_feature_div" data-feature-name="merchantInfoFeature">
+          <div class="offer-display-feature-label" offer-display-feature-name="desktop-merchant-info">
+            <span>Shipper / Seller</span>
+          </div>
+          <div class="offer-display-feature-text" offer-display-feature-name="desktop-merchant-info">
+            <span class="offer-display-feature-text-message">Amazon.com</span>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  <section id="secondary-same-asin-offer">
+    <form action="/gp/product/handle-buy-box">
+      <input name="items[0.base][asin]" type="hidden" value="B0DCGQ6CJD">
+      <input name="items[0.base][offerListingId]" type="hidden" value="FIXTURE_SECONDARY_SAME_ASIN_OFFER">
+      <input class="a-button-input" type="submit" value="Add to cart">
+    </form>
+  </section>
+</main></body>

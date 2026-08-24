@@ -1,0 +1,1339 @@
+const state = {
+  snapshot: null,
+  view: "overview",
+  editingStrategyId: "",
+  editingMission: null,
+  settingsDirty: false,
+  attributionDirty: false,
+  identityDirty: false,
+  observerRecipeDirty: false,
+  pairing: null,
+  libraryItems: [],
+  libraryTotal: 0,
+  libraryQuery: "",
+  missionItems: [],
+  missionTotal: 0,
+  missionQuery: "",
+  auditItems: [],
+  auditTotal: 0,
+  auditQuery: "",
+  signalItems: [],
+  signalTotal: 0,
+  signalQuery: "",
+  jobItems: [],
+  jobTotal: 0,
+  jobQuery: "",
+  authorizationUsers: [],
+  authorizationRoles: []
+};
+const COLLECTION_PAGE_SIZE = 200;
+const RETAILER_NAMES = Object.freeze({
+  target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "Best Buy",
+  disney: "Disney Store", ravensburger: "Ravensburger", riot: "Riot Games Merch",
+  booksamillion: "Books-A-Million", fanatics: "Fanatics", kohls: "Kohl's", macys: "Macy's",
+  pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center"
+});
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+function retailerName(value) {
+  const id = String(value || "");
+  return RETAILER_NAMES[id] || `${id.slice(0, 1).toUpperCase()}${id.slice(1)}` || "Unknown retailer";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", "\"": "&quot;"
+  })[character]);
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.message || `Yoink request failed with HTTP ${response.status}.`);
+  return payload;
+}
+
+let toastTimer;
+function toast(message, error = false) {
+  const element = $("#toast");
+  element.textContent = message;
+  element.classList.toggle("error", error);
+  element.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => element.classList.remove("show"), 4200);
+}
+
+function formatMoney(cents, currency = "USD") {
+  if (!Number.isFinite(Number(cents))) return "Not set";
+  return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(cents) / 100);
+}
+
+function relativeTime(value) {
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return "Unknown time";
+  const seconds = Math.round((time - Date.now()) / 1000);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (Math.abs(seconds) < 60) return formatter.format(seconds, "second");
+  const minutes = Math.round(seconds / 60);
+  if (Math.abs(minutes) < 60) return formatter.format(minutes, "minute");
+  const hours = Math.round(minutes / 60);
+  if (Math.abs(hours) < 24) return formatter.format(hours, "hour");
+  return formatter.format(Math.round(hours / 24), "day");
+}
+
+function statusDot(kind = "good") { return `<span class="status-dot ${kind}"></span>`; }
+function empty(message) { return `<div class="empty">${escapeHtml(message)}</div>`; }
+
+function setView(view) {
+  state.view = view;
+  $$("[data-view-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.viewPanel === view));
+  $$(".nav-button").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
+  history.replaceState(null, "", `#${view}`);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function renderStatus() {
+  const { settings, capabilities } = state.snapshot;
+  const toggle = $("#actionsToggle");
+  toggle.textContent = settings.actionsPaused ? "Actions paused" : "Actions enabled";
+  toggle.classList.toggle("enabled", !settings.actionsPaused);
+  const targetQualified = capabilities.targetAddQualified === true;
+  const walmartQualified = capabilities.walmartAddQualified === true;
+  const amazonQualified = capabilities.amazonAddQualified === true;
+  const bestBuyQualified = capabilities.bestBuyAddQualified === true;
+  const targetActive = capabilities.targetAddMutationAuthorized === true;
+  const walmartActive = capabilities.walmartAddMutationAuthorized === true;
+  const amazonActive = capabilities.amazonAddMutationAuthorized === true;
+  const bestBuyActive = capabilities.bestBuyAddMutationAuthorized === true;
+  toggle.disabled = settings.actionsPaused && !targetQualified && !walmartQualified && !amazonQualified && !bestBuyQualified;
+  toggle.title = toggle.disabled ? "Complete at least one retailer add-only qualification before enabling actions." : "Pause or resume qualified action jobs.";
+  $("#modeChip").textContent = `${settings.executionMode[0].toUpperCase()}${settings.executionMode.slice(1)} mode`;
+  $("#heroStatus").innerHTML = `
+    <div class="hero-status-row"><span>${statusDot("good")} Local control plane</span><strong>Ready</strong></div>
+    <div class="hero-status-row"><span>${statusDot(settings.actionsPaused ? "warning" : "good")} Actions</span><strong>${settings.actionsPaused ? "Paused" : "Enabled"}</strong></div>
+    <div class="hero-status-row"><span>${statusDot("good")} Signal engine</span><strong>Listening</strong></div>
+    <div class="hero-status-row"><span>${statusDot(state.snapshot.trackalacker?.ready ? "good" : "warning")} TrackaLacker push</span><strong>${state.snapshot.trackalacker?.ready ? "Connected" : "Not connected"}</strong></div>
+    <div class="hero-status-row"><span>${statusDot(state.snapshot.counts.onlineDevices ? "good" : "warning")} Chrome companion</span><strong>${state.snapshot.counts.onlineDevices ? "Online" : "Not paired"}</strong></div>
+    <div class="hero-status-row"><span>${statusDot(capabilities.targetReadOnlyShadow ? "good" : "warning")} Target shadow observer</span><strong>${capabilities.targetReadOnlyShadow ? "Read only" : "Unavailable"}</strong></div>
+    <div class="hero-status-row"><span>${statusDot(targetActive ? "good" : "warning")} Target add-only</span><strong>${targetActive ? "Active" : targetQualified ? "Qualified · paused" : "Gate closed"}</strong></div>
+    <div class="hero-status-row"><span>${statusDot(walmartActive ? "good" : "warning")} Walmart add-only</span><strong>${walmartActive ? "Active" : walmartQualified ? "Qualified · paused" : "Gate closed"}</strong></div>
+    <div class="hero-status-row"><span>${statusDot(amazonActive ? "good" : "warning")} Amazon add-only</span><strong>${amazonActive ? "Active" : amazonQualified ? "Qualified · paused" : "Gate closed"}</strong></div>
+    <div class="hero-status-row"><span>${statusDot(bestBuyActive ? "good" : "warning")} Best Buy add-only</span><strong>${bestBuyActive ? "Active" : bestBuyQualified ? "Qualified · paused" : "Gate closed"}</strong></div>`;
+  const activeStores = [targetActive ? "Target" : "", walmartActive ? "Walmart" : "", amazonActive ? "Amazon" : "", bestBuyActive ? "Best Buy" : ""].filter(Boolean);
+  $("#safetyTitle").textContent = activeStores.length ? `Guarded ${activeStores.join(" and ")} adds are active` : "Qualification-gated execution";
+  $("#safetyCopy").textContent = activeStores.length
+    ? `Chrome may add one exact first-party shipping item at ${activeStores.join(" or ")} to a provably empty cart after fresh seller, price, stock, and fulfillment checks. Checkout and ordering remain disabled.`
+    : "Target, Walmart, Amazon, and Best Buy add-only lanes remain independently closed until their live evidence, no-click rehearsal, and explicit activation gates are complete.";
+  const executorKind = targetActive || walmartActive || amazonActive || bestBuyActive ? "good" : "warning";
+  const targetState = targetActive ? "Target active" : targetQualified ? "Target qualified · paused" : "Target closed";
+  const walmartState = walmartActive ? "Walmart active" : walmartQualified ? "Walmart qualified · paused" : "Walmart closed";
+  const amazonState = amazonActive ? "Amazon active" : amazonQualified ? "Amazon qualified · paused" : "Amazon closed";
+  const bestBuyState = bestBuyActive ? "Best Buy active" : bestBuyQualified ? "Best Buy qualified · paused" : "Best Buy closed";
+  $("#targetExecutorStatus").innerHTML = `<span class="status-dot ${executorKind}"></span><strong>${targetState} · ${walmartState} · ${amazonState} · ${bestBuyState}</strong>`;
+}
+
+function renderMetrics() {
+  const counts = state.snapshot.counts;
+  const metrics = [
+    ["Variants", counts.variants, "One exact product intent"],
+    ["Listings", counts.listings, `${counts.catalogOnlyListings} catalog-only`],
+    ["Missions", counts.missions, "Retailer routes grouped"],
+    ["Signals", counts.signals, `${counts.openIncidents} open incidents`],
+    ["Action jobs", counts.actionJobs, `${counts.pendingNotifications || 0} notifications pending`],
+    ["Source products", state.snapshot.trackalacker?.mappedProducts || 0, `${state.snapshot.trackalacker?.candidateListings || 0} source listings captured`]
+  ];
+  $("#metricGrid").innerHTML = metrics.map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong><small>${escapeHtml(note)}</small></article>`).join("");
+}
+
+function renderReadinessGuide() {
+  const snapshot = state.snapshot;
+  const capabilities = snapshot.capabilities || {};
+  const trackalacker = snapshot.trackalacker || {};
+  const counts = snapshot.counts || {};
+  const purchaseStrategies = (snapshot.strategies || []).filter((strategy) => strategy.enabled && strategy.action !== "notify");
+  const checks = [
+    {
+      label: "Chrome companion",
+      done: Number(counts.onlineDevices || 0) > 0,
+      detail: Number(counts.onlineDevices || 0) > 0 ? "Paired and online" : "Pair Chrome with one code",
+      view: "connections"
+    },
+    {
+      label: "TrackaLacker push",
+      done: trackalacker.ready === true,
+      detail: trackalacker.ready === true ? "Receiving without stock polling" : "Connect once from the extension",
+      view: "connections"
+    },
+    {
+      label: "Followed library",
+      done: Number(trackalacker.mappedProducts || 0) > 0,
+      detail: Number(trackalacker.mappedProducts || 0) > 0
+        ? `${Number(trackalacker.mappedProducts).toLocaleString()} products mapped`
+        : "Run one full followed-library sync",
+      view: "library"
+    },
+    {
+      label: "Signal strategy",
+      done: (snapshot.strategies || []).some((strategy) => strategy.enabled),
+      detail: purchaseStrategies.length
+        ? `${purchaseStrategies.length} purchase rule${purchaseStrategies.length === 1 ? "" : "s"} enabled`
+        : "Catchall notifications active; add a purchase rule when ready",
+      view: "strategies"
+    },
+    {
+      label: "Guarded Target action",
+      done: capabilities.targetAddMutationAuthorized === true && snapshot.settings.actionsPaused !== true,
+      detail: capabilities.targetAddMutationAuthorized !== true
+        ? "Qualification or activation still closed"
+        : snapshot.settings.actionsPaused ? "Qualified, but globally paused" : "Add-only execution active",
+      view: "connections"
+    },
+    {
+      label: "Guarded Walmart action",
+      done: capabilities.walmartAddMutationAuthorized === true && snapshot.settings.actionsPaused !== true,
+      detail: capabilities.walmartAddMutationAuthorized !== true
+        ? "Qualification or activation still closed"
+        : snapshot.settings.actionsPaused ? "Qualified, but globally paused" : "Add-only execution active",
+      view: "connections"
+    },
+    {
+      label: "Guarded Amazon action",
+      done: capabilities.amazonAddMutationAuthorized === true && snapshot.settings.actionsPaused !== true,
+      detail: capabilities.amazonAddMutationAuthorized !== true
+        ? "Qualification or activation still closed"
+        : snapshot.settings.actionsPaused ? "Qualified, but globally paused" : "Add-only execution active",
+      view: "connections"
+    },
+    {
+      label: "Guarded Best Buy action",
+      done: capabilities.bestBuyAddMutationAuthorized === true && snapshot.settings.actionsPaused !== true,
+      detail: capabilities.bestBuyAddMutationAuthorized !== true
+        ? "Qualification or activation still closed"
+        : snapshot.settings.actionsPaused ? "Qualified, but globally paused" : "Add-only execution active",
+      view: "connections"
+    }
+  ];
+  const intakeReady = checks[0].done && checks[1].done;
+  const automaticReady = intakeReady && (checks[4].done || checks[5].done || checks[6].done || checks[7].done) && purchaseStrategies.length > 0;
+  $("#readinessGate").textContent = automaticReady ? "AUTO READY" : intakeReady ? "SIGNALS READY" : "SETUP NEEDED";
+  $("#readinessSummary").textContent = automaticReady
+    ? "Real signals can resolve into a guarded Target, Walmart, Amazon, or Best Buy add job when your first matching strategy qualifies them."
+    : intakeReady
+      ? "Real signals can flow now. Notifications work; purchase actions remain bounded by independent retailer gates and your ordered strategies."
+      : "Complete the first unfinished item below. No separate Signals start switch is required.";
+  $("#readinessGuide").innerHTML = checks.map((check) => `<article class="readiness-step ${check.done ? "done" : ""}">
+    <span class="readiness-mark">${check.done ? "✓" : "○"}</span><div><h3>${escapeHtml(check.label)}</h3><p>${escapeHtml(check.detail)}</p></div><button class="text-button" data-open-view="${escapeHtml(check.view)}" type="button">${check.done ? "Review" : "Set up"}</button>
+  </article>`).join("");
+}
+
+function signalMarkup(signal) {
+  const decision = signal.missionDecision || signal.resolutionStatus || "recorded";
+  const kind = ["qualified", "corroborated"].includes(decision) ? "good" : ["test_signal", "actions_paused", "needs_price"].includes(decision) ? "warning" : "";
+  return `<article class="timeline-item">
+    ${statusDot(kind || "warning")}
+    <div><h3>${escapeHtml(signal.title || signal.signalId || "Unresolved signal")}</h3>
+      <p>${escapeHtml(signal.retailerId || "Unknown retailer")} · ${escapeHtml(signal.retailerSku || "No exact SKU")} · ${formatMoney(signal.unitPriceCents, signal.currency || "USD")}</p>
+      <span class="decision-pill">${escapeHtml(decision.replaceAll("_", " "))}</span>
+      <p>${escapeHtml(signal.missionReason || signal.resolutionReason || "Recorded")}</p>
+    </div><time>${escapeHtml(relativeTime(signal.observedAt))}</time>
+  </article>`;
+}
+
+function renderSignals() {
+  const signals = state.signalItems;
+  $("#recentSignals").innerHTML = signals.length ? signals.slice(0, 6).map(signalMarkup).join("") : empty("No signals received yet. Send a dry-run signal to exercise the pipeline.");
+  $("#signalList").innerHTML = signals.length ? signals.map(signalMarkup).join("") : empty("No opportunities yet.");
+  $("#signalCount").textContent = `${signals.length.toLocaleString()} of ${Number(state.signalTotal || 0).toLocaleString()} matching opportunities`;
+  $("#signalMoreButton").hidden = signals.length >= state.signalTotal;
+}
+
+function renderSources() {
+  const sources = state.snapshot.sources || [];
+  const rows = sources.map((source) => `<div class="status-row"><span>${statusDot(source.status === "connected" ? "good" : "warning")} ${escapeHtml(source.name)}</span><small>${escapeHtml(source.status)}</small></div>`).join("");
+  $("#sourceSummary").innerHTML = rows || empty("No source connections configured.");
+  $("#connectionList").innerHTML = sources.map((source) => {
+    const signals = Number(source.signalCount || 0);
+    const matchRate = source.matchRatePercent == null ? "No reliability sample" : `${Number(source.matchRatePercent).toFixed(Number(source.matchRatePercent) % 1 ? 1 : 0)}% exact identity`;
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(source.name)}</h3><p>${escapeHtml(source.source)} · ${escapeHtml(source.trustLevel)}</p></div>${statusDot(source.status === "connected" ? "good" : "warning")}</div><div class="card-meta"><span class="tag ${source.autoCreateMissions ? "good" : ""}">${source.autoCreateMissions ? "Can create missions" : "Existing missions only"}</span><span class="tag">${signals.toLocaleString()} real signals</span><span class="tag ${signals && Number(source.matchRatePercent) === 100 ? "good" : ""}">${escapeHtml(matchRate)}</span><span class="tag">${Number(source.corroboratedSignalCount || 0).toLocaleString()} corroborated</span><span class="tag">${Number(source.unresolvedSignalCount || 0).toLocaleString()} unresolved</span><span class="tag">${escapeHtml(source.lastEventAt ? relativeTime(source.lastEventAt) : "No events")}</span></div></article>`;
+  }).join("") || empty("No connections configured.");
+  const options = sources.map((source) => `<option value="${escapeHtml(source.id)}" data-source="${escapeHtml(source.source)}">${escapeHtml(source.name)}</option>`).join("");
+  $("#listingSourceConnection").innerHTML = options;
+  $("#signalSourceConnection").innerHTML = options;
+  if (!$("#strategyDialog").open) {
+    $("#strategySourceOptions").innerHTML = sources.map((source) => `<label class="check-label"><input data-strategy-source type="checkbox" value="${escapeHtml(source.source)}"><span>${escapeHtml(source.name)}</span></label>`).join("");
+  }
+  const trackalacker = state.snapshot.trackalacker || {};
+  const trackalackerReady = trackalacker.ready === true;
+  $("#trackalackerGate").textContent = trackalackerReady ? "CONNECTED" : String(trackalacker.state || "NOT CONNECTED").replaceAll("_", " ").toUpperCase();
+  $("#trackalackerConnectionStatus").innerHTML = `<span class="status-dot ${trackalackerReady ? "good" : trackalacker.state === "error" ? "bad" : "warning"}"></span><strong>${trackalackerReady ? "Chrome is receiving TrackaLacker push" : trackalacker.state === "error" ? "Connection needs attention" : "Open the Yoink extension to connect"}</strong>`;
+  const latest = trackalacker.devices?.[0];
+  $("#trackalackerConnectionDetail").textContent = trackalackerReady
+    ? `${Number(trackalacker.mappedProducts || 0).toLocaleString()} followed products and ${Number(trackalacker.candidateListings || 0).toLocaleString()} source listings are mapped. ${latest?.lastNotificationAt ? `Last push ${relativeTime(latest.lastNotificationAt)}.` : "Waiting for the first real push."}`
+    : "The extension registers as “Desktop - Windows - Chrome.” Subscription keys remain inside the enrollment request and are never stored by Yoink.";
+  const syncRuns = trackalacker.syncRuns || [];
+  $("#trackalackerSyncRuns").innerHTML = syncRuns.length ? syncRuns.slice(0, 5).map((run) => {
+    const kind = run.phase === "complete" ? "good" : run.phase === "error" ? "bad" : "warning";
+    return `<article class="sync-run"><div><strong>${statusDot(kind)} Library sync · ${escapeHtml(String(run.phase).replaceAll("_", " "))}</strong><p>${Number(run.imported || 0).toLocaleString()} imported · ${Number(run.failed || 0).toLocaleString()} failed · ${Number(run.itemReceiptCount || 0).toLocaleString()} durable item receipts</p></div><time>${escapeHtml(relativeTime(run.updatedAt))}</time></article>`;
+  }).join("") : "";
+}
+
+function renderDevices() {
+  const devices = state.snapshot.devices || [];
+  const pairing = state.pairing;
+  const pairingActive = pairing && new Date(pairing.expiresAt).getTime() > Date.now();
+  $("#pairingCodePanel").hidden = !pairingActive;
+  if (pairingActive) {
+    $("#pairingCode").textContent = pairing.code;
+    $("#pairingExpiry").textContent = `Expires ${relativeTime(pairing.expiresAt)}. Creating another code invalidates this one.`;
+  } else {
+    state.pairing = null;
+  }
+  $("#deviceList").innerHTML = devices.length ? devices.map((device) => `<article class="device-row"><div><h3>${statusDot(device.online ? "good" : device.status === "revoked" ? "bad" : "warning")} ${escapeHtml(device.name)}</h3><p>${escapeHtml(device.platform || "Chrome")} · extension ${escapeHtml(device.extensionVersion || "unknown")} · ${escapeHtml(device.lastSeenAt ? `seen ${relativeTime(device.lastSeenAt)}` : "never seen")}</p></div>${device.status === "active" ? `<button class="button danger" data-device-revoke="${escapeHtml(device.id)}" type="button">Revoke</button>` : '<span class="tag bad">Revoked</span>'}</article>`).join("") : empty("No Chrome companion is paired yet.");
+}
+
+function renderShadowObservations() {
+  const readiness = state.snapshot.retailerEvidence || [];
+  $("#retailerReadinessList").innerHTML = readiness.map((item) => {
+    const name = retailerName(item.retailerId);
+    const mode = item.mode === "guarded_add" ? "Guarded add lane" : "Read-only observer";
+    const routeEvidence = item.retailerId === "amazon"
+      ? ` · ${Number(item.purchaseRouteReadyCount || 0).toLocaleString()} ephemeral offer bindings verified`
+      : "";
+    return `<article class="retailer-readiness-card"><h3>${statusDot(item.observationCount ? "good" : "warning")} ${escapeHtml(name)}</h3><p>${escapeHtml(mode)} · ${Number(item.observationCount || 0).toLocaleString()} observations · ${Number(item.distinctSkuCount || 0).toLocaleString()} SKUs<br>${Number(item.actionableCandidateCount || 0).toLocaleString()} complete candidates${escapeHtml(routeEvidence)} · ${item.latestObservedAt ? escapeHtml(`latest ${relativeTime(item.latestObservedAt)}`) : "none captured"}</p></article>`;
+  }).join("");
+  const observations = state.snapshot.shadowObservations || [];
+  $("#targetShadowList").innerHTML = observations.length ? observations.map((observation) => {
+    const kind = observation.observationState === "actionable_candidate" ? "good"
+      : observation.observationState === "manual_block" ? "bad" : "warning";
+    const routeTag = observation.retailerId === "amazon"
+      ? `<span class="tag ${observation.purchaseRouteReady ? "good" : "warning"}">${observation.purchaseRouteReady ? "Offer binding verified" : escapeHtml(String(observation.routeReasonCode || "binding unavailable").replaceAll("_", " "))}</span>`
+      : "";
+    return `<article class="shadow-evidence-row">
+      <div>${statusDot(kind)}<div><h3>${escapeHtml(retailerName(observation.retailerId))} · SKU ${escapeHtml(observation.retailerSku)}</h3><p>${escapeHtml(String(observation.availability).replaceAll("_", " "))} · ${formatMoney(observation.unitPriceCents, observation.currency)} · ${escapeHtml(observation.sellerName || "Seller unknown")} · ${escapeHtml(observation.fulfillment)}</p></div></div>
+      <div class="shadow-evidence-meta"><span class="tag ${kind}">${escapeHtml(String(observation.observationState).replaceAll("_", " "))}</span>${routeTag}<time>${escapeHtml(relativeTime(observation.observedAt))}</time></div>
+      <a class="canonical-link" href="${escapeHtml(observation.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(observation.canonicalUrl)}</a>
+    </article>`;
+  }).join("") : empty("No retailer page has been inspected yet. Open an exact product page and use the extension’s read-only inspection button.");
+}
+
+function renderAdapterRepairQueue() {
+  const queue = state.snapshot.adapterRepairQueue || [];
+  const open = Number(state.snapshot.counts.openAdapterRepairGroups || 0);
+  const recovered = Number(state.snapshot.counts.recoveredAdapterRepairGroups || 0);
+  const events = Number(state.snapshot.counts.adapterDiagnosticEvents || 0);
+  const gate = $("#adapterRepairGate");
+  gate.textContent = open ? `${open} OPEN` : events ? "MONITORING" : "CLEAR";
+  gate.classList.toggle("danger", open > 0);
+  $("#adapterRepairSummary").innerHTML = `<strong>${open.toLocaleString()} open repair group${open === 1 ? "" : "s"}</strong><span>${events.toLocaleString()} sanitized events · ${recovered.toLocaleString()} recovered groups</span>`;
+  $("#adapterRepairList").innerHTML = queue.length ? queue.map((item) => {
+    const isOpen = item.status === "open";
+    const retailer = retailerName(item.retailerId);
+    const operation = String(item.operation || "observe").replaceAll("_", " ");
+    const stage = String(item.failureStage || "unknown").replaceAll("_", " ");
+    const reason = String(item.reasonCode || "unknown").replaceAll("_", " ");
+    const fingerprint = String(item.layoutFingerprint || "").slice(0, 12);
+    return `<article class="adapter-repair-row ${isOpen ? "open" : "recovered"}">
+      <div>${statusDot(isOpen ? "bad" : "good")}<div><h3>${escapeHtml(retailer)} · ${escapeHtml(operation)} · ${escapeHtml(item.latestRetailerSku || "unknown SKU")}</h3><p>${escapeHtml(stage)} · ${escapeHtml(reason)} · layout ${escapeHtml(fingerprint || "unknown")}</p></div></div>
+      <div class="adapter-repair-meta"><span class="tag ${isOpen ? "bad" : "good"}">${isOpen ? "Repair needed" : "Recovered"}</span><span>${Number(item.occurrenceCount || 0).toLocaleString()} occurrences · ${Number(item.affectedSkuCount || 0).toLocaleString()} SKUs${item.domChangedSeen ? " · DOM changed during retry" : ""}</span><time>${escapeHtml(relativeTime(item.lastSeenAt))}</time></div>
+    </article>`;
+  }).join("") : empty("No adapter repair incidents have been captured. The server is listening for sanitized extension diagnostics.");
+}
+
+function communityScopeParts(scope) {
+  const value = String(scope || "");
+  if (value.startsWith("region:")) return { kind: "region", value: value.slice(7) };
+  if (value.startsWith("store:")) return { kind: "store", value: "" };
+  return { kind: "country", value: value.startsWith("country:") ? value.slice(8) : "US" };
+}
+
+function renderCommunity() {
+  const community = state.snapshot.community || {};
+  const counts = state.snapshot.counts || {};
+  const consents = community.consents || [];
+  const assertions = community.assertions || [];
+  const aggregates = community.aggregates || [];
+  const enabled = Number(counts.communityEnabledDomains || 0);
+  const quarantined = Number(counts.communityQuarantinedAssertions || 0);
+  $("#communitySummary").innerHTML = [
+    ["Enabled stores", enabled, "Every store starts off"],
+    ["Your assertions", Number(counts.communityAssertions || 0), `${Number(counts.communityActiveAssertions || 0)} still current`],
+    ["Quarantined", quarantined, "Conflicts never publish"],
+    ["Advisory projections", aggregates.filter((item) => item.publicationState === "advisory").length, "Three-user/device minimum"]
+  ].map(([label, value, detail]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value).toLocaleString()}</strong><small>${escapeHtml(detail)}</small></article>`).join("");
+
+  $("#communityConsentList").innerHTML = consents.length ? consents.map((consent) => {
+    const scope = communityScopeParts(consent.locationScope);
+    return `<article class="community-consent-card" data-community-retailer="${escapeHtml(consent.retailerId)}" data-current-scope="${escapeHtml(consent.locationScope)}">
+      <div class="card-top"><div><h3>${escapeHtml(consent.retailerName)}</h3><p>${escapeHtml((consent.domains || []).join(", "))}</p></div><span class="tag ${consent.enabled ? "good" : "warning"}">${consent.enabled ? "Opted in" : "Off"}</span></div>
+      <div class="community-scope-fields">
+        <label><span>Location precision</span><select data-community-scope-kind><option value="country" ${scope.kind === "country" ? "selected" : ""}>Country</option><option value="region" ${scope.kind === "region" ? "selected" : ""}>Region</option><option value="store" ${scope.kind === "store" ? "selected" : ""}>Pickup store</option></select></label>
+        <label><span>Country / region / local store ID</span><input data-community-scope-value value="${escapeHtml(scope.value)}" autocomplete="off" placeholder="US, US-CA, or a store ID"></label>
+      </div>
+      <p class="fine-print">Pickup store IDs are hashed in this browser before submission. ${scope.kind === "store" && consent.enabled ? "A fingerprint is saved; leave the field blank to retain it." : "Country and region scopes contain no precise location."}</p>
+      <div class="card-actions"><button class="button primary" data-community-enable="${escapeHtml(consent.retailerId)}" type="button">${consent.enabled ? "Update opt-in" : "Enable sharing"}</button>${consent.enabled ? `<button class="button secondary" data-community-disable="${escapeHtml(consent.retailerId)}" type="button">Disable</button>` : ""}<button class="text-button" data-community-delete="${escapeHtml(consent.retailerId)}" type="button">Delete this store’s contributions</button></div>
+    </article>`;
+  }).join("") : empty("No supported community evidence domains are available.");
+
+  $("#communityAggregateList").innerHTML = aggregates.length ? aggregates.map((item) => {
+    const stateLabel = String(item.publicationState || "insufficient_quorum").replaceAll("_", " ");
+    const kind = item.publicationState === "advisory" ? "good" : item.publicationState === "quarantined" ? "bad" : "warning";
+    const confidence = item.confidence || {};
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</h3><p>${escapeHtml(String(item.availability || "unknown").replaceAll("_", " "))} · ${formatMoney(item.unitPriceCents, item.currency)} · ${escapeHtml(item.sellerName || "Seller unknown")} · ${escapeHtml(item.fulfillment || "unknown")}</p></div><span class="tag ${kind}">${escapeHtml(stateLabel)}</span></div><div class="card-meta"><span class="tag">${Number(item.independentUserCount || 0)} users</span><span class="tag">${Number(item.independentDeviceCount || 0)} devices</span><span class="tag">Availability ${Math.round(Number(confidence.availability || 0) * 100)}%</span><span class="tag">Price ${Math.round(Number(confidence.price || 0) * 100)}%</span><span class="tag">Expires ${escapeHtml(relativeTime(item.expiresAt))}</span></div></article>`;
+  }).join("") : empty("No current community projections. The local pilot cannot manufacture independent-user quorum.");
+
+  $("#communityAssertionList").innerHTML = assertions.length ? assertions.map((item) => {
+    const kind = item.assertionState === "quarantined" ? "bad" : "good";
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</h3><p>${escapeHtml(String(item.availability).replaceAll("_", " "))} · ${formatMoney(item.unitPriceCents, item.currency)} · ${escapeHtml(item.sellerName || "Seller unknown")} · ${escapeHtml(item.fulfillment)} · ${escapeHtml(item.locationScope)}</p></div><span class="tag ${kind}">${escapeHtml(String(item.assertionState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">Observer ${escapeHtml(item.observerVersion)}</span><span class="tag">Expires ${escapeHtml(relativeTime(item.expiresAt))}</span>${item.quarantineReason ? `<span class="tag bad">${escapeHtml(String(item.quarantineReason).replaceAll("_", " "))}</span>` : ""}</div></article>`;
+  }).join("") : empty("You have not shared any community evidence.");
+  $("#deleteAllCommunityButton").disabled = assertions.length === 0;
+}
+
+function renderIdentityGovernance() {
+  const governance = state.snapshot.identityGovernance || {};
+  const claims = governance.claims || [];
+  const projections = governance.projections || [];
+  const form = $("#identityClaimForm");
+  const listings = state.libraryItems || [];
+  if (!state.identityDirty) {
+    const options = listings.map((item) => `<option value="${escapeHtml(item.listingId)}">${escapeHtml(item.retailerName)} · ${escapeHtml(item.retailerSku)} · ${escapeHtml(item.title)}</option>`).join("");
+    form.elements.listingId.innerHTML = `<option value="">Choose an exact listing</option>${options}`;
+    form.elements.referenceListingId.innerHTML = `<option value="">Choose a different-store reference</option>${options}`;
+  }
+  form.querySelector("button[type='submit']").disabled = listings.length < 2;
+  $("#deleteIdentityClaimsButton").disabled = claims.length === 0;
+  $("#identityProjectionList").innerHTML = projections.length ? projections.map((item) => {
+    const kind = item.publicationState === "validated_equivalence" ? "good" : item.publicationState === "quarantined" ? "bad" : "warning";
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(item.listingRetailerId))} ${escapeHtml(item.listingRetailerSku)} ↔ ${escapeHtml(retailerName(item.referenceRetailerId))} ${escapeHtml(item.referenceRetailerSku)}</h3><p>${escapeHtml(String(item.identifierKind).toUpperCase())} fingerprint ${escapeHtml(String(item.identifierHash).slice(0, 12))} · ${Number(item.independentUserCount || 0)} users · ${Number(item.healthyPairedDeviceCount || 0)} healthy paired devices</p></div><span class="tag ${kind}">${escapeHtml(String(item.publicationState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag ${item.siblingAvailabilityEligible ? "good" : "warning"}">${item.siblingAvailabilityEligible ? "Sibling evidence eligible" : "No sibling stock merge"}</span><span class="tag">Catalog remapped: never</span></div></article>`;
+  }).join("") : empty("No cross-store identity projections. Inventory remains attached to each exact retailer listing.");
+  $("#identityClaimList").innerHTML = claims.length ? claims.map((claim) => {
+    const kind = claim.claimState === "reviewed" ? "good" : claim.claimState === "quarantined" || claim.claimState === "rejected" ? "bad" : "warning";
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(claim.listingRetailerId))} ${escapeHtml(claim.listingRetailerSku)} → ${escapeHtml(retailerName(claim.referenceRetailerId))} ${escapeHtml(claim.referenceRetailerSku)}</h3><p>${escapeHtml(String(claim.identifierKind).toUpperCase())} ${escapeHtml(claim.normalizedIdentifier)} · ${escapeHtml(claim.provenanceNote)}</p></div><span class="tag ${kind}">${escapeHtml(String(claim.claimState).replaceAll("_", " "))}</span></div>${claim.conflictReason ? `<p class="identity-conflict">Conflict: ${escapeHtml(String(claim.conflictReason).replaceAll("_", " "))}</p>` : ""}<div class="card-actions">${claim.claimState === "pending_review" ? `<button class="button secondary" data-identity-review="reviewed" data-identity-claim-id="${escapeHtml(claim.id)}" type="button">Record local review</button>` : ""}${["pending_review", "quarantined"].includes(claim.claimState) ? `<button class="button danger" data-identity-review="rejected" data-identity-claim-id="${escapeHtml(claim.id)}" type="button">Reject claim</button>` : ""}</div></article>`;
+  }).join("") : empty("No identity equivalence claims have been proposed.");
+}
+
+function renderObserverRegistry() {
+  const registry = state.snapshot.observerRegistry || {};
+  const recipes = registry.recipes || [];
+  const keyId = String(registry.key?.keyId || "");
+  $("#observerRegistryKey").textContent = keyId ? `ED25519 ${keyId.slice(0, 10)}` : "KEY UNAVAILABLE";
+  const form = $("#observerRecipeForm");
+  if (!state.observerRecipeDirty) {
+    form.elements.retailerId.innerHTML = Object.entries(RETAILER_NAMES)
+      .map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`).join("");
+    form.elements.minimumExtensionVersion.value = state.snapshot.version;
+  }
+  $("#observerRecipeList").innerHTML = recipes.length ? recipes.map((recipe) => {
+    const trials = recipe.trials || {};
+    const kind = recipe.lifecycleState === "trusted_read_only" ? "good"
+      : recipe.lifecycleState === "disabled" ? "bad" : recipe.lifecycleState === "quarantined" ? "warning" : "good";
+    const nextState = recipe.lifecycleState === "quarantined" ? "shadow"
+      : recipe.lifecycleState === "shadow" ? "canary"
+        : recipe.lifecycleState === "canary" ? "trusted_read_only" : "";
+    const selectorCount = Object.values(recipe.fields || {}).reduce((sum, field) => sum + Number(field.selectors?.length || 0), 0);
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(recipe.retailerId))} · ${escapeHtml(recipe.recipeVersion)}</h3><p>${Object.keys(recipe.fields || {}).length} fields · ${selectorCount} bounded selectors · minimum extension ${escapeHtml(recipe.minimumExtensionVersion)} · expires ${escapeHtml(relativeTime(recipe.expiresAt))}</p></div><span class="tag ${kind}">${escapeHtml(String(recipe.lifecycleState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">${Number(trials.passed || 0)} passed</span><span class="tag ${Number(trials.failed || 0) ? "bad" : ""}">${Number(trials.failed || 0)} failed</span><span class="tag">${Number(trials.distinctSkus || 0)} SKUs</span><span class="tag">${Number(trials.distinctLayouts || 0)} layouts</span><span class="tag">Fingerprint ${escapeHtml(String(recipe.recipeFingerprint).slice(0, 12))}</span>${recipe.rollbackRecipeId ? `<span class="tag">Rollback ${escapeHtml(String(recipe.rollbackRecipeId).slice(0, 12))}</span>` : ""}</div><div class="card-actions">${nextState ? `<button class="button primary" data-observer-promote="${escapeHtml(recipe.id)}" data-observer-target="${escapeHtml(nextState)}" type="button">Promote to ${escapeHtml(nextState.replaceAll("_", " "))}</button>` : ""}${recipe.lifecycleState !== "disabled" ? `<button class="button danger" data-observer-disable="${escapeHtml(recipe.id)}" type="button">Kill switch</button>` : ""}${recipe.rollbackRecipeId && recipe.lifecycleState !== "disabled" ? `<button class="button secondary" data-observer-rollback="${escapeHtml(recipe.id)}" type="button">Rollback</button>` : ""}</div>${recipe.disabledReason ? `<p class="identity-conflict">Disabled: ${escapeHtml(String(recipe.disabledReason).replaceAll("_", " "))}</p>` : ""}</article>`;
+  }).join("") : empty("No declarative observer recipes. Bundled observer versions remain authoritative.");
+}
+
+function renderAddQualification(retailerId) {
+  const names = { target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "BestBuy" };
+  const displayNames = { target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "Best Buy" };
+  const identifiers = { target: "TCINs", walmart: "item IDs", amazon: "ASINs", bestbuy: "SKUs" };
+  const name = names[retailerId];
+  const displayName = displayNames[retailerId];
+  const prefix = retailerId;
+  const readiness = state.snapshot[retailerId === "bestbuy" ? "bestBuyQualification" : `${prefix}Qualification`];
+  if (!readiness) {
+    $(`#${prefix}QualificationSummary`).innerHTML = empty(`${displayName} qualification readiness is unavailable.`);
+    $(`#${prefix}QualificationChecks`).innerHTML = "";
+    return;
+  }
+  const qualified = readiness.addToCartQualified === true;
+  const active = readiness.mutationAuthorized === true;
+  const evidenceReady = readiness.qualificationEvidenceReady === true;
+  const liveReady = readiness.liveEvidenceReady === true;
+  const label = active ? "Guarded adds active" : qualified ? "Qualified · paused" : evidenceReady ? "Ready for explicit activation" : liveReady ? "Ready for no-click rehearsal" : "Collecting required evidence";
+  const kind = active || qualified || evidenceReady || liveReady ? "good" : "warning";
+  $(`#${prefix}QualificationSummary`).innerHTML = `<div>
+      <span class="tag ${kind}">${escapeHtml(label)}</span>
+      <strong>${Number(readiness.observationCount || 0).toLocaleString()} current observations · ${Number(readiness.distinctSkuCount || 0).toLocaleString()} distinct ${identifiers[retailerId]}</strong>
+    </div>
+    <p>${escapeHtml(readiness.nextStep || "Collect read-only evidence with the Chrome companion.")}</p>
+    <small>Observer ${escapeHtml(readiness.adapterVersion || "unknown")} · runner ${escapeHtml(readiness.addAdapterVersion || "unknown")} · ${Number(readiness.evidenceWindowDays || 0)}-day evidence window</small>`;
+  $(`#${prefix}QualificationGate`).textContent = active ? "ACTIVE" : qualified ? "PAUSED" : evidenceReady ? "READY" : "GATE CLOSED";
+  const activation = $(`#activate${name}AddButton`);
+  activation.hidden = qualified;
+  activation.disabled = !evidenceReady || Number(state.snapshot.counts.onlineDevices || 0) < 1;
+  $(`#activate${name}AddHelp`).hidden = qualified;
+  $(`#activate${name}AddHelp`).textContent = evidenceReady
+    ? Number(state.snapshot.counts.onlineDevices || 0) < 1
+      ? "Reconnect the Chrome companion before activation."
+      : "One confirmation enables only the narrow add-to-cart scope above; the global pause remains available."
+    : liveReady ? `Run the safe qualification rehearsal once from the extension on a ${displayName}-sold shipping offer.` : "Complete only the checks marked Required; optional coverage can arrive naturally.";
+  $(`#${prefix}QualificationChecks`).innerHTML = (readiness.checks || []).map((check) => `<article class="qualification-check ${check.met ? "met" : "missing"} ${check.requiredForQualification === false ? "optional" : ""}">
+    <span class="qualification-check-mark" aria-hidden="true">${check.met ? "✓" : "○"}</span>
+    <div><h3>${escapeHtml(check.label)} · ${check.requiredForQualification === false ? "Optional" : "Required"}</h3><p>${escapeHtml(check.detail)}</p></div>
+    <strong>${Number(check.observed || 0)}/${Number(check.required || 0)}</strong>
+  </article>`).join("");
+}
+
+function renderQualifications() {
+  renderAddQualification("target");
+  renderAddQualification("walmart");
+  renderAddQualification("amazon");
+  renderAddQualification("bestbuy");
+  const policy = state.snapshot.futureMutationLanes;
+  const labels = { pickup_add: "Pickup add", prepare_checkout: "Prepare checkout", submit_order: "Submit order" };
+  $("#futureMutationLaneList").innerHTML = policy?.lanes?.length ? policy.lanes.map((lane) => {
+    const met = (lane.requirements || []).filter((requirement) => requirement.met).length;
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(lane.retailerName)} · ${escapeHtml(labels[lane.lane] || lane.lane)}</h3><p>${met}/${(lane.requirements || []).length} prerequisites observed · no packaged adapter</p></div><span class="tag warning">CLOSED</span></div><details><summary>Qualification requirements</summary><div class="qualification-check-list">${(lane.requirements || []).map((requirement) => `<article class="qualification-check ${requirement.met ? "met" : "missing"}"><span class="qualification-check-mark" aria-hidden="true">${requirement.met ? "✓" : "○"}</span><div><h3>${escapeHtml(requirement.label)}</h3><p>${escapeHtml(requirement.detail)}</p></div></article>`).join("")}</div></details></article>`;
+  }).join("") : empty("Future mutation-lane policy is unavailable; every lane remains closed.");
+}
+
+function renderLibrary() {
+  const items = state.libraryItems;
+  $("#libraryCount").textContent = `${items.length.toLocaleString()} of ${Number(state.libraryTotal || 0).toLocaleString()} matching listings`;
+  $("#libraryMoreButton").hidden = items.length >= state.libraryTotal;
+  $("#libraryList").innerHTML = items.length ? items.map((item) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.retailerName)} · ${escapeHtml(item.retailerSku)}</p></div>${statusDot(item.executionSupported ? "good" : "warning")}</div><div class="card-meta"><span class="tag ${item.status === "in_stock" ? "good" : ""}">${escapeHtml(String(item.status).replaceAll("_", " "))}</span><span class="tag">MSRP ${formatMoney(item.msrpCents, item.currency)}</span><span class="tag ${item.executionSupported ? "good" : "warning"}">${item.executionSupported ? "Executable mapping" : "Catalog only"}</span><span class="tag">${item.sourceMappingCount} source map</span></div><a class="canonical-link" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.canonicalUrl)}</a></article>`).join("") : empty("No matching retailer listings.");
+}
+
+function pricePolicyLabel(strategy) {
+  const kind = strategy.pricePolicy.kind.replaceAll("_", " ");
+  if (["absolute_max", "above_msrp"].includes(strategy.pricePolicy.kind)) return `${kind} · ${formatMoney(strategy.pricePolicy.maxPriceCents)}`;
+  if (strategy.pricePolicy.kind === "slightly_above_msrp") return `${kind} · ${Number(strategy.pricePolicy.toleranceBps || 1000) / 100}%`;
+  return kind;
+}
+
+function renderStrategies() {
+  const strategies = state.snapshot.strategies || [];
+  $("#strategyList").innerHTML = strategies.length ? strategies.map((strategy, index) => `<article class="strategy-row"><div class="strategy-rank">${index + 1}</div><div><h3>${escapeHtml(strategy.name)} ${strategy.enabled ? "" : "· Disabled"}</h3><p>${escapeHtml(pricePolicyLabel(strategy))} · ${escapeHtml(strategy.sellerPolicy.replaceAll("_", " "))} · ${escapeHtml(strategy.action.replaceAll("_", " "))} · qty ${escapeHtml(strategy.quantity)}</p><div class="card-meta"><span class="tag">${strategy.retailers.length ? escapeHtml(strategy.retailers.join(", ")) : "All retailers"}</span><span class="tag">${strategy.sources.length ? escapeHtml(strategy.sources.join(", ")) : "All sources"}</span>${!strategy.includeKeywords ? '<span class="tag warning">Catchall</span>' : `<span class="tag">${escapeHtml(strategy.includeKeywords)}</span>`}</div></div><div class="strategy-actions"><button class="button secondary" data-strategy-move="up" data-strategy-id="${escapeHtml(strategy.id)}" type="button">↑</button><button class="button secondary" data-strategy-move="down" data-strategy-id="${escapeHtml(strategy.id)}" type="button">↓</button><button class="button secondary" data-strategy-edit="${escapeHtml(strategy.id)}" type="button">Edit</button><button class="button danger" data-strategy-delete="${escapeHtml(strategy.id)}" type="button">Delete</button></div></article>`).join("") : empty("No strategies exist. Signals will be recorded without action.");
+}
+
+function renderMissions() {
+  const missions = state.missionItems;
+  $("#missionCount").textContent = `${missions.length.toLocaleString()} of ${Number(state.missionTotal || 0).toLocaleString()} matching missions`;
+  $("#missionMoreButton").hidden = missions.length >= state.missionTotal;
+  $("#missionList").innerHTML = missions.length ? missions.map((mission) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(mission.title)}</h3><p>${escapeHtml(mission.origin)} · created ${escapeHtml(relativeTime(mission.createdAt))}</p></div>${statusDot(mission.status === "active" ? "good" : "warning")}</div><div class="card-meta"><span class="tag ${mission.status === "active" ? "good" : "warning"}">${escapeHtml(mission.status)}</span><span class="tag">${mission.targetCount} listing targets</span><span class="tag">${mission.enabledTargetCount} enabled</span><span class="tag">Goal ${mission.targetQuantity}</span></div><div class="card-actions"><button class="button secondary" data-mission-edit="${escapeHtml(mission.id)}" type="button">Edit mission</button></div></article>`).join("") : empty("No missions yet. An exact trusted live signal can create one automatically.");
+}
+
+function renderAudit() {
+  const items = state.auditItems;
+  $("#auditCount").textContent = `${items.length.toLocaleString()} of ${Number(state.auditTotal || 0).toLocaleString()} matching events`;
+  $("#auditMoreButton").hidden = items.length >= state.auditTotal;
+  $("#outboxSummary").textContent = `${Number(state.snapshot.counts.pendingOutboxEvents || 0).toLocaleString()} tenant event${Number(state.snapshot.counts.pendingOutboxEvents || 0) === 1 ? "" : "s"} retained locally`;
+  $("#auditList").innerHTML = items.length ? items.map((event) => `<article class="timeline-item">
+    ${statusDot(event.reasonCode === "error" || String(event.reasonCode).includes("rejected") ? "bad" : "good")}
+    <div><h3>${escapeHtml(String(event.eventType).replaceAll("_", " "))}</h3><p>${escapeHtml(event.message)}</p><span class="decision-pill">${escapeHtml(String(event.reasonCode).replaceAll("_", " "))}</span><p>Correlation ${escapeHtml(event.correlationId)}</p></div>
+    <time>${escapeHtml(relativeTime(event.createdAt))}</time>
+  </article>`).join("") : empty("No matching activity has been recorded.");
+}
+
+function renderNotifications() {
+  const notifications = state.snapshot.notifications || [];
+  $("#notificationList").innerHTML = notifications.length ? notifications.map((notification) => {
+    const kind = ["delivered", "clicked"].includes(notification.state) ? "good"
+      : ["failed", "expired"].includes(notification.state) ? "bad" : "warning";
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(notification.title)}</h3><p>${escapeHtml(notification.retailerId)} · ${escapeHtml(notification.retailerSku)}</p></div>${statusDot(kind)}</div><div class="card-meta"><span class="tag ${kind}">${escapeHtml(String(notification.state).replaceAll("_", " "))}</span><span class="tag">${Number(notification.attempts || 0)} delivery attempt${Number(notification.attempts || 0) === 1 ? "" : "s"}</span>${notification.failureCode ? `<span class="tag bad">${escapeHtml(notification.failureCode.replaceAll("_", " "))}</span>` : ""}</div><p>${notification.deliveredAt ? `Delivered ${escapeHtml(relativeTime(notification.deliveredAt))}.` : `Created ${escapeHtml(relativeTime(notification.createdAt))}.`}</p></article>`;
+  }).join("") : empty("No notification deliveries yet.");
+}
+
+function renderAttributionReceipts() {
+  const receipts = state.snapshot.attributionReceipts || [];
+  $("#attributionReceiptList").innerHTML = receipts.length ? receipts.map((receipt) => {
+    const kind = receipt.outcome === "affiliate_route" ? "good"
+      : receipt.outcome === "required_route_unavailable" ? "bad" : "warning";
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(receipt.title)}</h3><p>${escapeHtml(receipt.retailerId)} · ${escapeHtml(receipt.retailerSku)}</p></div>${statusDot(kind)}</div><div class="card-meta"><span class="tag ${kind}">${escapeHtml(String(receipt.outcome).replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(receipt.provider).replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(receipt.reasonCode).replaceAll("_", " "))}</span></div><a class="canonical-link" href="${escapeHtml(receipt.routeUrl)}" target="_blank" rel="noreferrer">Open recorded route</a></article>`;
+  }).join("") : empty("No attribution receipts yet.");
+}
+
+function renderAttributionPolicies() {
+  const container = $("#attributionPolicyEditors");
+  if (!container || state.attributionDirty) return;
+  const policies = state.snapshot.attributionPolicies || [];
+  container.innerHTML = policies.map((policy) => `<article class="attribution-policy-editor" data-attribution-retailer="${escapeHtml(policy.retailerId)}">
+    <div class="card-top"><div><h3>${escapeHtml(policy.retailerName)}</h3><p>${escapeHtml(policy.validationReason)}</p></div><span class="tag ${policy.valid ? "good" : "bad"}">${policy.valid ? "Configuration valid" : "Needs correction"}</span></div>
+    <div class="form-grid">
+      <label class="check-label"><input data-attribution-field="enabled" type="checkbox" ${policy.enabled ? "checked" : ""}><span>Affiliate route enabled</span></label>
+      <label><span>Provider</span><select data-attribution-field="provider"><option value="canonical" ${policy.provider === "canonical" ? "selected" : ""}>Canonical retailer URL</option><option value="howl" ${policy.provider === "howl" ? "selected" : ""}>Howl</option><option value="amazon_associates" ${policy.provider === "amazon_associates" ? "selected" : ""}>Amazon Associates</option></select></label>
+      <label><span>Howl publisher slug</span><input data-attribution-field="publisherSlug" value="${escapeHtml(policy.publisherSlug)}" placeholder="collectwithdodo"></label>
+      <label><span>Public article base URL</span><input data-attribution-field="articleBaseUrl" type="url" value="${escapeHtml(policy.articleBaseUrl)}" placeholder="https://yourdomain.com/products/"></label>
+      <label><span>Amazon Associate tag</span><input data-attribution-field="associateTag" value="${escapeHtml(policy.associateTag)}" placeholder="your-tag-20"></label>
+    </div>
+  </article>`).join("");
+}
+
+function renderSettings() {
+  const form = $("#settingsForm");
+  if (!form || state.settingsDirty) return;
+  const settings = state.snapshot.settings;
+  form.elements.dedupeWindowSeconds.value = settings.dedupeWindowSeconds;
+  form.elements.taxPercent.value = (Number(settings.taxBps || 0) / 100).toFixed(2).replace(/\.00$/, "");
+  form.elements.affiliateMode.value = settings.affiliateMode;
+  for (const retailer of ["target", "walmart", "amazon", "bestbuy"]) {
+    form.elements[`${retailer}Allowance`].value = (Number(settings.storeAllowancesCents?.[retailer] || 0) / 100).toFixed(2);
+  }
+}
+
+function renderJobs() {
+  const jobs = state.jobItems;
+  $("#jobCount").textContent = `${jobs.length.toLocaleString()} of ${Number(state.jobTotal || 0).toLocaleString()} matching actions`;
+  $("#jobMoreButton").hidden = jobs.length >= state.jobTotal;
+  $("#jobList").innerHTML = jobs.length ? jobs.map((job) => {
+    const terminal = ["confirmed", "expired", "cancelled", "offer_rejected"].includes(job.state);
+    const needsReview = ["manual_review", "submission_uncertain"].includes(job.state);
+    const kind = job.state === "confirmed" ? "good" : needsReview ? "bad" : terminal || job.state === "shadow_ready" ? "warning" : "good";
+    const laneActive = job.retailerId === "target"
+      ? state.snapshot.capabilities.targetAddMutationAuthorized === true
+      : job.retailerId === "walmart"
+        ? state.snapshot.capabilities.walmartAddMutationAuthorized === true
+      : job.retailerId === "amazon"
+          ? state.snapshot.capabilities.amazonAddMutationAuthorized === true
+          : job.retailerId === "bestbuy"
+            ? state.snapshot.capabilities.bestBuyAddMutationAuthorized === true
+            : false;
+    const displayName = retailerName(job.retailerId);
+    const note = ["target", "walmart", "amazon", "bestbuy"].includes(job.retailerId) && job.action === "add_to_cart" && laneActive
+      ? `Chrome will revalidate the exact live ${displayName} offer before any click.`
+      : "This job remains recorded until a qualified executor can safely handle its exact scope.";
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(job.title)}</h3><p>${escapeHtml(job.retailerId)} · ${escapeHtml(job.retailerSku)}</p></div>${statusDot(kind)}</div><div class="card-meta"><span class="tag ${kind}">${escapeHtml(String(job.state).replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(job.action).replaceAll("_", " "))}</span><span class="tag">Qty ${job.quantity}</span><span class="tag">Unit cap ${formatMoney(job.maxUnitPriceCents, job.currency)}</span><span class="tag">Total cap ${formatMoney(job.maxOrderTotalCents, job.currency)}</span><span class="tag">${escapeHtml(job.sellerPolicy.replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(job.attributionProvider || "canonical").replaceAll("_", " "))}</span></div><p>Expires ${escapeHtml(relativeTime(job.expiresAt))}. ${escapeHtml(note)}</p>${needsReview ? `<div class="card-actions"><button class="button secondary" data-review-resolution="cancelled" data-job-id="${escapeHtml(job.id)}" type="button">Verified no purchase</button><button class="button primary" data-review-resolution="confirmed" data-job-id="${escapeHtml(job.id)}" type="button">Verified success</button></div>` : ""}</article>`;
+  }).join("") : empty("No action jobs yet.");
+}
+
+function renderCatalogGovernance() {
+  const governance = state.snapshot.catalogGovernance || {};
+  const panel = $("#catalogGovernancePanel");
+  panel.hidden = governance.reviewCapable !== true;
+  if (panel.hidden) return;
+  const proposals = governance.pending || [];
+  $("#catalogGovernanceGate").textContent = proposals.length ? `${proposals.length} PENDING` : "QUEUE CLEAR";
+  $("#catalogProposalList").innerHTML = proposals.length ? proposals.map((proposal) => `<article class="card">
+    <div class="card-top"><div><h3>${escapeHtml(proposal.payload?.title || "Catalog listing change")}</h3><p>${escapeHtml(retailerName(proposal.retailerId))} · ${escapeHtml(proposal.retailerSku)} · proposed by ${escapeHtml(proposal.proposerUserId)}</p></div><span class="tag warning">pending review</span></div>
+    <div class="card-meta"><span class="tag">${escapeHtml(proposal.payload?.canonicalUrl || "No URL")}</span><span class="tag">${formatMoney(proposal.payload?.msrpCents, proposal.payload?.currency || "USD")}</span><span class="tag">${escapeHtml(proposal.payloadHash?.slice(0, 12) || "no hash")}</span></div>
+    <div class="card-actions"><button class="button secondary" data-catalog-reject="${escapeHtml(proposal.id)}" type="button">Reject</button><button class="button primary" data-catalog-approve="${escapeHtml(proposal.id)}" type="button">Approve exact listing</button></div>
+  </article>`).join("") : empty("No catalog changes are waiting for review.");
+}
+
+function renderAuthorization() {
+  const enabled = state.snapshot.authorization?.roleAdministrationEnabled === true;
+  $("#authorizationGate").textContent = enabled ? "ADMIN ENABLED" : "READ ONLY";
+  if (!enabled) {
+    $("#authorizationUserList").innerHTML = empty("Your role can view administration state but cannot manage security memberships.");
+    $("#authorizationRoleList").innerHTML = "";
+    return;
+  }
+  const grantableRoles = state.authorizationRoles.filter((role) => role.id !== "yoink_user");
+  $("#authorizationUserList").innerHTML = state.authorizationUsers.length ? state.authorizationUsers.map((user) => `<article class="card">
+    <div class="card-top"><div><h3>${escapeHtml(user.displayName)}</h3><p>${escapeHtml(user.id)} · created ${escapeHtml(relativeTime(user.createdAt))}</p></div><span class="tag good">tenant user</span></div>
+    <div class="card-meta">${(user.activeRoles || []).map((roleId) => `<span class="tag">${escapeHtml(roleId)}</span>`).join("")}</div>
+    <div class="card-actions">
+      <select data-role-selection="${escapeHtml(user.id)}">${grantableRoles.map((role) => `<option value="${escapeHtml(role.id)}">${escapeHtml(role.displayName)}</option>`).join("")}</select>
+      <button class="button primary" data-role-grant="${escapeHtml(user.id)}" type="button">Grant role</button>
+      ${(user.activeRoles || []).filter((roleId) => roleId !== "yoink_user").map((roleId) => `<button class="button secondary" data-role-revoke-user="${escapeHtml(user.id)}" data-role-revoke="${escapeHtml(roleId)}" type="button">Revoke ${escapeHtml(roleId)}</button>`).join("")}
+    </div>
+  </article>`).join("") : empty("No users exist in this tenant.");
+  $("#authorizationRoleList").innerHTML = state.authorizationRoles.map((role) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(role.displayName)}</h3><p>${escapeHtml(role.description)}</p></div><span class="tag">${role.permissions.length} permissions</span></div><div class="card-meta">${role.permissions.map((permission) => `<span class="tag">${escapeHtml(permission)}</span>`).join("")}</div></article>`).join("");
+}
+
+function render() {
+  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization();
+}
+
+async function storeFingerprint(retailerId, localStoreId) {
+  const normalized = String(localStoreId || "").trim().toLocaleUpperCase("en-US");
+  if (!/^[A-Z0-9][A-Z0-9 _.-]{0,79}$/.test(normalized)) throw new Error("Enter the retailer’s local store ID using letters or numbers.");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`yoink-community-store-v1|${retailerId}|${normalized}`));
+  return `store:${[...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function communityLocationScope(card) {
+  const kind = $("[data-community-scope-kind]", card).value;
+  const raw = $("[data-community-scope-value]", card).value.trim().toLocaleUpperCase("en-US");
+  if (kind === "country") {
+    if (!/^[A-Z]{2}$/.test(raw)) throw new Error("Enter a two-letter country code such as US.");
+    return `country:${raw}`;
+  }
+  if (kind === "region") {
+    if (!/^[A-Z]{2}-[A-Z0-9]{2,3}$/.test(raw)) throw new Error("Enter an ISO-style region such as US-CA.");
+    return `region:${raw}`;
+  }
+  if (!raw && String(card.dataset.currentScope || "").startsWith("store:")) return card.dataset.currentScope;
+  return storeFingerprint(card.dataset.communityRetailer, raw);
+}
+
+async function loadLibrary(reset = true) {
+  const query = $("#librarySearch").value.trim();
+  const offset = reset || query !== state.libraryQuery ? 0 : state.libraryItems.length;
+  const result = await api(`/api/v1/user/library?limit=${COLLECTION_PAGE_SIZE}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  state.libraryItems = offset === 0 ? result.items || [] : [...state.libraryItems, ...(result.items || [])];
+  state.libraryTotal = Number(result.total || 0);
+  state.libraryQuery = query;
+}
+
+async function loadMissions(reset = true) {
+  const query = $("#missionSearch").value.trim();
+  const offset = reset || query !== state.missionQuery ? 0 : state.missionItems.length;
+  const result = await api(`/api/v1/user/missions?limit=${COLLECTION_PAGE_SIZE}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  state.missionItems = offset === 0 ? result.items || [] : [...state.missionItems, ...(result.items || [])];
+  state.missionTotal = Number(result.total || 0);
+  state.missionQuery = query;
+}
+
+async function loadAudit(reset = true) {
+  const query = $("#auditSearch").value.trim();
+  const offset = reset || query !== state.auditQuery ? 0 : state.auditItems.length;
+  const result = await api(`/api/v1/user/audit?limit=${COLLECTION_PAGE_SIZE}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  state.auditItems = offset === 0 ? result.items || [] : [...state.auditItems, ...(result.items || [])];
+  state.auditTotal = Number(result.total || 0);
+  state.auditQuery = query;
+}
+
+async function loadSignals(reset = true) {
+  const query = $("#signalSearch").value.trim();
+  const offset = reset || query !== state.signalQuery ? 0 : state.signalItems.length;
+  const result = await api(`/api/v1/user/signals?limit=${COLLECTION_PAGE_SIZE}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  state.signalItems = offset === 0 ? result.items || [] : [...state.signalItems, ...(result.items || [])];
+  state.signalTotal = Number(result.total || 0);
+  state.signalQuery = query;
+}
+
+async function loadJobs(reset = true) {
+  const query = $("#jobSearch").value.trim();
+  const offset = reset || query !== state.jobQuery ? 0 : state.jobItems.length;
+  const result = await api(`/api/v1/user/jobs?limit=${COLLECTION_PAGE_SIZE}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  state.jobItems = offset === 0 ? result.items || [] : [...state.jobItems, ...(result.items || [])];
+  state.jobTotal = Number(result.total || 0);
+  state.jobQuery = query;
+}
+
+async function refresh(reloadCollections = true) {
+  state.snapshot = await api("/api/v1/admin/snapshot");
+  if (state.snapshot.authorization?.roleAdministrationEnabled === true) {
+    const [users, roles] = await Promise.all([
+      api("/api/v1/admin/authorization/users"),
+      api("/api/v1/admin/authorization/roles")
+    ]);
+    state.authorizationUsers = users.users || [];
+    state.authorizationRoles = roles.roles || [];
+  } else {
+    state.authorizationUsers = [];
+    state.authorizationRoles = [];
+  }
+  if (reloadCollections) await Promise.all([loadLibrary(true), loadMissions(true), loadAudit(true), loadSignals(true), loadJobs(true)]);
+  render();
+}
+
+let backgroundRefresh = null;
+function refreshFromLoopback() {
+  if (document.visibilityState !== "visible" || backgroundRefresh) return;
+  backgroundRefresh = refresh(false).catch(() => undefined).finally(() => { backgroundRefresh = null; });
+}
+
+function formObject(form) { return Object.fromEntries(new FormData(form).entries()); }
+function dollarsToCents(value) {
+  if (!String(value || "").trim()) return null;
+  const dollars = Number(value);
+  if (!Number.isFinite(dollars) || dollars <= 0) throw new Error("Enter a positive dollar amount.");
+  return Math.round(dollars * 100);
+}
+function nonNegativeDollarsToCents(value) {
+  const dollars = Number(value);
+  if (!Number.isFinite(dollars) || dollars < 0) throw new Error("Enter a non-negative dollar amount.");
+  return Math.round(dollars * 100);
+}
+function commaList(value) { return String(value || "").split(",").map((part) => part.trim().toLowerCase()).filter(Boolean); }
+
+function openStrategy(strategy = null) {
+  state.editingStrategyId = strategy?.id || "";
+  const form = $("#strategyForm"); form.reset();
+  $("#strategyDialogTitle").textContent = strategy ? "Edit strategy" : "Add strategy";
+  form.elements.id.value = strategy?.id || `strategy_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  form.elements.revision.value = strategy?.revision || 1;
+  form.elements.name.value = strategy?.name || "";
+  form.elements.position.value = strategy?.position || Math.max(10, ...(state.snapshot.strategies || []).map((item) => item.position + 10));
+  form.elements.priceKind.value = strategy?.pricePolicy.kind || "at_or_below_msrp";
+  form.elements.maxPrice.value = strategy?.pricePolicy.maxPriceCents ? (strategy.pricePolicy.maxPriceCents / 100).toFixed(2) : "";
+  form.elements.tolerancePercent.value = Number(strategy?.pricePolicy.toleranceBps || 1000) / 100;
+  form.elements.sellerPolicy.value = strategy?.sellerPolicy || "first_party_only";
+  form.elements.allowedSellers.value = (strategy?.allowedSellers || []).join(", ");
+  form.elements.action.value = strategy?.action || "notify";
+  form.elements.quantity.value = strategy?.quantity || 1;
+  form.elements.fulfillment.value = strategy?.fulfillment || "shipping";
+  form.elements.maxSignalAgeSeconds.value = strategy?.maxSignalAgeSeconds || 120;
+  const selectedSources = new Set(strategy?.sources || []);
+  const selectedRetailers = new Set(strategy?.retailers || []);
+  $$('[data-strategy-source]', form).forEach((input) => { input.checked = selectedSources.has(input.value); });
+  $$('[data-strategy-retailer]', form).forEach((input) => { input.checked = selectedRetailers.has(input.value); });
+  form.elements.includeKeywords.value = strategy?.includeKeywords || "";
+  form.elements.excludeKeywords.value = strategy?.excludeKeywords || "";
+  form.elements.enabled.checked = strategy?.enabled !== false;
+  $("#strategyDialog").showModal();
+}
+
+async function openMission(missionId) {
+  const result = await api(`/api/v1/user/missions/${encodeURIComponent(missionId)}`);
+  const mission = result.mission;
+  if (!mission?.id || !Array.isArray(mission.targets)) throw new Error("The mission details are unavailable.");
+  state.editingMission = mission;
+  const form = $("#missionForm");
+  form.reset();
+  form.elements.id.value = mission.id;
+  form.elements.status.value = mission.status;
+  form.elements.targetQuantity.value = mission.targetQuantity;
+  $("#missionDialogTitle").textContent = mission.title;
+  $("#missionTargetEditors").innerHTML = mission.targets.map((target) => `<article class="mission-target-editor" data-mission-target="${escapeHtml(target.id)}">
+    <div class="card-top"><div><h3>${escapeHtml(target.retailerName)} · ${escapeHtml(target.retailerSku)}</h3><p>${escapeHtml(String(target.listingStatus).replaceAll("_", " "))} · last ${formatMoney(target.lastObservedPriceCents, target.currency)} · MSRP ${formatMoney(target.msrpCents, target.currency)}</p></div><span class="tag ${target.executionSupported ? "good" : "warning"}">${target.executionSupported ? "Executable mapping" : "Catalog only"}</span></div>
+    <div class="form-grid">
+      <label class="check-label"><input data-target-field="enabled" type="checkbox" ${target.enabled ? "checked" : ""}><span>Target enabled</span></label>
+      <label><span>Target price cap</span><div class="money-input"><span>$</span><input data-target-field="maxUnitPrice" inputmode="decimal" value="${target.maxUnitPriceCents ? (target.maxUnitPriceCents / 100).toFixed(2) : ""}" placeholder="Use strategy cap"></div></label>
+      <label><span>Seller policy</span><select data-target-field="sellerPolicy"><option value="inherit" ${target.sellerPolicy === "inherit" ? "selected" : ""}>Inherit strategy</option><option value="first_party_only" ${target.sellerPolicy === "first_party_only" ? "selected" : ""}>First party only</option><option value="allow_third_party" ${target.sellerPolicy === "allow_third_party" ? "selected" : ""}>Allow third party</option></select></label>
+      <label><span>Fulfillment</span><select data-target-field="fulfillment"><option value="inherit" ${target.fulfillment === "inherit" ? "selected" : ""}>Inherit strategy</option><option value="shipping" ${target.fulfillment === "shipping" ? "selected" : ""}>Shipping</option><option value="pickup" ${target.fulfillment === "pickup" ? "selected" : ""}>Pickup</option><option value="either" ${target.fulfillment === "either" ? "selected" : ""}>Either</option><option value="manual" ${target.fulfillment === "manual" ? "selected" : ""}>Manual review</option></select></label>
+    </div><a class="canonical-link" href="${escapeHtml(target.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(target.canonicalUrl)}</a>
+  </article>`).join("");
+  $("#missionDialog").showModal();
+}
+
+async function saveStrategies(strategies) {
+  await api("/api/v1/user/strategies", { method: "PUT", body: JSON.stringify({ strategies }) });
+  await refresh();
+}
+
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  try {
+    if (button.dataset.view) setView(button.dataset.view);
+    if (button.dataset.openView) setView(button.dataset.openView);
+    if (button.hasAttribute("data-close-dialog")) button.closest("dialog")?.close();
+    if (button.id === "addListingButton") $("#listingDialog").showModal();
+    if (button.id === "sendSignalButton") { $("#signalForm").reset(); $("#signalDialog").showModal(); }
+    if (button.id === "addStrategyButton") openStrategy();
+    if (button.dataset.missionEdit) await openMission(button.dataset.missionEdit);
+    if (button.id === "createPairingButton") {
+      const result = await api("/api/v1/user/devices/pairing-code", { method: "POST", body: "{}" });
+      state.pairing = result.pairing; renderDevices(); toast("One-time pairing code created. Enter it in the Yoink extension.");
+    }
+    if (button.id === "refreshDevicesButton") { await refresh(); toast("Chrome device status refreshed."); }
+    if (button.id === "copyPairingCodeButton" && state.pairing?.code) {
+      await navigator.clipboard.writeText(state.pairing.code); toast("Pairing code copied.");
+    }
+    if (button.dataset.deviceRevoke) {
+      if (confirm("Revoke this Chrome companion? It will need a new one-time code to reconnect.")) {
+        await api(`/api/v1/user/devices/${encodeURIComponent(button.dataset.deviceRevoke)}/revoke`, { method: "POST", body: "{}" });
+        await refresh(); toast("Chrome companion revoked.");
+      }
+    }
+    if (button.dataset.catalogApprove) {
+      if (!confirm("Approve this normalized exact listing change and apply it to the shared catalog? Existing retailer/SKU identity conflicts will still fail closed.")) return;
+      await api(`/api/v1/admin/catalog/proposals/${encodeURIComponent(button.dataset.catalogApprove)}/decision`, {
+        method: "POST",
+        body: JSON.stringify({
+          outcome: "approve",
+          note: "Exact listing identifiers reviewed in the admin control center.",
+          confirmation: "APPROVE_CATALOG_PROPOSAL"
+        })
+      });
+      await refresh(); toast("Catalog proposal approved and applied.");
+    }
+    if (button.dataset.catalogReject) {
+      const note = prompt("Why is this exact listing suggestion being rejected? This note is recorded in the audit trail.");
+      if (!note?.trim()) return;
+      await api(`/api/v1/admin/catalog/proposals/${encodeURIComponent(button.dataset.catalogReject)}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "reject", note, confirmation: "REJECT_CATALOG_PROPOSAL" })
+      });
+      await refresh(); toast("Catalog proposal rejected.");
+    }
+    if (button.dataset.roleGrant) {
+      const select = $(`[data-role-selection="${CSS.escape(button.dataset.roleGrant)}"]`);
+      if (!select?.value) throw new Error("Choose a role to grant.");
+      await api(`/api/v1/admin/authorization/users/${encodeURIComponent(button.dataset.roleGrant)}/roles/${encodeURIComponent(select.value)}`, { method: "POST", body: "{}" });
+      await refresh(false); toast("Role membership granted and audited.");
+    }
+    if (button.dataset.roleRevoke && button.dataset.roleRevokeUser) {
+      if (!confirm(`Revoke ${button.dataset.roleRevoke} from this user?`)) return;
+      await api(`/api/v1/admin/authorization/users/${encodeURIComponent(button.dataset.roleRevokeUser)}/roles/${encodeURIComponent(button.dataset.roleRevoke)}`, { method: "DELETE" });
+      await refresh(false); toast("Role membership revoked and audited.");
+    }
+    if (button.id === "actionsToggle") {
+      const paused = !state.snapshot.settings.actionsPaused;
+      await api("/api/v1/user/settings/actions", { method: "PATCH", body: JSON.stringify({ paused, reason: paused ? "Paused from the control center." : "Enabled from the control center." }) });
+      await refresh(); toast(paused ? "Actions paused. Signals will continue to be recorded." : "Qualified retailer add-only actions resumed.");
+    }
+    if (button.dataset.communityEnable) {
+      const card = button.closest("[data-community-retailer]");
+      const locationScope = await communityLocationScope(card);
+      const approved = confirm(`Enable read-only community sharing for ${retailerName(button.dataset.communityEnable)}?\n\nOnly explicit one-at-a-time shares from the extension are permitted. Yoink sends normalized stock facts derived from server-accepted evidence; it never sends page HTML, clicks, forms, account data, payment data, or offer tokens. Community results remain advisory and cannot trigger actions.`);
+      if (!approved) return;
+      await api(`/api/v1/user/community/consents/${encodeURIComponent(button.dataset.communityEnable)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          enabled: true,
+          locationScope,
+          privacyVersion: state.snapshot.community.privacyVersion,
+          confirmation: "SHARE_READ_ONLY_STOCK_EVIDENCE"
+        })
+      });
+      await refresh(false);
+      toast(`${retailerName(button.dataset.communityEnable)} community sharing enabled for explicit extension actions.`);
+    }
+    if (button.dataset.communityDisable) {
+      await api(`/api/v1/user/community/consents/${encodeURIComponent(button.dataset.communityDisable)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: false, locationScope: "", privacyVersion: "community-readonly-v1", confirmation: "SHARE_READ_ONLY_STOCK_EVIDENCE" })
+      });
+      await refresh(false);
+      toast(`${retailerName(button.dataset.communityDisable)} community sharing disabled.`);
+    }
+    if (button.dataset.communityDelete) {
+      if (!confirm(`Physically delete all of your ${retailerName(button.dataset.communityDelete)} community assertions and receipts? Consent is unchanged.`)) return;
+      await api(`/api/v1/user/community/contributions?retailer=${encodeURIComponent(button.dataset.communityDelete)}`, { method: "DELETE" });
+      await refresh(false);
+      toast(`${retailerName(button.dataset.communityDelete)} community contributions deleted.`);
+    }
+    if (button.id === "deleteAllCommunityButton") {
+      if (!confirm("Physically delete your complete community assertion and receipt ledger? Store opt-ins are unchanged.")) return;
+      await api("/api/v1/user/community/contributions", { method: "DELETE" });
+      await refresh(false);
+      toast("All community contributions deleted.");
+    }
+    if (button.dataset.identityReview && button.dataset.identityClaimId) {
+      const reviewed = button.dataset.identityReview === "reviewed";
+      const approved = confirm(reviewed
+        ? "Record that you checked this exact identifier claim?\n\nThis is provenance only. It does not remap either listing, merge stock, move a mission, or satisfy independent community quorum."
+        : "Reject this identity claim? The catalog and missions remain unchanged.");
+      if (!approved) return;
+      await api(`/api/v1/admin/identity/claims/${encodeURIComponent(button.dataset.identityClaimId)}/review`, {
+        method: "POST",
+        body: JSON.stringify({
+          outcome: button.dataset.identityReview,
+          note: reviewed ? "exact_identifier_checked" : "claim_rejected",
+          confirmation: "REVIEW_IDENTITY_CLAIM_WITHOUT_REMAP"
+        })
+      });
+      await refresh(false);
+      toast(reviewed ? "Local identity review recorded without remapping." : "Identity claim rejected.");
+    }
+    if (button.id === "deleteIdentityClaimsButton") {
+      if (!confirm("Physically delete all of your identity claims and review history? Catalog mappings and missions are unchanged.")) return;
+      await api("/api/v1/user/identity/claims", { method: "DELETE" });
+      await refresh(false);
+      toast("Identity claim history deleted.");
+    }
+    if (button.dataset.observerPromote && button.dataset.observerTarget) {
+      const approved = confirm(`Promote this signed observer-only recipe to ${button.dataset.observerTarget.replaceAll("_", " ")}?\n\nThe extension still uses only its packaged interpreter. This recipe cannot execute code, decide product identity, navigate, click, fill forms, check out, or submit an order.`);
+      if (!approved) return;
+      await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerPromote)}/promote`, {
+        method: "POST",
+        body: JSON.stringify({ targetState: button.dataset.observerTarget, confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE" })
+      });
+      await refresh(false);
+      toast(`Observer recipe promoted to ${button.dataset.observerTarget.replaceAll("_", " ")}.`);
+    }
+    if (button.dataset.observerDisable) {
+      if (!confirm("Activate the observer recipe kill switch? Distribution stops immediately and the packaged observer remains available.")) return;
+      await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerDisable)}/disable`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation: "DISABLE_OBSERVER_RECIPE", reasonCode: "maintainer_kill_switch" })
+      });
+      await refresh(false);
+      toast("Observer recipe disabled immediately.");
+    }
+    if (button.dataset.observerRollback) {
+      if (!confirm("Disable this recipe and restore its pre-reviewed signed rollback target?")) return;
+      await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerRollback)}/rollback`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation: "ROLLBACK_OBSERVER_RECIPE" })
+      });
+      await refresh(false);
+      toast("Observer recipe rollback completed.");
+    }
+    if (button.id === "activateTargetAddButton") {
+      const readiness = state.snapshot.targetQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("Target qualification evidence is not ready yet.");
+      }
+      const approved = confirm("Enable guarded Target adds?\n\nScope: Target-sold offers, shipping, quantity 1, add-to-cart only. Chrome will require an empty cart and revalidate SKU, seller, price, stock, and fulfillment immediately before clicking. Checkout and order submission remain disabled.");
+      if (!approved) return;
+      button.disabled = true;
+      await api("/api/v1/admin/qualifications/target-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_TARGET_ADD_V1"
+        })
+      });
+      await refresh();
+      toast("Guarded Target add-only execution is active.");
+    }
+    if (button.id === "activateWalmartAddButton") {
+      const readiness = state.snapshot.walmartQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("Walmart qualification evidence is not ready yet.");
+      }
+      const approved = confirm("Enable guarded Walmart adds?\n\nScope: Walmart-sold offers, explicitly verified shipping, quantity 1, add-to-cart only. Chrome will require an empty cart, stop at queues or challenges, and revalidate SKU, seller, price, stock, and fulfillment immediately before clicking. Checkout and order submission remain disabled.");
+      if (!approved) return;
+      button.disabled = true;
+      await api("/api/v1/admin/qualifications/walmart-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_WALMART_ADD_V3"
+        })
+      });
+      await refresh();
+      toast("Guarded Walmart add-only execution is active.");
+    }
+    if (button.id === "activateAmazonAddButton") {
+      const readiness = state.snapshot.amazonQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("Amazon qualification evidence is not ready yet.");
+      }
+      const approved = confirm("Enable guarded Amazon adds?\n\nScope: Amazon.com-sold offers with an exact ephemeral offer binding, explicitly verified shipping, quantity 1, add-to-cart only. Chrome will require an empty cart, stop at queues or challenges, and revalidate ASIN, seller, offer binding, price, stock, and fulfillment immediately before clicking. Buy Now, checkout, and order submission remain disabled.");
+      if (!approved) return;
+      button.disabled = true;
+      await api("/api/v1/admin/qualifications/amazon-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_AMAZON_ADD_V5"
+        })
+      });
+      await refresh();
+      toast("Guarded Amazon add-only execution is active.");
+    }
+    if (button.id === "activateBestBuyAddButton") {
+      const readiness = state.snapshot.bestBuyQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("Best Buy qualification evidence is not ready yet.");
+      }
+      const approved = confirm("Enable guarded Best Buy adds?\n\nScope: offers explicitly labeled Sold by Best Buy, shipping selected, quantity 1, add-to-cart only. Chrome will require an empty cart, stop at high-demand queues or challenges, and revalidate SKU, seller, price, stock, and fulfillment immediately before clicking. Marketplace, pickup, checkout, and order submission remain disabled.");
+      if (!approved) return;
+      button.disabled = true;
+      await api("/api/v1/admin/qualifications/bestbuy-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_BESTBUY_ADD_V3"
+        })
+      });
+      await refresh();
+      toast("Guarded Best Buy add-only execution is active.");
+    }
+    if (button.dataset.reviewResolution && button.dataset.jobId) {
+      const confirmed = button.dataset.reviewResolution === "confirmed";
+      const approved = confirm(confirmed
+        ? "Confirm this action succeeded?\n\nOnly do this after checking the retailer session and verifying the exact intended item/result. This updates mission fulfillment."
+        : "Confirm no purchase completed?\n\nOnly do this after checking the retailer session/cart. This closes the incident so a legitimate future re-signal can try again.");
+      if (!approved) return;
+      await api(`/api/v1/user/jobs/${encodeURIComponent(button.dataset.jobId)}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({
+          outcome: button.dataset.reviewResolution,
+          confirmation: "I_REVIEWED_BROWSER_STATE"
+        })
+      });
+      await refresh();
+      toast(confirmed ? "Action marked verified successful." : "Action closed as verified no purchase.");
+    }
+    if (button.dataset.strategyEdit) openStrategy(state.snapshot.strategies.find((item) => item.id === button.dataset.strategyEdit));
+    if (button.dataset.strategyDelete) {
+      const strategies = state.snapshot.strategies.filter((item) => item.id !== button.dataset.strategyDelete).map((item, index) => ({ ...item, position: (index + 1) * 10 }));
+      await saveStrategies(strategies); toast("Strategy deleted.");
+    }
+    if (button.dataset.strategyMove) {
+      const strategies = [...state.snapshot.strategies];
+      const index = strategies.findIndex((item) => item.id === button.dataset.strategyId);
+      const target = button.dataset.strategyMove === "up" ? index - 1 : index + 1;
+      if (index >= 0 && target >= 0 && target < strategies.length) [strategies[index], strategies[target]] = [strategies[target], strategies[index]];
+      await saveStrategies(strategies.map((item, itemIndex) => ({ ...item, position: (itemIndex + 1) * 10 })));
+    }
+  } catch (error) { toast(error.message || "The action failed.", true); }
+});
+
+let librarySearchTimer;
+$("#librarySearch").addEventListener("input", () => {
+  clearTimeout(librarySearchTimer);
+  librarySearchTimer = setTimeout(() => loadLibrary(true).then(renderLibrary).catch((error) => toast(error.message || "Library search failed.", true)), 250);
+});
+let missionSearchTimer;
+$("#missionSearch").addEventListener("input", () => {
+  clearTimeout(missionSearchTimer);
+  missionSearchTimer = setTimeout(() => loadMissions(true).then(renderMissions).catch((error) => toast(error.message || "Mission search failed.", true)), 250);
+});
+let auditSearchTimer;
+$("#auditSearch").addEventListener("input", () => {
+  clearTimeout(auditSearchTimer);
+  auditSearchTimer = setTimeout(() => loadAudit(true).then(renderAudit).catch((error) => toast(error.message || "Activity search failed.", true)), 250);
+});
+let signalSearchTimer;
+$("#signalSearch").addEventListener("input", () => {
+  clearTimeout(signalSearchTimer);
+  signalSearchTimer = setTimeout(() => loadSignals(true).then(renderSignals).catch((error) => toast(error.message || "Opportunity search failed.", true)), 250);
+});
+let jobSearchTimer;
+$("#jobSearch").addEventListener("input", () => {
+  clearTimeout(jobSearchTimer);
+  jobSearchTimer = setTimeout(() => loadJobs(true).then(renderJobs).catch((error) => toast(error.message || "Action search failed.", true)), 250);
+});
+$("#libraryMoreButton").addEventListener("click", async () => {
+  try { await loadLibrary(false); renderLibrary(); } catch (error) { toast(error.message || "More listings could not be loaded.", true); }
+});
+$("#missionMoreButton").addEventListener("click", async () => {
+  try { await loadMissions(false); renderMissions(); } catch (error) { toast(error.message || "More missions could not be loaded.", true); }
+});
+$("#auditMoreButton").addEventListener("click", async () => {
+  try { await loadAudit(false); renderAudit(); } catch (error) { toast(error.message || "More activity could not be loaded.", true); }
+});
+$("#signalMoreButton").addEventListener("click", async () => {
+  try { await loadSignals(false); renderSignals(); } catch (error) { toast(error.message || "More opportunities could not be loaded.", true); }
+});
+$("#jobMoreButton").addEventListener("click", async () => {
+  try { await loadJobs(false); renderJobs(); } catch (error) { toast(error.message || "More actions could not be loaded.", true); }
+});
+$("#listingForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const values = formObject(event.currentTarget);
+    const source = state.snapshot.sources.find((item) => item.id === values.sourceConnectionId)?.source;
+    if (!source) throw new Error("Choose an available source connection.");
+    await api("/api/v1/user/catalog/proposals", { method: "POST", body: JSON.stringify({
+      sourceConnectionId: values.sourceConnectionId, source,
+      sourceProductId: values.sourceProductId, sourceListingId: values.sourceListingId,
+      title: values.title, retailerId: values.retailerId, retailerSku: values.retailerSku,
+      canonicalUrl: values.canonicalUrl, listingStatus: values.listingStatus,
+      executionSupported: event.currentTarget.elements.executionSupported.checked,
+      msrpCents: dollarsToCents(values.msrp), currency: "USD"
+    }) });
+    event.currentTarget.closest("dialog").close(); await refresh(); toast("Exact listing change submitted for governed review.");
+  } catch (error) { toast(error.message || "Listing could not be saved.", true); }
+});
+
+$("#strategyForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const values = formObject(event.currentTarget);
+    const maxPriceCents = dollarsToCents(values.maxPrice);
+    const pricePolicy = { kind: values.priceKind };
+    if (["absolute_max", "above_msrp"].includes(values.priceKind)) {
+      if (maxPriceCents === null) throw new Error("This price policy requires an absolute maximum.");
+      pricePolicy.maxPriceCents = maxPriceCents;
+    }
+    if (values.priceKind === "slightly_above_msrp") {
+      const tolerancePercent = Number(values.tolerancePercent);
+      if (!Number.isFinite(tolerancePercent) || tolerancePercent < 0 || tolerancePercent > 100) {
+        throw new Error("Slightly-above tolerance must be from 0% through 100%.");
+      }
+      pricePolicy.toleranceBps = Math.round(tolerancePercent * 100);
+    }
+    const strategy = {
+      id: values.id, name: values.name, enabled: event.currentTarget.elements.enabled.checked,
+      position: Number(values.position), revision: Number(values.revision || 1),
+      sources: $$('[data-strategy-source]:checked', event.currentTarget).map((input) => input.value),
+      retailers: $$('[data-strategy-retailer]:checked', event.currentTarget).map((input) => input.value),
+      pricePolicy,
+      sellerPolicy: values.sellerPolicy, allowedSellers: commaList(values.allowedSellers), includeKeywords: values.includeKeywords,
+      excludeKeywords: values.excludeKeywords, action: values.action,
+      quantity: values.quantity === "max" ? "max" : Number(values.quantity), fulfillment: values.fulfillment,
+      maxSignalAgeSeconds: Number(values.maxSignalAgeSeconds)
+    };
+    const others = state.snapshot.strategies.filter((item) => item.id !== strategy.id);
+    await saveStrategies([...others, strategy].sort((left, right) => left.position - right.position));
+    event.currentTarget.closest("dialog").close(); toast("Strategy saved. The first matching rule wins.");
+  } catch (error) { toast(error.message || "Strategy could not be saved.", true); }
+});
+
+$("#missionForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const values = formObject(event.currentTarget);
+    const targets = $$("[data-mission-target]", $("#missionTargetEditors")).map((editor) => ({
+      id: editor.dataset.missionTarget,
+      enabled: $("[data-target-field='enabled']", editor).checked,
+      maxUnitPriceCents: dollarsToCents($("[data-target-field='maxUnitPrice']", editor).value),
+      sellerPolicy: $("[data-target-field='sellerPolicy']", editor).value,
+      fulfillment: $("[data-target-field='fulfillment']", editor).value
+    }));
+    if (!targets.length) throw new Error("This mission has no exact listing targets.");
+    await api(`/api/v1/user/missions/${encodeURIComponent(values.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: values.status,
+        targetQuantity: Number(values.targetQuantity),
+        targets
+      })
+    });
+    state.editingMission = null;
+    event.currentTarget.closest("dialog").close();
+    await refresh();
+    toast("Mission and retailer target guardrails saved.");
+  } catch (error) { toast(error.message || "Mission could not be saved.", true); }
+});
+
+$("#identityClaimForm").addEventListener("input", () => { state.identityDirty = true; });
+$("#identityClaimForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const values = formObject(event.currentTarget);
+    if (!values.listingId || !values.referenceListingId || values.listingId === values.referenceListingId) {
+      throw new Error("Choose two different exact retailer listings.");
+    }
+    const approved = confirm("Propose this cross-store identity claim?\n\nOnly exact identifiers and selected variant attributes are accepted. The claim will not remap the catalog, merge inventory, transfer a mission, or authorize an action.");
+    if (!approved) return;
+    const attributes = {
+      ...(values.size ? { size: values.size } : {}),
+      ...(values.color ? { color: values.color } : {}),
+      ...(values.edition ? { edition: values.edition } : {}),
+      ...(values.language ? { language: values.language } : {}),
+      ...(values.packCount ? { packCount: Number(values.packCount) } : {}),
+      ...(values.condition ? { condition: values.condition } : {})
+    };
+    await api("/api/v1/user/identity/claims", {
+      method: "POST",
+      body: JSON.stringify({
+        contractVersion: 1,
+        listingId: values.listingId,
+        referenceListingId: values.referenceListingId,
+        identifierKind: values.identifierKind,
+        identifierValue: values.identifierValue,
+        brand: values.brand,
+        mpn: values.mpn,
+        attributes,
+        provenanceNote: "manual_catalog_review",
+        confirmation: "PROPOSE_EXACT_PRODUCT_EQUIVALENCE"
+      })
+    });
+    event.currentTarget.reset();
+    state.identityDirty = false;
+    await refresh(false);
+    toast("Exact identity claim recorded without changing catalog truth.");
+  } catch (error) { toast(error.message || "Identity claim could not be recorded.", true); }
+});
+
+$("#observerRecipeForm").addEventListener("input", () => { state.observerRecipeDirty = true; });
+$("#observerRecipeForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const values = formObject(event.currentTarget);
+    let fields;
+    try { fields = JSON.parse(values.fieldsJson); } catch { throw new Error("Observer recipe field definitions must be valid JSON."); }
+    const approved = confirm("Submit this recipe to quarantine?\n\nThe server will reject any field, selector, attribute, or operation outside the packaged observer-only schema. Submission does not distribute or execute the recipe.");
+    if (!approved) return;
+    await api("/api/v1/admin/observer-recipes", {
+      method: "POST",
+      body: JSON.stringify({
+        contractVersion: 1,
+        retailerId: values.retailerId,
+        recipeVersion: values.recipeVersion,
+        minimumExtensionVersion: values.minimumExtensionVersion,
+        expiresAt: new Date(Date.now() + Number(values.lifetimeDays) * 24 * 60 * 60_000).toISOString(),
+        rollbackRecipeId: values.rollbackRecipeId,
+        fields,
+        provenanceCode: values.provenanceCode,
+        confirmation: "PROPOSE_OBSERVER_ONLY_RECIPE"
+      })
+    });
+    event.currentTarget.reset();
+    state.observerRecipeDirty = false;
+    await refresh(false);
+    toast("Observer-only recipe structurally validated and quarantined.");
+  } catch (error) { toast(error.message || "Observer recipe could not be proposed.", true); }
+});
+
+$("#settingsForm").addEventListener("input", () => { state.settingsDirty = true; });
+$("#settingsForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const values = formObject(event.currentTarget);
+    const taxPercent = Number(values.taxPercent);
+    if (!Number.isFinite(taxPercent) || taxPercent < 0 || taxPercent > 100) {
+      throw new Error("Tax reserve must be from 0% through 100%.");
+    }
+    await api("/api/v1/user/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        dedupeWindowSeconds: Number(values.dedupeWindowSeconds),
+        affiliateMode: values.affiliateMode,
+        taxBps: Math.round(taxPercent * 100),
+        storeAllowancesCents: {
+          target: nonNegativeDollarsToCents(values.targetAllowance),
+          walmart: nonNegativeDollarsToCents(values.walmartAllowance),
+          amazon: nonNegativeDollarsToCents(values.amazonAllowance),
+          bestbuy: nonNegativeDollarsToCents(values.bestbuyAllowance)
+        }
+      })
+    });
+    state.settingsDirty = false;
+    await refresh();
+    toast("Signal and order guardrails saved.");
+  } catch (error) { toast(error.message || "Settings could not be saved.", true); }
+});
+
+$("#attributionForm").addEventListener("input", () => { state.attributionDirty = true; });
+$("#attributionForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const policies = $$("[data-attribution-retailer]", $("#attributionPolicyEditors")).map((editor) => ({
+      retailerId: editor.dataset.attributionRetailer,
+      enabled: $("[data-attribution-field='enabled']", editor).checked,
+      provider: $("[data-attribution-field='provider']", editor).value,
+      publisherSlug: $("[data-attribution-field='publisherSlug']", editor).value,
+      articleBaseUrl: $("[data-attribution-field='articleBaseUrl']", editor).value,
+      associateTag: $("[data-attribution-field='associateTag']", editor).value
+    }));
+    await api("/api/v1/user/attribution-policies", {
+      method: "PUT",
+      body: JSON.stringify({ policies })
+    });
+    state.attributionDirty = false;
+    await refresh();
+    toast("Affiliate routing policies saved and validated.");
+  } catch (error) { toast(error.message || "Affiliate routing could not be saved.", true); }
+});
+
+$("#signalForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const values = formObject(event.currentTarget);
+    const source = state.snapshot.sources.find((item) => item.id === values.sourceConnectionId)?.source;
+    const body = {
+      sourceConnectionId: values.sourceConnectionId, source,
+      externalEventId: values.externalEventId, eventType: values.eventType,
+      observedAt: new Date().toISOString(), test: event.currentTarget.elements.test.checked,
+      identity: {
+        sourceProductId: values.sourceProductId, sourceListingId: values.sourceListingId,
+        retailerId: values.retailerId, retailerSku: values.retailerSku,
+        canonicalUrl: values.canonicalUrl, title: values.title
+      },
+      offer: {
+        availability: values.availability, unitPriceCents: dollarsToCents(values.price), currency: "USD",
+        sellerName: values.sellerName, sellerType: values.sellerType,
+        orderLimit: values.orderLimit ? Number(values.orderLimit) : null,
+        fulfillment: values.fulfillment, offerId: values.offerId
+      },
+      evidence: { headline: `${values.title} signal`, body: `Submitted through the local Yoink control center.` },
+      parserVersion: "control-center-v1"
+    };
+    const result = await api("/api/v1/user/signals", { method: "POST", body: JSON.stringify(body) });
+    event.currentTarget.closest("dialog").close(); await refresh(); toast(`Signal accepted: ${result.decision.replaceAll("_", " ")}.`);
+  } catch (error) { toast(error.message || "Signal could not be sent.", true); }
+});
+
+window.addEventListener("hashchange", () => setView(location.hash.slice(1) || "overview"));
+
+try {
+  await refresh();
+  const requested = location.hash.slice(1);
+  if ($(`[data-view-panel="${CSS.escape(requested)}"]`)) setView(requested); else setView("overview");
+} catch (error) {
+  toast(error.message || "Yoink could not load.", true);
+  $("#heroStatus").innerHTML = `<div class="empty">Control plane unavailable.</div>`;
+}
+
+setInterval(refreshFromLoopback, 3_000);

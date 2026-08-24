@@ -1,0 +1,181 @@
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import test from "node:test";
+import type { BrowserActionContract } from "../packages/browser-safety/src/index.js";
+import { AMAZON_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
+import {
+  commitAmazonAdd,
+  inspectAmazonEmptyCart,
+  prepareAmazonAdd,
+  rehearseAmazonAdd,
+  type AmazonAddJob,
+  verifyAmazonAddedCart
+} from "../apps/extension/src/amazon-action.js";
+
+const require = createRequire(import.meta.url);
+const { JSDOM } = require("jsdom") as { JSDOM: new (html: string, options?: { url?: string }) => { window: { document: Document } } };
+const RETAILER_FIXTURES = join(process.cwd(), "test", "fixtures", "retailers");
+const AMAZON_FIXTURES = join(process.cwd(), "test", "fixtures", "amazon");
+const PRODUCT_URL = "https://www.amazon.com/dp/B0GYTRYV7P";
+const CART_URL = "https://www.amazon.com/gp/cart/view.html";
+const NOW = new Date("2026-08-23T16:00:00.000Z").getTime();
+
+function product(name = "amazon-first-party.html", url = PRODUCT_URL): Document {
+  return new JSDOM(readFileSync(join(RETAILER_FIXTURES, name), "utf8"), { url }).window.document;
+}
+
+function job(overrides: Partial<AmazonAddJob> = {}): AmazonAddJob {
+  const base: BrowserActionContract = {
+    contractVersion: 1,
+    jobId: "job_amazon_add_fixture",
+    retailerId: "amazon",
+    retailerSku: "B0GYTRYV7P",
+    canonicalUrl: PRODUCT_URL,
+    action: "add_to_cart",
+    quantity: 1,
+    maxUnitPriceCents: 2200,
+    maxOrderTotalCents: 2200,
+    currency: "USD",
+    sellerPolicy: "first_party_only",
+    expectedSeller: "Amazon.com",
+    fulfillment: "shipping",
+    expiresAt: new Date(NOW + 60_000).toISOString()
+  };
+  return { ...base, adapterVersion: AMAZON_ADD_ADAPTER_VERSION, ...overrides };
+}
+
+test("Amazon rehearsal reaches one exact no-click boundary without exposing the offer ID", () => {
+  const document = product();
+  let clicks = 0;
+  document.querySelector("#add-to-cart-button")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    clicks += 1;
+  });
+  const result = rehearseAmazonAdd(document, PRODUCT_URL, job(), NOW);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.wouldClick, true);
+  assert.equal(JSON.stringify(result).includes("FIXTURE+OFFER/ONE=="), false);
+  assert.equal(clicks, 0);
+
+  const queued = product();
+  queued.body.insertAdjacentHTML("afterbegin", "<div role='dialog'>You’re in line in our virtual queue</div>");
+  assert.deepEqual(rehearseAmazonAdd(queued, PRODUCT_URL, job(), NOW), {
+    ok: false,
+    reason: "manual_action_required"
+  });
+});
+
+test("Amazon add consumes authorization once and revalidates the same ephemeral offer binding", () => {
+  const document = product();
+  let clicks = 0;
+  document.querySelector("#add-to-cart-button")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    clicks += 1;
+  });
+  const prepared = prepareAmazonAdd(document, PRODUCT_URL, job(), NOW);
+  assert.equal(prepared.ok, true);
+  assert.equal(JSON.stringify(prepared).includes("FIXTURE+OFFER/ONE=="), false);
+  if (!prepared.ok) return;
+  const committed = commitAmazonAdd(document, PRODUCT_URL, job(), prepared.authorizationId, NOW + 100);
+  assert.equal(committed.ok, true);
+  assert.equal(committed.clicked, true);
+  assert.equal(clicks, 1);
+  assert.deepEqual(commitAmazonAdd(document, PRODUCT_URL, job(), prepared.authorizationId, NOW + 200), {
+    ok: false,
+    reason: "authorization_missing",
+    clicked: false
+  });
+
+  const changed = product();
+  const changedPreparation = prepareAmazonAdd(changed, PRODUCT_URL, job(), NOW);
+  assert.equal(changedPreparation.ok, true);
+  if (!changedPreparation.ok) return;
+  const offer = changed.querySelector("input[name='offerListingID']") as HTMLInputElement | null;
+  if (offer) offer.value = "DIFFERENT_EPHEMERAL_OFFER";
+  assert.deepEqual(commitAmazonAdd(changed, PRODUCT_URL, job(), changedPreparation.authorizationId, NOW + 100), {
+    ok: false,
+    reason: "offer_binding_changed",
+    clicked: false
+  });
+});
+
+test("Amazon add v5 rejects marketplace, pickup, multi-quantity, checkout, and ambiguous canonical offers", () => {
+  assert.equal(prepareAmazonAdd(product("amazon-marketplace.html"), PRODUCT_URL, job(), NOW).reason, "third_party_seller");
+  const separatedMarketplaceUrl = "https://www.amazon.com/dp/B081J5PW5J";
+  assert.equal(prepareAmazonAdd(
+    product("amazon-offer-display-separated-marketplace.html", separatedMarketplaceUrl),
+    separatedMarketplaceUrl,
+    job({
+      retailerSku: "B081J5PW5J",
+      canonicalUrl: separatedMarketplaceUrl,
+      maxUnitPriceCents: 1200,
+      maxOrderTotalCents: 1200
+    }),
+    NOW
+  ).reason, "third_party_seller");
+  assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
+  assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
+  assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
+  assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ fulfillment: "pickup" }), NOW).reason, "fulfillment_not_supported");
+
+  const ambiguous = product();
+  ambiguous.querySelector("form")?.insertAdjacentHTML("beforeend", "<input name='offerListingID' value='SECOND_OFFER'>");
+  assert.equal(prepareAmazonAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
+
+  const accordionUrl = "https://www.amazon.com/dp/B0FB21526X";
+  assert.equal(rehearseAmazonAdd(
+    product("amazon-accordion-canonical-offer.html", accordionUrl),
+    accordionUrl,
+    job({
+      retailerSku: "B0FB21526X",
+      canonicalUrl: accordionUrl,
+      maxUnitPriceCents: 7999,
+      maxOrderTotalCents: 7999
+    }),
+    NOW
+  ).ok, true);
+
+  const variationUrl = "https://www.amazon.com/dp/B0FH8M48ZC";
+  assert.equal(rehearseAmazonAdd(
+    product("amazon-variation-heavy.html", variationUrl),
+    variationUrl,
+    job({
+      retailerSku: "B0FH8M48ZC",
+      canonicalUrl: variationUrl,
+      maxUnitPriceCents: 17599,
+      maxOrderTotalCents: 17599
+    }),
+    NOW
+  ).ok, true);
+
+  const marketplaceAccordionUrl = "https://www.amazon.com/dp/B07ZPS1KVD";
+  assert.equal(prepareAmazonAdd(
+    product("amazon-accordion-marketplace.html", marketplaceAccordionUrl),
+    marketplaceAccordionUrl,
+    job({
+      retailerSku: "B07ZPS1KVD",
+      canonicalUrl: marketplaceAccordionUrl,
+      maxUnitPriceCents: 27477,
+      maxOrderTotalCents: 27477
+    }),
+    NOW
+  ).reason, "third_party_seller");
+
+  const quantityChanged = product();
+  quantityChanged.querySelector("form")?.insertAdjacentHTML("beforeend", "<select id='quantity' name='quantity'><option value='2' selected>2</option></select>");
+  assert.equal(prepareAmazonAdd(quantityChanged, PRODUCT_URL, job(), NOW).ok, false);
+});
+
+test("Amazon cart preflight requires emptiness and post-add proof requires one exact line", () => {
+  const empty = new JSDOM("<body><main id='sc-active-cart'><h1>Your Amazon Cart is empty</h1></main></body>", { url: CART_URL }).window.document;
+  assert.deepEqual(inspectAmazonEmptyCart(empty, CART_URL), { ok: true, reason: "verified_empty" });
+  const cart = new JSDOM(readFileSync(join(AMAZON_FIXTURES, "cart.html"), "utf8"), { url: CART_URL }).window.document;
+  assert.deepEqual(inspectAmazonEmptyCart(cart, CART_URL), { ok: false, reason: "foreign_cart_line" });
+  const prepared = prepareAmazonAdd(product(), PRODUCT_URL, job(), NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  const verified = verifyAmazonAddedCart(cart, CART_URL, job(), prepared.proof, NOW + 500);
+  assert.equal(verified.ok, true);
+});

@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Yoink Companion",
+  "version": "0.19.0",
+  "description": "Connects TrackaLacker push to local Yoink, observes thirteen exact retailers, and runs four independently qualified add-only lanes.",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "notifications",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": [
+    "https://www.target.com/*",
+    "https://trackalacker.com/*",
+    "https://www.trackalacker.com/*",
+    "https://*.amazon.com/*",
+    "https://*.walmart.com/*",
+    "https://*.bestbuy.com/*",
+    "https://www.disneystore.com/*",
+    "https://*.ravensburger.us/*",
+    "https://merch.riotgames.com/*",
+    "https://*.booksamillion.com/*",
+    "https://*.fanatics.com/*",
+    "https://*.kohls.com/*",
+    "https://*.macys.com/*",
+    "https://*.p-bandai.com/*",
+    "https://*.pokemoncenter.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Yoink Companion",
+    "default_popup": "popup.html"
+  }
+}
