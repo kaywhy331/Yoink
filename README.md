@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.21.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.22.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,19 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.22.0 adds a separate read-only Walmart Collectibles Draw lifecycle.
+An explicit companion action observes only the exact draw hub, extracts bounded
+item ID, title, price, first-party seller, draw state, close time, condition,
+quantity limits, and the fact that normal Add is suppressed, then writes a
+sanitized migration-24 ledger. User and admin views match each exact Walmart
+item ID to an existing purchase plan and automatically hide expired drawings.
+Observer/runtime failures are reported immediately with allowlisted codes. The
+integration never reads or stores account, address, payment, membership,
+session, cookie, entry-token, or entry-status data. It cannot enter a drawing:
+Walmart drawing entry is irrevocable and authorizes a future automatic charge
+and order if selected, so it is isolated from the qualified Walmart add-only
+lane and remains manual pending a separately designed high-risk capability.
 
 The community pilot is explicit and read-only: users opt in per retailer
 and deliberately share one server-reconstructed sanitized observation at a
@@ -181,6 +194,15 @@ inspection also proves that one unique live offer token is bound to the exact
 ASIN and Add control. The token and any constructed validation route remain in
 page memory and are discarded; only readiness and a reason code are persisted.
 These observations never authorize mutation by themselves.
+
+Walmart Collectibles Draw uses a separate `walmart-draw-observer-v1` contract,
+not the normal Walmart product observer or `walmart-add-v3` qualification
+dossier. From the exact `/shop/collectibles/draw` hub it records at most 24
+normalized cards and reconstructs canonical item URLs server-side. Draw cards
+are matched to private missions only by exact Walmart item ID. They are never
+published as ordinary in-stock/Add evidence because Walmart suppresses Add on
+these cards and selecting **Enter drawing** authorizes a contingent order. The
+companion exposes no entry call, entry click, or drawing preference endpoint.
 
 Every explicit retailer inspection now sends a second, authenticated adapter
 diagnostic to the local server. If the packaged observer cannot be injected,

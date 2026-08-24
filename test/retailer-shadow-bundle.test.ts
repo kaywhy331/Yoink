@@ -72,6 +72,26 @@ test("the production generic observer bundle extracts all nine read-only retaile
   }
 });
 
+test("the production observer bundle extracts all four exact Walmart Draw cards read-only", () => {
+  const url = "https://www.walmart.com/shop/collectibles/draw";
+  const context = bundleContext(readFileSync(join(FIXTURES, "walmart-draw-hub.html"), "utf8"), url);
+  const result = runInContext(
+    `YoinkRetailerShadow.observeWalmartDrawHub(document, location.href, "2026-08-24T19:10:00.000Z")`,
+    context
+  ) as Record<string, unknown>;
+  const plain = JSON.parse(JSON.stringify(result)) as { outcome: string; observedCardCount: number; items: Array<Record<string, unknown>> };
+  assert.equal(plain.outcome, "passed");
+  assert.equal(plain.observedCardCount, 4);
+  assert.deepEqual(plain.items.map((item) => [item.retailerSku, item.unitPriceCents, item.orderMaxLimit]), [
+    ["19624258216", 597, 99],
+    ["19536452232", 597, 99],
+    ["5631614124", 5997, 5],
+    ["18029663536", 4998, 5]
+  ]);
+  assert.ok(plain.items.every((item) => item.addControlSuppressed === true));
+  assert.equal(JSON.stringify(plain).includes("entryToken"), false);
+});
+
 test("the production generic observer bundle rejects category and search pages that merely mention product IDs", () => {
   const rejects = [
     ["disney", "https://www.disneystore.com/search?q=409914998395"],

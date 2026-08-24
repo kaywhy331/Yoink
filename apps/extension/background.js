@@ -78,6 +78,7 @@ const SUPPORTED_RETAILER_DOMAINS = Object.freeze([
 ]);
 const TARGET_ADD_ADAPTER_VERSION = "target-add-v1";
 const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v3";
+const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v5";
 const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v3";
 const TARGET_CART_URL = "https://www.target.com/cart";
@@ -181,6 +182,7 @@ function targetCapabilities() {
     observerRecipeShadow: true,
     sanitizedAdapterDiagnostics: true,
     durableAdapterDiagnostics: true,
+    walmartDrawReadOnly: true,
     trackalackerPush: true,
     trackalackerCatalogSync: true
   };
@@ -251,6 +253,19 @@ function exactTargetProductUrl(value) {
       && !url.username
       && !url.password
       && /(?:^|\/)A-\d{6,}(?:\/|$)/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function exactWalmartDrawHubUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:"
+      && !url.username
+      && !url.password
+      && (url.hostname === "walmart.com" || url.hostname.endsWith(".walmart.com"))
+      && url.pathname.replace(/\/+$/, "") === "/shop/collectibles/draw";
   } catch {
     return false;
   }
@@ -379,6 +394,147 @@ function retailerObservationPayload(value, retailerId) {
     purchaseRouteReady: retailerId === "amazon" && value.purchaseRouteReady === true,
     routeReasonCode
   };
+}
+
+const WALMART_DRAW_OUTCOMES = new Set(["passed", "partial", "failed", "manual"]);
+const WALMART_DRAW_STATES = new Set(["active", "upcoming", "closed", "unknown"]);
+const WALMART_DRAW_REASONS = new Set([
+  "verified", "no_active_drawings", "draw_binding_incomplete", "security_challenge",
+  "interactive_auth", "interactive_mfa", "interactive_location", "interactive_membership",
+  "interactive_queue", "interactive_unknown", "draw_module_missing", "draw_payload_missing",
+  "observer_bundle_injection_failed", "observer_execution_failed", "observer_top_frame_missing",
+  "observer_runtime_unavailable", "observer_collection_failed", "observer_contract_invalid"
+]);
+
+function walmartDrawNullableInteger(value, minimum, maximum) {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < minimum || number > maximum) {
+    throw new Error("The Walmart Draw observer returned invalid bounded evidence.");
+  }
+  return number;
+}
+
+function walmartDrawScanPayload(value) {
+  if (!value || typeof value !== "object" || !Array.isArray(value.items)) {
+    throw new Error("The Walmart Draw observer returned no scan evidence.");
+  }
+  const outcome = String(value.outcome || "");
+  const reasonCode = String(value.reasonCode || "").toLocaleLowerCase("en-US");
+  const interactiveBlock = ["", "auth", "mfa", "location", "membership", "queue", "unknown"].includes(value.interactiveBlock)
+    ? value.interactiveBlock : "unknown";
+  const expectedCardCount = Number(value.expectedCardCount);
+  const observedCardCount = Number(value.observedCardCount);
+  const observedTime = new Date(String(value.observedAt || "")).getTime();
+  if (value.adapterVersion !== WALMART_DRAW_OBSERVER_VERSION
+    || value.contractVersion !== 1
+    || value.pageKind !== "walmart_draw_hub"
+    || !WALMART_DRAW_OUTCOMES.has(outcome)
+    || !WALMART_DRAW_REASONS.has(reasonCode)
+    || !Number.isFinite(observedTime)
+    || !Number.isInteger(expectedCardCount) || expectedCardCount < 0 || expectedCardCount > 24
+    || !Number.isInteger(observedCardCount) || observedCardCount < 0 || observedCardCount > 24
+    || expectedCardCount < observedCardCount
+    || value.items.length !== observedCardCount
+    || typeof value.securityChallenge !== "boolean") {
+    throw new Error("The Walmart Draw observer returned invalid scan evidence.");
+  }
+  const reasonMatches = outcome === "passed" ? ["verified", "no_active_drawings"].includes(reasonCode)
+    : outcome === "partial" ? reasonCode === "draw_binding_incomplete"
+      : outcome === "manual" ? reasonCode === "security_challenge" || reasonCode.startsWith("interactive_")
+        : ["draw_module_missing", "draw_payload_missing"].includes(reasonCode) || reasonCode.startsWith("observer_");
+  const expectedInteractiveReason = interactiveBlock ? `interactive_${interactiveBlock}` : "";
+  if (!reasonMatches
+    || value.securityChallenge !== (reasonCode === "security_challenge")
+    || (outcome !== "manual" && interactiveBlock !== "")
+    || (outcome === "manual" && reasonCode !== "security_challenge" && reasonCode !== expectedInteractiveReason)
+    || (reasonCode === "security_challenge" && interactiveBlock !== "")
+    || (["failed", "manual"].includes(outcome) && observedCardCount !== 0)) {
+    throw new Error("The Walmart Draw observer returned inconsistent scan evidence.");
+  }
+  const seen = new Set();
+  const items = value.items.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("The Walmart Draw observer returned an invalid item.");
+    const retailerSku = String(item.retailerSku || "");
+    const title = String(item.title || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+    const sellerName = String(item.sellerName || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+    const unitPriceCents = item.unitPriceCents === null ? null : Number(item.unitPriceCents);
+    const closeTime = item.closesAt === null ? null : new Date(String(item.closesAt || "")).getTime();
+    if (!/^\d{5,20}$/.test(retailerSku) || seen.has(retailerSku) || !title
+      || (unitPriceCents !== null && (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0 || unitPriceCents > 100_000_000))
+      || item.currency !== "USD"
+      || !["first_party", "third_party", "unknown"].includes(item.sellerType)
+      || !WALMART_DRAW_STATES.has(item.drawState)
+      || (item.sellerType === "third_party" && !sellerName)
+      || (item.closesAt !== null && !Number.isFinite(closeTime))
+      || typeof item.drawControlPresent !== "boolean"
+      || typeof item.addControlSuppressed !== "boolean") {
+      throw new Error("The Walmart Draw observer returned invalid item evidence.");
+    }
+    seen.add(retailerSku);
+    return {
+      retailerSku,
+      title,
+      unitPriceCents,
+      currency: "USD",
+      sellerName: item.sellerType === "first_party" ? "Walmart" : sellerName,
+      sellerType: item.sellerType,
+      drawState: item.drawState,
+      closesAt: item.closesAt === null ? null : new Date(closeTime).toISOString(),
+      conditionCode: walmartDrawNullableInteger(item.conditionCode, 0, 9_999_999),
+      conditionGroupCode: walmartDrawNullableInteger(item.conditionGroupCode, 0, 9_999),
+      orderMinLimit: walmartDrawNullableInteger(item.orderMinLimit, 1, 99),
+      orderMaxLimit: walmartDrawNullableInteger(item.orderMaxLimit, 1, 99),
+      drawControlPresent: item.drawControlPresent,
+      addControlSuppressed: item.addControlSuppressed
+    };
+  });
+  return {
+    adapterVersion: WALMART_DRAW_OBSERVER_VERSION,
+    contractVersion: 1,
+    observedAt: new Date(observedTime).toISOString(),
+    pageKind: "walmart_draw_hub",
+    outcome,
+    reasonCode,
+    expectedCardCount,
+    observedCardCount,
+    securityChallenge: value.securityChallenge,
+    interactiveBlock,
+    items
+  };
+}
+
+function walmartDrawFailurePayload(reasonCode) {
+  return walmartDrawScanPayload({
+    adapterVersion: WALMART_DRAW_OBSERVER_VERSION,
+    contractVersion: 1,
+    observedAt: new Date().toISOString(),
+    pageKind: "walmart_draw_hub",
+    outcome: "failed",
+    reasonCode,
+    expectedCardCount: 0,
+    observedCardCount: 0,
+    securityChallenge: false,
+    interactiveBlock: "",
+    items: []
+  });
+}
+
+async function postWalmartDrawScan(device, scan) {
+  const payload = walmartDrawScanPayload(scan);
+  return request("/devices/self/walmart-draw/scans", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify(payload)
+  }, EVIDENCE_REQUEST_TIMEOUT_MS);
+}
+
+async function reportWalmartDrawFailure(device, reasonCode) {
+  try {
+    return await postWalmartDrawScan(device, walmartDrawFailurePayload(reasonCode));
+  } catch {
+    return null;
+  }
 }
 
 const DIAGNOSTIC_OPERATIONS = new Set(["observe", "rehearse_add", "live_add"]);
@@ -1703,6 +1859,72 @@ async function inspectTargetTab() {
   return { state: await checkHealth(), observation: payload.observation, recipeTrial };
 }
 
+async function inspectWalmartDrawHubTab() {
+  const device = await storedDevice();
+  if (!device?.id || !device?.token) throw new Error("Pair this Chrome companion before inspecting Walmart drawings.");
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs[0];
+  if (!Number.isInteger(tab?.id) || !exactWalmartDrawHubUrl(tab.url)) {
+    throw new Error("Open the exact Walmart Collectibles Draw page in the active tab, then try again.");
+  }
+  const origins = RETAILER_ORIGINS.walmart;
+  if (!await chrome.permissions.contains({ origins })) {
+    throw new Error("Allow Walmart page access, then try again.");
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "ISOLATED",
+      files: ["retailer-shadow.js"]
+    });
+  } catch {
+    await reportWalmartDrawFailure(device, "observer_bundle_injection_failed");
+    throw new Error("Yoink could not load the Walmart Draw observer. The failure was reported for repair.");
+  }
+  let injections;
+  try {
+    injections = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "ISOLATED",
+      args: ["observeWalmartDrawHub"],
+      func: () => {
+        try {
+          const observer = globalThis.YoinkRetailerShadow;
+          if (!observer || typeof observer.observeWalmartDrawHub !== "function") {
+            return { ok: false, reasonCode: "observer_runtime_unavailable" };
+          }
+          return { ok: true, scan: observer.observeWalmartDrawHub(document, location.href) };
+        } catch {
+          return { ok: false, reasonCode: "observer_collection_failed" };
+        }
+      }
+    });
+  } catch {
+    await reportWalmartDrawFailure(device, "observer_execution_failed");
+    throw new Error("Yoink could not inspect Walmart drawings. The failure was reported for repair.");
+  }
+  const result = injections.find((entry) => entry.frameId === 0)?.result;
+  if (!result) {
+    await reportWalmartDrawFailure(device, "observer_top_frame_missing");
+    throw new Error("Yoink could not inspect Walmart drawings. The failure was reported for repair.");
+  }
+  if (!result.ok) {
+    const reasonCode = OBSERVER_RUNTIME_FAILURE_REASONS.has(result.reasonCode)
+      ? result.reasonCode : "observer_collection_failed";
+    await reportWalmartDrawFailure(device, reasonCode);
+    throw new Error("Yoink could not inspect Walmart drawings. The failure was reported for repair.");
+  }
+  let scan;
+  try {
+    scan = walmartDrawScanPayload(result.scan);
+  } catch {
+    await reportWalmartDrawFailure(device, "observer_contract_invalid");
+    throw new Error("Yoink received invalid Walmart Draw evidence. The failure was reported for repair.");
+  }
+  const response = await postWalmartDrawScan(device, scan);
+  return { state: await checkHealth(), scan: response.scan };
+}
+
 async function inspectRetailerTab() {
   const device = await storedDevice();
   if (!device?.id || !device?.token) throw new Error("Pair this Chrome companion before inspecting a retailer.");
@@ -2814,6 +3036,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const inspection = message?.type === "yoink:inspect-target";
+  const walmartDrawInspection = message?.type === "yoink:inspect-walmart-draw";
   const retailerInspection = message?.type === "yoink:inspect-retailer";
   const communityContribution = message?.type === "yoink:contribute-retailer";
   const rehearsal = message?.type === "yoink:rehearse-target";
@@ -2828,7 +3051,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     "yoink:trackalacker-sync-progress",
     "yoink:trackalacker-sync-item"
   ].includes(message?.type);
-  const pageOperation = inspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || contentOperation;
+  const pageOperation = inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : message?.type === "yoink:pair-device"
@@ -2837,6 +3060,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ? forgetDevice()
         : inspection
           ? inspectTargetTab()
+          : walmartDrawInspection
+            ? inspectWalmartDrawHubTab()
           : retailerInspection
             ? inspectRetailerTab()
           : communityContribution

@@ -100,6 +100,26 @@ no-click rehearsal, a current capable companion, the exact dossier hash, and a
 separate local confirmation. Shipping implementation is complete, but live
 authorization remains closed until those current-user gates are satisfied.
 
+Yoink 0.22 adds Walmart Collectibles Draw as a distinct read-only lifecycle.
+The packaged `walmart-draw-observer-v1` accepts only the exact draw hub and
+extracts a bounded public card schema from server-rendered draw modules, with a
+visible-card fallback. The extension allowlists and posts item ID, title, price,
+seller class/name, draw state, closing instant, condition, quantity limits, and
+draw/Add-control state to migration 24. The server rebuilds canonical URLs,
+keeps an idempotent bounded history, projects still-open drawings, and joins
+only on exact Walmart listing SKU to label private mission matches. Sanitized
+observer failures use the same ledger with no item payload.
+
+This is not part of Walmart add qualification. A drawing card has its normal
+Add control suppressed, and entering the drawing is an irrevocable contingent
+order authorization: Walmart may later place and charge the order if the user
+is selected. The packaged observer has no click or network primitive and the
+extension contains no drawing-entry route. Account, address, payment,
+membership, cookie/session, entry token, and entry status are excluded from the
+contract. Any future entry capability must be independently packaged,
+versioned, consented per drawing, rehearsed, and governed at least as strictly
+as submit-order.
+
 Yoink 0.10 advances the Amazon lane to `amazon-observer-v6` and
 `amazon-add-v5`. The contracts accept an Amazon candidate only when one offer
 scope binds the exact ASIN, unique volatile offer token, price, seller, explicit
@@ -233,6 +253,12 @@ These operations are intentionally limited to a database containing exactly
 one tenant. The catalog tables are still shared, so tenant-local authority must
 not become de facto global authority in hosted mode. A separately authenticated
 global curator, production step-up, and cross-tenant policy remain roadmap work.
+
+Yoink 0.22.0 adds migration 24 without altering any retailer execution or
+qualification row. Walmart Draw scans belong to the private tenant/user/device
+evidence plane and are read through explicit user/admin projections. Their
+exact item-ID mission join is advisory: it cannot create a stock incident,
+action job, add qualification, community assertion, or spend reservation.
 
 The application bundles now reflect those trust domains. `/` is the user
 product surface over existing missions, targets, listings, jobs, and settings;
@@ -410,6 +436,8 @@ The current local release is a modular monolith with separated trust surfaces:
 - Persisted RBAC and a governed manual catalog-write queue
 - Chrome companion with independently qualification-gated Target, Walmart, and
   Amazon, and Best Buy add-only executors
+- Explicit, read-only Walmart Draw discovery with exact private mission matching
+  and no contingent-order entry capability
 - Exact-version local companion package feed for unpacked-extension updates
 
 The future deployment moves shared control-plane data to PostgreSQL and adds a

@@ -1,6 +1,33 @@
 # Yoink roadmap
 
-## Shipped through 0.21.0
+## Shipped through 0.22.0
+
+### Walmart Collectibles Draw read-only lifecycle (0.22.0)
+
+- Migration 24 adds a tenant/user/device-scoped, idempotent Walmart Draw scan
+  and exact-item ledger with bounded retention. It stores normalized public
+  drawing facts only and reconstructs canonical Walmart item URLs server-side
+- `walmart-draw-observer-v1` accepts only the exact Collectibles Draw hub. It
+  parses bounded server-rendered draw modules with a visible-card fallback,
+  detects security/manual blocks, normalizes PDT/PST close labels, deduplicates
+  exact Walmart item IDs, and fails partial when price, seller, close time,
+  draw control, or suppressed Add evidence is incomplete
+- The companion runs this observer only from an explicit user click and posts
+  authenticated sanitized scans. Bundle, execution, top-frame, runtime,
+  collection, and contract failures are immediately recorded with allowlisted
+  codes; raw browser errors and page/account data never leave the tab
+- User and admin read models show current drawings, price, close time, quantity
+  limit, exact plan matches, scan health, and failures. Expired active drawings
+  leave the current projection, while historical evidence remains bounded
+- The four validated live records on 2026-08-24 were Walmart item IDs
+  `19624258216`, `19536452232`, `5631614124`, and `18029663536`; fixture and
+  production-bundle tests preserve their exact prices and limits
+- Drawing entry is intentionally not implemented. Entry is one per customer,
+  cannot be canceled or changed, and authorizes Walmart to place and charge an
+  order if selected. The observer collects no address, payment, account,
+  membership, session, cookie, offer token, or entry status and is structurally
+  unable to call the entry endpoint. Draw evidence never qualifies
+  `walmart-add-v3`
 
 ### Reversible local catalog identity governance (0.21.0)
 
@@ -148,6 +175,9 @@
 - Walmart virtual-queue and interactive-block restraint, independent capability,
   v4 evidence dossier, exact-SKU offer scoping, split-price normalization,
   no-click rehearsal receipt, and explicit activation flow
+- Separate Walmart Draw v1 discovery ledger, exact-item mission matching,
+  closing-time projection, and immediate sanitized runtime-failure reporting;
+  drawing entry and contingent-order authorization remain closed
 - Qualification-ready `amazon-add-v5`: Amazon.com-sold explicit shipping,
   quantity one, add-to-cart only; live activation remains evidence-gated
 - Amazon exact-offer scope requires price, seller, fulfillment, ASIN, unique
@@ -290,9 +320,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.21.0
+## Architecture assessment after 0.22.0
 
-Yoink 0.21.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.22.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -310,6 +340,7 @@ checkout or more autonomous behavior.
 | Autonomous correction | Sanitized failure groups and manually entered signed selector recipes exist | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an oracle when that parser is wrong; canary is not cohort deployment; production signing starts with trust-on-first-use |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified | Community truth is advisory, recipe truth is not independent, location/variation identity is incomplete, and no checkout/final-total verifier is packaged |
 | Automatic purchasing | Target and Walmart can perform guarded first-party shipping add-to-cart behind current intent/snapshot/reservation checks; Amazon and Best Buy are implemented but separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
+| Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
 
 ### Target trust-domain layout
 
@@ -569,6 +600,25 @@ limits, revocation, recovery, and legal/privacy/security/Chrome Web Store review
 must pass. Fully autonomous submit may remain unsupported for retailers whose
 flows cannot meet these proofs.
 
+##### Phase 6D — contingent-order drawings
+
+Treat entering a drawing as a dedicated high-risk contingent-order capability,
+not add-to-cart and not an ordinary availability signal. The shipped Walmart
+Draw observer remains read-only. Any future entry runner must require explicit
+per-drawing user authorization after presenting the exact item, quantity,
+price, estimated shipping fee, terms/rules version, closing time, saved-address
+fingerprint, payment-method fingerprint, and worst-case all-in cap. It must
+enforce Walmart's one-entry rule, freeze the user's choices, handle duplicate
+and high-traffic responses without retry ambiguity, and reconcile entry,
+selection, automatic order, charge, and non-returnable outcomes. A generic
+submit-order or Walmart-add capability must never authorize drawing entry.
+
+Exit gate: legal/privacy/Chrome Web Store review, step-up consent, a no-entry
+production rehearsal, durable pre-entry receipt, at-most-one submit proof,
+selection/order reconciliation, fee and spend commitment, revocation semantics
+before the entry boundary, and explicit acknowledgement that a submitted entry
+cannot be canceled or changed. Until all gates exist, entry stays manual.
+
 ## Retailer qualification workstream
 
 These are deliberately closed until each adapter has current live evidence,
@@ -584,6 +634,8 @@ no-click rehearsal receipts, recovery tests, and explicit activation:
 4. Prepare-checkout review per retailer.
 5. Submit-order only after user-approved destination/payment fingerprints,
    total verification, confirmation evidence, and uncertain-submit recovery.
+6. Keep Walmart Draw entry manual until the separate Phase 6D contingent-order
+   consent, fee, terms, idempotency, and reconciliation gates are complete.
 
 No generic mutation flag will authorize these lanes.
 

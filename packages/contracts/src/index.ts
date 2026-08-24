@@ -17,6 +17,7 @@ export type Fulfillment = "shipping" | "pickup" | "either" | "manual" | "unknown
 export type Availability = "in_stock" | "preorder" | "out_of_stock" | "unknown";
 export const TARGET_OBSERVER_VERSION = "target-observer-v1";
 export const WALMART_OBSERVER_VERSION = "walmart-observer-v4";
+export const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 export const AMAZON_OBSERVER_VERSION = "amazon-observer-v6";
 export const BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v4";
 export const DISNEY_OBSERVER_VERSION = "disney-observer-v1";
@@ -207,6 +208,46 @@ export interface TargetShadowObservationInput extends RetailerShadowObservationI
 export interface WalmartShadowObservationInput extends RetailerShadowObservationInput {
   adapterVersion: typeof WALMART_OBSERVER_VERSION;
   retailerId: "walmart";
+}
+
+export const WALMART_DRAW_STATES = ["active", "upcoming", "closed", "unknown"] as const;
+export type WalmartDrawState = (typeof WALMART_DRAW_STATES)[number];
+export const WALMART_DRAW_SCAN_OUTCOMES = ["passed", "partial", "failed", "manual"] as const;
+export type WalmartDrawScanOutcome = (typeof WALMART_DRAW_SCAN_OUTCOMES)[number];
+
+export interface WalmartDrawItemObservationInput {
+  retailerSku: string;
+  title: string;
+  unitPriceCents: number | null;
+  currency: "USD";
+  sellerName: string;
+  sellerType: SellerType;
+  drawState: WalmartDrawState;
+  closesAt: string | null;
+  conditionCode: number | null;
+  conditionGroupCode: number | null;
+  orderMinLimit: number | null;
+  orderMaxLimit: number | null;
+  drawControlPresent: boolean;
+  addControlSuppressed: boolean;
+}
+
+/**
+ * Read-only Walmart Draw discovery. This contract deliberately excludes entry
+ * status, address, payment, membership, session, and drawing-entry tokens.
+ */
+export interface WalmartDrawScanInput {
+  adapterVersion: typeof WALMART_DRAW_OBSERVER_VERSION;
+  contractVersion: 1;
+  observedAt: string;
+  pageKind: "walmart_draw_hub";
+  outcome: WalmartDrawScanOutcome;
+  reasonCode: string;
+  expectedCardCount: number;
+  observedCardCount: number;
+  securityChallenge: boolean;
+  interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "unknown";
+  items: WalmartDrawItemObservationInput[];
 }
 
 export interface AmazonShadowObservationInput extends RetailerShadowObservationInput {

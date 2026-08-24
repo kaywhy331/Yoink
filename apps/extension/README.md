@@ -13,6 +13,17 @@ no persistent content scripts, cookie API access,
 notification interception, checkout, or order capability. Page access is
 optional and is requested only from a user click.
 
+Walmart Collectibles Draw has a separate explicit **Inspect current drawings**
+action. It works only on the exact draw hub and sends a bounded list of public
+item IDs, titles, prices, seller classification, closing times, condition and
+quantity limits, plus draw/Add-control state. The companion sends sanitized
+runtime failures to the draw ledger immediately. It never calls Walmart's draw
+preferences or entry endpoints, clicks Enter, or reads/stores account, address,
+payment, membership, session, cookie, entry-token, or entry-status data.
+Drawing entry remains manual because submitting one irrevocably authorizes an
+automatic order and charge if Walmart selects the user; it is not covered by
+the qualified Walmart add-only capability.
+
 Premium Bandai unavailable-page shells and Pokémon Center Imperva challenge
 frames fail as manual/security blocks. They clear inventory and offer fields
 before the sanitized diagnostic is sent, so an access-control response cannot
@@ -50,6 +61,12 @@ For a Target, Walmart, Amazon, or Best Buy qualification check:
    permission.
 4. Review the sanitized result and qualification state in Yoink `/admin` →
    Connections.
+
+To inspect Walmart drawings, open
+`https://www.walmart.com/shop/collectibles/draw`, choose **Inspect current
+drawings**, and review the exact current cards in Yoink's Walmart drawings view
+or `/admin` → Connections. This is observation only and performs no rehearsal
+or entry.
 
 The rehearsal runs the production offer verifier to its final click boundary,
 then discards the authorization without clicking. After explicit activation in

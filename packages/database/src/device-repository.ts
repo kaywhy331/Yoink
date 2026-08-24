@@ -24,6 +24,7 @@ export interface DeviceCapabilities {
   communityReadOnlyEvidence: boolean;
   observerRecipeShadow: boolean;
   durableAdapterDiagnostics: boolean;
+  walmartDrawReadOnly: boolean;
   trackalackerPush: boolean;
   trackalackerCatalogSync: boolean;
   retailerMutation: false;
@@ -104,6 +105,7 @@ function capabilities(input: Partial<DeviceCapabilities> | undefined): DeviceCap
     communityReadOnlyEvidence: input?.communityReadOnlyEvidence === true,
     observerRecipeShadow: input?.observerRecipeShadow === true,
     durableAdapterDiagnostics: input?.durableAdapterDiagnostics === true,
+    walmartDrawReadOnly: input?.walmartDrawReadOnly === true,
     trackalackerPush: input?.trackalackerPush === true,
     trackalackerCatalogSync: input?.trackalackerCatalogSync === true,
     retailerMutation: false,

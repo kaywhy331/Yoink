@@ -1518,5 +1518,63 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
       BEGIN SELECT RAISE(ABORT, 'catalog identity events are append-only'); END;
     `
+  },
+  {
+    version: 24,
+    name: "walmart_draw_observation_ledger",
+    sql: `
+      CREATE TABLE walmart_draw_scans (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        device_id TEXT NOT NULL REFERENCES extension_devices(id) ON DELETE CASCADE,
+        adapter_version TEXT NOT NULL,
+        contract_version INTEGER NOT NULL CHECK (contract_version = 1),
+        outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'partial', 'failed', 'manual')),
+        reason_code TEXT NOT NULL,
+        expected_card_count INTEGER NOT NULL CHECK (expected_card_count BETWEEN 0 AND 24),
+        observed_card_count INTEGER NOT NULL CHECK (observed_card_count BETWEEN 0 AND 24),
+        security_challenge INTEGER NOT NULL CHECK (security_challenge IN (0, 1)),
+        interactive_block TEXT NOT NULL CHECK (interactive_block IN ('', 'auth', 'mfa', 'location', 'membership', 'queue', 'unknown')),
+        evidence_hash TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        UNIQUE(device_id, evidence_hash)
+      ) STRICT;
+      CREATE INDEX walmart_draw_scans_user_time_idx
+        ON walmart_draw_scans(user_id, observed_at DESC, id DESC);
+      CREATE INDEX walmart_draw_scans_failure_idx
+        ON walmart_draw_scans(tenant_id, outcome, reason_code, observed_at DESC);
+
+      CREATE TABLE walmart_draw_items (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        scan_id TEXT NOT NULL REFERENCES walmart_draw_scans(id) ON DELETE CASCADE,
+        retailer_sku TEXT NOT NULL,
+        title TEXT NOT NULL,
+        canonical_url TEXT NOT NULL,
+        unit_price_cents INTEGER CHECK (unit_price_cents IS NULL OR unit_price_cents >= 0),
+        currency TEXT NOT NULL CHECK (currency = 'USD'),
+        seller_name TEXT NOT NULL DEFAULT '',
+        seller_type TEXT NOT NULL CHECK (seller_type IN ('first_party', 'third_party', 'unknown')),
+        draw_state TEXT NOT NULL CHECK (draw_state IN ('active', 'upcoming', 'closed', 'unknown')),
+        closes_at TEXT NOT NULL DEFAULT '',
+        condition_code INTEGER,
+        condition_group_code INTEGER,
+        order_min_limit INTEGER CHECK (order_min_limit IS NULL OR order_min_limit BETWEEN 1 AND 99),
+        order_max_limit INTEGER CHECK (order_max_limit IS NULL OR order_max_limit BETWEEN 1 AND 99),
+        draw_control_present INTEGER NOT NULL CHECK (draw_control_present IN (0, 1)),
+        add_control_suppressed INTEGER NOT NULL CHECK (add_control_suppressed IN (0, 1)),
+        evidence_hash TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        UNIQUE(scan_id, retailer_sku)
+      ) STRICT;
+      CREATE INDEX walmart_draw_items_current_idx
+        ON walmart_draw_items(user_id, retailer_sku, observed_at DESC, id DESC);
+      CREATE INDEX walmart_draw_items_close_idx
+        ON walmart_draw_items(user_id, draw_state, closes_at, observed_at DESC);
+    `
   }
 ]);

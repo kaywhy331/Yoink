@@ -72,6 +72,7 @@ function render(state) {
   $("#rehearseAmazon").disabled = !connected || !paired;
   $("#rehearseBestBuy").disabled = !connected || !paired;
   $("#inspectRetailer").disabled = !connected || !paired;
+  $("#inspectWalmartDraw").disabled = !connected || !paired;
   $("#shareCommunity").disabled = !connected || !paired;
   $("#removeTarget").hidden = !targetAccess;
   const trackalacker = state?.trackalackerPush || {};
@@ -162,6 +163,16 @@ function renderRetailerObservation(observation) {
   $("#retailerMessage").textContent = `${retailer}: ${evidence} · ${observation?.retailerSku || "unknown SKU"} · ${price} · ${observation?.sellerName || "seller unknown"} · ${observation?.fulfillment || "fulfillment unknown"}${route}.`;
 }
 
+function renderWalmartDrawScan(scan) {
+  const items = Array.isArray(scan?.items) ? scan.items : [];
+  const label = scan?.outcome === "passed" ? "Verified"
+    : scan?.outcome === "partial" ? "Partially observed"
+      : scan?.outcome === "manual" ? "Manual browser step detected" : "Observation failed";
+  const active = items.filter((item) => item.drawState === "active").length;
+  const tracked = items.filter((item) => item.tracked === true).length;
+  $("#walmartDrawMessage").textContent = `${label}: ${active} active drawing${active === 1 ? "" : "s"} across ${items.length} exact item${items.length === 1 ? "" : "s"}${tracked ? ` · ${tracked} matches a purchase plan` : ""}. Entry remains manual; no account, address, payment, or entry state was collected.`;
+}
+
 async function check() {
   $("#statusTitle").textContent = "Checking local app…";
   try {
@@ -249,6 +260,31 @@ $("#inspectRetailer").addEventListener("click", async () => {
     renderRetailerObservation(response.observation);
   } catch (error) {
     $("#retailerMessage").textContent = error.message || "The retailer page could not be inspected.";
+    await check();
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#inspectWalmartDraw").addEventListener("click", async () => {
+  const button = $("#inspectWalmartDraw");
+  button.disabled = true;
+  $("#walmartDrawMessage").textContent = "Requesting read-only Walmart access…";
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = new URL(String(tabs[0]?.url || ""));
+    if (!(url.hostname === "walmart.com" || url.hostname.endsWith(".walmart.com"))
+      || url.pathname.replace(/\/+$/, "") !== "/shop/collectibles/draw") {
+      throw new Error("Open Walmart’s exact Collectibles Draw hub first.");
+    }
+    const granted = await chrome.permissions.request({ origins: RETAILER_ORIGINS.walmart });
+    if (!granted) throw new Error("Read-only Walmart page access was not granted.");
+    $("#walmartDrawMessage").textContent = "Inspecting current drawings without entering any of them…";
+    const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-walmart-draw" });
+    if (!response?.ok) throw new Error(response?.message || "Walmart drawing inspection failed.");
+    render(response.state);
+    renderWalmartDrawScan(response.scan);
+  } catch (error) {
+    $("#walmartDrawMessage").textContent = error.message || "Walmart drawings could not be inspected.";
     await check();
   } finally {
     button.disabled = false;

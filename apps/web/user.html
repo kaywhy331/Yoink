@@ -30,6 +30,7 @@
 
     <nav class="tabs" aria-label="Workspace">
       <button class="tab active" data-tab="products" type="button">Products</button>
+      <button class="tab" data-tab="drawings" type="button">Walmart drawings</button>
       <button class="tab" data-tab="plans" type="button">Purchase plans</button>
       <button class="tab" data-tab="activity" type="button">Recent actions</button>
       <button class="tab" data-tab="preferences" type="button">Preferences</button>
@@ -41,6 +42,12 @@
         <label class="search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label>
       </div>
       <div class="card-grid" id="productList"></div>
+    </section>
+
+    <section class="workspace" data-panel="drawings">
+      <div class="section-heading"><div><p class="eyebrow">Time-limited, exact item matches</p><h2>Walmart Collectibles Draw</h2><p>Yoink can identify current drawings and match their exact Walmart item IDs to your plans. Entry stays manual because a winning entry automatically places and charges an order.</p></div></div>
+      <div class="stack" id="walmartDrawSummary"></div>
+      <div class="card-grid" id="walmartDrawList"></div>
     </section>
 
     <section class="workspace" data-panel="plans">

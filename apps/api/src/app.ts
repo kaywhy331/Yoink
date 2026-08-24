@@ -34,7 +34,8 @@ import {
   type TargetAddRehearsalInput,
   type TargetShadowObservationInput,
   type WalmartAddActivationInput,
-  type WalmartAddRehearsalInput
+  type WalmartAddRehearsalInput,
+  type WalmartDrawScanInput
 } from "../../../packages/contracts/src/index.js";
 import { CatalogRepository } from "../../../packages/database/src/catalog-repository.js";
 import {
@@ -76,6 +77,7 @@ import { OfferIdentityRepository } from "../../../packages/database/src/offer-id
 import { SpendLedgerRepository } from "../../../packages/database/src/spend-ledger-repository.js";
 import { ShadowObservationRepository } from "../../../packages/database/src/shadow-observation-repository.js";
 import { SourceRepository } from "../../../packages/database/src/source-repository.js";
+import { WalmartDrawRepository } from "../../../packages/database/src/walmart-draw-repository.js";
 import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
 import { newId } from "../../../packages/domain/src/ids.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
@@ -237,6 +239,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const qualifications = new QualificationRepository(db);
   const shadowObservations = new ShadowObservationRepository(db);
   const sourceRuntime = new SourceRepository(db);
+  const walmartDraws = new WalmartDrawRepository(db);
 
   return createServer(async (request, response) => {
     const suppliedCorrelationId = String(request.headers["x-request-id"] ?? "").trim();
@@ -340,6 +343,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           purchaseIntents: missions,
           spend: spendLedger.summary(Date.now(), false),
           sources: control.listSources(),
+          walmartDraws: {
+            readOnly: true,
+            entryMutationAuthorized: false,
+            contingentOrderRisk: true,
+            latestScan: walmartDraws.latestScan(),
+            items: walmartDraws.currentItems()
+          },
           permissions: authorization.permissions()
         });
         return;
@@ -480,6 +490,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           if (body.retailerId !== shadowObservationMatch[1]) throw new Error("The retailer observation route and payload must match.");
           json(response, 201, {
             observation: shadowObservations.record(device.id, body as unknown as RetailerShadowObservationInput)
+          });
+          return;
+        }
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/walmart-draw/scans") {
+          const body = await readJson(request);
+          json(response, 201, {
+            scan: walmartDraws.record(device.id, body as unknown as WalmartDrawScanInput)
           });
           return;
         }
@@ -710,6 +727,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             devices: pairedDevices.length,
             onlineDevices: pairedDevices.filter((device) => device.online === true).length,
             shadowObservations: shadowObservations.count(),
+            ...walmartDraws.counts(),
             ...adapterDiagnostics.counts(),
             ...community.counts(),
             ...identityClaims.counts(),
@@ -730,6 +748,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           auditEvents: [],
           devices: pairedDevices,
           shadowObservations: shadowObservations.listRecent(50),
+          walmartDraws: {
+            readOnly: true,
+            entryMutationAuthorized: false,
+            contingentOrderRisk: true,
+            latestScan: walmartDraws.latestScan(),
+            items: walmartDraws.currentItems()
+          },
           adapterRepairQueue: adapterDiagnostics.listRepairQueue(50),
           community: {
             privacyVersion: "community-readonly-v1",
@@ -780,6 +805,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             chromeNotifications: true,
             targetReadOnlyShadow: true,
             walmartReadOnlyShadow: true,
+            walmartDrawReadOnly: true,
+            walmartDrawEntryMutation: false,
+            walmartDrawContingentOrderAuthorization: false,
             amazonReadOnlyShadow: true,
             amazonEphemeralBuyNowRehearsal: true,
             bestBuyReadOnlyShadow: true,

@@ -65,6 +65,10 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /communityReadOnlyEvidence: true/);
   assert.match(background, /observerRecipeShadow: true/);
   assert.match(background, /durableAdapterDiagnostics: true/);
+  assert.match(background, /walmartDrawReadOnly: true/);
+  assert.match(background, /yoink:inspect-walmart-draw/);
+  assert.match(background, /devices\/self\/walmart-draw\/scans/);
+  assert.doesNotMatch(background, /draw\.www\.walmart\.com|\/draw\/enter/);
   assert.match(background, /Ed25519/);
   assert.match(background, /observer-recipe-trials/);
   assert.match(background, /yoink:contribute-retailer/);
@@ -80,6 +84,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(popup, /chrome\.permissions\.request/);
   assert.match(popup, /chrome\.permissions\.remove/);
   assert.match(popup, /Share current page evidence once|yoink:contribute-retailer/);
+  assert.match(popup, /yoink:inspect-walmart-draw/);
   assert.doesNotMatch(targetBundle, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
   assert.doesNotMatch(retailerBundle, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
   assert.match(targetActionBundle, /\.click\s*\(/);

@@ -127,6 +127,20 @@ function renderProducts() {
   }).join("") : '<div class="empty">No exact products match yet. Connect a source in the Chrome companion or ask an administrator to review a product suggestion.</div>';
 }
 
+function renderWalmartDraws() {
+  const draws = state.overview.walmartDraws || {};
+  const latest = draws.latestScan || null;
+  const items = Array.isArray(draws.items) ? draws.items : [];
+  $("#walmartDrawSummary").innerHTML = `<article class="plan-card"><div><div class="card-top"><h3>Read-only drawing observer</h3><span class="tag ${latest?.outcome === "passed" ? "good" : "warn"}">${escapeHtml(latest ? String(latest.outcome).replaceAll("_", " ") : "not scanned")}</span></div><p>${latest ? `${Number(latest.observedCardCount || 0)} of ${Number(latest.expectedCardCount || 0)} cards recorded ${relative(latest.observedAt)}.` : "Open the Walmart Draw hub and choose Inspect current drawings in the Chrome companion."} No entry was submitted, and Yoink does not collect drawing account, address, payment, or entry state.</p></div><a class="canonical" href="https://www.walmart.com/shop/collectibles/draw" target="_blank" rel="noreferrer">Open drawing hub ↗</a></article>`;
+  $("#walmartDrawList").innerHTML = items.length ? items.map((item) => `<article class="product-card">
+    <div class="card-top"><span class="store">Walmart</span><span class="tag ${item.drawState === "active" ? "good" : "warn"}">${escapeHtml(String(item.drawState || "unknown"))}</span></div>
+    <h3>${escapeHtml(item.title)}</h3>
+    <p>Exact Walmart item ${escapeHtml(item.retailerSku)} · ${escapeHtml(item.sellerName || "seller unknown")}</p>
+    <div class="tags"><span class="tag">${escapeHtml(money(item.unitPriceCents, item.currency))}</span><span class="tag">${item.closesAt ? `Closes ${escapeHtml(relative(item.closesAt))}` : "Closing time unknown"}</span><span class="tag ${item.tracked ? "good" : ""}">${item.tracked ? "Matches your plan" : "Not tracked"}</span></div>
+    <div class="card-actions"><a class="canonical" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">View exact item ↗</a><span class="tag warn">Manual entry only</span></div>
+  </article>`).join("") : '<div class="empty">No open drawings are currently recorded. Run one explicit inspection from the Walmart Draw hub; expired drawings disappear from this view.</div>';
+}
+
 function renderPlans() {
   $("#planList").innerHTML = state.plans.length ? state.plans.map((plan) => `<article class="plan-card">
     <div><div class="card-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(plan.status)}</span></div>
@@ -165,7 +179,7 @@ async function refresh() {
   state.plans = plans.items || [];
   state.actions = actions.items || [];
   state.proposals = proposals.items || [];
-  renderOverview(); renderProducts(); renderPlans(); renderActions(); renderProposals();
+  renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals();
 }
 
 async function toggleActions() {

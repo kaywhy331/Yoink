@@ -65,6 +65,7 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
         notifications: true,
         retailerShadow: true,
         durableAdapterDiagnostics: true,
+        walmartDrawReadOnly: true,
         trackalackerPush: true,
         trackalackerCatalogSync: true,
         retailerMutation: true as never,
@@ -83,6 +84,7 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
     assert.equal(heartbeat.capabilities.notifications, true);
     assert.equal(heartbeat.capabilities.retailerShadow, true);
     assert.equal(heartbeat.capabilities.durableAdapterDiagnostics, true);
+    assert.equal(heartbeat.capabilities.walmartDrawReadOnly, true);
     assert.equal(heartbeat.capabilities.trackalackerPush, true);
     assert.equal(heartbeat.capabilities.trackalackerCatalogSync, true);
     assert.equal(heartbeat.capabilities.targetAddOnly, true);

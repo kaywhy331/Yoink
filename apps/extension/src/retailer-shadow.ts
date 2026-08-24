@@ -7,6 +7,7 @@ import {
   retailerAdapterLayoutEvidence,
   retailerObserverVersion
 } from "../../../packages/browser-adapters/src/retailers.js";
+import { observeWalmartDrawHub } from "../../../packages/browser-adapters/src/walmart-draw.js";
 import type {
   Fulfillment,
   RetailerAdapterDiagnosticInput,
@@ -180,6 +181,11 @@ export function collectRetailerShadowAttempt(
 }
 
 Object.defineProperty(globalThis, "YoinkRetailerShadow", {
-  value: Object.freeze({ collectRetailerShadowAttempt, collectRetailerShadowObservation, rehearseAmazonBuyNowRoute }),
+  value: Object.freeze({
+    collectRetailerShadowAttempt,
+    collectRetailerShadowObservation,
+    observeWalmartDrawHub,
+    rehearseAmazonBuyNowRoute
+  }),
   configurable: true
 });

@@ -344,6 +344,27 @@ function renderAdapterRepairQueue() {
   }).join("") : empty("No adapter repair incidents have been captured. The server is listening for sanitized extension diagnostics.");
 }
 
+function renderWalmartDraws() {
+  const draws = state.snapshot.walmartDraws || {};
+  const latest = draws.latestScan || null;
+  const items = Array.isArray(draws.items) ? draws.items : [];
+  const failures = Number(state.snapshot.counts.walmartDrawFailures || 0);
+  const gate = $("#walmartDrawGate");
+  gate.textContent = latest?.outcome === "passed" ? "VERIFIED · READ ONLY"
+    : latest ? `${String(latest.outcome).toUpperCase()} · READ ONLY` : "NOT SCANNED";
+  gate.classList.toggle("danger", ["failed", "manual"].includes(latest?.outcome));
+  $("#walmartDrawSummary").innerHTML = `<strong>${items.length.toLocaleString()} current drawing${items.length === 1 ? "" : "s"}</strong><span>${Number(state.snapshot.counts.walmartDrawScans || 0).toLocaleString()} scans · ${failures.toLocaleString()} blocked/failed · entry mutation closed</span>`;
+  $("#walmartDrawList").innerHTML = items.length ? items.map((item) => {
+    const kind = item.drawState === "active" && item.closesAt ? "good" : "warning";
+    const limit = item.orderMaxLimit ? ` · limit ${Number(item.orderMaxLimit)}` : "";
+    return `<article class="shadow-evidence-row">
+      <div>${statusDot(kind)}<div><h3>Walmart item ${escapeHtml(item.retailerSku)} · ${escapeHtml(item.title)}</h3><p>${formatMoney(item.unitPriceCents, item.currency)} · ${escapeHtml(item.sellerName || "seller unknown")} · condition group ${escapeHtml(item.conditionGroupCode ?? "unknown")}${escapeHtml(limit)}</p></div></div>
+      <div class="shadow-evidence-meta"><span class="tag ${kind}">${escapeHtml(String(item.drawState).replaceAll("_", " "))}</span><span class="tag ${item.tracked ? "good" : "warning"}">${item.tracked ? `Matched plan · ${escapeHtml(item.missionStatus || "tracked")}` : "No exact plan match"}</span><time>${item.closesAt ? `closes ${escapeHtml(relativeTime(item.closesAt))}` : "close unknown"}</time></div>
+      <a class="canonical-link" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.canonicalUrl)}</a>
+    </article>`;
+  }).join("") : empty(latest ? "No still-open drawings were present in the latest scan." : "Open Walmart’s Draw hub and run the extension’s explicit read-only drawing inspection.");
+}
+
 function communityScopeParts(scope) {
   const value = String(scope || "");
   if (value.startsWith("region:")) return { kind: "region", value: value.slice(7) };
@@ -669,7 +690,7 @@ function renderAuthorization() {
 }
 
 function render() {
-  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization();
+  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization();
 }
 
 async function storeFingerprint(retailerId, localStoreId) {

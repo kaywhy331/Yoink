@@ -13,6 +13,7 @@ const BESTBUY_PRODUCT_URL = "https://www.bestbuy.com/product/best-buy-essentials
 const DISNEY_PRODUCT_URL = "https://www.disneystore.com/dumbo-jeweled-figurine-409914998395.html";
 const PBANDAI_PRODUCT_URL = "https://p-bandai.com/us/item/N2884150001";
 const POKEMONCENTER_PRODUCT_URL = "https://www.pokemoncenter.com/product/10-10320-101/pokemon-tcg-mewtwo-and-mew-dna-premium-zip-binder";
+const WALMART_DRAW_URL = "https://www.walmart.com/shop/collectibles/draw";
 
 function signedObserverRecipe(tampered = false): Record<string, unknown> {
   const pair = generateKeyPairSync("ed25519");
@@ -161,6 +162,41 @@ const POKEMONCENTER_OBSERVATION = {
   canonicalUrl: POKEMONCENTER_PRODUCT_URL,
   unitPriceCents: 2999,
   sellerName: "Pokémon Center"
+};
+const WALMART_DRAW_SCAN = {
+  adapterVersion: "walmart-draw-observer-v1",
+  contractVersion: 1,
+  observedAt: new Date().toISOString(),
+  pageKind: "walmart_draw_hub",
+  outcome: "passed",
+  reasonCode: "verified",
+  expectedCardCount: 4,
+  observedCardCount: 4,
+  securityChallenge: false,
+  interactiveBlock: "",
+  items: [
+    ["19624258216", "NeeDoh Dream Drop", 597, 99],
+    ["19536452232", "NeeDoh Jelly Squish Stress Ball MISCL Color", 597, 99],
+    ["5631614124", "2023-24 Panini Mosaic Basketball Trading Cards Mega Box", 5997, 5],
+    ["18029663536", "2025-26 Topps Holiday Basketball Trading Cards Countdown Calendar", 4998, 5]
+  ].map(([retailerSku, title, unitPriceCents, orderMaxLimit]) => ({
+    retailerSku,
+    title,
+    unitPriceCents,
+    currency: "USD",
+    sellerName: "Walmart",
+    sellerType: "first_party",
+    drawState: "active",
+    closesAt: "2026-08-24T22:00:00.000Z",
+    conditionCode: 1,
+    conditionGroupCode: 1,
+    orderMinLimit: 1,
+    orderMaxLimit,
+    drawControlPresent: true,
+    addControlSuppressed: true,
+    cookie: "DO_NOT_SEND",
+    entryToken: TOKEN
+  }))
 };
 
 function diagnosticFor(observation: typeof AMAZON_OBSERVATION | typeof WALMART_OBSERVATION | typeof BESTBUY_OBSERVATION | typeof DISNEY_OBSERVATION | typeof PBANDAI_OBSERVATION | typeof POKEMONCENTER_OBSERVATION) {
@@ -441,6 +477,9 @@ function harness(options: HarnessOptions = {}) {
         if (args?.[0] === "rehearseTargetAdd") {
           return [{ frameId: 0, result: { ok: true, reason: "verified", wouldClick: true, proof: { retailerSku: "1011483414" } } }];
         }
+        if (args?.[0] === "observeWalmartDrawHub") {
+          return [{ frameId: 0, result: { ok: true, scan: WALMART_DRAW_SCAN } }];
+        }
         if (args?.[0] === "rehearseWalmartAdd") {
           return [{ frameId: 0, result: { ok: true, reason: "verified", wouldClick: true, proof: { retailerSku: "17354421975" } } }];
         }
@@ -713,6 +752,16 @@ function harness(options: HarnessOptions = {}) {
           cookie: undefined,
           canonicalUrl: "https://www.target.com/p/-/A-1011483414",
           observationState: "actionable_candidate"
+        }
+      }), { status: 201 });
+    }
+    if (url.endsWith("/devices/self/walmart-draw/scans")) {
+      const scan = JSON.parse(String(requestOptions.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        scan: {
+          ...scan,
+          id: "walmart_draw_scan_fixture",
+          items: (scan.items as Array<Record<string, unknown>>).map((item) => ({ ...item, tracked: item.retailerSku === "5631614124" }))
         }
       }), { status: 201 });
     }
@@ -1045,6 +1094,64 @@ test("the service worker fails before tab access or injection when Target permis
   assert.match(String(response.message), /Allow Target page access/);
   assert.equal(runtime.injections.length, 0);
   assert.equal(runtime.fetchCalls.length, 0);
+});
+
+test("the service worker records four sanitized Walmart drawings without entering or reading account state", async () => {
+  const runtime = harness({ activeUrl: `${WALMART_DRAW_URL}?source=DO_NOT_SEND` });
+  const response = await runtime.send({ type: "yoink:inspect-walmart-draw" });
+  assert.equal(response.ok, true);
+  assert.equal((response.scan as Record<string, unknown>).outcome, "passed");
+  assert.equal(((response.scan as Record<string, unknown>).items as unknown[]).length, 4);
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.injections[0])), {
+    target: { tabId: 17 },
+    world: "ISOLATED",
+    files: ["retailer-shadow.js"]
+  });
+  assert.equal((runtime.injections[1]?.args as unknown[])?.[0], "observeWalmartDrawHub");
+  const post = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/walmart-draw/scans"));
+  assert.ok(post);
+  const body = JSON.parse(String(post.options.body)) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(body).sort(), [
+    "adapterVersion", "contractVersion", "expectedCardCount", "interactiveBlock", "items",
+    "observedAt", "observedCardCount", "outcome", "pageKind", "reasonCode", "securityChallenge"
+  ]);
+  assert.equal(body.adapterVersion, "walmart-draw-observer-v1");
+  assert.equal(body.observedCardCount, 4);
+  assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
+  assert.equal(JSON.stringify(body).includes(TOKEN), false);
+  assert.equal(JSON.stringify(body).includes("entryToken"), false);
+  assert.equal(JSON.stringify(body).includes("cookie"), false);
+});
+
+test("Walmart Draw inspection is exact-route and permission gated before page injection", async () => {
+  const wrongPage = harness({ activeUrl: WALMART_PRODUCT_URL });
+  const wrongResponse = await wrongPage.send({ type: "yoink:inspect-walmart-draw" });
+  assert.equal(wrongResponse.ok, false);
+  assert.match(String(wrongResponse.message), /exact Walmart Collectibles Draw page/);
+  assert.equal(wrongPage.injections.length, 0);
+
+  const denied = harness({ activeUrl: WALMART_DRAW_URL, permission: false });
+  const deniedResponse = await denied.send({ type: "yoink:inspect-walmart-draw" });
+  assert.equal(deniedResponse.ok, false);
+  assert.match(String(deniedResponse.message), /Allow Walmart page access/);
+  assert.equal(denied.injections.length, 0);
+});
+
+test("a Walmart Draw observer startup failure is immediately reported through the sanitized draw ledger", async () => {
+  const runtime = harness({ activeUrl: `${WALMART_DRAW_URL}?source=DO_NOT_SEND`, retailerObserverFailure: "bundle_injection" });
+  const response = await runtime.send({ type: "yoink:inspect-walmart-draw" });
+  assert.equal(response.ok, false);
+  assert.equal(String(response.message).includes("DO_NOT_SEND"), false);
+  assert.equal(String(response.message).includes(TOKEN), false);
+  const posts = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/walmart-draw/scans"));
+  assert.equal(posts.length, 1);
+  const body = JSON.parse(String(posts[0]?.options.body)) as Record<string, unknown>;
+  assert.equal(body.outcome, "failed");
+  assert.equal(body.reasonCode, "observer_bundle_injection_failed");
+  assert.equal(body.observedCardCount, 0);
+  assert.deepEqual(body.items, []);
+  assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
+  assert.equal(JSON.stringify(body).includes(TOKEN), false);
 });
 
 test("the service worker records one sanitized Amazon exact-offer observation", async () => {
