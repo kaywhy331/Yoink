@@ -272,6 +272,28 @@ suppresses historical replay but permits a strictly later failure to reopen.
 Alert management has a distinct permission and cannot widen an observer,
 qualification, action job, or packaged runner.
 
+Yoink 0.24.0 adds migration 26 and replaces observer-recipe trust-on-first-use.
+The API package and Chrome companion contain only the same public Ed25519
+offline root. A root-signed, exact-schema manifest authorizes one unrevoked
+online recipe-signing intermediate, binds its lifetime, retains or explicitly
+revokes every prior key, and links each generation to the exact predecessor
+hash. SQLite stores immutable manifest receipts plus a chained append-only
+transparency ledger; the offline private root and online private intermediates
+are excluded from the database and portability format.
+
+The companion receives the complete manifest chain with an active recipe. It
+verifies every root signature and fingerprint, monotonic generation,
+predecessor hash, permanent revocation set, active-key lifetime, current
+manifest hash, transparency checkpoint, and recipe signature before its fixed
+isolated interpreter sees selector data. Chrome persists the latest generation
+and checkpoint, so later server replay or a conflicting root generation fails
+closed. A new root-authorized intermediate requires process restart to load its
+named private key and explicit maintainer re-signing of reviewed recipes.
+Neither manifest installation nor re-signing changes recipe review state or
+retailer execution authority. The remaining production gap is an independently
+witnessed transparency checkpoint; the local server is not treated as its own
+external witness.
+
 The application bundles now reflect those trust domains. `/` is the user
 product surface over existing missions, targets, listings, jobs, and settings;
 `/admin` is independently permission-gated and owns diagnostics, retailer

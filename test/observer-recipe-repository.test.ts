@@ -13,6 +13,10 @@ import { YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { ObserverRecipeRepository } from "../packages/database/src/observer-recipe-repository.js";
 import { ObserverRecipeSigner } from "../packages/observer-registry/src/signer.js";
+import {
+  createObserverRecipeTrustManifest,
+  ObserverRecipeTrustAuthority
+} from "../packages/observer-registry/src/trust.js";
 
 const NOW = new Date("2026-08-24T05:00:00.000Z").getTime();
 
@@ -70,12 +74,26 @@ function trial(
   };
 }
 
+function installRootedTrust(
+  repository: ObserverRecipeRepository,
+  trust: ObserverRecipeTrustAuthority,
+  now = NOW + 1_500
+): void {
+  const manifest = trust.manifest()?.manifest;
+  assert.ok(manifest);
+  repository.installTrustManifest({
+    manifest,
+    confirmation: "INSTALL_ROOTED_OBSERVER_RECIPE_TRUST_MANIFEST"
+  }, now);
+}
+
 test("observer recipes advance only through signed, measured, observer-only lifecycle stages", () => {
   const db = new YoinkDatabase();
   try {
     const paired = device(db);
-    const signer = ObserverRecipeSigner.ephemeral();
-    const repository = new ObserverRecipeRepository(db, signer);
+    const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
     const created = repository.propose(proposal(), NOW + 2_000);
     assert.equal(created.lifecycleState, "quarantined");
     assert.equal(repository.active("amazon", NOW + 3_000), null);
@@ -91,7 +109,7 @@ test("observer recipes advance only through signed, measured, observer-only life
     assert.equal(shadow.lifecycleState, "shadow");
     const envelope = repository.active("amazon", NOW + 4_000);
     assert.ok(envelope);
-    assert.equal(signer.verify(envelope), true);
+    assert.equal(trust.intermediateSigner.verify(envelope), true);
     assert.equal(envelope.payload.fields.unitPrice?.selectors[0], ".a-price .a-offscreen");
     assert.equal("script" in envelope.payload, false);
     assert.throws(() => repository.promote(String(created.id), {
@@ -125,7 +143,9 @@ test("observer recipes advance only through signed, measured, observer-only life
 test("the recipe schema rejects code, XPath, credential selectors, mutation selectors, arbitrary fields, and long expiry", () => {
   const db = new YoinkDatabase();
   try {
-    const repository = new ObserverRecipeRepository(db, ObserverRecipeSigner.ephemeral());
+    const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
     for (const fields of [
       { availability: { mode: "text", selectors: ["//div[@id='availability']"] } },
       { seller: { mode: "text", selectors: ["input[name=password]"] } },
@@ -149,7 +169,9 @@ test("any failed shadow trial blocks promotion and the kill switch immediately r
   const db = new YoinkDatabase();
   try {
     const paired = device(db);
-    const repository = new ObserverRecipeRepository(db, ObserverRecipeSigner.ephemeral());
+    const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
     const created = repository.propose(proposal("amazon-layout-failure"), NOW + 2_000);
     repository.promote(String(created.id), {
       targetState: "shadow",
@@ -174,8 +196,9 @@ test("any failed shadow trial blocks promotion and the kill switch immediately r
 test("explicit rollback disables the current recipe and restores only a signed reviewed target", () => {
   const db = new YoinkDatabase();
   try {
-    const signer = ObserverRecipeSigner.ephemeral();
-    const repository = new ObserverRecipeRepository(db, signer);
+    const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
     const oldRecipe = repository.propose(proposal("amazon-layout-old"), NOW + 2_000);
     repository.promote(String(oldRecipe.id), {
       targetState: "shadow",
@@ -190,7 +213,77 @@ test("explicit rollback disables the current recipe and restores only a signed r
     const rollback = repository.rollback(String(current.id), NOW + 7_000);
     assert.equal(rollback.disabled.lifecycleState, "disabled");
     assert.equal(rollback.active.payload.recipeId, oldRecipe.id);
-    assert.equal(signer.verify(rollback.active), true);
+    assert.equal(trust.intermediateSigner.verify(rollback.active), true);
+  } finally {
+    db.close();
+  }
+});
+
+test("an explicit re-sign restores reviewed recipe distribution after a monotonic trust renewal", () => {
+  const db = new YoinkDatabase();
+  try {
+    const rootSigner = ObserverRecipeSigner.ephemeral();
+    const intermediate = ObserverRecipeSigner.ephemeral();
+    const root = { algorithm: "Ed25519" as const, keyId: rootSigner.keyId, publicKeySpki: rootSigner.publicKeySpki };
+    const issuedAt = new Date(NOW - 60_000).toISOString();
+    const expiresAt = new Date(NOW + 30 * 24 * 60 * 60_000).toISOString();
+    const firstManifest = createObserverRecipeTrustManifest(rootSigner, {
+      generation: 1,
+      issuedAt,
+      expiresAt,
+      previousManifestHash: "",
+      keys: [{
+        algorithm: "Ed25519",
+        keyId: intermediate.keyId,
+        publicKeySpki: intermediate.publicKeySpki,
+        usage: "observer_recipe_signing",
+        status: "active",
+        notBefore: issuedAt,
+        notAfter: expiresAt
+      }],
+      revokedKeyIds: []
+    }, root);
+    const trust = ObserverRecipeTrustAuthority.inMemory(root, intermediate, firstManifest, NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
+    const created = repository.propose(proposal("amazon-root-renewal"), NOW + 2_000);
+    repository.promote(String(created.id), {
+      targetState: "shadow",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 3_000);
+    assert.ok(repository.active("amazon", NOW + 3_500));
+
+    const first = trust.manifest();
+    assert.ok(first);
+    const secondManifest = createObserverRecipeTrustManifest(rootSigner, {
+      generation: 2,
+      issuedAt: new Date(NOW + 4_000).toISOString(),
+      expiresAt,
+      previousManifestHash: first.manifestHash,
+      keys: first.manifest.payload.keys,
+      revokedKeyIds: []
+    }, root);
+    repository.installTrustManifest({
+      manifest: secondManifest,
+      confirmation: "INSTALL_ROOTED_OBSERVER_RECIPE_TRUST_MANIFEST"
+    }, NOW + 4_000);
+    assert.equal(repository.active("amazon", NOW + 4_500), null);
+    const resigned = repository.resign(String(created.id), {
+      confirmation: "RESIGN_ROOTED_OBSERVER_RECIPE"
+    }, NOW + 5_000);
+    assert.equal(resigned.lifecycleState, "shadow");
+    assert.equal(resigned.trustManifestGeneration, 2);
+    assert.ok(repository.active("amazon", NOW + 5_500));
+    assert.equal(repository.counts(NOW + 5_500).observerRecipeTrustManifests, 2);
+    assert.equal(repository.counts(NOW + 5_500).observerRecipeTransparencyEvents, 4);
+    assert.throws(
+      () => db.run("UPDATE observer_recipe_trust_manifests SET installed_at = installed_at"),
+      /append-only/
+    );
+    assert.throws(
+      () => db.run("UPDATE observer_recipe_transparency_events SET created_at = created_at"),
+      /append-only/
+    );
   } finally {
     db.close();
   }

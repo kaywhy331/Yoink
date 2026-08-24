@@ -1710,5 +1710,90 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
              strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       FROM tenants;
     `
+  },
+  {
+    version: 26,
+    name: "rooted_observer_recipe_trust",
+    sql: `
+      ALTER TABLE observer_recipe_candidates
+        ADD COLUMN trust_manifest_generation INTEGER NOT NULL DEFAULT 0 CHECK (trust_manifest_generation >= 0);
+      ALTER TABLE observer_recipe_candidates
+        ADD COLUMN trust_manifest_hash TEXT NOT NULL DEFAULT '';
+
+      INSERT INTO observer_recipe_lifecycle_events(
+        id, tenant_id, user_id, recipe_id, from_state, to_state,
+        reason_code, event_hash, created_at
+      )
+      SELECT 'observer_recipe_event_' || lower(hex(randomblob(16))), tenant_id, user_id, id,
+             lifecycle_state, 'disabled', 'rooted_trust_upgrade_required', lower(hex(randomblob(32))),
+             strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      FROM observer_recipe_candidates
+      WHERE lifecycle_state IN ('shadow', 'canary', 'trusted_read_only')
+         OR (kill_switch = 0 AND signature != '');
+
+      UPDATE observer_recipe_candidates
+      SET lifecycle_state = 'disabled', kill_switch = 1,
+          disabled_reason = 'rooted_trust_upgrade_required',
+          signature_key_id = '', signature = '', signed_at = '',
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE lifecycle_state IN ('shadow', 'canary', 'trusted_read_only')
+         OR (kill_switch = 0 AND signature != '');
+
+      CREATE TABLE observer_recipe_trust_manifests (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        root_key_id TEXT NOT NULL,
+        manifest_hash TEXT NOT NULL,
+        previous_manifest_hash TEXT NOT NULL DEFAULT '',
+        payload_json TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        active_intermediate_key_id TEXT NOT NULL DEFAULT '',
+        revoked_key_ids_json TEXT NOT NULL DEFAULT '[]',
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        installed_by_actor_id TEXT NOT NULL,
+        installed_at TEXT NOT NULL,
+        UNIQUE(tenant_id, generation),
+        UNIQUE(tenant_id, manifest_hash)
+      ) STRICT;
+      CREATE INDEX observer_recipe_trust_manifest_current_idx
+        ON observer_recipe_trust_manifests(tenant_id, generation DESC, installed_at DESC);
+
+      CREATE TABLE observer_recipe_transparency_events (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK (sequence > 0),
+        event_type TEXT NOT NULL CHECK (event_type IN ('manifest_installed', 'recipe_signed')),
+        manifest_generation INTEGER NOT NULL CHECK (manifest_generation > 0),
+        manifest_hash TEXT NOT NULL,
+        signing_key_id TEXT NOT NULL DEFAULT '',
+        subject_hash TEXT NOT NULL,
+        previous_event_hash TEXT NOT NULL DEFAULT '',
+        event_hash TEXT NOT NULL,
+        actor_kind TEXT NOT NULL CHECK (actor_kind IN ('maintainer', 'user', 'device', 'service')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(tenant_id, sequence),
+        UNIQUE(tenant_id, event_hash)
+      ) STRICT;
+      CREATE INDEX observer_recipe_transparency_recent_idx
+        ON observer_recipe_transparency_events(tenant_id, sequence DESC);
+
+      CREATE TRIGGER observer_recipe_trust_manifests_no_update
+      BEFORE UPDATE ON observer_recipe_trust_manifests
+      BEGIN SELECT RAISE(ABORT, 'observer recipe trust manifests are append-only'); END;
+      CREATE TRIGGER observer_recipe_trust_manifests_no_delete
+      BEFORE DELETE ON observer_recipe_trust_manifests
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'observer recipe trust manifests are append-only'); END;
+      CREATE TRIGGER observer_recipe_transparency_no_update
+      BEFORE UPDATE ON observer_recipe_transparency_events
+      BEGIN SELECT RAISE(ABORT, 'observer recipe transparency is append-only'); END;
+      CREATE TRIGGER observer_recipe_transparency_no_delete
+      BEFORE DELETE ON observer_recipe_transparency_events
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'observer recipe transparency is append-only'); END;
+    `
   }
 ]);

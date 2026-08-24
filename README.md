@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.23.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.24.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,18 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.24.0 replaces observer-recipe trust-on-first-use with a public offline
+root pinned independently in the API package and Chrome companion. Migration 26
+retires every legacy signed recipe, then stores immutable root-signed manifest
+generations and chained transparency receipts. One root-authorized online
+Ed25519 intermediate signs expiring, declarative read-only recipes. The
+companion verifies the complete manifest chain, permanent revocations, active
+key, transparency checkpoint, recipe signature, schema, and expiry, and pins
+the latest generation against rollback. Rooted rotation and renewal tooling,
+an admin install/status surface, and explicit audited recipe re-signing are
+included. None of this downloaded data can navigate, click, fill forms, decide
+identity, qualify a retailer, or widen mutation authority.
 
 Version 0.23.0 adds a tenant-scoped, privacy-classified operator alert path for
 adapter repair failures. An accepted sanitized companion diagnostic and its
@@ -47,7 +59,8 @@ and deliberately share one server-reconstructed sanitized observation at a
 time. Exact product-equivalence claims require strong identifiers and never
 remap the private catalog. Signed expiring observer recipes can evaluate five
 fixed read-only fields in shadow/canary mode; packaged code verifies the
-signature and schema, and downloaded data can never click or navigate.
+offline-root chain, revocation state, signature, and schema, and downloaded
+data can never click or navigate.
 
 Hosted portability now includes request-bound tenant/user repositories,
 replay-protected signed proxy scopes, automatic paired-device scope resolution,
@@ -130,7 +143,14 @@ migration is applied.
 For an offline, exact export/restore/reconciliation drill, use `npm run
 portability -- drill ...` and follow the [data portability
 contract](docs/DATA_PORTABILITY.md). Archives contain private state, are never
-served over HTTP, and do not include the observer-recipe signing key files.
+served over HTTP, and do not include observer-recipe root or intermediate key
+files.
+
+Observer-recipe trust initialization, renewal, rotation, revocation, restart,
+and recovery procedures are documented in the [rooted trust
+runbook](docs/OBSERVER_RECIPE_TRUST.md). The offline private root is never an
+API input, server dependency, extension asset, release file, or portability
+record.
 
 ## Load and pair the Chrome companion
 

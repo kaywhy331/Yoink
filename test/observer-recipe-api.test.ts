@@ -5,16 +5,16 @@ import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
-import { ObserverRecipeSigner } from "../packages/observer-registry/src/signer.js";
+import { ObserverRecipeTrustAuthority } from "../packages/observer-registry/src/trust.js";
 
 test("the signed observer registry distributes only promoted recipes to capable paired devices", async () => {
   const db = new YoinkDatabase();
-  const signer = ObserverRecipeSigner.ephemeral();
+  const trust = ObserverRecipeTrustAuthority.ephemeral();
   const server = createYoinkServer({
     db,
     webRoot: join(process.cwd(), "apps", "web"),
     version: "0.13.0-test",
-    observerRecipeSigner: signer
+    observerRecipeTrust: trust
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -38,6 +38,17 @@ test("the signed observer registry distributes only promoted recipes to capable 
     });
     assert.equal(pairedResponse.status, 201);
     const paired = (await pairedResponse.json() as { device: { token: string } }).device;
+    const manifest = trust.manifest()?.manifest;
+    assert.ok(manifest);
+    const installedTrust = await fetch(`${baseUrl}/api/v1/observer-recipes/trust-manifests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        manifest,
+        confirmation: "INSTALL_ROOTED_OBSERVER_RECIPE_TRUST_MANIFEST"
+      })
+    });
+    assert.equal(installedTrust.status, 201);
     const proposal = await fetch(`${baseUrl}/api/v1/observer-recipes`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
@@ -70,9 +81,14 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(promoted.status, 200);
     const distributed = await fetch(`${baseUrl}/api/v1/devices/self/observer-recipes/amazon`, {
       headers: { Origin: extensionOrigin, Authorization: `Bearer ${paired.token}` }
-    }).then((response) => response.json()) as { recipe: Parameters<typeof signer.verify>[0] };
+    }).then((response) => response.json()) as {
+      trust: { rootKeyId: string; manifestHash: string };
+      recipe: Parameters<typeof trust.intermediateSigner.verify>[0];
+    };
+    assert.equal(distributed.trust.rootKeyId, trust.root.keyId);
+    assert.match(distributed.trust.manifestHash, /^[a-f0-9]{64}$/);
     assert.equal(distributed.recipe.payload.state, "shadow");
-    assert.equal(signer.verify(distributed.recipe), true);
+    assert.equal(trust.intermediateSigner.verify(distributed.recipe), true);
 
     const trialResponse = await fetch(`${baseUrl}/api/v1/devices/self/observer-recipe-trials/amazon`, {
       method: "POST",

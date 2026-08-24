@@ -195,6 +195,14 @@
       </section>
       <section class="panel community-panel">
         <div class="panel-heading"><div><p class="eyebrow">Signed declarative maintenance</p><h2>Observer recipe registry</h2><p>Recipes are CSS selector data for five fixed read-only fields. They cannot contain code, XPath, regex, identity rules, navigation, events, forms, credentials, checkout, or mutations.</p></div><span class="mode-chip" id="observerRegistryKey">KEY UNAVAILABLE</span></div>
+        <div class="observer-trust-summary" id="observerTrustSummary"></div>
+        <form id="observerTrustForm" class="identity-claim-form">
+          <div class="form-grid">
+            <label class="wide"><span>Offline-root signed trust manifest (JSON)</span><textarea name="manifestJson" spellcheck="false" placeholder='{"algorithm":"Ed25519","rootKeyId":"…","payload":{…},"signature":"…"}' required></textarea></label>
+          </div>
+          <p class="fine-print">Only a manifest signed by the public root pinned in both the server package and Chrome companion can install. Generations must extend the immutable chain; revocations cannot be removed. The offline private root never belongs in this form or on the API host.</p>
+          <div class="dialog-actions"><button class="button secondary" type="submit">Install signed trust manifest</button></div>
+        </form>
         <form id="observerRecipeForm" class="identity-claim-form">
           <div class="form-grid">
             <label><span>Retailer</span><select name="retailerId"></select></label>

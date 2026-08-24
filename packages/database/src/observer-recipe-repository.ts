@@ -3,19 +3,28 @@ import {
   OBSERVER_RECIPE_FIELDS,
   OBSERVER_RECIPE_MODES,
   RETAILER_OBSERVER_VERSIONS,
+  INSTALL_OBSERVER_RECIPE_TRUST_MANIFEST_CONFIRMATION,
   type ObserverRecipeField,
   type ObserverRecipeFieldInput,
   type ObserverRecipePromotionInput,
   type ObserverRecipeProposalInput,
+  type ObserverRecipeResignInput,
   type ObserverRecipeState,
   type ObserverRecipeTrialInput,
+  type ObserverRecipeTrustManifestInstallInput,
+  type ObserverRecipeTrustTransparencyReceipt,
   type SignedObserverRecipeEnvelope,
+  type SignedObserverRecipeTrustManifest,
   type SignedObserverRecipePayload,
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
-import { ObserverRecipeSigner } from "../../observer-registry/src/signer.js";
+import {
+  ObserverRecipeTrustAuthority,
+  validateObserverRecipeTrustManifest,
+  type ValidatedObserverRecipeTrustManifest
+} from "../../observer-registry/src/trust.js";
 import { AuditRepository } from "./audit-repository.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -62,8 +71,25 @@ interface RecipeRow {
   signedAt: string;
   expiresAt: string;
   disabledReason: string;
+  trustManifestGeneration: number;
+  trustManifestHash: string;
   createdAt: string;
   updatedAt: string;
+}
+
+interface TrustManifestRow {
+  id: string;
+  generation: number;
+  rootKeyId: string;
+  manifestHash: string;
+  previousManifestHash: string;
+  payloadJson: string;
+  signature: string;
+  activeIntermediateKeyId: string;
+  revokedKeyIdsJson: string;
+  issuedAt: string;
+  expiresAt: string;
+  installedAt: string;
 }
 
 interface TrialSummary {
@@ -171,6 +197,9 @@ function recipeProjection(row: RecipeRow, trials: TrialSummary): Record<string, 
     killSwitch: row.killSwitch === 1,
     provenanceCode: row.provenanceCode,
     signatureKeyId: row.signatureKeyId,
+    trustManifestGeneration: row.trustManifestGeneration,
+    trustManifestHash: row.trustManifestHash,
+    rootedTrust: row.trustManifestGeneration > 0 && FINGERPRINT_PATTERN.test(row.trustManifestHash),
     signedAt: row.signedAt,
     expiresAt: row.expiresAt,
     disabledReason: row.disabledReason,
@@ -185,13 +214,140 @@ export class ObserverRecipeRepository {
 
   constructor(
     private readonly db: YoinkDatabase,
-    private readonly signer: ObserverRecipeSigner
+    private readonly trust: ObserverRecipeTrustAuthority
   ) {
     this.audit = new AuditRepository(db);
   }
 
-  keyInfo(): { algorithm: "Ed25519"; keyId: string; publicKeySpki: string } {
-    return { algorithm: "Ed25519", keyId: this.signer.keyId, publicKeySpki: this.signer.publicKeySpki };
+  keyInfo(now = Date.now()): Record<string, unknown> {
+    const installed = this.currentTrustManifest();
+    const authority = this.trust.manifest();
+    const ready = this.trust.ready(now) && Boolean(installed && authority
+      && installed.generation === authority.manifest.payload.generation
+      && installed.manifestHash === authority.manifestHash
+      && installed.activeIntermediateKeyId === authority.activeKey.keyId);
+    return {
+      algorithm: "Ed25519",
+      packagePinnedRoot: true,
+      rootKeyId: this.trust.root.keyId,
+      manifestInstalled: Boolean(installed),
+      generation: installed?.generation ?? 0,
+      manifestHash: installed?.manifestHash ?? "",
+      previousManifestHash: installed?.previousManifestHash ?? "",
+      keyId: ready ? authority?.activeKey.keyId ?? "" : "",
+      publicKeySpki: ready ? authority?.activeKey.publicKeySpki ?? "" : "",
+      revokedKeyCount: installed ? this.parsedRevocations(installed).length : 0,
+      expiresAt: installed?.expiresAt ?? "",
+      signingReady: ready,
+      mutationCapable: false
+    };
+  }
+
+  installTrustManifest(input: ObserverRecipeTrustManifestInstallInput, now = Date.now()): Record<string, unknown> {
+    if (!input || !input.manifest || input.confirmation !== INSTALL_OBSERVER_RECIPE_TRUST_MANIFEST_CONFIRMATION) {
+      throw new Error("Explicit rooted observer recipe trust-manifest installation is required.");
+    }
+    const scope = currentRequestScope();
+    const currentRow = this.currentTrustManifest();
+    const standalone = validateObserverRecipeTrustManifest(input.manifest, this.trust.root, now, undefined);
+    if (currentRow && standalone.manifestHash === currentRow.manifestHash) {
+      const installed = this.validatedManifestFromRow(currentRow, now);
+      if (installed.manifestHash !== standalone.manifestHash) {
+        throw new Error("The installed observer recipe trust receipt conflicts with the signed manifest.");
+      }
+      const authorityCandidate = this.trust.validateSuccessor(input.manifest, now);
+      if (authorityCandidate.manifestHash !== installed.manifestHash) {
+        throw new Error("The online observer recipe authority rejected the installed trust manifest.");
+      }
+      this.trust.activate(input.manifest, now);
+      return this.trustStatus(now);
+    }
+    const previousValidationTime = currentRow
+      ? Math.min(now, Math.max(new Date(currentRow.issuedAt).getTime(), new Date(currentRow.expiresAt).getTime() - 1))
+      : now;
+    const previous = currentRow ? this.validatedManifestFromRow(currentRow, previousValidationTime) : null;
+    const validated = validateObserverRecipeTrustManifest(input.manifest, this.trust.root, now, previous);
+    const authorityCandidate = this.trust.validateSuccessor(input.manifest, now);
+    if (authorityCandidate.manifestHash !== validated.manifestHash) {
+      throw new Error("The online observer recipe authority rejected the trust manifest.");
+    }
+    const timestamp = nowIso(now);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO observer_recipe_trust_manifests(
+           id, tenant_id, generation, root_key_id, manifest_hash, previous_manifest_hash,
+           payload_json, signature, active_intermediate_key_id, revoked_key_ids_json,
+           issued_at, expires_at, installed_by_actor_id, installed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        newId("observer_recipe_trust"),
+        scope.tenantId,
+        validated.manifest.payload.generation,
+        validated.manifest.rootKeyId,
+        validated.manifestHash,
+        validated.manifest.payload.previousManifestHash,
+        JSON.stringify(validated.manifest.payload),
+        validated.manifest.signature,
+        validated.activeKey.keyId,
+        JSON.stringify(validated.manifest.payload.revokedKeyIds),
+        validated.manifest.payload.issuedAt,
+        validated.manifest.payload.expiresAt,
+        scope.actorId,
+        timestamp
+      );
+      this.transparency("manifest_installed", validated, validated.manifestHash, validated.activeKey.keyId, now);
+      this.audit.record({
+        correlationId: validated.manifestHash,
+        aggregateType: "observer_recipe_trust_manifest",
+        eventType: "observer_recipe_trust_manifest_installed",
+        reasonCode: validated.manifest.payload.revokedKeyIds.length ? "rooted_manifest_with_revocations" : "rooted_manifest_installed",
+        message: "A root-signed monotonic observer recipe trust manifest was installed.",
+        data: {
+          generation: validated.manifest.payload.generation,
+          manifestHash: validated.manifestHash,
+          rootKeyId: validated.manifest.rootKeyId,
+          activeIntermediateKeyId: validated.activeKey.keyId,
+          revokedKeyCount: validated.manifest.payload.revokedKeyIds.length,
+          mutationCapable: false
+        }
+      }, now);
+      this.trust.activate(input.manifest, now);
+    });
+    return this.trustStatus(now);
+  }
+
+  trustStatus(now = Date.now()): Record<string, unknown> {
+    return {
+      ...this.keyInfo(now),
+      transparency: this.transparencyEvents(100),
+      manifests: this.trustManifests(50)
+    };
+  }
+
+  trustBundle(now = Date.now()): Record<string, unknown> | null {
+    const row = this.currentTrustManifest();
+    const authority = this.trust.manifest();
+    if (!row || !authority || !this.trust.ready(now)
+      || row.manifestHash !== authority.manifestHash
+      || row.generation !== authority.manifest.payload.generation) return null;
+    const receipt = this.db.get<ObserverRecipeTrustTransparencyReceipt>(
+      `SELECT sequence, event_type AS eventType, manifest_generation AS manifestGeneration,
+              manifest_hash AS manifestHash, signing_key_id AS signingKeyId,
+              subject_hash AS subjectHash, previous_event_hash AS previousEventHash,
+              event_hash AS eventHash, created_at AS createdAt
+       FROM observer_recipe_transparency_events
+       WHERE tenant_id = ? AND event_type = 'manifest_installed' AND manifest_hash = ?
+       ORDER BY sequence DESC LIMIT 1`,
+      currentRequestScope().tenantId,
+      row.manifestHash
+    );
+    return {
+      contractVersion: 1,
+      rootKeyId: this.trust.root.keyId,
+      manifestHash: row.manifestHash,
+      manifest: authority.manifest,
+      manifestChain: this.trustManifestChain(),
+      transparencyReceipt: receipt ?? null
+    };
   }
 
   propose(input: ObserverRecipeProposalInput, now = Date.now()): Record<string, unknown> {
@@ -287,20 +443,25 @@ export class ObserverRecipeRepository {
       && (trials.failed > 0 || trials.passed < 5 || trials.distinctSkus < 3 || trials.distinctLayouts < 2)) {
       throw new Error("Trusted read-only promotion requires five passing trials, three exact SKUs, two layouts, and no failures.");
     }
+    const rootedTrust = this.requireRootedTrust(now);
     const signedAt = nowIso(now);
     const payload = this.payload(row, input.targetState, signedAt);
-    const envelope = this.signer.envelope(payload);
+    const envelope = this.trust.envelope(payload, now);
     return this.db.transaction(() => {
       this.db.run(
         `UPDATE observer_recipe_candidates SET lifecycle_state = ?, signature_key_id = ?,
-           signature = ?, signed_at = ?, updated_at = ? WHERE id = ?`,
+           signature = ?, signed_at = ?, trust_manifest_generation = ?, trust_manifest_hash = ?,
+           updated_at = ? WHERE id = ?`,
         input.targetState,
         envelope.keyId,
         envelope.signature,
         signedAt,
+        rootedTrust.manifest.payload.generation,
+        rootedTrust.manifestHash,
         signedAt,
         recipeId
       );
+      this.transparency("recipe_signed", rootedTrust, row.recipeFingerprint, envelope.keyId, now);
       this.lifecycle(recipeId, row.lifecycleState, input.targetState, "explicit_maintainer_promotion", now);
       this.audit.record({
         correlationId: recipeId,
@@ -309,6 +470,52 @@ export class ObserverRecipeRepository {
         reasonCode: input.targetState,
         message: "A signed observer-only recipe advanced one reviewed lifecycle stage.",
         data: { retailerId: row.retailerId, recipeVersion: row.recipeVersion, targetState: input.targetState, trials }
+      }, now);
+      return this.requireProjection(recipeId);
+    });
+  }
+
+  resign(id: string, input: ObserverRecipeResignInput, now = Date.now()): Record<string, unknown> {
+    const recipeId = cleanText(id, 120);
+    if (!ID_PATTERN.test(recipeId) || !input || input.confirmation !== "RESIGN_ROOTED_OBSERVER_RECIPE") {
+      throw new Error("Explicit rooted observer recipe re-signing is required.");
+    }
+    const row = this.row(recipeId);
+    if (!row || !ACTIVE_STATES.has(row.lifecycleState) || row.killSwitch === 1
+      || new Date(row.expiresAt).getTime() <= now) {
+      throw new Error("Only an unexpired reviewed observer recipe may be re-signed.");
+    }
+    const rootedTrust = this.requireRootedTrust(now);
+    const signedAt = nowIso(now);
+    const payload = this.payload(row, row.lifecycleState as SignedObserverRecipePayload["state"], signedAt);
+    const envelope = this.trust.envelope(payload, now);
+    return this.db.transaction(() => {
+      this.db.run(
+        `UPDATE observer_recipe_candidates SET signature_key_id = ?, signature = ?, signed_at = ?,
+           trust_manifest_generation = ?, trust_manifest_hash = ?, updated_at = ? WHERE id = ?`,
+        envelope.keyId,
+        envelope.signature,
+        signedAt,
+        rootedTrust.manifest.payload.generation,
+        rootedTrust.manifestHash,
+        signedAt,
+        recipeId
+      );
+      this.transparency("recipe_signed", rootedTrust, row.recipeFingerprint, envelope.keyId, now);
+      this.audit.record({
+        correlationId: recipeId,
+        aggregateType: "observer_recipe",
+        eventType: "observer_recipe_resigned",
+        reasonCode: "rooted_trust_rotation",
+        message: "A previously reviewed observer-only recipe was explicitly re-signed under the current rooted intermediate.",
+        data: {
+          retailerId: row.retailerId,
+          recipeVersion: row.recipeVersion,
+          lifecycleState: row.lifecycleState,
+          manifestGeneration: rootedTrust.manifest.payload.generation,
+          manifestHash: rootedTrust.manifestHash,
+          mutationCapable: false
+        }
       }, now);
       return this.requireProjection(recipeId);
     });
@@ -333,7 +540,7 @@ export class ObserverRecipeRepository {
     const recipe = this.row(cleanText(input.recipeId, 120));
     if (!recipe || !ACTIVE_STATES.has(recipe.lifecycleState) || recipe.killSwitch === 1
       || recipe.retailerId !== input.retailerId || recipe.recipeVersion !== input.recipeVersion
-      || recipe.signatureKeyId !== this.signer.keyId || new Date(recipe.expiresAt).getTime() <= now) {
+      || !this.envelope(recipe, now) || new Date(recipe.expiresAt).getTime() <= now) {
       throw new Error("The signed observer recipe is unavailable or does not match this trial.");
     }
     const retailerSku = cleanText(input.retailerSku, 64).toLocaleUpperCase("en-US");
@@ -418,7 +625,7 @@ export class ObserverRecipeRepository {
       throw new Error("The observer recipe rollback target is unavailable.");
     }
     const disabled = this.disable(row.id, "explicit_rollback", now);
-    const active = this.envelope(rollback);
+    const active = this.envelope(rollback, now);
     if (!active) throw new Error("The rollback observer recipe signature could not be verified.");
     return { disabled, active };
   }
@@ -433,6 +640,8 @@ export class ObserverRecipeRepository {
               kill_switch AS killSwitch, provenance_code AS provenanceCode,
               signature_key_id AS signatureKeyId, signature, signed_at AS signedAt,
               expires_at AS expiresAt, disabled_reason AS disabledReason,
+              trust_manifest_generation AS trustManifestGeneration,
+              trust_manifest_hash AS trustManifestHash,
               created_at AS createdAt, updated_at AS updatedAt
        FROM observer_recipe_candidates
        WHERE tenant_id = ? AND retailer_id = ? AND lifecycle_state IN ('trusted_read_only', 'canary', 'shadow')
@@ -444,7 +653,7 @@ export class ObserverRecipeRepository {
       nowIso(now)
     );
     for (const row of rows) {
-      const envelope = this.envelope(row);
+      const envelope = this.envelope(row, now);
       if (envelope) return envelope;
     }
     return null;
@@ -455,16 +664,28 @@ export class ObserverRecipeRepository {
   }
 
   counts(now = Date.now()): Record<string, number> {
-    const row = this.db.get<{ candidates: number; active: number; disabled: number; trials: number; failedTrials: number }>(
+    const currentTrust = this.currentTrustManifest();
+    const row = this.db.get<{
+      candidates: number; active: number; disabled: number; trials: number; failedTrials: number;
+      trustManifests: number; transparencyEvents: number;
+    }>(
       `SELECT
          (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?) AS candidates,
-         (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ? AND lifecycle_state IN ('shadow', 'canary', 'trusted_read_only') AND kill_switch = 0 AND expires_at > ?) AS active,
+         (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?
+            AND lifecycle_state IN ('shadow', 'canary', 'trusted_read_only') AND kill_switch = 0 AND expires_at > ?
+            AND trust_manifest_generation = ? AND trust_manifest_hash = ?) AS active,
          (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ? AND lifecycle_state = 'disabled') AS disabled,
          (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ?) AS trials,
-         (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND outcome = 'failed') AS failedTrials`,
+         (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND outcome = 'failed') AS failedTrials,
+         (SELECT COUNT(*) FROM observer_recipe_trust_manifests WHERE tenant_id = ?) AS trustManifests,
+         (SELECT COUNT(*) FROM observer_recipe_transparency_events WHERE tenant_id = ?) AS transparencyEvents`,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       nowIso(now),
+      currentTrust?.generation ?? 0,
+      currentTrust?.manifestHash ?? "",
+      currentRequestScope().tenantId,
+      currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId
@@ -474,7 +695,180 @@ export class ObserverRecipeRepository {
       activeObserverRecipes: Number(row?.active ?? 0),
       disabledObserverRecipes: Number(row?.disabled ?? 0),
       observerRecipeTrials: Number(row?.trials ?? 0),
-      failedObserverRecipeTrials: Number(row?.failedTrials ?? 0)
+      failedObserverRecipeTrials: Number(row?.failedTrials ?? 0),
+      observerRecipeTrustManifests: Number(row?.trustManifests ?? 0),
+      observerRecipeTransparencyEvents: Number(row?.transparencyEvents ?? 0)
+    };
+  }
+
+  trustManifests(limit = 50): Array<Record<string, unknown>> {
+    const safeLimit = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
+    return this.db.all<TrustManifestRow>(
+      `SELECT id, generation, root_key_id AS rootKeyId, manifest_hash AS manifestHash,
+              previous_manifest_hash AS previousManifestHash, payload_json AS payloadJson,
+              signature, active_intermediate_key_id AS activeIntermediateKeyId,
+              revoked_key_ids_json AS revokedKeyIdsJson, issued_at AS issuedAt,
+              expires_at AS expiresAt, installed_at AS installedAt
+       FROM observer_recipe_trust_manifests WHERE tenant_id = ?
+       ORDER BY generation DESC LIMIT ?`,
+      currentRequestScope().tenantId,
+      safeLimit
+    ).map((row) => ({
+      id: row.id,
+      generation: row.generation,
+      rootKeyId: row.rootKeyId,
+      manifestHash: row.manifestHash,
+      previousManifestHash: row.previousManifestHash,
+      activeIntermediateKeyId: row.activeIntermediateKeyId,
+      revokedKeyCount: this.parsedRevocations(row).length,
+      issuedAt: row.issuedAt,
+      expiresAt: row.expiresAt,
+      installedAt: row.installedAt,
+      privacyClassification: "public_cryptographic_metadata"
+    }));
+  }
+
+  transparencyEvents(limit = 100): ObserverRecipeTrustTransparencyReceipt[] {
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    return this.db.all<ObserverRecipeTrustTransparencyReceipt>(
+      `SELECT sequence, event_type AS eventType, manifest_generation AS manifestGeneration,
+              manifest_hash AS manifestHash, signing_key_id AS signingKeyId,
+              subject_hash AS subjectHash, previous_event_hash AS previousEventHash,
+              event_hash AS eventHash, created_at AS createdAt
+       FROM observer_recipe_transparency_events WHERE tenant_id = ?
+       ORDER BY sequence DESC LIMIT ?`,
+      currentRequestScope().tenantId,
+      safeLimit
+    );
+  }
+
+  private currentTrustManifest(): TrustManifestRow | undefined {
+    return this.db.get<TrustManifestRow>(
+      `SELECT id, generation, root_key_id AS rootKeyId, manifest_hash AS manifestHash,
+              previous_manifest_hash AS previousManifestHash, payload_json AS payloadJson,
+              signature, active_intermediate_key_id AS activeIntermediateKeyId,
+              revoked_key_ids_json AS revokedKeyIdsJson, issued_at AS issuedAt,
+              expires_at AS expiresAt, installed_at AS installedAt
+       FROM observer_recipe_trust_manifests WHERE tenant_id = ?
+       ORDER BY generation DESC LIMIT 1`,
+      currentRequestScope().tenantId
+    );
+  }
+
+  private trustManifestChain(): SignedObserverRecipeTrustManifest[] {
+    return this.db.all<TrustManifestRow>(
+      `SELECT id, generation, root_key_id AS rootKeyId, manifest_hash AS manifestHash,
+              previous_manifest_hash AS previousManifestHash, payload_json AS payloadJson,
+              signature, active_intermediate_key_id AS activeIntermediateKeyId,
+              revoked_key_ids_json AS revokedKeyIdsJson, issued_at AS issuedAt,
+              expires_at AS expiresAt, installed_at AS installedAt
+       FROM observer_recipe_trust_manifests WHERE tenant_id = ?
+       ORDER BY generation ASC`,
+      currentRequestScope().tenantId
+    ).map((manifestRow) => this.manifestFromRow(manifestRow));
+  }
+
+  private parsedRevocations(row: TrustManifestRow): string[] {
+    try {
+      const parsed = JSON.parse(row.revokedKeyIdsJson) as unknown;
+      return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private manifestFromRow(row: TrustManifestRow): SignedObserverRecipeTrustManifest {
+    return {
+      algorithm: "Ed25519",
+      rootKeyId: row.rootKeyId,
+      payload: JSON.parse(row.payloadJson) as SignedObserverRecipeTrustManifest["payload"],
+      signature: row.signature
+    };
+  }
+
+  private validatedManifestFromRow(row: TrustManifestRow, now: number): ValidatedObserverRecipeTrustManifest {
+    const validated = validateObserverRecipeTrustManifest(this.manifestFromRow(row), this.trust.root, now);
+    if (validated.manifestHash !== row.manifestHash
+      || validated.manifest.payload.generation !== row.generation
+      || validated.activeKey.keyId !== row.activeIntermediateKeyId) {
+      throw new Error("The installed observer recipe trust manifest does not match its immutable receipt.");
+    }
+    return validated;
+  }
+
+  private installedTrust(now: number): ValidatedObserverRecipeTrustManifest | null {
+    const row = this.currentTrustManifest();
+    const authority = this.trust.manifest();
+    if (!row || !authority || !this.trust.ready(now)
+      || row.manifestHash !== authority.manifestHash
+      || row.generation !== authority.manifest.payload.generation) return null;
+    const validated = this.validatedManifestFromRow(row, now);
+    return validated.activeKey.keyId === authority.activeKey.keyId ? validated : null;
+  }
+
+  private requireRootedTrust(now: number): ValidatedObserverRecipeTrustManifest {
+    const trust = this.installedTrust(now);
+    if (!trust) throw new Error("Install a package-rooted observer recipe trust manifest before promotion or distribution.");
+    return trust;
+  }
+
+  private transparency(
+    eventType: ObserverRecipeTrustTransparencyReceipt["eventType"],
+    manifest: ValidatedObserverRecipeTrustManifest,
+    subjectHash: string,
+    signingKeyId: string,
+    now: number
+  ): ObserverRecipeTrustTransparencyReceipt {
+    const scope = currentRequestScope();
+    const prior = this.db.get<{ sequence: number; eventHash: string }>(
+      `SELECT sequence, event_hash AS eventHash FROM observer_recipe_transparency_events
+       WHERE tenant_id = ? ORDER BY sequence DESC LIMIT 1`,
+      scope.tenantId
+    );
+    const sequence = Number(prior?.sequence ?? 0) + 1;
+    const previousEventHash = prior?.eventHash ?? "";
+    const createdAt = nowIso(now);
+    const eventHash = stableHash(
+      "observer-recipe-transparency-v1",
+      sequence,
+      eventType,
+      manifest.manifest.payload.generation,
+      manifest.manifestHash,
+      signingKeyId,
+      subjectHash,
+      previousEventHash,
+      createdAt
+    );
+    this.db.run(
+      `INSERT INTO observer_recipe_transparency_events(
+         id, tenant_id, sequence, event_type, manifest_generation, manifest_hash,
+         signing_key_id, subject_hash, previous_event_hash, event_hash,
+         actor_kind, actor_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      newId("observer_recipe_transparency"),
+      scope.tenantId,
+      sequence,
+      eventType,
+      manifest.manifest.payload.generation,
+      manifest.manifestHash,
+      signingKeyId,
+      subjectHash,
+      previousEventHash,
+      eventHash,
+      scope.actorKind,
+      scope.actorId,
+      createdAt
+    );
+    return {
+      sequence,
+      eventType,
+      manifestGeneration: manifest.manifest.payload.generation,
+      manifestHash: manifest.manifestHash,
+      signingKeyId,
+      subjectHash,
+      previousEventHash,
+      eventHash,
+      createdAt
     };
   }
 
@@ -493,18 +887,21 @@ export class ObserverRecipeRepository {
     };
   }
 
-  private envelope(row: RecipeRow): SignedObserverRecipeEnvelope | null {
+  private envelope(row: RecipeRow, now = Date.now()): SignedObserverRecipeEnvelope | null {
+    const rootedTrust = this.installedTrust(now);
     if (!ACTIVE_STATES.has(row.lifecycleState) || !row.signedAt || !row.signature
-      || row.signatureKeyId !== this.signer.keyId) return null;
+      || !rootedTrust || row.signatureKeyId !== rootedTrust.activeKey.keyId
+      || row.trustManifestGeneration !== rootedTrust.manifest.payload.generation
+      || row.trustManifestHash !== rootedTrust.manifestHash) return null;
     const payload = this.payload(row, row.lifecycleState as SignedObserverRecipePayload["state"], row.signedAt);
     const envelope: SignedObserverRecipeEnvelope = {
       algorithm: "Ed25519",
       keyId: row.signatureKeyId,
-      publicKeySpki: this.signer.publicKeySpki,
+      publicKeySpki: rootedTrust.activeKey.publicKeySpki,
       payload,
       signature: row.signature
     };
-    return this.signer.verify(envelope) ? envelope : null;
+    return this.trust.verifyEnvelope(envelope, now) ? envelope : null;
   }
 
   private rows(): RecipeRow[] {
@@ -516,6 +913,8 @@ export class ObserverRecipeRepository {
               kill_switch AS killSwitch, provenance_code AS provenanceCode,
               signature_key_id AS signatureKeyId, signature, signed_at AS signedAt,
               expires_at AS expiresAt, disabled_reason AS disabledReason,
+              trust_manifest_generation AS trustManifestGeneration,
+              trust_manifest_hash AS trustManifestHash,
               created_at AS createdAt, updated_at AS updatedAt
        FROM observer_recipe_candidates WHERE tenant_id = ?
        ORDER BY created_at DESC, id DESC`,

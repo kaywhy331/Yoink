@@ -10,7 +10,7 @@ import { MIGRATIONS } from "../packages/database/src/migrations.js";
 test("initial migration creates the normalized graph and safe local defaults", () => {
   const db = new YoinkDatabase();
   try {
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 25);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 26);
     assert.equal(db.get<{ name: string }>("SELECT name FROM tenants WHERE id = ?", LOCAL_TENANT_ID)?.name, "Local");
     assert.equal(db.get<{ display_name: string }>("SELECT display_name FROM users WHERE id = ?", LOCAL_USER_ID)?.display_name, "Local user");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailers")?.count, 13);
@@ -58,6 +58,10 @@ test("initial migration creates the normalized graph and safe local defaults", (
         'operator_alert_rules', 'operator_alert_incidents',
         'operator_alert_events', 'operator_alert_deliveries'
       )`)?.count, 4);
+    assert.equal(db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type = 'table' AND name IN (
+        'observer_recipe_trust_manifests', 'observer_recipe_transparency_events'
+      )`)?.count, 2);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM operator_alert_rules WHERE tenant_id = ? AND enabled = 1",
       LOCAL_TENANT_ID
@@ -81,7 +85,7 @@ test("a file database reopens idempotently", () => {
     const second = new YoinkDatabase(filePath);
     try {
       assert.equal(second.get<{ pause_reason: string }>("SELECT pause_reason FROM app_settings WHERE user_id = ?", LOCAL_USER_ID)?.pause_reason, "Preserved");
-      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 25);
+      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 26);
       second.assertIntegrity();
     } finally {
       second.close();
@@ -109,7 +113,7 @@ test("an existing 0.2 database upgrades transactionally to shadow observations a
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 25);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 26);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_trials")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics")?.count, 0);
@@ -162,7 +166,7 @@ test("migration 11 closes any inherited Best Buy execution and qualification sta
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 25);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 26);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>("SELECT status FROM retailer_adapter_qualifications WHERE retailer_id = 'bestbuy'")?.status, "retired");
       assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name IN (
@@ -206,7 +210,7 @@ test("migration 19 retires Best Buy v2 qualification before the v4/v3 boundary",
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 25);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 26);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>(
         "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'bestbuy'"
@@ -432,6 +436,82 @@ test("migration 25 adds privacy-classified operator alert control without wideni
       assert.equal(upgraded.get<{ executionSupported: number }>(
         "SELECT execution_supported AS executionSupported FROM retailers WHERE id = 'walmart'"
       )?.executionSupported, 1);
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("migration 26 retires TOFU recipes and adds immutable rooted trust without widening execution", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-rooted-trust-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 25)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        "2026-08-24T00:00:00.000Z"
+      );
+    }
+    legacy.exec(`
+      INSERT OR IGNORE INTO tenants(id, name, created_at)
+      VALUES ('tenant_local', 'Local', '2026-08-24T00:00:00.000Z');
+      INSERT OR IGNORE INTO users(id, tenant_id, display_name, created_at)
+      VALUES ('user_local', 'tenant_local', 'Local user', '2026-08-24T00:00:00.000Z');
+      INSERT INTO retailers(id, display_name, execution_supported, domains_json, created_at, updated_at)
+      VALUES ('target', 'Target', 1, '["target.com"]', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z')
+      ON CONFLICT(id) DO UPDATE SET execution_supported = 1;
+      INSERT INTO observer_recipe_candidates(
+        id, tenant_id, user_id, retailer_id, recipe_version,
+        minimum_extension_version, recipe_json, recipe_fingerprint,
+        lifecycle_state, rollback_recipe_id, kill_switch, provenance_code,
+        signature_key_id, signature, signed_at, expires_at,
+        disabled_reason, created_at, updated_at
+      ) VALUES (
+        'observer_recipe_legacy_tofu', 'tenant_local', 'user_local', 'target', 'target-legacy-tofu',
+        '0.15.0', '{"availability":{"mode":"text","selectors":["#availability"]}}',
+        '${"f".repeat(64)}', 'shadow', '', 0, 'legacy_tofu', '${"a".repeat(64)}', '${"B".repeat(86)}',
+        '2026-08-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z', '',
+        '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z'
+      );
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 26 AND name = 'rooted_observer_recipe_trust'"
+      )?.count, 1);
+      const retired = upgraded.get<{
+        state: string; killSwitch: number; reason: string; signature: string; generation: number; manifestHash: string;
+      }>(`SELECT lifecycle_state AS state, kill_switch AS killSwitch, disabled_reason AS reason,
+                 signature, trust_manifest_generation AS generation, trust_manifest_hash AS manifestHash
+          FROM observer_recipe_candidates WHERE id = 'observer_recipe_legacy_tofu'`);
+      assert.deepEqual({ ...retired }, {
+        state: "disabled",
+        killSwitch: 1,
+        reason: "rooted_trust_upgrade_required",
+        signature: "",
+        generation: 0,
+        manifestHash: ""
+      });
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM observer_recipe_lifecycle_events WHERE recipe_id = 'observer_recipe_legacy_tofu' AND reason_code = 'rooted_trust_upgrade_required'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ executionSupported: number }>(
+        "SELECT execution_supported AS executionSupported FROM retailers WHERE id = 'target'"
+      )?.executionSupported, 1);
+      assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master
+        WHERE type = 'trigger' AND name IN (
+          'observer_recipe_trust_manifests_no_update', 'observer_recipe_trust_manifests_no_delete',
+          'observer_recipe_transparency_no_update', 'observer_recipe_transparency_no_delete'
+        )`)?.count, 4);
       upgraded.assertIntegrity();
     } finally {
       upgraded.close();

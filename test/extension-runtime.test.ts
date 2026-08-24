@@ -16,11 +16,160 @@ const PBANDAI_PRODUCT_URL = "https://p-bandai.com/us/item/N2884150001";
 const POKEMONCENTER_PRODUCT_URL = "https://www.pokemoncenter.com/product/10-10320-101/pokemon-tcg-mewtwo-and-mew-dna-premium-zip-binder";
 const WALMART_DRAW_URL = "https://www.walmart.com/shop/collectibles/draw";
 
-function signedObserverRecipe(tampered = false): Record<string, unknown> {
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+}
+
+function stableHash(...parts: Array<string | number>): string {
+  const hash = createHash("sha256");
+  for (const part of parts) {
+    const value = String(part);
+    hash.update(String(Buffer.byteLength(value)), "utf8");
+    hash.update(":", "utf8");
+    hash.update(value, "utf8");
+    hash.update("|", "utf8");
+  }
+  return hash.digest("hex");
+}
+
+interface ObserverRecipeFixture {
+  distribution: Record<string, unknown>;
+  root: Record<string, unknown>;
+  priorTrustState?: Record<string, unknown>;
+}
+
+interface FixtureTrustKey {
+  algorithm: string;
+  keyId: string;
+  publicKeySpki: string;
+  usage: string;
+  status: string;
+  notBefore: string;
+  notAfter: string;
+}
+
+interface FixtureTrustManifest {
+  algorithm: string;
+  rootKeyId: string;
+  payload: {
+    contractVersion: number;
+    generation: number;
+    rootKeyId: string;
+    issuedAt: string;
+    expiresAt: string;
+    previousManifestHash: string;
+    keys: FixtureTrustKey[];
+    revokedKeyIds: string[];
+  };
+  signature: string;
+}
+
+function signedObserverRecipe(tampered = false): ObserverRecipeFixture {
+  return observerRecipeFixture({ tampered });
+}
+
+function rotatedObserverRecipe(signWithRevokedKey = false): ObserverRecipeFixture {
+  return observerRecipeFixture({ rotated: true, signWithRevokedKey });
+}
+
+function observerRecipeFixture(options: {
+  tampered?: boolean;
+  rotated?: boolean;
+  signWithRevokedKey?: boolean;
+}): ObserverRecipeFixture {
+  const rootPair = generateKeyPairSync("ed25519");
+  const rootSpki = rootPair.publicKey.export({ type: "spki", format: "der" }) as Buffer;
+  const rootKeyId = createHash("sha256").update(rootSpki).digest("hex");
+  const root = {
+    algorithm: "Ed25519",
+    keyId: rootKeyId,
+    publicKeySpki: rootSpki.toString("base64url"),
+    minimumManifestGeneration: 1
+  };
   const pair = generateKeyPairSync("ed25519");
   const spki = pair.publicKey.export({ type: "spki", format: "der" }) as Buffer;
   const publicKeySpki = spki.toString("base64url");
   const keyId = createHash("sha256").update(spki).digest("hex");
+  const trustIssuedAt = new Date(Date.now() - 60_000).toISOString();
+  const trustExpiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+  const manifestPayload: FixtureTrustManifest["payload"] = {
+    contractVersion: 1,
+    generation: 1,
+    rootKeyId,
+    issuedAt: trustIssuedAt,
+    expiresAt: trustExpiresAt,
+    previousManifestHash: "",
+    keys: [{
+      algorithm: "Ed25519",
+      keyId,
+      publicKeySpki,
+      usage: "observer_recipe_signing",
+      status: "active",
+      notBefore: trustIssuedAt,
+      notAfter: trustExpiresAt
+    }],
+    revokedKeyIds: []
+  };
+  const manifest: FixtureTrustManifest = {
+    algorithm: "Ed25519",
+    rootKeyId,
+    payload: manifestPayload,
+    signature: sign(null, Buffer.from(canonicalJson(manifestPayload)), rootPair.privateKey).toString("base64url")
+  };
+  const manifestHash = createHash("sha256")
+    .update(`yoink-observer-recipe-trust-manifest-v1|${canonicalJson(manifest)}`)
+    .digest("hex");
+  let currentPair = pair;
+  let currentPublicKeySpki = publicKeySpki;
+  let currentKeyId = keyId;
+  let currentManifest = manifest;
+  let currentManifestHash = manifestHash;
+  const manifestChain: FixtureTrustManifest[] = [manifest];
+  if (options.rotated) {
+    const nextPair = generateKeyPairSync("ed25519");
+    const nextSpki = nextPair.publicKey.export({ type: "spki", format: "der" }) as Buffer;
+    const nextPublicKeySpki = nextSpki.toString("base64url");
+    const nextKeyId = createHash("sha256").update(nextSpki).digest("hex");
+    const rotatedPayload: FixtureTrustManifest["payload"] = {
+      contractVersion: 1,
+      generation: 2,
+      rootKeyId,
+      issuedAt: new Date(Date.now() - 30_000).toISOString(),
+      expiresAt: trustExpiresAt,
+      previousManifestHash: manifestHash,
+      keys: [
+        { ...manifestPayload.keys[0]!, status: "retired" },
+        {
+          algorithm: "Ed25519",
+          keyId: nextKeyId,
+          publicKeySpki: nextPublicKeySpki,
+          usage: "observer_recipe_signing",
+          status: "active",
+          notBefore: trustIssuedAt,
+          notAfter: trustExpiresAt
+        }
+      ],
+      revokedKeyIds: [keyId]
+    };
+    currentManifest = {
+      algorithm: "Ed25519",
+      rootKeyId,
+      payload: rotatedPayload,
+      signature: sign(null, Buffer.from(canonicalJson(rotatedPayload)), rootPair.privateKey).toString("base64url")
+    };
+    currentManifestHash = createHash("sha256")
+      .update(`yoink-observer-recipe-trust-manifest-v1|${canonicalJson(currentManifest)}`)
+      .digest("hex");
+    manifestChain.push(currentManifest);
+    if (!options.signWithRevokedKey) {
+      currentPair = nextPair;
+      currentPublicKeySpki = nextPublicKeySpki;
+      currentKeyId = nextKeyId;
+    }
+  }
   const payload = {
     contractVersion: 1,
     recipeId: "observer_recipe_fixture",
@@ -39,15 +188,62 @@ function signedObserverRecipe(tampered = false): Record<string, unknown> {
       addControl: { mode: "disabled_state", selectors: ["#add-to-cart-button"] }
     }
   };
-  const signature = sign(null, Buffer.from(JSON.stringify(payload)), pair.privateKey).toString("base64url");
+  const signature = sign(null, Buffer.from(JSON.stringify(payload)), currentPair.privateKey).toString("base64url");
+  const transparencySequence = options.rotated ? 2 : 1;
+  const transparencyPreviousHash = options.rotated ? "e".repeat(64) : "";
+  const transparencyCreatedAt = new Date().toISOString();
+  const transparencyEventHash = stableHash(
+    "observer-recipe-transparency-v1",
+    transparencySequence,
+    "manifest_installed",
+    options.rotated ? 2 : 1,
+    currentManifestHash,
+    options.rotated
+      ? (currentManifest.payload.keys.find((item) => item.status === "active")?.keyId ?? "")
+      : keyId,
+    currentManifestHash,
+    transparencyPreviousHash,
+    transparencyCreatedAt
+  );
   return {
-    key: { algorithm: "Ed25519", keyId, publicKeySpki },
-    recipe: {
-      algorithm: "Ed25519",
-      keyId,
-      publicKeySpki,
-      payload,
-      signature: tampered ? `${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}` : signature
+    root,
+    ...(options.rotated ? { priorTrustState: {
+      contractVersion: 1,
+      rootKeyId,
+      generation: 1,
+      manifestHash,
+      activeKeyId: keyId,
+      transparencySequence: 1,
+      transparencyEventHash: "e".repeat(64)
+    } } : {}),
+    distribution: {
+      trust: {
+        contractVersion: 1,
+        rootKeyId,
+        manifestHash: currentManifestHash,
+        manifest: currentManifest,
+        manifestChain,
+        transparencyReceipt: {
+          sequence: transparencySequence,
+          eventType: "manifest_installed",
+          manifestGeneration: options.rotated ? 2 : 1,
+          manifestHash: currentManifestHash,
+          signingKeyId: options.rotated
+            ? (currentManifest.payload.keys.find((item) => item.status === "active")?.keyId ?? "")
+            : keyId,
+          subjectHash: currentManifestHash,
+          previousEventHash: transparencyPreviousHash,
+          eventHash: transparencyEventHash,
+          createdAt: transparencyCreatedAt
+        }
+      },
+      recipe: {
+        algorithm: "Ed25519",
+        keyId: currentKeyId,
+        publicKeySpki: currentPublicKeySpki,
+        payload,
+        signature: options.tampered ? `${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}` : signature
+      }
     }
   };
 }
@@ -300,6 +496,8 @@ interface HarnessOptions {
   adapterDiagnosticFailureStatus?: number;
   queuedAdapterDiagnostics?: Array<Record<string, unknown>>;
   observerRecipeDistribution?: Record<string, unknown>;
+  observerRecipeRoot?: Record<string, unknown>;
+  observerRecipeTrustState?: Record<string, unknown>;
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -307,6 +505,9 @@ function harness(options: HarnessOptions = {}) {
   const storage: Record<string, unknown> = {
     pairedDevice: { id: "device_fixture", token: TOKEN, name: "Desktop - Windows - Chrome" }
   };
+  if (options.observerRecipeTrustState) {
+    storage.yoinkObserverRecipeTrustStateV1 = options.observerRecipeTrustState;
+  }
   if (options.activeJob) {
     storage.activeTargetJob = {
       id: "job_target_fixture",
@@ -853,7 +1054,7 @@ function harness(options: HarnessOptions = {}) {
     }
     if (url.includes("/devices/self/observer-recipes/")) {
       return new Response(JSON.stringify(options.observerRecipeDistribution || {
-        key: { algorithm: "Ed25519", keyId: "a".repeat(64), publicKeySpki: "A".repeat(60) },
+        trust: null,
         recipe: null
       }), { status: 200 });
     }
@@ -1005,7 +1206,11 @@ function harness(options: HarnessOptions = {}) {
     registration: registrationMock,
     importScripts: (...files: string[]) => {
       for (const file of files) {
-        runInContext(readFileSync(join(process.cwd(), "apps", "extension", file), "utf8"), context);
+        if (file === "observer-recipe-root.js" && options.observerRecipeRoot) {
+          runInContext(`globalThis.YoinkObserverRecipeRoot = Object.freeze(${JSON.stringify(options.observerRecipeRoot)});`, context);
+        } else {
+          runInContext(readFileSync(join(process.cwd(), "apps", "extension", file), "utf8"), context);
+        }
       }
     },
     crypto: globalThis.crypto,
@@ -1384,9 +1589,11 @@ test("community sharing is an explicit one-shot action that sends only server ev
 });
 
 test("the packaged interpreter verifies and pins a signed observer-only recipe before reporting bounded agreement", async () => {
+  const fixture = signedObserverRecipe();
   const runtime = harness({
     activeUrl: AMAZON_PRODUCT_URL,
-    observerRecipeDistribution: signedObserverRecipe()
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root
   });
   const response = await runtime.send({ type: "yoink:inspect-retailer" });
   assert.equal(response.ok, true);
@@ -1404,23 +1611,125 @@ test("the packaged interpreter verifies and pins a signed observer-only recipe b
   assert.match(String(body.layoutFingerprint), /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(body).includes("Amazon.com"), false);
   assert.equal(JSON.stringify(body).includes("#availability"), false);
-  const pin = runtime.storage.yoinkObserverRecipeKeyPinV1 as Record<string, unknown>;
-  assert.match(String(pin.keyId), /^[a-f0-9]{64}$/);
+  const trust = runtime.storage.yoinkObserverRecipeTrustStateV1 as Record<string, unknown>;
+  assert.equal(trust.generation, 1);
+  assert.match(String(trust.manifestHash), /^[a-f0-9]{64}$/);
+  assert.match(String(trust.activeKeyId), /^[a-f0-9]{64}$/);
+  assert.equal(runtime.storage.yoinkObserverRecipeKeyPinV1, undefined);
 });
 
 test("a bad observer recipe signature fails closed without affecting bundled evidence", async () => {
+  const fixture = signedObserverRecipe(true);
   const runtime = harness({
     activeUrl: AMAZON_PRODUCT_URL,
-    observerRecipeDistribution: signedObserverRecipe(true)
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root
   });
   const response = await runtime.send({ type: "yoink:inspect-retailer" });
   assert.equal(response.ok, true);
   assert.equal(response.recipeTrial, null);
   assert.equal(runtime.fetchCalls.some((entry) => entry.url.includes("/observer-recipe-trials/")), false);
   assert.equal(runtime.storage.yoinkObserverRecipeKeyPinV1, undefined);
+  assert.equal(runtime.storage.yoinkObserverRecipeTrustStateV1, undefined);
   const status = runtime.storage.yoinkObserverRecipeStatusV1 as Record<string, unknown>;
   assert.equal(status.state, "rejected");
   assert.match(String(status.message), /signature is invalid/);
+});
+
+test("a root-signed intermediate rotation extends pinned trust and accepts only the new key", async () => {
+  const fixture = rotatedObserverRecipe();
+  assert.ok(fixture.priorTrustState);
+  const runtime = harness({
+    activeUrl: AMAZON_PRODUCT_URL,
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root,
+    observerRecipeTrustState: fixture.priorTrustState
+  });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  assert.equal((response.recipeTrial as Record<string, unknown>).id, "observer_recipe_trial_fixture");
+  const trust = runtime.storage.yoinkObserverRecipeTrustStateV1 as Record<string, unknown>;
+  assert.equal(trust.generation, 2);
+  assert.equal(trust.transparencySequence, 2);
+  assert.deepEqual(trust.revokedKeyIds, [fixture.priorTrustState?.activeKeyId].filter(Boolean));
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.includes("/observer-recipe-trials/")), true);
+});
+
+test("a recipe signed by a root-revoked intermediate fails closed", async () => {
+  const fixture = rotatedObserverRecipe(true);
+  assert.ok(fixture.priorTrustState);
+  const runtime = harness({
+    activeUrl: AMAZON_PRODUCT_URL,
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root,
+    observerRecipeTrustState: fixture.priorTrustState
+  });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  assert.equal(response.recipeTrial, null);
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.includes("/observer-recipe-trials/")), false);
+  const status = runtime.storage.yoinkObserverRecipeStatusV1 as Record<string, unknown>;
+  assert.match(String(status.message), /signing key is revoked/);
+  assert.equal((runtime.storage.yoinkObserverRecipeTrustStateV1 as Record<string, unknown>).generation, 1);
+});
+
+test("a valid older root manifest cannot roll back a companion's pinned generation", async () => {
+  const fixture = signedObserverRecipe();
+  const runtime = harness({
+    activeUrl: AMAZON_PRODUCT_URL,
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root,
+    observerRecipeTrustState: {
+      contractVersion: 1,
+      rootKeyId: fixture.root.keyId,
+      generation: 2,
+      manifestHash: "9".repeat(64),
+      transparencySequence: 2,
+      transparencyEventHash: "8".repeat(64)
+    }
+  });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  assert.equal(response.recipeTrial, null);
+  const status = runtime.storage.yoinkObserverRecipeStatusV1 as Record<string, unknown>;
+  assert.match(String(status.message), /manifest was rolled back/);
+});
+
+test("a manifest with a corrupted offline-root signature is rejected before recipe evaluation", async () => {
+  const fixture = signedObserverRecipe();
+  const trust = fixture.distribution.trust as Record<string, unknown>;
+  const manifest = trust.manifest as Record<string, unknown>;
+  const signature = String(manifest.signature);
+  manifest.signature = `${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}`;
+  const runtime = harness({
+    activeUrl: AMAZON_PRODUCT_URL,
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root
+  });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  assert.equal(response.recipeTrial, null);
+  assert.equal(runtime.storage.yoinkObserverRecipeTrustStateV1, undefined);
+  const status = runtime.storage.yoinkObserverRecipeStatusV1 as Record<string, unknown>;
+  assert.match(String(status.message), /root signature is invalid/);
+});
+
+test("a tampered transparency receipt is rejected before recipe evaluation", async () => {
+  const fixture = signedObserverRecipe();
+  const trust = fixture.distribution.trust as Record<string, unknown>;
+  const receipt = trust.transparencyReceipt as Record<string, unknown>;
+  receipt.eventHash = "0".repeat(64);
+  const runtime = harness({
+    activeUrl: AMAZON_PRODUCT_URL,
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root
+  });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  assert.equal(response.recipeTrial, null);
+  assert.equal(runtime.storage.yoinkObserverRecipeTrustStateV1, undefined);
+  const status = runtime.storage.yoinkObserverRecipeStatusV1 as Record<string, unknown>;
+  assert.match(String(status.message), /transparency receipt is invalid/);
 });
 
 test("the service worker records Disney Store evidence through the generic read-only lane", async () => {

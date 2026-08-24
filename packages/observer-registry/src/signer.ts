@@ -39,6 +39,11 @@ export class ObserverRecipeSigner {
     return new ObserverRecipeSigner(pair.privateKey, pair.publicKey);
   }
 
+  static fromPrivatePem(value: string | Buffer): ObserverRecipeSigner {
+    const privateKey = createPrivateKey(value);
+    return new ObserverRecipeSigner(privateKey, createPublicKey(privateKey));
+  }
+
   static persistent(dataDirectory: string): ObserverRecipeSigner {
     mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
     const privatePath = join(dataDirectory, PRIVATE_KEY_FILE);
@@ -60,8 +65,35 @@ export class ObserverRecipeSigner {
     return new ObserverRecipeSigner(privateKey, publicKey);
   }
 
+  static named(dataDirectory: string): ObserverRecipeSigner {
+    const signer = ObserverRecipeSigner.ephemeral();
+    signer.persistNamed(dataDirectory);
+    return signer;
+  }
+
+  static fromNamed(dataDirectory: string, keyId: string): ObserverRecipeSigner | null {
+    const privatePath = join(dataDirectory, `observer-recipe-ed25519-${keyId}-private.pem`);
+    if (!existsSync(privatePath)) return null;
+    chmodSync(privatePath, 0o600);
+    return ObserverRecipeSigner.fromPrivatePem(readFileSync(privatePath));
+  }
+
+  persistNamed(dataDirectory: string): { privatePath: string; publicPath: string } {
+    mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+    const privatePath = join(dataDirectory, `observer-recipe-ed25519-${this.keyId}-private.pem`);
+    const publicPath = join(dataDirectory, `observer-recipe-ed25519-${this.keyId}-public.pem`);
+    if (!existsSync(privatePath)) {
+      writeFileSync(privatePath, this.privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600, flag: "wx" });
+    }
+    if (!existsSync(publicPath)) {
+      writeFileSync(publicPath, this.publicKey.export({ type: "spki", format: "pem" }), { mode: 0o644, flag: "wx" });
+    }
+    chmodSync(privatePath, 0o600);
+    return { privatePath, publicPath };
+  }
+
   envelope(payload: SignedObserverRecipePayload): SignedObserverRecipeEnvelope {
-    const signature = sign(null, Buffer.from(canonicalPayload(payload), "utf8"), this.privateKey).toString("base64url");
+    const signature = this.signCanonical(canonicalPayload(payload));
     return {
       algorithm: "Ed25519",
       keyId: this.keyId,
@@ -71,16 +103,25 @@ export class ObserverRecipeSigner {
     };
   }
 
+  signCanonical(value: string): string {
+    return sign(null, Buffer.from(value, "utf8"), this.privateKey).toString("base64url");
+  }
+
+  verifyCanonical(value: string, signature: string): boolean {
+    if (!/^[A-Za-z0-9_-]{80,120}$/.test(signature)) return false;
+    return verify(
+      null,
+      Buffer.from(value, "utf8"),
+      this.publicKey,
+      Buffer.from(signature, "base64url")
+    );
+  }
+
   verify(envelope: SignedObserverRecipeEnvelope): boolean {
     if (envelope.algorithm !== "Ed25519" || envelope.keyId !== this.keyId
       || envelope.publicKeySpki !== this.publicKeySpki || !/^[A-Za-z0-9_-]{80,120}$/.test(envelope.signature)) {
       return false;
     }
-    return verify(
-      null,
-      Buffer.from(canonicalPayload(envelope.payload), "utf8"),
-      this.publicKey,
-      Buffer.from(envelope.signature, "base64url")
-    );
+    return this.verifyCanonical(canonicalPayload(envelope.payload), envelope.signature);
   }
 }

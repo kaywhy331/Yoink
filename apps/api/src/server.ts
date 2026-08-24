@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { createYoinkServer } from "./app.js";
 import { loadConfig } from "./config.js";
 import { YoinkDatabase } from "../../../packages/database/src/database.js";
-import { ObserverRecipeSigner } from "../../../packages/observer-registry/src/signer.js";
+import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import {
   allowHostedHosts,
   allowHostedMutationOrigins,
@@ -21,7 +21,7 @@ const server = createYoinkServer({
   db,
   webRoot: config.webRoot,
   releaseRoot: config.releaseRoot,
-  observerRecipeSigner: ObserverRecipeSigner.persistent(config.dataDirectory),
+  observerRecipeTrust: ObserverRecipeTrustAuthority.persistent(config.dataDirectory),
   version: config.version,
   ...hostedDependencies
 });

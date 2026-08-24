@@ -9,6 +9,8 @@ import {
   type IdentityClaimReviewInput,
   type ObserverRecipePromotionInput,
   type ObserverRecipeProposalInput,
+  type ObserverRecipeResignInput,
+  type ObserverRecipeTrustManifestInstallInput,
   type ObserverRecipeTrialInput,
   type AmazonAddActivationInput,
   type AmazonAddRehearsalInput,
@@ -85,7 +87,7 @@ import { WalmartDrawRepository } from "../../../packages/database/src/walmart-dr
 import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
 import { newId } from "../../../packages/domain/src/ids.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
-import { ObserverRecipeSigner } from "../../../packages/observer-registry/src/signer.js";
+import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import { resolveExtensionRelease } from "./extension-release.js";
 import { ApiError, apiErrorPayload } from "./api-error.js";
 import { resolveApiRoutePolicy } from "./api-route-policy.js";
@@ -107,7 +109,7 @@ export interface AppDependencies {
   db: YoinkDatabase;
   webRoot: string;
   releaseRoot?: string;
-  observerRecipeSigner?: ObserverRecipeSigner;
+  observerRecipeTrust?: ObserverRecipeTrustAuthority;
   requestScopeResolver?: (request: IncomingMessage) => RequestScope | Promise<RequestScope>;
   hostValidator?: (request: IncomingMessage) => boolean;
   mutationOriginValidator?: (request: IncomingMessage) => boolean;
@@ -238,7 +240,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const identityClaims = new IdentityClaimRepository(db);
   const notifications = new NotificationRepository(db);
   const mutationLanes = new MutationLaneRepository(db);
-  const observerRecipes = new ObserverRecipeRepository(db, dependencies.observerRecipeSigner ?? ObserverRecipeSigner.ephemeral());
+  const observerRecipes = new ObserverRecipeRepository(db, dependencies.observerRecipeTrust ?? ObserverRecipeTrustAuthority.ephemeral());
   const operatorAlerts = new OperatorAlertRepository(db);
   const principals = new PrincipalRepository(db);
   const qualifications = new QualificationRepository(db);
@@ -577,7 +579,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             throw new Error("Upgrade the Chrome companion before requesting observer recipes.");
           }
           const retailerId = observerRecipeMatch[1] as SupportedRetailerId;
-          json(response, 200, { key: observerRecipes.keyInfo(), recipe: observerRecipes.active(retailerId) });
+          json(response, 200, { trust: observerRecipes.trustBundle(), recipe: observerRecipes.active(retailerId) });
           return;
         }
         const observerTrialMatch = /^\/api\/v1\/devices\/self\/observer-recipe-trials\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
@@ -807,6 +809,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           },
           observerRegistry: {
             key: observerRecipes.keyInfo(),
+            trust: observerRecipes.trustStatus(),
             mutationCapable: false,
             recipes: observerRecipes.list()
           },
@@ -1156,12 +1159,23 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, identityClaims.deleteClaims());
         return;
       }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/observer-recipes/trust") {
+        json(response, 200, observerRecipes.trustStatus());
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/observer-recipes/trust-manifests") {
+        const body = await readJson(request);
+        json(response, 201, {
+          trust: observerRecipes.installTrustManifest(body as unknown as ObserverRecipeTrustManifestInstallInput)
+        });
+        return;
+      }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/observer-recipes") {
         const body = await readJson(request);
         json(response, 201, { recipe: observerRecipes.propose(body as unknown as ObserverRecipeProposalInput) });
         return;
       }
-      const observerRecipeActionMatch = /^\/api\/v1\/observer-recipes\/([A-Za-z0-9_-]{3,120})\/(promote|disable|rollback)$/.exec(requestUrl.pathname);
+      const observerRecipeActionMatch = /^\/api\/v1\/observer-recipes\/([A-Za-z0-9_-]{3,120})\/(promote|resign|disable|rollback)$/.exec(requestUrl.pathname);
       if (request.method === "POST" && observerRecipeActionMatch) {
         const recipeId = observerRecipeActionMatch[1] ?? "";
         const action = observerRecipeActionMatch[2];
@@ -1169,6 +1183,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (action === "promote") {
           json(response, 200, {
             recipe: observerRecipes.promote(recipeId, body as unknown as ObserverRecipePromotionInput)
+          });
+        } else if (action === "resign") {
+          json(response, 200, {
+            recipe: observerRecipes.resign(recipeId, body as unknown as ObserverRecipeResignInput)
           });
         } else if (action === "disable") {
           if (body.confirmation !== "DISABLE_OBSERVER_RECIPE") throw new Error("Explicit observer recipe kill-switch confirmation is required.");

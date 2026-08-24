@@ -1,6 +1,6 @@
 {
   "name": "yoink",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "private": true,
   "type": "module",
   "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",
@@ -14,6 +14,7 @@
     "test": "node --import tsx --test test/*.test.ts",
     "verify": "npm run check && npm run build && npm test",
     "package:extension": "npm run build:extension && node scripts/package-extension.mjs",
+    "recipe-trust": "tsx scripts/observer-recipe-trust.ts",
     "portability": "npm run build:types && node scripts/portability.mjs"
   },
   "engines": {

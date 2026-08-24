@@ -13,7 +13,8 @@ test("the extension release allowlist contains every packaged observer and mutat
     "bestbuy-action.js",
     "retailer-shadow.js",
     "trackalacker-push.js",
-    "trackalacker-sync.js"
+    "trackalacker-sync.js",
+    "observer-recipe-root.js"
   ]) {
     assert.match(script, new RegExp(`\\"${file.replaceAll(".", "\\.")}\\"`), `${file} must be included in the release zip`);
   }

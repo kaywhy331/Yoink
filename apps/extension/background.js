@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("trackalacker-push.js");
+importScripts("trackalacker-push.js", "observer-recipe-root.js");
 
 const API_ROOT = "http://127.0.0.1:32991/api/v1";
 const LOCAL_APP_ROOT = "http://127.0.0.1:32991";
@@ -17,7 +17,8 @@ const TRACKALACKER_SYNC_STATE_KEY = "yoinkTrackalackerSyncStateV1";
 const NOTIFICATION_HISTORY_KEY = "yoinkNotificationHistoryV1";
 const NOTIFICATION_ROUTES_KEY = "yoinkNotificationRoutesV1";
 const COMMUNITY_CONTRIBUTION_TIMES_KEY = "yoinkCommunityContributionTimesV1";
-const OBSERVER_RECIPE_KEY_PIN = "yoinkObserverRecipeKeyPinV1";
+const LEGACY_OBSERVER_RECIPE_KEY_PIN = "yoinkObserverRecipeKeyPinV1";
+const OBSERVER_RECIPE_TRUST_STATE_KEY = "yoinkObserverRecipeTrustStateV1";
 const OBSERVER_RECIPE_STATUS_KEY = "yoinkObserverRecipeStatusV1";
 const ADAPTER_DIAGNOSTIC_QUEUE_KEY = "yoinkAdapterDiagnosticQueueV1";
 const COMMUNITY_CONTRIBUTION_INTERVAL_MS = 60_000;
@@ -133,6 +134,7 @@ const ADD_LANES = Object.freeze({
 });
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const TrackalackerPush = globalThis.YoinkTrackalackerPush;
+const ObserverRecipeRoot = globalThis.YoinkObserverRecipeRoot;
 let jobCyclePromise = null;
 let notificationCyclePromise = null;
 let trackalackerEnrollmentPromise = null;
@@ -914,6 +916,246 @@ async function sha256Hex(value) {
   return [...new Uint8Array(digest)].map((item) => item.toString(16).padStart(2, "0")).join("");
 }
 
+async function stableHashHex(...parts) {
+  let framed = "";
+  for (const part of parts) {
+    const value = part === null || part === undefined ? "" : String(part);
+    framed += `${new TextEncoder().encode(value).length}:${value}|`;
+  }
+  return sha256Hex(framed);
+}
+
+function exactObjectKeys(value, expected) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expected].sort()));
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") {
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new Error("The observer recipe trust payload is not canonical JSON.");
+    return encoded;
+  }
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+}
+
+async function verifyEd25519(publicKeySpki, signature, message) {
+  try {
+    const publicKey = await crypto.subtle.importKey(
+      "spki",
+      base64urlBytes(publicKeySpki),
+      { name: "Ed25519" },
+      false,
+      ["verify"]
+    );
+    return await crypto.subtle.verify(
+      { name: "Ed25519" },
+      publicKey,
+      base64urlBytes(signature),
+      new TextEncoder().encode(message)
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function normalizedObserverRecipeTrustManifest(value, root, now) {
+  if (!exactObjectKeys(value, ["algorithm", "rootKeyId", "payload", "signature"])
+    || value.algorithm !== "Ed25519" || value.rootKeyId !== root.keyId
+    || !/^[A-Za-z0-9_-]{80,120}$/.test(String(value.signature || ""))) {
+    throw new Error("The observer recipe trust manifest envelope is invalid.");
+  }
+  const payload = value.payload;
+  if (!exactObjectKeys(payload, [
+    "contractVersion", "generation", "rootKeyId", "issuedAt", "expiresAt",
+    "previousManifestHash", "keys", "revokedKeyIds"
+  ]) || payload.contractVersion !== 1 || payload.rootKeyId !== root.keyId
+    || !Number.isSafeInteger(payload.generation) || payload.generation < 1
+    || !Array.isArray(payload.keys) || payload.keys.length < 1 || payload.keys.length > 8
+    || !Array.isArray(payload.revokedKeyIds) || payload.revokedKeyIds.length > 32) {
+    throw new Error("The observer recipe trust manifest payload is invalid.");
+  }
+  const issuedAt = new Date(payload.issuedAt).getTime();
+  const expiresAt = new Date(payload.expiresAt).getTime();
+  if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || issuedAt > now + 5 * 60_000
+    || expiresAt <= issuedAt || expiresAt - issuedAt > 400 * 24 * 60 * 60_000) {
+    throw new Error("The observer recipe trust manifest lifetime is invalid.");
+  }
+  const revokedKeyIds = payload.revokedKeyIds.map((keyId) => String(keyId));
+  if (new Set(revokedKeyIds).size !== revokedKeyIds.length
+    || revokedKeyIds.some((keyId) => !/^[a-f0-9]{64}$/.test(keyId))) {
+    throw new Error("The observer recipe trust revocation set is invalid.");
+  }
+  const seen = new Set();
+  const keys = [];
+  for (const key of payload.keys) {
+    if (!exactObjectKeys(key, [
+      "algorithm", "keyId", "publicKeySpki", "usage", "status", "notBefore", "notAfter"
+    ]) || key.algorithm !== "Ed25519" || key.usage !== "observer_recipe_signing"
+      || !["active", "retired"].includes(key.status)
+      || !/^[a-f0-9]{64}$/.test(String(key.keyId || ""))
+      || !/^[A-Za-z0-9_-]{40,120}$/.test(String(key.publicKeySpki || ""))
+      || seen.has(key.keyId)
+      || await sha256Hex(base64urlBytes(key.publicKeySpki)) !== key.keyId) {
+      throw new Error("The observer recipe intermediate-key manifest is invalid.");
+    }
+    const notBefore = new Date(key.notBefore).getTime();
+    const notAfter = new Date(key.notAfter).getTime();
+    if (!Number.isFinite(notBefore) || !Number.isFinite(notAfter) || notBefore > now + 5 * 60_000
+      || notAfter <= notBefore) {
+      throw new Error("The observer recipe intermediate-key lifetime is invalid.");
+    }
+    seen.add(key.keyId);
+    keys.push({ ...key });
+  }
+  const activeKeys = keys.filter((key) => key.status === "active" && !revokedKeyIds.includes(key.keyId));
+  if (activeKeys.length !== 1) {
+    throw new Error("The observer recipe trust manifest must identify exactly one unrevoked active key.");
+  }
+  if (!await verifyEd25519(root.publicKeySpki, value.signature, canonicalJson(payload))) {
+    throw new Error("The observer recipe trust manifest root signature is invalid.");
+  }
+  const manifestHash = await sha256Hex(`yoink-observer-recipe-trust-manifest-v1|${canonicalJson(value)}`);
+  return {
+    manifest: value,
+    manifestHash,
+    issuedAt,
+    expiresAt,
+    activeKey: activeKeys[0],
+    keys,
+    revokedKeyIds
+  };
+}
+
+async function verifiedObserverRecipeTrust(value) {
+  const now = Date.now();
+  const root = ObserverRecipeRoot;
+  if (!exactObjectKeys(root, ["algorithm", "keyId", "minimumManifestGeneration", "publicKeySpki"])
+    || root.algorithm !== "Ed25519" || !/^[a-f0-9]{64}$/.test(String(root.keyId || ""))
+    || !Number.isSafeInteger(root.minimumManifestGeneration) || root.minimumManifestGeneration < 1
+    || !/^[A-Za-z0-9_-]{40,120}$/.test(String(root.publicKeySpki || ""))
+    || await sha256Hex(base64urlBytes(root.publicKeySpki)) !== root.keyId) {
+    throw new Error("The packaged observer recipe root is invalid.");
+  }
+  if (!exactObjectKeys(value, [
+    "contractVersion", "rootKeyId", "manifestHash", "manifest", "manifestChain", "transparencyReceipt"
+  ]) || value.contractVersion !== 1 || value.rootKeyId !== root.keyId
+    || !/^[a-f0-9]{64}$/.test(String(value.manifestHash || ""))
+    || !Array.isArray(value.manifestChain) || value.manifestChain.length < 1 || value.manifestChain.length > 128) {
+    throw new Error("The observer recipe rooted trust bundle is invalid.");
+  }
+  const chain = [];
+  for (const manifest of value.manifestChain) {
+    chain.push(await normalizedObserverRecipeTrustManifest(manifest, root, now));
+  }
+  for (let index = 0; index < chain.length; index += 1) {
+    const current = chain[index];
+    const previous = chain[index - 1];
+    if (!previous) {
+      if (current.manifest.payload.generation !== 1 || current.manifest.payload.previousManifestHash !== "") {
+        throw new Error("The observer recipe trust chain does not begin at generation one.");
+      }
+      continue;
+    }
+    const payload = current.manifest.payload;
+    if (payload.generation !== previous.manifest.payload.generation + 1
+      || payload.previousManifestHash !== previous.manifestHash
+      || current.issuedAt < previous.issuedAt
+      || previous.revokedKeyIds.some((keyId) => !current.revokedKeyIds.includes(keyId))) {
+      throw new Error("The observer recipe trust chain is not monotonic.");
+    }
+    const known = new Set([...current.keys.map((key) => key.keyId), ...current.revokedKeyIds]);
+    if (previous.keys.some((key) => !known.has(key.keyId))) {
+      throw new Error("The observer recipe trust chain silently removed a prior key.");
+    }
+  }
+  const current = chain.at(-1);
+  if (!current || current.manifest.payload.generation < root.minimumManifestGeneration
+    || current.manifestHash !== value.manifestHash
+    || canonicalJson(current.manifest) !== canonicalJson(value.manifest)
+    || current.expiresAt <= now
+    || new Date(current.activeKey.notBefore).getTime() > now + 5 * 60_000
+    || new Date(current.activeKey.notAfter).getTime() <= now
+    || new Date(current.activeKey.notAfter).getTime() > current.expiresAt) {
+    throw new Error("The current observer recipe trust manifest is unavailable or expired.");
+  }
+  const receipt = value.transparencyReceipt;
+  if (!exactObjectKeys(receipt, [
+    "sequence", "eventType", "manifestGeneration", "manifestHash", "signingKeyId",
+    "subjectHash", "previousEventHash", "eventHash", "createdAt"
+  ])) throw new Error("The observer recipe transparency receipt is invalid.");
+  const expectedEventHash = await stableHashHex(
+    "observer-recipe-transparency-v1",
+    receipt.sequence,
+    receipt.eventType,
+    receipt.manifestGeneration,
+    receipt.manifestHash,
+    receipt.signingKeyId,
+    receipt.subjectHash,
+    receipt.previousEventHash,
+    receipt.createdAt
+  );
+  if (!Number.isSafeInteger(receipt.sequence) || receipt.sequence < 1
+    || receipt.eventType !== "manifest_installed"
+    || receipt.manifestGeneration !== current.manifest.payload.generation
+    || receipt.manifestHash !== current.manifestHash || receipt.subjectHash !== current.manifestHash
+    || receipt.signingKeyId !== current.activeKey.keyId
+    || !/^(?:|[a-f0-9]{64})$/.test(String(receipt.previousEventHash || ""))
+    || !/^[a-f0-9]{64}$/.test(String(receipt.eventHash || ""))
+    || receipt.eventHash !== expectedEventHash
+    || !Number.isFinite(new Date(receipt.createdAt).getTime())
+    || new Date(receipt.createdAt).getTime() > now + 5 * 60_000) {
+    throw new Error("The observer recipe transparency receipt is invalid.");
+  }
+  const stored = (await chrome.storage.local.get(OBSERVER_RECIPE_TRUST_STATE_KEY))[OBSERVER_RECIPE_TRUST_STATE_KEY];
+  if (stored) {
+    if (stored.rootKeyId !== root.keyId || !Number.isSafeInteger(stored.generation)
+      || !/^[a-f0-9]{64}$/.test(String(stored.manifestHash || ""))) {
+      throw new Error("The stored observer recipe trust state is invalid.");
+    }
+    if (current.manifest.payload.generation < stored.generation) {
+      throw new Error("The observer recipe trust manifest was rolled back.");
+    }
+    if (current.manifest.payload.generation === stored.generation && current.manifestHash !== stored.manifestHash) {
+      throw new Error("The observer recipe trust manifest conflicts with the pinned generation.");
+    }
+    if (current.manifest.payload.generation > stored.generation
+      && !chain.some((manifest) => manifest.manifest.payload.generation === stored.generation
+        && manifest.manifestHash === stored.manifestHash)) {
+      throw new Error("The observer recipe trust rotation does not extend the pinned chain.");
+    }
+    if (Number.isSafeInteger(stored.transparencySequence)
+      && (receipt.sequence < stored.transparencySequence
+        || (receipt.sequence === stored.transparencySequence && receipt.eventHash !== stored.transparencyEventHash))) {
+      throw new Error("The observer recipe transparency receipt was rolled back.");
+    }
+    if (Number.isSafeInteger(stored.transparencySequence)
+      && receipt.sequence === stored.transparencySequence + 1
+      && receipt.previousEventHash !== stored.transparencyEventHash) {
+      throw new Error("The observer recipe transparency chain does not extend the pinned checkpoint.");
+    }
+  }
+  return {
+    activeKey: current.activeKey,
+    state: {
+      contractVersion: 1,
+      rootKeyId: root.keyId,
+      generation: current.manifest.payload.generation,
+      manifestHash: current.manifestHash,
+      previousManifestHash: current.manifest.payload.previousManifestHash,
+      activeKeyId: current.activeKey.keyId,
+      activePublicKeySpki: current.activeKey.publicKeySpki,
+      knownKeyIds: current.keys.map((key) => key.keyId),
+      revokedKeyIds: current.revokedKeyIds,
+      expiresAt: current.manifest.payload.expiresAt,
+      transparencySequence: receipt.sequence,
+      transparencyEventHash: receipt.eventHash,
+      verifiedAt: new Date(now).toISOString()
+    }
+  };
+}
+
 function observerRecipeSelector(value) {
   const normalized = String(value || "").trim().replace(/\s+/g, " ");
   const lower = normalized.toLocaleLowerCase("en-US");
@@ -940,7 +1182,7 @@ function normalizedObserverRecipeEnvelope(value, key, retailerId) {
   if (value.algorithm !== "Ed25519" || !/^[a-f0-9]{64}$/.test(String(value.keyId || ""))
     || !/^[A-Za-z0-9_-]{40,120}$/.test(String(value.publicKeySpki || ""))
     || !/^[A-Za-z0-9_-]{80,120}$/.test(String(value.signature || ""))
-    || key?.algorithm !== "Ed25519" || key.keyId !== value.keyId || key.publicKeySpki !== value.publicKeySpki) {
+    || key?.algorithm !== "Ed25519") {
     throw new Error("The observer recipe signing key metadata is invalid.");
   }
   const payload = value.payload;
@@ -1009,31 +1251,23 @@ function normalizedObserverRecipeEnvelope(value, key, retailerId) {
   };
 }
 
-async function verifiedObserverRecipe(value, key, retailerId) {
-  const normalized = normalizedObserverRecipeEnvelope(value, key, retailerId);
+async function verifiedObserverRecipe(value, rootedTrust, retailerId) {
+  const normalized = normalizedObserverRecipeEnvelope(value, rootedTrust.activeKey, retailerId);
   const spki = base64urlBytes(normalized.envelope.publicKeySpki);
   if (await sha256Hex(spki) !== normalized.envelope.keyId) throw new Error("The observer recipe key fingerprint does not match its public key.");
-  const pinned = (await chrome.storage.local.get(OBSERVER_RECIPE_KEY_PIN))[OBSERVER_RECIPE_KEY_PIN];
-  if (pinned && (pinned.keyId !== normalized.envelope.keyId || pinned.publicKeySpki !== normalized.envelope.publicKeySpki)) {
-    throw new Error("The observer recipe signing key changed; recipe execution is pinned closed.");
+  if (rootedTrust.state.revokedKeyIds.includes(normalized.envelope.keyId)) {
+    throw new Error("The observer recipe signing key is revoked.");
   }
-  const publicKey = await crypto.subtle.importKey("spki", spki, { name: "Ed25519" }, false, ["verify"]);
-  const valid = await crypto.subtle.verify(
-    { name: "Ed25519" },
-    publicKey,
-    base64urlBytes(normalized.envelope.signature),
-    new TextEncoder().encode(normalized.canonicalPayload)
+  if (normalized.envelope.keyId !== rootedTrust.activeKey.keyId
+    || normalized.envelope.publicKeySpki !== rootedTrust.activeKey.publicKeySpki) {
+    throw new Error("The observer recipe was not signed by the current active intermediate key.");
+  }
+  const valid = await verifyEd25519(
+    normalized.envelope.publicKeySpki,
+    normalized.envelope.signature,
+    normalized.canonicalPayload
   );
   if (!valid) throw new Error("The observer recipe signature is invalid.");
-  if (!pinned) {
-    await chrome.storage.local.set({
-      [OBSERVER_RECIPE_KEY_PIN]: {
-        algorithm: "Ed25519",
-        keyId: normalized.envelope.keyId,
-        publicKeySpki: normalized.envelope.publicKeySpki
-      }
-    });
-  }
   return normalized.envelope.payload;
 }
 
@@ -1131,7 +1365,10 @@ async function runObserverRecipeShadow(tabId, retailerId, observation, diagnosti
       headers: { Authorization: `Bearer ${device.token}` }
     }, EVIDENCE_REQUEST_TIMEOUT_MS);
     if (!distributed.recipe) return null;
-    const recipe = await verifiedObserverRecipe(distributed.recipe, distributed.key, retailerId);
+    const rootedTrust = await verifiedObserverRecipeTrust(distributed.trust);
+    const recipe = await verifiedObserverRecipe(distributed.recipe, rootedTrust, retailerId);
+    await chrome.storage.local.set({ [OBSERVER_RECIPE_TRUST_STATE_KEY]: rootedTrust.state });
+    await chrome.storage.local.remove(LEGACY_OBSERVER_RECIPE_KEY_PIN);
     const evaluation = await evaluateObserverRecipe(tabId, recipe.fields, observation);
     const diagnosticFingerprint = String(diagnostic?.layoutFingerprint || "");
     const layoutFingerprint = /^[a-f0-9]{64}$/.test(diagnosticFingerprint)

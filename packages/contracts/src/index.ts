@@ -474,6 +474,10 @@ export interface ObserverRecipePromotionInput {
   confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE";
 }
 
+export interface ObserverRecipeResignInput {
+  confirmation: "RESIGN_ROOTED_OBSERVER_RECIPE";
+}
+
 export interface ObserverRecipeTrialInput {
   contractVersion: typeof OBSERVER_RECIPE_CONTRACT_VERSION;
   recipeId: string;
@@ -508,6 +512,54 @@ export interface SignedObserverRecipeEnvelope {
   publicKeySpki: string;
   payload: SignedObserverRecipePayload;
   signature: string;
+}
+
+export const OBSERVER_RECIPE_TRUST_CONTRACT_VERSION = 1;
+export const INSTALL_OBSERVER_RECIPE_TRUST_MANIFEST_CONFIRMATION = "INSTALL_ROOTED_OBSERVER_RECIPE_TRUST_MANIFEST";
+
+export interface ObserverRecipeTrustKey {
+  algorithm: "Ed25519";
+  keyId: string;
+  publicKeySpki: string;
+  usage: "observer_recipe_signing";
+  status: "active" | "retired";
+  notBefore: string;
+  notAfter: string;
+}
+
+export interface ObserverRecipeTrustManifestPayload {
+  contractVersion: typeof OBSERVER_RECIPE_TRUST_CONTRACT_VERSION;
+  generation: number;
+  rootKeyId: string;
+  issuedAt: string;
+  expiresAt: string;
+  previousManifestHash: string;
+  keys: ObserverRecipeTrustKey[];
+  revokedKeyIds: string[];
+}
+
+export interface SignedObserverRecipeTrustManifest {
+  algorithm: "Ed25519";
+  rootKeyId: string;
+  payload: ObserverRecipeTrustManifestPayload;
+  signature: string;
+}
+
+export interface ObserverRecipeTrustManifestInstallInput {
+  manifest: SignedObserverRecipeTrustManifest;
+  confirmation: typeof INSTALL_OBSERVER_RECIPE_TRUST_MANIFEST_CONFIRMATION;
+}
+
+export interface ObserverRecipeTrustTransparencyReceipt {
+  sequence: number;
+  eventType: "manifest_installed" | "recipe_signed";
+  manifestGeneration: number;
+  manifestHash: string;
+  signingKeyId: string;
+  subjectHash: string;
+  previousEventHash: string;
+  eventHash: string;
+  createdAt: string;
 }
 
 export type MissionStatus = "active" | "paused" | "satisfied" | "archived";

@@ -43,7 +43,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.equal(manifest.host_permissions.includes("https://www.target.com/*"), false);
   assert.equal(manifest.host_permissions.includes("https://*.walmart.com/*"), false);
 
-  for (const file of ["background.js", "popup.js", "trackalacker-push.js", "trackalacker-sync.js"]) {
+  for (const file of ["background.js", "popup.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js"]) {
     const result = spawnSync(process.execPath, ["--check", join(extensionRoot, file)], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
   }
@@ -56,6 +56,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   const bestBuyActionBundle = readFileSync(join(extensionRoot, "bestbuy-action.js"), "utf8");
   const retailerBundle = readFileSync(join(extensionRoot, "retailer-shadow.js"), "utf8");
   const trackalackerPush = readFileSync(join(extensionRoot, "trackalacker-push.js"), "utf8");
+  const observerRecipeRoot = readFileSync(join(extensionRoot, "observer-recipe-root.js"), "utf8");
   assert.match(background, /setAccessLevel\(\{ accessLevel: "TRUSTED_CONTEXTS" \}\)/);
   assert.match(background, /jobs\/next/);
   assert.match(background, /targetAddAdapterVersion/);
@@ -71,6 +72,9 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.doesNotMatch(background, /draw\.www\.walmart\.com|\/draw\/enter/);
   assert.match(background, /Ed25519/);
   assert.match(background, /observer-recipe-trials/);
+  assert.match(background, /observer-recipe-root\.js/);
+  assert.match(background, /yoinkObserverRecipeTrustStateV1/);
+  assert.doesNotMatch(background, /const OBSERVER_RECIPE_KEY_PIN/);
   assert.match(background, /yoink:contribute-retailer/);
   assert.doesNotMatch(background, /console\./);
   assert.match(background, /world: "ISOLATED"/);
@@ -98,4 +102,6 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.doesNotMatch(bestBuyActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
   assert.doesNotMatch(trackalackerPush, /console\./);
   assert.doesNotMatch(trackalackerPush, /endpoint\s*:\s*["']https:\/\/fcm\.googleapis\.com/);
+  assert.match(observerRecipeRoot, /minimumManifestGeneration: 1/);
+  assert.doesNotMatch(observerRecipeRoot, /PRIVATE KEY|privateKey|BEGIN PRIVATE/);
 });

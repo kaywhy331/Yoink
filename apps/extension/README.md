@@ -95,11 +95,15 @@ is accepted. A local 60-second key gate and server rate/dedupe rules prevent
 background flooding.
 
 Promoted observer-only recipes are signed, expiring JSON data for five fixed
-read-only fields. The extension pins and verifies the Ed25519 key, revalidates
-the strict selector schema, and evaluates it only in a packaged isolated
-interpreter. It reports selector counts/agreement and a sanitized layout
-fingerprint—not extracted values. Invalid signatures, expiry, key changes, or
-schema violations fail closed and leave the bundled observer authoritative.
+read-only fields. The extension pins a packaged public offline Ed25519 root,
+verifies the complete root-signed intermediate manifest chain, permanent
+revocations, active key, transparency checkpoint, recipe signature, and strict
+selector schema, then evaluates it only in a packaged isolated interpreter. It
+persists the latest generation/checkpoint against rollback and reports selector
+counts/agreement plus a sanitized layout fingerprint—not extracted values.
+Invalid root or recipe signatures, expiry, revoked keys, broken rotations,
+rollback, or schema violations fail closed and leave the bundled observer
+authoritative.
 
 For TrackaLacker:
 

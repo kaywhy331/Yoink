@@ -26,6 +26,7 @@ const files = [
   "retailer-shadow.js",
   "trackalacker-push.js",
   "trackalacker-sync.js",
+  "observer-recipe-root.js",
   "yoink-icon.svg",
   "README.md"
 ];

@@ -1,6 +1,36 @@
 # Yoink roadmap
 
-## Shipped through 0.23.0
+## Shipped through 0.24.0
+
+### Package-rooted observer recipe trust (0.24.0)
+
+- Migration 26 retires every active or signed trust-on-first-use recipe without
+  changing retailer execution or qualification state. It adds immutable,
+  tenant-scoped trust-manifest generations and append-only chained
+  transparency events
+- The server and companion pin the same Ed25519 public offline root. The root
+  authorizes bounded online intermediate keys through exact-schema manifests;
+  one active unrevoked key is required, generations and predecessor hashes are
+  monotonic, prior keys cannot silently disappear, and revocation is permanent
+- The paired companion validates the complete root-signed chain, current
+  manifest/hash, active-key fingerprint and lifetime, transparency checkpoint,
+  recipe signature, and selector schema. It persists the latest generation and
+  event checkpoint so replay, conflicting generations, broken rotation chains,
+  corrupted root signatures, expired manifests, and revoked signers fail closed
+- `npm run recipe-trust` initializes, renews, or rotates the online
+  intermediate while loading the offline root only inside the explicit CLI.
+  Named intermediate key files support restart after rotation; private material
+  is never printed, served, packaged, archived, or stored in SQLite
+- `/admin` exposes public root/manifest/revocation/transparency health and an
+  explicit signed-manifest install control. Rotation may temporarily close
+  distribution; after the process loads the new intermediate, maintainers must
+  explicitly and auditably re-sign already reviewed recipes without changing
+  their selectors or lifecycle state
+- Rooted recipes remain declarative data for five packaged read-only fields.
+  They cannot determine product equivalence, navigate, click, fill a form,
+  qualify an adapter, enter a drawing, check out, submit an order, or grant any
+  retailer mutation capability. See the [operator
+  runbook](OBSERVER_RECIPE_TRUST.md)
 
 ### Privacy-classified operator alerts (0.23.0)
 
@@ -350,24 +380,25 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.23.0
+## Architecture assessment after 0.24.0
 
-Yoink 0.23.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.24.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
 diagnostic ledger, and outbox are valuable foundations; the next work should
-finish production catalog/recipe trust, privacy operations, and step-up
-authority while propagating stable child-offer/location identity before adding
-checkout or more autonomous behavior.
+finish production catalog authority, externally witnessed recipe transparency,
+privacy operations, and step-up authority while propagating stable
+child-offer/location identity before adding checkout or more autonomous
+behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-25 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, append-only spend/catalog events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
+| Primary backend database | Transactional migration-26 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, append-only spend/catalog/trust events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, role administration, diagnostics, privacy-classified adapter-repair alerts, retailer/source/affiliate controls, and audit | No production IdP/step-up, secret references, external alert connectors/background escalation worker, break-glass workflow, cross-tenant global curator, or retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard for exact products, revisioned intent, store/seller/fulfillment/unit/all-in limits, action ceiling, expiry/cooldown/substitution preferences, periodic spend caps, activity, pause, pairing, and source/review status | Stable child-offer/region/store dimensions are not yet supplied by every observer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound assertions, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, selected-variation key, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
-| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts, and manually entered signed selector recipes exist | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an oracle when that parser is wrong; canary is not cohort deployment; production signing starts with trust-on-first-use |
+| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts; observer recipes now use offline-root manifests, rotation/revocation, rollback pins, and transparency receipts | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; transparency is not yet externally witnessed |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified | Community truth is advisory, recipe truth is not independent, location/variation identity is incomplete, and no checkout/final-total verifier is packaged |
 | Automatic purchasing | Target and Walmart can perform guarded first-party shipping add-to-cart behind current intent/snapshot/reservation checks; Amazon and Best Buy are implemented but separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 | Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
@@ -423,10 +454,12 @@ development channel.
 split bundles, and initial catalog candidate review. 0.21.0 adds authorized,
 reversible, topology-bound local merge/split/compensation. 0.23.0 adds the first
 privacy-classified adapter-repair alert path with allowlisted inputs, redacted
-projections, immutable receipts, and separate management permission. The phase
-exit gate remains **open**: the current shared catalog has no cross-tenant
-global curator; general structured metrics/log retention, production recipe
-root rotation/revocation/transparency, and production IdP step-up are not
+projections, immutable receipts, and separate management permission. 0.24.0
+completes the local package-rooted observer-recipe trust slice with monotonic
+rotation/revocation, extension rollback protection, and transparency receipts.
+The phase exit gate remains **open**: the current shared catalog has no
+cross-tenant global curator; general structured metrics/log retention,
+externally witnessed transparency, and production IdP step-up are not
 implemented.
 
 - Persist operator memberships and granular permissions; deny every route by
@@ -440,9 +473,9 @@ implemented.
   SKU's URL, status, variant, or execution flag
 - Add structured server error classes, correct 4xx/5xx behavior, correlation
   IDs, privacy-classified logs, metrics, and sanitized aggregate diagnostics
-- Replace observer-recipe trust-on-first-use with a package-pinned offline root,
-  signed online intermediate, monotonic key manifest, revocation/rotation, and
-  transparency receipts before production recipe delivery
+- Publish production trust checkpoints to an independently witnessed log and
+  integrate its availability/consistency alarms; the local append-only receipt
+  chain and companion rollback pin are shipped
 - Pause implementation or activation of any new mutation retailer beyond the
   four already packaged until this exit gate passes. Existing Amazon/Best Buy
   qualification work and additional read-only observer coverage may continue
@@ -451,7 +484,7 @@ Exit gate: hosted user/device scopes receive a tested `403` for every admin or
 cross-user operation; identifier-forcing and enumeration tests prove tenant
 isolation; catalog mutation requires an authorized, reversible review event;
 all material operations have a correlation ID and audit receipt; production
-recipe delivery stays disabled until rooted rotation/revocation is complete;
+recipe delivery requires rooted rotation/revocation plus an external witness;
 local mode remains backward-compatible.
 
 #### Phase 1 — exact offer identity and a product-centric user model

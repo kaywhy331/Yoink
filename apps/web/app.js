@@ -441,8 +441,20 @@ function renderIdentityGovernance() {
 function renderObserverRegistry() {
   const registry = state.snapshot.observerRegistry || {};
   const recipes = registry.recipes || [];
-  const keyId = String(registry.key?.keyId || "");
-  $("#observerRegistryKey").textContent = keyId ? `ED25519 ${keyId.slice(0, 10)}` : "KEY UNAVAILABLE";
+  const trust = registry.trust || registry.key || {};
+  const keyId = String(trust.keyId || "");
+  const rootKeyId = String(trust.rootKeyId || "");
+  const generation = Number(trust.generation || 0);
+  $("#observerRegistryKey").textContent = trust.signingReady
+    ? `ROOTED G${generation} · ${keyId.slice(0, 8)}`
+    : rootKeyId ? "ROOT PINNED · INSTALL REQUIRED" : "KEY UNAVAILABLE";
+  const manifests = Array.isArray(trust.manifests) ? trust.manifests : [];
+  const transparency = Array.isArray(trust.transparency) ? trust.transparency : [];
+  $("#observerTrustSummary").innerHTML = `
+    <article class="community-evidence-row">
+      <div class="card-top"><div><h3>Package-rooted observer trust</h3><p>Root ${escapeHtml(rootKeyId.slice(0, 16) || "unavailable")} · generation ${generation} · ${Number(trust.revokedKeyCount || 0)} revoked keys · expires ${escapeHtml(trust.expiresAt ? relativeTime(trust.expiresAt) : "not installed")}</p></div><span class="tag ${trust.signingReady ? "good" : "bad"}">${trust.signingReady ? "SIGNING READY" : "DISTRIBUTION CLOSED"}</span></div>
+      <div class="card-meta"><span class="tag">${manifests.length} manifest receipts</span><span class="tag">${transparency.length} transparency events</span><span class="tag">Mutation capable: never</span>${trust.manifestHash ? `<span class="tag">Manifest ${escapeHtml(String(trust.manifestHash).slice(0, 12))}</span>` : ""}</div>
+    </article>`;
   const form = $("#observerRecipeForm");
   if (!state.observerRecipeDirty) {
     form.elements.retailerId.innerHTML = Object.entries(RETAILER_NAMES)
@@ -456,8 +468,12 @@ function renderObserverRegistry() {
     const nextState = recipe.lifecycleState === "quarantined" ? "shadow"
       : recipe.lifecycleState === "shadow" ? "canary"
         : recipe.lifecycleState === "canary" ? "trusted_read_only" : "";
+    const needsResign = ["shadow", "canary", "trusted_read_only"].includes(recipe.lifecycleState)
+      && generation > 0
+      && (Number(recipe.trustManifestGeneration || 0) !== generation
+        || String(recipe.trustManifestHash || "") !== String(trust.manifestHash || ""));
     const selectorCount = Object.values(recipe.fields || {}).reduce((sum, field) => sum + Number(field.selectors?.length || 0), 0);
-    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(recipe.retailerId))} · ${escapeHtml(recipe.recipeVersion)}</h3><p>${Object.keys(recipe.fields || {}).length} fields · ${selectorCount} bounded selectors · minimum extension ${escapeHtml(recipe.minimumExtensionVersion)} · expires ${escapeHtml(relativeTime(recipe.expiresAt))}</p></div><span class="tag ${kind}">${escapeHtml(String(recipe.lifecycleState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">${Number(trials.passed || 0)} passed</span><span class="tag ${Number(trials.failed || 0) ? "bad" : ""}">${Number(trials.failed || 0)} failed</span><span class="tag">${Number(trials.distinctSkus || 0)} SKUs</span><span class="tag">${Number(trials.distinctLayouts || 0)} layouts</span><span class="tag">Fingerprint ${escapeHtml(String(recipe.recipeFingerprint).slice(0, 12))}</span>${recipe.rollbackRecipeId ? `<span class="tag">Rollback ${escapeHtml(String(recipe.rollbackRecipeId).slice(0, 12))}</span>` : ""}</div><div class="card-actions">${nextState ? `<button class="button primary" data-observer-promote="${escapeHtml(recipe.id)}" data-observer-target="${escapeHtml(nextState)}" type="button">Promote to ${escapeHtml(nextState.replaceAll("_", " "))}</button>` : ""}${recipe.lifecycleState !== "disabled" ? `<button class="button danger" data-observer-disable="${escapeHtml(recipe.id)}" type="button">Kill switch</button>` : ""}${recipe.rollbackRecipeId && recipe.lifecycleState !== "disabled" ? `<button class="button secondary" data-observer-rollback="${escapeHtml(recipe.id)}" type="button">Rollback</button>` : ""}</div>${recipe.disabledReason ? `<p class="identity-conflict">Disabled: ${escapeHtml(String(recipe.disabledReason).replaceAll("_", " "))}</p>` : ""}</article>`;
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(recipe.retailerId))} · ${escapeHtml(recipe.recipeVersion)}</h3><p>${Object.keys(recipe.fields || {}).length} fields · ${selectorCount} bounded selectors · minimum extension ${escapeHtml(recipe.minimumExtensionVersion)} · expires ${escapeHtml(relativeTime(recipe.expiresAt))}</p></div><span class="tag ${kind}">${escapeHtml(String(recipe.lifecycleState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">${Number(trials.passed || 0)} passed</span><span class="tag ${Number(trials.failed || 0) ? "bad" : ""}">${Number(trials.failed || 0)} failed</span><span class="tag">${Number(trials.distinctSkus || 0)} SKUs</span><span class="tag">${Number(trials.distinctLayouts || 0)} layouts</span><span class="tag">Fingerprint ${escapeHtml(String(recipe.recipeFingerprint).slice(0, 12))}</span><span class="tag ${needsResign ? "bad" : ""}">Root G${Number(recipe.trustManifestGeneration || 0)}</span>${recipe.rollbackRecipeId ? `<span class="tag">Rollback ${escapeHtml(String(recipe.rollbackRecipeId).slice(0, 12))}</span>` : ""}</div><div class="card-actions">${needsResign && trust.signingReady ? `<button class="button secondary" data-observer-resign="${escapeHtml(recipe.id)}" type="button">Re-sign at root G${generation}</button>` : ""}${nextState ? `<button class="button primary" data-observer-promote="${escapeHtml(recipe.id)}" data-observer-target="${escapeHtml(nextState)}" type="button">Promote to ${escapeHtml(nextState.replaceAll("_", " "))}</button>` : ""}${recipe.lifecycleState !== "disabled" ? `<button class="button danger" data-observer-disable="${escapeHtml(recipe.id)}" type="button">Kill switch</button>` : ""}${recipe.rollbackRecipeId && recipe.lifecycleState !== "disabled" ? `<button class="button secondary" data-observer-rollback="${escapeHtml(recipe.id)}" type="button">Rollback</button>` : ""}</div>${recipe.disabledReason ? `<p class="identity-conflict">Disabled: ${escapeHtml(String(recipe.disabledReason).replaceAll("_", " "))}</p>` : ""}</article>`;
   }).join("") : empty("No declarative observer recipes. Bundled observer versions remain authoritative.");
 }
 
@@ -1135,6 +1151,15 @@ document.addEventListener("click", async (event) => {
       await refresh(false);
       toast("Observer recipe disabled immediately.");
     }
+    if (button.dataset.observerResign) {
+      if (!confirm("Re-sign this already reviewed observer-only recipe with the current root-authorized intermediate?\n\nIts lifecycle state and selectors do not change. This restores read-only distribution after a trust rotation and cannot grant mutation authority.")) return;
+      await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerResign)}/resign`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation: "RESIGN_ROOTED_OBSERVER_RECIPE" })
+      });
+      await refresh(false);
+      toast("Observer recipe re-signed under the current rooted trust generation.");
+    }
     if (button.dataset.observerRollback) {
       if (!confirm("Disable this recipe and restore its pre-reviewed signed rollback target?")) return;
       await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerRollback)}/rollback`, {
@@ -1485,6 +1510,27 @@ $("#identityClaimForm").addEventListener("submit", async (event) => {
 });
 
 $("#observerRecipeForm").addEventListener("input", () => { state.observerRecipeDirty = true; });
+$("#observerTrustForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const values = formObject(event.currentTarget);
+    let manifest;
+    try { manifest = JSON.parse(values.manifestJson); } catch { throw new Error("The trust manifest must be valid JSON."); }
+    const approved = confirm("Install this offline-root signed trust manifest?\n\nYoink will verify the packaged root, exact schema, monotonic generation, predecessor hash, active key, lifetimes, and permanent revocation set. This does not grant any retailer mutation authority.");
+    if (!approved) return;
+    await api("/api/v1/admin/observer-recipes/trust-manifests", {
+      method: "POST",
+      body: JSON.stringify({
+        manifest,
+        confirmation: "INSTALL_ROOTED_OBSERVER_RECIPE_TRUST_MANIFEST"
+      })
+    });
+    event.currentTarget.reset();
+    await refresh(false);
+    toast("Root-signed observer trust manifest installed and transparency-receipted.");
+  } catch (error) { toast(error.message || "Observer recipe trust manifest could not be installed.", true); }
+});
+
 $("#observerRecipeForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
