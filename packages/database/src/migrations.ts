@@ -1220,5 +1220,215 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       CREATE UNIQUE INDEX catalog_change_proposals_pending_payload_unique
         ON catalog_change_proposals(tenant_id, payload_hash) WHERE status = 'pending';
     `
+  },
+  {
+    version: 22,
+    name: "exact_offer_intent_and_spend_safety",
+    sql: `
+      CREATE TABLE exact_offer_keys (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE RESTRICT,
+        retailer_id TEXT NOT NULL REFERENCES retailers(id) ON DELETE RESTRICT,
+        retailer_sku TEXT NOT NULL,
+        child_offer_key TEXT NOT NULL DEFAULT '',
+        attributes_json TEXT NOT NULL DEFAULT '{}',
+        condition_code TEXT NOT NULL DEFAULT 'new',
+        seller_name TEXT NOT NULL DEFAULT '',
+        seller_key TEXT NOT NULL DEFAULT '',
+        seller_type TEXT NOT NULL CHECK (seller_type IN ('first_party', 'third_party', 'unknown')),
+        fulfillment TEXT NOT NULL CHECK (fulfillment IN ('shipping', 'pickup', 'either', 'manual', 'unknown')),
+        region_scope TEXT NOT NULL DEFAULT '',
+        store_scope TEXT NOT NULL DEFAULT '',
+        identity_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(tenant_id, identity_hash)
+      ) STRICT;
+      CREATE INDEX exact_offer_keys_listing_idx
+        ON exact_offer_keys(tenant_id, listing_id, created_at DESC);
+
+      CREATE TABLE mission_intent_revisions (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE RESTRICT,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        quantity INTEGER NOT NULL CHECK (quantity BETWEEN 1 AND 99),
+        currency TEXT NOT NULL DEFAULT 'USD',
+        max_all_in_cents INTEGER CHECK (max_all_in_cents IS NULL OR max_all_in_cents > 0),
+        action_ceiling TEXT NOT NULL CHECK (action_ceiling IN ('notify', 'add_to_cart', 'prepare_checkout', 'submit_order')),
+        substitution_policy TEXT NOT NULL CHECK (substitution_policy IN ('exact_only', 'verified_equivalent')),
+        expires_at TEXT NOT NULL DEFAULT '',
+        cooldown_seconds INTEGER NOT NULL DEFAULT 0 CHECK (cooldown_seconds BETWEEN 0 AND 2592000),
+        target_policy_json TEXT NOT NULL,
+        policy_hash TEXT NOT NULL,
+        change_reason TEXT NOT NULL DEFAULT '',
+        created_by_actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(mission_id, revision),
+        UNIQUE(mission_id, policy_hash)
+      ) STRICT;
+      CREATE INDEX mission_intent_revisions_current_idx
+        ON mission_intent_revisions(mission_id, revision DESC);
+
+      CREATE TABLE offer_snapshots (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE RESTRICT,
+        intent_revision_id TEXT NOT NULL REFERENCES mission_intent_revisions(id) ON DELETE RESTRICT,
+        exact_offer_key_id TEXT NOT NULL REFERENCES exact_offer_keys(id) ON DELETE RESTRICT,
+        listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE RESTRICT,
+        source_observation_id TEXT REFERENCES offer_observations(id) ON DELETE RESTRICT,
+        incident_id TEXT REFERENCES signal_incidents(id) ON DELETE RESTRICT,
+        availability TEXT NOT NULL CHECK (availability IN ('in_stock', 'preorder', 'out_of_stock', 'unknown')),
+        unit_price_cents INTEGER CHECK (unit_price_cents IS NULL OR unit_price_cents > 0),
+        quantity INTEGER NOT NULL CHECK (quantity BETWEEN 1 AND 99),
+        item_subtotal_cents INTEGER CHECK (item_subtotal_cents IS NULL OR item_subtotal_cents > 0),
+        maximum_all_in_cents INTEGER CHECK (maximum_all_in_cents IS NULL OR maximum_all_in_cents > 0),
+        currency TEXT NOT NULL DEFAULT 'USD',
+        seller_name TEXT NOT NULL DEFAULT '',
+        seller_type TEXT NOT NULL CHECK (seller_type IN ('first_party', 'third_party', 'unknown')),
+        fulfillment TEXT NOT NULL CHECK (fulfillment IN ('shipping', 'pickup', 'either', 'manual', 'unknown')),
+        offer_fingerprint TEXT NOT NULL DEFAULT '',
+        evidence_hash TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(user_id, evidence_hash)
+      ) STRICT;
+      CREATE INDEX offer_snapshots_mission_idx
+        ON offer_snapshots(mission_id, observed_at DESC);
+
+      CREATE TABLE user_spend_policies (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+        currency TEXT NOT NULL DEFAULT 'USD',
+        per_order_cap_cents INTEGER CHECK (per_order_cap_cents IS NULL OR per_order_cap_cents > 0),
+        daily_cap_cents INTEGER CHECK (daily_cap_cents IS NULL OR daily_cap_cents > 0),
+        monthly_cap_cents INTEGER CHECK (monthly_cap_cents IS NULL OR monthly_cap_cents > 0),
+        order_submission_enabled INTEGER NOT NULL DEFAULT 0 CHECK (order_submission_enabled IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE spend_reservations (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE RESTRICT,
+        intent_revision_id TEXT NOT NULL REFERENCES mission_intent_revisions(id) ON DELETE RESTRICT,
+        exact_offer_key_id TEXT NOT NULL REFERENCES exact_offer_keys(id) ON DELETE RESTRICT,
+        offer_snapshot_id TEXT NOT NULL REFERENCES offer_snapshots(id) ON DELETE RESTRICT,
+        action_job_id TEXT NOT NULL REFERENCES action_jobs(id) ON DELETE RESTRICT,
+        idempotency_key TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('add_to_cart', 'prepare_checkout', 'submit_order')),
+        quantity INTEGER NOT NULL CHECK (quantity BETWEEN 1 AND 99),
+        reserved_amount_cents INTEGER NOT NULL CHECK (reserved_amount_cents > 0),
+        committed_amount_cents INTEGER NOT NULL DEFAULT 0 CHECK (committed_amount_cents >= 0),
+        currency TEXT NOT NULL DEFAULT 'USD',
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'committed', 'released')),
+        release_reason TEXT NOT NULL DEFAULT '',
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(user_id, idempotency_key),
+        UNIQUE(action_job_id)
+      ) STRICT;
+      CREATE INDEX spend_reservations_active_user_idx
+        ON spend_reservations(user_id, status, expires_at, created_at);
+      CREATE INDEX spend_reservations_active_mission_idx
+        ON spend_reservations(mission_id, status, created_at);
+
+      CREATE TABLE spend_ledger_entries (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        reservation_id TEXT NOT NULL REFERENCES spend_reservations(id) ON DELETE RESTRICT,
+        action_job_id TEXT NOT NULL REFERENCES action_jobs(id) ON DELETE RESTRICT,
+        entry_type TEXT NOT NULL CHECK (entry_type IN ('reserved', 'released', 'committed', 'refunded', 'adjusted')),
+        reserved_delta_cents INTEGER NOT NULL,
+        spent_delta_cents INTEGER NOT NULL,
+        quantity_delta INTEGER NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        reason_code TEXT NOT NULL,
+        correlation_id TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX spend_ledger_user_time_idx
+        ON spend_ledger_entries(user_id, created_at DESC, id DESC);
+      CREATE INDEX spend_ledger_reservation_idx
+        ON spend_ledger_entries(reservation_id, created_at, id);
+
+      ALTER TABLE action_jobs ADD COLUMN intent_revision_id TEXT REFERENCES mission_intent_revisions(id) ON DELETE RESTRICT;
+      ALTER TABLE action_jobs ADD COLUMN exact_offer_key_id TEXT REFERENCES exact_offer_keys(id) ON DELETE RESTRICT;
+      ALTER TABLE action_jobs ADD COLUMN offer_snapshot_id TEXT REFERENCES offer_snapshots(id) ON DELETE RESTRICT;
+      ALTER TABLE action_jobs ADD COLUMN spend_reservation_id TEXT REFERENCES spend_reservations(id) ON DELETE RESTRICT;
+
+      CREATE TRIGGER mission_intent_revisions_no_update
+      BEFORE UPDATE ON mission_intent_revisions
+      BEGIN SELECT RAISE(ABORT, 'mission intent revisions are append-only'); END;
+      CREATE TRIGGER mission_intent_revisions_no_delete
+      BEFORE DELETE ON mission_intent_revisions
+      BEGIN SELECT RAISE(ABORT, 'mission intent revisions are append-only'); END;
+      CREATE TRIGGER exact_offer_keys_no_update
+      BEFORE UPDATE ON exact_offer_keys
+      BEGIN SELECT RAISE(ABORT, 'exact offer keys are immutable'); END;
+      CREATE TRIGGER exact_offer_keys_no_delete
+      BEFORE DELETE ON exact_offer_keys
+      BEGIN SELECT RAISE(ABORT, 'exact offer keys are immutable'); END;
+      CREATE TRIGGER offer_snapshots_no_update
+      BEFORE UPDATE ON offer_snapshots
+      BEGIN SELECT RAISE(ABORT, 'offer snapshots are immutable'); END;
+      CREATE TRIGGER offer_snapshots_no_delete
+      BEFORE DELETE ON offer_snapshots
+      BEGIN SELECT RAISE(ABORT, 'offer snapshots are immutable'); END;
+      CREATE TRIGGER spend_ledger_entries_no_update
+      BEFORE UPDATE ON spend_ledger_entries
+      BEGIN SELECT RAISE(ABORT, 'spend ledger entries are append-only'); END;
+      CREATE TRIGGER spend_ledger_entries_no_delete
+      BEFORE DELETE ON spend_ledger_entries
+      BEGIN SELECT RAISE(ABORT, 'spend ledger entries are append-only'); END;
+
+      INSERT INTO user_spend_policies(
+        user_id, tenant_id, revision, currency, per_order_cap_cents,
+        daily_cap_cents, monthly_cap_cents, order_submission_enabled,
+        created_at, updated_at
+      )
+      SELECT id, tenant_id, 1, 'USD', NULL, NULL, NULL, 0,
+             strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      FROM users;
+
+      INSERT INTO mission_intent_revisions(
+        id, tenant_id, user_id, mission_id, revision, quantity, currency,
+        max_all_in_cents, action_ceiling, substitution_policy, expires_at,
+        cooldown_seconds, target_policy_json, policy_hash, change_reason,
+        created_by_actor_id, created_at
+      )
+      SELECT 'intent_revision_m22_' || m.id, m.tenant_id, m.user_id, m.id, 1,
+             m.target_quantity,
+             COALESCE((SELECT mt.currency FROM mission_targets mt WHERE mt.mission_id = m.id ORDER BY mt.id LIMIT 1), 'USD'),
+             NULL, 'add_to_cart', 'exact_only', '', 0,
+             COALESCE((
+               SELECT json_group_array(json(target_json)) FROM (
+                 SELECT json_object(
+                   'targetId', mt.id,
+                   'listingId', mt.listing_id,
+                   'retailerId', l.retailer_id,
+                   'enabled', json(CASE WHEN mt.enabled = 1 THEN 'true' ELSE 'false' END),
+                   'maxUnitPriceCents', mt.max_unit_price_cents,
+                   'sellerPolicy', mt.seller_policy,
+                   'fulfillment', mt.fulfillment
+                 ) AS target_json
+                 FROM mission_targets mt JOIN listings l ON l.id = mt.listing_id
+                 WHERE mt.mission_id = m.id ORDER BY mt.id
+               )
+             ), '[]'),
+             'migration22:' || m.id, 'Backfilled from the current mission preferences.',
+             'migration_22', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      FROM missions m;
+    `
   }
 ]);

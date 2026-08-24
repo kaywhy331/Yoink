@@ -357,7 +357,8 @@ test("a generic retailer-mutation flag cannot authorize an ungoverned lane", () 
     new ControlRepository(db).replaceStrategies([strategy()]);
     db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
     const processed = new SignalEngine(db).process(signal(), NOW);
-    assert.equal(processed.actionJobState, "shadow_ready");
+    assert.equal(processed.actionJobState, "notify_only");
+    assert.equal(processed.decision, "intent_action_ceiling");
 
     const devices = new DeviceRepository(db);
     const code = devices.createPairingCode(NOW);

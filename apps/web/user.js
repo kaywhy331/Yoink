@@ -13,6 +13,27 @@ function money(cents, currency = "USD") {
   return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(cents) / 100);
 }
 
+function moneyInput(cents) {
+  return Number.isFinite(Number(cents)) ? (Number(cents) / 100).toFixed(2) : "";
+}
+
+function centsInput(value, label) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const dollars = Number(raw);
+  if (!Number.isFinite(dollars) || dollars <= 0 || Math.round(dollars * 100) > 1_000_000_000) {
+    throw new Error(`${label} must be a positive dollar amount or blank.`);
+  }
+  return Math.round(dollars * 100);
+}
+
+function localDateTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
 function relative(value) {
   const time = new Date(value).getTime();
   if (!Number.isFinite(time)) return "Unknown time";
@@ -50,7 +71,7 @@ function setTab(name) {
 }
 
 function renderOverview() {
-  const { settings, counts, sources, permissions } = state.overview;
+  const { settings, counts, sources, permissions, spend } = state.overview;
   const paused = settings.actionsPaused === true;
   $("#modePill").textContent = `${settings.executionMode} mode`;
   for (const button of [$("#pauseButton"), $("#preferencePauseButton")]) {
@@ -64,6 +85,7 @@ function renderOverview() {
   $("#heroState").innerHTML = `
     <div class="state-row"><span><i class="dot ${paused ? "warn" : "good"}"></i>Actions</span><strong>${paused ? "Paused" : "Enabled"}</strong></div>
     <div class="state-row"><span><i class="dot ${connectedSources ? "good" : "warn"}"></i>Signal sources</span><strong>${connectedSources} connected</strong></div>
+    <div class="state-row"><span><i class="dot ${Number(spend?.activeReservationCount || 0) ? "warn" : "good"}"></i>Reserved capacity</span><strong>${escapeHtml(money(spend?.activeReservedCents || 0))}</strong></div>
     <div class="state-row"><span><i class="dot good"></i>Checkout</span><strong>Manual only</strong></div>`;
   const metricRows = [
     [counts.products, "Known listings"],
@@ -73,6 +95,18 @@ function renderOverview() {
   ];
   $("#metrics").innerHTML = metricRows.map(([value, label]) => `<article class="metric"><strong>${Number(value || 0).toLocaleString()}</strong><span>${escapeHtml(label)}</span></article>`).join("");
   $("#sourceList").innerHTML = (sources || []).map((source) => `<div class="mini-row"><span>${escapeHtml(source.name)}</span><strong>${escapeHtml(source.status)}</strong></div>`).join("") || '<div class="mini-row"><span>No sources configured</span></div>';
+  renderSpend(spend);
+}
+
+function renderSpend(spend) {
+  if (!spend) return;
+  $("#spendSummary").textContent = `${money(spend.activeReservedCents)} reserved · ${money(spend.spentTodayCents)} spent today · order submission remains closed.`;
+  const form = $("#spendForm");
+  if (form.contains(document.activeElement)) return;
+  form.elements.revision.value = spend.policy.revision;
+  form.elements.perOrder.value = moneyInput(spend.policy.perOrderCapCents);
+  form.elements.daily.value = moneyInput(spend.policy.dailyCapCents);
+  form.elements.monthly.value = moneyInput(spend.policy.monthlyCapCents);
 }
 
 function renderProducts() {
@@ -96,7 +130,7 @@ function renderProducts() {
 function renderPlans() {
   $("#planList").innerHTML = state.plans.length ? state.plans.map((plan) => `<article class="plan-card">
     <div><div class="card-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(plan.status)}</span></div>
-    <p>${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled · quantity ${Number(plan.targetQuantity || 1)} · updated ${escapeHtml(relative(plan.updatedAt))}</p></div>
+    <p>${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled · quantity ${Number(plan.targetQuantity || 1)} · ${escapeHtml(String(plan.actionCeiling || "add_to_cart").replaceAll("_", " "))} · all-in cap ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · revision ${Number(plan.intentRevision || 1)}</p></div>
     <button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Price & store preferences</button>
   </article>`).join("") : '<div class="empty">You have no purchase plans. Choose “Track product” from the Products tab.</div>';
 }
@@ -104,7 +138,7 @@ function renderPlans() {
 function renderActions() {
   $("#actionList").innerHTML = state.actions.length ? state.actions.map((action) => `<article class="action-card">
     <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${action.state === "confirmed" ? "good" : "warn"}">${escapeHtml(String(action.state).replaceAll("_", " "))}</span></div>
-    <p>${escapeHtml(action.retailerId)} · ${escapeHtml(action.retailerSku)} · ${escapeHtml(String(action.action).replaceAll("_", " "))} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}</p></div>
+    <p>${escapeHtml(action.retailerId)} · ${escapeHtml(action.retailerSku)} · ${escapeHtml(String(action.action).replaceAll("_", " "))} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}${action.spendReservationStatus ? ` · reservation ${escapeHtml(action.spendReservationStatus)}` : ""}</p></div>
     <a class="canonical" href="${escapeHtml(action.canonicalUrl)}" target="_blank" rel="noreferrer">Store page ↗</a>
   </article>`).join("") : '<div class="empty">No purchase or notification actions have been recorded yet.</div>';
 }
@@ -122,7 +156,7 @@ async function refresh() {
   const [overview, products, plans, actions, proposals] = await Promise.all([
     api("/api/v1/user/overview"),
     api(`/api/v1/user/library?limit=200&offset=0${query}`),
-    api("/api/v1/user/missions?limit=200&offset=0"),
+    api("/api/v1/user/purchase-intents?limit=200&offset=0"),
     api("/api/v1/user/jobs?limit=100&offset=0"),
     api("/api/v1/user/catalog/proposals?limit=100&offset=0")
   ]);
@@ -145,12 +179,18 @@ async function toggleActions() {
 }
 
 async function openPlan(id) {
-  const { mission } = await api(`/api/v1/user/missions/${encodeURIComponent(id)}`);
+  const { purchaseIntent: mission } = await api(`/api/v1/user/purchase-intents/${encodeURIComponent(id)}`);
   state.editingPlan = mission;
   const form = $("#planForm");
   form.elements.id.value = mission.id;
   form.elements.status.value = mission.status;
   form.elements.targetQuantity.value = mission.targetQuantity;
+  const policy = mission.intentPolicy || {};
+  form.elements.maxAllIn.value = moneyInput(policy.maxAllInCents);
+  form.elements.actionCeiling.value = ["notify", "add_to_cart"].includes(policy.actionCeiling) ? policy.actionCeiling : "notify";
+  form.elements.substitutionPolicy.value = policy.substitutionPolicy || "exact_only";
+  form.elements.cooldownMinutes.value = Math.round(Number(policy.cooldownSeconds || 0) / 60);
+  form.elements.expiresAt.value = localDateTime(policy.expiresAt);
   $("#planDialogTitle").textContent = mission.title;
   $("#targetEditors").innerHTML = mission.targets.map((target) => `<article class="target-editor" data-target-id="${escapeHtml(target.id)}">
     <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div><a class="canonical" href="${escapeHtml(target.canonicalUrl)}" target="_blank" rel="noreferrer">View ↗</a></div>
@@ -200,16 +240,43 @@ $("#planForm").addEventListener("submit", async (event) => {
         fulfillment: $("[data-field=fulfillment]", card).value
       };
     });
-    await api(`/api/v1/user/missions/${encodeURIComponent(event.currentTarget.elements.id.value)}`, {
+    const expiresValue = event.currentTarget.elements.expiresAt.value;
+    await api(`/api/v1/user/purchase-intents/${encodeURIComponent(event.currentTarget.elements.id.value)}`, {
       method: "PATCH",
       body: JSON.stringify({
         status: event.currentTarget.elements.status.value,
         targetQuantity: Number(event.currentTarget.elements.targetQuantity.value),
-        targets
+        targets,
+        policy: {
+          expectedRevision: Number(state.editingPlan.intentPolicy?.revision || 1),
+          maxAllInCents: centsInput(event.currentTarget.elements.maxAllIn.value, "The all-in cap"),
+          actionCeiling: event.currentTarget.elements.actionCeiling.value,
+          substitutionPolicy: event.currentTarget.elements.substitutionPolicy.value,
+          cooldownSeconds: Number(event.currentTarget.elements.cooldownMinutes.value || 0) * 60,
+          expiresAt: expiresValue ? new Date(expiresValue).toISOString() : "",
+          changeReason: "Updated from the user purchase dashboard."
+        }
       })
     });
     $("#planDialog").close(); await refresh(); toast("Purchase preferences saved.");
   } catch (error) { toast(error.message || "Preferences could not be saved.", true); }
+});
+
+$("#spendForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/v1/user/spend-policy", {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedRevision: Number(event.currentTarget.elements.revision.value),
+        perOrderCapCents: centsInput(event.currentTarget.elements.perOrder.value, "The per-order cap"),
+        dailyCapCents: centsInput(event.currentTarget.elements.daily.value, "The daily cap"),
+        monthlyCapCents: centsInput(event.currentTarget.elements.monthly.value, "The monthly cap")
+      })
+    });
+    await refresh();
+    toast("Spending limits saved.");
+  } catch (error) { toast(error.message || "Spending limits could not be saved.", true); }
 });
 
 let searchTimer;

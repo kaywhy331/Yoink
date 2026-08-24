@@ -57,6 +57,7 @@
       <div class="section-heading"><div><p class="eyebrow">Simple global controls</p><h2>Preferences</h2><p>Retailer-specific price and seller choices belong to each purchase plan.</p></div></div>
       <div class="preference-grid">
         <article class="preference-card"><span class="icon">Ⅱ</span><div><h3>Action state</h3><p id="actionStateCopy">Loading your action state…</p><button class="button secondary" id="preferencePauseButton" type="button">Change action state</button></div></article>
+        <article class="preference-card budget-card"><span class="icon">$</span><div><h3>Spending limits</h3><p id="spendSummary">Loading your private spending limits…</p><form id="spendForm"><input name="revision" type="hidden"><div class="budget-fields"><label><span>Per order</span><input name="perOrder" inputmode="decimal" placeholder="Optional"></label><label><span>Per day</span><input name="daily" inputmode="decimal" placeholder="Optional"></label><label><span>Per month</span><input name="monthly" inputmode="decimal" placeholder="Optional"></label></div><button class="button secondary" type="submit">Save spending limits</button></form></div></article>
         <article class="preference-card"><span class="icon">⌁</span><div><h3>Chrome companion</h3><p>Pair Chrome with a one-time code. The extension remains the only component allowed to perform a qualified retailer click.</p><button class="button secondary" id="pairButton" type="button">Create pairing code</button><div class="pairing" id="pairing" hidden></div></div></article>
         <article class="preference-card"><span class="icon">✓</span><div><h3>Catalog review</h3><p id="proposalCopy">Checking your pending product suggestions…</p><div class="mini-list" id="proposalList"></div></div></article>
         <article class="preference-card"><span class="icon">◎</span><div><h3>Signal connections</h3><p>Your sources discover opportunities; they never raise your plan limits.</p><div class="mini-list" id="sourceList"></div></div></article>
@@ -71,6 +72,18 @@
       <div class="form-row">
         <label><span>Plan state</span><select name="status"><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option><option value="archived">Archived</option></select></label>
         <label><span>Quantity wanted</span><input name="targetQuantity" type="number" min="1" max="99" required></label>
+      </div>
+      <div class="form-row">
+        <label><span>Maximum all-in total</span><input name="maxAllIn" inputmode="decimal" placeholder="Optional"></label>
+        <label><span>Yoink may</span><select name="actionCeiling"><option value="notify">Notify me only</option><option value="add_to_cart">Add one to cart</option></select></label>
+      </div>
+      <div class="form-row">
+        <label><span>Substitutions</span><select name="substitutionPolicy"><option value="exact_only">Exact item only</option><option value="verified_equivalent">Only independently verified equivalents</option></select></label>
+        <label><span>Cooldown between attempts (minutes)</span><input name="cooldownMinutes" type="number" min="0" max="43200" step="1" value="0"></label>
+      </div>
+      <div class="form-row">
+        <label><span>Plan expires</span><input name="expiresAt" type="datetime-local"></label>
+        <div class="field-note"><strong>Checkout stays manual.</strong><span>These limits reserve capacity for qualified add-only actions. They never authorize checkout or order submission.</span></div>
       </div>
       <div class="target-list" id="targetEditors"></div>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save preferences</button></div>

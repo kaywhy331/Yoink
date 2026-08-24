@@ -25,6 +25,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(pageBody, /My purchase assistant/);
     assert.match(pageBody, /Purchase plans/);
     assert.match(pageBody, /Products, price, and purchase preferences/);
+    assert.match(pageBody, /Spending limits/);
     assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
 
     const adminPage = await fetch(`${baseUrl}/admin`);
@@ -147,13 +148,83 @@ test("the loopback API serves the control center and processes a dry-run signal"
       body: JSON.stringify({ listingId: String(libraryPage.items[0]?.listingId ?? "") })
     });
     assert.equal(purchaseIntentResponse.status, 201);
-    assert.equal((await purchaseIntentResponse.json() as { created: boolean }).created, true);
-    const updatedMissionPage = await fetch(`${baseUrl}/api/v1/user/missions?limit=1&offset=0`).then((response) => response.json()) as {
+    const createdPurchaseIntent = await purchaseIntentResponse.json() as {
+      created: boolean;
+      purchaseIntent: { id: string; intentPolicy: { revision: number }; targets: Array<Record<string, unknown>> };
+    };
+    assert.equal(createdPurchaseIntent.created, true);
+    assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.revision, 1);
+    const intentId = createdPurchaseIntent.purchaseIntent.id;
+    const target = createdPurchaseIntent.purchaseIntent.targets[0];
+    assert.ok(target);
+    const updateIntent = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(intentId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        status: "active",
+        targetQuantity: 2,
+        targets: [{
+          id: target.id,
+          enabled: true,
+          maxUnitPriceCents: 6999,
+          sellerPolicy: "first_party_only",
+          fulfillment: "shipping"
+        }],
+        policy: {
+          expectedRevision: 1,
+          maxAllInCents: 16_000,
+          actionCeiling: "add_to_cart",
+          substitutionPolicy: "exact_only",
+          cooldownSeconds: 60,
+          expiresAt: new Date(Date.now() + 86_400_000).toISOString()
+        }
+      })
+    });
+    assert.equal(updateIntent.status, 200);
+    assert.equal((await updateIntent.json() as { purchaseIntent: { intentPolicy: { revision: number; maxAllInCents: number } } }).purchaseIntent.intentPolicy.revision, 2);
+    const staleUpdate = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(intentId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        status: "active",
+        targetQuantity: 2,
+        targets: [{
+          id: target.id, enabled: true, maxUnitPriceCents: 6999,
+          sellerPolicy: "first_party_only", fulfillment: "shipping"
+        }],
+        policy: { expectedRevision: 1, maxAllInCents: 15_000 }
+      })
+    });
+    assert.equal(staleUpdate.status, 409);
+    assert.equal((await staleUpdate.json() as { error: string }).error, "intent_revision_conflict");
+
+    const spendResponse = await fetch(`${baseUrl}/api/v1/user/spend-policy`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        expectedRevision: 1,
+        perOrderCapCents: 20_000,
+        dailyCapCents: 30_000,
+        monthlyCapCents: 100_000
+      })
+    });
+    assert.equal(spendResponse.status, 200);
+    assert.equal((await spendResponse.json() as { summary: { policy: { revision: number } } }).summary.policy.revision, 2);
+    const spendLedger = await fetch(`${baseUrl}/api/v1/user/spend-ledger`).then((response) => response.json()) as {
+      items: unknown[];
+      summary: { activeReservedCents: number; spentTodayCents: number };
+    };
+    assert.deepEqual(spendLedger.items, []);
+    assert.equal(spendLedger.summary.activeReservedCents, 0);
+    assert.equal(spendLedger.summary.spentTodayCents, 0);
+
+    const updatedMissionPage = await fetch(`${baseUrl}/api/v1/user/purchase-intents?limit=1&offset=0`).then((response) => response.json()) as {
       items: Array<Record<string, unknown>>;
       total: number;
     };
     assert.equal(updatedMissionPage.total, 1);
     assert.equal(updatedMissionPage.items[0]?.title, "Yoink API Test Product");
+    assert.equal(updatedMissionPage.items[0]?.intentRevision, 2);
     const activity = await fetch(`${baseUrl}/api/v1/audit?limit=10&q=test_signal`).then((response) => response.json()) as {
       items: Array<Record<string, unknown>>;
       total: number;

@@ -14,6 +14,7 @@ import { ControlRepository } from "./control-repository.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 import { SignalRepository } from "./signal-repository.js";
+import { SpendLedgerRepository } from "./spend-ledger-repository.js";
 
 const LEASE_TTL_MS = 45_000;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
@@ -96,6 +97,8 @@ function deviceEvidence(value: Record<string, unknown>): Record<string, unknown>
     output.retailerSku = value.retailerSku;
   }
   if (Number.isSafeInteger(value.unitPriceCents) && Number(value.unitPriceCents) > 0) output.unitPriceCents = Number(value.unitPriceCents);
+  if (Number.isSafeInteger(value.allInTotalCents) && Number(value.allInTotalCents) > 0) output.allInTotalCents = Number(value.allInTotalCents);
+  if (Number.isSafeInteger(value.orderTotalCents) && Number(value.orderTotalCents) > 0) output.orderTotalCents = Number(value.orderTotalCents);
   if (value.currency === "USD") output.currency = "USD";
   if (["first_party", "third_party", "unknown"].includes(String(value.sellerType))) output.sellerType = value.sellerType;
   if (["shipping", "pickup", "unknown"].includes(String(value.fulfillment))) output.fulfillment = value.fulfillment;
@@ -136,10 +139,12 @@ function attributionMetadata(value: string): Record<string, string> {
 export class ExecutionRepository {
   private readonly signals: SignalRepository;
   private readonly control: ControlRepository;
+  private readonly spendLedger: SpendLedgerRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.signals = new SignalRepository(db);
     this.control = new ControlRepository(db);
+    this.spendLedger = new SpendLedgerRepository(db);
   }
 
   recoverExpiredLeases(now = Date.now()): number {
@@ -212,6 +217,7 @@ export class ExecutionRepository {
     return this.db.transaction(() => {
       this.recoverExpiredLeases(now);
       this.expirePendingJobs(now);
+      this.spendLedger.releaseExpired(now);
       const device = this.db.get<{ capabilities_json: string }>(
         "SELECT capabilities_json FROM extension_devices WHERE id = ? AND user_id = ? AND status = 'active'",
         cleanText(deviceId, 120),
@@ -254,10 +260,18 @@ export class ExecutionRepository {
                 l.retailer_id, l.retailer_sku, aj.canonical_url,
                 aj.attribution_url, aj.attribution_provider,
                 aj.attribution_metadata_json, aj.expires_at
-         FROM action_jobs aj JOIN listings l ON l.id = aj.listing_id
+         FROM action_jobs aj
+         JOIN listings l ON l.id = aj.listing_id
+         JOIN spend_reservations sr ON sr.id = aj.spend_reservation_id
          WHERE aj.user_id = ? AND aj.state = 'awaiting_executor'
            AND aj.expires_at > ? AND aj.max_unit_price_cents IS NOT NULL
            AND aj.max_order_total_cents IS NOT NULL
+           AND aj.offer_snapshot_id IS NOT NULL
+           AND sr.status = 'active' AND sr.expires_at > ?
+           AND aj.intent_revision_id = (
+             SELECT ir.id FROM mission_intent_revisions ir
+             WHERE ir.mission_id = aj.mission_id ORDER BY ir.revision DESC LIMIT 1
+           )
            AND (
              ? = 1 AND l.retailer_id = 'target' AND aj.action = 'add_to_cart'
                AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
@@ -274,6 +288,7 @@ export class ExecutionRepository {
            )
          ORDER BY aj.created_at LIMIT 1`,
         currentRequestScope().userId,
+        nowIso(now),
         nowIso(now),
         targetAddCapable ? 1 : 0,
         walmartAddCapable ? 1 : 0,

@@ -4,10 +4,12 @@ Yoink 0.13 added a deployable authenticated request boundary and durable
 delivery protocol; 0.14 adds an offline portability and exact restore-parity
 drill. Both preserve the local-first default. They do **not** silently turn
 the current SQLite process into a public service. Version 0.19 adds persisted
-application roles and split API/UI surfaces, but a hosted operator must provide
-TLS termination, an identity-aware reverse proxy, explicit Host/Origin
-allowlists, principal lifecycle management, backups, monitoring, and a
-PostgreSQL implementation before treating a deployment as production hosted.
+application roles and split API/UI surfaces; 0.20 adds tenant/user-owned intent
+revisions, offer snapshots, spend policy, transactional reservations, and an
+append-only spend ledger. A hosted operator must still provide TLS termination,
+an identity-aware reverse proxy, explicit Host/Origin allowlists, principal
+lifecycle management, backups, monitoring, and a PostgreSQL implementation
+before treating a deployment as production hosted.
 
 ## Runtime modes
 

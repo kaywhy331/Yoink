@@ -13,6 +13,8 @@ import { cleanText } from "../../domain/src/normalize.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 import { AuditRepository } from "./audit-repository.js";
+import { PurchasePolicyRepository } from "./purchase-policy-repository.js";
+import { SignalRepository } from "./signal-repository.js";
 
 interface StrategyRow {
   id: string;
@@ -142,9 +144,13 @@ function validatedStrategy(strategy: StrategyDefinition, index: number): Strateg
 
 export class ControlRepository {
   private readonly auditEvents: AuditRepository;
+  private readonly purchasePolicies: PurchasePolicyRepository;
+  private readonly signals: SignalRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.auditEvents = new AuditRepository(db);
+    this.purchasePolicies = new PurchasePolicyRepository(db);
+    this.signals = new SignalRepository(db);
   }
 
   settings(): AppSettings {
@@ -365,6 +371,7 @@ export class ControlRepository {
           data: { variantId, initialListingId: listingId, targetCount: variantListings.length }
         }, now);
       }
+      this.purchasePolicies.ensureCurrent(mission.id, now);
       return { mission: this.requireMissionContext(mission.id, listingId), created };
     });
   }
@@ -400,13 +407,16 @@ export class ControlRepository {
 
   setMissionTargetQuantity(missionId: string, quantity: number, now = Date.now()): void {
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) throw new Error("Mission quantity must be 1 through 99.");
-    this.db.run(
-      "UPDATE missions SET target_quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-      quantity,
-      nowIso(now),
-      missionId,
-      currentRequestScope().userId
-    );
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE missions SET target_quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+        quantity,
+        nowIso(now),
+        missionId,
+        currentRequestScope().userId
+      );
+      this.purchasePolicies.revise(missionId, { changeReason: "Signal strategy established the requested quantity." }, now);
+    });
   }
 
   missionDetail(missionId: string): Record<string, unknown> | null {
@@ -440,7 +450,7 @@ export class ControlRepository {
       enabled: Number(target.enabled) === 1,
       executionSupported: Number(target.executionSupported) === 1
     }));
-    return { ...mission, targets };
+    return { ...mission, intentPolicy: this.purchasePolicies.current(String(mission.id)), targets };
   }
 
   updateMission(missionId: string, input: MissionUpdateInput, now = Date.now()): Record<string, unknown> {
@@ -515,6 +525,27 @@ export class ControlRepository {
           id
         );
       }
+      const intentPolicy = this.purchasePolicies.revise(id, input.policy ?? {}, now);
+      const stalePendingJobs = this.db.all<{ id: string }>(
+        `SELECT id FROM action_jobs
+         WHERE mission_id = ? AND user_id = ?
+           AND intent_revision_id IS NOT NULL AND intent_revision_id <> ?
+           AND state IN ('shadow_ready', 'awaiting_executor')
+         ORDER BY created_at, id`,
+        id,
+        currentRequestScope().userId,
+        intentPolicy.id
+      );
+      for (const job of stalePendingJobs) {
+        this.signals.transitionJob(
+          job.id,
+          "cancelled",
+          "intent_revision_superseded",
+          "The purchase intent changed before the action was leased; the stale job and reservation were cancelled.",
+          { intentRevision: intentPolicy.revision },
+          now
+        );
+      }
       const detail = this.missionDetail(id);
       if (!detail) throw new Error("The updated mission could not be loaded.");
       this.auditEvents.record({
@@ -526,6 +557,7 @@ export class ControlRepository {
         data: {
           status,
           targetQuantity,
+          intentRevision: intentPolicy.revision,
           targetCount: normalizedTargets.length,
           enabledTargetCount: normalizedTargets.filter((target) => target.enabled).length
         }
@@ -544,6 +576,12 @@ export class ControlRepository {
               m.fulfilled_quantity AS fulfilledQuantity, v.id AS variantId,
               v.title, COUNT(mt.id) AS targetCount,
               SUM(CASE WHEN mt.enabled = 1 THEN 1 ELSE 0 END) AS enabledTargetCount,
+              (SELECT ir.revision FROM mission_intent_revisions ir
+               WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS intentRevision,
+              (SELECT ir.max_all_in_cents FROM mission_intent_revisions ir
+               WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS maxAllInCents,
+              (SELECT ir.action_ceiling FROM mission_intent_revisions ir
+               WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS actionCeiling,
               m.created_at AS createdAt, m.updated_at AS updatedAt
        FROM missions m
        JOIN variants v ON v.id = m.variant_id

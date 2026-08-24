@@ -225,6 +225,24 @@ audit operations. The bundles call explicit `/api/v1/user` and
 `/api/v1/admin` contracts. Legacy unprefixed application paths remain only as a
 deprecated compatibility facade during migration.
 
+Yoink 0.20.0 adds the private intent and spend boundary in migration 22.
+`exact_offer_keys` freezes an exact listing/SKU with allowlisted variant
+dimensions, condition, seller, fulfillment, and explicit region/store slots;
+`offer_snapshots` freezes the sanitized price and availability evidence used by
+one action. Neither table accepts a raw retailer session token. Mission changes
+append a `mission_intent_revisions` row instead of rewriting policy history,
+and optimistic revision checks reject lost updates.
+
+Before a live mutation job can be leased, the engine must bind the current
+intent revision and immutable snapshot, then create a transactional
+`spend_reservations` row within remaining desired quantity and per-intent plus
+optional per-order/daily/monthly limits. `spend_ledger_entries` is append-only:
+reserve and release events balance cart-only work, while a commit is legal only
+for a future verified `submit_order` action with an all-in total no greater than
+the reservation. Current add-only confirmation releases capacity and does not
+increase mission fulfillment. A policy revision cancels unleased stale work;
+already uncertain mutation remains locked for review rather than being retried.
+
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted
 structural diagnostic for explicit inspections, rehearsals, and guarded live
@@ -276,6 +294,8 @@ activation writes the exact qualification record.
 - Ordered, revisioned strategies
 - One mission per user and exact variant
 - Many listing targets per mission
+- Append-only mission intent revisions with exact target and action limits
+- Private per-order/daily/monthly spend policy
 - Notification and attribution policy
 - Paired extension devices
 - Persisted tenant role memberships and user-facing product preferences
@@ -286,6 +306,8 @@ activation writes the exact qualification record.
 - Semantic opportunity incidents
 - Resolution and mission decisions
 - Action jobs, attempts, and append-only state events
+- Immutable exact-offer keys and sanitized offer snapshots
+- Transactional spend reservations and append-only spend ledger entries
 - Sanitized receipts and audit events
 - Tenant-scoped transactional outbox events
 - Sanitized, device-attributed retailer shadow observations
@@ -297,7 +319,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 21. Foreign keys are mandatory.
+numbered; the current schema is migration 22. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 

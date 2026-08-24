@@ -585,10 +585,69 @@ export interface MissionTargetUpdateInput {
   fulfillment: Fulfillment | "inherit";
 }
 
+export type SubstitutionPolicy = "exact_only" | "verified_equivalent";
+
+export interface PurchaseIntentPolicyTarget {
+  targetId: string;
+  listingId: string;
+  retailerId: string;
+  enabled: boolean;
+  maxUnitPriceCents: number | null;
+  sellerPolicy: SellerPolicy | "inherit";
+  fulfillment: Fulfillment | "inherit";
+}
+
+export interface PurchaseIntentPolicy {
+  id: string;
+  missionId: string;
+  revision: number;
+  quantity: number;
+  currency: string;
+  maxAllInCents: number | null;
+  actionCeiling: Action;
+  substitutionPolicy: SubstitutionPolicy;
+  expiresAt: string;
+  cooldownSeconds: number;
+  targets: PurchaseIntentPolicyTarget[];
+  policyHash: string;
+  changeReason: string;
+  createdByActorId: string;
+  createdAt: string;
+}
+
+export interface PurchaseIntentPolicyUpdateInput {
+  expectedRevision?: number;
+  maxAllInCents?: number | null;
+  actionCeiling?: Action;
+  substitutionPolicy?: SubstitutionPolicy;
+  expiresAt?: string;
+  cooldownSeconds?: number;
+  changeReason?: string;
+}
+
 export interface MissionUpdateInput {
   status: MissionStatus;
   targetQuantity: number;
   targets: MissionTargetUpdateInput[];
+  policy?: PurchaseIntentPolicyUpdateInput;
+}
+
+export interface SpendPolicy {
+  revision: number;
+  currency: "USD";
+  perOrderCapCents: number | null;
+  dailyCapCents: number | null;
+  monthlyCapCents: number | null;
+  orderSubmissionEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SpendPolicyUpdateInput {
+  expectedRevision: number;
+  perOrderCapCents: number | null;
+  dailyCapCents: number | null;
+  monthlyCapCents: number | null;
 }
 
 export interface AppSettingsUpdateInput {

@@ -223,6 +223,17 @@ export class YoinkDatabase {
         LOCAL_USER_ID,
         timestamp
       );
+      this.run(
+        `INSERT OR IGNORE INTO user_spend_policies(
+           user_id, tenant_id, revision, currency, per_order_cap_cents,
+           daily_cap_cents, monthly_cap_cents, order_submission_enabled,
+           created_at, updated_at
+         ) VALUES (?, ?, 1, 'USD', NULL, NULL, NULL, 0, ?, ?)`,
+        LOCAL_USER_ID,
+        LOCAL_TENANT_ID,
+        timestamp,
+        timestamp
+      );
       const attributionPolicies = [
         ["target", "howl", "collectwithdodo", "", ""],
         ["walmart", "howl", "collectwithdodo", "", ""],

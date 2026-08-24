@@ -51,6 +51,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 
   if (pathname === "/api/v1/user/overview" || pathname === "/api/v1/user/authorization") return "user.read";
   if (pathname.startsWith("/api/v1/user/purchase-intents")) return "user.intent.manage";
+  if (pathname === "/api/v1/user/spend" || pathname === "/api/v1/user/spend-ledger") return "user.read";
+  if (pathname === "/api/v1/user/spend-policy") return "user.settings.manage";
   if (["/api/v1/library", "/api/v1/missions", "/api/v1/signals", "/api/v1/jobs", "/api/v1/audit", "/api/v1/strategies"].includes(pathname)
     || /^\/api\/v1\/missions\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
     return method === "GET" ? "user.read" : "user.intent.manage";
@@ -69,7 +71,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 function canonicalPath(pathname: string): { pathname: string; requestedSurface: ApiSurface | null } {
   if (pathname === "/api/v1/user/overview" || pathname === "/api/v1/user/authorization"
     || pathname.startsWith("/api/v1/user/catalog/")
-    || pathname.startsWith("/api/v1/user/purchase-intents")) {
+    || pathname.startsWith("/api/v1/user/purchase-intents")
+    || pathname.startsWith("/api/v1/user/spend")) {
     return { pathname, requestedSurface: "user" };
   }
   if (pathname.startsWith("/api/v1/user/")) {

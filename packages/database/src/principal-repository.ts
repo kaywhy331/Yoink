@@ -105,6 +105,17 @@ export class PrincipalRepository {
         principal.userId,
         timestamp
       );
+      this.db.run(
+        `INSERT OR IGNORE INTO user_spend_policies(
+           user_id, tenant_id, revision, currency, per_order_cap_cents,
+           daily_cap_cents, monthly_cap_cents, order_submission_enabled,
+           created_at, updated_at
+         ) VALUES (?, ?, 1, 'USD', NULL, NULL, NULL, 0, ?, ?)`,
+        principal.userId,
+        principal.tenantId,
+        timestamp,
+        timestamp
+      );
       for (const [source, name, trust, autoCreate] of SOURCE_DEFAULTS) {
         this.db.run(
           `INSERT OR IGNORE INTO source_connections(

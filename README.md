@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.19.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.20.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -38,6 +38,18 @@ and safe status taxonomy. Manual catalog changes enter a normalized review
 queue and cannot update the shared commerce graph until an authorized curator
 approves them. The root page is now a minimal product and purchase-preference
 dashboard, while the permission-gated operations console lives at `/admin`.
+
+Version 0.20.0 adds the private purchase-safety spine. Every new actionable
+job binds an immutable exact-offer key and sanitized offer snapshot to the
+current append-only mission intent revision. Intent policy now covers exact
+retailer targets, unit and all-in caps, quantity, seller, fulfillment, action
+ceiling, expiry, cooldown, and substitution rules. Transactional reservations
+prevent concurrent jobs from exceeding remaining quantity or optional
+per-order, daily, and monthly user limits; an append-only ledger records every
+reserve, release, and future verified purchase commit. Leasing fails closed
+when the intent revision or reservation is stale. Add-to-cart confirmation now
+releases its reservation and never counts as a completed purchase. Checkout
+and order submission remain closed.
 
 Disney Store, Ravensburger, Riot Games Merch, Books-A-Million, Fanatics,
 Kohl's, Macy's, Premium Bandai, and Pokémon Center are recognized as

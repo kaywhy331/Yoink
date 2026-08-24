@@ -210,6 +210,15 @@ export class SignalEngine {
         reason = evaluation.reason;
       }
       const job = this.signals.createActionJob(signal, listing, mission, incident, evaluation, settings, attribution, now);
+      if (job.policyBlocked) {
+        evaluation = {
+          ...evaluation,
+          effectiveAction: "notify",
+          reason: job.decisionReason || "The current purchase-intent or spend policy rejected the mutation."
+        };
+        outcome = job.decisionReasonCode || "purchase_policy_blocked";
+        reason = evaluation.reason;
+      }
       this.signals.recordMissionDecision(eventId, incident.id, mission.id, evaluation, outcome, reason, now);
       return {
         ...result,

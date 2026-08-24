@@ -1,5 +1,6 @@
 import { sanitizeDiagnosticData } from "../../../packages/domain/src/redaction.js";
 import { AuthorizationError } from "../../../packages/database/src/authorization-repository.js";
+import { PurchaseSafetyError } from "../../../packages/database/src/purchase-policy-repository.js";
 
 export interface ApiErrorPayload {
   error: string;
@@ -20,6 +21,12 @@ export class ApiError extends Error {
 
 export function apiErrorPayload(error: unknown, correlationId: string): { status: number; payload: ApiErrorPayload } {
   if (error instanceof AuthorizationError) {
+    return {
+      status: error.status,
+      payload: { error: error.code, message: error.message, correlationId }
+    };
+  }
+  if (error instanceof PurchaseSafetyError) {
     return {
       status: error.status,
       payload: { error: error.code, message: error.message, correlationId }

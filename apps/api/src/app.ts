@@ -19,6 +19,7 @@ import {
   type CatalogListingInput,
   type JobState,
   type MissionUpdateInput,
+  type SpendPolicyUpdateInput,
   type RetailerAdapterDiagnosticInput,
   type RetailerShadowObservationInput,
   type SignalEventInput,
@@ -68,6 +69,8 @@ import {
   type RequestScope
 } from "../../../packages/database/src/request-scope.js";
 import { SignalRepository } from "../../../packages/database/src/signal-repository.js";
+import { OfferIdentityRepository } from "../../../packages/database/src/offer-identity-repository.js";
+import { SpendLedgerRepository } from "../../../packages/database/src/spend-ledger-repository.js";
 import { ShadowObservationRepository } from "../../../packages/database/src/shadow-observation-repository.js";
 import { SourceRepository } from "../../../packages/database/src/source-repository.js";
 import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
@@ -216,6 +219,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const control = new ControlRepository(db);
   const community = new CommunityEvidenceRepository(db);
   const signals = new SignalRepository(db);
+  const offerIdentity = new OfferIdentityRepository(db);
+  const spendLedger = new SpendLedgerRepository(db);
   const engine = new SignalEngine(db);
   const devices = new DeviceRepository(db);
   const execution = new ExecutionRepository(db);
@@ -264,6 +269,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           response.setHeader("Link", `</api/v1/${routePolicy.surface}/>; rel=\"successor-version\"`);
         }
       }
+      const purchaseIntentDetailMatch = /^\/api\/v1\/user\/purchase-intents\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
+      const purchaseIntentOffersMatch = /^\/api\/v1\/user\/purchase-intents\/([A-Za-z0-9_-]{3,120})\/offers$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
         const settings = control.settings();
@@ -325,6 +332,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ...catalogGovernance.mineCounts()
           },
           purchaseIntents: missions,
+          spend: spendLedger.summary(Date.now(), false),
           sources: control.listSources(),
           permissions: authorization.permissions()
         });
@@ -343,6 +351,41 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
         json(response, 200, { items: catalogGovernance.listMine(limit, offset) });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/purchase-intents") {
+        const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
+        const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
+        const query = String(requestUrl.searchParams.get("q") ?? "");
+        const items = control.listMissions(limit, offset, query);
+        json(response, 200, { items, total: control.missionCount(query), offset, limit: items.length });
+        return;
+      }
+
+      if (request.method === "GET" && purchaseIntentOffersMatch) {
+        const mission = control.missionDetail(purchaseIntentOffersMatch[1] ?? "");
+        if (!mission) throw new ApiError("purchase_intent_not_found", 404, "The purchase intent does not exist.");
+        json(response, 200, { items: offerIdentity.listSnapshots(purchaseIntentOffersMatch[1] ?? "", 50) });
+        return;
+      }
+
+      if (request.method === "GET" && purchaseIntentDetailMatch) {
+        const mission = control.missionDetail(purchaseIntentDetailMatch[1] ?? "");
+        if (!mission) throw new ApiError("purchase_intent_not_found", 404, "The purchase intent does not exist.");
+        json(response, 200, { purchaseIntent: mission });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/spend") {
+        json(response, 200, { summary: spendLedger.summary() });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/spend-ledger") {
+        const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
+        const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
+        json(response, 200, { items: spendLedger.listLedger(limit, offset), summary: spendLedger.summary() });
         return;
       }
 
@@ -644,6 +687,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ...audit.outboxCounts(),
             auditEvents: audit.count(),
             missions: control.missionCount(),
+            ...spendLedger.counts(),
             devices: pairedDevices.length,
             onlineDevices: pairedDevices.filter((device) => device.online === true).length,
             shadowObservations: shadowObservations.count(),
@@ -844,7 +888,28 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const body = await readJson(request);
         const listing = catalog.requireListing(String(body.listingId ?? ""));
         const result = control.ensureMission(listing.variantId, listing.id, "user_selected");
-        json(response, result.created ? 201 : 200, { purchaseIntent: result.mission, created: result.created });
+        json(response, result.created ? 201 : 200, {
+          purchaseIntent: control.missionDetail(result.mission.id),
+          created: result.created
+        });
+        return;
+      }
+
+      if (request.method === "PATCH" && purchaseIntentDetailMatch) {
+        const body = await readJson(request);
+        json(response, 200, {
+          purchaseIntent: control.updateMission(
+            purchaseIntentDetailMatch[1] ?? "",
+            body as unknown as MissionUpdateInput
+          )
+        });
+        return;
+      }
+
+      if (request.method === "PUT" && requestUrl.pathname === "/api/v1/user/spend-policy") {
+        const body = await readJson(request);
+        spendLedger.updatePolicy(body as unknown as SpendPolicyUpdateInput);
+        json(response, 200, { summary: spendLedger.summary() });
         return;
       }
 

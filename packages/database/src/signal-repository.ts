@@ -17,6 +17,9 @@ import { currentRequestScope } from "./request-scope.js";
 import { NotificationRepository } from "./notification-repository.js";
 import { AttributionRepository } from "./attribution-repository.js";
 import { AuditRepository } from "./audit-repository.js";
+import { OfferIdentityRepository } from "./offer-identity-repository.js";
+import { PurchasePolicyRepository } from "./purchase-policy-repository.js";
+import { SpendLedgerRepository } from "./spend-ledger-repository.js";
 
 export interface SourceConnectionContext {
   id: string;
@@ -42,6 +45,12 @@ export interface JobRecord {
   action: string;
   idempotencyKey: string;
   created: boolean;
+  policyBlocked?: boolean;
+  decisionReasonCode?: string;
+  decisionReason?: string;
+  intentRevision?: number;
+  offerSnapshotId?: string;
+  spendReservationId?: string;
 }
 
 interface SignalEventRow {
@@ -71,9 +80,15 @@ function incidentRecord(row: IncidentRow): IncidentRecord {
 
 export class SignalRepository {
   private readonly auditEvents: AuditRepository;
+  private readonly offerIdentity: OfferIdentityRepository;
+  private readonly purchasePolicies: PurchasePolicyRepository;
+  private readonly spendLedger: SpendLedgerRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.auditEvents = new AuditRepository(db);
+    this.offerIdentity = new OfferIdentityRepository(db);
+    this.purchasePolicies = new PurchasePolicyRepository(db);
+    this.spendLedger = new SpendLedgerRepository(db);
   }
 
   sourceConnection(id: string): SourceConnectionContext | null {
@@ -388,21 +403,8 @@ export class SignalRepository {
     now = Date.now()
   ): JobRecord {
     if (!evaluation.strategy) throw new Error("An action job requires the winning strategy revision.");
-    const idempotencyKey = stableHash(
-      currentRequestScope().userId,
-      mission.id,
-      incident.id,
-      evaluation.strategy.id,
-      evaluation.strategy.revision,
-      evaluation.effectiveAction
-    );
     const existing = this.jobForIncident(incident.id);
     if (existing) return existing;
-    const jobId = newId("action_job");
-    const packagedMutationLane = evaluation.effectiveAction === "add_to_cart";
-    const state: JobState = evaluation.effectiveAction === "notify"
-      ? "notify_only"
-      : !packagedMutationLane || settings.executionMode === "shadow" ? "shadow_ready" : "awaiting_executor";
     const unitCap = evaluation.effectiveUnitCapCents;
     const allowance = Number(settings.storeAllowancesCents[listing.retailerId] ?? 0);
     const subtotal = unitCap === null ? null : unitCap * evaluation.effectiveQuantity;
@@ -413,6 +415,72 @@ export class SignalRepository {
       new Date(signal.observedAt).getTime() + evaluation.strategy.maxSignalAgeSeconds * 1_000,
       now + evaluation.strategy.maxSignalAgeSeconds * 1_000
     );
+    const expiresAt = nowIso(expiresAtMs);
+    const policy = this.purchasePolicies.ensureCurrent(mission.id, now);
+    let effectiveAction = evaluation.effectiveAction;
+    let decisionReasonCode = "intent_policy_verified";
+    let decisionReason = evaluation.reason;
+    let policyBlocked = false;
+    if (effectiveAction !== "notify") {
+      const policyDecision = this.purchasePolicies.evaluateAction(
+        signal,
+        listing,
+        mission,
+        evaluation,
+        maxOrderTotal,
+        now
+      );
+      if (!policyDecision.allowed) {
+        effectiveAction = "notify";
+        policyBlocked = true;
+        decisionReasonCode = policyDecision.reasonCode;
+        decisionReason = policyDecision.message;
+      }
+    }
+    let packagedMutationLane = effectiveAction === "add_to_cart";
+    let state: JobState = effectiveAction === "notify"
+      ? "notify_only"
+      : !packagedMutationLane || settings.executionMode === "shadow" ? "shadow_ready" : "awaiting_executor";
+    if (state === "awaiting_executor" && maxOrderTotal !== null) {
+      this.spendLedger.releaseExpired(now);
+      const reservationDecision = this.spendLedger.evaluateReservation(
+        mission.id,
+        policy,
+        effectiveAction as "add_to_cart" | "prepare_checkout" | "submit_order",
+        evaluation.effectiveQuantity,
+        maxOrderTotal,
+        now
+      );
+      if (!reservationDecision.allowed) {
+        effectiveAction = "notify";
+        packagedMutationLane = false;
+        state = "notify_only";
+        policyBlocked = true;
+        decisionReasonCode = reservationDecision.reasonCode;
+        decisionReason = reservationDecision.message;
+      }
+    }
+    const idempotencyKey = stableHash(
+      currentRequestScope().userId,
+      mission.id,
+      policy.id,
+      incident.id,
+      evaluation.strategy.id,
+      evaluation.strategy.revision,
+      effectiveAction
+    );
+    const jobId = newId("action_job");
+    const captured = this.offerIdentity.capture(
+      signal,
+      listing,
+      mission.id,
+      policy,
+      incident.id,
+      evaluation.effectiveQuantity,
+      maxOrderTotal,
+      expiresAt,
+      now
+    );
     const timestamp = nowIso(now);
     this.db.run(
       `INSERT OR IGNORE INTO action_jobs(
@@ -422,7 +490,8 @@ export class SignalRepository {
          fulfillment, expected_seller, listing_id, canonical_url, attribution_url,
          attribution_provider, attribution_metadata_json, affiliate_mode,
          offer_fingerprint, idempotency_key,
-         capability_nonce_hash, expires_at, created_at, updated_at
+         capability_nonce_hash, expires_at, created_at, updated_at,
+         intent_revision_id, exact_offer_key_id, offer_snapshot_id
        ) VALUES (
          ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?,
@@ -430,7 +499,8 @@ export class SignalRepository {
          ?, ?, ?, ?,
          ?, ?, ?,
          ?, ?,
-         ?, ?, ?, ?
+         ?, ?, ?, ?,
+         ?, ?, ?
        )`,
       jobId,
       currentRequestScope().tenantId,
@@ -441,7 +511,7 @@ export class SignalRepository {
       evaluation.strategy.id,
       evaluation.strategy.revision,
       state,
-      evaluation.effectiveAction,
+      effectiveAction,
       evaluation.effectiveQuantity,
       unitCap,
       maxOrderTotal,
@@ -458,28 +528,48 @@ export class SignalRepository {
       signal.offer.offerFingerprint,
       idempotencyKey,
       stableHash(newId("capability_nonce")),
-      nowIso(expiresAtMs),
+      expiresAt,
       timestamp,
-      timestamp
+      timestamp,
+      policy.id,
+      captured.exactOffer.id,
+      captured.snapshot.id
     );
-    const saved = this.db.get<{ id: string; state: JobState; action: string }>(
-      "SELECT id, state, action FROM action_jobs WHERE idempotency_key = ?",
+    const saved = this.db.get<{ id: string; state: JobState; action: string; spendReservationId: string | null }>(
+      "SELECT id, state, action, spend_reservation_id AS spendReservationId FROM action_jobs WHERE idempotency_key = ?",
       idempotencyKey
     );
     if (!saved) throw new Error("The action job could not be saved.");
     const created = saved.id === jobId;
     if (created) {
+      if (state === "awaiting_executor" && effectiveAction !== "notify" && maxOrderTotal !== null) {
+        const reservation = this.spendLedger.reserve({
+          missionId: mission.id,
+          policy,
+          exactOfferKeyId: captured.exactOffer.id,
+          offerSnapshotId: captured.snapshot.id,
+          actionJobId: jobId,
+          idempotencyKey: stableHash("spend-reservation-v1", idempotencyKey),
+          action: effectiveAction,
+          quantity: evaluation.effectiveQuantity,
+          amountCents: maxOrderTotal,
+          currency: listing.currency,
+          expiresAt
+        }, now);
+        saved.spendReservationId = reservation.id;
+      }
       this.db.run(
         `INSERT INTO action_events(id, job_id, state, reason_code, message, evidence_json, created_at)
-         VALUES (?, ?, ?, 'strategy_qualified', ?, '{}', ?)`,
+         VALUES (?, ?, ?, ?, ?, '{}', ?)`,
         newId("action_event"),
         jobId,
         state,
+        policyBlocked ? decisionReasonCode : "strategy_qualified",
         state === "shadow_ready"
           ? packagedMutationLane
             ? "Strategy qualified; Yoink is in shadow mode and no retailer mutation is available."
             : "Strategy qualified, but this mutation lane has no packaged, independently qualified runner and remains rehearsal-only."
-          : evaluation.reason,
+          : policyBlocked ? decisionReason : evaluation.reason,
         timestamp
       );
       this.audit(
@@ -489,10 +579,10 @@ export class SignalRepository {
         state === "shadow_ready"
           ? packagedMutationLane ? "Qualified shadow action job created." : "A closed-lane rehearsal record was created."
           : "Action job created.",
-        { jobId, incidentId: incident.id, listingId: listing.id, action: evaluation.effectiveAction },
+        { jobId, incidentId: incident.id, listingId: listing.id, action: effectiveAction, intentRevision: policy.revision, policyBlocked },
         now
       );
-      if (evaluation.effectiveAction === "notify") {
+      if (effectiveAction === "notify") {
         new NotificationRepository(this.db).ensureForJob(jobId, now);
       }
       new AttributionRepository(this.db).recordReceipt(jobId, attribution, listing.canonicalUrl, now);
@@ -504,7 +594,13 @@ export class SignalRepository {
       state: saved.state,
       action: saved.action,
       idempotencyKey,
-      created
+      created,
+      policyBlocked,
+      decisionReasonCode,
+      decisionReason,
+      intentRevision: policy.revision,
+      offerSnapshotId: captured.snapshot.id,
+      spendReservationId: saved.spendReservationId ?? ""
     };
   }
 
@@ -532,9 +628,10 @@ export class SignalRepository {
         state: JobState;
         incident_id: string;
         mission_id: string;
+        action: string;
         quantity: number;
       }>(
-        "SELECT id, state, incident_id, mission_id, quantity FROM action_jobs WHERE id = ? AND user_id = ?",
+        "SELECT id, state, incident_id, mission_id, action, quantity FROM action_jobs WHERE id = ? AND user_id = ?",
         jobId,
         currentRequestScope().userId
       );
@@ -559,6 +656,7 @@ export class SignalRepository {
       );
       if (["offer_rejected", "expired", "cancelled"].includes(nextState)) {
         this.closeIncident(job.incident_id, nextState, now);
+        this.spendLedger.releaseForJob(job.id, nextState, now);
       } else if (nextState === "submission_uncertain" || nextState === "manual_review") {
         this.db.run(
           `UPDATE signal_incidents SET status = 'locked', closed_reason = ?, updated_at = ? WHERE id = ?`,
@@ -568,17 +666,23 @@ export class SignalRepository {
         );
       } else if (nextState === "confirmed") {
         this.closeIncident(job.incident_id, "confirmed", now);
-        this.db.run(
-          `UPDATE missions
-           SET fulfilled_quantity = MIN(target_quantity, fulfilled_quantity + ?),
-               status = CASE WHEN fulfilled_quantity + ? >= target_quantity THEN 'satisfied' ELSE status END,
-               updated_at = ?
-           WHERE id = ?`,
-          job.quantity,
-          job.quantity,
-          timestamp,
-          job.mission_id
-        );
+        if (job.action === "submit_order") {
+          const verifiedTotal = Number(evidence.allInTotalCents ?? evidence.orderTotalCents);
+          this.spendLedger.commitForJob(job.id, verifiedTotal, now);
+          this.db.run(
+            `UPDATE missions
+             SET fulfilled_quantity = MIN(target_quantity, fulfilled_quantity + ?),
+                 status = CASE WHEN fulfilled_quantity + ? >= target_quantity THEN 'satisfied' ELSE status END,
+                 updated_at = ?
+             WHERE id = ?`,
+            job.quantity,
+            job.quantity,
+            timestamp,
+            job.mission_id
+          );
+        } else {
+          this.spendLedger.releaseForJob(job.id, `${job.action}_confirmed_without_order`, now);
+        }
       }
       this.audit(job.id, "action_job_transition", nextState, message, { previousState: job.state, ...sanitizeDiagnosticData(evidence) as Record<string, unknown> }, now);
       return { id: job.id, previousState: job.state, state: nextState, updatedAt: timestamp };
@@ -735,12 +839,18 @@ export class SignalRepository {
               aj.canonical_url AS canonicalUrl, aj.attribution_url AS attributionUrl,
               aj.attribution_provider AS attributionProvider,
               ar.outcome AS attributionOutcome, aj.expires_at AS expiresAt,
+              ir.revision AS intentRevision,
+              aj.offer_snapshot_id AS offerSnapshotId,
+              sr.id AS spendReservationId, sr.status AS spendReservationStatus,
+              sr.reserved_amount_cents AS reservedAmountCents,
               aj.created_at AS createdAt, v.title,
               l.retailer_id AS retailerId, l.retailer_sku AS retailerSku
        FROM action_jobs aj
        JOIN listings l ON l.id = aj.listing_id
        JOIN variants v ON v.id = l.variant_id
        LEFT JOIN attribution_receipts ar ON ar.job_id = aj.id
+       LEFT JOIN mission_intent_revisions ir ON ir.id = aj.intent_revision_id
+       LEFT JOIN spend_reservations sr ON sr.id = aj.spend_reservation_id
        WHERE aj.user_id = ? AND (? = ''
          OR aj.id LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR aj.state LIKE ? ESCAPE '\\' COLLATE NOCASE

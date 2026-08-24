@@ -1,6 +1,29 @@
 # Yoink roadmap
 
-## Shipped through 0.19.0
+## Shipped through 0.20.0
+
+### Exact intent and spending safety (0.20.0)
+
+- Migration 22 adds tenant-owned immutable exact-offer keys and offer snapshots.
+  The key combines the exact listing/SKU, allowlisted variant dimensions,
+  condition, seller, fulfillment, and reserved region/store slots. Ephemeral
+  Amazon offer tokens remain page-memory-only and never enter these tables
+- Mission preferences now produce append-only intent revisions with optimistic
+  concurrency. Each revision freezes quantity, exact target policies, unit and
+  all-in caps, action ceiling, substitution policy, expiry, and cooldown
+- User spend policy supports optional per-order, daily, and monthly caps.
+  Transactional reservations claim quantity and bounded spend before a live job
+  can be leased; an append-only ledger records reserve, release, and future
+  verified commit events
+- A live mutation lease requires the current intent revision, immutable offer
+  snapshot, and active unexpired reservation. Revising a plan cancels safe
+  unleased stale jobs and releases their reservations in the same transaction
+- The user dashboard and canonical user API expose these controls and ledger
+  state. The admin snapshot exposes aggregate reservation and ledger counts
+  without enabling checkout, payment, or order submission
+- Add-to-cart confirmation is no longer treated as fulfillment. It releases
+  reserved capacity without recording spend; only a future verified
+  `submit_order` result can commit spend and increase fulfilled quantity
 
 ### Trust, API, and product-surface foundation (0.19.0)
 
@@ -238,25 +261,26 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.19.0
+## Architecture assessment after 0.20.0
 
-Yoink 0.19.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.20.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
 diagnostic ledger, and outbox are valuable foundations; the next work should
-extend exact offer/intent/spend correctness before adding more autonomous
+finish the remaining governed catalog/recipe trust work and propagate stable
+child-offer/location identity before adding checkout or more autonomous
 behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-21 SQLite schema plus deterministic portability | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
+| Primary backend database | Transactional migration-22 SQLite schema plus deterministic portability, immutable offer/intent evidence, and append-only spend events | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, catalog review, role administration, diagnostics, retailer/source/affiliate controls, and audit | No production IdP/step-up or two-person approval, secret references, operator alert model, break-glass workflow, cross-tenant operations, or complete retailer/catalog rollback tooling |
-| Minimal user application | Separate `/` dashboard for exact products, purchase plans, store/seller/fulfillment/price preferences, activity, pause, pairing, and source/review status | Mission preferences still rely on the legacy mission/strategy model; no revisioned product intent policy, all-in cap, substitution policy, expiry/cooldown, or spend reservation/ledger |
+| Minimal user application | Separate `/` dashboard for exact products, revisioned intent, store/seller/fulfillment/unit/all-in limits, action ceiling, expiry/cooldown/substitution preferences, periodic spend caps, activity, pause, pairing, and source/review status | Stable child-offer/region/store dimensions are not yet supplied by every observer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound assertions, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, selected-variation key, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups and manually entered signed selector recipes exist | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an oracle when that parser is wrong; canary is not cohort deployment; production signing starts with trust-on-first-use |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified | Community truth is advisory, recipe truth is not independent, location/variation identity is incomplete, and no checkout/final-total verifier is packaged |
-| Automatic purchasing | Target and Walmart can perform guarded first-party shipping add-to-cart; Amazon and Best Buy are implemented but separately gated | No spending reservation/ledger, product-scoped intent policy, checkout-review runner, submit-order runner, destination/payment fingerprinting, or completed-order recovery |
+| Automatic purchasing | Target and Walmart can perform guarded first-party shipping add-to-cart behind current intent/snapshot/reservation checks; Amazon and Best Buy are implemented but separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 
 ### Target trust-domain layout
 
@@ -338,10 +362,15 @@ local mode remains backward-compatible.
 
 #### Phase 1 — exact offer identity and a product-centric user model
 
-0.19.0 ships the product-centric user read model and first minimal dashboard as
-an early vertical slice. Exact selected-offer identity, revisioned intent
-policy, all-in caps, substitution/expiry/cooldown, and the spend reservation
-ledger remain the Phase 1 correctness gate.
+0.20.0 ships the local Phase 1 safety spine: immutable selected-offer keys and
+snapshots, revisioned mission-owned policy, all-in/action/substitution/expiry/
+cooldown controls, transactional quantity/spend reservations, and an
+append-only ledger. Concurrent quantity and daily-budget tests pass, stale
+policy leases fail closed, and cart-only confirmation cannot record a purchase.
+The broader phase exit remains **open** until live observers supply stable
+child-offer plus applicable region/store scope, verified-equivalent selection
+has independently governed identity evidence, and a future checkout/order path
+can prove and commit a final total without weakening the closed mutation lanes.
 
 - Extend listing identity to an exact selected-offer key: retailer SKU/child
   offer, normalized size/color/edition/language/pack/condition, seller,

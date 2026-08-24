@@ -144,6 +144,7 @@ function renderMetrics() {
     ["Missions", counts.missions, "Retailer routes grouped"],
     ["Signals", counts.signals, `${counts.openIncidents} open incidents`],
     ["Action jobs", counts.actionJobs, `${counts.pendingNotifications || 0} notifications pending`],
+    ["Spend ledger", counts.ledgerEntries || 0, `${counts.activeReservations || 0} active reservations`],
     ["Source products", state.snapshot.trackalacker?.mappedProducts || 0, `${state.snapshot.trackalacker?.candidateListings || 0} source listings captured`]
   ];
   $("#metricGrid").innerHTML = metrics.map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong><small>${escapeHtml(note)}</small></article>`).join("");
@@ -516,7 +517,7 @@ function renderMissions() {
   const missions = state.missionItems;
   $("#missionCount").textContent = `${missions.length.toLocaleString()} of ${Number(state.missionTotal || 0).toLocaleString()} matching missions`;
   $("#missionMoreButton").hidden = missions.length >= state.missionTotal;
-  $("#missionList").innerHTML = missions.length ? missions.map((mission) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(mission.title)}</h3><p>${escapeHtml(mission.origin)} · created ${escapeHtml(relativeTime(mission.createdAt))}</p></div>${statusDot(mission.status === "active" ? "good" : "warning")}</div><div class="card-meta"><span class="tag ${mission.status === "active" ? "good" : "warning"}">${escapeHtml(mission.status)}</span><span class="tag">${mission.targetCount} listing targets</span><span class="tag">${mission.enabledTargetCount} enabled</span><span class="tag">Goal ${mission.targetQuantity}</span></div><div class="card-actions"><button class="button secondary" data-mission-edit="${escapeHtml(mission.id)}" type="button">Edit mission</button></div></article>`).join("") : empty("No missions yet. An exact trusted live signal can create one automatically.");
+  $("#missionList").innerHTML = missions.length ? missions.map((mission) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(mission.title)}</h3><p>${escapeHtml(mission.origin)} · created ${escapeHtml(relativeTime(mission.createdAt))}</p></div>${statusDot(mission.status === "active" ? "good" : "warning")}</div><div class="card-meta"><span class="tag ${mission.status === "active" ? "good" : "warning"}">${escapeHtml(mission.status)}</span><span class="tag">${mission.targetCount} listing targets</span><span class="tag">${mission.enabledTargetCount} enabled</span><span class="tag">Goal ${mission.targetQuantity}</span><span class="tag">Intent r${Number(mission.intentRevision || 1)} · ${escapeHtml(String(mission.actionCeiling || "add_to_cart").replaceAll("_", " "))}</span></div><div class="card-actions"><button class="button secondary" data-mission-edit="${escapeHtml(mission.id)}" type="button">Edit mission</button></div></article>`).join("") : empty("No missions yet. An exact trusted live signal can create one automatically.");
 }
 
 function renderAudit() {

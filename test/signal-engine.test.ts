@@ -24,7 +24,7 @@ function purchaseStrategies(): StrategyDefinition[] {
       allowedSellers: [],
       includeKeywords: "pokemon + \"elite trainer box\"",
       excludeKeywords: "used | refurbished",
-      action: "submit_order",
+      action: "add_to_cart",
       quantity: 2,
       fulfillment: "shipping",
       maxSignalAgeSeconds: 120
@@ -126,7 +126,7 @@ test("an exact under-MSRP signal creates one mission and a bounded shadow action
       expected_seller: string;
     }>("SELECT action, quantity, max_unit_price_cents, max_order_total_cents, fulfillment, expected_seller FROM action_jobs WHERE id = ?", result.actionJobId);
     assert.deepEqual({ ...job }, {
-      action: "submit_order",
+      action: "add_to_cart",
       quantity: 2,
       max_unit_price_cents: 6500,
       max_order_total_cents: 17560,

@@ -10,7 +10,7 @@ import { MIGRATIONS } from "../packages/database/src/migrations.js";
 test("initial migration creates the normalized graph and safe local defaults", () => {
   const db = new YoinkDatabase();
   try {
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 21);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
     assert.equal(db.get<{ name: string }>("SELECT name FROM tenants WHERE id = ?", LOCAL_TENANT_ID)?.name, "Local");
     assert.equal(db.get<{ display_name: string }>("SELECT display_name FROM users WHERE id = ?", LOCAL_USER_ID)?.display_name, "Local user");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailers")?.count, 13);
@@ -42,6 +42,15 @@ test("initial migration creates the normalized graph and safe local defaults", (
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'catalog_change_proposals'"
     )?.count, 1);
+    assert.equal(db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type = 'table' AND name IN (
+        'exact_offer_keys', 'mission_intent_revisions', 'offer_snapshots',
+        'user_spend_policies', 'spend_reservations', 'spend_ledger_entries'
+      )`)?.count, 6);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM user_spend_policies WHERE user_id = ? AND order_submission_enabled = 0",
+      LOCAL_USER_ID
+    )?.count, 1);
     db.assertIntegrity();
   } finally {
     db.close();
@@ -61,7 +70,7 @@ test("a file database reopens idempotently", () => {
     const second = new YoinkDatabase(filePath);
     try {
       assert.equal(second.get<{ pause_reason: string }>("SELECT pause_reason FROM app_settings WHERE user_id = ?", LOCAL_USER_ID)?.pause_reason, "Preserved");
-      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 21);
+      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
       second.assertIntegrity();
     } finally {
       second.close();
@@ -89,7 +98,7 @@ test("an existing 0.2 database upgrades transactionally to shadow observations a
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 21);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_trials")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics")?.count, 0);
@@ -140,7 +149,7 @@ test("migration 11 closes any inherited Best Buy execution and qualification sta
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 21);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>("SELECT status FROM retailer_adapter_qualifications WHERE retailer_id = 'bestbuy'")?.status, "retired");
       assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name IN (
@@ -184,7 +193,7 @@ test("migration 19 retires Best Buy v2 qualification before the v4/v3 boundary",
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 21);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 22);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>(
         "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'bestbuy'"
@@ -198,10 +207,70 @@ test("migration 19 retires Best Buy v2 qualification before the v4/v3 boundary",
   }
 });
 
+test("migration 22 backfills existing missions into immutable intent and spend policy", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-intent-ledger-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 21)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        "2026-08-24T00:00:00.000Z"
+      );
+    }
+    legacy.exec(`
+      INSERT INTO retailers(id, display_name, execution_supported, domains_json, created_at, updated_at)
+      VALUES ('target', 'Target', 1, '["target.com"]', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO product_families(id, title, brand, created_at, updated_at)
+      VALUES ('family_upgrade', 'Upgrade product', '', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+      VALUES ('variant_upgrade', 'family_upgrade', 'Upgrade product blue', '{"color":"Blue"}', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO listings(id, variant_id, retailer_id, retailer_sku, canonical_url, status, execution_supported, msrp_cents, currency, created_at, updated_at)
+      VALUES ('listing_upgrade', 'variant_upgrade', 'target', '95280894', 'https://www.target.com/p/-/A-95280894', 'in_stock', 1, 4999, 'USD', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO missions(id, tenant_id, user_id, variant_id, status, origin, target_quantity, fulfilled_quantity, created_at, updated_at)
+      VALUES ('mission_upgrade', 'tenant_local', 'user_local', 'variant_upgrade', 'active', 'fixture', 2, 0, '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO mission_targets(id, mission_id, listing_id, enabled, max_unit_price_cents, currency, seller_policy, fulfillment, created_at, updated_at)
+      VALUES ('mission_target_upgrade', 'mission_upgrade', 'listing_upgrade', 1, 4500, 'USD', 'first_party_only', 'shipping', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      const policy = upgraded.get<{ revision: number; quantity: number; action: string; targets: string }>(
+        `SELECT revision, quantity, action_ceiling AS action, target_policy_json AS targets
+         FROM mission_intent_revisions WHERE mission_id = 'mission_upgrade'`
+      );
+      assert.equal(policy?.revision, 1);
+      assert.equal(policy?.quantity, 2);
+      assert.equal(policy?.action, "add_to_cart");
+      assert.deepEqual(JSON.parse(policy?.targets ?? "[]"), [{
+        targetId: "mission_target_upgrade",
+        listingId: "listing_upgrade",
+        retailerId: "target",
+        enabled: true,
+        maxUnitPriceCents: 4500,
+        sellerPolicy: "first_party_only",
+        fulfillment: "shipping"
+      }]);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM user_spend_policies WHERE user_id = 'user_local' AND order_submission_enabled = 0"
+      )?.count, 1);
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("the durable schema has no raw offer token column", () => {
   const db = new YoinkDatabase();
   try {
-    const tables = ["offer_observations", "signal_events", "signal_incidents", "action_jobs", "retailer_shadow_observations", "retailer_adapter_trials", "retailer_adapter_diagnostics"];
+    const tables = ["offer_observations", "offer_snapshots", "exact_offer_keys", "signal_events", "signal_incidents", "action_jobs", "retailer_shadow_observations", "retailer_adapter_trials", "retailer_adapter_diagnostics"];
     for (const table of tables) {
       const columns = db.all<{ name: string }>(`PRAGMA table_info(${table})`).map((row) => row.name);
       assert.equal(columns.includes("offer_id"), false, `${table} must not persist raw offer IDs`);
