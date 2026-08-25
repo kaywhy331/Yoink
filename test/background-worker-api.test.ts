@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import { SIGNAL_INGRESS_EVENT_TYPE } from "../packages/contracts/src/signal-ingress.js";
+import { BACKGROUND_TASK_KINDS } from "../packages/domain/src/background-task.js";
 import { BackgroundTaskRepository } from "../packages/database/src/background-task-repository.js";
 import { HostedDeliveryRepository } from "../packages/database/src/hosted-delivery-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
@@ -38,6 +39,9 @@ test("the admin worker API exposes safe controls without lease capability materi
     assert.equal(health.durableBackgroundTasks, true);
     assert.equal(health.durableSignalIngress, true);
     assert.equal(health.signalEvaluationOutsideDeviceRequest, true);
+    assert.equal(health.durableObserverRepairCandidateEvaluation, true);
+    assert.equal(health.generatedObserverRepairCandidatesExecutable, false);
+    assert.equal(health.generatedObserverRepairCandidatesAutoPromoted, false);
     assert.equal(health.durableObserverRecipeWitnessRefresh, true);
     assert.equal(health.observerRecipeWitnessRefreshConfigured, false);
     assert.equal(health.standaloneWitnessRefreshLoadsSigningKeys, false);
@@ -101,7 +105,10 @@ test("the admin worker API exposes safe controls without lease capability materi
       attested: true,
       contractVersion: 2
     });
-    assert.equal(initial.backgroundWork.schedules.length, 6);
+    assert.equal(initial.backgroundWork.schedules.length, BACKGROUND_TASK_KINDS.length);
+    assert.equal(initial.backgroundWork.schedules.some(
+      (schedule) => schedule.taskKind === "observer_recipe_candidate_evaluation" && schedule.enabled
+    ), true);
     assert.equal(initial.backgroundWork.schedules.some(
       (schedule) => schedule.taskKind === "observer_recipe_witness_refresh" && schedule.enabled
     ), true);

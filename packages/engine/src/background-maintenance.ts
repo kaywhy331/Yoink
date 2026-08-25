@@ -19,6 +19,7 @@ import { OperatorAlertRepository } from "../../database/src/operator-alert-repos
 import { SpendLedgerRepository } from "../../database/src/spend-ledger-repository.js";
 import { runWithRequestScope } from "../../database/src/request-scope.js";
 import { DurableSignalIngressProcessor } from "./signal-ingress.js";
+import { ObserverRecipeCandidateEvaluationService } from "./observer-recipe-candidate-evaluation.js";
 import type { ObserverRecipeWitnessRefreshService } from "./observer-recipe-witness-refresh.js";
 import type { OperatorAlertConnectorDispatchService } from "./operator-alert-connector-dispatch.js";
 
@@ -37,6 +38,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
   private readonly notifications: NotificationRepository;
   private readonly operationalTelemetry: OperationalTelemetryRepository;
   private readonly operatorAlerts: OperatorAlertRepository;
+  private readonly observerRecipeCandidates: ObserverRecipeCandidateEvaluationService;
   private readonly spendLedger: SpendLedgerRepository;
   private readonly signalIngress: DurableSignalIngressProcessor;
 
@@ -48,6 +50,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
     this.notifications = new NotificationRepository(db);
     this.operationalTelemetry = new OperationalTelemetryRepository(db);
     this.operatorAlerts = new OperatorAlertRepository(db);
+    this.observerRecipeCandidates = new ObserverRecipeCandidateEvaluationService(db);
     this.spendLedger = new SpendLedgerRepository(db);
     this.signalIngress = new DurableSignalIngressProcessor(db);
   }
@@ -62,10 +65,14 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
       userId: context.principal.userId,
       actorKind: "service",
       actorId: context.workerId
-    }, () => this.executeScoped(taskKind, now));
+    }, () => this.executeScoped(taskKind, context.runtimeVersion, now));
   }
 
-  private async executeScoped(taskKind: BackgroundTaskKind, now: number): Promise<BackgroundTaskResult> {
+  private async executeScoped(
+    taskKind: BackgroundTaskKind,
+    runtimeVersion: string,
+    now: number
+  ): Promise<BackgroundTaskResult> {
     switch (taskKind) {
       case "execution_recovery":
         return {
@@ -98,6 +105,8 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
                 connectorDeliveriesDeadLettered: 0
               })
         };
+      case "observer_recipe_candidate_evaluation":
+        return this.observerRecipeCandidates.execute(runtimeVersion, now);
       case "observer_recipe_witness_refresh":
         return this.options.observerRecipeWitnessRefresh
           ? this.options.observerRecipeWitnessRefresh.execute(now)

@@ -48,6 +48,7 @@ const VERSION_PATTERN = /^[a-z0-9][a-z0-9._-]{1,39}$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const REASON_PATTERN = /^[a-z][a-z0-9_]{1,79}$/;
 const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
+const RESERVED_PROVENANCE_CODES = new Set(["privacy_bounded_repair_miner"]);
 const MAX_TRIAL_AGE_MS = 10 * 60_000;
 const SKU_PATTERNS: Record<SupportedRetailerId, RegExp> = {
   target: /^\d{6,20}$/,
@@ -652,7 +653,8 @@ export class ObserverRecipeRepository {
     const minimumExtensionVersion = cleanText(input.minimumExtensionVersion, 40);
     const provenanceCode = cleanText(input.provenanceCode, 80).toLocaleLowerCase("en-US");
     if (!VERSION_PATTERN.test(recipeVersion) || !SEMVER_PATTERN.test(minimumExtensionVersion)
-      || !REASON_PATTERN.test(provenanceCode)) {
+      || !REASON_PATTERN.test(provenanceCode) || RESERVED_PROVENANCE_CODES.has(provenanceCode)
+      || recipeVersion.startsWith(`${input.retailerId}-repair-`)) {
       throw new Error("Observer recipe versions and provenance must use bounded version/reason formats.");
     }
     const expires = new Date(input.expiresAt).getTime();
@@ -959,6 +961,7 @@ export class ObserverRecipeRepository {
     const currentTrust = this.currentTrustManifest();
     const row = this.db.get<{
       candidates: number; active: number; disabled: number; trials: number; failedTrials: number;
+      generatedRepairCandidates: number; quarantinedGeneratedRepairCandidates: number;
       trustManifests: number; transparencyEvents: number;
       witnessReceipts: number; witnessChecks: number; failedWitnessChecks: number;
     }>(
@@ -968,6 +971,11 @@ export class ObserverRecipeRepository {
             AND lifecycle_state IN ('shadow', 'canary', 'trusted_read_only') AND kill_switch = 0 AND expires_at > ?
             AND trust_manifest_generation = ? AND trust_manifest_hash = ?) AS active,
          (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ? AND lifecycle_state = 'disabled') AS disabled,
+         (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?
+            AND provenance_code = 'privacy_bounded_repair_miner') AS generatedRepairCandidates,
+         (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?
+            AND provenance_code = 'privacy_bounded_repair_miner'
+            AND lifecycle_state = 'quarantined') AS quarantinedGeneratedRepairCandidates,
          (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ?) AS trials,
          (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND outcome = 'failed') AS failedTrials,
          (SELECT COUNT(*) FROM observer_recipe_trust_manifests WHERE tenant_id = ?) AS trustManifests,
@@ -987,12 +995,16 @@ export class ObserverRecipeRepository {
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
+      currentRequestScope().tenantId,
+      currentRequestScope().tenantId,
       currentRequestScope().tenantId
     );
     return {
       observerRecipeCandidates: Number(row?.candidates ?? 0),
       activeObserverRecipes: Number(row?.active ?? 0),
       disabledObserverRecipes: Number(row?.disabled ?? 0),
+      generatedObserverRepairCandidates: Number(row?.generatedRepairCandidates ?? 0),
+      quarantinedGeneratedObserverRepairCandidates: Number(row?.quarantinedGeneratedRepairCandidates ?? 0),
       observerRecipeTrials: Number(row?.trials ?? 0),
       failedObserverRecipeTrials: Number(row?.failedTrials ?? 0),
       observerRecipeTrustManifests: Number(row?.trustManifests ?? 0),

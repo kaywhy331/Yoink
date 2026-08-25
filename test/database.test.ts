@@ -1463,6 +1463,129 @@ test("migrations 38 through 40 preserve heartbeat history and harden governed al
   }
 });
 
+test("migration 41 adds bounded observer-repair evaluation without losing durable work or widening retailers", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-observer-repair-worker-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 40)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        "2026-08-25T12:00:00.000Z"
+      );
+    }
+    legacy.exec(`
+      INSERT INTO background_task_schedules(
+        id, tenant_id, subject_user_id, task_kind, display_name, description,
+        enabled, interval_seconds, next_run_at, last_enqueued_at,
+        created_by_actor_id, updated_by_actor_id, privacy_classification,
+        created_at, updated_at
+      ) VALUES (
+        'background_schedule_upgrade_41', 'tenant_local', 'user_local',
+        'adapter_alert_reconciliation', 'Preserved repair alerts',
+        'Preserved before migration 41.', 1, 60, '2026-08-25T12:00:00.000Z', '',
+        'legacy_worker', 'legacy_worker', 'operational_configuration',
+        '2026-08-25T12:00:00.000Z', '2026-08-25T12:00:00.000Z'
+      );
+      INSERT INTO background_tasks(
+        id, tenant_id, subject_user_id, schedule_id, task_kind, dedupe_key,
+        state, priority, attempt_count, maximum_attempts, scheduled_for,
+        privacy_classification, created_at, updated_at
+      ) VALUES (
+        'background_task_upgrade_41', 'tenant_local', 'user_local',
+        'background_schedule_upgrade_41', 'adapter_alert_reconciliation',
+        'upgrade-41-fixture', 'pending', 50, 0, 5,
+        '2026-08-25T12:00:00.000Z', 'operational_aggregate',
+        '2026-08-25T12:00:00.000Z', '2026-08-25T12:00:00.000Z'
+      );
+      INSERT INTO background_task_events(
+        id, tenant_id, subject_user_id, task_id, sequence, event_type, attempt,
+        reason_code, worker_id, privacy_classification, created_at
+      ) VALUES (
+        'background_task_event_upgrade_41', 'tenant_local', 'user_local',
+        'background_task_upgrade_41', 1, 'scheduled', 0, 'migration_fixture', '',
+        'operational_aggregate', '2026-08-25T12:00:00.000Z'
+      );
+    `);
+    const qualificationCount = Number(legacy.prepare(
+      "SELECT COUNT(*) AS count FROM retailer_adapter_qualifications"
+    ).get()?.count ?? 0);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 41 AND name = 'durable_observer_repair_candidate_evaluation'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM background_task_schedules WHERE id = 'background_schedule_upgrade_41'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM background_tasks WHERE id = 'background_task_upgrade_41'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM background_task_events WHERE id = 'background_task_event_upgrade_41'"
+      )?.count, 1);
+      upgraded.run(
+        `INSERT INTO background_task_schedules(
+           id, tenant_id, subject_user_id, task_kind, display_name, description,
+           enabled, interval_seconds, next_run_at, created_by_actor_id, updated_by_actor_id,
+           privacy_classification, created_at, updated_at
+         ) VALUES (?, ?, ?, 'observer_recipe_candidate_evaluation', ?, ?, 1, 60, ?, ?, ?,
+           'operational_configuration', ?, ?)`,
+        "background_schedule_repair_candidate_upgrade_41",
+        "tenant_local",
+        "user_local",
+        "Observer repair candidate evaluation",
+        "Compile only mature bounded landmarks into quarantined candidates.",
+        "2026-08-25T12:00:00.000Z",
+        "migration_41",
+        "migration_41",
+        "2026-08-25T12:00:00.000Z",
+        "2026-08-25T12:00:00.000Z"
+      );
+      assert.throws(() => upgraded.run(
+        `INSERT INTO background_task_schedules(
+           id, tenant_id, subject_user_id, task_kind, display_name, description,
+           enabled, interval_seconds, next_run_at, created_by_actor_id, updated_by_actor_id,
+           privacy_classification, created_at, updated_at
+         ) VALUES ('background_schedule_invalid_upgrade_41', 'tenant_local', 'user_local',
+           'observer_recipe_mutation', 'Invalid', 'Must remain closed.', 1, 60,
+           '2026-08-25T12:00:00.000Z', 'migration_41', 'migration_41',
+           'operational_configuration', '2026-08-25T12:00:00.000Z', '2026-08-25T12:00:00.000Z')`
+      ), /constraint failed/);
+      const candidateInsert = `INSERT INTO observer_recipe_candidates(
+        id, tenant_id, user_id, retailer_id, recipe_version,
+        minimum_extension_version, recipe_json, recipe_fingerprint,
+        lifecycle_state, rollback_recipe_id, kill_switch, provenance_code,
+        signature_key_id, signature, signed_at, expires_at, disabled_reason,
+        trust_manifest_generation, trust_manifest_hash, created_at, updated_at
+      ) VALUES (?, 'tenant_local', 'user_local', 'bestbuy', ?, '0.47.0',
+        '{"addControl":{"mode":"disabled_state","selectors":["button[data-testid=''pdp-add-to-cart-control'']"]}}',
+        ?, 'quarantined', '', 0, 'privacy_bounded_repair_miner', '', '', '',
+        '2026-09-24T12:00:00.000Z', '', 0, '',
+        '2026-08-25T12:00:00.000Z', '2026-08-25T12:00:00.000Z')`;
+      upgraded.run(candidateInsert, "observer_recipe_upgrade_41_a", "bestbuy-repair-upgrade-a", "a".repeat(64));
+      assert.throws(
+        () => upgraded.run(candidateInsert, "observer_recipe_upgrade_41_b", "bestbuy-repair-upgrade-b", "a".repeat(64)),
+        /UNIQUE constraint failed/
+      );
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM retailer_adapter_qualifications"
+      )?.count, qualificationCount);
+      assert.deepEqual(upgraded.all("PRAGMA foreign_key_check"), []);
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("catalog identity history is immutable during normal operation and purges with its tenant", () => {
   const db = new YoinkDatabase();
   const tenantId = "tenant_identity_lifecycle";

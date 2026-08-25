@@ -23,6 +23,12 @@ export const BACKGROUND_TASK_DEFINITIONS = Object.freeze({
     intervalSeconds: 60,
     maximumAttempts: 5
   }),
+  observer_recipe_candidate_evaluation: Object.freeze({
+    label: "Observer repair candidate evaluation",
+    description: "Compile mature privacy-bounded repair landmarks into unsigned quarantined observer-only candidates for maintainer review.",
+    intervalSeconds: 60,
+    maximumAttempts: 5
+  }),
   observer_recipe_witness_refresh: Object.freeze({
     label: "Observer trust witness refresh",
     description: "Refresh independently signed observer-recipe transparency receipts before they become stale.",

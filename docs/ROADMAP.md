@@ -1,6 +1,40 @@
 # Yoink roadmap
 
-## Shipped through 0.46.0
+## Shipped through 0.47.0
+
+### Durable observer-repair candidate evaluation (0.47.0)
+
+- Migration 41 adds a seventh closed background task family. Every 60 seconds
+  it evaluates the existing privacy-bounded repair queue outside request
+  handling, with a 2,000-group read bound and at most 25 candidate decisions
+  per run
+- Only an open packaged-observer Add-control selector miss whose exact derived
+  selector has at least three distinct paired devices and two exact SKUs may
+  advance. This is a local noise threshold, not independent-account community
+  quorum or a correctness oracle
+- The signing-free worker repository can create only one through five fixed
+  allowlisted selectors for the read-only `addControl` field in
+  `disabled_state` mode. Code, XPath, text, HTML, IDs/classes, URLs, form or
+  product values, sensitive vocabulary, navigation, events, and mutation are
+  structurally rejected
+- Generated candidates are unsigned, 30-day, `quarantined`, and carry no trust
+  generation or rollback target. Exact device/SKU identities are not copied
+  into the candidate or audit receipt. Deterministic tenant/user/layout/
+  selector/package fingerprints and a partial unique index make replay
+  idempotent
+- The generated provenance and version namespace are reserved from ordinary
+  proposals. Automatic processing cannot promote, sign, trial, distribute,
+  renew, or execute a candidate. Existing protected maintainer change control,
+  rooted signing, measured shadow/canary gates, kill switch, rollback, and
+  hosted witness enforcement remain mandatory
+- Admin repair cards show collection versus bounded candidate-evaluation readiness;
+  registry cards label worker-generated unsigned candidates; Operations shows
+  the schedule/results/retry path. Health reports durable evaluation while
+  explicitly reporting generated execution and auto-promotion as false
+- Repository, durable-handler, API, admin, migration, idempotency, privacy,
+  reserved-namespace, and signing-key-isolation tests prove the boundary. No
+  observation, qualification, action, spend, checkout, drawing, or retailer
+  execution authority changes
 
 ### Server-authoritative guided plan preflight (0.46.0)
 
@@ -1040,9 +1074,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.46.0
+## Architecture assessment after 0.47.0
 
-Yoink 0.46.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.47.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1058,7 +1092,7 @@ or more autonomous behavior.
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
-| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; a narrow stable-attribute landmark can derive a tenant-scoped non-executable maintainer suggestion; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Landmarks cover only unique Add-control selector misses and cannot synthesize a complete recipe; local device/SKU evidence is not a public community quorum or independent oracle; canary is not cohort deployment; recipe evaluation is not a worker handler; the independent witness service and public consistency monitor are not deployed by this repository |
+| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; a narrow stable-attribute landmark can derive a tenant-scoped non-executable maintainer suggestion; a signing-free seventh worker family may now compile thresholded Add-control landmarks into idempotent unsigned quarantine candidates only; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Landmarks cover only unique Add-control selector misses and cannot synthesize the other four read-only fields; local device/SKU evidence is not a public community quorum or independent oracle; no candidate is auto-promoted or independently validated; canary is not cohort deployment; the independent witness service and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
 | Automatic purchasing | Reviewed plans can directly request guarded quantity-one attempts without a strategy and now expose an authoritative armed/blocked explanation; live legacy multi-unit strategy adds and all unqualified-lane matches fail over to notification before reservation; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 | Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
@@ -1231,7 +1265,9 @@ adds the sixth durable task for external observer-witness receipt refresh and
 keeps the standalone worker verification-only with respect to observer trust
 keys. Version 0.41 binds new standalone work to the exact API-owned package,
 task-registry, and public-witness fingerprint with append-only expectation
-history and fail-closed health. Neither release turns the SQLite process into a
+history and fail-closed health. Version 0.47 adds the seventh closed task for
+signing-free observer-repair candidate quarantine; signing, promotion, trials,
+and distribution deliberately stay outside that worker. None of these releases turns the SQLite process into a
 production fleet or proves signed artifact/workload identity.
 
 - Implement the async PostgreSQL repository family and migrations/importer with
@@ -1345,16 +1381,18 @@ and cannot directly authorize mutation.
 0.37.0 ships the first deliberately narrow miner: on an unblocked unique
 Add-control selector miss it can retain one of five allowlisted stable
 attributes and derive a non-executable, tenant-scoped maintainer suggestion.
+Version 0.47 moves that exact local threshold into a durable signing-free
+compiler that may create only an unsigned Add-control quarantine candidate.
 It does not mine the other read-only fields, aggregate independent accounts,
-compile recipes, or promote anything automatically. The broader phase remains
-open:
+validate correctness, or promote/sign/trial/distribute anything automatically.
+The broader phase remains open:
 
-- Add a packaged candidate miner for the five fixed read-only fields. It may
+- Extend the packaged candidate miner to the other four fixed read-only fields. It may
   emit only stability-checked, k-anonymous selector candidates and bounded
   structural tokens from a packaged exact-SKU/offer root; editable, form,
   account, checkout, and sensitive elements are structurally excluded
-- Cluster sanitized failures and candidates server-side, compile bounded recipe
-  candidates, and validate with the strongest available independent oracle:
+- Extend the shipped Add-control clustering/compiler to complete bounded recipe
+  candidates, then validate with the strongest available independent oracle:
   maintainer-redacted fixtures, a second packaged/structured reader, explicit
   user confirmation of normalized fields, then reputable multi-device agreement
 - Deduplicate trials by latest independent contributor/device and require
@@ -1587,9 +1625,11 @@ and [optional permission guidance](https://developer.chrome.com/docs/extensions/
 5. **Shadow-validation and witness seam implemented:** manually proposed signed
    declarative selectors, trial counts, lifecycle labels, kill switch,
    rollback, bundled fallback, package-rooted signing, and a deployment-pinned
-   external witness gate are present. Cohorted canaries, independent observer
-   oracles, autonomous candidate generation, external witness operation, and
-   automatic correction remain open.
+   external witness gate are present. A durable worker can generate only an
+   unsigned quarantined Add-control candidate from the narrow local threshold.
+   Other fields, independent-account evidence/oracles, cohort canaries,
+   external witness operation, automatic validation, and automatic correction
+   remain open.
 6. **Production blocked:** trusted-read-only delivery still requires a deployed
    independent witness/monitor, production IdP and key management, real staged
    canaries, privacy/security review, and Chrome Web Store approval. Mutation

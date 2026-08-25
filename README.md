@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.46.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.47.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,22 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.47.0 gives privacy-bounded observer correction its own durable worker
+family. When one open Add-control selector miss independently reaches the
+existing three-device/two-exact-SKU local threshold, the worker can compile its
+allowlisted stable attributes into one unsigned, quarantined observer-only
+candidate. Repeated runs reuse the same scoped fingerprint, and migration 41
+preserves existing worker history while adding the seventh closed task kind.
+
+Automatic processing stops at quarantine. Generated candidates contain only
+the fixed read-only `addControl` field, carry no signature or trust generation,
+expire after 30 days, and cannot distribute or execute. The standalone worker
+has no recipe signing-key dependency. Explicit protected maintainer promotion,
+rooted signing, measured shadow/canary trials, rollback/kill-switch behavior,
+and the hosted witness gate remain mandatory; mutation runners never consume
+remote recipes. See
+[durable observer-repair candidate evaluation](docs/OBSERVER_REPAIR_CANDIDATE_EVALUATION.md).
 
 Version 0.46.0 makes guided purchase setup server-authoritative before it
 writes. As the user changes an exact item, quantity, price limits, delivery,
@@ -184,9 +200,10 @@ The repair queue aggregates matching landmarks by exact layout, distinct
 paired device, and distinct retailer SKU, then derives a non-executable
 read-only selector suggestion for maintainers. Three devices and two exact SKUs
 mean only **maintainer review ready**—never trusted, published, or safe to run.
-Suggestions cannot enter the recipe registry automatically and still require
-reproduction, quarantine, trials, signing, rollback protection, and the hosted
-witness gate. This is a tenant-scoped correction aid, not the future
+At 0.37 suggestions could not enter the registry. Version 0.47 may now compile
+that thresholded evidence into an unsigned quarantine candidate, but it cannot
+promote, sign, trial, distribute, or execute it automatically. This is a
+tenant-scoped correction aid, not the future
 cross-account community trust plane, and it widens no retailer action. See
 [adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md).
 
@@ -852,5 +869,5 @@ signal, source, attribution, notification, adapter, service-worker recovery,
 and API tests.
 
 See [Architecture](docs/ARCHITECTURE.md), [Purchase-plan preflight](docs/PURCHASE_PLAN_PREFLIGHT.md), [Purchase automation readiness](docs/PURCHASE_AUTOMATION_READINESS.md), [Hosted deployment
-contract](docs/HOSTED_DEPLOYMENT.md), [Worker deployment attestation](docs/WORKER_DEPLOYMENT_ATTESTATION.md), [Observer witness refresh](docs/OBSERVER_WITNESS_REFRESH.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
+contract](docs/HOSTED_DEPLOYMENT.md), [Worker deployment attestation](docs/WORKER_DEPLOYMENT_ATTESTATION.md), [Observer witness refresh](docs/OBSERVER_WITNESS_REFRESH.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Durable repair candidate evaluation](docs/OBSERVER_REPAIR_CANDIDATE_EVALUATION.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
 migration](docs/CARTCOLLECT_MIGRATION.md), and [Roadmap](docs/ROADMAP.md).

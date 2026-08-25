@@ -159,6 +159,13 @@ test("the recipe schema rejects code, XPath, credential selectors, mutation sele
       ...proposal(),
       expiresAt: new Date(NOW + 31 * 24 * 60 * 60_000).toISOString()
     }, NOW + 2_000), /30 days/);
+    assert.throws(() => repository.propose({
+      ...proposal(),
+      provenanceCode: "privacy_bounded_repair_miner"
+    }, NOW + 2_000), /provenance/);
+    assert.throws(() => repository.propose({
+      ...proposal("amazon-repair-aaaaaaaaaaaa")
+    }, NOW + 2_000), /version/);
     assert.equal(repository.list().length, 0);
   } finally {
     db.close();

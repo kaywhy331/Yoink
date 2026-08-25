@@ -1,0 +1,72 @@
+import { AdapterDiagnosticRepository } from "../../database/src/adapter-diagnostic-repository.js";
+import type { YoinkDatabase } from "../../database/src/database.js";
+import {
+  isGeneratedObserverRepairSelector,
+  ObserverRepairCandidateRepository
+} from "../../database/src/observer-repair-candidate-repository.js";
+import type { BackgroundTaskResult } from "../../domain/src/background-task.js";
+
+const MAX_REPAIR_GROUPS = 2_000;
+const MAX_GENERATED_CANDIDATES_PER_RUN = 25;
+const GENERATED_CANDIDATE_LIFETIME_MS = 30 * 24 * 60 * 60_000;
+
+export class ObserverRecipeCandidateEvaluationService {
+  private readonly diagnostics: AdapterDiagnosticRepository;
+  private readonly candidates: ObserverRepairCandidateRepository;
+
+  constructor(db: YoinkDatabase) {
+    this.diagnostics = new AdapterDiagnosticRepository(db);
+    this.candidates = new ObserverRepairCandidateRepository(db);
+  }
+
+  execute(runtimeVersion: string, now = Date.now()): BackgroundTaskResult {
+    const groups = this.diagnostics.listRepairQueue(MAX_REPAIR_GROUPS);
+    let unsupportedMatureSelectors = 0;
+    const mature = groups.flatMap((group) => {
+      if (group.status !== "open" || group.operation !== "observe") return [];
+      const ready = group.repairSuggestions
+        .filter((suggestion) => suggestion.reviewState === "maintainer_ready" && suggestion.executable === false);
+      const suggestions = ready
+        .filter((suggestion) => isGeneratedObserverRepairSelector(suggestion.selector))
+        .sort((left, right) => left.selector.localeCompare(right.selector));
+      unsupportedMatureSelectors += ready.length - suggestions.length;
+      return suggestions.length ? [{ group, suggestions }] : [];
+    });
+    let candidatesCreated = 0;
+    let candidatesReused = 0;
+    let expiredCandidates = 0;
+    let reviewedCandidates = 0;
+    let selectorsEvaluated = 0;
+    for (const { group, suggestions } of mature.slice(0, MAX_GENERATED_CANDIDATES_PER_RUN)) {
+      const selectors = suggestions.map((suggestion) => suggestion.selector);
+      selectorsEvaluated += selectors.length;
+      const ensured = this.candidates.ensure({
+        retailerId: group.retailerId,
+        layoutFingerprint: group.layoutFingerprint,
+        selectors,
+        minimumExtensionVersion: runtimeVersion,
+        occurrenceCount: suggestions.reduce((sum, suggestion) => sum + suggestion.occurrenceCount, 0),
+        minimumDistinctDeviceCount: Math.min(...suggestions.map((suggestion) => suggestion.distinctDeviceCount)),
+        minimumDistinctSkuCount: Math.min(...suggestions.map((suggestion) => suggestion.distinctSkuCount))
+      }, now);
+      if (ensured.created) candidatesCreated += 1;
+      else candidatesReused += 1;
+      if (new Date(ensured.expiresAt).getTime() <= now) expiredCandidates += 1;
+      if (ensured.lifecycleState !== "quarantined") reviewedCandidates += 1;
+    }
+    return {
+      repairGroupsEvaluated: groups.length,
+      matureRepairGroups: mature.length,
+      unsupportedMatureSelectors,
+      selectorsEvaluated,
+      candidatesCreated,
+      candidatesReused,
+      candidatesDeferred: Math.max(0, mature.length - MAX_GENERATED_CANDIDATES_PER_RUN),
+      expiredCandidates,
+      reviewedCandidates,
+      generatedCandidateLifetimeDays: GENERATED_CANDIDATE_LIFETIME_MS / (24 * 60 * 60_000),
+      mutationAuthority: false,
+      generatedCandidatesExecutable: false
+    };
+  }
+}

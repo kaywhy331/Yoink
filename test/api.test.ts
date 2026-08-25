@@ -62,7 +62,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /currentContributorVoteCount/);
     assert.match(adminScript, /Price quorum pending/);
     assert.match(adminScript, /Observed range/);
-    assert.match(adminScript, /Maintainer review ready/);
+    assert.match(adminScript, /Ready for candidate evaluation/);
+    assert.match(adminScript, /worker-generated candidate/);
+    assert.match(adminPageBody, /may enter recipe quarantine automatically/);
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
@@ -80,6 +82,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
+      durableObserverRepairCandidateEvaluation: true,
+      generatedObserverRepairCandidatesExecutable: false,
+      generatedObserverRepairCandidatesAutoPromoted: false,
       durableObserverRecipeWitnessRefresh: true,
       durableOperatorAlertConnectorDispatch: true,
       governedOperatorAlertConnectorReplay: true,
@@ -245,6 +250,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.backgroundWorkOutsideRequestHandling, true);
     assert.equal(snapshot.capabilities.durableSignalIngress, true);
     assert.equal(snapshot.capabilities.signalEvaluationOutsideDeviceRequest, true);
+    assert.equal(snapshot.capabilities.durableObserverRepairCandidateEvaluation, true);
+    assert.equal(snapshot.capabilities.generatedObserverRepairCandidatesExecutable, false);
+    assert.equal(snapshot.capabilities.generatedObserverRepairCandidatesAutoPromoted, false);
     assert.equal(snapshot.capabilities.durableObserverRecipeWitnessRefresh, true);
     assert.equal(snapshot.capabilities.attestedBackgroundWorkerDeployment, true);
     assert.equal(snapshot.capabilities.observerRecipeWitnessRefreshConfigured, false);

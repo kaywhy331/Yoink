@@ -2819,5 +2819,134 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       )
       BEGIN SELECT RAISE(ABORT, 'operator alert connector delivery transition is invalid'); END;
     `
+  },
+  {
+    version: 41,
+    name: "durable_observer_repair_candidate_evaluation",
+    sql: `
+      PRAGMA defer_foreign_keys = ON;
+
+      CREATE TABLE background_task_schedules_v41 (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        subject_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        task_kind TEXT NOT NULL CHECK (task_kind IN (
+          'execution_recovery', 'notification_recovery',
+          'hosted_delivery_recovery', 'adapter_alert_reconciliation',
+          'observer_recipe_candidate_evaluation',
+          'observer_recipe_witness_refresh', 'operational_telemetry_retention'
+        )),
+        display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 120),
+        description TEXT NOT NULL CHECK (length(description) BETWEEN 1 AND 500),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        interval_seconds INTEGER NOT NULL CHECK (interval_seconds BETWEEN 15 AND 604800),
+        next_run_at TEXT NOT NULL,
+        last_enqueued_at TEXT NOT NULL DEFAULT '',
+        created_by_actor_id TEXT NOT NULL,
+        updated_by_actor_id TEXT NOT NULL,
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_configuration'
+          CHECK (privacy_classification = 'operational_configuration'),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(tenant_id, subject_user_id, task_kind)
+      ) STRICT;
+
+      CREATE TABLE background_tasks_v41 (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        subject_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        schedule_id TEXT REFERENCES background_task_schedules_v41(id) ON DELETE SET NULL,
+        task_kind TEXT NOT NULL CHECK (task_kind IN (
+          'execution_recovery', 'notification_recovery',
+          'hosted_delivery_recovery', 'adapter_alert_reconciliation',
+          'observer_recipe_candidate_evaluation',
+          'observer_recipe_witness_refresh', 'operational_telemetry_retention'
+        )),
+        dedupe_key TEXT NOT NULL CHECK (length(dedupe_key) BETWEEN 1 AND 200),
+        state TEXT NOT NULL CHECK (state IN (
+          'pending', 'leased', 'retry_wait', 'succeeded', 'dead_letter', 'cancelled'
+        )),
+        priority INTEGER NOT NULL DEFAULT 50 CHECK (priority BETWEEN 0 AND 100),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 20),
+        maximum_attempts INTEGER NOT NULL CHECK (maximum_attempts BETWEEN 1 AND 20),
+        scheduled_for TEXT NOT NULL,
+        lease_owner_id TEXT NOT NULL DEFAULT '',
+        lease_capability_hash TEXT NOT NULL DEFAULT '',
+        lease_expires_at TEXT NOT NULL DEFAULT '',
+        last_error_code TEXT NOT NULL DEFAULT '' CHECK (length(last_error_code) <= 80),
+        result_json TEXT NOT NULL DEFAULT '{}'
+          CHECK (json_valid(result_json) AND length(result_json) <= 4000),
+        completed_at TEXT NOT NULL DEFAULT '',
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE background_task_events_v41 (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        subject_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL REFERENCES background_tasks_v41(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK (sequence >= 1),
+        event_type TEXT NOT NULL CHECK (event_type IN (
+          'scheduled', 'leased', 'succeeded', 'retry_scheduled',
+          'dead_lettered', 'manually_retried', 'cancelled'
+        )),
+        attempt INTEGER NOT NULL CHECK (attempt BETWEEN 0 AND 20),
+        reason_code TEXT NOT NULL CHECK (length(reason_code) BETWEEN 1 AND 80),
+        worker_id TEXT NOT NULL DEFAULT '' CHECK (length(worker_id) <= 120),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        created_at TEXT NOT NULL,
+        UNIQUE(task_id, sequence)
+      ) STRICT;
+
+      INSERT INTO background_task_schedules_v41 SELECT * FROM background_task_schedules;
+      INSERT INTO background_tasks_v41 SELECT * FROM background_tasks;
+      INSERT INTO background_task_events_v41 SELECT * FROM background_task_events;
+
+      DROP TABLE background_task_events;
+      DROP TABLE background_tasks;
+      DROP TABLE background_task_schedules;
+
+      ALTER TABLE background_task_schedules_v41 RENAME TO background_task_schedules;
+      ALTER TABLE background_tasks_v41 RENAME TO background_tasks;
+      ALTER TABLE background_task_events_v41 RENAME TO background_task_events;
+
+      CREATE INDEX background_task_schedules_due_idx
+        ON background_task_schedules(tenant_id, subject_user_id, enabled, next_run_at, id);
+      CREATE UNIQUE INDEX background_tasks_active_dedupe_idx
+        ON background_tasks(tenant_id, subject_user_id, task_kind, dedupe_key)
+        WHERE state IN ('pending', 'leased', 'retry_wait');
+      CREATE INDEX background_tasks_queue_idx
+        ON background_tasks(tenant_id, subject_user_id, state, scheduled_for, priority DESC, created_at, id);
+      CREATE INDEX background_tasks_history_idx
+        ON background_tasks(tenant_id, subject_user_id, created_at DESC, id DESC);
+      CREATE INDEX background_task_events_recent_idx
+        ON background_task_events(tenant_id, subject_user_id, created_at DESC, id DESC);
+
+      CREATE TRIGGER background_task_events_no_update
+      BEFORE UPDATE ON background_task_events
+      BEGIN SELECT RAISE(ABORT, 'background task events are append-only'); END;
+      CREATE TRIGGER background_task_events_no_delete
+      BEFORE DELETE ON background_task_events
+      WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.subject_user_id)
+        AND EXISTS (SELECT 1 FROM background_tasks WHERE id = OLD.task_id)
+      BEGIN SELECT RAISE(ABORT, 'background task events are append-only'); END;
+      CREATE TRIGGER background_tasks_bounded_delete
+      BEFORE DELETE ON background_tasks
+      WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.subject_user_id)
+        AND NOT (
+          OLD.state IN ('succeeded', 'cancelled')
+          AND OLD.completed_at <> ''
+          AND OLD.completed_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')
+        )
+      BEGIN SELECT RAISE(ABORT, 'background tasks are retained until bounded cleanup'); END;
+
+      CREATE UNIQUE INDEX observer_recipe_generated_fingerprint_unique
+        ON observer_recipe_candidates(tenant_id, recipe_fingerprint)
+        WHERE provenance_code = 'privacy_bounded_repair_miner';
+    `
   }
 ]);

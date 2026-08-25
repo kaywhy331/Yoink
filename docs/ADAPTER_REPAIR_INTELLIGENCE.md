@@ -7,7 +7,9 @@ the companion may report a stable attribute landmark. The server can then show
 a maintainer the corresponding CSS selector candidate without receiving page
 HTML or making that candidate executable.
 
-This is an investigation aid, not autonomous recipe publication. It does not
+This began as an investigation aid and remains outside autonomous recipe
+publication. Version 0.47 may compile mature evidence into an unsigned
+quarantine candidate, but no automated path may promote or distribute it. It does not
 change a retailer observation, qualify an add lane, click a control, or bypass
 the observer-recipe quarantine, trial, signing, rollback, and independent
 witness gates.
@@ -81,21 +83,30 @@ before treating crowd evidence as global.
 
 The suggestion appears in **Admin → Retailers → Adapter repair queue**. A
 maintainer may use it to reproduce the layout and update a packaged observer or
-manually author a read-only observer recipe. Yoink never copies the suggestion
-into a recipe automatically.
+manually author a read-only observer recipe. Starting in 0.47, the dedicated
+60-second worker may copy only a thresholded allowlisted Add-control selector
+into an unsigned quarantined candidate. It uses a deterministic scoped
+fingerprint, creates no duplicate on replay, and copies no device ID or SKU into
+the candidate or its audit receipt.
 
-Any recipe still begins in quarantine and must pass the existing shadow and
+Automatic processing ends there. Any recipe still begins in quarantine and
+requires explicit protected maintainer promotion, then must pass the existing shadow and
 canary evidence requirements before trusted-read-only promotion. It must be
 signed under package-rooted trust, retain rollback/kill-switch behavior, and—
 in hosted mode—match a fresh independently witnessed transparency checkpoint.
 Remote recipes remain permanently unable to authorize retailer mutation.
 
 Health advertises `privacyBoundedRepairLandmarks=true` and
-`nonExecutableRepairSuggestions=true`. These flags describe diagnostic and
-admin capabilities only; they do not indicate automatic correction or
-production community readiness.
+`nonExecutableRepairSuggestions=true`. Version 0.47 additionally advertises
+`durableObserverRepairCandidateEvaluation=true` while keeping
+`generatedObserverRepairCandidatesExecutable=false` and
+`generatedObserverRepairCandidatesAutoPromoted=false`. These flags do not
+indicate production community readiness.
 
 No schema migration was required for 0.37 because the normalized optional
 landmarks use the existing bounded diagnostic JSON column. Migration 35 was
 current for that release; 0.38 later adds migration 36 for device credential
-rotation without changing this evidence format.
+rotation without changing this evidence format. Migration 41 adds only the
+seventh closed worker task and generated-candidate fingerprint uniqueness; it
+does not change the diagnostic format or any retailer authority. See
+[durable observer-repair candidate evaluation](OBSERVER_REPAIR_CANDIDATE_EVALUATION.md).

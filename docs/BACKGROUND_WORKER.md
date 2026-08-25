@@ -1,10 +1,10 @@
 # Background worker operations
 
-Yoink 0.44 retains two safe SQLite worker layouts. Embedded mode is the
+Yoink 0.47 retains two safe SQLite worker layouts. Embedded mode is the
 zero-configuration local default. External mode runs the same closed handler
-registry in a separately supervised process. The registry contains six closed
-task families, including durable TrackaLacker evaluation and observer-recipe
-witness receipt refresh. Neither mode can execute retailer mutation, checkout,
+registry in a separately supervised process. The registry contains seven closed
+task families, including durable TrackaLacker evaluation, observer-repair
+candidate quarantine, and observer-recipe witness receipt refresh. Neither mode can execute retailer mutation, checkout,
 payment, drawing entry, or order submission.
 
 ## Choose a mode
@@ -129,6 +129,22 @@ evaluation correction. The reset, audit/outbox receipt, and worker wake commit
 atomically. See [durable signal ingress](SIGNAL_INGRESS.md) for the complete
 contract and failure semantics.
 
+## Observer repair candidate evaluation
+
+The **Observer repair candidate evaluation** schedule runs every 60 seconds. It
+examines only current privacy-bounded repair groups and can compile at most 25
+thresholded Add-control selector sets per run. Each set must already have three
+distinct paired devices and two exact SKUs in the same user-scoped repair
+ledger.
+
+The signing-free worker repository can insert only one fixed `addControl`
+`disabled_state` field into an unsigned `quarantined` recipe row. Scoped
+deterministic fingerprints make retry idempotent. Exact SKU and device IDs are
+not copied into the candidate or audit receipt. The worker cannot load recipe
+signing keys, promote a candidate, create trials, or distribute an envelope;
+remote recipes remain structurally unavailable to mutation runners. See
+[durable observer-repair candidate evaluation](OBSERVER_REPAIR_CANDIDATE_EVALUATION.md).
+
 ## Observer-recipe witness refresh
 
 The **Observer trust witness refresh** schedule runs every 60 seconds. It
@@ -164,6 +180,9 @@ recovery, and key-separation requirements.
   without exposing its fingerprint inputs;
 - `durableSignalIngress` and `signalEvaluationOutsideDeviceRequest` remain
   `true` for the packaged TrackaLacker device path;
+- `durableObserverRepairCandidateEvaluation` is `true`, while
+  `generatedObserverRepairCandidatesExecutable` and
+  `generatedObserverRepairCandidatesAutoPromoted` remain `false`;
 - `durableObserverRecipeWitnessRefresh` is `true`, while
   `observerRecipeWitnessRefreshConfigured` reports whether this process has a
   complete public witness configuration;

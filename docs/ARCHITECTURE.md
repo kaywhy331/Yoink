@@ -441,7 +441,9 @@ The packaged handler registry initially contained five idempotent maintenance
 families: action/spend recovery, notification lease recovery, hosted
 inbox/outbox lease recovery, sanitized adapter-alert reconciliation, and
 operational telemetry retention. Version 0.40 adds a sixth closed family for
-independent observer-recipe witness receipt refresh. Results accept only a
+independent observer-recipe witness receipt refresh. Version 0.47 adds a
+seventh closed family that can turn only thresholded privacy-bounded
+Add-control landmarks into unsigned quarantined observer candidates. Results accept only a
 small primitive map and reject credential, account, URL, product, address, and
 payment-shaped fields;
 exception text is never persisted. The local server starts this runtime after
@@ -514,9 +516,11 @@ diagnostic, and the server independently validates it against layout counts and
 block state. The server alone derives a quoted read-only selector for the admin
 projection. Matching open failures aggregate distinct paired devices and exact
 retailer SKUs; three devices and two SKUs mark a suggestion ready for
-maintainer review, never execution. Suggestions cannot write the observer
-registry or bypass quarantine, trials, signed package-rooted trust, rollback,
-kill switch, or external witness enforcement. Because aggregation remains
+maintainer review, never execution. At 0.47 a signing-free durable worker may
+write that exact bounded selector into an unsigned quarantine candidate with a
+deterministic scoped fingerprint. It cannot promote, sign, trial, distribute,
+or execute the candidate, and it cannot bypass signed package-rooted trust,
+rollback, kill switch, or external witness enforcement. Because aggregation remains
 tenant/user scoped, it is not yet a cross-account community quorum or an
 independent correctness oracle.
 
@@ -736,6 +740,17 @@ opening the mission transaction. The fingerprint is a consistency receipt, not
 an action capability, and is never persisted in purchase audit/outbox data.
 Contract v1 remains a backward-compatible input; the first-party UI requires
 v2 and clears user acknowledgement after every material edit.
+
+Yoink 0.47 turns only the existing privacy-bounded repair landmark threshold
+into a durable compiler boundary. Migration 41 adds a seventh closed task kind.
+Under the worker's exact tenant/user scope, it can derive a deterministic
+version and fingerprint for one `addControl` `disabled_state` selector set and
+insert an unsigned, 30-day `quarantined` recipe candidate. Its repository has
+no trust-authority or signing dependency, copies no device/SKU identity into
+the candidate receipt, and reserves its provenance/version namespace from the
+ordinary proposal API. Replays reuse the existing row. Promotion, signing,
+trial collection, witness-gated distribution, and every mutation boundary stay
+in their existing explicit trust domains.
 
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted
