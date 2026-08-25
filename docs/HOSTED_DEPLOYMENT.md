@@ -354,10 +354,13 @@ controlled cutover. Version 0.59 proves the lease algorithm across three native
 PostgreSQL 16 backend sessions. Version 0.60 separately qualifies an empty
 server-owned tenant-principal registry, zero-argument binder, read-only adapter,
 and restrictive policies across all 82 tenant tables; native fixture principals
-prove isolation, but no production login or mapping is provisioned. Neither
-release deploys that runtime. Until it is provisioned and verified, SQLite is
-the source of truth and hosted boundary mode is suitable for integration/
-staging—not a claim of completed production hosting.
+prove isolation. Version 0.61 separately qualifies an inactive four-table queue
+writer with 11 exact operations, no delete access, four restrictive policies,
+and native two-principal write isolation. No production login, mapping,
+membership, repository, or handler is provisioned. None of these releases
+deploys that runtime. Until it is provisioned and verified, SQLite is the source
+of truth and hosted boundary mode is suitable for integration/staging—not a
+claim of completed production hosting.
 
 Do not use dual writes as a shortcut. The transactional inbox/outbox protocol is
 the supported seam for migration and reconciliation.

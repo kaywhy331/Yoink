@@ -9,8 +9,10 @@ worker-store port. Yoink 0.58 adds five inactive exact read-role templates and
 live-catalog drift verification. Yoink 0.59 adds a native PostgreSQL 16
 three-session worker-lease contention proof. Yoink 0.60 adds an inert
 server-bound, read-only tenant-session qualification with an empty principal
-registry and restrictive policies over all 82 tenant tables. The runtime API
-and worker remain SQLite-only.
+registry and restrictive policies over all 82 tenant tables. Yoink 0.61 adds an
+inactive server-bound queue writer with 11 exact operations on four tables,
+four restrictive policies, no delete access, and native two-principal write
+isolation. The runtime API and worker remain SQLite-only.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.

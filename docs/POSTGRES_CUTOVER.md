@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.60 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.61 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -127,10 +127,11 @@ The test suite proves default denial, exact tenant selection, inherited and
 mixed tenant filtering, cross-role denial, write denial, tamper detection, and
 an immutable role receipt against real PostgreSQL semantics. It deliberately
 does not create a login, grant membership, bind a tenant setting to an
-authenticated workload, define write roles, or connect these roles to the API
-or worker. Version 0.60's separate tenant-session qualification contract binds
-the tenant role to a server-owned principal mapping; production identity and
-write transactions remain separate gates.
+authenticated workload, or connect these roles to the API or worker. Version
+0.60's separate tenant-session contract binds the tenant role to a server-owned
+principal mapping. Version 0.61's separate queue-writer contract qualifies only
+four queue tables; production identity, repositories, and runtime activation
+remain separate gates.
 
 Plan the exact role namespace without a database connection:
 
@@ -224,6 +225,69 @@ production provisioning CLI in this release. A future deployment must bind
 cryptographically authenticated application identities to narrowly scoped
 database logins through a separately reviewed lifecycle before this adapter can
 become a runtime repository boundary.
+
+## Server-bound tenant queue-write qualification seam
+
+Version 0.61 derives one additional queue-writer role from the exact cutover,
+read-role, and tenant-session manifests. It is `NOLOGIN`, `NOINHERIT`,
+`NOSUPERUSER`, `NOCREATEROLE`, `NOCREATEDB`, `NOREPLICATION`, and
+`NOBYPASSRLS`. Its complete table surface is:
+
+| Table | Exact operations |
+| --- | --- |
+| `background_task_schedules` | `SELECT`, `INSERT`, `UPDATE` |
+| `background_tasks` | `SELECT`, `INSERT`, `UPDATE` |
+| `background_task_events` | `SELECT`, `INSERT` |
+| `background_worker_heartbeats` | `SELECT`, `INSERT`, `UPDATE` |
+
+The role has 11 operation grants in total. It has no `DELETE`, `TRUNCATE`,
+`REFERENCES`, `TRIGGER`, sequence, schema-creation, object-ownership,
+receipt-table, or other application-table access. The packaged checks and
+transition triggers remain responsible for valid queue states; task events are
+append-only at this boundary.
+
+Each of the four tables receives an `AS RESTRICTIVE FOR ALL` policy using the
+same zero-argument server-owned tenant scope as the read boundary. The
+`NodePostgresTenantQueueWriteDatabase` opens a `READ COMMITTED READ WRITE`
+transaction, assumes only this role, invokes the binder, and refuses an exact
+tenant/user mismatch before exposing a query session. The verifier requires the
+principal registry and role memberships to remain empty, checks effective
+privileges across every application relation, and seals exact grants, binder/
+scope function definitions, and policy expressions in an immutable receipt.
+
+The native PostgreSQL 16 suite temporarily maps two logins and proves concurrent
+tenant-isolated writes. It also proves denial of cross-tenant insert, delete,
+task-event update, unrelated-table select, mismatched expected identity, and an
+unmapped login. Those fixtures and memberships are removed before final receipt
+verification, and a deliberately weakened policy must invalidate the receipt.
+
+Plan the exact boundary without a database connection:
+
+```bash
+npm run postgres:writes -- plan \
+  yoink_cutover_qualification yoink_q_061 yoink_session_q_061 yoink_queue_q_061
+```
+
+After the current cutover, read-role, and tenant-session receipts are verified,
+apply once with the qualification/control role and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_TENANT_QUEUE_WRITE_QUALIFICATION_ACK=server-bound-queue-write-qualification \
+  npm run postgres:writes -- apply \
+  yoink_cutover_qualification yoink_q_061 yoink_session_q_061 yoink_queue_q_061
+```
+
+Then independently re-inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:writes -- verify \
+  yoink_cutover_qualification yoink_q_061 yoink_session_q_061 yoink_queue_q_061
+```
+
+Apply cannot create a login, role membership, or principal mapping. It does not
+port a handler or repository and does not configure the API or worker to use
+PostgreSQL. The four-table boundary is qualification evidence only; SQLite
+remains authoritative.
 
 ## Requirements
 
@@ -329,10 +393,10 @@ confirms that the operator intentionally requested an offline, one-shot load.
 The admin Operations projection lists these as required, not complete:
 
 - PostgreSQL implementations for task handlers and every API repository;
-- production identity-to-login provisioning and restricted write roles, plus
+- production identity-to-login provisioning, integration of the inactive
+  server-bound queue writer, remaining least-privilege writer families, and
   governed semantics for mixed source-less offers and the unresolved incident
-  table; the five read-only group-role templates and server-bound tenant-session
-  reader remain inactive;
+  table; all qualified roles remain inactive;
 - deployed multi-process worker isolation, task-handler idempotent replay,
   sustained load, connection-failure, failover, and outage drills;
 - encrypted backups, PITR, restore/reconcile drills, and rollback evidence;

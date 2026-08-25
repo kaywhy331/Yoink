@@ -1,6 +1,38 @@
 # Yoink roadmap
 
-## Shipped through 0.60.0
+## Shipped through 0.61.0
+
+### Server-bound PostgreSQL tenant queue-write qualification (0.61.0)
+
+- A deterministic contract derives one fresh `NOLOGIN`, `NOINHERIT`,
+  `NOBYPASSRLS` tenant queue-writer role from the exact cutover, read-role, and
+  tenant-session manifests. It receives 11 exact `SELECT`/`INSERT`/`UPDATE`
+  grants on schedules, tasks, append-only task events, and worker heartbeats
+- `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, sequence, ownership,
+  schema-creation, receipt, unrelated-table, login, membership, and runtime
+  authority remain absent. Task events deliberately have no update grant
+- Four `AS RESTRICTIVE FOR ALL` policies intersect reads and writes with the
+  zero-argument, server-owned tenant/user binding from 0.60. The registry must
+  contain zero active principals when the boundary is applied or verified
+- A production-driver adapter opens `READ COMMITTED READ WRITE` transactions,
+  assumes only the bounded role, calls the server binder, and compares its
+  result with the authenticated principal expected by the caller before
+  exposing the query session
+- Native PostgreSQL 16 tests use two simultaneous mapped writers and one
+  unmapped writer to prove tenant-isolated insert/read behavior and explicit
+  denial of cross-tenant insertion, deletion, task-event update, unrelated-
+  table read, mismatched identity, and unmapped identity. Transaction scope is
+  reset, fixture memberships are removed, and the disposable cluster is erased
+- Exact effective privileges, role attributes, functions, restrictive policy
+  expressions, and all 82 forced-RLS tables are inspected. An immutable receipt
+  seals the catalog fingerprint, and deliberate policy weakening fails
+  verification
+- This qualifies only the queue-store write surface. No production principal,
+  task handler, API repository, login, membership, deployed worker, dual write,
+  PostgreSQL authority, or retailer action is activated. SQLite remains the
+  sole runtime source of truth
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### Server-bound PostgreSQL tenant-session qualification (0.60.0)
 
@@ -1453,9 +1485,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.60.0
+## Architecture assessment after 0.61.0
 
-Yoink 0.60.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.61.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1468,7 +1500,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete table-scope classification, direct/inherited forced-RLS qualification, a complete qualification-only asynchronous worker store, five exact inactive least-privilege read-role templates, an empty server-owned tenant-principal registry with a zero-argument binder and 82 restrictive scope policies, native PostgreSQL 16 tenant-isolation and three-session lease-contention proofs, and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | No PostgreSQL handler/request repository family, production login/principal provisioning, restricted write roles, governed mixed shared-offer/incident access, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
+| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete table-scope classification, direct/inherited forced-RLS qualification, a complete qualification-only asynchronous worker store, five exact inactive least-privilege read-role templates, an empty server-owned tenant-principal registry with a zero-argument binder and 82 restrictive scope policies, one inactive server-bound queue writer with 11 exact grants and four restrictive write policies, native PostgreSQL 16 tenant read/write isolation and three-session lease-contention proofs, and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | No PostgreSQL handler/request repository family, production login/principal provisioning, remaining least-privilege writer families, governed mixed shared-offer/incident access, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -1679,9 +1711,17 @@ login or mapping and does not qualify writes. None of these releases turns the
 SQLite process into a production fleet or proves signed artifact/workload
 identity.
 
+Version 0.61 adds the first deliberately narrow write-role contract: a
+server-bound queue writer with 11 exact operations on four queue tables, no
+delete access, an empty principal registry, and a `READ COMMITTED` transaction
+adapter. Native simultaneous writers prove isolation and prohibited operations,
+while receipt verification catches policy tamper. It does not port or activate
+the worker handlers, API repositories, production principals, or runtime
+authority.
+
 - Implement PostgreSQL task-handler and request-repository families over the
-  qualified schema, add production identity-to-login provisioning and
-  restricted write roles around the qualified server-bound read session,
+  qualified schema, integrate the qualified queue writer, add production
+  identity-to-login provisioning and the remaining restricted writer families,
   resolve the remaining incident and mixed/shared access semantics, and pass
   transactional/isolation parity, deployed multi-process lease/load/outage
   drills, idempotent handler replay, and no-dual-write tests
@@ -2107,10 +2147,11 @@ repository alone:
 - PostgreSQL source of truth and production migration/cutover. The logical
   archive, production-driver qualification importer, relational-invariant
   manifest, full scope classification, direct/inherited tenant RLS proof,
-  qualification-only asynchronous worker store, and exact reconcile receipt
-  are implemented, but task handlers and request repositories remain SQLite.
-  The PostgreSQL runtime must add restricted roles and pass multi-connection
-  contention, backup/PITR/restore, outage, and authority-switch drills.
+  qualification-only asynchronous worker store, server-bound tenant reader,
+  narrow queue-writer contract, and exact reconcile receipts are implemented,
+  but task handlers and request repositories remain SQLite. The PostgreSQL
+  runtime must add production principals, remaining restricted roles, and pass
+  multi-connection contention, backup/PITR/restore, outage, and authority-switch drills.
   Dual-write emulation is explicitly rejected.
   See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 - Production identity provider, TLS reverse proxy, secrets manager, monitoring,

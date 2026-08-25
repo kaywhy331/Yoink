@@ -14,6 +14,7 @@ import { YoinkDatabase } from "../packages/database/src/database.js";
 import { postgresCutoverCapabilityProjection } from "../packages/database/src/postgres-cutover.js";
 import { postgresRuntimeReadRoleCapabilityProjection } from "../packages/database/src/postgres-runtime-roles.js";
 import { postgresTenantSessionCapabilityProjection } from "../packages/database/src/postgres-tenant-session.js";
+import { postgresTenantQueueWriteCapabilityProjection } from "../packages/database/src/postgres-tenant-queue-writes.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -96,6 +97,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresCutover: ReturnType<typeof postgresCutoverCapabilityProjection>;
         postgresRuntimeReadRoles: ReturnType<typeof postgresRuntimeReadRoleCapabilityProjection>;
         postgresTenantSessions: ReturnType<typeof postgresTenantSessionCapabilityProjection>;
+        postgresTenantQueueWrites: ReturnType<typeof postgresTenantQueueWriteCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -106,6 +108,10 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.deepEqual(snapshot.dataPlane.postgresCutover, postgresCutoverCapabilityProjection());
     assert.deepEqual(snapshot.dataPlane.postgresRuntimeReadRoles, postgresRuntimeReadRoleCapabilityProjection());
     assert.deepEqual(snapshot.dataPlane.postgresTenantSessions, postgresTenantSessionCapabilityProjection());
+    assert.deepEqual(
+      snapshot.dataPlane.postgresTenantQueueWrites,
+      postgresTenantQueueWriteCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -129,7 +135,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Server-bound tenant sessions/);
     assert.match(cutoverText, /82 restrictive policies/);
     assert.match(cutoverText, /PostgreSQL permits custom parameter changes, but they cannot widen the mapped tenant/);
-    assert.match(cutoverText, /Runtime principals and write roles/);
+    assert.match(cutoverText, /Bounded tenant queue writes/);
+    assert.match(cutoverText, /4 queue tables expose 11 exact SELECT\/INSERT\/UPDATE grants/);
+    assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);
     assert.match(cutoverText, /3 independent PostgreSQL 16 backend sessions/);
     assert.match(cutoverText, /Runtime repositories and deployment drills/);

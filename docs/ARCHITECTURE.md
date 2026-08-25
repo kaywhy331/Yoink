@@ -996,7 +996,7 @@ application table from one read transaction, preserves exact integers/blobs,
 and binds every table plus the aggregate logical dataset to SHA-256 counts and
 hashes. Restore is permitted only into a new database with an exact migration
 and schema match, followed by foreign-key, integrity, and data-parity checks.
-Version 0.60 can additionally stream one verified archive through the
+Version 0.61 can additionally stream one verified archive through the
 production PostgreSQL driver into a new private schema inside a serializable
 transaction, preserve packaged relational invariants, classify every table,
 force direct and exact inherited-tenant RLS, and reconcile exact logical hashes.
@@ -1010,15 +1010,18 @@ ownership, routine/sequence access, and unsafe attributes. That schema remains
 qualification-only. A hermetic native PostgreSQL 16 test now uses two
 independent production-driver worker pools and a third lock-holder connection
 to prove `SKIP LOCKED` distribution, an exact-one-winner lease race, and one-use
-completion capabilities. Authenticated runtime login/session binding, write
 completion capabilities. An empty server-owned principal registry, zero-
 argument binder, read-only tenant adapter, and 82 restrictive policies also
 prove simultaneous mapped-principal isolation on native PostgreSQL. Custom
 tenant settings remain syntactically mutable but cannot widen scope beyond the
-server mapping. Production login provisioning, write roles, mixed shared-offer/
-incident semantics, PostgreSQL task handlers and request repositories, deployed
-fleet/load/outage proof, and backup/cutover drills remain gated, so SQLite
-retains runtime authority. See
+server mapping. One separately qualified queue-writer role adds exactly 11
+`SELECT`/`INSERT`/`UPDATE` grants and four restrictive policies across the four
+queue tables; native simultaneous writers prove tenant isolation and prohibited
+operations. Its principal registry remains empty and it is not connected to a
+handler or runtime. Production login provisioning, remaining writer families,
+mixed shared-offer/incident semantics, PostgreSQL task handlers and request
+repositories, deployed fleet/load/outage proof, and backup/cutover drills remain
+gated, so SQLite retains runtime authority. See
 [Data portability and recovery](DATA_PORTABILITY.md) and
 [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 

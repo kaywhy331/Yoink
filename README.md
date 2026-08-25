@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.60.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.61.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,7 +15,30 @@ new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
 
-Version 0.60.0 adds a qualification-only PostgreSQL tenant-session boundary.
+Version 0.61.0 adds the first server-bound PostgreSQL write boundary without
+activating it. One fresh `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` queue-writer role
+has exactly 11 `SELECT`/`INSERT`/`UPDATE` grants across schedules, tasks,
+append-only task events, and worker heartbeats. It has no `DELETE`, `TRUNCATE`,
+`REFERENCES`, `TRIGGER`, sequence, ownership, schema-creation, other-table, login,
+membership, or runtime authority. Four restrictive policies intersect every
+read and write with the server-owned tenant/user binding qualified in 0.60.
+
+A production-driver adapter opens `READ COMMITTED READ WRITE` transactions,
+assumes only the queue-writer role, invokes the zero-argument server binder, and
+refuses a binding that differs from the authenticated principal expected by the
+caller. Native PostgreSQL 16 tests prove two simultaneous tenant writers cannot
+see or mutate each other's rows and explicitly deny cross-tenant insertion,
+deletion, task-event updates, unrelated-table reads, mismatched identities, and
+unmapped identities. The verifier seals the exact grants, function definitions,
+and restrictive policy expressions and deliberately fails after policy tamper.
+
+This remains qualification evidence: the principal registry is empty, no login
+or membership is provisioned, task handlers and API repositories still use
+SQLite, and PostgreSQL has no runtime or retailer authority. Use `npm run
+postgres:writes -- plan ...` and the [PostgreSQL cutover
+qualification](docs/POSTGRES_CUTOVER.md) runbook for the bounded operator flow.
+
+Version 0.60.0 added a qualification-only PostgreSQL tenant-session boundary.
 One `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` reader receives exact `SELECT` access
 to the 82 tenant-scoped tables. A server-owned principal registry and
 zero-argument security-definer binder derive tenant and user from PostgreSQL
@@ -844,9 +867,10 @@ files.
 For a separate offline PostgreSQL qualification, first export and verify an
 archive, then run `npm run postgres:cutover -- preflight`, the acknowledged
 one-shot `import`, and an independent `verify`. The subsequent inactive
-least-privilege boundaries are operated with `npm run postgres:roles -- ...`
-and `npm run postgres:sessions -- ...`; both require their documented explicit
-acknowledgement for apply and neither provisions a runtime login. Follow the
+least-privilege boundaries are operated with `npm run postgres:roles -- ...`,
+`npm run postgres:sessions -- ...`, and `npm run postgres:writes -- ...`; every
+apply command requires its documented explicit acknowledgement and none
+provisions a runtime login or principal mapping. Follow the
 [PostgreSQL cutover runbook](docs/POSTGRES_CUTOVER.md); the result is not a
 runtime cutover and cannot authorize actions.
 

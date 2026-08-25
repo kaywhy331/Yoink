@@ -121,6 +121,7 @@ import { PORTABILITY_FORMAT } from "../../../packages/database/src/portability.j
 import { postgresCutoverCapabilityProjection } from "../../../packages/database/src/postgres-cutover.js";
 import { postgresRuntimeReadRoleCapabilityProjection } from "../../../packages/database/src/postgres-runtime-roles.js";
 import { postgresTenantSessionCapabilityProjection } from "../../../packages/database/src/postgres-tenant-session.js";
+import { postgresTenantQueueWriteCapabilityProjection } from "../../../packages/database/src/postgres-tenant-queue-writes.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -374,6 +375,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const postgresCutover = postgresCutoverCapabilityProjection();
   const postgresRuntimeReadRoles = postgresRuntimeReadRoleCapabilityProjection();
   const postgresTenantSessions = postgresTenantSessionCapabilityProjection();
+  const postgresTenantQueueWrites = postgresTenantQueueWriteCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -641,6 +643,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresCutover,
           postgresRuntimeReadRoles,
           postgresTenantSessions,
+          postgresTenantQueueWrites,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1485,7 +1488,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             activeStorageEngine: "sqlite",
             postgresCutover,
             postgresRuntimeReadRoles,
-            postgresTenantSessions
+            postgresTenantSessions,
+            postgresTenantQueueWrites
           },
           capabilities: {
             catalog: true,
@@ -1636,6 +1640,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresCutover,
             postgresRuntimeReadRoles,
             postgresTenantSessions,
+            postgresTenantQueueWrites,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

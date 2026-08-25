@@ -36,6 +36,11 @@ import {
   postgresTenantSessionCapabilityProjection
 } from "../packages/database/src/postgres-tenant-session.js";
 import {
+  POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION,
+  buildPostgresTenantQueueWriteManifest,
+  postgresTenantQueueWriteCapabilityProjection
+} from "../packages/database/src/postgres-tenant-queue-writes.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -185,6 +190,69 @@ test("the PostgreSQL tenant-session template is deterministic, inactive, and res
   assert.throws(
     () => buildPostgresTenantSessionManifest("yoink_cutover_test", "same_namespace", "same_namespace"),
     /must differ/
+  );
+});
+
+test("the PostgreSQL tenant queue-write template is exact, inert, and delete-free", () => {
+  const manifest = buildPostgresTenantQueueWriteManifest(
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test"
+  );
+  assert.deepEqual(
+    buildPostgresTenantQueueWriteManifest(
+      "yoink_cutover_test",
+      "yoink_q_test",
+      "yoink_session_test",
+      "yoink_queue_write_test"
+    ),
+    manifest
+  );
+  assert.equal(manifest.contractVersion, POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION);
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(manifest.tenantSessionContractVersion, POSTGRES_TENANT_SESSION_CONTRACT_VERSION);
+  assert.equal(manifest.tableCount, 4);
+  assert.equal(manifest.grantCount, 11);
+  assert.equal(manifest.restrictivePolicyCount, 4);
+  assert.equal(manifest.activePrincipalCount, 0);
+  assert.equal(manifest.handlerRepositoryParity, false);
+  assert.equal(manifest.runtimeAuthority, false);
+  assert.equal(manifest.writeRole.login, false);
+  assert.equal(manifest.writeRole.inherit, false);
+  assert.equal(manifest.writeRole.bypassRls, false);
+  assert.equal(manifest.writeRole.deleteAccess, false);
+  assert.deepEqual(manifest.writeRole.tableGrants, [
+    { tableName: "background_task_schedules", privileges: ["SELECT", "INSERT", "UPDATE"] },
+    { tableName: "background_tasks", privileges: ["SELECT", "INSERT", "UPDATE"] },
+    { tableName: "background_task_events", privileges: ["SELECT", "INSERT"] },
+    { tableName: "background_worker_heartbeats", privileges: ["SELECT", "INSERT", "UPDATE"] }
+  ]);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+  const capability = postgresTenantQueueWriteCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION);
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.immutableBoundaryCatalogFingerprint, true);
+  assert.equal(capability.serverBoundRestrictivePolicies, true);
+  assert.equal(capability.readCommittedTransactionAdapter, true);
+  assert.equal(capability.nativeTwoPrincipalWriteIsolationQualified, true);
+  assert.equal(capability.tableCount, 4);
+  assert.equal(capability.grantCount, 11);
+  assert.equal(capability.insertTableCount, 4);
+  assert.equal(capability.updateTableCount, 3);
+  assert.equal(capability.deleteTableCount, 0);
+  assert.equal(capability.principalProvisioningImplemented, false);
+  assert.equal(capability.handlerRepositoryParity, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresTenantQueueWriteManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "same_namespace",
+      "queue_namespace"
+    ),
+    /must be distinct/
   );
 });
 

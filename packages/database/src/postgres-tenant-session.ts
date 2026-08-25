@@ -291,7 +291,7 @@ function policyName(tableName: string): string {
   return `${base.slice(0, 50)}_${suffix}`;
 }
 
-function serverBoundTenantCondition(
+export function buildPostgresServerBoundTenantCondition(
   schema: string,
   table: PostgresTableSchemaDescriptor,
   tenantExpression: string
@@ -1015,7 +1015,11 @@ export async function applyPostgresTenantSessionBoundary(
           `Tenant-session policy table ${tableName} is absent from the schema manifest.`
         );
       }
-      const condition = serverBoundTenantCondition(manifest.schemaName, table, tenantExpression);
+      const condition = buildPostgresServerBoundTenantCondition(
+        manifest.schemaName,
+        table,
+        tenantExpression
+      );
       await session.query(
         `CREATE POLICY ${identifier(policyName(table.name))}
          ON ${relation(manifest.schemaName, table.name)} AS RESTRICTIVE FOR ALL

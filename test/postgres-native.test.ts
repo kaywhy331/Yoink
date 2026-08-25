@@ -23,6 +23,12 @@ import {
   buildPostgresTenantSessionManifest,
   verifyPostgresTenantSessionBoundary
 } from "../packages/database/src/postgres-tenant-session.js";
+import {
+  NodePostgresTenantQueueWriteDatabase,
+  applyPostgresTenantQueueWriteBoundary,
+  buildPostgresTenantQueueWriteManifest,
+  verifyPostgresTenantQueueWriteBoundary
+} from "../packages/database/src/postgres-tenant-queue-writes.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
 import {
   POSTGRES_TEST_WORKER_FINGERPRINT,
@@ -36,6 +42,7 @@ const NATIVE_ROLE_NAMESPACE = "yoink_native_q";
 const NATIVE_TENANT = "tenant_cutover_other";
 const NATIVE_USER = "user_cutover_other";
 const NATIVE_SESSION_ROLE_NAMESPACE = "yoink_native_session";
+const NATIVE_QUEUE_WRITE_ROLE_NAMESPACE = "yoink_native_queue_write";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_UNMAPPED = "yoink_native_principal_unmapped";
@@ -84,7 +91,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound tenant isolation and independent SKIP LOCKED leasing", {
+test("native PostgreSQL proves server-bound tenant reads, queue writes, and independent SKIP LOCKED leasing", {
   timeout: 180_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -112,6 +119,9 @@ test("native PostgreSQL proves server-bound tenant isolation and independent SKI
   let tenantReaderA: NodePostgresTenantReadDatabase | null = null;
   let tenantReaderB: NodePostgresTenantReadDatabase | null = null;
   let tenantReaderUnmapped: NodePostgresTenantReadDatabase | null = null;
+  let queueWriterA: NodePostgresTenantQueueWriteDatabase | null = null;
+  let queueWriterB: NodePostgresTenantQueueWriteDatabase | null = null;
+  let queueWriterUnmapped: NodePostgresTenantQueueWriteDatabase | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -167,6 +177,33 @@ test("native PostgreSQL proves server-bound tenant isolation and independent SKI
       ),
       sessionBoundary
     );
+    const queueWriteBoundary = await applyPostgresTenantQueueWriteBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:52:00.000Z").getTime()
+    );
+    assert.equal(queueWriteBoundary.tableCount, 4);
+    assert.equal(queueWriteBoundary.grantCount, 11);
+    assert.equal(queueWriteBoundary.membershipCount, 0);
+    assert.equal(queueWriteBoundary.activePrincipalCount, 0);
+    assert.equal(queueWriteBoundary.restrictivePolicyCount, 4);
+    assert.match(queueWriteBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(queueWriteBoundary.deleteAccess, false);
+    assert.equal(queueWriteBoundary.handlerRepositoryParity, false);
+    assert.equal(queueWriteBoundary.runtimeAuthority, false);
+    assert.deepEqual(
+      await verifyPostgresTenantQueueWriteBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE
+      ),
+      queueWriteBoundary
+    );
     await importer.close();
     importer = null;
 
@@ -218,6 +255,12 @@ test("native PostgreSQL proves server-bound tenant isolation and independent SKI
       NATIVE_ROLE_NAMESPACE,
       NATIVE_SESSION_ROLE_NAMESPACE
     );
+    const queueWriteManifest = buildPostgresTenantQueueWriteManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE
+    );
     for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
       await first.query(
         `CREATE ROLE "${principalRole}"
@@ -226,6 +269,9 @@ test("native PostgreSQL proves server-bound tenant isolation and independent SKI
       );
       await first.query(
         `GRANT "${tenantSessionManifest.sessionRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${queueWriteManifest.writeRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -259,6 +305,24 @@ test("native PostgreSQL proves server-bound tenant isolation and independent SKI
       tlsMode: "local-insecure",
       certificateAuthorityPem: ""
     }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE, { maxConnections: 1 });
+    queueWriterA = new NodePostgresTenantQueueWriteDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, { maxConnections: 1 });
+    queueWriterB = new NodePostgresTenantQueueWriteDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_B),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, { maxConnections: 1 });
+    queueWriterUnmapped = new NodePostgresTenantQueueWriteDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_UNMAPPED),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, { maxConnections: 1 });
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -353,6 +417,171 @@ test("native PostgreSQL proves server-bound tenant isolation and independent SKI
     );
     assert.deepEqual(
       await tenantReaderA.readTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async (session) => (await session.query<{ tenantId: string; userId: string }>(
+          `SELECT current_setting('yoink.tenant_id') AS "tenantId",
+                  current_setting('yoink.user_id') AS "userId"`
+        )).rows[0]
+      ),
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }
+    );
+
+    const heartbeatInsert = (
+      writer: NodePostgresTenantQueueWriteDatabase,
+      principal: { tenantId: string; userId: string },
+      workerId: string
+    ) => writer.writeTransaction(principal, async (session) =>
+      (await session.query<{ tenantId: string; workerId: string }>(
+        `INSERT INTO "${NATIVE_SCHEMA}"."background_worker_heartbeats"(
+           tenant_id, subject_user_id, worker_id, runtime_kind, runtime_version,
+           state, started_at, heartbeat_at, stopped_at, last_error_code,
+           privacy_classification, deployment_fingerprint
+         ) VALUES ($1, $2, $3, 'standalone', $4, 'running', $5, $5, '', '',
+                   'operational_aggregate', $6)
+         RETURNING tenant_id AS "tenantId", worker_id AS "workerId"`,
+        [
+          principal.tenantId,
+          principal.userId,
+          workerId,
+          POSTGRES_TEST_WORKER_VERSION,
+          "2026-08-25T16:57:00.000Z",
+          POSTGRES_TEST_WORKER_FINGERPRINT
+        ]
+      )).rows[0]
+    );
+    assert.deepEqual(await Promise.all([
+      heartbeatInsert(
+        queueWriterA,
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "native_queue_writer_a"
+      ),
+      heartbeatInsert(
+        queueWriterB,
+        { tenantId: "tenant_local", userId: "user_local" },
+        "native_queue_writer_b"
+      )
+    ]), [
+      { tenantId: NATIVE_TENANT, workerId: "native_queue_writer_a" },
+      { tenantId: "tenant_local", workerId: "native_queue_writer_b" }
+    ]);
+    const [queueViewA, queueViewB] = await Promise.all([
+      queueWriterA.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async (session) => (await session.query<{ workerId: string }>(
+          `SELECT worker_id AS "workerId"
+           FROM "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+           WHERE worker_id LIKE 'native_queue_%' ORDER BY worker_id`
+        )).rows.map((row) => row.workerId)
+      ),
+      queueWriterB.writeTransaction(
+        { tenantId: "tenant_local", userId: "user_local" },
+        async (session) => (await session.query<{ workerId: string }>(
+          `SELECT worker_id AS "workerId"
+           FROM "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+           WHERE worker_id LIKE 'native_queue_%' ORDER BY worker_id`
+        )).rows.map((row) => row.workerId)
+      )
+    ]);
+    assert.deepEqual(queueViewA, ["native_queue_writer_a"]);
+    assert.deepEqual(queueViewB, ["native_queue_writer_b"]);
+    assert.deepEqual(
+      await queueWriterA.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async (session) => (await session.query<{ errorCode: string }>(
+          `UPDATE "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+           SET last_error_code = 'native_probe'
+           WHERE worker_id = 'native_queue_writer_a'
+           RETURNING last_error_code AS "errorCode"`
+        )).rows
+      ),
+      [{ errorCode: "native_probe" }]
+    );
+    assert.deepEqual(
+      await queueWriterA.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async (session) => (await session.query<{ workerId: string }>(
+          `UPDATE "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+           SET last_error_code = 'cross_tenant_probe'
+           WHERE worker_id = 'native_queue_writer_b'
+           RETURNING worker_id AS "workerId"`
+        )).rows
+      ),
+      []
+    );
+    assert.deepEqual(
+      await queueWriterB.writeTransaction(
+        { tenantId: "tenant_local", userId: "user_local" },
+        async (session) => (await session.query<{ errorCode: string }>(
+          `SELECT last_error_code AS "errorCode"
+           FROM "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+           WHERE worker_id = 'native_queue_writer_b'`
+        )).rows
+      ),
+      [{ errorCode: "" }]
+    );
+    await assert.rejects(
+      queueWriterA.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        (session) => session.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."background_worker_heartbeats"(
+             tenant_id, subject_user_id, worker_id, runtime_kind, runtime_version,
+             state, started_at, heartbeat_at, stopped_at, last_error_code,
+             privacy_classification, deployment_fingerprint
+           ) VALUES ('tenant_local', 'user_local', 'native_queue_cross', 'standalone',
+                     $1, 'running', $2, $2, '', '', 'operational_aggregate', $3)`,
+          [
+            POSTGRES_TEST_WORKER_VERSION,
+            "2026-08-25T16:57:01.000Z",
+            POSTGRES_TEST_WORKER_FINGERPRINT
+          ]
+        )
+      ),
+      /row-level security/i
+    );
+    await assert.rejects(
+      queueWriterA.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        (session) => session.query(
+          `DELETE FROM "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+           WHERE worker_id = 'native_queue_writer_a'`
+        )
+      ),
+      /permission denied/i
+    );
+    await assert.rejects(
+      queueWriterA.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        (session) => session.query(
+          `UPDATE "${NATIVE_SCHEMA}"."background_task_events"
+           SET reason_code = reason_code WHERE tenant_id = $1`,
+          [NATIVE_TENANT]
+        )
+      ),
+      /permission denied/i
+    );
+    await assert.rejects(
+      queueWriterA.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        (session) => session.query(`SELECT id FROM "${NATIVE_SCHEMA}"."users"`)
+      ),
+      /permission denied/i
+    );
+    await assert.rejects(
+      queueWriterA.writeTransaction(
+        { tenantId: "tenant_local", userId: "user_local" },
+        async () => undefined
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      queueWriterUnmapped.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async () => undefined
+      ),
+      /tenant session principal is not active/
+    );
+    assert.deepEqual(
+      await queueWriterA.writeTransaction(
         { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
         async (session) => (await session.query<{ tenantId: string; userId: string }>(
           `SELECT current_setting('yoink.tenant_id') AS "tenantId",
@@ -501,6 +730,9 @@ test("native PostgreSQL proves server-bound tenant isolation and independent SKI
       await first.query(
         `REVOKE "${tenantSessionManifest.sessionRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${queueWriteManifest.writeRole.name}" FROM "${principalRole}"`
+      );
     }
     const cleanBoundary = await verifyPostgresTenantSessionBoundary(
       first,
@@ -509,6 +741,32 @@ test("native PostgreSQL proves server-bound tenant isolation and independent SKI
       NATIVE_SESSION_ROLE_NAMESPACE
     );
     assert.equal(cleanBoundary.boundaryCatalogFingerprint, sessionBoundary.boundaryCatalogFingerprint);
+    const cleanQueueWriteBoundary = await verifyPostgresTenantQueueWriteBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanQueueWriteBoundary.boundaryCatalogFingerprint,
+      queueWriteBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER POLICY "yoink_server_queue_write_background_worker_heartbeats"
+       ON "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+       USING (TRUE) WITH CHECK (TRUE)`
+    );
+    await assert.rejects(
+      verifyPostgresTenantQueueWriteBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE
+      ),
+      /no longer matches its verified receipt/
+    );
     await first.query(
       `ALTER POLICY "yoink_server_bound_users" ON "${NATIVE_SCHEMA}"."users"
        USING (TRUE) WITH CHECK (TRUE)`
@@ -532,7 +790,10 @@ test("native PostgreSQL proves server-bound tenant isolation and independent SKI
       directClient?.end(),
       tenantReaderA?.close(),
       tenantReaderB?.close(),
-      tenantReaderUnmapped?.close()
+      tenantReaderUnmapped?.close(),
+      queueWriterA?.close(),
+      queueWriterB?.close(),
+      queueWriterUnmapped?.close()
     ].filter(Boolean) as Array<Promise<void>>);
     await postgres.stop().catch(() => undefined);
     if (existsSync(parent)) rmSync(parent, { recursive: true, force: true });
