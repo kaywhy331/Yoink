@@ -802,6 +802,15 @@ var YoinkAmazonActionModule = (() => {
   function genericAddIntentControls(root) {
     return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
   }
+  var REPAIR_LANDMARK_ATTRIBUTES = [
+    "data-testid",
+    "data-test-id",
+    "data-automation-id",
+    "data-button-state",
+    "name",
+    "itemprop"
+  ];
+  var REPAIR_STRUCTURAL_SELECTOR = REPAIR_LANDMARK_ATTRIBUTES.map((attribute) => `[${attribute}]`).join(", ");
   var WALMART_PRIMARY_SCOPE = [
     "[data-testid*='buy-box' i]",
     "[data-automation-id*='buy-box' i]",

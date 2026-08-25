@@ -222,6 +222,87 @@ test("repair landmarks aggregate exact-SKU and distinct-device evidence without 
   }
 });
 
+test("five-field landmarks aggregate independently without retaining observed commerce values", () => {
+  const db = new YoinkDatabase();
+  try {
+    const devices = [pairedDevice(db), pairedDevice(db), pairedDevice(db)];
+    const repository = new AdapterDiagnosticRepository(db);
+    const repairLayout = layout({
+      scopeKind: "form",
+      addControlCount: 1,
+      genericAddIntentCount: 1,
+      genericAvailabilityCandidateCount: 1,
+      genericPriceCandidateCount: 1,
+      genericSellerCandidateCount: 1,
+      genericFulfillmentCandidateCount: 1,
+      scopedControlCount: 1,
+      explicitSkuInputCount: 0,
+      exactSkuInputCount: 0,
+      variationSkuCount: 0,
+      canonicalOfferInputCount: 0,
+      canonicalOfferDistinctCount: 0,
+      alternateOfferInputCount: 0,
+      alternateOfferDistinctCount: 0,
+      priceCandidateCount: 0,
+      repairLandmarks: [
+        { field: "availability", elementKind: "div", attribute: "data-testid", value: "product-availability-status" },
+        { field: "unitPrice", elementKind: "span", attribute: "data-testid", value: "product-current-price" },
+        { field: "seller", elementKind: "p", attribute: "data-testid", value: "seller-display-name" },
+        { field: "fulfillment", elementKind: "div", attribute: "data-testid", value: "shipping-fulfillment-option" },
+        { field: "addControl", elementKind: "button", attribute: "data-automation-id", value: "atc" }
+      ]
+    });
+    for (const [index, retailerSku] of ["6612619", "6669690", "6528565"].entries()) {
+      repository.record(devices[index]?.id ?? "", diagnostic({
+        observedAt: new Date(NOW + 1_000 + index).toISOString(),
+        retailerId: "bestbuy",
+        retailerSku,
+        adapterVersion: BESTBUY_OBSERVER_VERSION,
+        failureStage: "price_binding",
+        reasonCode: "price_selector_miss",
+        layout: repairLayout
+      }), NOW + 2_000 + index);
+    }
+    const suggestions = repository.listRepairQueue()[0]?.repairSuggestions ?? [];
+    assert.equal(suggestions.length, 5);
+    assert.deepEqual(Object.fromEntries(suggestions.map((suggestion) => [suggestion.field, {
+      selector: suggestion.selector,
+      mode: suggestion.mode,
+      devices: suggestion.distinctDeviceCount,
+      skus: suggestion.distinctSkuCount,
+      reviewState: suggestion.reviewState,
+      executable: suggestion.executable
+    }])), {
+      addControl: {
+        selector: "button[data-automation-id='atc']", mode: "disabled_state",
+        devices: 3, skus: 3, reviewState: "maintainer_ready", executable: false
+      },
+      availability: {
+        selector: "div[data-testid='product-availability-status']", mode: "text",
+        devices: 3, skus: 3, reviewState: "maintainer_ready", executable: false
+      },
+      fulfillment: {
+        selector: "div[data-testid='shipping-fulfillment-option']", mode: "text",
+        devices: 3, skus: 3, reviewState: "maintainer_ready", executable: false
+      },
+      seller: {
+        selector: "p[data-testid='seller-display-name']", mode: "text",
+        devices: 3, skus: 3, reviewState: "maintainer_ready", executable: false
+      },
+      unitPrice: {
+        selector: "span[data-testid='product-current-price']", mode: "text",
+        devices: 3, skus: 3, reviewState: "maintainer_ready", executable: false
+      }
+    });
+    const durable = JSON.stringify(db.all("SELECT layout_json FROM retailer_adapter_diagnostics"));
+    for (const forbidden of ["$19.99", "Sold and shipped by", "In stock", "Shipping", "DO_NOT_STORE"]) {
+      assert.equal(durable.includes(forbidden), false);
+    }
+  } finally {
+    db.close();
+  }
+});
+
 test("adapter diagnostics reject malformed, stale, secret-shaped, and inconsistent input", () => {
   const db = new YoinkDatabase();
   try {
@@ -244,7 +325,29 @@ test("adapter diagnostics reject malformed, stale, secret-shaped, and inconsiste
     }) }), NOW + 2_000), /privacy bounded/);
     assert.throws(() => repository.record(device.id, diagnostic({ layout: layout({
       repairLandmarks: [{ field: "addControl", elementKind: "button", attribute: "data-testid", value: "pdp-add-to-cart" }]
-    }) }), NOW + 2_000), /selector-miss layout/);
+    }) }), NOW + 2_000), /selector-miss/);
+    assert.throws(() => repository.record(device.id, diagnostic({
+      failureStage: "price_binding",
+      reasonCode: "price_selector_miss",
+      layout: layout({
+        priceCandidateCount: 0,
+        genericPriceCandidateCount: 1,
+        genericSellerCandidateCount: 1,
+        repairLandmarks: [{
+          field: "seller", elementKind: "p", attribute: "data-testid", value: "seller-display-name"
+        }]
+      })
+    }), NOW + 2_000), /matching bounded landmark/);
+    assert.throws(() => repository.record(device.id, diagnostic({
+      failureStage: "price_binding",
+      reasonCode: "price_selector_miss",
+      layout: layout({
+        genericPriceCandidateCount: 1,
+        repairLandmarks: [{
+          field: "unitPrice", elementKind: "input", attribute: "data-testid", value: "product-price"
+        }]
+      })
+    }), NOW + 2_000), /privacy bounded/);
     assert.throws(() => repository.record(device.id, diagnostic({ adapterVersion: "amazon-observer-spoofed" }), NOW + 2_000), /version/);
     assert.throws(() => repository.record("missing_device", diagnostic(), NOW + 2_000), /unavailable/);
     assert.equal(repository.counts().adapterDiagnosticEvents, 0);

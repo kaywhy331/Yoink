@@ -63,6 +63,7 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_STAGES = [
   "complete",
   "page_identity",
   "interactive_block",
+  "availability_binding",
   "add_control",
   "sku_binding",
   "offer_binding",
@@ -93,6 +94,7 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "interactive_queue",
   "interactive_high_demand",
   "interactive_unknown",
+  "availability_selector_miss",
   "add_control_selector_miss",
   "add_control_missing",
   "add_control_ambiguous",
@@ -101,8 +103,11 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "explicit_sku_binding_ambiguous",
   "offer_binding_missing",
   "offer_binding_ambiguous",
+  "price_selector_miss",
   "price_binding_missing",
+  "seller_selector_miss",
   "seller_binding_missing",
+  "fulfillment_selector_miss",
   "fulfillment_binding_missing",
   "selected_offer_binding_unresolved",
   "offer_scope_not_actionable",
@@ -161,20 +166,21 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
 export type RetailerAdapterDiagnosticReasonCode = (typeof RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES)[number];
 
 export const RETAILER_ADAPTER_REPAIR_LANDMARK_ATTRIBUTES = [
-  "data-testid", "data-test-id", "data-automation-id", "data-button-state", "name"
+  "data-testid", "data-test-id", "data-automation-id", "data-button-state", "name", "itemprop"
 ] as const;
 export type RetailerAdapterRepairLandmarkAttribute =
   (typeof RETAILER_ADAPTER_REPAIR_LANDMARK_ATTRIBUTES)[number];
 
 /**
- * A deliberately narrow structural landmark for a missed read-only add
- * control. It contains no DOM text, class list, ID, URL, product value, or
- * arbitrary selector. The server independently validates this shape before it
- * derives a non-executable maintainer suggestion.
+ * A deliberately narrow structural landmark for one of the five packaged
+ * read-only commerce fields. It contains no DOM text, class list, ID, URL,
+ * product value, seller value, price, or arbitrary selector. The server
+ * independently validates this shape before deriving a non-executable
+ * suggestion.
  */
 export interface RetailerAdapterRepairLandmark {
-  field: "addControl";
-  elementKind: "button" | "input" | "role_button";
+  field: "availability" | "unitPrice" | "seller" | "fulfillment" | "addControl";
+  elementKind: "button" | "input" | "role_button" | "div" | "span" | "p" | "label" | "section" | "li";
   attribute: RetailerAdapterRepairLandmarkAttribute;
   value: string;
 }
@@ -188,6 +194,11 @@ export interface RetailerAdapterLayoutEvidence {
   addControlCount: number;
   /** Count-only drift signal; optional so diagnostics from the preceding companion remain ingestible. */
   genericAddIntentCount?: number;
+  /** Privacy-bounded semantic candidate counts; omitted when zero for backward-stable fingerprints. */
+  genericAvailabilityCandidateCount?: number;
+  genericPriceCandidateCount?: number;
+  genericSellerCandidateCount?: number;
+  genericFulfillmentCandidateCount?: number;
   scopedControlCount: number;
   explicitSkuInputCount: number;
   exactSkuInputCount: number;

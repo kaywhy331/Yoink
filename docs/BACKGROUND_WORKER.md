@@ -1,6 +1,6 @@
 # Background worker operations
 
-Yoink 0.47 retains two safe SQLite worker layouts. Embedded mode is the
+Yoink 0.48 retains two safe SQLite worker layouts. Embedded mode is the
 zero-configuration local default. External mode runs the same closed handler
 registry in a separately supervised process. The registry contains seven closed
 task families, including durable TrackaLacker evaluation, observer-repair
@@ -133,13 +133,15 @@ contract and failure semantics.
 
 The **Observer repair candidate evaluation** schedule runs every 60 seconds. It
 examines only current privacy-bounded repair groups and can compile at most 25
-thresholded Add-control selector sets per run. Each set must already have three
-distinct paired devices and two exact SKUs in the same user-scoped repair
+thresholded layout candidates per run. Each field/selector must already have
+three distinct paired devices and two exact SKUs in the same user-scoped repair
 ledger.
 
-The signing-free worker repository can insert only one fixed `addControl`
-`disabled_state` field into an unsigned `quarantined` recipe row. Scoped
-deterministic fingerprints make retry idempotent. Exact SKU and device IDs are
+The signing-free worker repository accepts only availability/unit-price/seller/
+fulfillment `text` fields and an add-control `disabled_state` field, with fixed
+field-aware selector grammar. It groups mature compatible fields for one layout
+into an unsigned `quarantined` recipe row. Scoped deterministic fingerprints
+make retry idempotent. Exact SKU/device IDs and observed page/offer values are
 not copied into the candidate or audit receipt. The worker cannot load recipe
 signing keys, promote a candidate, create trials, or distribute an envelope;
 remote recipes remain structurally unavailable to mutation runners. See

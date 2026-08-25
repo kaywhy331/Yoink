@@ -1,15 +1,18 @@
 # Privacy-bounded adapter repair intelligence
 
-Yoink 0.37 adds a narrow structural signal to the existing immediate adapter
-diagnostic path. When a packaged read-only observer sees one visible control
-whose semantics say **Add to cart** but none of its packaged selectors match,
-the companion may report a stable attribute landmark. The server can then show
-a maintainer the corresponding CSS selector candidate without receiving page
-HTML or making that candidate executable.
+Yoink 0.37 added a narrow Add-control structural signal to the existing
+immediate adapter diagnostic path. Yoink 0.48 extends that privacy boundary to
+all five fixed read-only observer fields: availability, unit price, seller,
+fulfillment, and add control. When a packaged field misses but one local
+semantic candidate has a globally unique stable attribute, the companion may
+report that structural landmark. The server can then show a maintainer the
+corresponding CSS selector candidate without receiving page HTML, observed
+field values, or making the candidate executable.
 
 This began as an investigation aid and remains outside autonomous recipe
-publication. Version 0.47 may compile mature evidence into an unsigned
-quarantine candidate, but no automated path may promote or distribute it. It does not
+publication. Version 0.48 may compile mature evidence for multiple fixed fields
+into one unsigned quarantine candidate, but no automated path may promote or
+distribute it. It does not
 change a retailer observation, qualify an add lane, click a control, or bypass
 the observer-recipe quarantine, trial, signing, rollback, and independent
 witness gates.
@@ -20,23 +23,28 @@ The observer considers a landmark only when all of these conditions hold:
 
 - the exact product page is not behind authentication, MFA, location setup,
   membership, a queue, high-demand handling, or a security challenge;
-- no packaged Add-control selector matched;
-- a visible, non-merchandising button-like element has unambiguous Add/Cart/Bag
-  or Preorder intent;
+- at least one packaged availability, unit-price, seller, fulfillment, or
+  Add-control selector missed;
+- the candidate is visible and non-merchandising, with locally unambiguous
+  field semantics; Add control remains limited to button-like elements with
+  Add/Cart/Bag or Preorder intent;
 - one allowlisted structural attribute selects that exact element once in the
   current document;
 - the value is short, every separated word belongs to a packaged structural/
   commerce vocabulary, and it contains no long numeric or hash-shaped
   component.
 
-At most five landmarks may be sent. The only accepted element kinds are
-`button`, `input`, and `role_button`. The only accepted attributes are:
+At most one landmark per fixed field may be sent. Add control accepts only
+`button`, `input`, and `role_button`; input is rejected for every value field.
+The other read-only fields may use `button`, `role_button`, `div`, `span`, `p`,
+`label`, `section`, and `li`. The only accepted attributes are:
 
 - `data-testid`
 - `data-test-id`
 - `data-automation-id`
 - `data-button-state`
 - `name`
+- `itemprop`
 
 IDs, classes, DOM paths, arbitrary selectors, element text, URLs, prices,
 retailer SKUs, and form values are never part of the landmark. Values
@@ -52,17 +60,18 @@ same reconstructed payload during a transient server outage.
 ## Server boundary
 
 The server repeats all landmark validation and additionally requires the
-reported layout to be an unblocked product page with zero packaged Add-control
-matches and at least one generic Add-intent control. Only the normalized
-landmark objects enter `layout_json`; supplied selector strings and unknown
-fields are never stored.
+reported layout to be an unblocked product page, a field-specific selector-miss
+reason/stage, and matching bounded candidate counts. Add-control evidence still
+requires at least one generic Add-intent control. Only normalized landmark
+objects enter `layout_json`; supplied selector strings and unknown fields are
+never stored.
 
 The layout fingerprint includes normalized landmarks while continuing to omit
 `scopedControlCount`. This keeps evidence for different structural candidates
 separate while allowing a later packaged observer to mark the same markup
 recovered.
 
-For an open read-only `add_control_selector_miss` group, Yoink derives one
+For an open read-only field-specific selector-miss group, Yoink derives one
 quoted attribute selector from each landmark and reports:
 
 - occurrence count;
@@ -83,11 +92,13 @@ before treating crowd evidence as global.
 
 The suggestion appears in **Admin → Retailers → Adapter repair queue**. A
 maintainer may use it to reproduce the layout and update a packaged observer or
-manually author a read-only observer recipe. Starting in 0.47, the dedicated
-60-second worker may copy only a thresholded allowlisted Add-control selector
-into an unsigned quarantined candidate. It uses a deterministic scoped
-fingerprint, creates no duplicate on replay, and copies no device ID or SKU into
-the candidate or its audit receipt.
+manually author a read-only observer recipe. Starting in 0.48, the dedicated
+60-second worker may group thresholded allowlisted availability, unit-price,
+seller, fulfillment, and Add-control selectors for one layout into an unsigned
+quarantined candidate. Interpretation modes are fixed (`text` for the four
+value fields and `disabled_state` for Add control). It uses a deterministic
+scoped fingerprint, creates no duplicate on replay, and copies no device ID,
+SKU, page text, or observed offer value into the candidate or its audit receipt.
 
 Automatic processing ends there. Any recipe still begins in quarantine and
 requires explicit protected maintainer promotion, then must pass the existing shadow and
@@ -97,8 +108,10 @@ in hosted mode—match a fresh independently witnessed transparency checkpoint.
 Remote recipes remain permanently unable to authorize retailer mutation.
 
 Health advertises `privacyBoundedRepairLandmarks=true` and
-`nonExecutableRepairSuggestions=true`. Version 0.47 additionally advertises
-`durableObserverRepairCandidateEvaluation=true` while keeping
+`nonExecutableRepairSuggestions=true`. Version 0.48 additionally advertises
+`durableObserverRepairCandidateEvaluation=true`,
+`privacyBoundedObserverRepairFieldCount=5`, and the still-open independent
+oracle requirement while keeping
 `generatedObserverRepairCandidatesExecutable=false` and
 `generatedObserverRepairCandidatesAutoPromoted=false`. These flags do not
 indicate production community readiness.
@@ -110,3 +123,7 @@ rotation without changing this evidence format. Migration 41 adds only the
 seventh closed worker task and generated-candidate fingerprint uniqueness; it
 does not change the diagnostic format or any retailer authority. See
 [durable observer-repair candidate evaluation](OBSERVER_REPAIR_CANDIDATE_EVALUATION.md).
+
+Version 0.48 also requires no migration: the existing bounded JSON and recipe
+field-map columns already represent the additive structural evidence. Migration
+41 remains current.

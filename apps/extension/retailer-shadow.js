@@ -834,10 +834,10 @@ var YoinkRetailerShadowModule = (() => {
     "data-test-id",
     "data-automation-id",
     "data-button-state",
-    "name"
+    "name",
+    "itemprop"
   ];
   var REPAIR_LANDMARK_VALUE = /^[A-Za-z][A-Za-z0-9_.:-]{1,63}$/;
-  var REPAIR_LANDMARK_INTENT = /(?:add|cart|bag|pre[_.:-]?order|atc)/i;
   var REPAIR_LANDMARK_FORBIDDEN = /(?:checkout|buy[_.:-]?now|place[_.:-]?order|submit[_.:-]?order|payment|credit|debit|address|email|phone|account|password|cookie|csrf|token)/i;
   var REPAIR_LANDMARK_TOKENS = /* @__PURE__ */ new Set([
     "pdp",
@@ -867,47 +867,140 @@ var YoinkRetailerShadowModule = (() => {
     "state",
     "available",
     "availability",
+    "unavailable",
+    "inventory",
+    "stock",
+    "in",
+    "out",
+    "sold",
+    "price",
+    "amount",
+    "cost",
+    "current",
+    "customer",
+    "sale",
+    "offer",
+    "value",
+    "seller",
+    "merchant",
+    "vendor",
+    "display",
+    "name",
+    "by",
+    "fulfilled",
+    "ship",
+    "pickup",
+    "pick",
+    "up",
+    "store",
+    "method",
+    "option",
+    "selected",
+    "status",
+    "label",
+    "message",
+    "info",
     "commerce"
   ]);
-  function repairLandmarkTokensAllowed(value) {
-    return value.split(/[_.:-]+/).filter(Boolean).every((token) => REPAIR_LANDMARK_TOKENS.has(token.toLocaleLowerCase("en-US")));
+  var REPAIR_LANDMARK_INTENT = {
+    availability: /(?:availability|available|unavailable|inventory|stock|sold[_.:-]?out|pre[_.:-]?order)/i,
+    unitPrice: /(?:price|amount|cost|sale[_.:-]?price|customer[_.:-]?price|offer[_.:-]?price)/i,
+    seller: /(?:seller|merchant|vendor|sold[_.:-]?by)/i,
+    fulfillment: /(?:fulfillment|shipping|delivery|pickup|pick[_.:-]?up|ship[_.:-]?to)/i,
+    addControl: /(?:add|cart|bag|pre[_.:-]?order|atc)/i
+  };
+  var REPAIR_FIELDS = ["availability", "unitPrice", "seller", "fulfillment", "addControl"];
+  var REPAIR_STRUCTURAL_SELECTOR = REPAIR_LANDMARK_ATTRIBUTES.map((attribute) => `[${attribute}]`).join(", ");
+  function repairLandmarkTokensAllowed(field, value) {
+    return REPAIR_LANDMARK_INTENT[field].test(value) && value.split(/[_.:-]+/).filter(Boolean).every((token) => REPAIR_LANDMARK_TOKENS.has(token.toLocaleLowerCase("en-US")));
   }
-  function repairLandmarkElement(element) {
+  function repairLandmarkElement(element, field) {
     if (element.tagName === "BUTTON") return "button";
-    if (element.tagName === "INPUT") return "input";
-    return element.getAttribute("role") === "button" ? "role_button" : null;
+    if (element.tagName === "INPUT") return field === "addControl" ? "input" : null;
+    if (element.getAttribute("role") === "button") return "role_button";
+    if (field === "addControl") return null;
+    const elementKind = element.tagName.toLocaleLowerCase("en-US");
+    return ["div", "span", "p", "label", "section", "li"].includes(elementKind) ? elementKind : null;
   }
   function repairLandmarkSelector(landmark) {
     const element = landmark.elementKind === "role_button" ? "[role='button']" : landmark.elementKind;
     return `${element}[${landmark.attribute}='${landmark.value}']`;
   }
-  function addControlRepairLandmarks(document, retailer, blocked) {
-    if (blocked || candidateControls(document, retailer).length > 0) return [];
-    const landmarks = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const element of genericAddIntentControls(document)) {
-      const elementKind = repairLandmarkElement(element);
-      if (!elementKind) continue;
-      for (const attribute of REPAIR_LANDMARK_ATTRIBUTES) {
-        const value = String(element.getAttribute(attribute) ?? "").trim();
-        if (!REPAIR_LANDMARK_VALUE.test(value) || !REPAIR_LANDMARK_INTENT.test(value) || REPAIR_LANDMARK_FORBIDDEN.test(value) || !repairLandmarkTokensAllowed(value) || /\d{4,}|[a-f0-9]{12,}/i.test(value)) continue;
-        const landmark = { field: "addControl", elementKind, attribute, value };
-        const selector = repairLandmarkSelector(landmark);
-        let exact = false;
-        try {
-          const matches = [...document.querySelectorAll(selector)];
-          exact = matches.length === 1 && matches[0] === element;
-        } catch {
-          exact = false;
-        }
-        if (!exact || seen.has(selector)) continue;
-        seen.add(selector);
-        landmarks.push(landmark);
-        break;
-      }
-      if (landmarks.length >= 5) break;
+  function repairSemanticMatches(field, element, retailer) {
+    const evidence = field === "seller" ? sellerElementText(element, 1e3) : `${observableText(element, 1e3)} ${element.getAttribute("aria-label") ?? ""}`.trim();
+    if (field === "availability") {
+      return /\bout of stock\b|\bsold out\b|\bcurrently unavailable\b|\bunavailable\b|\bin stock\b|\bpre[ -]?order\b/i.test(evidence);
     }
-    return landmarks;
+    if (field === "unitPrice") return parseRetailerPriceElement(element) !== null;
+    if (field === "seller") {
+      return retailer.firstPartyPattern.test(evidence) || retailer.marketplacePattern.test(evidence);
+    }
+    if (field === "fulfillment") {
+      const shipping = retailer.shippingPattern.test(evidence);
+      const pickup = retailer.pickupPattern.test(evidence);
+      return shipping !== pickup;
+    }
+    return GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element));
+  }
+  function fieldRepairEvidence(document, root, retailer, field) {
+    const elements = (field === "addControl" ? genericAddIntentControls(root) : [...root.querySelectorAll(REPAIR_STRUCTURAL_SELECTOR)].slice(0, 500).filter((element2) => visible2(element2) && !merchandisingControl(element2))).filter((element2) => repairLandmarkElement(element2, field) !== null).filter((element2) => repairSemanticMatches(field, element2, retailer));
+    const candidates = [...new Set(elements)];
+    if (candidates.length !== 1 || !candidates[0]) {
+      return { candidateCount: boundedCount(candidates.length), landmarks: [] };
+    }
+    const element = candidates[0];
+    const elementKind = repairLandmarkElement(element, field);
+    if (!elementKind) return { candidateCount: 1, landmarks: [] };
+    for (const attribute of REPAIR_LANDMARK_ATTRIBUTES) {
+      const value = String(element.getAttribute(attribute) ?? "").trim();
+      if (!REPAIR_LANDMARK_VALUE.test(value) || REPAIR_LANDMARK_FORBIDDEN.test(value) || !repairLandmarkTokensAllowed(field, value) || /\d{4,}|[a-f0-9]{12,}/i.test(value)) continue;
+      const landmark = { field, elementKind, attribute, value };
+      const selector = repairLandmarkSelector(landmark);
+      let exact = false;
+      try {
+        const matches = [...document.querySelectorAll(selector)];
+        exact = matches.length === 1 && matches[0] === element;
+      } catch {
+        exact = false;
+      }
+      if (exact) return { candidateCount: 1, landmarks: [landmark] };
+    }
+    return { candidateCount: 1, landmarks: [] };
+  }
+  function repairLandmarkEvidence(document, root, retailer, blocked) {
+    if (blocked) {
+      return {
+        availabilityCandidateCount: 0,
+        priceCandidateCount: 0,
+        sellerCandidateCount: 0,
+        fulfillmentCandidateCount: 0,
+        landmarks: []
+      };
+    }
+    const evidence = Object.fromEntries(REPAIR_FIELDS.map((field) => [
+      field,
+      fieldRepairEvidence(document, root, retailer, field)
+    ]));
+    return {
+      availabilityCandidateCount: evidence.availability.candidateCount,
+      priceCandidateCount: evidence.unitPrice.candidateCount,
+      sellerCandidateCount: evidence.seller.candidateCount,
+      fulfillmentCandidateCount: evidence.fulfillment.candidateCount,
+      landmarks: REPAIR_FIELDS.flatMap((field) => evidence[field].landmarks)
+    };
+  }
+  function eligibleRepairLandmarks(evidence, missing) {
+    const hasMissingCandidate = evidence.landmarks.some((landmark) => missing[landmark.field] === true);
+    return hasMissingCandidate ? evidence.landmarks : [];
+  }
+  function repairCandidateCounts(evidence, landmarks) {
+    if (!landmarks.length) return {};
+    return {
+      ...evidence.availabilityCandidateCount ? { genericAvailabilityCandidateCount: evidence.availabilityCandidateCount } : {},
+      ...evidence.priceCandidateCount ? { genericPriceCandidateCount: evidence.priceCandidateCount } : {},
+      ...evidence.sellerCandidateCount ? { genericSellerCandidateCount: evidence.sellerCandidateCount } : {},
+      ...evidence.fulfillmentCandidateCount ? { genericFulfillmentCandidateCount: evidence.fulfillmentCandidateCount } : {}
+    };
   }
   var WALMART_PRIMARY_SCOPE = [
     "[data-testid*='buy-box' i]",
@@ -1081,19 +1174,33 @@ var YoinkRetailerShadowModule = (() => {
     const scopedControlCount = pageSku === expectedSku ? controls.map((candidate) => amazonOfferScope(candidate, retailer, expectedSku)).filter(Boolean).length : 0;
     const securityChallenge = retailerSecurityChallenge(document);
     const interactiveBlock = retailerInteractiveBlock(document, urlValue);
-    const repairLandmarks = addControlRepairLandmarks(
+    const genericAddIntentCount = boundedCount(genericAddIntentControls(document).length);
+    const priceCandidateCount = visibleSelectorCount(evidenceRoot, retailer.priceSelectors.join(", "));
+    const sellerShape = amazonSellerShape(evidenceRoot);
+    const currentSeller = pageSku === expectedSku ? sellerEvidence(document, selected.control, retailer, selected.offerRoot) : { sellerType: "unknown" };
+    const currentPrice = pageSku === expectedSku ? readPrice(evidenceRoot, retailer.priceSelectors) ?? readPrice(document, retailer.priceSelectors) : null;
+    const repairEvidence = repairLandmarkEvidence(
       document,
+      evidenceRoot,
       retailer,
-      securityChallenge || Boolean(interactiveBlock)
+      pageSku !== expectedSku || securityChallenge || Boolean(interactiveBlock)
     );
+    const repairLandmarks = controls.length <= 1 ? eligibleRepairLandmarks(repairEvidence, {
+      availability: controls.length === 0 && genericAddIntentCount === 0,
+      unitPrice: currentPrice === null,
+      seller: currentSeller.sellerType === "unknown",
+      fulfillment: selected.fulfillment === "unknown",
+      addControl: controls.length === 0 && genericAddIntentCount > 0
+    }) : [];
     return {
       schemaVersion: 1,
       pageKind: pageSku ? "product" : "other",
       scopeKind: amazonScopeKind(control),
-      sellerShape: amazonSellerShape(evidenceRoot),
+      sellerShape,
       fulfillmentShape: fulfillmentShape(evidenceRoot),
       addControlCount: boundedCount(controls.length),
-      genericAddIntentCount: boundedCount(genericAddIntentControls(document).length),
+      genericAddIntentCount,
+      ...repairCandidateCounts(repairEvidence, repairLandmarks),
       scopedControlCount: boundedCount(scopedControlCount),
       explicitSkuInputCount: boundedCount(explicitSkuInputs.length),
       exactSkuInputCount: boundedCount(exactSkuInputs.length),
@@ -1102,7 +1209,7 @@ var YoinkRetailerShadowModule = (() => {
       canonicalOfferDistinctCount: boundedCount(canonicalOffers.size),
       alternateOfferInputCount: boundedCount(alternateInputs.length),
       alternateOfferDistinctCount: boundedCount(alternateOffers.size),
-      priceCandidateCount: visibleSelectorCount(evidenceRoot, retailer.priceSelectors.join(", ")),
+      priceCandidateCount,
       quantityControlCount: visibleSelectorCount(
         evidenceRoot,
         "select#quantity, select[name='quantity'], input[name='quantity'], input[name='items[0.base][quantity]']"
@@ -1122,19 +1229,33 @@ var YoinkRetailerShadowModule = (() => {
     const root = selected.offerRoot || control?.closest("form, main") || document;
     const securityChallenge = retailerSecurityChallenge(document);
     const interactiveBlock = retailerInteractiveBlock(document, urlValue);
-    const repairLandmarks = addControlRepairLandmarks(
+    const genericAddIntentCount = boundedCount(genericAddIntentControls(document).length);
+    const priceCandidateCount = visibleSelectorCount(root, retailer.priceSelectors.join(", "));
+    const sellerShape = queryVisible(root, retailer.sellerSelectors) || retailerId === "bestbuy" && selected.offerRoot && bestBuySellerBound(selected.offerRoot, retailer) ? "legacy" : "none";
+    const currentSeller = pageSku === expectedSku ? sellerEvidence(document, selected.control, retailer, selected.offerRoot) : { sellerType: "unknown" };
+    const currentPrice = pageSku === expectedSku ? readPrice(root, retailer.priceSelectors) ?? readPrice(document, retailer.priceSelectors) : null;
+    const repairEvidence = repairLandmarkEvidence(
       document,
+      root,
       retailer,
-      securityChallenge || Boolean(interactiveBlock)
+      pageSku !== expectedSku || securityChallenge || Boolean(interactiveBlock)
     );
+    const repairLandmarks = controls.length <= 1 ? eligibleRepairLandmarks(repairEvidence, {
+      availability: controls.length === 0 && genericAddIntentCount === 0,
+      unitPrice: currentPrice === null,
+      seller: currentSeller.sellerType === "unknown",
+      fulfillment: selected.fulfillment === "unknown",
+      addControl: controls.length === 0 && genericAddIntentCount > 0
+    }) : [];
     return {
       schemaVersion: 1,
       pageKind: pageSku ? "product" : "other",
       scopeKind: control?.closest("form") ? "form" : retailerId === "bestbuy" && selected.offerRoot ? "buybox" : control ? "other" : "none",
-      sellerShape: queryVisible(root, retailer.sellerSelectors) || retailerId === "bestbuy" && selected.offerRoot && bestBuySellerBound(selected.offerRoot, retailer) ? "legacy" : "none",
+      sellerShape,
       fulfillmentShape: fulfillmentShape(root),
       addControlCount: boundedCount(controls.length),
-      genericAddIntentCount: boundedCount(genericAddIntentControls(document).length),
+      genericAddIntentCount,
+      ...repairCandidateCounts(repairEvidence, repairLandmarks),
       scopedControlCount: selected.control ? 1 : 0,
       explicitSkuInputCount: 0,
       exactSkuInputCount: 0,
@@ -1143,7 +1264,7 @@ var YoinkRetailerShadowModule = (() => {
       canonicalOfferDistinctCount: 0,
       alternateOfferInputCount: 0,
       alternateOfferDistinctCount: 0,
-      priceCandidateCount: visibleSelectorCount(root, retailer.priceSelectors.join(", ")),
+      priceCandidateCount,
       quantityControlCount: visibleSelectorCount(root, "select[name='quantity'], input[name='quantity']"),
       securityChallenge,
       interactiveBlock,
@@ -1740,6 +1861,28 @@ var YoinkRetailerShadowModule = (() => {
     "pbandai",
     "pokemoncenter"
   ]);
+  var REPAIR_SELECTOR_MISS_REASONS = /* @__PURE__ */ new Set([
+    "availability_selector_miss",
+    "add_control_selector_miss",
+    "price_selector_miss",
+    "seller_selector_miss",
+    "fulfillment_selector_miss"
+  ]);
+  function hasRepairField(layout, field) {
+    return Boolean(layout.repairLandmarks?.some((landmark) => landmark.field === field));
+  }
+  function boundedDiagnosticLayout(layout, reasonCode) {
+    if (REPAIR_SELECTOR_MISS_REASONS.has(reasonCode)) return layout;
+    const {
+      repairLandmarks: _repairLandmarks,
+      genericAvailabilityCandidateCount: _availabilityCandidates,
+      genericPriceCandidateCount: _priceCandidates,
+      genericSellerCandidateCount: _sellerCandidates,
+      genericFulfillmentCandidateCount: _fulfillmentCandidates,
+      ...bounded
+    } = layout;
+    return bounded;
+  }
   function rehearseAmazonBuyNowRoute(documentValue, urlValue) {
     const asin = extractRetailerSku("amazon", urlValue);
     if (!asin) return { purchaseRouteKind: "amazon_buy_now", purchaseRouteReady: false, routeReasonCode: "offer_not_actionable" };
@@ -1817,7 +1960,13 @@ var YoinkRetailerShadowModule = (() => {
       };
     }
     if (layout.addControlCount === 0) {
-      return (layout.genericAddIntentCount ?? 0) > 0 ? { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_selector_miss" } : { outcome: "rejected", failureStage: "add_control", reasonCode: "add_control_missing" };
+      if ((layout.genericAddIntentCount ?? 0) > 0) {
+        return { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_selector_miss" };
+      }
+      if ((layout.genericAvailabilityCandidateCount ?? 0) === 1 && hasRepairField(layout, "availability")) {
+        return { outcome: "failed", failureStage: "availability_binding", reasonCode: "availability_selector_miss" };
+      }
+      return { outcome: "rejected", failureStage: "add_control", reasonCode: "add_control_missing" };
     }
     if (layout.addControlCount > 1 && layout.scopedControlCount !== 1) {
       return { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_ambiguous" };
@@ -1837,13 +1986,13 @@ var YoinkRetailerShadowModule = (() => {
       if (primaryOfferCount !== 1) return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_ambiguous" };
     }
     if (layout.priceCandidateCount === 0 || observation.unitPriceCents === null) {
-      return { outcome: "failed", failureStage: "price_binding", reasonCode: "price_binding_missing" };
+      return (layout.genericPriceCandidateCount ?? 0) === 1 && hasRepairField(layout, "unitPrice") ? { outcome: "failed", failureStage: "price_binding", reasonCode: "price_selector_miss" } : { outcome: "failed", failureStage: "price_binding", reasonCode: "price_binding_missing" };
     }
     if (observation.sellerType === "unknown") {
-      return { outcome: "failed", failureStage: "seller_binding", reasonCode: "seller_binding_missing" };
+      return (layout.genericSellerCandidateCount ?? 0) === 1 && hasRepairField(layout, "seller") ? { outcome: "failed", failureStage: "seller_binding", reasonCode: "seller_selector_miss" } : { outcome: "failed", failureStage: "seller_binding", reasonCode: "seller_binding_missing" };
     }
     if (observation.fulfillment === "unknown") {
-      return { outcome: "failed", failureStage: "fulfillment_binding", reasonCode: "fulfillment_binding_missing" };
+      return (layout.genericFulfillmentCandidateCount ?? 0) === 1 && hasRepairField(layout, "fulfillment") ? { outcome: "failed", failureStage: "fulfillment_binding", reasonCode: "fulfillment_selector_miss" } : { outcome: "failed", failureStage: "fulfillment_binding", reasonCode: "fulfillment_binding_missing" };
     }
     if (!observation.addControlActionable) {
       return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_scope_not_actionable" };
@@ -1862,6 +2011,7 @@ var YoinkRetailerShadowModule = (() => {
     const observation = collectRetailerShadowObservation(documentValue, urlValue, retailerId, requiredFulfillment);
     const layout = retailerAdapterLayoutEvidence(documentValue, urlValue, retailerId, observation.retailerSku);
     const state = observationDiagnosticState(observation, layout);
+    const diagnosticLayout = boundedDiagnosticLayout(layout, state.reasonCode);
     return {
       observation,
       diagnostic: {
@@ -1876,7 +2026,7 @@ var YoinkRetailerShadowModule = (() => {
         reasonCode: state.reasonCode,
         attemptCount: Math.max(1, Math.min(3, Math.trunc(attemptCount) || 1)),
         domChanged: domChanged === true,
-        layout
+        layout: diagnosticLayout
       }
     };
   }

@@ -501,6 +501,7 @@ interface HarnessOptions {
   visibleTrackalackerFallback?: boolean;
   amazonHydrationRetry?: boolean;
   observerRepairLandmark?: boolean;
+  observerFiveFieldRepairLandmarks?: boolean;
   deviceCredentialRotationDue?: boolean;
   pendingDeviceCredential?: boolean;
   deviceCredentialCommitFailures?: number;
@@ -873,7 +874,7 @@ function harness(options: HarnessOptions = {}) {
           if (options.retailerObserverFailure === "invalid_contract") {
             return [{ frameId: 0, result: { ok: true, observation: AMAZON_OBSERVATION, diagnostic: null } }];
           }
-          if (options.observerRepairLandmark) {
+          if (options.observerRepairLandmark || options.observerFiveFieldRepairLandmarks) {
             const observation = {
               ...AMAZON_OBSERVATION,
               availability: "out_of_stock",
@@ -882,24 +883,39 @@ function harness(options: HarnessOptions = {}) {
               purchaseRouteReady: false,
               routeReasonCode: "offer_not_actionable"
             };
+            const fiveField = options.observerFiveFieldRepairLandmarks === true;
             const diagnostic = {
               ...diagnosticFor(AMAZON_OBSERVATION),
               outcome: "failed",
-              failureStage: "add_control",
-              reasonCode: "add_control_selector_miss",
+              failureStage: fiveField ? "availability_binding" : "add_control",
+              reasonCode: fiveField ? "availability_selector_miss" : "add_control_selector_miss",
               rawDom: "DO_NOT_SEND_DOM",
               layout: {
                 ...diagnosticFor(AMAZON_OBSERVATION).layout,
                 addControlCount: 0,
                 genericAddIntentCount: 1,
+                ...(fiveField ? {
+                  genericAvailabilityCandidateCount: 1,
+                  genericPriceCandidateCount: 1,
+                  genericSellerCandidateCount: 1,
+                  genericFulfillmentCandidateCount: 1
+                } : {}),
                 scopedControlCount: 0,
-                repairLandmarks: [{
-                  field: "addControl",
-                  elementKind: "role_button",
-                  attribute: "data-testid",
-                  value: "pdp-add-to-cart-control",
-                  textContent: "DO_NOT_SEND_TEXT"
-                }],
+                repairLandmarks: [
+                  ...(fiveField ? [
+                    { field: "availability", elementKind: "div", attribute: "data-testid", value: "product-availability-status", textContent: "DO_NOT_SEND_STOCK" },
+                    { field: "unitPrice", elementKind: "span", attribute: "data-testid", value: "product-current-price", textContent: "$DO_NOT_SEND_PRICE" },
+                    { field: "seller", elementKind: "p", attribute: "data-testid", value: "seller-display-name", textContent: "DO_NOT_SEND_SELLER" },
+                    { field: "fulfillment", elementKind: "div", attribute: "data-testid", value: "shipping-fulfillment-option", textContent: "DO_NOT_SEND_FULFILLMENT" }
+                  ] : []),
+                  {
+                    field: "addControl",
+                    elementKind: "role_button",
+                    attribute: "data-testid",
+                    value: "pdp-add-to-cart-control",
+                    textContent: "DO_NOT_SEND_TEXT"
+                  }
+                ],
                 pageText: "DO_NOT_SEND_PAGE"
               }
             };
@@ -1547,6 +1563,31 @@ test("the service worker transports only the allowlisted structural landmark fro
   assert.equal(serialized.includes("rawDom"), false);
   assert.equal((body.layout.repairLandmarks as Array<Record<string, unknown>>)
     .some((landmark) => "selector" in landmark), false);
+});
+
+test("the service worker transports five fixed repair fields without page or offer values", async () => {
+  const runtime = harness({ activeUrl: AMAZON_PRODUCT_URL, observerFiveFieldRepairLandmarks: true });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  const post = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/amazon"));
+  assert.ok(post);
+  const body = JSON.parse(String(post.options.body)) as { layout: Record<string, unknown>; reasonCode: string };
+  assert.equal(body.reasonCode, "availability_selector_miss");
+  assert.deepEqual(body.layout.repairLandmarks, [
+    { field: "availability", elementKind: "div", attribute: "data-testid", value: "product-availability-status" },
+    { field: "unitPrice", elementKind: "span", attribute: "data-testid", value: "product-current-price" },
+    { field: "seller", elementKind: "p", attribute: "data-testid", value: "seller-display-name" },
+    { field: "fulfillment", elementKind: "div", attribute: "data-testid", value: "shipping-fulfillment-option" },
+    { field: "addControl", elementKind: "role_button", attribute: "data-testid", value: "pdp-add-to-cart-control" }
+  ]);
+  assert.equal(body.layout.genericAvailabilityCandidateCount, 1);
+  assert.equal(body.layout.genericPriceCandidateCount, 1);
+  assert.equal(body.layout.genericSellerCandidateCount, 1);
+  assert.equal(body.layout.genericFulfillmentCandidateCount, 1);
+  const serialized = JSON.stringify(body);
+  for (const forbidden of ["DO_NOT_SEND", "textContent", "pageText", "rawDom"]) {
+    assert.equal(serialized.includes(forbidden), false, forbidden);
+  }
 });
 
 for (const [failure, reasonCode] of [

@@ -25,7 +25,7 @@ export const BACKGROUND_TASK_DEFINITIONS = Object.freeze({
   }),
   observer_recipe_candidate_evaluation: Object.freeze({
     label: "Observer repair candidate evaluation",
-    description: "Compile mature privacy-bounded repair landmarks into unsigned quarantined observer-only candidates for maintainer review.",
+    description: "Compile mature privacy-bounded availability, unit-price, seller, fulfillment, and add-control landmarks into unsigned quarantined observer-only candidates for independent validation.",
     intervalSeconds: 60,
     maximumAttempts: 5
   }),

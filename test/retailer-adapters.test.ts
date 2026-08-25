@@ -48,6 +48,11 @@ test("selector misses expose only a locally unique privacy-bounded structural la
   assert.equal(attempt.diagnostic.layout.addControlCount, 0);
   assert.equal(attempt.diagnostic.layout.genericAddIntentCount, 1);
   assert.deepEqual(attempt.diagnostic.layout.repairLandmarks, [{
+    field: "seller",
+    elementKind: "p",
+    attribute: "data-testid",
+    value: "seller-display-name"
+  }, {
     field: "addControl",
     elementKind: "role_button",
     attribute: "data-testid",
@@ -66,6 +71,35 @@ test("selector misses expose only a locally unique privacy-bounded structural la
   </main>`, { url }).window.document;
   const layout = retailerAdapterLayoutEvidence(unsafe, url, "walmart", "17354421975");
   assert.deepEqual(layout.repairLandmarks, undefined);
+});
+
+test("one exact selector-class failure can expose all five privacy-bounded read-only field landmarks", () => {
+  const url = "https://www.walmart.com/ip/example/17354421975";
+  const document = new JSDOM(`<main data-us-item-id="17354421975">
+    <div data-testid="product-availability-status">In stock</div>
+    <span data-testid="product-current-price">$19.99</span>
+    <p data-testid="seller-display-name">Sold and shipped by Walmart</p>
+    <div data-testid="shipping-fulfillment-option" aria-selected="true">Shipping</div>
+    <button data-automation-id="atc">Add to cart</button>
+  </main>`, { url }).window.document;
+  const attempt = collectRetailerShadowAttempt(document, url, "walmart", "shipping");
+  assert.equal(attempt.diagnostic.failureStage, "price_binding");
+  assert.equal(attempt.diagnostic.reasonCode, "price_selector_miss");
+  assert.equal(attempt.diagnostic.layout.genericAvailabilityCandidateCount, 1);
+  assert.equal(attempt.diagnostic.layout.genericPriceCandidateCount, 1);
+  assert.equal(attempt.diagnostic.layout.genericSellerCandidateCount, 1);
+  assert.equal(attempt.diagnostic.layout.genericFulfillmentCandidateCount, 1);
+  assert.deepEqual(attempt.diagnostic.layout.repairLandmarks, [
+    { field: "availability", elementKind: "div", attribute: "data-testid", value: "product-availability-status" },
+    { field: "unitPrice", elementKind: "span", attribute: "data-testid", value: "product-current-price" },
+    { field: "seller", elementKind: "p", attribute: "data-testid", value: "seller-display-name" },
+    { field: "fulfillment", elementKind: "div", attribute: "data-testid", value: "shipping-fulfillment-option" },
+    { field: "addControl", elementKind: "button", attribute: "data-automation-id", value: "atc" }
+  ]);
+  const serialized = JSON.stringify(attempt.diagnostic.layout.repairLandmarks);
+  for (const forbidden of ["19.99", "Sold and shipped by Walmart", "In stock", "Shipping", "17354421975"]) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
 });
 
 test("retailer URL identity extraction is exact and rejects foreign origins", () => {

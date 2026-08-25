@@ -1,6 +1,39 @@
 # Yoink roadmap
 
-## Shipped through 0.47.0
+## Shipped through 0.48.0
+
+### Five-field privacy-bounded repair mining (0.48.0)
+
+- The packaged exact-product observer now mines stable structural landmarks
+  for availability, unit price, seller, fulfillment, and add control. It first
+  proves local field semantics, then requires one globally unique allowlisted
+  element/attribute/value selector; ambiguity or sensitive/dynamic vocabulary
+  fails closed
+- Add control remains restricted to button/input/role-button structures. Input
+  is rejected for every value field; those fields use a small fixed set of
+  visible semantic elements.
+  Page DOM/text, observed field values, arbitrary selectors, IDs/classes, URLs,
+  form values, offer/session material, and account/checkout data never enter a
+  repair landmark
+- Companion and server independently validate field, element, attribute,
+  field-specific vocabulary, reason/stage, product/block state, and matching
+  structural counts. Exact product identity stays in the private diagnostic
+  ledger only for evidence isolation and is never copied into a candidate
+- The signing-free durable compiler groups every mature compatible field for
+  one layout into one deterministic candidate. Modes are fixed to `text` for
+  the four value fields and `disabled_state` for add control. Adversarial tests
+  reject wrong-field intent, wrong modes, editable Add targets, sensitive
+  values, arbitrary selector grammar, and replay collisions
+- Generated recipes remain unsigned, 30-day, quarantined, non-executable, and
+  absent from all mutation runners. Automatic processing cannot sign, promote,
+  trial, distribute, renew, or execute them. The required independent oracle is
+  explicitly reported as unimplemented
+- Admin repair cards name each field; generated registry cards enumerate their
+  fields and mark the independent-oracle gate. Health reports five supported
+  repair fields while retaining false execution and auto-promotion flags
+- No schema migration or retailer authority changes. Migration 41 remains
+  current; observations, qualifications, spend, checkout, drawing entry, and
+  order submission are unchanged
 
 ### Durable observer-repair candidate evaluation (0.47.0)
 
@@ -1074,9 +1107,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.47.0
+## Architecture assessment after 0.48.0
 
-Yoink 0.47.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.48.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1092,7 +1125,7 @@ or more autonomous behavior.
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
-| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; a narrow stable-attribute landmark can derive a tenant-scoped non-executable maintainer suggestion; a signing-free seventh worker family may now compile thresholded Add-control landmarks into idempotent unsigned quarantine candidates only; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Landmarks cover only unique Add-control selector misses and cannot synthesize the other four read-only fields; local device/SKU evidence is not a public community quorum or independent oracle; no candidate is auto-promoted or independently validated; canary is not cohort deployment; the independent witness service and public consistency monitor are not deployed by this repository |
+| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; field-specific stable-attribute landmarks cover all five fixed read-only observer fields; a signing-free seventh worker family compiles mature compatible fields per layout into idempotent unsigned quarantine candidates only; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Local device/SKU evidence is not a public community quorum or independent oracle; generated candidates are not independently validated or auto-promoted; packaged-versus-recipe conflict handling, contributor-deduplicated cohorts, regional/layout canaries, and automatic kill SLOs remain incomplete; the independent witness service and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
 | Automatic purchasing | Reviewed plans can directly request guarded quantity-one attempts without a strategy and now expose an authoritative armed/blocked explanation; live legacy multi-unit strategy adds and all unqualified-lane matches fail over to notification before reservation; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 | Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
@@ -1267,7 +1300,9 @@ keys. Version 0.41 binds new standalone work to the exact API-owned package,
 task-registry, and public-witness fingerprint with append-only expectation
 history and fail-closed health. Version 0.47 adds the seventh closed task for
 signing-free observer-repair candidate quarantine; signing, promotion, trials,
-and distribution deliberately stay outside that worker. None of these releases turns the SQLite process into a
+and distribution deliberately stay outside that worker. Version 0.48 expands
+only its bounded input compiler to all five fixed read-only fields; it adds no
+worker authority. None of these releases turns the SQLite process into a
 production fleet or proves signed artifact/workload identity.
 
 - Implement the async PostgreSQL repository family and migrations/importer with
@@ -1383,24 +1418,25 @@ Add-control selector miss it can retain one of five allowlisted stable
 attributes and derive a non-executable, tenant-scoped maintainer suggestion.
 Version 0.47 moves that exact local threshold into a durable signing-free
 compiler that may create only an unsigned Add-control quarantine candidate.
-It does not mine the other read-only fields, aggregate independent accounts,
-validate correctness, or promote/sign/trial/distribute anything automatically.
-The broader phase remains open:
+Version 0.48 extends the same local semantic and stable-attribute boundary to
+availability, unit price, seller, fulfillment, and add control, and compiles
+every mature compatible field for a layout into one fixed-mode unsigned
+candidate. It still does not aggregate independent accounts, validate
+correctness, or promote/sign/trial/distribute anything automatically. The
+broader phase remains open:
 
-- Extend the packaged candidate miner to the other four fixed read-only fields. It may
-  emit only stability-checked, k-anonymous selector candidates and bounded
-  structural tokens from a packaged exact-SKU/offer root; editable, form,
-  account, checkout, and sensitive elements are structurally excluded
-- Extend the shipped Add-control clustering/compiler to complete bounded recipe
-  candidates, then validate with the strongest available independent oracle:
+- Validate generated candidates with the strongest available independent oracle:
   maintainer-redacted fixtures, a second packaged/structured reader, explicit
   user confirmation of normalized fields, then reputable multi-device agreement
+- Make packaged evidence authoritative on conflict: a recipe may fill a missing
+  read-only field but cannot override a conflicting packaged value. Conflict
+  must become unknown/quarantined and feed a bounded regression incident
 - Deduplicate trials by latest independent contributor/device and require
   multiple SKUs, layouts, regions, minimum canary time, deterministic cohorts,
   regression SLOs, expiry, auto-kill, rollback, and transparency history
-- A recipe may fill a missing read-only field; it cannot override conflicting
-  packaged evidence. Conflict becomes unknown/quarantined. Mutation runners
-  must ignore remote recipes by type and execution boundary, not convention
+- Keep mutation runners isolated from remote recipes by type and execution
+  boundary, not convention; continue source-scanning and packaged adversarial
+  tests for every release
 - LLMs may rank sanitized candidate recipes or explain clusters, but never
   receive checkout/form data and never produce directly executable logic
 
@@ -1625,11 +1661,12 @@ and [optional permission guidance](https://developer.chrome.com/docs/extensions/
 5. **Shadow-validation and witness seam implemented:** manually proposed signed
    declarative selectors, trial counts, lifecycle labels, kill switch,
    rollback, bundled fallback, package-rooted signing, and a deployment-pinned
-   external witness gate are present. A durable worker can generate only an
-   unsigned quarantined Add-control candidate from the narrow local threshold.
-   Other fields, independent-account evidence/oracles, cohort canaries,
-   external witness operation, automatic validation, and automatic correction
-   remain open.
+   external witness gate are present. A durable worker can generate an unsigned
+   quarantined fixed-mode candidate spanning any mature subset of all five
+   read-only fields from the narrow local threshold. Independent-account
+   evidence/oracles, packaged-conflict adjudication, cohort canaries, external
+   witness operation, automatic validation, and automatic correction remain
+   open.
 6. **Production blocked:** trusted-read-only delivery still requires a deployed
    independent witness/monitor, production IdP and key management, real staged
    canaries, privacy/security review, and Chrome Web Store approval. Mutation

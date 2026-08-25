@@ -131,12 +131,20 @@ test("the production observer bundle emits only a stable structural repair landm
   ) as { diagnostic: { reasonCode: string; layout: Record<string, unknown> } };
   const plain = JSON.parse(JSON.stringify(result)) as typeof result;
   assert.equal(plain.diagnostic.reasonCode, "add_control_selector_miss");
-  assert.deepEqual(plain.diagnostic.layout.repairLandmarks, [{
-    field: "addControl",
-    elementKind: "role_button",
-    attribute: "data-testid",
-    value: "pdp-add-to-cart-control"
-  }]);
+  assert.deepEqual(plain.diagnostic.layout.repairLandmarks, [
+    {
+      field: "seller",
+      elementKind: "p",
+      attribute: "data-testid",
+      value: "seller-display-name"
+    },
+    {
+      field: "addControl",
+      elementKind: "role_button",
+      attribute: "data-testid",
+      value: "pdp-add-to-cart-control"
+    }
+  ]);
   assert.equal(JSON.stringify(plain.diagnostic.layout).includes("Private Fixture"), false);
   assert.equal(JSON.stringify(plain.diagnostic.layout).includes("17354421975"), false);
 });

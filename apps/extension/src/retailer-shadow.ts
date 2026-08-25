@@ -23,6 +23,30 @@ const SUPPORTED = new Set<SupportedRetailerId>([
   "walmart", "amazon", "bestbuy", "disney", "ravensburger", "riot",
   "booksamillion", "fanatics", "kohls", "macys", "pbandai", "pokemoncenter"
 ]);
+const REPAIR_SELECTOR_MISS_REASONS = new Set([
+  "availability_selector_miss", "add_control_selector_miss", "price_selector_miss",
+  "seller_selector_miss", "fulfillment_selector_miss"
+]);
+
+function hasRepairField(layout: RetailerAdapterLayoutEvidence, field: string): boolean {
+  return Boolean(layout.repairLandmarks?.some((landmark) => landmark.field === field));
+}
+
+function boundedDiagnosticLayout(
+  layout: RetailerAdapterLayoutEvidence,
+  reasonCode: string
+): RetailerAdapterLayoutEvidence {
+  if (REPAIR_SELECTOR_MISS_REASONS.has(reasonCode)) return layout;
+  const {
+    repairLandmarks: _repairLandmarks,
+    genericAvailabilityCandidateCount: _availabilityCandidates,
+    genericPriceCandidateCount: _priceCandidates,
+    genericSellerCandidateCount: _sellerCandidates,
+    genericFulfillmentCandidateCount: _fulfillmentCandidates,
+    ...bounded
+  } = layout;
+  return bounded;
+}
 
 export function rehearseAmazonBuyNowRoute(documentValue: Document, urlValue: string) {
   const asin = extractRetailerSku("amazon", urlValue);
@@ -116,9 +140,13 @@ function observationDiagnosticState(
     };
   }
   if (layout.addControlCount === 0) {
-    return (layout.genericAddIntentCount ?? 0) > 0
-      ? { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_selector_miss" }
-      : { outcome: "rejected", failureStage: "add_control", reasonCode: "add_control_missing" };
+    if ((layout.genericAddIntentCount ?? 0) > 0) {
+      return { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_selector_miss" };
+    }
+    if ((layout.genericAvailabilityCandidateCount ?? 0) === 1 && hasRepairField(layout, "availability")) {
+      return { outcome: "failed", failureStage: "availability_binding", reasonCode: "availability_selector_miss" };
+    }
+    return { outcome: "rejected", failureStage: "add_control", reasonCode: "add_control_missing" };
   }
   if (layout.addControlCount > 1 && layout.scopedControlCount !== 1) {
     return { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_ambiguous" };
@@ -139,13 +167,19 @@ function observationDiagnosticState(
     if (primaryOfferCount !== 1) return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_ambiguous" };
   }
   if (layout.priceCandidateCount === 0 || observation.unitPriceCents === null) {
-    return { outcome: "failed", failureStage: "price_binding", reasonCode: "price_binding_missing" };
+    return (layout.genericPriceCandidateCount ?? 0) === 1 && hasRepairField(layout, "unitPrice")
+      ? { outcome: "failed", failureStage: "price_binding", reasonCode: "price_selector_miss" }
+      : { outcome: "failed", failureStage: "price_binding", reasonCode: "price_binding_missing" };
   }
   if (observation.sellerType === "unknown") {
-    return { outcome: "failed", failureStage: "seller_binding", reasonCode: "seller_binding_missing" };
+    return (layout.genericSellerCandidateCount ?? 0) === 1 && hasRepairField(layout, "seller")
+      ? { outcome: "failed", failureStage: "seller_binding", reasonCode: "seller_selector_miss" }
+      : { outcome: "failed", failureStage: "seller_binding", reasonCode: "seller_binding_missing" };
   }
   if (observation.fulfillment === "unknown") {
-    return { outcome: "failed", failureStage: "fulfillment_binding", reasonCode: "fulfillment_binding_missing" };
+    return (layout.genericFulfillmentCandidateCount ?? 0) === 1 && hasRepairField(layout, "fulfillment")
+      ? { outcome: "failed", failureStage: "fulfillment_binding", reasonCode: "fulfillment_selector_miss" }
+      : { outcome: "failed", failureStage: "fulfillment_binding", reasonCode: "fulfillment_binding_missing" };
   }
   if (!observation.addControlActionable) {
     return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_scope_not_actionable" };
@@ -172,6 +206,7 @@ export function collectRetailerShadowAttempt(
   const observation = collectRetailerShadowObservation(documentValue, urlValue, retailerId, requiredFulfillment);
   const layout = retailerAdapterLayoutEvidence(documentValue, urlValue, retailerId, observation.retailerSku);
   const state = observationDiagnosticState(observation, layout);
+  const diagnosticLayout = boundedDiagnosticLayout(layout, state.reasonCode);
   return {
     observation,
     diagnostic: {
@@ -186,7 +221,7 @@ export function collectRetailerShadowAttempt(
       reasonCode: state.reasonCode,
       attemptCount: Math.max(1, Math.min(3, Math.trunc(attemptCount) || 1)),
       domChanged: domChanged === true,
-      layout
+      layout: diagnosticLayout
     }
   };
 }

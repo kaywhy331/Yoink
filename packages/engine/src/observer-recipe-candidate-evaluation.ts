@@ -4,6 +4,7 @@ import {
   isGeneratedObserverRepairSelector,
   ObserverRepairCandidateRepository
 } from "../../database/src/observer-repair-candidate-repository.js";
+import type { ObserverRecipeField, ObserverRecipeFieldInput } from "../../contracts/src/index.js";
 import type { BackgroundTaskResult } from "../../domain/src/background-task.js";
 
 const MAX_REPAIR_GROUPS = 2_000;
@@ -27,8 +28,8 @@ export class ObserverRecipeCandidateEvaluationService {
       const ready = group.repairSuggestions
         .filter((suggestion) => suggestion.reviewState === "maintainer_ready" && suggestion.executable === false);
       const suggestions = ready
-        .filter((suggestion) => isGeneratedObserverRepairSelector(suggestion.selector))
-        .sort((left, right) => left.selector.localeCompare(right.selector));
+        .filter((suggestion) => isGeneratedObserverRepairSelector(suggestion.field, suggestion.selector))
+        .sort((left, right) => left.field.localeCompare(right.field) || left.selector.localeCompare(right.selector));
       unsupportedMatureSelectors += ready.length - suggestions.length;
       return suggestions.length ? [{ group, suggestions }] : [];
     });
@@ -37,13 +38,23 @@ export class ObserverRecipeCandidateEvaluationService {
     let expiredCandidates = 0;
     let reviewedCandidates = 0;
     let selectorsEvaluated = 0;
+    let candidateFieldsEvaluated = 0;
     for (const { group, suggestions } of mature.slice(0, MAX_GENERATED_CANDIDATES_PER_RUN)) {
-      const selectors = suggestions.map((suggestion) => suggestion.selector);
-      selectorsEvaluated += selectors.length;
+      const fields: Partial<Record<ObserverRecipeField, ObserverRecipeFieldInput>> = {};
+      for (const suggestion of suggestions) {
+        const current = fields[suggestion.field];
+        fields[suggestion.field] = {
+          mode: suggestion.mode,
+          selectors: [...new Set([...(current?.selectors ?? []), suggestion.selector])]
+            .sort((left, right) => left.localeCompare(right))
+        };
+      }
+      selectorsEvaluated += suggestions.length;
+      candidateFieldsEvaluated += Object.keys(fields).length;
       const ensured = this.candidates.ensure({
         retailerId: group.retailerId,
         layoutFingerprint: group.layoutFingerprint,
-        selectors,
+        fields,
         minimumExtensionVersion: runtimeVersion,
         occurrenceCount: suggestions.reduce((sum, suggestion) => sum + suggestion.occurrenceCount, 0),
         minimumDistinctDeviceCount: Math.min(...suggestions.map((suggestion) => suggestion.distinctDeviceCount)),
@@ -59,6 +70,8 @@ export class ObserverRecipeCandidateEvaluationService {
       matureRepairGroups: mature.length,
       unsupportedMatureSelectors,
       selectorsEvaluated,
+      candidateFieldsEvaluated,
+      supportedRepairFields: 5,
       candidatesCreated,
       candidatesReused,
       candidatesDeferred: Math.max(0, mature.length - MAX_GENERATED_CANDIDATES_PER_RUN),

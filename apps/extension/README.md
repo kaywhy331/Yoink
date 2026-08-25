@@ -38,6 +38,14 @@ timestamp, and zero-valued structural counts. Raw Chrome errors, query-bearing
 URLs, DOM, and page text are not sent. Identity failures and permission denials
 remain entirely local.
 
+Companion 0.48 extends the same privacy-bounded repair path to availability,
+unit price, seller, fulfillment, and add control. Field semantics stay inside
+the isolated observer. The service worker accepts only one locally unique
+allowlisted structural landmark per field plus bounded counts; it independently
+rejects wrong-field vocabulary, sensitive/dynamic values, unknown properties,
+and Add controls that are not button-like. Observed page text and offer values
+never enter the diagnostic repair payload.
+
 If that canonical diagnostic cannot reach the loopback server because of a
 transient network, timeout/rate-limit, or server failure, companion 0.17.0 keeps
 it in a paired-device-bound local outbox and retries on startup and the

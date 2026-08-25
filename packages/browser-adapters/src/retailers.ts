@@ -775,27 +775,47 @@ function genericAddIntentControls(root: ParentNode): Element[] {
 }
 
 const REPAIR_LANDMARK_ATTRIBUTES = [
-  "data-testid", "data-test-id", "data-automation-id", "data-button-state", "name"
+  "data-testid", "data-test-id", "data-automation-id", "data-button-state", "name", "itemprop"
 ] as const;
 const REPAIR_LANDMARK_VALUE = /^[A-Za-z][A-Za-z0-9_.:-]{1,63}$/;
-const REPAIR_LANDMARK_INTENT = /(?:add|cart|bag|pre[_.:-]?order|atc)/i;
 const REPAIR_LANDMARK_FORBIDDEN = /(?:checkout|buy[_.:-]?now|place[_.:-]?order|submit[_.:-]?order|payment|credit|debit|address|email|phone|account|password|cookie|csrf|token)/i;
 const REPAIR_LANDMARK_TOKENS = new Set([
   "pdp", "product", "detail", "buy", "box", "fulfillment", "shipping", "delivery",
   "primary", "main", "add", "to", "cart", "bag", "pre", "preorder", "order",
   "button", "btn", "control", "atc", "submit", "action", "purchase", "state",
-  "available", "availability", "commerce"
+  "available", "availability", "unavailable", "inventory", "stock", "in", "out", "sold",
+  "price", "amount", "cost", "current", "customer", "sale", "offer", "value",
+  "seller", "merchant", "vendor", "display", "name", "by", "fulfilled",
+  "ship", "pickup", "pick", "up", "store", "method", "option", "selected",
+  "status", "label", "message", "info", "commerce"
 ]);
+const REPAIR_LANDMARK_INTENT: Record<RetailerAdapterRepairLandmark["field"], RegExp> = {
+  availability: /(?:availability|available|unavailable|inventory|stock|sold[_.:-]?out|pre[_.:-]?order)/i,
+  unitPrice: /(?:price|amount|cost|sale[_.:-]?price|customer[_.:-]?price|offer[_.:-]?price)/i,
+  seller: /(?:seller|merchant|vendor|sold[_.:-]?by)/i,
+  fulfillment: /(?:fulfillment|shipping|delivery|pickup|pick[_.:-]?up|ship[_.:-]?to)/i,
+  addControl: /(?:add|cart|bag|pre[_.:-]?order|atc)/i
+};
+const REPAIR_FIELDS = ["availability", "unitPrice", "seller", "fulfillment", "addControl"] as const;
+const REPAIR_STRUCTURAL_SELECTOR = REPAIR_LANDMARK_ATTRIBUTES.map((attribute) => `[${attribute}]`).join(", ");
 
-function repairLandmarkTokensAllowed(value: string): boolean {
-  return value.split(/[_.:-]+/).filter(Boolean)
+function repairLandmarkTokensAllowed(field: RetailerAdapterRepairLandmark["field"], value: string): boolean {
+  return REPAIR_LANDMARK_INTENT[field].test(value) && value.split(/[_.:-]+/).filter(Boolean)
     .every((token) => REPAIR_LANDMARK_TOKENS.has(token.toLocaleLowerCase("en-US")));
 }
 
-function repairLandmarkElement(element: Element): RetailerAdapterRepairLandmark["elementKind"] | null {
+function repairLandmarkElement(
+  element: Element,
+  field: RetailerAdapterRepairLandmark["field"]
+): RetailerAdapterRepairLandmark["elementKind"] | null {
   if (element.tagName === "BUTTON") return "button";
-  if (element.tagName === "INPUT") return "input";
-  return element.getAttribute("role") === "button" ? "role_button" : null;
+  if (element.tagName === "INPUT") return field === "addControl" ? "input" : null;
+  if (element.getAttribute("role") === "button") return "role_button";
+  if (field === "addControl") return null;
+  const elementKind = element.tagName.toLocaleLowerCase("en-US");
+  return ["div", "span", "p", "label", "section", "li"].includes(elementKind)
+    ? elementKind as RetailerAdapterRepairLandmark["elementKind"]
+    : null;
 }
 
 function repairLandmarkSelector(landmark: RetailerAdapterRepairLandmark): string {
@@ -803,41 +823,121 @@ function repairLandmarkSelector(landmark: RetailerAdapterRepairLandmark): string
   return `${element}[${landmark.attribute}='${landmark.value}']`;
 }
 
-function addControlRepairLandmarks(
+function repairSemanticMatches(
+  field: RetailerAdapterRepairLandmark["field"],
+  element: Element,
+  retailer: RetailerObserverConfig
+): boolean {
+  const evidence = field === "seller" ? sellerElementText(element, 1_000)
+    : `${observableText(element, 1_000)} ${element.getAttribute("aria-label") ?? ""}`.trim();
+  if (field === "availability") {
+    return /\bout of stock\b|\bsold out\b|\bcurrently unavailable\b|\bunavailable\b|\bin stock\b|\bpre[ -]?order\b/i.test(evidence);
+  }
+  if (field === "unitPrice") return parseRetailerPriceElement(element) !== null;
+  if (field === "seller") {
+    return retailer.firstPartyPattern.test(evidence) || retailer.marketplacePattern.test(evidence);
+  }
+  if (field === "fulfillment") {
+    const shipping = retailer.shippingPattern.test(evidence);
+    const pickup = retailer.pickupPattern.test(evidence);
+    return shipping !== pickup;
+  }
+  return GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element));
+}
+
+function fieldRepairEvidence(
   document: Document,
+  root: Element | Document,
+  retailer: RetailerObserverConfig,
+  field: RetailerAdapterRepairLandmark["field"]
+): { candidateCount: number; landmarks: RetailerAdapterRepairLandmark[] } {
+  const elements = (field === "addControl"
+    ? genericAddIntentControls(root)
+    : [...root.querySelectorAll(REPAIR_STRUCTURAL_SELECTOR)]
+      .slice(0, 500)
+      .filter((element) => visible(element) && !merchandisingControl(element)))
+    .filter((element) => repairLandmarkElement(element, field) !== null)
+    .filter((element) => repairSemanticMatches(field, element, retailer));
+  const candidates = [...new Set(elements)];
+  if (candidates.length !== 1 || !candidates[0]) {
+    return { candidateCount: boundedCount(candidates.length), landmarks: [] };
+  }
+  const element = candidates[0];
+  const elementKind = repairLandmarkElement(element, field);
+  if (!elementKind) return { candidateCount: 1, landmarks: [] };
+  for (const attribute of REPAIR_LANDMARK_ATTRIBUTES) {
+    const value = String(element.getAttribute(attribute) ?? "").trim();
+    if (!REPAIR_LANDMARK_VALUE.test(value)
+      || REPAIR_LANDMARK_FORBIDDEN.test(value)
+      || !repairLandmarkTokensAllowed(field, value)
+      || /\d{4,}|[a-f0-9]{12,}/i.test(value)) continue;
+    const landmark: RetailerAdapterRepairLandmark = { field, elementKind, attribute, value };
+    const selector = repairLandmarkSelector(landmark);
+    let exact = false;
+    try {
+      const matches = [...document.querySelectorAll(selector)];
+      exact = matches.length === 1 && matches[0] === element;
+    } catch {
+      exact = false;
+    }
+    if (exact) return { candidateCount: 1, landmarks: [landmark] };
+  }
+  return { candidateCount: 1, landmarks: [] };
+}
+
+function repairLandmarkEvidence(
+  document: Document,
+  root: Element | Document,
   retailer: RetailerObserverConfig,
   blocked: boolean
-): RetailerAdapterRepairLandmark[] {
-  if (blocked || candidateControls(document, retailer).length > 0) return [];
-  const landmarks: RetailerAdapterRepairLandmark[] = [];
-  const seen = new Set<string>();
-  for (const element of genericAddIntentControls(document)) {
-    const elementKind = repairLandmarkElement(element);
-    if (!elementKind) continue;
-    for (const attribute of REPAIR_LANDMARK_ATTRIBUTES) {
-      const value = String(element.getAttribute(attribute) ?? "").trim();
-      if (!REPAIR_LANDMARK_VALUE.test(value)
-        || !REPAIR_LANDMARK_INTENT.test(value)
-        || REPAIR_LANDMARK_FORBIDDEN.test(value)
-        || !repairLandmarkTokensAllowed(value)
-        || /\d{4,}|[a-f0-9]{12,}/i.test(value)) continue;
-      const landmark: RetailerAdapterRepairLandmark = { field: "addControl", elementKind, attribute, value };
-      const selector = repairLandmarkSelector(landmark);
-      let exact = false;
-      try {
-        const matches = [...document.querySelectorAll(selector)];
-        exact = matches.length === 1 && matches[0] === element;
-      } catch {
-        exact = false;
-      }
-      if (!exact || seen.has(selector)) continue;
-      seen.add(selector);
-      landmarks.push(landmark);
-      break;
-    }
-    if (landmarks.length >= 5) break;
+): {
+  availabilityCandidateCount: number;
+  priceCandidateCount: number;
+  sellerCandidateCount: number;
+  fulfillmentCandidateCount: number;
+  landmarks: RetailerAdapterRepairLandmark[];
+} {
+  if (blocked) {
+    return {
+      availabilityCandidateCount: 0,
+      priceCandidateCount: 0,
+      sellerCandidateCount: 0,
+      fulfillmentCandidateCount: 0,
+      landmarks: []
+    };
   }
-  return landmarks;
+  const evidence = Object.fromEntries(REPAIR_FIELDS.map((field) => [
+    field,
+    fieldRepairEvidence(document, root, retailer, field)
+  ])) as Record<(typeof REPAIR_FIELDS)[number], ReturnType<typeof fieldRepairEvidence>>;
+  return {
+    availabilityCandidateCount: evidence.availability.candidateCount,
+    priceCandidateCount: evidence.unitPrice.candidateCount,
+    sellerCandidateCount: evidence.seller.candidateCount,
+    fulfillmentCandidateCount: evidence.fulfillment.candidateCount,
+    landmarks: REPAIR_FIELDS.flatMap((field) => evidence[field].landmarks)
+  };
+}
+
+function eligibleRepairLandmarks(
+  evidence: ReturnType<typeof repairLandmarkEvidence>,
+  missing: Partial<Record<RetailerAdapterRepairLandmark["field"], boolean>>
+): RetailerAdapterRepairLandmark[] {
+  const hasMissingCandidate = evidence.landmarks.some((landmark) => missing[landmark.field] === true);
+  return hasMissingCandidate ? evidence.landmarks : [];
+}
+
+function repairCandidateCounts(
+  evidence: ReturnType<typeof repairLandmarkEvidence>,
+  landmarks: RetailerAdapterRepairLandmark[]
+): Partial<RetailerAdapterLayoutEvidence> {
+  if (!landmarks.length) return {};
+  return {
+    ...(evidence.availabilityCandidateCount ? { genericAvailabilityCandidateCount: evidence.availabilityCandidateCount } : {}),
+    ...(evidence.priceCandidateCount ? { genericPriceCandidateCount: evidence.priceCandidateCount } : {}),
+    ...(evidence.sellerCandidateCount ? { genericSellerCandidateCount: evidence.sellerCandidateCount } : {}),
+    ...(evidence.fulfillmentCandidateCount ? { genericFulfillmentCandidateCount: evidence.fulfillmentCandidateCount } : {})
+  };
 }
 
 interface SelectedRetailerControl {
@@ -1076,19 +1176,37 @@ function amazonLayoutEvidence(
     : 0;
   const securityChallenge = retailerSecurityChallenge(document);
   const interactiveBlock = retailerInteractiveBlock(document, urlValue);
-  const repairLandmarks = addControlRepairLandmarks(
+  const genericAddIntentCount = boundedCount(genericAddIntentControls(document).length);
+  const priceCandidateCount = visibleSelectorCount(evidenceRoot, retailer.priceSelectors.join(", "));
+  const sellerShape = amazonSellerShape(evidenceRoot);
+  const currentSeller = pageSku === expectedSku
+    ? sellerEvidence(document, selected.control, retailer, selected.offerRoot)
+    : { sellerType: "unknown" as const };
+  const currentPrice = pageSku === expectedSku
+    ? readPrice(evidenceRoot, retailer.priceSelectors) ?? readPrice(document, retailer.priceSelectors)
+    : null;
+  const repairEvidence = repairLandmarkEvidence(
     document,
+    evidenceRoot,
     retailer,
-    securityChallenge || Boolean(interactiveBlock)
+    pageSku !== expectedSku || securityChallenge || Boolean(interactiveBlock)
   );
+  const repairLandmarks = controls.length <= 1 ? eligibleRepairLandmarks(repairEvidence, {
+    availability: controls.length === 0 && genericAddIntentCount === 0,
+    unitPrice: currentPrice === null,
+    seller: currentSeller.sellerType === "unknown",
+    fulfillment: selected.fulfillment === "unknown",
+    addControl: controls.length === 0 && genericAddIntentCount > 0
+  }) : [];
   return {
     schemaVersion: 1,
     pageKind: pageSku ? "product" : "other",
     scopeKind: amazonScopeKind(control),
-    sellerShape: amazonSellerShape(evidenceRoot),
+    sellerShape,
     fulfillmentShape: fulfillmentShape(evidenceRoot),
     addControlCount: boundedCount(controls.length),
-    genericAddIntentCount: boundedCount(genericAddIntentControls(document).length),
+    genericAddIntentCount,
+    ...repairCandidateCounts(repairEvidence, repairLandmarks),
     scopedControlCount: boundedCount(scopedControlCount),
     explicitSkuInputCount: boundedCount(explicitSkuInputs.length),
     exactSkuInputCount: boundedCount(exactSkuInputs.length),
@@ -1097,7 +1215,7 @@ function amazonLayoutEvidence(
     canonicalOfferDistinctCount: boundedCount(canonicalOffers.size),
     alternateOfferInputCount: boundedCount(alternateInputs.length),
     alternateOfferDistinctCount: boundedCount(alternateOffers.size),
-    priceCandidateCount: visibleSelectorCount(evidenceRoot, retailer.priceSelectors.join(", ")),
+    priceCandidateCount,
     quantityControlCount: visibleSelectorCount(
       evidenceRoot,
       "select#quantity, select[name='quantity'], input[name='quantity'], input[name='items[0.base][quantity]']"
@@ -1125,23 +1243,41 @@ export function retailerAdapterLayoutEvidence(
   const root: Element | Document = selected.offerRoot || control?.closest("form, main") || document;
   const securityChallenge = retailerSecurityChallenge(document);
   const interactiveBlock = retailerInteractiveBlock(document, urlValue);
-  const repairLandmarks = addControlRepairLandmarks(
+  const genericAddIntentCount = boundedCount(genericAddIntentControls(document).length);
+  const priceCandidateCount = visibleSelectorCount(root, retailer.priceSelectors.join(", "));
+  const sellerShape = queryVisible(root, retailer.sellerSelectors)
+    || (retailerId === "bestbuy" && selected.offerRoot && bestBuySellerBound(selected.offerRoot, retailer))
+    ? "legacy" as const : "none" as const;
+  const currentSeller = pageSku === expectedSku
+    ? sellerEvidence(document, selected.control, retailer, selected.offerRoot)
+    : { sellerType: "unknown" as const };
+  const currentPrice = pageSku === expectedSku
+    ? readPrice(root, retailer.priceSelectors) ?? readPrice(document, retailer.priceSelectors)
+    : null;
+  const repairEvidence = repairLandmarkEvidence(
     document,
+    root,
     retailer,
-    securityChallenge || Boolean(interactiveBlock)
+    pageSku !== expectedSku || securityChallenge || Boolean(interactiveBlock)
   );
+  const repairLandmarks = controls.length <= 1 ? eligibleRepairLandmarks(repairEvidence, {
+    availability: controls.length === 0 && genericAddIntentCount === 0,
+    unitPrice: currentPrice === null,
+    seller: currentSeller.sellerType === "unknown",
+    fulfillment: selected.fulfillment === "unknown",
+    addControl: controls.length === 0 && genericAddIntentCount > 0
+  }) : [];
   return {
     schemaVersion: 1,
     pageKind: pageSku ? "product" : "other",
     scopeKind: control?.closest("form") ? "form"
       : retailerId === "bestbuy" && selected.offerRoot ? "buybox"
         : control ? "other" : "none",
-    sellerShape: queryVisible(root, retailer.sellerSelectors)
-      || (retailerId === "bestbuy" && selected.offerRoot && bestBuySellerBound(selected.offerRoot, retailer))
-      ? "legacy" : "none",
+    sellerShape,
     fulfillmentShape: fulfillmentShape(root),
     addControlCount: boundedCount(controls.length),
-    genericAddIntentCount: boundedCount(genericAddIntentControls(document).length),
+    genericAddIntentCount,
+    ...repairCandidateCounts(repairEvidence, repairLandmarks),
     scopedControlCount: selected.control ? 1 : 0,
     explicitSkuInputCount: 0,
     exactSkuInputCount: 0,
@@ -1150,7 +1286,7 @@ export function retailerAdapterLayoutEvidence(
     canonicalOfferDistinctCount: 0,
     alternateOfferInputCount: 0,
     alternateOfferDistinctCount: 0,
-    priceCandidateCount: visibleSelectorCount(root, retailer.priceSelectors.join(", ")),
+    priceCandidateCount,
     quantityControlCount: visibleSelectorCount(root, "select[name='quantity'], input[name='quantity']"),
     securityChallenge,
     interactiveBlock,

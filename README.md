@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.47.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.48.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,24 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.48.0 extends privacy-bounded observer repair mining across all five
+fixed read-only fields: availability, unit price, seller, fulfillment, and add
+control. On an exact unblocked product/offer page, field semantics are evaluated
+locally and only one globally unique allowlisted element/attribute/value
+landmark per field can cross the extension boundary. Page HTML/text, observed
+prices, seller names, stock labels, fulfillment labels, arbitrary selectors,
+and offer/session material remain outside the repair payload.
+
+The durable signing-free compiler can group mature field suggestions for one
+layout into a single fixed-mode recipe candidate. A five-field candidate is now
+representable and tested; partial candidates may fill only a missing read-only
+field. Automatic processing still stops at unsigned 30-day quarantine. The
+independent correctness oracle, cross-account/Sybil-resistant consensus,
+cohort canaries, and automatic validation/promotion remain deliberately open.
+No schema migration or retailer authority changes in 0.48; migration 41 remains
+current. See [adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md)
+and [durable observer-repair candidate evaluation](docs/OBSERVER_REPAIR_CANDIDATE_EVALUATION.md).
 
 Version 0.47.0 gives privacy-bounded observer correction its own durable worker
 family. When one open Add-control selector miss independently reaches the

@@ -77,6 +77,35 @@ function diagnostic(
   };
 }
 
+function fiveFieldDiagnostic(retailerSku: string, observedAt: number): RetailerAdapterDiagnosticInput {
+  return {
+    ...diagnostic(retailerSku, observedAt),
+    failureStage: "price_binding",
+    reasonCode: "price_selector_miss",
+    layout: {
+      ...repairLayout(),
+      scopeKind: "form",
+      sellerShape: "legacy",
+      fulfillmentShape: "shipping",
+      addControlCount: 1,
+      genericAddIntentCount: 1,
+      genericAvailabilityCandidateCount: 1,
+      genericPriceCandidateCount: 1,
+      genericSellerCandidateCount: 1,
+      genericFulfillmentCandidateCount: 1,
+      scopedControlCount: 1,
+      priceCandidateCount: 0,
+      repairLandmarks: [
+        { field: "availability", elementKind: "div", attribute: "data-testid", value: "product-availability-status" },
+        { field: "unitPrice", elementKind: "span", attribute: "data-testid", value: "product-current-price" },
+        { field: "seller", elementKind: "p", attribute: "data-testid", value: "seller-display-name" },
+        { field: "fulfillment", elementKind: "div", attribute: "data-testid", value: "shipping-fulfillment-option" },
+        { field: "addControl", elementKind: "button", attribute: "data-automation-id", value: "atc" }
+      ]
+    }
+  };
+}
+
 test("the durable worker compiles mature repair evidence into one unsigned quarantined observer-only candidate", async () => {
   const db = new YoinkDatabase();
   try {
@@ -103,6 +132,8 @@ test("the durable worker compiles mature repair evidence into one unsigned quara
       matureRepairGroups: 1,
       unsupportedMatureSelectors: 0,
       selectorsEvaluated: 1,
+      candidateFieldsEvaluated: 1,
+      supportedRepairFields: 5,
       candidatesCreated: 1,
       candidatesReused: 0,
       candidatesDeferred: 0,
@@ -166,6 +197,7 @@ test("the durable worker compiles mature repair evidence into one unsigned quara
     assert.ok(audit);
     assert.deepEqual(Object.keys(JSON.parse(audit.dataJson)).sort(), [
       "executable",
+      "fieldCount",
       "generated",
       "layoutFingerprint",
       "minimumDistinctDeviceCount",
@@ -228,6 +260,71 @@ test("the durable worker compiles mature repair evidence into one unsigned quara
   }
 });
 
+test("the durable worker compiles all five fixed read-only fields into one complete unsigned candidate", async () => {
+  const db = new YoinkDatabase();
+  try {
+    const devices = [pairedDevice(db), pairedDevice(db), pairedDevice(db)];
+    const diagnostics = new AdapterDiagnosticRepository(db);
+    for (const [index, retailerSku] of ["6612619", "6669690", "6528565"].entries()) {
+      diagnostics.record(
+        devices[index]?.id ?? "",
+        fiveFieldDiagnostic(retailerSku, NOW + 2_000 + index),
+        NOW + 3_000 + index
+      );
+    }
+    const result = await new BackgroundMaintenanceHandler(db).execute({
+      principal: { tenantId: LOCAL_TENANT_ID, userId: LOCAL_USER_ID },
+      workerId: "observer_repair_candidate_worker",
+      runtimeKind: "standalone",
+      runtimeVersion: "0.48.0",
+      deploymentFingerprint: "d".repeat(64)
+    }, "observer_recipe_candidate_evaluation", NOW + 5_000);
+    assert.deepEqual(result, {
+      repairGroupsEvaluated: 1,
+      matureRepairGroups: 1,
+      unsupportedMatureSelectors: 0,
+      selectorsEvaluated: 5,
+      candidateFieldsEvaluated: 5,
+      supportedRepairFields: 5,
+      candidatesCreated: 1,
+      candidatesReused: 0,
+      candidatesDeferred: 0,
+      expiredCandidates: 0,
+      reviewedCandidates: 0,
+      generatedCandidateLifetimeDays: 30,
+      mutationAuthority: false,
+      generatedCandidatesExecutable: false
+    });
+    const candidate = db.get<{ recipeJson: string; signature: string; lifecycleState: string }>(
+      `SELECT recipe_json AS recipeJson, signature, lifecycle_state AS lifecycleState
+       FROM observer_recipe_candidates`
+    );
+    assert.ok(candidate);
+    assert.deepEqual(JSON.parse(candidate.recipeJson), {
+      availability: { mode: "text", selectors: ["div[data-testid='product-availability-status']"] },
+      unitPrice: { mode: "text", selectors: ["span[data-testid='product-current-price']"] },
+      seller: { mode: "text", selectors: ["p[data-testid='seller-display-name']"] },
+      fulfillment: { mode: "text", selectors: ["div[data-testid='shipping-fulfillment-option']"] },
+      addControl: { mode: "disabled_state", selectors: ["button[data-automation-id='atc']"] }
+    });
+    assert.equal(candidate.signature, "");
+    assert.equal(candidate.lifecycleState, "quarantined");
+    const durable = JSON.stringify({
+      candidate: db.all("SELECT * FROM observer_recipe_candidates"),
+      lifecycle: db.all("SELECT * FROM observer_recipe_lifecycle_events"),
+      audit: db.all("SELECT * FROM audit_events WHERE event_type = 'observer_recipe_repair_candidate_generated'")
+    });
+    for (const forbidden of [
+      "$19.99", "Sold and shipped by Best Buy", "In stock", "Shipping",
+      ...devices.map((device) => device.token), "6612619", "6669690", "6528565"
+    ]) {
+      assert.equal(durable.includes(forbidden), false);
+    }
+  } finally {
+    db.close();
+  }
+});
+
 test("the signing-free candidate repository rejects weak, arbitrary, or secret-shaped repair input", () => {
   const db = new YoinkDatabase();
   try {
@@ -235,7 +332,12 @@ test("the signing-free candidate repository rejects weak, arbitrary, or secret-s
     const valid = {
       retailerId: "bestbuy" as const,
       layoutFingerprint: "b".repeat(64),
-      selectors: ["button[data-testid='pdp-add-to-cart-control']"],
+      fields: {
+        addControl: {
+          mode: "disabled_state" as const,
+          selectors: ["button[data-testid='pdp-add-to-cart-control']"]
+        }
+      },
       minimumExtensionVersion: "0.47.0",
       occurrenceCount: 3,
       minimumDistinctDeviceCount: 3,
@@ -245,10 +347,42 @@ test("the signing-free candidate repository rejects weak, arbitrary, or secret-s
     assert.throws(() => candidates.ensure({ ...valid, minimumDistinctSkuCount: 1 }), /evidence/);
     assert.throws(() => candidates.ensure({ ...valid, occurrenceCount: 2 }), /evidence/);
     assert.throws(() => candidates.ensure({ ...valid, minimumExtensionVersion: "worker-test" }), /evidence/);
-    assert.throws(() => candidates.ensure({ ...valid, selectors: ["#checkout"] }), /allowlisted/);
-    assert.throws(() => candidates.ensure({ ...valid, selectors: ["button[name='account-add-to-cart']"] }), /allowlisted/);
-    assert.throws(() => candidates.ensure({ ...valid, selectors: ["button[data-testid='pdp:add:to:cart:control']"] }), /allowlisted/);
-    assert.throws(() => candidates.ensure({ ...valid, selectors: [valid.selectors[0] as string, valid.selectors[0] as string] }), /unique/);
+    assert.throws(() => candidates.ensure({
+      ...valid,
+      fields: { addControl: { mode: "disabled_state", selectors: ["#checkout"] } }
+    }), /compatible/);
+    assert.throws(() => candidates.ensure({
+      ...valid,
+      fields: { addControl: { mode: "disabled_state", selectors: ["button[name='account-add-to-cart']"] } }
+    }), /compatible/);
+    assert.throws(() => candidates.ensure({
+      ...valid,
+      fields: { addControl: { mode: "disabled_state", selectors: ["button[data-testid='pdp:add:to:cart:control']"] } }
+    }), /compatible/);
+    assert.throws(() => candidates.ensure({
+      ...valid,
+      fields: {
+        addControl: {
+          mode: "disabled_state",
+          selectors: [
+            "button[data-testid='pdp-add-to-cart-control']",
+            "button[data-testid='pdp-add-to-cart-control']"
+          ]
+        }
+      }
+    }), /unique/);
+    assert.throws(() => candidates.ensure({
+      ...valid,
+      fields: { unitPrice: { mode: "disabled_state", selectors: ["span[data-testid='product-price']"] } }
+    }), /fixed read-only schema/);
+    assert.throws(() => candidates.ensure({
+      ...valid,
+      fields: { addControl: { mode: "disabled_state", selectors: ["div[data-testid='pdp-add-to-cart-control']"] } }
+    }), /compatible/);
+    assert.throws(() => candidates.ensure({
+      ...valid,
+      fields: { unitPrice: { mode: "text", selectors: ["input[data-testid='product-price']"] } }
+    }), /compatible/);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM observer_recipe_candidates")?.count, 0);
   } finally {
     db.close();
@@ -262,7 +396,12 @@ test("generated candidate identity is replay-safe within a package and collision
     const input = {
       retailerId: "bestbuy" as const,
       layoutFingerprint: "c".repeat(64),
-      selectors: ["button[data-testid='pdp-add-to-cart-control']"],
+      fields: {
+        addControl: {
+          mode: "disabled_state" as const,
+          selectors: ["button[data-testid='pdp-add-to-cart-control']"]
+        }
+      },
       minimumExtensionVersion: "0.47.0",
       occurrenceCount: 3,
       minimumDistinctDeviceCount: 3,
@@ -308,6 +447,8 @@ test("the worker records and skips mature repair landmarks that cannot satisfy t
       matureRepairGroups: 0,
       unsupportedMatureSelectors: 1,
       selectorsEvaluated: 0,
+      candidateFieldsEvaluated: 0,
+      supportedRepairFields: 5,
       candidatesCreated: 0,
       candidatesReused: 0,
       candidatesDeferred: 0,

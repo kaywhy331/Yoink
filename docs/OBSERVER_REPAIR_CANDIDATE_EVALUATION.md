@@ -1,9 +1,11 @@
 # Durable observer-repair candidate evaluation
 
-Yoink 0.47 moves the narrow privacy-bounded repair miner into its own durable
-worker family. The worker may compile sufficiently repeated structural evidence
-into an **unsigned, quarantined observer-only candidate**. It cannot sign,
-promote, distribute, trial, or execute that candidate.
+Yoink 0.47 moved the narrow privacy-bounded Add-control repair miner into its
+own durable worker family. Yoink 0.48 extends the same closed compiler contract
+to all five fixed read-only observer fields: availability, unit price, seller,
+fulfillment, and add control. The worker may compile sufficiently repeated
+structural evidence into an **unsigned, quarantined observer-only candidate**.
+It cannot sign, promote, distribute, trial, or execute that candidate.
 
 This is the first automatic compilation step in the correction ladder. It is
 not automatic repair publication, community truth, an LLM-generated script, or
@@ -15,10 +17,10 @@ The worker reads the existing user-scoped adapter repair projection. A group is
 eligible only when all of the following are already true:
 
 - it is an open failure from the packaged read-only `observe` operation;
-- the failure is the allowlisted `add_control_selector_miss` case on an
+- the failure is one of the five field-specific selector-miss cases on an
   unblocked exact product page;
-- no packaged Add selector matched and a unique generic Add-intent control was
-  present;
+- the missing field has one locally unambiguous semantic candidate and every
+  contributed field has one globally unique stable-attribute selector;
 - every retained landmark passed the independent companion and server privacy
   allowlists; and
 - the same derived selector has current evidence from at least three distinct
@@ -31,16 +33,24 @@ quorum. That is why it can create only a review candidate.
 ## Compiler boundary
 
 One worker run examines at most 2,000 repair groups and creates or reuses at
-most 25 candidates. Each candidate contains exactly one packaged read-only
-field, `addControl`, in `disabled_state` mode with one through five unique
-selectors. Selectors must be one of these fixed shapes:
+most 25 candidates. It groups every mature compatible field for one layout
+into one candidate. Each field accepts one through five unique selectors and a
+fixed interpretation mode:
+
+- availability, unit price, seller, and fulfillment use `text`;
+- add control uses `disabled_state`.
+
+Add-control selectors must use one of these fixed shapes:
 
 - `button[allowlisted-attribute='allowlisted-value']`
 - `input[allowlisted-attribute='allowlisted-value']`
 - `[role='button'][allowlisted-attribute='allowlisted-value']`
 
-The five attribute names and stable structural vocabulary are the same strict
-allowlists used at diagnostic ingestion. Checkout, Buy Now, order submission,
+The other four fields may additionally use the packaged structural elements
+`div`, `span`, `p`, `label`, `section`, or `li`, but never `input`. Attributes are limited
+to `data-testid`, `data-test-id`, `data-automation-id`, `data-button-state`,
+`name`, or `itemprop`. Field-specific stable structural vocabularies are the
+same strict allowlists used at diagnostic ingestion. Checkout, Buy Now, order submission,
 payment, account, credential, contact, address, cookie, CSRF, and token-shaped
 values fail closed. Code, XPath, regex, text, HTML, IDs/classes, navigation,
 events, forms, URLs, product values, offer material, and arbitrary selectors
@@ -57,14 +67,16 @@ class. A created row has:
 - an append-only lifecycle event plus privacy-bounded audit receipt.
 
 Exact SKUs and device IDs are used to calculate the private threshold but are
-not copied into the candidate or its audit data. The candidate stores the
-bounded selector because that is the fixed declarative object being reviewed.
+not copied into the candidate or its audit data. Page text, prices, seller
+names, fulfillment labels, availability text, DOM, and offer material never
+enter the candidate. It stores only field, fixed mode, and bounded selector
+because those are the declarative objects being reviewed.
 
 ## Idempotency and ownership
 
 The candidate version and recipe fingerprint are deterministic over the
-tenant/user scope, retailer, layout fingerprint, sorted selectors, and exact
-worker package version. The generated provenance and version namespace are
+tenant/user scope, retailer, layout fingerprint, ordered field/mode/selector
+map, and exact worker package version. The generated provenance and version namespace are
 reserved from the ordinary admin proposal API. Migration 41 adds a partial
 unique fingerprint index for generated candidates.
 
@@ -89,9 +101,10 @@ unchanged:
 5. The packaged interpreter may use the recipe only for fixed read-only fields.
    Mutation runners do not consume remote recipes.
 
-The worker result explicitly reports `mutationAuthority: false` and
-`generatedCandidatesExecutable: false`. Health additionally reports that
-durable evaluation exists while execution and automatic promotion remain
+The worker result explicitly reports five supported fields,
+`mutationAuthority: false`, and `generatedCandidatesExecutable: false`. Health
+additionally reports a field count of five, that an independent oracle remains
+required and unimplemented, and that execution and automatic promotion remain
 false.
 
 ## Operations and recovery
@@ -111,3 +124,8 @@ Migration 41 rebuilds only the closed task-kind checks, preserves existing
 schedules/tasks/events, and adds generated-candidate fingerprint uniqueness. It
 does not change observations, qualifications, action jobs, spend state, or any
 retailer execution setting.
+
+Yoink 0.48 requires no schema migration. The optional field-specific counts and
+landmarks remain inside the existing bounded diagnostic JSON column, and the
+candidate recipe already stores a fixed field map. Migration 41 remains the
+current schema.
