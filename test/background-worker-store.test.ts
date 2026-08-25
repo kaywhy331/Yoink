@@ -6,6 +6,7 @@ import { SqliteBackgroundWorkerStore } from "../packages/database/src/background
 import { YoinkDatabase } from "../packages/database/src/database.js";
 
 const NOW = new Date("2026-08-25T12:00:00.000Z").getTime();
+const DEPLOYMENT_FINGERPRINT = "a".repeat(64);
 
 function seedPrincipal(db: YoinkDatabase, tenantId: string, userId: string): void {
   const timestamp = new Date(NOW).toISOString();
@@ -18,7 +19,8 @@ function context(tenantId: string, userId: string, workerId = "background_worker
     principal: { tenantId, userId },
     workerId,
     runtimeKind: "standalone",
-    runtimeVersion: "store-test"
+    runtimeVersion: "store-test",
+    deploymentFingerprint: DEPLOYMENT_FINGERPRINT
   };
 }
 
@@ -51,7 +53,8 @@ test("the async SQLite worker store scopes queues and reports complete standalon
   try {
     seedPrincipal(db, "tenant_worker_coverage", "user_worker_coverage");
     const store = new SqliteBackgroundWorkerStore(db, { principalMode: "all" });
-    const waiting = await store.deploymentStatus("standalone", NOW);
+    store.configureDeploymentExpectation("external", DEPLOYMENT_FINGERPRINT, "store-test", NOW - 1);
+    const waiting = await store.deploymentStatus("standalone", DEPLOYMENT_FINGERPRINT, NOW);
     assert.equal(waiting.state, "waiting");
     assert.equal(waiting.healthy, false);
     assert.equal(waiting.lastErrorCode, "worker_waiting");
@@ -70,17 +73,19 @@ test("the async SQLite worker store scopes queues and reports complete standalon
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE tenant_id = 'tenant_worker_coverage' AND subject_user_id = 'user_worker_coverage'"
     )?.count, BACKGROUND_TASK_KINDS.length);
-    assert.deepEqual(await store.deploymentStatus("standalone", NOW + 1), {
+    assert.deepEqual(await store.deploymentStatus("standalone", DEPLOYMENT_FINGERPRINT, NOW + 1), {
       state: "running",
       healthy: true,
       runtimeKind: "standalone",
       lastHeartbeatAt: new Date(NOW).toISOString(),
       lastErrorCode: "",
       coveredPrincipals: 2,
-      totalPrincipals: 2
+      totalPrincipals: 2,
+      deploymentAttested: true,
+      deploymentContractVersion: 1
     });
     await store.stopWorker("background_worker_store_test", "standalone", "", NOW + 2);
-    const stopped = await store.deploymentStatus("standalone", NOW + 3);
+    const stopped = await store.deploymentStatus("standalone", DEPLOYMENT_FINGERPRINT, NOW + 3);
     assert.equal(stopped.state, "stopped");
     assert.equal(stopped.healthy, false);
     assert.equal(stopped.lastErrorCode, "worker_stopped");
@@ -93,12 +98,58 @@ test("standalone deployment health treats an expired running heartbeat as stoppe
   const db = new YoinkDatabase();
   try {
     const store = new SqliteBackgroundWorkerStore(db, { principalMode: "all" });
+    store.configureDeploymentExpectation("external", DEPLOYMENT_FINGERPRINT, "store-test", NOW - 1);
     await store.heartbeat(context("tenant_local", "user_local", "background_worker_stale_test"), "", NOW);
-    const stale = await store.deploymentStatus("standalone", NOW + 30_001);
+    const stale = await store.deploymentStatus("standalone", DEPLOYMENT_FINGERPRINT, NOW + 30_001);
     assert.equal(stale.state, "stopped");
     assert.equal(stale.healthy, false);
     assert.equal(stale.coveredPrincipals, 0);
     assert.equal(stale.lastErrorCode, "worker_stopped");
+  } finally {
+    db.close();
+  }
+});
+
+test("standalone work and health fail closed on a deployment attestation mismatch", async () => {
+  const db = new YoinkDatabase();
+  try {
+    const store = new SqliteBackgroundWorkerStore(db, { principalMode: "all" });
+    store.configureDeploymentExpectation("external", DEPLOYMENT_FINGERPRINT, "store-test", NOW - 2);
+    store.configureDeploymentExpectation("external", DEPLOYMENT_FINGERPRINT, "store-test", NOW - 1);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM background_worker_deployment_events"
+    )?.count, 1, "an unchanged API startup must not flood attestation history");
+
+    const mismatched = {
+      ...context("tenant_local", "user_local", "background_worker_mismatch_test"),
+      deploymentFingerprint: "b".repeat(64)
+    };
+    await assert.rejects(() => store.ensureSchedules(mismatched, NOW), /does not match/);
+    await store.heartbeat(mismatched, "worker_deployment_mismatch", NOW);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM background_task_schedules"
+    )?.count, 0);
+    const status = await store.deploymentStatus("standalone", DEPLOYMENT_FINGERPRINT, NOW + 1);
+    assert.equal(status.state, "running");
+    assert.equal(status.healthy, false);
+    assert.equal(status.deploymentAttested, false);
+    assert.equal(status.lastErrorCode, "worker_deployment_mismatch");
+
+    store.configureDeploymentExpectation("embedded", DEPLOYMENT_FINGERPRINT, "store-test", NOW + 2);
+    await assert.rejects(
+      () => store.ensureSchedules(context("tenant_local", "user_local", "background_worker_wrong_mode"), NOW + 3),
+      /does not match/
+    );
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM background_worker_deployment_events"
+    )?.count, 2);
+    const wrongMode = await store.deploymentStatus("standalone", DEPLOYMENT_FINGERPRINT, NOW + 3);
+    assert.equal(wrongMode.healthy, false);
+    assert.equal(wrongMode.lastErrorCode, "worker_deployment_expectation_mismatch");
+
+    assert.throws(() => db.run(
+      "UPDATE background_worker_deployment_events SET reason_code = 'changed' WHERE sequence = 1"
+    ), /append-only/);
   } finally {
     db.close();
   }

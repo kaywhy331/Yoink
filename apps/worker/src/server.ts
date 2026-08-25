@@ -68,6 +68,7 @@ async function start(): Promise<void> {
         ? { observerRecipeWitnessRefresh }
         : {}),
       version: config.version,
+      deploymentFingerprint: config.deploymentFingerprint,
       runtimeKind: "standalone",
       workerId: config.workerId,
       pollIntervalMs: config.pollIntervalMs,
@@ -81,7 +82,9 @@ async function start(): Promise<void> {
     process.once("SIGTERM", () => void shutdown("SIGTERM"));
     await runtime.start();
     const status = runtime.status();
-    process.stdout.write(`Yoink ${config.version} standalone worker ready as ${config.workerId}.\n`);
+    process.stdout.write(status.healthy
+      ? `Yoink ${config.version} standalone worker ready as ${config.workerId}.\n`
+      : `Yoink ${config.version} standalone worker is online but deployment-gated.\n`);
     process.stdout.write(`${status.lastPrincipalCount} principal scope(s) visited in the initial bounded cycle; PostgreSQL fleet readiness remains gated.\n`);
   } catch {
     process.stderr.write("Yoink standalone worker startup failed safely; initialize and migrate the API database first.\n");

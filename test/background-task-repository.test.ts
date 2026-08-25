@@ -116,7 +116,7 @@ test("background work remains tenant and user scoped", () => {
     const localLease = runWithRequestScope(workerScope(), () => {
       tasks.ensureDefaultSchedules(NOW);
       tasks.enqueueDueSchedules(NOW);
-      tasks.heartbeat("background_worker_local", "local_in_process", "test", "", NOW);
+      tasks.heartbeat("background_worker_local", "local_in_process", "test", "a".repeat(64), "", NOW);
       return tasks.leaseNext("background_worker_local", 60, NOW + 1);
     });
     const secondLease = runWithRequestScope(
@@ -124,7 +124,7 @@ test("background work remains tenant and user scoped", () => {
       () => {
         tasks.ensureDefaultSchedules(NOW);
         tasks.enqueueDueSchedules(NOW);
-        tasks.heartbeat("background_worker_second", "standalone", "test", "", NOW);
+        tasks.heartbeat("background_worker_second", "standalone", "test", "a".repeat(64), "", NOW);
         return tasks.leaseNext("background_worker_second", 60, NOW + 1);
       }
     );
@@ -146,6 +146,7 @@ test("background work remains tenant and user scoped", () => {
     const localSnapshot = runWithRequestScope(LOCAL_REQUEST_SCOPE, () => tasks.snapshot(NOW + 2));
     assert.equal(localSnapshot.counts.onlineWorkers, 1);
     assert.deepEqual(localSnapshot.workers.map((worker) => worker.workerId), ["background_worker_local"]);
+    assert.equal(localSnapshot.workers[0]?.deploymentFingerprintPresent, true);
   } finally {
     db.close();
   }
@@ -161,7 +162,7 @@ test("append-only task history cascades only with its owning user lifecycle", ()
     runWithRequestScope(workerScope(tenantId, userId), () => {
       tasks.ensureDefaultSchedules(NOW);
       tasks.enqueueDueSchedules(NOW);
-      tasks.heartbeat("background_worker_lifecycle", "standalone", "test", "", NOW);
+      tasks.heartbeat("background_worker_lifecycle", "standalone", "test", "a".repeat(64), "", NOW);
     });
     assert.throws(
       () => db.run(

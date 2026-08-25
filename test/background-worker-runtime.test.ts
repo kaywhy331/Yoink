@@ -11,6 +11,7 @@ import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-
 import { BackgroundWorkerRuntime } from "../packages/engine/src/background-worker-runtime.js";
 
 const NOW = new Date("2026-08-25T09:00:00.000Z").getTime();
+const DEPLOYMENT_FINGERPRINT = "a".repeat(64);
 
 function runtimeFor(
   db: YoinkDatabase,
@@ -28,6 +29,7 @@ function runtimeFor(
       store,
       handler: options.handler ?? new BackgroundMaintenanceHandler(db),
       version: "runtime-test",
+      deploymentFingerprint: DEPLOYMENT_FINGERPRINT,
       workerId: "background_worker_runtime_test",
       ...(options.maximumPrincipalsPerCycle !== undefined
         ? { maximumPrincipalsPerCycle: options.maximumPrincipalsPerCycle }
@@ -108,7 +110,8 @@ test("the maintenance handler awaits the configured witness refresh service", as
       principal: { tenantId: LOCAL_TENANT_ID, userId: LOCAL_USER_ID },
       workerId: "background_worker_witness_test",
       runtimeKind: "standalone",
-      runtimeVersion: "witness-test"
+      runtimeVersion: "witness-test",
+      deploymentFingerprint: DEPLOYMENT_FINGERPRINT
     }, "observer_recipe_witness_refresh", NOW);
     assert.equal(calls, 1);
     assert.deepEqual(result, {
@@ -213,6 +216,7 @@ test("runtime start and stop publish an observable heartbeat lifecycle", async (
       store,
       handler: new BackgroundMaintenanceHandler(db),
       version: "heartbeat-test",
+      deploymentFingerprint: DEPLOYMENT_FINGERPRINT,
       workerId: "background_worker_heartbeat_test",
       pollIntervalMs: 60_000
     });

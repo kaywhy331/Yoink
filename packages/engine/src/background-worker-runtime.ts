@@ -5,6 +5,7 @@ import type {
   BackgroundWorkerTaskHandler
 } from "../../contracts/src/background-worker.js";
 import { BACKGROUND_TASK_KINDS } from "../../domain/src/background-task.js";
+import { BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION } from "../../domain/src/background-worker-deployment.js";
 
 export type BackgroundWorkerRuntimeState = "stopped" | "starting" | "running" | "stopping";
 
@@ -18,6 +19,8 @@ export interface BackgroundWorkerRuntimeStatus {
   lastHeartbeatAt: string;
   lastCompletedAt: string;
   lastErrorCode: string;
+  deploymentAttested: boolean;
+  deploymentContractVersion: number;
   cycles: number;
   principalsVisited: number;
   lastPrincipalCount: number;
@@ -40,6 +43,7 @@ export interface BackgroundWorkerRuntimeOptions {
   store: BackgroundWorkerStore;
   handler: BackgroundWorkerTaskHandler;
   version: string;
+  deploymentFingerprint: string;
   runtimeKind?: BackgroundWorkerRuntimeKind;
   workerId?: string;
   pollIntervalMs?: number;
@@ -80,6 +84,7 @@ export class BackgroundWorkerRuntime {
   private readonly handler: BackgroundWorkerTaskHandler;
   private readonly workerId: string;
   private readonly version: string;
+  private readonly deploymentFingerprint: string;
   private readonly runtimeKind: BackgroundWorkerRuntimeKind;
   private readonly pollIntervalMs: number;
   private readonly leaseSeconds: number;
@@ -107,6 +112,7 @@ export class BackgroundWorkerRuntime {
     this.handler = options.handler;
     this.workerId = String(options.workerId ?? "background_worker_local").slice(0, 120);
     this.version = String(options.version || "0.0.0").slice(0, 40);
+    this.deploymentFingerprint = String(options.deploymentFingerprint ?? "");
     this.runtimeKind = options.runtimeKind ?? "local_in_process";
     this.pollIntervalMs = boundedInteger(options.pollIntervalMs, 2_000, 500, 60_000);
     this.leaseSeconds = boundedInteger(options.leaseSeconds, 60, 15, 300);
@@ -114,7 +120,8 @@ export class BackgroundWorkerRuntime {
     this.maximumTasksPerCycle = boundedInteger(options.maximumTasksPerCycle, 100, 1, 1_000);
     this.maximumTasksPerPrincipal = boundedInteger(options.maximumTasksPerPrincipal, 20, 1, 100);
     this.unrefTimer = options.unrefTimer !== false;
-    if (!this.store || !this.handler || !BACKGROUND_TASK_KINDS.length) {
+    if (!this.store || !this.handler || !BACKGROUND_TASK_KINDS.length
+      || !/^[a-f0-9]{64}$/.test(this.deploymentFingerprint)) {
       throw new Error("The background worker runtime contract is incomplete.");
     }
   }
@@ -182,6 +189,8 @@ export class BackgroundWorkerRuntime {
       lastHeartbeatAt: this.lastHeartbeatAt,
       lastCompletedAt: this.lastCompletedAt,
       lastErrorCode: this.lastErrorCode,
+      deploymentAttested: true,
+      deploymentContractVersion: BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION,
       cycles: this.cycles,
       principalsVisited: this.principalsVisited,
       lastPrincipalCount: this.lastPrincipalCount,
@@ -207,7 +216,8 @@ export class BackgroundWorkerRuntime {
           principal,
           workerId: this.workerId,
           runtimeKind: this.runtimeKind,
-          runtimeVersion: this.version
+          runtimeVersion: this.version,
+          deploymentFingerprint: this.deploymentFingerprint
         };
         result.principalsVisited += 1;
         let principalErrorCode = "";

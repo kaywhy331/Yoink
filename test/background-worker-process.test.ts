@@ -59,6 +59,7 @@ test("standalone worker configuration is bounded and credential-free", () => {
   assert.equal(config.maximumTasksPerPrincipal, 8);
   assert.equal(config.observerRecipeWitness, null);
   assert.equal(config.observerRecipeWitnessRequired, false);
+  assert.match(config.deploymentFingerprint, /^[a-f0-9]{64}$/);
   assert.equal(Object.keys(config).some((key) => /secret|token|password|credential/i.test(key)), false);
   assert.throws(() => loadWorkerConfig(process.cwd(), { YOINK_WORKER_ID: "bad worker" }), /WORKER_ID/);
   assert.throws(() => loadWorkerConfig(process.cwd(), { YOINK_WORKER_POLL_MS: "499" }), /500 through 60000/);
@@ -78,6 +79,16 @@ test("standalone worker configuration is bounded and credential-free", () => {
   });
   assert.equal(hosted.observerRecipeWitnessRequired, true);
   assert.equal(hosted.observerRecipeWitness?.key.keyId, witness.keyId);
+  assert.notEqual(hosted.deploymentFingerprint, config.deploymentFingerprint);
+  const hostedWithDifferentFreshness = loadWorkerConfig(process.cwd(), {
+    YOINK_HOSTED_MODE: "1",
+    YOINK_OBSERVER_RECIPE_WITNESS_URL: "https://witness.example.net/v1/checkpoints",
+    YOINK_OBSERVER_RECIPE_WITNESS_LOG_ID: "yoink-production",
+    YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID: witness.keyId,
+    YOINK_OBSERVER_RECIPE_WITNESS_PUBLIC_KEY_SPKI: witness.publicKeySpki,
+    YOINK_OBSERVER_RECIPE_WITNESS_MAX_AGE_SECONDS: "600"
+  });
+  assert.notEqual(hostedWithDifferentFreshness.deploymentFingerprint, hosted.deploymentFingerprint);
 });
 
 test("the standalone worker fails closed and redacts startup errors before API initialization", async () => {
@@ -115,15 +126,22 @@ test("a separate worker process serves every principal and drives truthful exter
     "INSERT INTO users(id, tenant_id, display_name, created_at) VALUES ('user_process_second', 'tenant_process_second', 'Second', ?)",
     new Date().toISOString()
   );
+  const workerEnvironment = {
+    ...process.env,
+    YOINK_DATA_DIR: directory,
+    YOINK_WORKER_ID: workerId,
+    YOINK_WORKER_POLL_MS: "500"
+  };
+  const workerConfig = loadWorkerConfig(process.cwd(), workerEnvironment);
+  new SqliteBackgroundWorkerStore(initialized, { principalMode: "all" }).configureDeploymentExpectation(
+    "external",
+    workerConfig.deploymentFingerprint,
+    workerConfig.version
+  );
   initialized.close();
   const child = spawn(process.execPath, ["--import", "tsx", "apps/worker/src/server.ts"], {
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      YOINK_DATA_DIR: directory,
-      YOINK_WORKER_ID: workerId,
-      YOINK_WORKER_POLL_MS: "500"
-    },
+    env: workerEnvironment,
     stdio: ["pipe", "pipe", "pipe"]
   });
   const captured = capture(child);
@@ -135,11 +153,16 @@ test("a separate worker process serves every principal and drives truthful exter
     assert.equal(/token|secret checkout/i.test(captured.output()), false);
     db = new YoinkDatabase(join(directory, "yoink.sqlite"));
     const store = new SqliteBackgroundWorkerStore(db, { principalMode: "all" });
-    const status = await store.deploymentStatus("standalone", Date.now());
+    const status = await store.deploymentStatus(
+      "standalone",
+      workerConfig.deploymentFingerprint,
+      Date.now()
+    );
     assert.equal(status.state, "running");
     assert.equal(status.healthy, true);
     assert.equal(status.totalPrincipals, 2);
     assert.equal(status.coveredPrincipals, status.totalPrincipals);
+    assert.equal(status.deploymentAttested, true);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE state = 'succeeded'"
     )?.count, BACKGROUND_TASK_KINDS.length * 2);
@@ -152,7 +175,11 @@ test("a separate worker process serves every principal and drives truthful exter
       webRoot: join(process.cwd(), "apps", "web"),
       version: "external-worker-process-test",
       backgroundWorkerStatus: async () => ({
-        ...await store.deploymentStatus("standalone", Date.now()),
+        ...await store.deploymentStatus(
+          "standalone",
+          workerConfig.deploymentFingerprint,
+          Date.now()
+        ),
         mode: "external"
       })
     });
@@ -165,6 +192,7 @@ test("a separate worker process serves every principal and drives truthful exter
     assert.equal(running.backgroundWorkerDeployment, "standalone");
     assert.equal(running.backgroundWorkerRuntime, "running");
     assert.equal(running.backgroundWorkerHealthy, true);
+    assert.equal(running.backgroundWorkerDeploymentAttested, true);
     assert.equal(running.productionWorkerFleetReady, false);
 
     child.kill("SIGTERM");
@@ -184,6 +212,62 @@ test("a separate worker process serves every principal and drives truthful exter
       server.close();
       if (server.listening) await once(server, "close");
     }
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await once(child, "exit");
+    }
+    db?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a mismatched standalone process remains online only as deployment-gated evidence", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-mismatched-worker-"));
+  const expectedFingerprint = "a".repeat(64);
+  const initialized = new YoinkDatabase(join(directory, "yoink.sqlite"));
+  new SqliteBackgroundWorkerStore(initialized, { principalMode: "all" }).configureDeploymentExpectation(
+    "external",
+    expectedFingerprint,
+    "intentionally-mismatched-version"
+  );
+  initialized.close();
+  const child = spawn(process.execPath, ["--import", "tsx", "apps/worker/src/server.ts"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      YOINK_DATA_DIR: directory,
+      YOINK_WORKER_ID: "background_worker_mismatch_process",
+      YOINK_WORKER_POLL_MS: "500"
+    },
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  const captured = capture(child);
+  let db: YoinkDatabase | null = null;
+  try {
+    await eventually(() => assert.match(captured.output(), /online but deployment-gated/));
+    db = new YoinkDatabase(join(directory, "yoink.sqlite"));
+    await eventually(() => {
+      assert.equal(db?.get<{ lastErrorCode: string }>(
+        `SELECT last_error_code AS lastErrorCode FROM background_worker_heartbeats
+         WHERE worker_id = 'background_worker_mismatch_process'`
+      )?.lastErrorCode, "worker_deployment_mismatch");
+    });
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM background_tasks"
+    )?.count, 0);
+    const status = await new SqliteBackgroundWorkerStore(db, { principalMode: "all" }).deploymentStatus(
+      "standalone",
+      expectedFingerprint,
+      Date.now()
+    );
+    assert.equal(status.healthy, false);
+    assert.equal(status.deploymentAttested, false);
+    assert.equal(status.lastErrorCode, "worker_deployment_mismatch");
+
+    child.kill("SIGTERM");
+    const [exitCode] = await once(child, "exit") as [number | null, NodeJS.Signals | null];
+    assert.equal(exitCode, 0, captured.output());
+  } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
       await once(child, "exit");

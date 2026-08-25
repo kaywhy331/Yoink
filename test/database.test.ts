@@ -1359,6 +1359,86 @@ test("migration 37 adds the witness-refresh task kind without losing durable wor
   }
 });
 
+test("migration 38 adds worker deployment attestation without losing heartbeat history", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-worker-attestation-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 37)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        "2026-08-25T11:00:00.000Z"
+      );
+    }
+    legacy.exec(`
+      INSERT INTO background_worker_heartbeats(
+        tenant_id, subject_user_id, worker_id, runtime_kind, runtime_version,
+        state, started_at, heartbeat_at, stopped_at, last_error_code,
+        privacy_classification
+      ) VALUES (
+        'tenant_local', 'user_local', 'background_worker_upgrade_38', 'standalone', '0.40.0',
+        'stopped', '2026-08-25T11:00:00.000Z', '2026-08-25T11:00:00.000Z',
+        '2026-08-25T11:00:00.000Z', '', 'operational_aggregate'
+      );
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 38 AND name = 'attested_background_worker_deployment'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ deploymentFingerprint: string }>(
+        `SELECT deployment_fingerprint AS deploymentFingerprint
+         FROM background_worker_heartbeats WHERE worker_id = 'background_worker_upgrade_38'`
+      )?.deploymentFingerprint, "");
+      assert.equal(upgraded.get<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table'
+         AND name IN ('background_worker_deployment_expectations', 'background_worker_deployment_events')`
+      )?.count, 2);
+      upgraded.run(
+        "UPDATE background_worker_heartbeats SET deployment_fingerprint = ? WHERE worker_id = 'background_worker_upgrade_38'",
+        "a".repeat(64)
+      );
+      assert.throws(
+        () => upgraded.run(
+          "UPDATE background_worker_heartbeats SET deployment_fingerprint = 'invalid' WHERE worker_id = 'background_worker_upgrade_38'"
+        ),
+        /constraint failed/
+      );
+      upgraded.run(
+        `INSERT INTO background_worker_deployment_events(
+           id, sequence, contract_version, from_mode, to_mode,
+           from_deployment_fingerprint, to_deployment_fingerprint,
+           runtime_version, previous_event_hash, event_hash, reason_code,
+           privacy_classification, created_at
+         ) VALUES (
+           'background_worker_deployment_event_upgrade_38', 1, 1, '', 'external', '', ?,
+           '0.41.0', '', ?, 'api_startup_contract', 'operational_configuration',
+           '2026-08-25T11:00:00.000Z'
+         )`,
+        "a".repeat(64),
+        "b".repeat(64)
+      );
+      assert.throws(
+        () => upgraded.run(
+          "DELETE FROM background_worker_deployment_events WHERE sequence = 1"
+        ),
+        /append-only/
+      );
+      assert.deepEqual(upgraded.all("PRAGMA foreign_key_check"), []);
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("catalog identity history is immutable during normal operation and purges with its tenant", () => {
   const db = new YoinkDatabase();
   const tenantId = "tenant_identity_lifecycle";

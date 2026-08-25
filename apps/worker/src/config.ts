@@ -4,6 +4,7 @@ import {
   loadObserverRecipeWitnessConfig,
   type ObserverRecipeWitnessRuntimeConfig
 } from "../../../packages/observer-registry/src/config.js";
+import { backgroundWorkerDeploymentFingerprint } from "../../../packages/domain/src/background-worker-deployment.js";
 
 const WORKER_ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 
@@ -19,6 +20,7 @@ export interface YoinkWorkerConfig {
   maximumTasksPerPrincipal: number;
   observerRecipeWitness: ObserverRecipeWitnessRuntimeConfig | null;
   observerRecipeWitnessRequired: boolean;
+  deploymentFingerprint: string;
 }
 
 function projectVersion(projectRoot: string): string {
@@ -60,10 +62,11 @@ export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
   if (observerRecipeWitnessRequired && !observerRecipeWitness) {
     throw new Error("Hosted workers require an independently operated observer recipe witness.");
   }
+  const version = projectVersion(projectRoot);
   return {
     dataDirectory,
     databasePath: join(dataDirectory, "yoink.sqlite"),
-    version: projectVersion(projectRoot),
+    version,
     workerId,
     pollIntervalMs: boundedInteger(env.YOINK_WORKER_POLL_MS, 2_000, 500, 60_000, "YOINK_WORKER_POLL_MS"),
     leaseSeconds: boundedInteger(env.YOINK_WORKER_LEASE_SECONDS, 60, 15, 300, "YOINK_WORKER_LEASE_SECONDS"),
@@ -89,6 +92,11 @@ export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
       "YOINK_WORKER_TASKS_PER_PRINCIPAL"
     ),
     observerRecipeWitness,
-    observerRecipeWitnessRequired
+    observerRecipeWitnessRequired,
+    deploymentFingerprint: backgroundWorkerDeploymentFingerprint({
+      runtimeVersion: version,
+      observerRecipeWitness,
+      observerRecipeWitnessRequired
+    })
   };
 }

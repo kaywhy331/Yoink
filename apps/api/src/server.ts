@@ -15,6 +15,10 @@ import { BackgroundMaintenanceHandler } from "../../../packages/engine/src/backg
 import { BackgroundWorkerRuntime } from "../../../packages/engine/src/background-worker-runtime.js";
 import { ObserverRecipeRepository } from "../../../packages/database/src/observer-recipe-repository.js";
 import { ObserverRecipeWitnessRefreshService } from "../../../packages/engine/src/observer-recipe-witness-refresh.js";
+import {
+  BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION,
+  backgroundWorkerDeploymentFingerprint as deploymentFingerprintForWorker
+} from "../../../packages/domain/src/background-worker-deployment.js";
 
 const config = loadConfig();
 mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
@@ -33,15 +37,26 @@ const observerRecipeWitnessRefresh = observerRecipeWitness
       observerRecipeWitness
     )
   : undefined;
+const workerDeploymentFingerprint = deploymentFingerprintForWorker({
+  runtimeVersion: config.version,
+  observerRecipeWitness: config.observerRecipeWitness,
+  observerRecipeWitnessRequired: config.hosted !== null
+});
 const backgroundWorkerStore = new SqliteBackgroundWorkerStore(db, {
   principalMode: config.hosted ? "all" : "fixed"
 });
+backgroundWorkerStore.configureDeploymentExpectation(
+  config.backgroundWorkerMode,
+  workerDeploymentFingerprint,
+  config.version
+);
 const backgroundWorker = new BackgroundWorkerRuntime({
   store: backgroundWorkerStore,
   handler: new BackgroundMaintenanceHandler(db, observerRecipeWitnessRefresh
     ? { observerRecipeWitnessRefresh }
     : {}),
   version: config.version,
+  deploymentFingerprint: workerDeploymentFingerprint,
   runtimeKind: "local_in_process",
   workerId: "background_worker_embedded"
 });
@@ -70,7 +85,11 @@ const server = createYoinkServer({
     }
     if (config.backgroundWorkerMode === "external") {
       return {
-        ...await backgroundWorkerStore.deploymentStatus("standalone", Date.now()),
+        ...await backgroundWorkerStore.deploymentStatus(
+          "standalone",
+          workerDeploymentFingerprint,
+          Date.now()
+        ),
         mode: "external" as const
       };
     }
@@ -80,7 +99,9 @@ const server = createYoinkServer({
         runtimeKind: "local_in_process",
         mode: "disabled",
         lastHeartbeatAt: "",
-        lastErrorCode: "operator_disabled"
+        lastErrorCode: "operator_disabled",
+        deploymentAttested: false,
+        deploymentContractVersion: BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION
       } as const;
   },
   ...witnessDependencies,

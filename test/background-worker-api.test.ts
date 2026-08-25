@@ -24,7 +24,9 @@ test("the admin worker API exposes safe controls without lease capability materi
       healthy: true,
       runtimeKind: "local_in_process",
       lastHeartbeatAt: new Date().toISOString(),
-      lastErrorCode: ""
+      lastErrorCode: "",
+      deploymentAttested: true,
+      deploymentContractVersion: 1
     })
   });
   server.listen(0, "127.0.0.1");
@@ -42,6 +44,8 @@ test("the admin worker API exposes safe controls without lease capability materi
     assert.equal(health.backgroundWorkerRuntime, "running");
     assert.equal(health.backgroundWorkerHealthy, true);
     assert.equal(health.backgroundWorkerMode, "embedded");
+    assert.equal(health.backgroundWorkerDeploymentAttested, true);
+    assert.equal(health.backgroundWorkerDeploymentContractVersion, 1);
     assert.equal(health.asyncBackgroundWorkerContract, true);
     assert.equal(health.standaloneBackgroundWorkerProcessReady, true);
     assert.equal(health.productionWorkerFleetReady, false);
@@ -57,6 +61,16 @@ test("the admin worker API exposes safe controls without lease capability materi
         boundedPrincipalPagination: boolean;
         successfulHistoryRetentionDays: number;
         canManage: boolean;
+        deployment: {
+          state: string;
+          healthy: boolean;
+          runtimeKind: string;
+          mode: string;
+          lastHeartbeatAt: string;
+          attested: boolean;
+          contractVersion: number;
+          lastErrorCode: string;
+        };
         schedules: Array<{ id: string; taskKind: string; enabled: boolean }>;
         signalIngress: {
           eventType: string;
@@ -77,6 +91,16 @@ test("the admin worker API exposes safe controls without lease capability materi
     assert.equal(initial.backgroundWork.successfulHistoryRetentionDays, 30);
     assert.equal((initial.backgroundWork as { executionBoundary?: string }).executionBoundary, "outside_request_handler");
     assert.equal(initial.backgroundWork.canManage, true);
+    assert.deepEqual(initial.backgroundWork.deployment, {
+      state: "running",
+      healthy: true,
+      runtimeKind: "local_in_process",
+      mode: "embedded",
+      lastHeartbeatAt: initial.backgroundWork.deployment.lastHeartbeatAt,
+      lastErrorCode: "",
+      attested: true,
+      contractVersion: 1
+    });
     assert.equal(initial.backgroundWork.schedules.length, 6);
     assert.equal(initial.backgroundWork.schedules.some(
       (schedule) => schedule.taskKind === "observer_recipe_witness_refresh" && schedule.enabled
@@ -185,10 +209,11 @@ test("the admin worker API exposes safe controls without lease capability materi
     const script = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(page, /Durable maintenance/);
     assert.match(page, /Durable evaluation with closed browser mutation/);
-    assert.match(page, /separately supervised standalone process/);
+    assert.match(page, /package version, closed task registry, and public witness configuration attest/);
     assert.match(script, /renderBackgroundWork/);
     assert.match(script, /data-worker-task-retry/);
     assert.match(script, /data-signal-inbox-retry/);
+    assert.match(script, /CONFIG MISMATCH/);
   } finally {
     server.close();
     await once(server, "close");

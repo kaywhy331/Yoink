@@ -864,16 +864,21 @@ function renderBackgroundWork() {
     return;
   }
   const counts = model.counts || {};
+  const deployment = model.deployment || { healthy: false, attested: false, lastErrorCode: "not_attached" };
   const signalIngress = model.signalIngress || {};
   const signalWaiting = Number(signalIngress.accepted || 0) + Number(signalIngress.processing || 0) + Number(signalIngress.failed || 0);
   const activeProblems = Number(counts.deadLetterTasks || 0) + Number(counts.retryingTasks || 0) + Number(signalIngress.deadLetter || 0);
   const gate = $("#backgroundWorkerGate");
-  gate.textContent = Number(counts.onlineWorkers || 0)
-    ? activeProblems ? `${activeProblems} NEED ATTENTION` : "RUNNING"
-    : "OFFLINE";
-  gate.classList.toggle("danger", activeProblems > 0 || Number(counts.onlineWorkers || 0) === 0);
+  const deploymentMismatch = ["worker_deployment_mismatch", "worker_deployment_expectation_mismatch"].includes(deployment.lastErrorCode);
+  gate.textContent = deploymentMismatch
+    ? "CONFIG MISMATCH"
+    : deployment.healthy
+      ? activeProblems ? `${activeProblems} NEED ATTENTION` : "RUNNING"
+      : "OFFLINE";
+  gate.classList.toggle("danger", activeProblems > 0 || !deployment.healthy);
   const metrics = [
     ["Workers online", counts.onlineWorkers, "30-second heartbeat"],
+    ["Deployment contract", deployment.attested ? 1 : 0, deployment.attested ? `attested v${Number(deployment.contractVersion || 0)}` : operationalLabel(deployment.lastErrorCode || "not_attested")],
     ["Signal inbox", signalWaiting, `${Number(signalIngress.processed || 0).toLocaleString()} processed · ${Number(signalIngress.deadLetter || 0).toLocaleString()} dead letter`],
     ["Schedules", counts.enabledSchedules, `${Number(counts.schedules || 0).toLocaleString()} configured`],
     ["Waiting", Number(counts.pendingTasks || 0) + Number(counts.retryingTasks || 0), `${Number(counts.retryingTasks || 0).toLocaleString()} retrying`],
@@ -892,7 +897,7 @@ function renderBackgroundWork() {
     return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(backgroundTaskLabel(task.taskKind))}</h3><p>Attempt ${Number(task.attemptCount)} of ${Number(task.maximumAttempts)} · queued ${escapeHtml(relativeTime(task.createdAt))}</p></div><span class="tag ${kind}">${escapeHtml(String(task.state).replaceAll("_", " "))}</span></div><div class="card-meta">${task.lastErrorCode ? `<span class="tag bad">${escapeHtml(operationalLabel(task.lastErrorCode))}</span>` : ""}${results || '<span class="tag">no sensitive payload</span>'}</div>${task.state === "dead_letter" ? `<div class="card-actions"><button class="button primary" data-worker-task-retry="${escapeHtml(task.id)}" type="button" ${model.canManage ? "" : "disabled"}>Retry safely</button></div>` : ""}</article>`;
   }).join("") : empty("No background task has run yet.");
   $("#signalInboxDeadLetterList").innerHTML = (model.signalDeadLetters || []).length ? model.signalDeadLetters.map((message) => `<article class="card"><div class="card-top"><div><h3>TrackaLacker signal evaluation stopped</h3><p>Attempt ${Number(message.attempt)} · received ${escapeHtml(relativeTime(message.receivedAt))}</p></div><span class="tag bad">dead letter</span></div><div class="card-meta"><span class="tag bad">${escapeHtml(operationalLabel(message.lastErrorCode || "signal_processing_failed"))}</span><span class="tag">${escapeHtml(message.privacyClassification || "operational_aggregate")}</span><span class="tag operational-correlation">${escapeHtml(message.id)}</span><span>updated ${escapeHtml(relativeTime(message.updatedAt))}</span></div><div class="card-actions"><button class="button primary" data-signal-inbox-retry="${escapeHtml(message.id)}" type="button" ${model.canManage ? "" : "disabled"}>Retry corrected signal</button></div></article>`).join("") : empty("No signal message is in dead letter.");
-  $("#backgroundWorkerInstanceList").innerHTML = (model.workers || []).length ? model.workers.map((worker) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(worker.runtimeKind.replaceAll("_", " "))}</h3><p>${escapeHtml(worker.workerId)} · version ${escapeHtml(worker.runtimeVersion)}</p></div><span class="tag ${worker.online ? "good" : "warning"}">${worker.online ? "online" : worker.state}</span></div><div class="card-meta"><span class="tag">heartbeat ${escapeHtml(relativeTime(worker.heartbeatAt))}</span>${worker.lastErrorCode ? `<span class="tag warning">${escapeHtml(operationalLabel(worker.lastErrorCode))}</span>` : ""}<span class="tag">operational aggregate</span><span class="tag">bounded principals</span></div></article>`).join("") : empty("No worker heartbeat has been recorded. Start Yoink in embedded mode or start the standalone worker after the API initializes the database.");
+  $("#backgroundWorkerInstanceList").innerHTML = (model.workers || []).length ? model.workers.map((worker) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(worker.runtimeKind.replaceAll("_", " "))}</h3><p>${escapeHtml(worker.workerId)} · version ${escapeHtml(worker.runtimeVersion)}</p></div><span class="tag ${worker.online ? "good" : "warning"}">${worker.online ? "online" : worker.state}</span></div><div class="card-meta"><span class="tag">heartbeat ${escapeHtml(relativeTime(worker.heartbeatAt))}</span>${worker.lastErrorCode ? `<span class="tag warning">${escapeHtml(operationalLabel(worker.lastErrorCode))}</span>` : ""}<span class="tag ${worker.deploymentFingerprintPresent ? "good" : "warning"}">${worker.deploymentFingerprintPresent ? "attestation presented" : "legacy heartbeat"}</span><span class="tag">operational aggregate</span><span class="tag">bounded principals</span></div></article>`).join("") : empty("No worker heartbeat has been recorded. Start Yoink in embedded mode or start the standalone worker after the API initializes the database.");
 }
 
 function adminChangeLabel(value) {

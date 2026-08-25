@@ -564,6 +564,26 @@ portion of the witness seam, not the independent service, external public-log
 monitor, alert connector, PostgreSQL fleet, or automatic recipe generation and
 promotion.
 
+Yoink 0.41.0 binds that seam to a deterministic deployment contract. The API
+owns one current mode/version/fingerprint expectation. Both API and worker
+derive the fingerprint from the version, fixed task names and timing/attempt
+bounds, witness-required bit, and complete public witness configuration. The
+database stores only the fingerprint plus a hash-chained append-only history of
+actual expectation changes. Identical API restarts are idempotent.
+
+Every standalone schedule seed, due enqueue, and task lease checks the current
+expectation. A mismatched process may persist a bounded heartbeat/error for
+diagnosis but cannot obtain new work. Health requires matching online coverage
+for every principal and no concurrently online mismatched heartbeat. Completion
+and failure transitions remain available for an already-issued capability so a
+configuration change does not manufacture a contradictory outcome. Operators
+still stop worker before API during a deployment.
+
+This is drift detection within reviewed packaged code, not proof that the
+binary is trustworthy. It does not provide hardware remote attestation,
+artifact-signature verification, workload identity, a secrets manager,
+PostgreSQL roles, or a fleet scheduler.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and
@@ -714,7 +734,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 37. Foreign keys are mandatory.
+numbered; the current schema is migration 38. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 

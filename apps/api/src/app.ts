@@ -118,6 +118,7 @@ import {
 import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
 import { DurableSignalIngressService } from "../../../packages/engine/src/signal-ingress.js";
 import { newId } from "../../../packages/domain/src/ids.js";
+import { BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION } from "../../../packages/domain/src/background-worker-deployment.js";
 import { buildUserSetupReadiness } from "../../../packages/domain/src/user-setup.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
@@ -164,6 +165,8 @@ export interface AppDependencies {
     mode?: "embedded" | "external" | "disabled";
     lastHeartbeatAt: string;
     lastErrorCode: string;
+    deploymentAttested: boolean;
+    deploymentContractVersion: number;
   } | Promise<{
     state: "running" | "waiting" | "stopped" | "starting" | "stopping" | "disabled";
     healthy: boolean;
@@ -171,6 +174,8 @@ export interface AppDependencies {
     mode?: "embedded" | "external" | "disabled";
     lastHeartbeatAt: string;
     lastErrorCode: string;
+    deploymentAttested: boolean;
+    deploymentContractVersion: number;
   }>;
   version: string;
 }
@@ -459,7 +464,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           runtimeKind: "local_in_process" as const,
           mode: "disabled" as const,
           lastHeartbeatAt: "",
-          lastErrorCode: "not_attached"
+          lastErrorCode: "not_attached",
+          deploymentAttested: false,
+          deploymentContractVersion: BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION
         };
         json(response, 200, {
           status: "ready",
@@ -488,6 +495,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           backgroundWorkerHealthy: backgroundWorker.healthy,
           backgroundWorkerDeployment: backgroundWorker.runtimeKind,
           backgroundWorkerMode: backgroundWorker.mode ?? "embedded",
+          backgroundWorkerDeploymentAttested: backgroundWorker.deploymentAttested,
+          backgroundWorkerDeploymentContractVersion: backgroundWorker.deploymentContractVersion,
           asyncBackgroundWorkerContract: true,
           standaloneBackgroundWorkerProcessReady: true,
           productionWorkerFleetReady: false,
@@ -995,9 +1004,29 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/workers") {
+        const deployment = await dependencies.backgroundWorkerStatus?.() ?? {
+          state: "stopped" as const,
+          healthy: false,
+          runtimeKind: "local_in_process" as const,
+          mode: "disabled" as const,
+          lastHeartbeatAt: "",
+          lastErrorCode: "not_attached",
+          deploymentAttested: false,
+          deploymentContractVersion: BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION
+        };
         json(response, 200, {
           backgroundWork: {
             ...backgroundTasks.snapshot(),
+            deployment: {
+              state: deployment.state,
+              healthy: deployment.healthy,
+              runtimeKind: deployment.runtimeKind,
+              mode: deployment.mode ?? "embedded",
+              lastHeartbeatAt: deployment.lastHeartbeatAt,
+              lastErrorCode: deployment.lastErrorCode,
+              attested: deployment.deploymentAttested,
+              contractVersion: deployment.deploymentContractVersion
+            },
             signalIngress: hostedDelivery.inboxEventCounts(SIGNAL_INGRESS_EVENT_TYPE),
             signalDeadLetters: hostedDelivery.listInboxDeadLettersByEventType(SIGNAL_INGRESS_EVENT_TYPE)
           }
@@ -1225,6 +1254,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             durableSignalIngress: true,
             signalEvaluationOutsideDeviceRequest: true,
             durableObserverRecipeWitnessRefresh: true,
+            attestedBackgroundWorkerDeployment: true,
             observerRecipeWitnessRefreshConfigured: dependencies.observerRecipeWitness !== undefined,
             standaloneWitnessRefreshLoadsSigningKeys: false,
             privacyBoundedRepairLandmarks: true,

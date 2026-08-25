@@ -1,6 +1,6 @@
 # Background worker operations
 
-Yoink 0.40 retains two safe SQLite worker layouts. Embedded mode is the
+Yoink 0.41 retains two safe SQLite worker layouts. Embedded mode is the
 zero-configuration local default. External mode runs the same closed handler
 registry in a separately supervised process. The registry contains six closed
 task families, including durable TrackaLacker evaluation and observer-recipe
@@ -56,6 +56,14 @@ npm run start:worker
 Run `npm run build` before these release commands. For source development use
 `npm run dev` and `npm run dev:worker` with the same environment and ordering.
 Never point independently versioned API and worker packages at one SQLite file.
+
+Migration 38 makes that exact-package rule enforceable for the standalone
+layout. On startup the API records its requested worker mode and a secret-free
+fingerprint over the package version, closed task registry, witness requirement,
+and complete public witness configuration. A standalone worker presents its
+independently calculated fingerprint with every heartbeat. It cannot create a
+schedule, enqueue work, or lease a task unless the API-owned expectation is
+`external` and both version and fingerprint match.
 
 The standalone process accepts only bounded operational settings:
 
@@ -122,7 +130,11 @@ recovery, and key-separation requirements.
 - `backgroundWorkerDeployment` is `local_in_process` or `standalone`;
 - `backgroundWorkerRuntime` reports the current lifecycle state;
 - `backgroundWorkerHealthy` requires a current heartbeat, no bounded worker
-  error, and—in external mode—coverage of every persisted principal;
+  error, and—in external mode—attested coverage of every persisted principal
+  with no concurrently online mismatch;
+- `backgroundWorkerDeploymentAttested` and
+  `backgroundWorkerDeploymentContractVersion` expose the fixed deployment gate
+  without exposing its fingerprint inputs;
 - `durableSignalIngress` and `signalEvaluationOutsideDeviceRequest` remain
   `true` for the packaged TrackaLacker device path;
 - `durableObserverRecipeWitnessRefresh` is `true`, while
@@ -164,6 +176,14 @@ log ID, key ID, public SPKI, and maximum age. A witness-refresh dead letter is
 an availability or consistency incident: inspect the independent service and
 public log, correct the deployment, then use the normal authorized task retry.
 Do not copy either observer or witness private signing material onto the worker.
+
+A `worker_deployment_mismatch` means the process fingerprint differs from the
+API expectation. Stop the worker, compare the exact package and public witness
+settings, then restart the API before restarting the worker. Do not edit the
+fingerprint in SQLite or retry tasks around the gate. The current expectation
+is mutable only as API startup configuration; every actual transition has a
+hash-chained append-only event, while unchanged restarts are idempotent. See
+[worker deployment attestation](WORKER_DEPLOYMENT_ATTESTATION.md).
 
 ## Production gate
 

@@ -474,6 +474,7 @@ test("paired Chrome can report sanitized push status, import catalog, and delive
       store: new SqliteBackgroundWorkerStore(db),
       handler: new BackgroundMaintenanceHandler(db),
       version: "trackalacker-test",
+      deploymentFingerprint: "a".repeat(64),
       workerId: "background_worker_trackalacker_test"
     });
     const cycle = await runtime.runOnce();

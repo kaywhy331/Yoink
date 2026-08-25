@@ -2497,5 +2497,74 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         )
       BEGIN SELECT RAISE(ABORT, 'background tasks are retained until bounded cleanup'); END;
     `
+  },
+  {
+    version: 38,
+    name: "attested_background_worker_deployment",
+    sql: `
+      ALTER TABLE background_worker_heartbeats
+        ADD COLUMN deployment_fingerprint TEXT NOT NULL DEFAULT ''
+          CHECK (
+            deployment_fingerprint = '' OR (
+              length(deployment_fingerprint) = 64
+              AND deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+            )
+          );
+
+      CREATE TABLE background_worker_deployment_expectations (
+        id TEXT PRIMARY KEY CHECK (id = 'active'),
+        contract_version INTEGER NOT NULL CHECK (contract_version = 1),
+        desired_mode TEXT NOT NULL CHECK (desired_mode IN ('embedded', 'external', 'disabled')),
+        runtime_version TEXT NOT NULL CHECK (length(runtime_version) BETWEEN 1 AND 40),
+        deployment_fingerprint TEXT NOT NULL CHECK (
+          length(deployment_fingerprint) = 64
+          AND deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+        ),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_configuration'
+          CHECK (privacy_classification = 'operational_configuration'),
+        updated_at TEXT NOT NULL
+      ) STRICT, WITHOUT ROWID;
+
+      CREATE TABLE background_worker_deployment_events (
+        id TEXT PRIMARY KEY,
+        sequence INTEGER NOT NULL UNIQUE CHECK (sequence > 0),
+        contract_version INTEGER NOT NULL CHECK (contract_version = 1),
+        from_mode TEXT NOT NULL CHECK (from_mode IN ('', 'embedded', 'external', 'disabled')),
+        to_mode TEXT NOT NULL CHECK (to_mode IN ('embedded', 'external', 'disabled')),
+        from_deployment_fingerprint TEXT NOT NULL CHECK (
+          from_deployment_fingerprint = '' OR (
+            length(from_deployment_fingerprint) = 64
+            AND from_deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        to_deployment_fingerprint TEXT NOT NULL CHECK (
+          length(to_deployment_fingerprint) = 64
+          AND to_deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+        ),
+        runtime_version TEXT NOT NULL CHECK (length(runtime_version) BETWEEN 1 AND 40),
+        previous_event_hash TEXT NOT NULL CHECK (
+          previous_event_hash = '' OR (
+            length(previous_event_hash) = 64
+            AND previous_event_hash NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        event_hash TEXT NOT NULL UNIQUE CHECK (
+          length(event_hash) = 64 AND event_hash NOT GLOB '*[^a-f0-9]*'
+        ),
+        reason_code TEXT NOT NULL CHECK (reason_code = 'api_startup_contract'),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_configuration'
+          CHECK (privacy_classification = 'operational_configuration'),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX background_worker_deployment_events_recent_idx
+        ON background_worker_deployment_events(sequence DESC);
+
+      CREATE TRIGGER background_worker_deployment_events_no_update
+      BEFORE UPDATE ON background_worker_deployment_events
+      BEGIN SELECT RAISE(ABORT, 'background worker deployment events are append-only'); END;
+      CREATE TRIGGER background_worker_deployment_events_no_delete
+      BEFORE DELETE ON background_worker_deployment_events
+      BEGIN SELECT RAISE(ABORT, 'background worker deployment events are append-only'); END;
+    `
   }
 ]);

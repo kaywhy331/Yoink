@@ -85,6 +85,7 @@ export interface BackgroundWorkerRecord {
   workerId: string;
   runtimeKind: "local_in_process" | "standalone";
   runtimeVersion: string;
+  deploymentFingerprintPresent: boolean;
   state: "running" | "stopped";
   online: boolean;
   startedAt: string;
@@ -527,6 +528,7 @@ export class BackgroundTaskRepository {
     workerId: string,
     runtimeKind: "local_in_process" | "standalone",
     runtimeVersion: string,
+    deploymentFingerprint: string,
     lastErrorCode = "",
     now = Date.now()
   ): void {
@@ -534,7 +536,9 @@ export class BackgroundTaskRepository {
     const scope = currentRequestScope();
     const safeWorkerId = identifier(workerId, "background worker ID");
     const safeVersion = cleanText(runtimeVersion, 40);
-    if (!safeVersion || !["local_in_process", "standalone"].includes(runtimeKind)) {
+    const safeDeploymentFingerprint = String(deploymentFingerprint ?? "").trim();
+    if (!safeVersion || !["local_in_process", "standalone"].includes(runtimeKind)
+      || !/^[a-f0-9]{64}$/.test(safeDeploymentFingerprint)) {
       throw new BackgroundTaskError("background_task_invalid", 400, "The background worker runtime identity is invalid.");
     }
     const timestamp = nowIso(now);
@@ -542,11 +546,12 @@ export class BackgroundTaskRepository {
       `INSERT INTO background_worker_heartbeats(
          tenant_id, subject_user_id, worker_id, runtime_kind, runtime_version,
          state, started_at, heartbeat_at, stopped_at, last_error_code,
-         privacy_classification
-       ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, '', ?, 'operational_aggregate')
+         privacy_classification, deployment_fingerprint
+       ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, '', ?, 'operational_aggregate', ?)
        ON CONFLICT(tenant_id, subject_user_id, worker_id) DO UPDATE SET
          runtime_kind = excluded.runtime_kind,
          runtime_version = excluded.runtime_version,
+         deployment_fingerprint = excluded.deployment_fingerprint,
          state = 'running',
          started_at = CASE WHEN background_worker_heartbeats.state = 'stopped'
            THEN excluded.started_at ELSE background_worker_heartbeats.started_at END,
@@ -560,7 +565,8 @@ export class BackgroundTaskRepository {
       safeVersion,
       timestamp,
       timestamp,
-      reasonCode(lastErrorCode, "")
+      reasonCode(lastErrorCode, ""),
+      safeDeploymentFingerprint
     );
   }
 
@@ -1009,6 +1015,7 @@ export class BackgroundTaskRepository {
       workerId: string;
       runtimeKind: "local_in_process" | "standalone";
       runtimeVersion: string;
+      deploymentFingerprintPresent: number;
       state: "running" | "stopped";
       startedAt: string;
       heartbeatAt: string;
@@ -1020,6 +1027,7 @@ export class BackgroundTaskRepository {
               runtime_version AS runtimeVersion, state, started_at AS startedAt,
               heartbeat_at AS heartbeatAt, stopped_at AS stoppedAt,
               last_error_code AS lastErrorCode,
+              CASE WHEN deployment_fingerprint <> '' THEN 1 ELSE 0 END AS deploymentFingerprintPresent,
               privacy_classification AS privacyClassification
        FROM background_worker_heartbeats
        WHERE tenant_id = ? AND subject_user_id = ?
@@ -1028,6 +1036,7 @@ export class BackgroundTaskRepository {
       scope.userId
     ).map((worker) => ({
       ...worker,
+      deploymentFingerprintPresent: worker.deploymentFingerprintPresent === 1,
       online: worker.state === "running" && new Date(worker.heartbeatAt).getTime() >= now - ONLINE_HEARTBEAT_MS
     }));
   }

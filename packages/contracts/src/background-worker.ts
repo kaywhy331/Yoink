@@ -16,6 +16,7 @@ export interface BackgroundWorkerContext {
   workerId: string;
   runtimeKind: BackgroundWorkerRuntimeKind;
   runtimeVersion: string;
+  deploymentFingerprint: string;
 }
 
 export interface BackgroundWorkerPrincipalPage {
@@ -37,6 +38,8 @@ export interface BackgroundWorkerDeploymentStatus {
   lastErrorCode: string;
   coveredPrincipals: number;
   totalPrincipals: number;
+  deploymentAttested: boolean;
+  deploymentContractVersion: number;
 }
 
 export interface BackgroundWorkerStore {
@@ -60,7 +63,11 @@ export interface BackgroundWorkerStore {
   ): Promise<void>;
   heartbeat(context: BackgroundWorkerContext, lastErrorCode: string, now: number): Promise<void>;
   stopWorker(workerId: string, runtimeKind: BackgroundWorkerRuntimeKind, lastErrorCode: string, now: number): Promise<void>;
-  deploymentStatus(runtimeKind: BackgroundWorkerRuntimeKind, now: number): Promise<BackgroundWorkerDeploymentStatus>;
+  deploymentStatus(
+    runtimeKind: BackgroundWorkerRuntimeKind,
+    expectedDeploymentFingerprint: string,
+    now: number
+  ): Promise<BackgroundWorkerDeploymentStatus>;
 }
 
 export interface BackgroundWorkerTaskHandler {

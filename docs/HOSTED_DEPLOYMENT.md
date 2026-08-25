@@ -69,6 +69,16 @@ service and its key, independent public-log monitoring, and alert delivery
 remain deployment responsibilities. See
 [observer witness refresh](OBSERVER_WITNESS_REFRESH.md).
 
+Version 0.41 binds that split process to an API-owned deployment expectation.
+Both processes independently hash the exact package version, closed task
+registry, witness requirement, and complete public witness configuration.
+Hosted health requires exact attested principal coverage and rejects any online
+mismatch; a mismatched standalone worker cannot create, enqueue, or lease work.
+Only the fingerprint and hash-chained configuration-transition metadata enter
+SQLite. This prevents accidental drift in packaged code, not a malicious binary
+from lying, and is not hardware remote attestation or release provenance. See
+[worker deployment attestation](WORKER_DEPLOYMENT_ATTESTATION.md).
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting
