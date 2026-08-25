@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.56.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.57.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,16 +15,32 @@ new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
 
-Version 0.56.0 adds an offline PostgreSQL cutover qualification plane without
+Version 0.57.0 completes explicit tenant-scope classification for all 95
+portable tables. Forced PostgreSQL RLS now covers 68 direct-owner tables and
+13 tables whose ownership is inherited through exact foreign keys. The one
+mixed-scope offer-observation table hides source-less shared rows from tenant
+roles until separately governed shared-catalog roles are proven. Six shared
+catalog, three authorization catalog, two deployment control, one tenant
+registry, and one unresolved table are named rather than assigned guessed
+policies.
+
+The release also adds a qualification-only PostgreSQL implementation of the
+complete asynchronous worker-store contract. On an inert verified schema it
+passes bounded principal pagination, schedule/dedupe behavior, tenant-bound
+`FOR UPDATE SKIP LOCKED` leasing, capability-protected completion and retry,
+heartbeats, stopping, and deployment attestation. It is deliberately not wired
+to the API or worker: PostgreSQL task handlers, independent multi-connection
+contention, runtime roles, backup/restore, and the authority switch remain
+closed. SQLite is still the sole runtime source of truth. See
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md).
+
+Version 0.56.0 added the offline PostgreSQL cutover qualification plane without
 changing runtime authority. A verified portability archive can be streamed in
 bounded batches through the production `pg` driver into one new private schema
 inside a serializable transaction. The importer preserves packaged keys,
 foreign keys, indexes, safe defaults, checks, and state-guard triggers; forces
 default-deny RLS on direct-tenant tables; and requires exact logical hashes
-before issuing an inert verified receipt. SQLite remains active, dual write is
-prohibited, and inherited tenant policies, async repositories, fleet
-contention, backup/restore, and authority-switch drills remain open. See
-[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md).
+before issuing an inert verified receipt.
 
 Version 0.55.0 makes internal service authorization workload-scoped and
 deny-by-default. A hosted deployment must explicitly map each signed service

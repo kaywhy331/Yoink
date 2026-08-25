@@ -9,7 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
+import { SqliteBackgroundWorkerStore } from "../packages/database/src/background-worker-store.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { PostgresBackgroundWorkerQualificationStore } from "../packages/database/src/postgres-background-worker-store.js";
 import { exportPortabilityArchive } from "../packages/database/src/portability.js";
 import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
@@ -22,6 +24,10 @@ import {
   type PostgresQuerySession
 } from "../packages/database/src/postgres-cutover.js";
 import { buildPostgresSchemaManifest } from "../packages/database/src/postgres-schema-manifest.js";
+
+const WORKER_FINGERPRINT = "d".repeat(64);
+const WORKER_VERSION = "postgres-worker-test";
+const WORKER_NOW = new Date("2026-08-25T15:00:00.000Z").getTime();
 
 class PgliteCutoverDatabase implements PostgresCutoverDatabase {
   constructor(readonly connection = new PGlite()) {}
@@ -70,6 +76,99 @@ function fixture(): {
       "Other cutover user",
       "2026-08-25T12:00:00.000Z"
     );
+    source.run(
+      "INSERT INTO app_settings(user_id, updated_at) VALUES (?, ?)",
+      "user_cutover_other",
+      "2026-08-25T12:00:00.000Z"
+    );
+    source.run(
+      `INSERT INTO source_connections(
+         id, tenant_id, user_id, source, name, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      "source_cutover_other",
+      "tenant_cutover_other",
+      "user_cutover_other",
+      "fixture",
+      "PostgreSQL fixture",
+      "2026-08-25T12:00:00.000Z",
+      "2026-08-25T12:00:00.000Z"
+    );
+    source.run(
+      "INSERT INTO product_families(id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      "family_cutover_scope",
+      "Cutover scope family",
+      "2026-08-25T12:00:00.000Z",
+      "2026-08-25T12:00:00.000Z"
+    );
+    source.run(
+      "INSERT INTO variants(id, family_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      "variant_cutover_scope",
+      "family_cutover_scope",
+      "Cutover scope variant",
+      "2026-08-25T12:00:00.000Z",
+      "2026-08-25T12:00:00.000Z"
+    );
+    source.run(
+      `INSERT INTO listings(
+         id, variant_id, retailer_id, retailer_sku, canonical_url, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      "listing_cutover_scope",
+      "variant_cutover_scope",
+      "target",
+      "cutover-scope-sku",
+      "https://www.target.com/p/-/A-cutover-scope-sku",
+      "2026-08-25T12:00:00.000Z",
+      "2026-08-25T12:00:00.000Z"
+    );
+    for (const [id, tenantId, userId] of [
+      ["mission_cutover_local", "tenant_local", "user_local"],
+      ["mission_cutover_other", "tenant_cutover_other", "user_cutover_other"]
+    ] as const) {
+      source.run(
+        `INSERT INTO missions(id, tenant_id, user_id, variant_id, created_at, updated_at)
+         VALUES (?, ?, ?, 'variant_cutover_scope', ?, ?)`,
+        id,
+        tenantId,
+        userId,
+        "2026-08-25T12:00:00.000Z",
+        "2026-08-25T12:00:00.000Z"
+      );
+    }
+    source.run(
+      `INSERT INTO signal_events(
+         id, tenant_id, user_id, source_connection_id, signal_id,
+         external_event_id, transport_hash, schema_version, source, event_type,
+         observed_at, received_at, identity_json, offer_json, evidence_json,
+         parser_version, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'fixture', 'restock', ?, ?, '{}', '{}', '{}', 'fixture-v1', ?)`,
+      "signal_cutover_other",
+      "tenant_cutover_other",
+      "user_cutover_other",
+      "source_cutover_other",
+      "signal-cutover-other",
+      "external-cutover-other",
+      "transport-cutover-other",
+      "2026-08-25T12:00:00.000Z",
+      "2026-08-25T12:00:00.000Z",
+      "2026-08-25T12:00:00.000Z"
+    );
+    source.run(
+      `INSERT INTO offer_observations(
+         id, listing_id, source_connection_id, availability, observed_at, created_at
+       ) VALUES (?, 'listing_cutover_scope', ?, 'in_stock', ?, ?)`,
+      "offer_cutover_other",
+      "source_cutover_other",
+      "2026-08-25T12:00:00.000Z",
+      "2026-08-25T12:00:00.000Z"
+    );
+    source.run(
+      `INSERT INTO offer_observations(
+         id, listing_id, source_connection_id, availability, observed_at, created_at
+       ) VALUES (?, 'listing_cutover_scope', NULL, 'unknown', ?, ?)`,
+      "offer_cutover_shared",
+      "2026-08-25T12:00:00.000Z",
+      "2026-08-25T12:00:00.000Z"
+    );
     for (let index = 0; index < 520; index += 1) {
       source.run(
         `INSERT INTO audit_events(
@@ -87,6 +186,12 @@ function fixture(): {
         "2026-08-25T12:00:00.000Z"
       );
     }
+    new SqliteBackgroundWorkerStore(source).configureDeploymentExpectation(
+      "external",
+      WORKER_FINGERPRINT,
+      WORKER_VERSION,
+      new Date("2026-08-25T12:30:00.000Z").getTime()
+    );
     exportPortabilityArchive(source, archivePath, "2026-08-25T13:00:00.000Z");
   } finally {
     source.close();
@@ -108,6 +213,15 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.equal(first.directTenantTableCount, 68);
   assert.equal(first.inheritedTenantPathTableCount, 14);
   assert.equal(first.noTenantPathTableCount, 13);
+  assert.equal(first.inheritedTenantTableCount, 13);
+  assert.equal(first.mixedTenantTableCount, 1);
+  assert.equal(first.sharedCatalogTableCount, 6);
+  assert.equal(first.authorizationCatalogTableCount, 3);
+  assert.equal(first.deploymentControlTableCount, 2);
+  assert.equal(first.tenantRegistryTableCount, 1);
+  assert.equal(first.unresolvedTenantTableCount, 1);
+  assert.equal(first.tables.filter((table) => table.tenantScopeKind === "direct").length, 68);
+  assert.equal(first.tables.reduce((count, table) => count + table.tenantOwnershipEdges.length, 0), 18);
   assert.match(first.fingerprint, /^[a-f0-9]{64}$/);
   assert.ok(first.tables.every((table) => table.name !== "schema_migrations"));
   assert.ok(first.tables.every((table) => table.indexes.every((index) => Buffer.byteLength(index.name) <= 63)));
@@ -139,6 +253,13 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     assert.equal(imported.receipt.qualification.runtimeAuthority, false);
     assert.equal(imported.receipt.qualification.cutoverReady, false);
     assert.equal(imported.receipt.qualification.defaultExpressionParity, true);
+    assert.equal(imported.receipt.qualification.inheritedTenantRlsParity, true);
+    assert.equal(imported.receipt.qualification.mixedTenantScopeParity, false);
+    assert.equal(imported.receipt.qualification.sharedTableRuntimeRoleParity, false);
+    assert.equal(imported.receipt.qualification.postgresAsyncWorkerStoreImplemented, true);
+    assert.equal(imported.receipt.qualification.postgresAsyncWorkerStoreContractParity, true);
+    assert.equal(imported.receipt.qualification.singleConnectionWorkerLeaseSemanticsQualified, true);
+    assert.equal(imported.receipt.qualification.postgresBackgroundHandlerParity, false);
     assert.equal(imported.receipt.qualification.checkConstraintParity, true);
     assert.equal(imported.receipt.qualification.triggerParity, true);
     assert.equal(imported.receipt.qualification.asyncRuntimeRepositoryParity, false);
@@ -147,10 +268,39 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     assert.equal(verified.matched, true);
     assert.equal(verified.receipt.sourceFileSha256, imported.archive.fileSha256);
 
+    const workerStore = new PostgresBackgroundWorkerQualificationStore(postgres, "yoink_cutover_test");
+    await assert.rejects(
+      workerStore.listPrincipals("", 1),
+      /must pass qualification/
+    );
+    const workerQualification = await workerStore.qualify();
+    assert.ok(workerQualification.serverVersionMajor >= 15);
+    assert.deepEqual({ ...workerQualification, serverVersionMajor: "supported" }, {
+      qualificationOnly: true,
+      cutoverContractVersion: POSTGRES_CUTOVER_CONTRACT_VERSION,
+      schemaManifestFingerprint: imported.manifest.fingerprint,
+      serverVersionMajor: "supported",
+      verifiedTenantPolicyCount: imported.manifest.directTenantTableCount
+        + imported.manifest.inheritedTenantTableCount
+        + imported.manifest.mixedTenantTableCount,
+      storeContractImplemented: true,
+      tenantPredicatesApplied: true,
+      skipLockedLeaseImplemented: true,
+      singleConnectionSemanticsQualified: true,
+      multiConnectionContentionQualified: false,
+      handlerRepositoryParity: false,
+      runtimeAuthority: false
+    });
+
     const tenantPolicies = await postgres.query<{ count: number }>(
       `SELECT COUNT(*)::integer AS count FROM pg_catalog.pg_policies WHERE schemaname = 'yoink_cutover_test'`
     );
-    assert.equal(tenantPolicies.rows[0]?.count, imported.manifest.directTenantTableCount);
+    assert.equal(
+      tenantPolicies.rows[0]?.count,
+      imported.manifest.directTenantTableCount
+        + imported.manifest.inheritedTenantTableCount
+        + imported.manifest.mixedTenantTableCount
+    );
     const triggerCount = await postgres.query<{ count: number }>(`
       SELECT COUNT(*)::integer AS count
       FROM pg_catalog.pg_trigger trigger
@@ -266,9 +416,26 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     await postgres.query("CREATE ROLE yoink_cutover_reader NOLOGIN");
     await postgres.query("GRANT USAGE ON SCHEMA yoink_cutover_test TO yoink_cutover_reader");
     await postgres.query("GRANT SELECT, INSERT, UPDATE ON yoink_cutover_test.users TO yoink_cutover_reader");
+    await postgres.query(
+      `GRANT SELECT ON
+         yoink_cutover_test.app_settings,
+         yoink_cutover_test.offer_observations,
+         yoink_cutover_test.source_connections,
+         yoink_cutover_test.signal_events,
+         yoink_cutover_test.missions,
+         yoink_cutover_test.strategies
+       TO yoink_cutover_reader`
+    );
+    await postgres.query(
+      "GRANT SELECT, INSERT ON yoink_cutover_test.mission_decisions TO yoink_cutover_reader"
+    );
     await postgres.query("SET ROLE yoink_cutover_reader");
     const defaultDenied = await postgres.query<{ id: string }>("SELECT id FROM yoink_cutover_test.users");
     assert.deepEqual(defaultDenied.rows, []);
+    const inheritedDefaultDenied = await postgres.query<{ user_id: string }>(
+      "SELECT user_id FROM yoink_cutover_test.app_settings"
+    );
+    assert.deepEqual(inheritedDefaultDenied.rows, []);
     await assert.rejects(
       postgres.query(
         `INSERT INTO yoink_cutover_test.users(id, tenant_id, display_name, created_at)
@@ -280,6 +447,38 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     await postgres.query("SET yoink.tenant_id = 'tenant_cutover_other'");
     const visible = await postgres.query<{ id: string }>("SELECT id FROM yoink_cutover_test.users ORDER BY id");
     assert.deepEqual(visible.rows.map((row) => row.id), ["user_cutover_other"]);
+    const inheritedVisible = await postgres.query<{ user_id: string }>(
+      "SELECT user_id FROM yoink_cutover_test.app_settings ORDER BY user_id"
+    );
+    assert.deepEqual(inheritedVisible.rows.map((row) => row.user_id), ["user_cutover_other"]);
+    const mixedVisible = await postgres.query<{ id: string }>(
+      "SELECT id FROM yoink_cutover_test.offer_observations ORDER BY id"
+    );
+    assert.deepEqual(mixedVisible.rows.map((row) => row.id), ["offer_cutover_other"]);
+
+    await postgres.query("BEGIN");
+    await postgres.query(
+      `INSERT INTO yoink_cutover_test.mission_decisions(
+         id, event_id, mission_id, outcome, reason, created_at
+       ) VALUES ('decision_postgres_valid_owner', 'signal_cutover_other',
+                 'mission_cutover_other', 'notify', 'valid owner', $1)`,
+      ["2026-08-25T14:41:00.000Z"]
+    );
+    const validInheritedInsert = await postgres.query<{ id: string }>(
+      "SELECT id FROM yoink_cutover_test.mission_decisions WHERE id = 'decision_postgres_valid_owner'"
+    );
+    assert.deepEqual(validInheritedInsert.rows.map((row) => row.id), ["decision_postgres_valid_owner"]);
+    await postgres.query("ROLLBACK");
+    await assert.rejects(
+      postgres.query(
+        `INSERT INTO yoink_cutover_test.mission_decisions(
+           id, event_id, mission_id, outcome, reason, created_at
+         ) VALUES ('decision_postgres_cross_owner', 'signal_cutover_other',
+                   'mission_cutover_local', 'notify', 'cross owner', $1)`,
+        ["2026-08-25T14:42:00.000Z"]
+      ),
+      /row-level security/i
+    );
     const blocked = await postgres.query(
       "UPDATE yoink_cutover_test.users SET display_name = 'blocked' WHERE id = 'user_local' RETURNING id"
     );
@@ -293,6 +492,160 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     const mismatch = await verifyPostgresCutoverArchive(postgres, paths.archivePath, "yoink_cutover_test");
     assert.equal(mismatch.matched, false);
     assert.deepEqual(mismatch.mismatchedTables, ["users"]);
+
+    const firstPrincipalPage = await workerStore.listPrincipals("", 1);
+    assert.deepEqual(firstPrincipalPage.principals, [{
+      tenantId: "tenant_cutover_other",
+      userId: "user_cutover_other"
+    }]);
+    assert.ok(firstPrincipalPage.nextCursor);
+    const secondPrincipalPage = await workerStore.listPrincipals(firstPrincipalPage.nextCursor, 1);
+    assert.deepEqual(secondPrincipalPage, {
+      principals: [{ tenantId: "tenant_local", userId: "user_local" }],
+      nextCursor: ""
+    });
+    await assert.rejects(workerStore.listPrincipals(`${firstPrincipalPage.nextCursor}x`, 1), /cursor is invalid/);
+
+    const workerContext = (tenantId: string, userId: string) => ({
+      principal: { tenantId, userId },
+      workerId: "postgres_worker_test",
+      runtimeKind: "standalone" as const,
+      runtimeVersion: WORKER_VERSION,
+      deploymentFingerprint: WORKER_FINGERPRINT
+    });
+    const localWorker = workerContext("tenant_local", "user_local");
+    const otherWorker = workerContext("tenant_cutover_other", "user_cutover_other");
+    await assert.rejects(
+      workerStore.ensureSchedules(workerContext("tenant_local", "user_cutover_other"), WORKER_NOW),
+      /does not belong/
+    );
+    await workerStore.ensureSchedules(localWorker, WORKER_NOW);
+    await workerStore.ensureSchedules(otherWorker, WORKER_NOW);
+    assert.equal(await workerStore.enqueueDueSchedules(localWorker, WORKER_NOW), 7);
+    assert.equal(await workerStore.enqueueDueSchedules(otherWorker, WORKER_NOW), 7);
+    assert.equal(await workerStore.enqueueDueSchedules(localWorker, WORKER_NOW), 0);
+
+    const localLease = await workerStore.leaseNext(localWorker, 60, WORKER_NOW + 1);
+    const otherLease = await workerStore.leaseNext(otherWorker, 60, WORKER_NOW + 1);
+    assert.ok(localLease);
+    assert.ok(otherLease);
+    assert.notEqual(localLease.id, otherLease.id);
+    assert.match(localLease.capabilityToken, /^[A-Za-z0-9_-]{43}$/);
+    await assert.rejects(
+      workerStore.complete(localWorker, localLease.id, "invalid", { processed: 1 }, WORKER_NOW + 2),
+      /capability is invalid/
+    );
+    await workerStore.complete(
+      localWorker,
+      localLease.id,
+      localLease.capabilityToken,
+      { processed: 1, bounded: true },
+      WORKER_NOW + 2
+    );
+    await workerStore.fail(
+      otherWorker,
+      otherLease.id,
+      otherLease.capabilityToken,
+      "fixture_failure",
+      WORKER_NOW + 2
+    );
+    const transitioned = await postgres.query<{ id: string; state: string; result_json: string }>(
+      `SELECT id, state, result_json FROM yoink_cutover_test.background_tasks
+       WHERE id IN ($1, $2) ORDER BY id`,
+      [localLease.id, otherLease.id]
+    );
+    assert.deepEqual(
+      new Map(transitioned.rows.map((row) => [row.id, row.state])),
+      new Map([[localLease.id, "succeeded"], [otherLease.id, "retry_wait"]])
+    );
+    assert.deepEqual(
+      JSON.parse(transitioned.rows.find((row) => row.id === localLease.id)?.result_json ?? "{}"),
+      { processed: 1, bounded: true }
+    );
+
+    const expiringLease = await workerStore.leaseNext(localWorker, 60, WORKER_NOW + 3);
+    assert.ok(expiringLease);
+    await postgres.query(
+      `UPDATE yoink_cutover_test.background_tasks SET lease_expires_at = $1 WHERE id = $2`,
+      [new Date(WORKER_NOW + 3).toISOString(), expiringLease.id]
+    );
+    const reclaimedLease = await workerStore.leaseNext(localWorker, 60, WORKER_NOW + 4);
+    assert.ok(reclaimedLease);
+    assert.equal(reclaimedLease.id, expiringLease.id);
+    assert.notEqual(reclaimedLease.capabilityToken, expiringLease.capabilityToken);
+    await assert.rejects(
+      workerStore.complete(
+        localWorker,
+        expiringLease.id,
+        expiringLease.capabilityToken,
+        { reclaimed: false },
+        WORKER_NOW + 5
+      ),
+      /capability is invalid/
+    );
+    await workerStore.complete(
+      localWorker,
+      reclaimedLease.id,
+      reclaimedLease.capabilityToken,
+      { reclaimed: true },
+      WORKER_NOW + 5
+    );
+
+    const exhaustedLease = await workerStore.leaseNext(localWorker, 60, WORKER_NOW + 6);
+    assert.ok(exhaustedLease);
+    await postgres.query(
+      `UPDATE yoink_cutover_test.background_tasks
+       SET attempt_count = maximum_attempts, lease_expires_at = $1 WHERE id = $2`,
+      [new Date(WORKER_NOW + 6).toISOString(), exhaustedLease.id]
+    );
+    const afterExhaustion = await workerStore.leaseNext(localWorker, 60, WORKER_NOW + 7);
+    assert.ok(afterExhaustion);
+    assert.notEqual(afterExhaustion.id, exhaustedLease.id);
+    const exhaustedState = await postgres.query<{ state: string; last_error_code: string }>(
+      `SELECT state, last_error_code FROM yoink_cutover_test.background_tasks WHERE id = $1`,
+      [exhaustedLease.id]
+    );
+    assert.deepEqual(exhaustedState.rows[0], {
+      state: "dead_letter",
+      last_error_code: "lease_attempts_exhausted"
+    });
+    await workerStore.complete(
+      localWorker,
+      afterExhaustion.id,
+      afterExhaustion.capabilityToken,
+      { continued: true },
+      WORKER_NOW + 8
+    );
+
+    await workerStore.heartbeat(localWorker, "", WORKER_NOW + 9);
+    await workerStore.heartbeat(otherWorker, "", WORKER_NOW + 9);
+    const running = await workerStore.deploymentStatus("standalone", WORKER_FINGERPRINT, WORKER_NOW + 10);
+    assert.equal(running.state, "running");
+    assert.equal(running.healthy, true);
+    assert.equal(running.deploymentAttested, true);
+    assert.equal(running.coveredPrincipals, 2);
+    await workerStore.stopWorker("postgres_worker_test", "standalone", "", WORKER_NOW + 11);
+    const stopped = await workerStore.deploymentStatus("standalone", WORKER_FINGERPRINT, WORKER_NOW + 12);
+    assert.equal(stopped.state, "stopped");
+    assert.equal(stopped.healthy, false);
+    assert.equal(stopped.lastErrorCode, "worker_stopped");
+
+    const mismatchedWorker = {
+      ...localWorker,
+      deploymentFingerprint: "e".repeat(64)
+    };
+    await assert.rejects(
+      workerStore.ensureSchedules(mismatchedWorker, WORKER_NOW + 13),
+      /does not match/
+    );
+    await workerStore.heartbeat(mismatchedWorker, "worker_deployment_mismatch", WORKER_NOW + 13);
+    const mismatchedStatus = await workerStore.deploymentStatus(
+      "standalone",
+      WORKER_FINGERPRINT,
+      WORKER_NOW + 14
+    );
+    assert.equal(mismatchedStatus.healthy, false);
+    assert.equal(mismatchedStatus.lastErrorCode, "worker_deployment_mismatch");
   } finally {
     await postgres.close();
     rmSync(paths.directory, { recursive: true, force: true });

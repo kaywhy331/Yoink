@@ -991,17 +991,18 @@ function renderPostgresCutover() {
     ["Indexes", model.indexCount, "Unique and query indexes"],
     ["Column defaults", model.defaultExpressionCount, "Safely translated expressions"],
     ["Direct tenant RLS", model.directTenantRlsTableCount, "Forced, default-deny policies"],
-    ["Inherited paths gated", model.inheritedTenantPathTableCount, `${Number(model.noTenantPathTableCount || 0).toLocaleString()} tables have no tenant FK path`]
+    ["Inherited tenant RLS", model.inheritedTenantRlsTableCount, `${Number(model.mixedTenantRlsTableCount || 0).toLocaleString()} mixed table fails closed`]
   ];
   $("#postgresCutoverMetricGrid").innerHTML = metrics.map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong><small>${escapeHtml(note)}</small></article>`).join("");
   const checks = [
     ["One-shot archive import", model.oneShotImportImplemented === true, "A pre-verified archive streams into a new private schema inside one serializable transaction."],
     ["Exact logical reconciliation", model.exactReconciliationImplemented === true, "Every table, row count, and canonical content hash must match before the receipt becomes verified."],
     ["Default-expression parity", model.defaultExpressionParity === true, `${Number(model.defaultExpressionCount || 0).toLocaleString()} packaged column defaults are translated under a strict literal-only policy.`],
-    ["Direct tenant isolation", model.directTenantRlsTableCount > 0, `${Number(model.directTenantRlsTableCount || 0).toLocaleString()} tables receive forced, default-deny row policies; ${Number(model.inheritedTenantPathTableCount || 0).toLocaleString()} inherited paths remain gated.`],
+    ["Tenant-scope classification", model.tenantScopeClassificationComplete === true && model.inheritedTenantRlsParity === true && model.mixedTenantRlsFailClosed === true, `${Number(model.directTenantRlsTableCount || 0).toLocaleString()} direct and ${Number(model.inheritedTenantRlsTableCount || 0).toLocaleString()} inherited tables receive forced policies; mixed-source rows remain hidden until shared-role semantics are proven.`],
     ["SQLite check parity", model.checkConstraintParity === true, `${Number(model.checkConstraintCount || 0).toLocaleString()} packaged checks receive validated PostgreSQL equivalents.`],
     ["Immutable trigger parity", model.triggerParity === true, `${Number(model.triggerCount || 0).toLocaleString()} packaged trigger invariants receive validated PostgreSQL equivalents.`],
-    ["Async repository and fleet proof", model.asyncRuntimeRepositoryParity === true && model.fleetLeaseContentionQualified === true, "Every request repository, SKIP LOCKED lease race, idempotent replay, outage, backup, and restore drill must pass."],
+    ["PostgreSQL worker-store contract", model.postgresAsyncWorkerStoreContractParity === true && model.singleConnectionWorkerLeaseSemanticsQualified === true, "Principal pagination, scheduling, tenant-bound SKIP LOCKED leasing, capability transitions, heartbeats, and deployment attestation pass on the inert qualification schema."],
+    ["Runtime repository and fleet proof", model.asyncRuntimeRepositoryParity === true && model.fleetLeaseContentionQualified === true, "PostgreSQL task handlers, independent multi-connection lease races, idempotent replay, outage, backup, and restore drills must still pass."],
     ["Production authority", model.productionReady === true, `Active source: ${dataPlane.activeStorageEngine || "sqlite"} · dual write: ${model.dualWriteSupported === true ? "enabled" : "prohibited"}.`]
   ];
   $("#postgresCutoverChecklist").innerHTML = checks.map(([label, ready, detail]) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(label)}</h3><p>${escapeHtml(detail)}</p></div><span class="tag ${ready ? "good" : "warning"}">${ready ? "proven" : "required"}</span></div></article>`).join("")

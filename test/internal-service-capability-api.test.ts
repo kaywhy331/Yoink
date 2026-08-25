@@ -113,6 +113,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(browser.document.querySelector("#postgresCutoverGate")?.textContent ?? "", /QUALIFICATION ONLY/);
     const cutoverText = browser.document.querySelector("#postgresCutoverChecklist")?.textContent ?? "";
     assert.match(cutoverText, /One-shot archive import/);
+    assert.match(cutoverText, /Tenant-scope classification/);
+    assert.match(cutoverText, /PostgreSQL worker-store contract/);
+    assert.match(cutoverText, /Runtime repository and fleet proof/);
     assert.match(cutoverText, /Exact logical reconciliation/);
     assert.match(cutoverText, /Production authority/);
     assert.match(cutoverText, /required/);

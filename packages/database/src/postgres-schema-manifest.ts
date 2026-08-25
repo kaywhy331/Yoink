@@ -42,9 +42,28 @@ export interface PostgresTriggerDescriptor {
     | { kind: "credential_issued_at_backfill" };
 }
 
+export type PostgresTenantScopeKind =
+  | "direct"
+  | "inherited"
+  | "mixed"
+  | "shared_catalog"
+  | "authorization_catalog"
+  | "deployment_control"
+  | "tenant_registry"
+  | "unresolved";
+
+export interface PostgresTenantOwnershipEdge {
+  targetTable: string;
+  columns: PostgresForeignKeyColumn[];
+  nullable: boolean;
+  requiredForOwnership: boolean;
+}
+
 export interface PostgresTableSchemaDescriptor {
   name: string;
   directTenantScope: boolean;
+  tenantScopeKind: PostgresTenantScopeKind;
+  tenantOwnershipEdges: PostgresTenantOwnershipEdge[];
   defaultExpressionCount: number;
   foreignKeys: PostgresForeignKeyDescriptor[];
   indexes: PostgresIndexDescriptor[];
@@ -54,7 +73,7 @@ export interface PostgresTableSchemaDescriptor {
 }
 
 export interface PostgresSchemaManifest {
-  contractVersion: 1;
+  contractVersion: 2;
   tableCount: number;
   foreignKeyCount: number;
   indexCount: number;
@@ -64,6 +83,13 @@ export interface PostgresSchemaManifest {
   directTenantTableCount: number;
   inheritedTenantPathTableCount: number;
   noTenantPathTableCount: number;
+  inheritedTenantTableCount: number;
+  mixedTenantTableCount: number;
+  sharedCatalogTableCount: number;
+  authorizationCatalogTableCount: number;
+  deploymentControlTableCount: number;
+  tenantRegistryTableCount: number;
+  unresolvedTenantTableCount: number;
   fingerprint: string;
   tables: PostgresTableSchemaDescriptor[];
 }
@@ -76,6 +102,7 @@ interface SchemaTableRow {
 interface TableColumnRow {
   name: string;
   dflt_value: string | null;
+  notnull: number;
 }
 
 interface ForeignKeyRow {
@@ -114,6 +141,63 @@ interface TriggerRow {
 
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const FOREIGN_KEY_ACTIONS = new Set(["NO ACTION", "RESTRICT", "SET NULL", "SET DEFAULT", "CASCADE"]);
+
+interface TenantScopeRule {
+  kind: "inherited" | "mixed";
+  edges: Array<{ targetTable: string; from: string; requiredForOwnership: boolean }>;
+}
+
+const TENANT_SCOPE_RULES: Record<string, TenantScopeRule> = {
+  action_events: { kind: "inherited", edges: [{ targetTable: "action_jobs", from: "job_id", requiredForOwnership: true }] },
+  app_settings: { kind: "inherited", edges: [{ targetTable: "users", from: "user_id", requiredForOwnership: true }] },
+  mission_decisions: {
+    kind: "inherited",
+    edges: [
+      { targetTable: "signal_events", from: "event_id", requiredForOwnership: true },
+      { targetTable: "missions", from: "mission_id", requiredForOwnership: false },
+      { targetTable: "strategies", from: "strategy_id", requiredForOwnership: false }
+    ]
+  },
+  mission_targets: { kind: "inherited", edges: [{ targetTable: "missions", from: "mission_id", requiredForOwnership: true }] },
+  offer_observations: { kind: "mixed", edges: [{ targetTable: "source_connections", from: "source_connection_id", requiredForOwnership: true }] },
+  resolution_decisions: { kind: "inherited", edges: [{ targetTable: "signal_events", from: "event_id", requiredForOwnership: true }] },
+  signal_occurrences: {
+    kind: "inherited",
+    edges: [
+      { targetTable: "signal_events", from: "event_id", requiredForOwnership: true },
+      { targetTable: "source_connections", from: "source_connection_id", requiredForOwnership: true }
+    ]
+  },
+  source_device_states: {
+    kind: "inherited",
+    edges: [
+      { targetTable: "extension_devices", from: "device_id", requiredForOwnership: true },
+      { targetTable: "source_connections", from: "source_connection_id", requiredForOwnership: true }
+    ]
+  },
+  source_listing_candidates: { kind: "inherited", edges: [{ targetTable: "source_connections", from: "source_connection_id", requiredForOwnership: true }] },
+  source_listing_refs: { kind: "inherited", edges: [{ targetTable: "source_connections", from: "source_connection_id", requiredForOwnership: true }] },
+  source_product_aliases: { kind: "inherited", edges: [{ targetTable: "source_connections", from: "source_connection_id", requiredForOwnership: true }] },
+  source_product_refs: { kind: "inherited", edges: [{ targetTable: "source_connections", from: "source_connection_id", requiredForOwnership: true }] },
+  source_sync_run_items: { kind: "inherited", edges: [{ targetTable: "source_sync_runs", from: "run_id", requiredForOwnership: true }] },
+  source_variant_retailer_refs: { kind: "inherited", edges: [{ targetTable: "source_connections", from: "source_connection_id", requiredForOwnership: true }] }
+};
+
+const NON_TENANT_SCOPE_KINDS: Record<string, Exclude<PostgresTenantScopeKind, "direct" | "inherited" | "mixed">> = {
+  authorization_permissions: "authorization_catalog",
+  authorization_role_permissions: "authorization_catalog",
+  authorization_roles: "authorization_catalog",
+  background_worker_deployment_events: "deployment_control",
+  background_worker_deployment_expectations: "deployment_control",
+  identifiers: "shared_catalog",
+  listing_urls: "shared_catalog",
+  listings: "shared_catalog",
+  product_families: "shared_catalog",
+  retailers: "shared_catalog",
+  signal_incidents: "unresolved",
+  tenants: "tenant_registry",
+  variants: "shared_catalog"
+};
 
 function identifier(value: unknown, context: string): string {
   const result = String(value ?? "");
@@ -317,9 +401,42 @@ export function buildPostgresSchemaManifest(): PostgresSchemaManifest {
         .sort((left, right) => left.name.localeCompare(right.name));
 
       const checks = checkExpressions(tableName, row.sql);
+      const tenantRule = TENANT_SCOPE_RULES[tableName];
+      const nonTenantScopeKind = NON_TENANT_SCOPE_KINDS[tableName];
+      if (directTenantScope && (tenantRule || nonTenantScopeKind)) {
+        throw new Error(`Canonical table ${tableName} has conflicting tenant-scope classifications.`);
+      }
+      if (!directTenantScope && !tenantRule && !nonTenantScopeKind) {
+        throw new Error(`Canonical table ${tableName} requires an explicit tenant-scope classification.`);
+      }
+      const tenantOwnershipEdges = (tenantRule?.edges ?? []).map((rule): PostgresTenantOwnershipEdge => {
+        const matches = foreignKeys.filter((foreignKey) => foreignKey.targetTable === rule.targetTable
+          && foreignKey.columns.length === 1
+          && foreignKey.columns[0]?.from === rule.from);
+        if (matches.length !== 1 || !matches[0]) {
+          throw new Error(`Canonical table ${tableName} does not match its explicit tenant ownership edge.`);
+        }
+        const column = columns.find((candidate) => candidate.name === rule.from);
+        if (!column) throw new Error(`Canonical table ${tableName} is missing its tenant ownership column.`);
+        const nullable = Number(column.notnull) !== 1;
+        if (tenantRule?.kind === "inherited" && rule.requiredForOwnership && nullable) {
+          throw new Error(`Canonical inherited table ${tableName} has a nullable primary ownership edge.`);
+        }
+        if (!rule.requiredForOwnership && !nullable) {
+          throw new Error(`Canonical inherited table ${tableName} marks a mandatory edge as optional consistency.`);
+        }
+        return {
+          targetTable: matches[0].targetTable,
+          columns: matches[0].columns,
+          nullable,
+          requiredForOwnership: rule.requiredForOwnership
+        };
+      });
       return {
         name: tableName,
         directTenantScope,
+        tenantScopeKind: directTenantScope ? "direct" : tenantRule?.kind ?? nonTenantScopeKind as PostgresTenantScopeKind,
+        tenantOwnershipEdges,
         defaultExpressionCount: columns.filter((column) => column.dflt_value !== null).length,
         foreignKeys,
         indexes,
@@ -329,7 +446,26 @@ export function buildPostgresSchemaManifest(): PostgresSchemaManifest {
       };
     });
 
-    const tenantPathTables = new Set(tables.filter((table) => table.directTenantScope).map((table) => table.name));
+    const tableNames = new Set(tables.map((table) => table.name));
+    for (const classifiedTable of [...Object.keys(TENANT_SCOPE_RULES), ...Object.keys(NON_TENANT_SCOPE_KINDS)]) {
+      if (!tableNames.has(classifiedTable)) {
+        throw new Error(`Tenant-scope classification ${classifiedTable} no longer exists in the canonical schema.`);
+      }
+    }
+    const directTenantTables = new Set(tables.filter((table) => table.directTenantScope).map((table) => table.name));
+    for (const table of tables) {
+      const directForeignKeys = table.foreignKeys.filter((foreignKey) => directTenantTables.has(foreignKey.targetTable));
+      const represented = new Set(table.tenantOwnershipEdges.map((edge) => `${edge.targetTable}:${edge.columns.map((column) => column.from).join(",")}`));
+      if (!table.directTenantScope && directForeignKeys.some((foreignKey) =>
+        !represented.has(`${foreignKey.targetTable}:${foreignKey.columns.map((column) => column.from).join(",")}`))) {
+        throw new Error(`Canonical table ${table.name} has an unclassified tenant ownership edge.`);
+      }
+      if (table.tenantOwnershipEdges.some((edge) => !directTenantTables.has(edge.targetTable))) {
+        throw new Error(`Canonical table ${table.name} has an ownership edge to a non-direct tenant table.`);
+      }
+    }
+
+    const tenantPathTables = new Set(directTenantTables);
     let discoveredTenantPath = true;
     while (discoveredTenantPath) {
       discoveredTenantPath = false;
@@ -343,7 +479,7 @@ export function buildPostgresSchemaManifest(): PostgresSchemaManifest {
     }
     const directTenantTableCount = tables.filter((table) => table.directTenantScope).length;
     const withoutFingerprint: Omit<PostgresSchemaManifest, "fingerprint"> = {
-      contractVersion: 1,
+      contractVersion: 2,
       tableCount: tables.length,
       foreignKeyCount: tables.reduce((count, table) => count + table.foreignKeys.length, 0),
       indexCount: tables.reduce((count, table) => count + table.indexes.length, 0),
@@ -353,6 +489,13 @@ export function buildPostgresSchemaManifest(): PostgresSchemaManifest {
       directTenantTableCount,
       inheritedTenantPathTableCount: tenantPathTables.size - directTenantTableCount,
       noTenantPathTableCount: tables.length - tenantPathTables.size,
+      inheritedTenantTableCount: tables.filter((table) => table.tenantScopeKind === "inherited").length,
+      mixedTenantTableCount: tables.filter((table) => table.tenantScopeKind === "mixed").length,
+      sharedCatalogTableCount: tables.filter((table) => table.tenantScopeKind === "shared_catalog").length,
+      authorizationCatalogTableCount: tables.filter((table) => table.tenantScopeKind === "authorization_catalog").length,
+      deploymentControlTableCount: tables.filter((table) => table.tenantScopeKind === "deployment_control").length,
+      tenantRegistryTableCount: tables.filter((table) => table.tenantScopeKind === "tenant_registry").length,
+      unresolvedTenantTableCount: tables.filter((table) => table.tenantScopeKind === "unresolved").length,
       tables
     };
     return { ...withoutFingerprint, fingerprint: manifestFingerprint(withoutFingerprint) };

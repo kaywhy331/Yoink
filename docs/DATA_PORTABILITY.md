@@ -1,10 +1,11 @@
 # Data portability and recovery drill
 
 Yoink 0.14 provides a streaming, deterministic portability archive for an
-operator-controlled SQLite database. Yoink 0.56 adds an offline PostgreSQL
+operator-controlled SQLite database. Yoink 0.56 added an offline PostgreSQL
 qualification importer that consumes the same contract, creates a new private
-schema atomically, and reconciles every table exactly. The runtime API and
-worker remain SQLite-only.
+schema atomically, and reconciles every table exactly. Yoink 0.57 completes the
+tenant-ownership policy manifest and adds the qualification-only PostgreSQL
+worker-store port. The runtime API and worker remain SQLite-only.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -88,18 +89,22 @@ the source during a controlled recovery.
    reconciliation passes.
 
 The PostgreSQL qualification importer now proves a one-shot, bounded load,
-primary/not-null/foreign-key/index/default/check/trigger translation, direct
-tenant RLS, tamper closure, and the same canonical table/data reconciliation.
+primary/not-null/foreign-key/index/default/check/trigger translation, complete
+table-scope classification, direct and inherited tenant RLS, mixed-source
+fail-closed behavior, tamper closure, and the same canonical table/data
+reconciliation. A qualification-only asynchronous worker store also exercises
+the queue state machine and single-connection `SKIP LOCKED` path on that inert
+schema.
 Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
-A production cutover must still add the async PostgreSQL repository family,
-complete inherited tenant isolation, fleet lease contention, production
-identity, backup/PITR and restore, outage/load testing, and controlled authority
-switch evidence. It must quiesce SQLite, load PostgreSQL once, reconcile, and
-switch authority once. Dual writes remain rejected because they create two
-competing transaction authorities.
+A production cutover must still add PostgreSQL task handlers and request
+repositories, restricted tenant/shared/control roles, independent fleet lease
+contention, production identity, backup/PITR and restore, outage/load testing,
+and controlled authority-switch evidence. It must quiesce SQLite, load
+PostgreSQL once, reconcile, and switch authority once. Dual writes remain
+rejected because they create two competing transaction authorities.
 
 This archive and drill establish the portable dataset and recovery receipt.
 They do not claim that PostgreSQL is the runtime source of truth or that a

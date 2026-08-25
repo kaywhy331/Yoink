@@ -247,8 +247,11 @@ hash-chained append-only event, while unchanged restarts are idempotent. See
 ## Production gate
 
 The separate process proves lifecycle, asynchronous port, bounded enumeration,
-and recovery semantics against SQLite. Production still requires the roadmap's
-async PostgreSQL repository/importer, row-level tenant isolation, fleet-safe
-leases, production identity and secrets, backups/PITR, load and outage drills,
-SLO alerting, and controlled cutover. Do not advertise external SQLite mode as
-a production worker fleet.
+and recovery semantics against SQLite. Version 0.57 additionally qualifies a
+complete PostgreSQL worker-store port on an inert imported schema, including
+direct/inherited tenant isolation and single-connection `SKIP LOCKED` queue
+semantics. Production still requires PostgreSQL task-handler repositories,
+restricted runtime roles, independent multi-connection fleet contention,
+production identity and secrets, backups/PITR, load and outage drills, SLO
+alerting, and controlled cutover. Do not advertise either external SQLite mode
+or the qualification store as a production worker fleet.

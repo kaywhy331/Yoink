@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.56 adds an offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.57 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -25,14 +25,45 @@ For the schema packaged with the current build, the importer:
   immutable/state-guard triggers;
 - performs exact per-table counts and canonical content hashes before issuing
   a verified receipt;
-- enables and forces default-deny row-level security on every table with a
-  direct `tenant_id`; and
+- enables and forces default-deny row-level security on 68 tables with a direct
+  `tenant_id` and 13 tables with exact inherited ownership;
+- classifies all remaining tables explicitly, and fails the mixed-scope
+  `offer_observations` table closed for source-less rows rather than exposing a
+  guessed shared policy; and
 - records `runtime_authority = false` and `cutover_ready = false` in a receipt
   whose constraints prevent either value from becoming true.
 
 The importer re-verifies the file after streaming, so a file changed between
 the initial check and the final row does not produce a committed schema. A
 failed import rolls back the new schema and receipt atomically.
+
+Cutover contract v2 changes the schema manifest, receipt, and tenant-policy
+surface. A schema created by contract v1 remains historical qualification
+evidence only. Never upgrade, alter, or reuse it; export again and import into a
+new schema with the current build.
+
+## Worker-store qualification seam
+
+Version 0.57 also packages a `PostgresBackgroundWorkerQualificationStore`. It
+implements the complete asynchronous worker-store interface against a verified,
+inert cutover schema and requires the qualification/control role before use.
+Automated real-engine tests cover:
+
+- bounded keyset pagination across tenant/user principals;
+- packaged schedule creation, due-run deduplication, and exact tenant/user
+  predicates;
+- `FOR UPDATE SKIP LOCKED` selection, random one-use lease capabilities stored
+  only as hashes, expired-lease recovery, completion, retry, and dead letter;
+- deployment-expectation enforcement, heartbeats, coverage status, mismatch
+  reporting, and stopping; and
+- refusal to operate before the exact current receipt, manifest fingerprint,
+  and forced-policy count are qualified.
+
+This class is not imported by the API or standalone worker entry points. It
+cannot flip receipt authority, cannot enable dual writes, and does not give the
+PostgreSQL process any retailer-session capability. The task handlers still use
+SQLite repositories. Single-connection state-machine semantics are proven;
+independent multi-connection contention is not.
 
 ## Requirements
 
@@ -137,10 +168,10 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- async PostgreSQL implementations for every API and worker repository;
-- RLS/ownership policies for tables whose tenant scope is inherited through a
-  foreign-key path, plus explicit classification of shared/global tables;
-- independent runtime roles without superuser or `BYPASSRLS`;
+- PostgreSQL implementations for task handlers and every API repository;
+- independent tenant, shared-catalog, authorization, deployment-control, and
+  registry runtime roles without superuser or `BYPASSRLS`, plus governed
+  semantics for mixed source-less offers and the unresolved incident table;
 - real multi-connection `SKIP LOCKED` lease contention, idempotent replay,
   isolation, load, and outage drills;
 - encrypted backups, PITR, restore/reconcile drills, and rollback evidence;

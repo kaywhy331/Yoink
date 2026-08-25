@@ -1,6 +1,35 @@
 # Yoink roadmap
 
-## Shipped through 0.56.0
+## Shipped through 0.57.0
+
+### PostgreSQL tenant ownership and worker-store qualification (0.57.0)
+
+- Every one of the 95 portable tables now has exactly one deterministic tenant-
+  scope classification. The manifest rejects new, removed, conflicting, or
+  unrepresented ownership edges instead of silently guessing policy
+- Forced default-deny RLS now covers 68 direct-owner tables and 13 inherited-
+  owner tables. Exact parent ownership is enforced for required links, while
+  nullable mission/strategy consistency links may be absent but cannot cross a
+  tenant when present
+- `offer_observations` is explicitly mixed-scope: rows tied to a tenant source
+  receive inherited isolation, while source-less shared rows fail closed for
+  ordinary tenant roles. Six shared-catalog, three authorization-catalog, two
+  deployment-control, one tenant-registry, and one unresolved table remain
+  named runtime-role gates
+- A qualification-only PostgreSQL store implements the complete asynchronous
+  worker port over the inert imported schema: bounded keyset principal pages,
+  packaged schedules, due-run dedupe, tenant predicates, `FOR UPDATE SKIP
+  LOCKED` leases, ephemeral capability hashes, completion/retry/dead-letter
+  transitions, heartbeats, stopping, and deployment attestation
+- Real PostgreSQL-semantics tests exercise cross-tenant RLS and the worker-store
+  state machine. The cutover contract advances to v2, so v1 qualification
+  schemas are evidence only and must never be upgraded or reused
+- The API and standalone worker remain on SQLite. PostgreSQL handler
+  repositories, restricted runtime/shared roles, independent multi-connection
+  lease contention, backup/PITR, and authority-switch evidence remain closed;
+  retailer evidence and action authorization are unchanged
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### PostgreSQL cutover qualification plane (0.56.0)
 
@@ -1336,9 +1365,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.56.0
+## Architecture assessment after 0.57.0
 
-Yoink 0.56.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.57.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1351,7 +1380,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, direct-tenant RLS qualification, and permanently inert receipt; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | No async PostgreSQL runtime repository family, inherited tenant-policy parity, restricted runtime roles, production identity/risk provider, backup/PITR service, independently tested fleet scheduler, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
+| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete table-scope classification, direct/inherited forced-RLS qualification, a complete qualification-only asynchronous worker store, and permanently inert receipt; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | No PostgreSQL handler/request repository family, restricted tenant/shared/control runtime roles, independent multi-connection fleet proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -1541,14 +1570,19 @@ trust root until mTLS/OIDC workload identity and managed keys are deployed.
 Version 0.56 adds the PostgreSQL qualification plane: strict driver/TLS
 configuration, deterministic schema manifest, bounded one-shot import, exact
 reconciliation, packaged invariant translation, and direct-tenant RLS tests.
-It deliberately cannot become runtime authority. None of these releases turns
+Version 0.57 classifies every remaining table, enforces exact inherited-owner
+RLS, fails mixed shared rows closed, and qualifies a complete PostgreSQL
+worker-store port with single-connection `SKIP LOCKED` semantics. It does not
+port the task handlers or prove independent fleet contention, and deliberately
+cannot become runtime authority. None of these releases turns
 the SQLite process into a production fleet or proves signed artifact/workload
 identity.
 
-- Implement the async PostgreSQL repository family over the qualified schema,
-  complete inherited tenant ownership and shared-table classification, use
-  restricted runtime roles, and pass transactional/isolation parity, real
-  multi-connection lease contention, idempotent replay, and no-dual-write tests
+- Implement PostgreSQL task-handler and request-repository families over the
+  qualified schema, define restricted tenant/shared/control runtime roles for
+  the explicit table classes, resolve the remaining incident and mixed/shared
+  access semantics, and pass transactional/isolation parity, real multi-
+  connection lease contention, idempotent replay, and no-dual-write tests
 - Add production IdP sessions, lifecycle/provisioning, TLS ingress, CSRF/session
   protection, secrets management, encryption, production retention/deletion,
   backups/PITR, restore drills, load tests, SLOs, and on-call alerting
@@ -1970,11 +2004,12 @@ repository alone:
 
 - PostgreSQL source of truth and production migration/cutover. The logical
   archive, production-driver qualification importer, relational-invariant
-  manifest, direct-tenant RLS proof, and exact reconcile receipt are
-  implemented, but the synchronous runtime repository remains SQLite. The
-  PostgreSQL runtime port must be async and pass inherited isolation,
-  restricted-role, multi-connection contention, backup/PITR/restore, outage,
-  and authority-switch drills. Dual-write emulation is explicitly rejected.
+  manifest, full scope classification, direct/inherited tenant RLS proof,
+  qualification-only asynchronous worker store, and exact reconcile receipt
+  are implemented, but task handlers and request repositories remain SQLite.
+  The PostgreSQL runtime must add restricted roles and pass multi-connection
+  contention, backup/PITR/restore, outage, and authority-switch drills.
+  Dual-write emulation is explicitly rejected.
   See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 - Production identity provider, TLS reverse proxy, secrets manager, monitoring,
   abuse operations, and independent security/privacy review

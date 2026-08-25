@@ -24,7 +24,7 @@ import {
   type PostgresTableSchemaDescriptor
 } from "./postgres-schema-manifest.js";
 
-export const POSTGRES_CUTOVER_CONTRACT_VERSION = 1;
+export const POSTGRES_CUTOVER_CONTRACT_VERSION = 2;
 export const POSTGRES_CUTOVER_MINIMUM_MAJOR_VERSION = 15;
 export const POSTGRES_CUTOVER_DEFAULT_SCHEMA = "yoink_cutover";
 
@@ -72,9 +72,18 @@ export interface PostgresCutoverQualification {
   indexesApplied: true;
   defaultExpressionParity: true;
   directTenantRlsApplied: true;
+  inheritedTenantRlsApplied: true;
+  mixedTenantRlsFailClosed: true;
+  tenantScopeClassificationComplete: true;
   checkConstraintParity: true;
   triggerParity: true;
-  inheritedTenantRlsParity: false;
+  inheritedTenantRlsParity: true;
+  mixedTenantScopeParity: false;
+  sharedTableRuntimeRoleParity: false;
+  postgresAsyncWorkerStoreImplemented: true;
+  postgresAsyncWorkerStoreContractParity: true;
+  singleConnectionWorkerLeaseSemanticsQualified: true;
+  postgresBackgroundHandlerParity: false;
   asyncRuntimeRepositoryParity: false;
   fleetLeaseContentionQualified: false;
   backupRestoreQualified: false;
@@ -97,6 +106,8 @@ export interface PostgresCutoverReceipt {
   indexCount: number;
   defaultExpressionCount: number;
   directTenantRlsTableCount: number;
+  inheritedTenantRlsTableCount: number;
+  mixedTenantRlsTableCount: number;
   importedAt: string;
   verifiedAt: string;
   qualification: PostgresCutoverQualification;
@@ -127,10 +138,25 @@ export interface PostgresCutoverCapabilityProjection {
   directTenantRlsTableCount: number;
   inheritedTenantPathTableCount: number;
   noTenantPathTableCount: number;
+  inheritedTenantRlsTableCount: number;
+  mixedTenantRlsTableCount: number;
+  sharedCatalogTableCount: number;
+  authorizationCatalogTableCount: number;
+  deploymentControlTableCount: number;
+  tenantRegistryTableCount: number;
+  unresolvedTenantTableCount: number;
+  tenantScopeClassificationComplete: true;
+  mixedTenantRlsFailClosed: true;
   defaultExpressionParity: true;
   checkConstraintParity: true;
   triggerParity: true;
-  inheritedTenantRlsParity: false;
+  inheritedTenantRlsParity: true;
+  mixedTenantScopeParity: false;
+  sharedTableRuntimeRoleParity: false;
+  postgresAsyncWorkerStoreImplemented: true;
+  postgresAsyncWorkerStoreContractParity: true;
+  singleConnectionWorkerLeaseSemanticsQualified: true;
+  postgresBackgroundHandlerParity: false;
   asyncRuntimeRepositoryParity: false;
   fleetLeaseContentionQualified: false;
   backupRestoreQualified: false;
@@ -158,6 +184,8 @@ interface ReceiptRow extends Record<string, unknown> {
   index_count: string | number | bigint;
   default_expression_count: string | number | bigint;
   direct_tenant_rls_table_count: string | number | bigint;
+  inherited_tenant_rls_table_count: string | number | bigint;
+  mixed_tenant_rls_table_count: string | number | bigint;
   imported_at: string;
   verified_at: string;
   runtime_authority: boolean;
@@ -358,10 +386,28 @@ function triggerSql(schema: string, table: PostgresTableSchemaDescriptor): strin
 }
 
 function rlsSql(schema: string, table: PostgresTableSchemaDescriptor): string[] {
-  if (!table.directTenantScope) return [];
+  if (!(table.tenantScopeKind === "direct"
+    || table.tenantScopeKind === "inherited"
+    || table.tenantScopeKind === "mixed")) return [];
   const policy = objectName(`yoink_tenant_scope_${table.name}`);
   const relation = qualified(schema, table.name);
-  const condition = `${identifier("tenant_id")} = NULLIF(current_setting('yoink.tenant_id', true), '')`;
+  const tenantSetting = `NULLIF(current_setting('yoink.tenant_id', true), '')`;
+  const condition = table.tenantScopeKind === "direct"
+    ? `${identifier("tenant_id")} = ${tenantSetting}`
+    : table.tenantOwnershipEdges.map((edge, index) => {
+        const alias = `yoink_owner_${index + 1}`;
+        const childColumns = edge.columns.map((column) =>
+          `${identifier(table.name)}.${identifier(column.from)}`);
+        const joins = edge.columns.map((column) =>
+          `${identifier(alias)}.${identifier(column.to)} = ${identifier(table.name)}.${identifier(column.from)}`);
+        const exists = `EXISTS (SELECT 1 FROM ${qualified(schema, edge.targetTable)} AS ${identifier(alias)} `
+          + `WHERE ${joins.join(" AND ")} AND ${identifier(alias)}.${identifier("tenant_id")} = ${tenantSetting})`;
+        if (edge.requiredForOwnership) return exists;
+        const allNull = childColumns.map((column) => `${column} IS NULL`).join(" AND ");
+        const allPresent = childColumns.map((column) => `${column} IS NOT NULL`).join(" AND ");
+        return `((${allNull}) OR ((${allPresent}) AND ${exists}))`;
+      }).join(" AND ");
+  if (!condition) throw new Error(`Tenant-scoped table ${table.name} has no enforceable PostgreSQL ownership policy.`);
   return [
     `ALTER TABLE ${relation} ENABLE ROW LEVEL SECURITY`,
     `ALTER TABLE ${relation} FORCE ROW LEVEL SECURITY`,
@@ -431,9 +477,18 @@ function receiptQualification(): PostgresCutoverQualification {
     indexesApplied: true,
     defaultExpressionParity: true,
     directTenantRlsApplied: true,
+    inheritedTenantRlsApplied: true,
+    mixedTenantRlsFailClosed: true,
+    tenantScopeClassificationComplete: true,
     checkConstraintParity: true,
     triggerParity: true,
-    inheritedTenantRlsParity: false,
+    inheritedTenantRlsParity: true,
+    mixedTenantScopeParity: false,
+    sharedTableRuntimeRoleParity: false,
+    postgresAsyncWorkerStoreImplemented: true,
+    postgresAsyncWorkerStoreContractParity: true,
+    singleConnectionWorkerLeaseSemanticsQualified: true,
+    postgresBackgroundHandlerParity: false,
     asyncRuntimeRepositoryParity: false,
     fleetLeaseContentionQualified: false,
     backupRestoreQualified: false,
@@ -465,10 +520,25 @@ export function postgresCutoverCapabilityProjection(): PostgresCutoverCapability
     directTenantRlsTableCount: manifest.directTenantTableCount,
     inheritedTenantPathTableCount: manifest.inheritedTenantPathTableCount,
     noTenantPathTableCount: manifest.noTenantPathTableCount,
+    inheritedTenantRlsTableCount: manifest.inheritedTenantTableCount,
+    mixedTenantRlsTableCount: manifest.mixedTenantTableCount,
+    sharedCatalogTableCount: manifest.sharedCatalogTableCount,
+    authorizationCatalogTableCount: manifest.authorizationCatalogTableCount,
+    deploymentControlTableCount: manifest.deploymentControlTableCount,
+    tenantRegistryTableCount: manifest.tenantRegistryTableCount,
+    unresolvedTenantTableCount: manifest.unresolvedTenantTableCount,
+    tenantScopeClassificationComplete: true,
+    mixedTenantRlsFailClosed: true,
     defaultExpressionParity: true,
     checkConstraintParity: true,
     triggerParity: true,
-    inheritedTenantRlsParity: false,
+    inheritedTenantRlsParity: true,
+    mixedTenantScopeParity: false,
+    sharedTableRuntimeRoleParity: false,
+    postgresAsyncWorkerStoreImplemented: true,
+    postgresAsyncWorkerStoreContractParity: true,
+    singleConnectionWorkerLeaseSemanticsQualified: true,
+    postgresBackgroundHandlerParity: false,
     asyncRuntimeRepositoryParity: false,
     fleetLeaseContentionQualified: false,
     backupRestoreQualified: false,
@@ -502,6 +572,8 @@ function receiptFromRow(row: ReceiptRow): PostgresCutoverReceipt {
     indexCount: exactInteger(row.index_count, "index count"),
     defaultExpressionCount: exactInteger(row.default_expression_count, "default-expression count"),
     directTenantRlsTableCount: exactInteger(row.direct_tenant_rls_table_count, "RLS table count"),
+    inheritedTenantRlsTableCount: exactInteger(row.inherited_tenant_rls_table_count, "inherited RLS table count"),
+    mixedTenantRlsTableCount: exactInteger(row.mixed_tenant_rls_table_count, "mixed RLS table count"),
     importedAt: isoTimestamp(row.imported_at, "import timestamp"),
     verifiedAt: isoTimestamp(row.verified_at, "verification timestamp"),
     qualification: receiptQualification()
@@ -728,7 +800,9 @@ export async function verifyPostgresCutoverArchive(
       || receipt.foreignKeyCount !== manifest.foreignKeyCount
       || receipt.indexCount !== manifest.indexCount
       || receipt.defaultExpressionCount !== manifest.defaultExpressionCount
-      || receipt.directTenantRlsTableCount !== manifest.directTenantTableCount) {
+      || receipt.directTenantRlsTableCount !== manifest.directTenantTableCount
+      || receipt.inheritedTenantRlsTableCount !== manifest.inheritedTenantTableCount
+      || receipt.mixedTenantRlsTableCount !== manifest.mixedTenantTableCount) {
       throw new Error("The PostgreSQL cutover receipt does not match this archive and Yoink build.");
     }
     const databaseSummary = await summarizePostgresTables(session, schema, archive);
@@ -797,6 +871,8 @@ export async function importPostgresCutoverArchive(
       index_count BIGINT NOT NULL,
       default_expression_count BIGINT NOT NULL,
       direct_tenant_rls_table_count BIGINT NOT NULL,
+      inherited_tenant_rls_table_count BIGINT NOT NULL,
+      mixed_tenant_rls_table_count BIGINT NOT NULL,
       imported_at TEXT NOT NULL,
       verified_at TEXT NOT NULL DEFAULT '',
       runtime_authority BOOLEAN NOT NULL DEFAULT FALSE CHECK (runtime_authority = FALSE),
@@ -807,8 +883,9 @@ export async function importPostgresCutoverArchive(
          id, contract_version, phase, source_format, source_schema_version,
          source_file_sha256, source_data_sha256, schema_manifest_fingerprint,
          table_count, row_count, foreign_key_count, index_count,
-         default_expression_count, direct_tenant_rls_table_count, imported_at
-       ) VALUES ('active', $1, 'loading', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+         default_expression_count, direct_tenant_rls_table_count,
+         inherited_tenant_rls_table_count, mixed_tenant_rls_table_count, imported_at
+       ) VALUES ('active', $1, 'loading', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
       [
         POSTGRES_CUTOVER_CONTRACT_VERSION,
         PORTABILITY_FORMAT,
@@ -822,6 +899,8 @@ export async function importPostgresCutoverArchive(
         manifest.indexCount,
         manifest.defaultExpressionCount,
         manifest.directTenantTableCount,
+        manifest.inheritedTenantTableCount,
+        manifest.mixedTenantTableCount,
         importedAt
       ]
     );
