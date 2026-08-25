@@ -26,6 +26,7 @@ import {
   type PostgresQuerySession
 } from "./postgres-cutover.js";
 import { buildPostgresSchemaManifest } from "./postgres-schema-manifest.js";
+import type { NodePostgresTenantQueueWriteDatabase } from "./postgres-tenant-queue-writes.js";
 
 const SCOPE_IDENTIFIER = /^[A-Za-z0-9_-]{3,120}$/;
 const TASK_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{2,159}$/;
@@ -86,8 +87,19 @@ export interface PostgresBackgroundWorkerStoreQualification {
   nativePostgresQualificationSuite: true;
   independentBackendSessionCount: 3;
   multiConnectionContentionQualified: true;
+  serverBoundQueueWriteTransactions: boolean;
+  queueStoreWriteRoleParity: boolean;
+  atomicDeploymentAttestationAndQueueWrite: false;
+  controlRepositoryParity: false;
   handlerRepositoryParity: false;
   runtimeAuthority: false;
+}
+
+export interface PostgresBackgroundWorkerQualificationStoreOptions {
+  tenantQueueWriteDatabase?: Pick<
+    NodePostgresTenantQueueWriteDatabase,
+    "manifest" | "writeTransaction"
+  >;
 }
 
 export class PostgresBackgroundWorkerQualificationError extends Error {
@@ -285,9 +297,11 @@ function assertCapability(row: TaskRow | undefined, taskId: string, token: strin
 
 /**
  * Exercises the complete asynchronous worker-store contract against an inert,
- * verified cutover schema. It is intentionally not wired into either runtime:
- * principal enumeration uses the cutover/control role and task handlers still
- * depend on SQLite repositories.
+ * verified cutover schema. When a tenant queue-write database is supplied,
+ * every tenant queue transaction uses that server-bound least-privilege role;
+ * principal enumeration, deployment attestation/status, and worker stopping
+ * still use the cutover/control role. It is intentionally not wired into either
+ * runtime, and task handlers still depend on SQLite repositories.
  */
 export class PostgresBackgroundWorkerQualificationStore implements BackgroundWorkerStore {
   private qualified = false;
@@ -296,7 +310,8 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
 
   constructor(
     private readonly database: PostgresCutoverDatabase,
-    requestedSchema = POSTGRES_CUTOVER_DEFAULT_SCHEMA
+    requestedSchema = POSTGRES_CUTOVER_DEFAULT_SCHEMA,
+    private readonly options: PostgresBackgroundWorkerQualificationStoreOptions = {}
   ) {
     this.schema = schemaName(requestedSchema);
   }
@@ -337,6 +352,12 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
         "The PostgreSQL worker store tenant-policy surface does not match the cutover manifest."
       );
     }
+    const queueWriteManifest = this.options.tenantQueueWriteDatabase?.manifest;
+    if (queueWriteManifest && queueWriteManifest.schemaName !== this.schema) {
+      throw new PostgresBackgroundWorkerQualificationError(
+        "The server-bound tenant queue writer does not match the worker qualification schema."
+      );
+    }
     this.qualified = true;
     return {
       qualificationOnly: true,
@@ -351,6 +372,10 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
       nativePostgresQualificationSuite: true,
       independentBackendSessionCount: 3,
       multiConnectionContentionQualified: true,
+      serverBoundQueueWriteTransactions: Boolean(queueWriteManifest),
+      queueStoreWriteRoleParity: Boolean(queueWriteManifest),
+      atomicDeploymentAttestationAndQueueWrite: false,
+      controlRepositoryParity: false,
       handlerRepositoryParity: false,
       runtimeAuthority: false
     };
@@ -847,6 +872,29 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
   ): Promise<T> {
     this.assertQualified();
     const scope = contextValue(context);
+    const tenantQueueWrites = this.options.tenantQueueWriteDatabase;
+    if (tenantQueueWrites) {
+      if (requireAttestation) {
+        await this.database.transaction(async (session) => {
+          await session.query("SELECT set_config('yoink.tenant_id', $1, true)", [scope.tenantId]);
+          const user = await session.query<{ id: string }>(
+            `SELECT id FROM ${relation(this.schema, "users")}
+             WHERE tenant_id = $1 AND id = $2`,
+            [scope.tenantId, scope.userId]
+          );
+          if (user.rows.length !== 1) {
+            throw new PostgresBackgroundWorkerQualificationError(
+              "The PostgreSQL worker principal does not belong to the requested tenant."
+            );
+          }
+          await this.assertDeploymentExpectation(session, scope);
+        });
+      }
+      return tenantQueueWrites.writeTransaction(
+        { tenantId: scope.tenantId, userId: scope.userId },
+        (session) => operation(session, scope)
+      );
+    }
     return this.database.transaction(async (session) => {
       await session.query("SELECT set_config('yoink.tenant_id', $1, true)", [scope.tenantId]);
       const user = await session.query<{ id: string }>(

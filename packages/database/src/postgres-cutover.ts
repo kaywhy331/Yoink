@@ -27,6 +27,7 @@ import {
 export const POSTGRES_CUTOVER_CONTRACT_VERSION = 3;
 export const POSTGRES_CUTOVER_MINIMUM_MAJOR_VERSION = 15;
 export const POSTGRES_CUTOVER_DEFAULT_SCHEMA = "yoink_cutover";
+export const POSTGRES_JSON_VALID_FUNCTION = "yoink_json_valid";
 
 export type PostgresCutoverTlsMode = "verify-full" | "local-insecure";
 
@@ -884,7 +885,7 @@ export async function importPostgresCutoverArchive(
   const importedAt = isoTimestamp(now, "import timestamp");
   return database.transaction(async (session) => {
     await session.query(`CREATE SCHEMA ${identifier(schema)}`);
-    await session.query(`CREATE FUNCTION ${qualified(schema, "yoink_json_valid")}(value TEXT)
+    await session.query(`CREATE FUNCTION ${qualified(schema, POSTGRES_JSON_VALID_FUNCTION)}(value TEXT)
       RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE STRICT AS $$
       BEGIN
         PERFORM value::jsonb;

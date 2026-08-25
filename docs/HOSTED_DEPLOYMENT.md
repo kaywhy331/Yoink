@@ -356,11 +356,15 @@ server-owned tenant-principal registry, zero-argument binder, read-only adapter,
 and restrictive policies across all 82 tenant tables; native fixture principals
 prove isolation. Version 0.61 separately qualifies an inactive four-table queue
 writer with 11 exact operations, no delete access, four restrictive policies,
-and native two-principal write isolation. No production login, mapping,
-membership, repository, or handler is provisioned. None of these releases
-deploys that runtime. Until it is provisioned and verified, SQLite is the source
-of truth and hosted boundary mode is suitable for integration/staging—not a
-claim of completed production hosting.
+and native two-principal write isolation. Version 0.62 runs the tenant queue
+repository through contract v2 of that writer, including only the imported
+immutable JSON helper required by the task constraint. Principal enumeration,
+deployment control, and atomic attestation/write composition remain on the
+qualification side. No production login, mapping, membership, handler, or API
+repository is provisioned. None of these releases deploys that runtime. Until
+it is provisioned and verified, SQLite is the source of truth and hosted
+boundary mode is suitable for integration/staging—not a claim of completed
+production hosting.
 
 Do not use dual writes as a shortcut. The transactional inbox/outbox protocol is
 the supported seam for migration and reconciliation.

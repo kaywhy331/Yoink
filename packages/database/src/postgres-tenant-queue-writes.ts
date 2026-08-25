@@ -4,6 +4,7 @@ import { nowIso } from "../../domain/src/ids.js";
 import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
+  POSTGRES_JSON_VALID_FUNCTION,
   inspectPostgresCutoverPreflight,
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
@@ -23,7 +24,7 @@ import {
   type PostgresTenantSessionPrincipal
 } from "./postgres-tenant-session.js";
 
-export const POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION = 1;
+export const POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION = 2;
 export const POSTGRES_TENANT_QUEUE_WRITE_RECEIPT_TABLE = "yoink_tenant_queue_write_receipt";
 
 const SAFE_SCHEMA = /^[a-z][a-z0-9_]{2,62}$/;
@@ -36,6 +37,12 @@ type QueueWritePrivilege = "SELECT" | "INSERT" | "UPDATE";
 export interface PostgresTenantQueueWriteTableGrant {
   tableName: string;
   privileges: QueueWritePrivilege[];
+}
+
+export interface PostgresTenantQueueWriteFunctionGrant {
+  functionName: string;
+  argumentTypes: ["text"];
+  purpose: "immutable_json_constraint_helper";
 }
 
 export interface PostgresTenantQueueWriteManifest {
@@ -52,6 +59,7 @@ export interface PostgresTenantQueueWriteManifest {
     kind: "tenant_queue_writer";
     name: string;
     tableGrants: PostgresTenantQueueWriteTableGrant[];
+    functionGrants: PostgresTenantQueueWriteFunctionGrant[];
     login: false;
     inherit: false;
     bypassRls: false;
@@ -62,6 +70,8 @@ export interface PostgresTenantQueueWriteManifest {
   };
   tableCount: 4;
   grantCount: 11;
+  functionGrantCount: 3;
+  constraintHelperFunctionCount: 1;
   restrictivePolicyCount: 4;
   activePrincipalCount: 0;
   handlerRepositoryParity: false;
@@ -83,6 +93,8 @@ export interface PostgresTenantQueueWriteQualificationReceipt {
   writeRoleName: string;
   tableCount: 4;
   grantCount: 11;
+  functionGrantCount: 3;
+  constraintHelperFunctionCount: 1;
   membershipCount: 0;
   activePrincipalCount: 0;
   restrictivePolicyCount: 4;
@@ -114,8 +126,13 @@ export interface PostgresTenantQueueWriteCapabilityProjection {
   serverBoundRestrictivePolicies: true;
   readCommittedTransactionAdapter: true;
   nativeTwoPrincipalWriteIsolationQualified: true;
+  queueStoreRepositoryParity: true;
+  atomicDeploymentAttestationAndQueueWrite: false;
+  controlRepositoryParity: false;
   tableCount: 4;
   grantCount: 11;
+  functionGrantCount: 3;
+  constraintHelperFunctionCount: 1;
   insertTableCount: 4;
   updateTableCount: 3;
   deleteTableCount: 0;
@@ -162,6 +179,8 @@ interface ReceiptRow extends Record<string, unknown> {
   write_role_name: string;
   table_count: string | number | bigint;
   grant_count: string | number | bigint;
+  function_grant_count: string | number | bigint;
+  constraint_helper_function_count: string | number | bigint;
   membership_count: string | number | bigint;
   active_principal_count: string | number | bigint;
   restrictive_policy_count: string | number | bigint;
@@ -181,6 +200,7 @@ interface ReceiptRow extends Record<string, unknown> {
 interface BoundaryInspection {
   tableCount: number;
   grantCount: number;
+  functionGrantCount: number;
   membershipCount: number;
   activePrincipalCount: number;
   restrictivePolicyCount: number;
@@ -314,6 +334,14 @@ function cloneTableGrants(): PostgresTenantQueueWriteTableGrant[] {
   }));
 }
 
+function constraintFunctionGrants(): PostgresTenantQueueWriteFunctionGrant[] {
+  return [{
+    functionName: POSTGRES_JSON_VALID_FUNCTION,
+    argumentTypes: ["text"],
+    purpose: "immutable_json_constraint_helper"
+  }];
+}
+
 export function buildPostgresTenantQueueWriteManifest(
   requestedSchema = POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   requestedReadRoleNamespace = "yoink_qualification",
@@ -348,6 +376,7 @@ export function buildPostgresTenantQueueWriteManifest(
       kind: "tenant_queue_writer",
       name: roleName(writeNamespace),
       tableGrants: cloneTableGrants(),
+      functionGrants: constraintFunctionGrants(),
       login: false,
       inherit: false,
       bypassRls: false,
@@ -358,6 +387,8 @@ export function buildPostgresTenantQueueWriteManifest(
     },
     tableCount: 4,
     grantCount: 11,
+    functionGrantCount: 3,
+    constraintHelperFunctionCount: 1,
     restrictivePolicyCount: 4,
     activePrincipalCount: 0,
     handlerRepositoryParity: false,
@@ -384,8 +415,13 @@ export function postgresTenantQueueWriteCapabilityProjection(): PostgresTenantQu
     serverBoundRestrictivePolicies: true,
     readCommittedTransactionAdapter: true,
     nativeTwoPrincipalWriteIsolationQualified: true,
+    queueStoreRepositoryParity: true,
+    atomicDeploymentAttestationAndQueueWrite: false,
+    controlRepositoryParity: false,
     tableCount: manifest.tableCount,
     grantCount: manifest.grantCount,
+    functionGrantCount: manifest.functionGrantCount,
+    constraintHelperFunctionCount: manifest.constraintHelperFunctionCount,
     insertTableCount: 4,
     updateTableCount: 3,
     deleteTableCount: 0,
@@ -500,16 +536,42 @@ async function inspectBoundary(
     );
   }
 
-  const expectedFunctions = [
-    POSTGRES_TENANT_SESSION_BINDER_FUNCTION,
-    POSTGRES_TENANT_SESSION_SCOPE_FUNCTION
-  ].sort();
+  const expectedFunctionSpecs = new Map([
+    [POSTGRES_TENANT_SESSION_BINDER_FUNCTION, {
+      argumentCount: 0,
+      identityArguments: "",
+      securityDefiner: true,
+      volatility: "v",
+      strict: false,
+      configuration: ["search_path=pg_catalog"]
+    }],
+    [POSTGRES_TENANT_SESSION_SCOPE_FUNCTION, {
+      argumentCount: 0,
+      identityArguments: "",
+      securityDefiner: true,
+      volatility: "s",
+      strict: false,
+      configuration: ["search_path=pg_catalog"]
+    }],
+    [POSTGRES_JSON_VALID_FUNCTION, {
+      argumentCount: 1,
+      identityArguments: "value text",
+      securityDefiner: false,
+      volatility: "i",
+      strict: true,
+      configuration: []
+    }]
+  ]);
+  const expectedFunctions = [...expectedFunctionSpecs.keys()].sort();
   const functions = await session.query<{
     functionName: string;
     ownerName: string;
     languageName: string;
     securityDefiner: boolean;
     argumentCount: string | number | bigint;
+    identityArguments: string;
+    volatility: string;
+    strict: boolean;
     configuration: string[];
     definition: string;
     publicMayExecute: boolean;
@@ -517,6 +579,8 @@ async function inspectBoundary(
     `SELECT routine.proname AS "functionName", owner_role.rolname AS "ownerName",
             language.lanname AS "languageName", routine.prosecdef AS "securityDefiner",
             routine.pronargs AS "argumentCount",
+            pg_catalog.pg_get_function_identity_arguments(routine.oid) AS "identityArguments",
+            routine.provolatile AS volatility, routine.proisstrict AS strict,
             COALESCE(routine.proconfig, ARRAY[]::text[]) AS configuration,
             pg_catalog.pg_get_functiondef(routine.oid) AS definition,
             COALESCE(bool_or(acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'), FALSE) AS "publicMayExecute"
@@ -527,17 +591,23 @@ async function inspectBoundary(
      CROSS JOIN LATERAL aclexplode(COALESCE(routine.proacl, acldefault('f', routine.proowner))) acl
      WHERE namespace.nspname = $1 AND has_function_privilege($2, routine.oid, 'EXECUTE')
      GROUP BY routine.oid, routine.proname, owner_role.rolname, language.lanname,
-              routine.prosecdef, routine.pronargs, routine.proconfig
+              routine.prosecdef, routine.pronargs, routine.proconfig,
+              routine.provolatile, routine.proisstrict
      ORDER BY routine.proname`,
     [manifest.schemaName, role]
   );
-  if (functions.rows.length !== 2
+  if (functions.rows.length !== manifest.functionGrantCount
     || functions.rows.map((row) => row.functionName).join(",") !== expectedFunctions.join(",")
-    || functions.rows.some((row) => row.languageName !== "plpgsql"
-      || row.securityDefiner !== true
-      || exactInteger(row.argumentCount, "boundary-function argument count") !== 0
-      || row.configuration.length !== 1 || row.configuration[0] !== "search_path=pg_catalog"
-      || row.publicMayExecute)) {
+    || functions.rows.some((row) => {
+      const expected = expectedFunctionSpecs.get(row.functionName);
+      return !expected || row.languageName !== "plpgsql"
+        || row.securityDefiner !== expected.securityDefiner
+        || exactInteger(row.argumentCount, "boundary-function argument count") !== expected.argumentCount
+        || row.identityArguments !== expected.identityArguments
+        || row.volatility !== expected.volatility || row.strict !== expected.strict
+        || row.configuration.join(",") !== expected.configuration.join(",")
+        || row.publicMayExecute;
+    })) {
     throw new PostgresTenantQueueWriteQualificationError(
       "The PostgreSQL tenant queue-write function boundary is incomplete."
     );
@@ -645,6 +715,7 @@ async function inspectBoundary(
   return {
     tableCount: privilegeByTable.size,
     grantCount: grants.rows.length,
+    functionGrantCount: functions.rows.length,
     membershipCount,
     activePrincipalCount,
     restrictivePolicyCount: policies.rows.length,
@@ -656,6 +727,9 @@ async function inspectBoundary(
         language: row.languageName,
         securityDefiner: row.securityDefiner,
         argumentCount: exactInteger(row.argumentCount, "boundary-function argument count"),
+        identityArguments: row.identityArguments,
+        volatility: row.volatility,
+        strict: row.strict,
         configuration: row.configuration,
         definition: row.definition
       })),
@@ -702,6 +776,9 @@ function receiptFromRow(
       !== POSTGRES_TENANT_SESSION_CONTRACT_VERSION
     || exactInteger(row.table_count, "table count") !== manifest.tableCount
     || exactInteger(row.grant_count, "grant count") !== manifest.grantCount
+    || exactInteger(row.function_grant_count, "function grant count") !== manifest.functionGrantCount
+    || exactInteger(row.constraint_helper_function_count, "constraint-helper function count")
+      !== manifest.constraintHelperFunctionCount
     || exactInteger(row.membership_count, "membership count") !== 0
     || exactInteger(row.active_principal_count, "active principal count") !== 0
     || exactInteger(row.restrictive_policy_count, "restrictive policy count")
@@ -724,6 +801,8 @@ function receiptFromRow(
     writeRoleName: manifest.writeRole.name,
     tableCount: 4,
     grantCount: 11,
+    functionGrantCount: 3,
+    constraintHelperFunctionCount: 1,
     membershipCount: 0,
     activePrincipalCount: 0,
     restrictivePolicyCount: 4,
@@ -764,6 +843,7 @@ function assertInspectionMatchesReceipt(
 ): void {
   if (inspection.tableCount !== receipt.tableCount
     || inspection.grantCount !== receipt.grantCount
+    || inspection.functionGrantCount !== receipt.functionGrantCount
     || inspection.membershipCount !== receipt.membershipCount
     || inspection.activePrincipalCount !== receipt.activePrincipalCount
     || inspection.restrictivePolicyCount !== receipt.restrictivePolicyCount
@@ -888,6 +968,13 @@ export async function applyPostgresTenantQueueWriteBoundary(
          TO ${identifier(manifest.writeRole.name)}`
       );
     }
+    for (const grant of manifest.writeRole.functionGrants) {
+      await session.query(
+        `GRANT EXECUTE ON FUNCTION
+         ${relation(manifest.schemaName, grant.functionName)}(${grant.argumentTypes.join(", ")})
+         TO ${identifier(manifest.writeRole.name)}`
+      );
+    }
 
     const schemaManifest = buildPostgresSchemaManifest();
     const tableByName = new Map(schemaManifest.tables.map((table) => [table.name, table]));
@@ -930,6 +1017,8 @@ export async function applyPostgresTenantQueueWriteBoundary(
       write_role_name TEXT NOT NULL,
       table_count BIGINT NOT NULL,
       grant_count BIGINT NOT NULL,
+      function_grant_count BIGINT NOT NULL,
+      constraint_helper_function_count BIGINT NOT NULL,
       membership_count BIGINT NOT NULL CHECK (membership_count = 0),
       active_principal_count BIGINT NOT NULL CHECK (active_principal_count = 0),
       restrictive_policy_count BIGINT NOT NULL,
@@ -960,10 +1049,11 @@ export async function applyPostgresTenantQueueWriteBoundary(
          id, contract_version, cutover_contract_version, tenant_session_contract_version,
          phase, read_role_namespace, session_role_namespace, write_role_namespace,
          role_manifest_fingerprint, tenant_session_manifest_fingerprint, write_role_name,
-         table_count, grant_count, membership_count, active_principal_count,
+         table_count, grant_count, function_grant_count, constraint_helper_function_count,
+         membership_count, active_principal_count,
          restrictive_policy_count, boundary_catalog_fingerprint, applied_at
        ) VALUES ('active', $1, $2, $3, 'loading', $4, $5, $6, $7, $8, $9,
-                 0, 0, 0, 0, 0, repeat('0', 64), $10)`,
+                 0, 0, 0, 0, 0, 0, 0, repeat('0', 64), $10)`,
       [
         POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION,
         POSTGRES_CUTOVER_CONTRACT_VERSION,
@@ -981,13 +1071,16 @@ export async function applyPostgresTenantQueueWriteBoundary(
     const verifiedAt = new Date(Date.parse(appliedAt) + 1).toISOString();
     await session.query(
       `UPDATE ${relation(manifest.schemaName, POSTGRES_TENANT_QUEUE_WRITE_RECEIPT_TABLE)}
-       SET phase = 'verified', table_count = $1, grant_count = $2, membership_count = $3,
-           active_principal_count = $4, restrictive_policy_count = $5,
-           boundary_catalog_fingerprint = $6, verified_at = $7
+       SET phase = 'verified', table_count = $1, grant_count = $2,
+           function_grant_count = $3, constraint_helper_function_count = $4,
+           membership_count = $5, active_principal_count = $6, restrictive_policy_count = $7,
+           boundary_catalog_fingerprint = $8, verified_at = $9
        WHERE id = 'active' AND phase = 'loading'`,
       [
         inspection.tableCount,
         inspection.grantCount,
+        inspection.functionGrantCount,
+        manifest.constraintHelperFunctionCount,
         inspection.membershipCount,
         inspection.activePrincipalCount,
         inspection.restrictivePolicyCount,

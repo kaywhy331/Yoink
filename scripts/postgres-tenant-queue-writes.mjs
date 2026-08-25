@@ -20,8 +20,10 @@ function usage() {
 
 The command creates one qualification-only, server-bound tenant queue writer.
 It grants only the manifested SELECT/INSERT/UPDATE operations on four queue
-tables. It never grants DELETE, creates a login or principal mapping, ports a
-task handler, enables PostgreSQL runtime authority, or changes retailer actions.
+tables plus the binder, scope, and one strict immutable JSON constraint helper.
+It never grants DELETE or any other application function, creates a login or
+principal mapping, ports a task handler/control repository, enables PostgreSQL
+runtime authority, or changes retailer actions.
 `);
 }
 
@@ -31,6 +33,9 @@ function print(value) {
 
 function safeFailureCode(error) {
   const message = error instanceof Error ? error.message : "";
+  if (/acknowledgement is required/i.test(message)) {
+    return "qualification_acknowledgement_required";
+  }
   if (/YOINK_POSTGRES_URL|TLS|loopback|certificate|namespace|schema is invalid/i.test(message)) {
     return "configuration_invalid";
   }

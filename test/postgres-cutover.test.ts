@@ -214,6 +214,8 @@ test("the PostgreSQL tenant queue-write template is exact, inert, and delete-fre
   assert.equal(manifest.tenantSessionContractVersion, POSTGRES_TENANT_SESSION_CONTRACT_VERSION);
   assert.equal(manifest.tableCount, 4);
   assert.equal(manifest.grantCount, 11);
+  assert.equal(manifest.functionGrantCount, 3);
+  assert.equal(manifest.constraintHelperFunctionCount, 1);
   assert.equal(manifest.restrictivePolicyCount, 4);
   assert.equal(manifest.activePrincipalCount, 0);
   assert.equal(manifest.handlerRepositoryParity, false);
@@ -228,6 +230,11 @@ test("the PostgreSQL tenant queue-write template is exact, inert, and delete-fre
     { tableName: "background_task_events", privileges: ["SELECT", "INSERT"] },
     { tableName: "background_worker_heartbeats", privileges: ["SELECT", "INSERT", "UPDATE"] }
   ]);
+  assert.deepEqual(manifest.writeRole.functionGrants, [{
+    functionName: "yoink_json_valid",
+    argumentTypes: ["text"],
+    purpose: "immutable_json_constraint_helper"
+  }]);
   assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
   const capability = postgresTenantQueueWriteCapabilityProjection();
   assert.equal(capability.contractVersion, POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION);
@@ -236,8 +243,13 @@ test("the PostgreSQL tenant queue-write template is exact, inert, and delete-fre
   assert.equal(capability.serverBoundRestrictivePolicies, true);
   assert.equal(capability.readCommittedTransactionAdapter, true);
   assert.equal(capability.nativeTwoPrincipalWriteIsolationQualified, true);
+  assert.equal(capability.queueStoreRepositoryParity, true);
+  assert.equal(capability.atomicDeploymentAttestationAndQueueWrite, false);
+  assert.equal(capability.controlRepositoryParity, false);
   assert.equal(capability.tableCount, 4);
   assert.equal(capability.grantCount, 11);
+  assert.equal(capability.functionGrantCount, 3);
+  assert.equal(capability.constraintHelperFunctionCount, 1);
   assert.equal(capability.insertTableCount, 4);
   assert.equal(capability.updateTableCount, 3);
   assert.equal(capability.deleteTableCount, 0);
@@ -323,6 +335,10 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
       nativePostgresQualificationSuite: true,
       independentBackendSessionCount: 3,
       multiConnectionContentionQualified: true,
+      serverBoundQueueWriteTransactions: false,
+      queueStoreWriteRoleParity: false,
+      atomicDeploymentAttestationAndQueueWrite: false,
+      controlRepositoryParity: false,
       handlerRepositoryParity: false,
       runtimeAuthority: false
     });

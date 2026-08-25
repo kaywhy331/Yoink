@@ -260,10 +260,14 @@ server-bound, read-only tenant session across simultaneous native principals;
 its registry remains empty outside disposable tests. Version 0.61 qualifies one
 server-bound four-table queue writer with 11 exact
 operations, no delete access, and native two-principal write isolation. It has
-no active principal, membership, handler, or runtime authority. Production
-still requires PostgreSQL task-handler repositories, production login
-provisioning, queue-writer integration and remaining writer families, a deployed
-multi-process worker fleet with handler replay and failure testing, production
+no active principal, membership, handler, or runtime authority. Version 0.62
+routes the actual tenant queue repository through contract v2 of that role,
+including its single immutable JSON constraint helper, and proves scheduling,
+retry, heartbeat, completion, and contention. Principal enumeration, deployment
+control, and atomic attestation/write composition still use the qualification
+connection. Production still requires PostgreSQL task-handler repositories,
+production login provisioning, restricted control and remaining writer
+families, a deployed multi-process worker fleet with handler replay and failure testing, production
 identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode
 or the qualification store as a production worker fleet.

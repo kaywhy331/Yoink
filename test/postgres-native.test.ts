@@ -120,6 +120,7 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
   let tenantReaderB: NodePostgresTenantReadDatabase | null = null;
   let tenantReaderUnmapped: NodePostgresTenantReadDatabase | null = null;
   let queueWriterA: NodePostgresTenantQueueWriteDatabase | null = null;
+  let queueWriterASecond: NodePostgresTenantQueueWriteDatabase | null = null;
   let queueWriterB: NodePostgresTenantQueueWriteDatabase | null = null;
   let queueWriterUnmapped: NodePostgresTenantQueueWriteDatabase | null = null;
   try {
@@ -187,6 +188,8 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
     );
     assert.equal(queueWriteBoundary.tableCount, 4);
     assert.equal(queueWriteBoundary.grantCount, 11);
+    assert.equal(queueWriteBoundary.functionGrantCount, 3);
+    assert.equal(queueWriteBoundary.constraintHelperFunctionCount, 1);
     assert.equal(queueWriteBoundary.membershipCount, 0);
     assert.equal(queueWriteBoundary.activePrincipalCount, 0);
     assert.equal(queueWriteBoundary.restrictivePolicyCount, 4);
@@ -306,6 +309,12 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       certificateAuthorityPem: ""
     }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE, { maxConnections: 1 });
     queueWriterA = new NodePostgresTenantQueueWriteDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, { maxConnections: 1 });
+    queueWriterASecond = new NodePostgresTenantQueueWriteDatabase({
       connectionString: principalConnection(NATIVE_PRINCIPAL_A),
       tlsMode: "local-insecure",
       certificateAuthorityPem: ""
@@ -591,13 +600,22 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       { tenantId: NATIVE_TENANT, userId: NATIVE_USER }
     );
 
-    const firstStore = new PostgresBackgroundWorkerQualificationStore(first, NATIVE_SCHEMA);
-    const secondStore = new PostgresBackgroundWorkerQualificationStore(second, NATIVE_SCHEMA);
+    const firstStore = new PostgresBackgroundWorkerQualificationStore(first, NATIVE_SCHEMA, {
+      tenantQueueWriteDatabase: queueWriterA
+    });
+    const secondStore = new PostgresBackgroundWorkerQualificationStore(second, NATIVE_SCHEMA, {
+      tenantQueueWriteDatabase: queueWriterASecond
+    });
     const [firstQualification, secondQualification] = await Promise.all([
       firstStore.qualify(),
       secondStore.qualify()
     ]);
     assert.equal(firstQualification.skipLockedLeaseImplemented, true);
+    assert.equal(firstQualification.serverBoundQueueWriteTransactions, true);
+    assert.equal(firstQualification.queueStoreWriteRoleParity, true);
+    assert.equal(firstQualification.atomicDeploymentAttestationAndQueueWrite, false);
+    assert.equal(firstQualification.controlRepositoryParity, false);
+    assert.equal(firstQualification.handlerRepositoryParity, false);
     assert.deepEqual(secondQualification, firstQualification);
 
     await first.query(
@@ -616,7 +634,70 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       [NATIVE_TENANT, NATIVE_USER]
     );
 
+    await firstStore.ensureSchedules(workerContext("native_repository_probe"), NATIVE_NOW);
+    assert.equal(
+      await firstStore.enqueueDueSchedules(workerContext("native_repository_probe"), NATIVE_NOW),
+      7
+    );
+    const restrictedRepositoryRows = await first.query<{
+      schedules: string | number | bigint;
+      tasks: string | number | bigint;
+      events: string | number | bigint;
+    }>(
+      `SELECT
+         (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."background_task_schedules"
+          WHERE tenant_id = $1 AND subject_user_id = $2) AS schedules,
+         (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."background_tasks"
+          WHERE tenant_id = $1 AND subject_user_id = $2) AS tasks,
+         (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."background_task_events"
+          WHERE tenant_id = $1 AND subject_user_id = $2) AS events`,
+      [NATIVE_TENANT, NATIVE_USER]
+    );
+    assert.deepEqual(restrictedRepositoryRows.rows.map((row) => ({
+      schedules: Number(row.schedules),
+      tasks: Number(row.tasks),
+      events: Number(row.events)
+    })), [{ schedules: 7, tasks: 7, events: 7 }]);
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."background_tasks"
+       SET state = 'cancelled', completed_at = $3, updated_at = $3
+       WHERE tenant_id = $1 AND subject_user_id = $2 AND state = 'pending'`,
+      [NATIVE_TENANT, NATIVE_USER, "2026-08-25T17:00:00.001Z"]
+    );
+
+    await firstStore.heartbeat(workerContext("native_repository_probe"), "", NATIVE_NOW);
+    assert.equal(
+      (await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+         WHERE tenant_id = $1 AND subject_user_id = $2
+           AND worker_id = 'native_repository_probe' AND state = 'running'`,
+        [NATIVE_TENANT, NATIVE_USER]
+      )).rows[0]?.count,
+      "1"
+    );
     const scheduledFor = "2026-08-25T16:59:00.000Z";
+    await insertProbeTask(first, "native_repository_retry", 25, scheduledFor);
+    const retryLease = await firstStore.leaseNext(
+      workerContext("native_repository_probe"),
+      60,
+      NATIVE_NOW
+    );
+    assert.equal(retryLease?.id, "native_repository_retry");
+    await firstStore.fail(
+      workerContext("native_repository_probe"),
+      retryLease!.id,
+      retryLease!.capabilityToken,
+      "native_repository_probe",
+      NATIVE_NOW + 1
+    );
+    assert.deepEqual(
+      (await first.query<{ state: string; errorCode: string }>(
+        `SELECT state, last_error_code AS "errorCode"
+         FROM "${NATIVE_SCHEMA}"."background_tasks" WHERE id = 'native_repository_retry'`
+      )).rows,
+      [{ state: "retry_wait", errorCode: "native_repository_probe" }]
+    );
+
     await insertProbeTask(first, "native_contention_locked", 100, scheduledFor);
     await insertProbeTask(first, "native_contention_skipped", 50, scheduledFor);
     await locker.query("BEGIN ISOLATION LEVEL READ COMMITTED");
@@ -753,6 +834,32 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       queueWriteBoundary.boundaryCatalogFingerprint
     );
     await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_json_valid"(text) VOLATILE`
+    );
+    await assert.rejects(
+      verifyPostgresTenantQueueWriteBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_json_valid"(text) IMMUTABLE`
+    );
+    assert.equal(
+      (await verifyPostgresTenantQueueWriteBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      queueWriteBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
       `ALTER POLICY "yoink_server_queue_write_background_worker_heartbeats"
        ON "${NATIVE_SCHEMA}"."background_worker_heartbeats"
        USING (TRUE) WITH CHECK (TRUE)`
@@ -792,6 +899,7 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       tenantReaderB?.close(),
       tenantReaderUnmapped?.close(),
       queueWriterA?.close(),
+      queueWriterASecond?.close(),
       queueWriterB?.close(),
       queueWriterUnmapped?.close()
     ].filter(Boolean) as Array<Promise<void>>);

@@ -1016,9 +1016,14 @@ prove simultaneous mapped-principal isolation on native PostgreSQL. Custom
 tenant settings remain syntactically mutable but cannot widen scope beyond the
 server mapping. One separately qualified queue-writer role adds exactly 11
 `SELECT`/`INSERT`/`UPDATE` grants and four restrictive policies across the four
-queue tables; native simultaneous writers prove tenant isolation and prohibited
-operations. Its principal registry remains empty and it is not connected to a
-handler or runtime. Production login provisioning, remaining writer families,
+queue tables. Queue-write contract v2 also grants the one strict immutable JSON
+constraint helper required by the task table, then runs the actual tenant queue
+repository through two native server-bound writer pools. Scheduling, enqueue,
+append-only events, retry, heartbeat, leasing, completion, contention, isolation,
+and prohibited operations are proven. Its principal registry remains empty;
+principal enumeration, deployment attestation/status, worker stopping, and task
+handlers are still outside this least-privilege transaction boundary. Production
+login provisioning, atomic control/write composition, remaining writer families,
 mixed shared-offer/incident semantics, PostgreSQL task handlers and request
 repositories, deployed fleet/load/outage proof, and backup/cutover drills remain
 gated, so SQLite retains runtime authority. See
