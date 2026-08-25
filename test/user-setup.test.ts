@@ -21,6 +21,8 @@ test("setup readiness guides a new user without implying purchase authority", ()
   assert.equal(setup.readyForGuardedAdds, false);
   assert.deepEqual(setup.steps[0]?.primaryAction, "download_companion");
   assert.deepEqual(setup.steps[0]?.secondaryAction, "pair_companion");
+  assert.equal(setup.companion.downloadUrl, "/api/v1/extension/release/download");
+  assert.equal(buildUserSetupReadiness({ ...BASE, companionDownloadUrl: "" }).companion.downloadUrl, "");
   assert.match(setup.steps[4]?.summary ?? "", /Checkout, payment, raffle entry, and order submission always remain manual/);
 
   const pending = buildUserSetupReadiness({

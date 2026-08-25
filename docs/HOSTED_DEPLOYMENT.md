@@ -49,6 +49,16 @@ connect device lifecycle to production identity and incident operations.
 Pending and previous credential hashes belong in encrypted backups and must
 remain excluded from logs, telemetry, user exports, and support views.
 
+Version 0.39 makes that protocol usable through the hosted request boundary.
+An exact allowlisted Chrome extension origin is checked before pairing-code or
+bearer lookup; the bounded pairing body resolves only its owning tenant/user;
+pending credentials scope only commit; and current/unexpired previous
+credentials scope ordinary device routes. Bearer-shaped failures cannot fall
+back to proxy headers. Hosted mode also removes the local ZIP endpoints and
+onboarding link. A separate deterministic production extension profile accepts
+only explicit non-loopback HTTPS origins and uses browser-managed updates. See
+[hosted Chrome device transport](HOSTED_DEVICE_TRANSPORT.md).
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting
@@ -67,6 +77,7 @@ YOINK_HOSTED_MODE=1
 YOINK_HOSTED_PROXY_SECRET=<at least 32 random bytes>
 YOINK_HOSTED_HOSTS=yoink.example.com
 YOINK_HOSTED_ORIGINS=https://yoink.example.com
+YOINK_HOSTED_EXTENSION_ORIGINS=chrome-extension://<exact-production-extension-id>
 YOINK_OBSERVER_RECIPE_WITNESS_URL=https://witness.example.net/v1/checkpoints
 YOINK_OBSERVER_RECIPE_WITNESS_LOG_ID=yoink-production
 YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID=<sha256 of witness Ed25519 SPKI>
@@ -78,6 +89,20 @@ YOINK_BACKGROUND_WORKER_MODE=external
 The Node process still binds to loopback. Put an authenticated TLS reverse proxy
 on the same host in front of it. Do not expose port 32991 directly and do not
 rewrite untrusted client headers into Yoink scope headers.
+
+Build the matching production companion with explicit origins; then publish it
+through the deployment's reviewed managed-browser or Chrome Web Store channel:
+
+```bash
+YOINK_EXTENSION_API_ORIGIN=https://api.yoink.example \
+YOINK_EXTENSION_APP_ORIGIN=https://app.yoink.example \
+npm run package:extension:production
+```
+
+Set `YOINK_HOSTED_EXTENSION_ORIGINS` to the exact ID assigned to that reviewed
+package. A bounded multi-ID list is for controlled release transitions only.
+Do not reuse the local unpacked package or enable the local release endpoint in
+hosted mode.
 
 ## Background worker process boundary
 

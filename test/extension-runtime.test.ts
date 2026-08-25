@@ -504,6 +504,7 @@ interface HarnessOptions {
   deviceCredentialRotationDue?: boolean;
   pendingDeviceCredential?: boolean;
   deviceCredentialCommitFailures?: number;
+  runtimeProfile?: "local" | "production";
   retailerObserverFailure?:
     | "bundle_injection"
     | "execution"
@@ -1323,7 +1324,14 @@ function harness(options: HarnessOptions = {}) {
     registration: registrationMock,
     importScripts: (...files: string[]) => {
       for (const file of files) {
-        if (file === "observer-recipe-root.js" && options.observerRecipeRoot) {
+        if (file === "runtime-config.js" && options.runtimeProfile === "production") {
+          runInContext(`globalThis.YoinkRuntimeConfig = Object.freeze({
+            profile: "production",
+            apiOrigin: "https://api.yoink.example",
+            appOrigin: "https://app.yoink.example",
+            localPackageUpdates: false
+          });`, context);
+        } else if (file === "observer-recipe-root.js" && options.observerRecipeRoot) {
           runInContext(`globalThis.YoinkObserverRecipeRoot = Object.freeze(${JSON.stringify(options.observerRecipeRoot)});`, context);
         } else {
           runInContext(readFileSync(join(process.cwd(), "apps", "extension", file), "utf8"), context);
@@ -2295,4 +2303,32 @@ test("the service worker checks the exact local release and starts one update do
   assert.equal(update.updateAvailable, true);
   assert.equal(update.downloadStarted, true);
   assert.ok(runtime.tabUrls().includes("http://127.0.0.1:32991/api/v1/extension/release/download"));
+});
+
+test("the production service worker uses only its pinned HTTPS API and never opens the local ZIP channel", async () => {
+  const runtime = harness({ runtimeProfile: "production" });
+  const updateResponse = await runtime.send({ type: "yoink:check-update", download: true });
+  assert.equal(updateResponse.ok, true);
+  assert.deepEqual({ ...(updateResponse.update as Record<string, unknown>) }, {
+    installedVersion: "0.3.0",
+    releaseVersion: "0.3.0",
+    updateAvailable: false,
+    packageReady: false,
+    sha256: "",
+    sizeBytes: 0,
+    downloadUrl: "",
+    downloadStarted: false,
+    channel: "managed",
+    managedByBrowser: true
+  });
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.includes("/extension/release")), false);
+  assert.equal(runtime.tabUrls().some((url) => url.includes("/extension/release/download")), false);
+
+  const health = await runtime.send({ type: "yoink:check-health" });
+  assert.equal(health.ok, true);
+  assert.equal(runtime.fetchCalls.every((entry) => entry.url.startsWith("https://api.yoink.example/api/v1/")), true);
+  const heartbeat = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/heartbeat"));
+  const body = JSON.parse(String(heartbeat?.options.body)) as { capabilities: Record<string, unknown> };
+  assert.equal(body.capabilities.productionTransportProfile, true);
+  assert.equal(body.capabilities.managedExtensionUpdates, true);
 });

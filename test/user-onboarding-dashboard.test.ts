@@ -136,6 +136,11 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
     assert.match(browser.document.querySelector("#setupGuideHeadline")?.textContent ?? "", /Start with the Chrome companion/);
     assert.match(browser.document.querySelector("#setupGuide")?.textContent ?? "", /Always manual.*checkout, payment, raffle entry, and order submission/s);
     assert.equal((browser.document.querySelector("#companionDownloadLink") as HTMLAnchorElement).pathname, "/api/v1/extension/release/download");
+    assert.equal((browser.document.querySelector("#companionDownloadLink") as HTMLAnchorElement).hidden, false);
+    overview.setup.companion.downloadUrl = "";
+    await browser.eval("refresh()");
+    await eventually(() => assert.equal((browser.document.querySelector("#companionDownloadLink") as HTMLAnchorElement).hidden, true));
+    assert.match(browser.document.querySelector("#setupGuide")?.textContent ?? "", /installation is managed by your Yoink administrator/);
     assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /8 records/);
     assert.match(browser.document.querySelector("#privacyBoundary")?.textContent ?? "", /Device tokens.*excluded/s);
 

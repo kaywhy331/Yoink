@@ -43,12 +43,14 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.equal(manifest.host_permissions.includes("https://www.target.com/*"), false);
   assert.equal(manifest.host_permissions.includes("https://*.walmart.com/*"), false);
 
-  for (const file of ["background.js", "popup.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js"]) {
+  for (const file of ["background.js", "popup.js", "runtime-config.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js"]) {
     const result = spawnSync(process.execPath, ["--check", join(extensionRoot, file)], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
   }
   const background = readFileSync(join(extensionRoot, "background.js"), "utf8");
   const popup = readFileSync(join(extensionRoot, "popup.js"), "utf8");
+  const popupHtml = readFileSync(join(extensionRoot, "popup.html"), "utf8");
+  const runtimeConfig = readFileSync(join(extensionRoot, "runtime-config.js"), "utf8");
   const targetBundle = readFileSync(join(extensionRoot, "target-shadow.js"), "utf8");
   const targetActionBundle = readFileSync(join(extensionRoot, "target-action.js"), "utf8");
   const walmartActionBundle = readFileSync(join(extensionRoot, "walmart-action.js"), "utf8");
@@ -69,6 +71,9 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /durableAdapterDiagnostics: true/);
   assert.match(background, /privacyBoundedRepairLandmarks: true/);
   assert.match(background, /rotatableDeviceCredentials: true/);
+  assert.match(background, /productionTransportProfile:/);
+  assert.match(background, /managedExtensionUpdates:/);
+  assert.match(background, /importScripts\("runtime-config\.js"/);
   assert.match(background, /credential-rotation\/begin/);
   assert.match(background, /credential-rotation\/commit/);
   assert.match(background, /pendingCredential/);
@@ -99,6 +104,12 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(popup, /yoink:inspect-walmart-draw/);
   assert.match(popup, /preorder read-only/);
   assert.match(popup, /high-demand gate closed/);
+  assert.match(popup, /POPUP_RUNTIME_CONFIG\.appOrigin/);
+  assert.doesNotMatch(popup, /http:\/\/127\.0\.0\.1:32991/);
+  assert.doesNotMatch(popupHtml, /Checking local app/);
+  assert.ok(popupHtml.indexOf('src="runtime-config.js"') < popupHtml.indexOf('src="popup.js"'));
+  assert.match(runtimeConfig, /profile: "local"/);
+  assert.match(runtimeConfig, /localPackageUpdates: true/);
   assert.doesNotMatch(targetBundle, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
   assert.doesNotMatch(retailerBundle, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
   assert.match(retailerBundle, /pdp-add|repairLandmarks/);

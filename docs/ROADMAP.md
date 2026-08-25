@@ -1,6 +1,37 @@
 # Yoink roadmap
 
-## Shipped through 0.38.0
+## Shipped through 0.39.0
+
+### Hosted Chrome transport and production package profile (0.39.0)
+
+- Hosted startup requires an exact `YOINK_HOSTED_EXTENSION_ORIGINS` allowlist.
+  The API checks it before reading a pairing body or resolving a bearer, so a
+  foreign extension cannot probe or consume a code or credential slot
+- The exact bounded pairing body may establish scope only on the pairing route.
+  Its hashed, globally unique, unconsumed code resolves one tenant/user and is
+  then consumed atomically by the existing repository flow; it never enters a
+  URL, header, audit payload, or telemetry record
+- Hosted bearer resolution mirrors rotation: current and unexpired previous
+  credentials establish ordinary device scope, an unexpired pending credential
+  establishes scope only for exact commit, and an invalid bearer cannot fall
+  back to trusted-proxy identity
+- A package-owned runtime configuration separates local and production
+  companions. Production packaging requires exact non-loopback HTTPS API/app
+  origins, emits only the selected API host permission, disables local ZIP
+  behavior, and creates a distinct deterministic archive
+- The production popup opens only its packaged app origin and declares
+  browser-managed updates. Heartbeat advertises production transport/update
+  capabilities, while admin distinguishes local from production companions
+- Hosted mode returns a closed response for both local release endpoints,
+  reports `localExtensionUpdates=false`, and supplies no local download link to
+  onboarding; the dashboard does not synthesize a fallback ZIP URL
+- Tests cover origin enumeration resistance, one-time tenant scope, wrong-route
+  pairing denial, all credential slots, invalid-bearer fallback denial,
+  deterministic HTTPS packaging, loopback rejection, hosted release closure,
+  managed updates, and production-only request origins
+- No migration is required; schema 36 remains current. This is not a published
+  browser release, TLS/IdP/PostgreSQL deployment, worker fleet, device-risk
+  service, or action expansion
 
 ### Recoverable Chrome device credential rotation (0.38.0)
 
@@ -789,9 +820,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.38.0
+## Architecture assessment after 0.39.0
 
-Yoink 0.38.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.39.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -803,9 +834,9 @@ or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-36 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, or hosted cutover |
+| Primary backend database | Transactional migration-36 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, bounded service-health telemetry, durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, secret references, external alert connectors or connector dispatch workers, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
-| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, and source/review status | Production onboarding still depends on Phase 2 IdP/hosted deployment; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
+| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, and an explicit managed-install boundary when hosted ZIP delivery is closed | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, complete retention/deletion operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; a narrow stable-attribute landmark can derive a tenant-scoped non-executable maintainer suggestion; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Landmarks cover only unique Add-control selector misses and cannot synthesize a complete recipe; local device/SKU evidence is not a public community quorum or independent oracle; canary is not cohort deployment; recipe evaluation is not a worker handler; the independent witness service, refresh scheduler, and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
@@ -969,6 +1000,10 @@ families and the production persistence/deployment gate remain open. Version
 binding, hash-only server state, idempotent commit, and extension-side
 crash/outage recovery. It improves the device-authentication seam but does not
 replace a production IdP, fixed hosted origin, TLS, or device-risk operations.
+Version 0.39 adds the fixed hosted extension-origin policy, pairing and all-slot
+rotation scope resolution, invalid-bearer fallback denial, separate deterministic
+local/production package profiles, and hosted local-ZIP closure. The production
+profile is buildable and tested but is not published or deployed.
 
 - Implement the async PostgreSQL repository family and migrations/importer with
   transactional and isolation parity, row-level tenant tests, fleet lease-
@@ -981,11 +1016,11 @@ replace a production IdP, fixed hosted origin, TLS, or device-risk operations.
   external inbox/outbox dispatch, projection cleanup, recipe evaluation,
   notification dispatch, and generic hosted signal sources onto explicit
   idempotent worker contracts
-- Ship separate dev and production extension configurations. Production uses
-  rotatable device credentials, a package-allowlisted HTTPS origin,
-  authenticated pull, Web Push only as a wake hint, and alarms as fallback.
-  Chrome retains an independent local pause and action ceiling even when the
-  hosted control plane is healthy
+- Deploy the shipped production extension profile through a signed managed
+  browser/Chrome Web Store channel with provenance, staged rollout, rollback,
+  and the exact server-side ID pin. Keep authenticated pull, Web Push only as a
+  wake hint, and alarms as fallback. Chrome retains an independent local pause
+  and action ceiling even when the hosted control plane is healthy
 
 Exit gate: a staged PostgreSQL deployment passes restore, isolation, replay,
 contention, device revocation, outage, and cutover drills; no production request

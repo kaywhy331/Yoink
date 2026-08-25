@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.38.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.39.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,23 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.39.0 completes the repository-side hosted Chrome transport seam.
+Hosted mode now requires an exact allowlist of packaged Chrome extension
+origins and checks it before pairing-code or bearer resolution. The exact
+one-time pairing code body resolves only its owning tenant/user; current and
+unexpired previous credentials resolve ordinary device routes, while a pending
+credential resolves only the two-phase commit route. An invalid bearer cannot
+fall back to trusted-proxy identity headers.
+
+The extension now has package-owned local and production runtime profiles. A
+production build requires exact non-loopback HTTPS API/app origins, emits only
+that API host permission, uses browser-managed updates, and contains no local
+ZIP behavior. Hosted mode disables both unpacked-extension release endpoints
+and omits their onboarding link. This is verified deployment structure—not a
+published browser release, TLS/IdP/PostgreSQL implementation, or production
+fleet—and it widens no retailer action. See
+[hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md).
 
 Version 0.38.0 adds recoverable two-phase rotation for paired Chrome device
 credentials. After 30 days, the companion prepares a random next-generation
@@ -687,6 +704,18 @@ folder, then choose **Reload after overwriting the folder** in the popup (or
 Reload on `chrome://extensions`). Pairing and local extension state remain in
 Chrome storage.
 
+For a production-channel artifact, supply exact HTTPS origins explicitly:
+
+```bash
+YOINK_EXTENSION_API_ORIGIN=https://api.yoink.example \
+YOINK_EXTENSION_APP_ORIGIN=https://app.yoink.example \
+npm run package:extension:production
+```
+
+The production archive has a separate filename, manifest host permission, and
+runtime profile. It rejects loopback origins and never uses the local ZIP feed;
+publication/signing and the final extension ID remain deployment steps.
+
 ## Verify
 
 ```bash
@@ -698,5 +727,5 @@ signal, source, attribution, notification, adapter, service-worker recovery,
 and API tests.
 
 See [Architecture](docs/ARCHITECTURE.md), [Hosted deployment
-contract](docs/HOSTED_DEPLOYMENT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
+contract](docs/HOSTED_DEPLOYMENT.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
 migration](docs/CARTCOLLECT_MIGRATION.md), and [Roadmap](docs/ROADMAP.md).

@@ -20,6 +20,7 @@ export interface UserSetupStep {
 
 export interface UserSetupInput {
   version: string;
+  companionDownloadUrl?: string;
   devices: Array<Record<string, unknown>>;
   sources: Array<Record<string, unknown>>;
   products: number;
@@ -233,7 +234,9 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
       currentCount: currentDevices.length,
       onlineCurrentCount: onlineCurrentDevices.length,
       latestVersion: input.version,
-      downloadUrl: "/api/v1/extension/release/download"
+      downloadUrl: input.companionDownloadUrl === undefined
+        ? "/api/v1/extension/release/download"
+        : input.companionDownloadUrl
     },
     connectedSignalCount: connectedSignals.length,
     activePlanCount: activePlans.length,

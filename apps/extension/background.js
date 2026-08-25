@@ -1,9 +1,39 @@
 "use strict";
 
-importScripts("trackalacker-push.js", "observer-recipe-root.js");
+importScripts("runtime-config.js", "trackalacker-push.js", "observer-recipe-root.js");
 
-const API_ROOT = "http://127.0.0.1:32991/api/v1";
-const LOCAL_APP_ROOT = "http://127.0.0.1:32991";
+function normalizedRuntimeOrigin(value, profile) {
+  const parsed = new URL(String(value || ""));
+  const exactOrigin = !parsed.username && !parsed.password
+    && parsed.pathname === "/" && !parsed.search && !parsed.hash;
+  const loopback = parsed.hostname === "localhost" || parsed.hostname.endsWith(".localhost")
+    || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+  if (!exactOrigin
+    || (profile === "local" && (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1"))
+    || (profile === "production" && (parsed.protocol !== "https:" || loopback))) {
+    throw new Error("Yoink Companion has an invalid packaged runtime origin.");
+  }
+  return parsed.origin;
+}
+
+function normalizedRuntimeConfig(value) {
+  const profile = value?.profile === "production" ? "production" : value?.profile === "local" ? "local" : "";
+  if (!profile || typeof value?.localPackageUpdates !== "boolean"
+    || value.localPackageUpdates !== (profile === "local")) {
+    throw new Error("Yoink Companion has an invalid packaged runtime profile.");
+  }
+  return Object.freeze({
+    profile,
+    apiOrigin: normalizedRuntimeOrigin(value.apiOrigin, profile),
+    appOrigin: normalizedRuntimeOrigin(value.appOrigin, profile),
+    localPackageUpdates: value.localPackageUpdates
+  });
+}
+
+const RUNTIME_CONFIG = normalizedRuntimeConfig(globalThis.YoinkRuntimeConfig);
+const API_ROOT = `${RUNTIME_CONFIG.apiOrigin}/api/v1`;
+const APP_ROOT = RUNTIME_CONFIG.appOrigin;
+const LOCAL_PACKAGE_UPDATES = RUNTIME_CONFIG.localPackageUpdates;
 const EVIDENCE_REQUEST_TIMEOUT_MS = 10_000;
 const HEALTH_ALARM = "yoink-health";
 const JOB_ALARM = "yoink-jobs";
@@ -163,7 +193,7 @@ function readiness(connected, details = {}, device = null) {
     targetShadowAccess: details.targetShadowAccess === true,
     trackalackerPush: details.trackalackerPush || normalizeTrackalackerState(),
     trackalackerSync: details.trackalackerSync || normalizeTrackalackerSyncState(),
-    message: connected ? "Local control plane ready" : "Local control plane unavailable"
+    message: connected ? "Yoink control plane ready" : "Yoink control plane unavailable"
   };
 }
 
@@ -189,6 +219,8 @@ function targetCapabilities() {
     durableAdapterDiagnostics: true,
     privacyBoundedRepairLandmarks: true,
     rotatableDeviceCredentials: true,
+    productionTransportProfile: RUNTIME_CONFIG.profile === "production",
+    managedExtensionUpdates: RUNTIME_CONFIG.profile === "production",
     walmartDrawReadOnly: true,
     trackalackerPush: true,
     trackalackerCatalogSync: true
@@ -229,11 +261,29 @@ function normalizedExtensionRelease(value) {
     packageReady,
     sha256: packageReady ? sha256 : "",
     sizeBytes: packageReady ? sizeBytes : 0,
-    downloadUrl: packageReady ? `${LOCAL_APP_ROOT}${downloadPath}` : ""
+    downloadUrl: packageReady ? `${APP_ROOT}${downloadPath}` : "",
+    channel: "local",
+    managedByBrowser: false
   };
 }
 
 async function checkExtensionUpdate(download = false) {
+  if (!LOCAL_PACKAGE_UPDATES) {
+    return {
+      update: {
+        installedVersion: EXTENSION_VERSION,
+        releaseVersion: EXTENSION_VERSION,
+        updateAvailable: false,
+        packageReady: false,
+        sha256: "",
+        sizeBytes: 0,
+        downloadUrl: "",
+        downloadStarted: false,
+        channel: "managed",
+        managedByBrowser: true
+      }
+    };
+  }
   const release = normalizedExtensionRelease(await request("/extension/release", {}, 10_000));
   let downloadStarted = false;
   if (download && release.updateAvailable && release.packageReady) {

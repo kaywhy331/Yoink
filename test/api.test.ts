@@ -55,6 +55,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /renderBackgroundWork/);
     assert.match(adminScript, /Maintainer review ready/);
     assert.match(adminScript, /automatic rotation enabled/);
+    assert.match(adminScript, /pinned production transport/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
@@ -74,6 +75,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       nonExecutableRepairSuggestions: true,
       rotatableDeviceCredentials: true,
       recoverableTwoPhaseDeviceCredentialRotation: true,
+      hostedDeviceTransportContract: true,
+      separateExtensionRuntimeProfiles: true,
+      explicitExtensionOriginPolicy: false,
+      localExtensionUpdates: true,
       backgroundWorkerRuntime: "stopped",
       backgroundWorkerHealthy: false,
       backgroundWorkerDeployment: "local_in_process",
@@ -215,6 +220,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.nonExecutableRepairSuggestions, true);
     assert.equal(snapshot.capabilities.rotatableDeviceCredentials, true);
     assert.equal(snapshot.capabilities.recoverableTwoPhaseDeviceCredentialRotation, true);
+    assert.equal(snapshot.capabilities.hostedDeviceTransportContract, true);
+    assert.equal(snapshot.capabilities.separateExtensionRuntimeProfiles, true);
+    assert.equal(snapshot.capabilities.explicitExtensionOriginPolicy, false);
+    assert.equal(snapshot.capabilities.hostedDevicePairingScope, false);
+    assert.equal(snapshot.capabilities.localExtensionUpdates, true);
     assert.equal(snapshot.capabilities.asyncBackgroundWorkerContract, true);
     assert.equal(snapshot.capabilities.standaloneBackgroundWorkerProcessReady, true);
     assert.equal(snapshot.capabilities.boundedMultiPrincipalWorker, true);

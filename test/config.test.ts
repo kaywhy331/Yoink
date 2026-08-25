@@ -28,7 +28,8 @@ test("hosted configuration requires authentication allowlists and an independent
     YOINK_HOSTED_MODE: "1",
     YOINK_HOSTED_PROXY_SECRET: "a-secret-value-that-is-at-least-thirty-two-bytes",
     YOINK_HOSTED_HOSTS: "yoink.example.com,internal.example.com:443",
-    YOINK_HOSTED_ORIGINS: "https://yoink.example.com"
+    YOINK_HOSTED_ORIGINS: "https://yoink.example.com",
+    YOINK_HOSTED_EXTENSION_ORIGINS: `chrome-extension://${"b".repeat(32)}`
   };
   assert.throws(() => loadConfig(process.cwd(), hosted), /independently operated observer recipe witness/);
   const config = loadConfig(process.cwd(), {
@@ -42,7 +43,8 @@ test("hosted configuration requires authentication allowlists and an independent
   assert.deepEqual(config.hosted, {
     proxySecret: "a-secret-value-that-is-at-least-thirty-two-bytes",
     allowedHosts: ["yoink.example.com", "internal.example.com:443"],
-    allowedOrigins: ["https://yoink.example.com"]
+    allowedOrigins: ["https://yoink.example.com"],
+    allowedExtensionOrigins: [`chrome-extension://${"b".repeat(32)}`]
   });
   assert.deepEqual(config.observerRecipeWitness, {
     endpoint: "https://witness.example.net/v1/checkpoints",
@@ -51,6 +53,24 @@ test("hosted configuration requires authentication allowlists and an independent
     maxAgeSeconds: 600
   });
   assert.equal(config.backgroundWorkerMode, "external");
+});
+
+test("hosted configuration requires an exact package-pinned Chrome extension origin", () => {
+  const base = {
+    YOINK_HOSTED_MODE: "1",
+    YOINK_HOSTED_PROXY_SECRET: "a-secret-value-that-is-at-least-thirty-two-bytes",
+    YOINK_HOSTED_HOSTS: "yoink.example.com",
+    YOINK_HOSTED_ORIGINS: "https://yoink.example.com"
+  };
+  assert.throws(() => loadConfig(process.cwd(), base), /YOINK_HOSTED_EXTENSION_ORIGINS/);
+  assert.throws(() => loadConfig(process.cwd(), {
+    ...base,
+    YOINK_HOSTED_EXTENSION_ORIGINS: "chrome-extension://not-a-real-extension-id"
+  }), /exact chrome-extension origins/);
+  assert.throws(() => loadConfig(process.cwd(), {
+    ...base,
+    YOINK_HOSTED_EXTENSION_ORIGINS: `https://${"b".repeat(32)}.example.com`
+  }), /exact chrome-extension origins/);
 });
 
 test("observer recipe witness configuration rejects partial, insecure, or mismatched public pins", () => {

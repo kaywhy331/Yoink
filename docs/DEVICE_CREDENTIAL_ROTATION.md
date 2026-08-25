@@ -65,6 +65,13 @@ Production still requires TLS, a package-allowlisted extension ID/origin,
 secrets and incident operations, device-risk monitoring, and a production
 identity lifecycle.
 
+Yoink 0.39 subsequently wires this lifecycle through the hosted scope resolver:
+pending tokens can reach only commit, unexpired previous tokens retain their
+bounded ordinary-device grace, and one-time pairing establishes the exact
+tenant scope without proxy identity headers. The hosted server also requires
+an explicit production extension-origin allowlist. See
+[hosted Chrome device transport](HOSTED_DEVICE_TRANSPORT.md).
+
 ## Persistence and operations
 
 Migration 36 adds credential generation, issued time, pending-hash/expiry, and

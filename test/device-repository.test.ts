@@ -69,6 +69,8 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
         durableAdapterDiagnostics: true,
         privacyBoundedRepairLandmarks: true,
         rotatableDeviceCredentials: true,
+        productionTransportProfile: true,
+        managedExtensionUpdates: true,
         walmartDrawReadOnly: true,
         trackalackerPush: true,
         trackalackerCatalogSync: true,
@@ -92,6 +94,8 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
     assert.equal(heartbeat.capabilities.durableAdapterDiagnostics, true);
     assert.equal(heartbeat.capabilities.privacyBoundedRepairLandmarks, true);
     assert.equal(heartbeat.capabilities.rotatableDeviceCredentials, true);
+    assert.equal(heartbeat.capabilities.productionTransportProfile, true);
+    assert.equal(heartbeat.capabilities.managedExtensionUpdates, true);
     assert.equal(heartbeat.capabilities.walmartDrawReadOnly, true);
     assert.equal(heartbeat.capabilities.trackalackerPush, true);
     assert.equal(heartbeat.capabilities.trackalackerCatalogSync, true);
@@ -116,6 +120,8 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
     assert.equal(downgraded.capabilities.bestBuyAddAdapterVersion, "");
     assert.equal(downgraded.capabilities.privacyBoundedRepairLandmarks, false);
     assert.equal(downgraded.capabilities.rotatableDeviceCredentials, false);
+    assert.equal(downgraded.capabilities.productionTransportProfile, false);
+    assert.equal(downgraded.capabilities.managedExtensionUpdates, false);
     assert.equal(devices.listDevices(NOW + 2_500)[0]?.online, true);
     assert.equal(devices.revoke(paired.id, NOW + 3_000), true);
     assert.equal(devices.authenticate(paired.token), null);

@@ -30,6 +30,8 @@ export interface DeviceCapabilities {
   durableAdapterDiagnostics: boolean;
   privacyBoundedRepairLandmarks: boolean;
   rotatableDeviceCredentials: boolean;
+  productionTransportProfile: boolean;
+  managedExtensionUpdates: boolean;
   walmartDrawReadOnly: boolean;
   trackalackerPush: boolean;
   trackalackerCatalogSync: boolean;
@@ -66,6 +68,12 @@ export interface AuthenticatedDevice {
 export interface PairingCodeResult {
   code: string;
   expiresAt: string;
+}
+
+export interface DevicePairingScope {
+  tenantId: string;
+  userId: string;
+  pairingCodeId: string;
 }
 
 export interface PairedDeviceResult extends AuthenticatedDevice {
@@ -167,6 +175,8 @@ function capabilities(input: Partial<DeviceCapabilities> | undefined): DeviceCap
     durableAdapterDiagnostics: input?.durableAdapterDiagnostics === true,
     privacyBoundedRepairLandmarks: input?.privacyBoundedRepairLandmarks === true,
     rotatableDeviceCredentials: input?.rotatableDeviceCredentials === true,
+    productionTransportProfile: input?.productionTransportProfile === true,
+    managedExtensionUpdates: input?.managedExtensionUpdates === true,
     walmartDrawReadOnly: input?.walmartDrawReadOnly === true,
     trackalackerPush: input?.trackalackerPush === true,
     trackalackerCatalogSync: input?.trackalackerCatalogSync === true,
@@ -230,6 +240,26 @@ export class DeviceRepository {
       this.audit(id, "device_pairing_code_created", "created", "A one-time extension pairing code was created.", {}, now);
       return { code, expiresAt };
     });
+  }
+
+  resolvePairingCodeScope(code: unknown, now = Date.now()): DevicePairingScope | null {
+    let normalized: string;
+    try {
+      normalized = normalizedPairingCode(code);
+    } catch {
+      return null;
+    }
+    return this.db.get<{
+      tenantId: string;
+      userId: string;
+      pairingCodeId: string;
+    }>(
+      `SELECT tenant_id AS tenantId, user_id AS userId, id AS pairingCodeId
+       FROM device_pairing_codes
+       WHERE code_hash = ? AND used_at = '' AND expires_at >= ?`,
+      codeHash(normalized),
+      nowIso(now)
+    ) ?? null;
   }
 
   pair(input: PairDeviceInput, now = Date.now()): PairedDeviceResult {

@@ -5,6 +5,7 @@ import { YoinkDatabase } from "../../../packages/database/src/database.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import { ObserverRecipeWitnessClient } from "../../../packages/observer-registry/src/witness.js";
 import {
+  allowHostedExtensionOrigins,
   allowHostedHosts,
   allowHostedMutationOrigins,
   createHostedRequestScopeResolver
@@ -29,7 +30,9 @@ const backgroundWorker = new BackgroundWorkerRuntime({
 const hostedDependencies = config.hosted ? {
   requestScopeResolver: createHostedRequestScopeResolver(db, { proxySecret: config.hosted.proxySecret }),
   hostValidator: allowHostedHosts(config.hosted.allowedHosts),
-  mutationOriginValidator: allowHostedMutationOrigins(config.hosted.allowedOrigins)
+  mutationOriginValidator: allowHostedMutationOrigins(config.hosted.allowedOrigins),
+  extensionOriginValidator: allowHostedExtensionOrigins(config.hosted.allowedExtensionOrigins),
+  localExtensionReleaseEnabled: false
 } : {};
 const witnessDependencies = config.observerRecipeWitness ? {
   observerRecipeWitness: new ObserverRecipeWitnessClient(config.observerRecipeWitness),

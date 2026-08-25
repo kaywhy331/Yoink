@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { nowIso, stableHash } from "../../../packages/domain/src/ids.js";
 import type { YoinkDatabase } from "../../../packages/database/src/database.js";
+import { DeviceRepository } from "../../../packages/database/src/device-repository.js";
 import {
   currentRequestScope,
   normalizedRequestScope,
@@ -17,6 +18,10 @@ export interface HostedRequestAuthOptions {
   maximumClockSkewSeconds?: number;
   nonceTtlSeconds?: number;
   maximumStepUpAgeSeconds?: number;
+}
+
+export interface HostedRequestAuthContext {
+  body?: Record<string, unknown>;
 }
 
 export interface HostedScopeSignatureInput {
@@ -82,6 +87,14 @@ function suppliedBearer(request: IncomingMessage): string {
   return /^Bearer ([A-Za-z0-9_-]{40,100})$/.exec(authorization)?.[1] ?? "";
 }
 
+function pathname(request: IncomingMessage): string {
+  try {
+    return new URL(request.url ?? "/", "https://yoink.invalid").pathname;
+  } catch {
+    return "/api/v1/invalid";
+  }
+}
+
 function safeEqualHex(expected: string, supplied: string): boolean {
   if (!SIGNATURE_PATTERN.test(expected) || !SIGNATURE_PATTERN.test(supplied)) return false;
   const left = Buffer.from(expected, "hex");
@@ -92,7 +105,7 @@ function safeEqualHex(expected: string, supplied: string): boolean {
 export function createHostedRequestScopeResolver(
   db: YoinkDatabase,
   options: HostedRequestAuthOptions
-): (request: IncomingMessage) => RequestScope {
+): (request: IncomingMessage, context?: HostedRequestAuthContext) => RequestScope {
   const secret = String(options.proxySecret ?? "");
   if (Buffer.byteLength(secret, "utf8") < 32) throw new Error("The hosted request proxy secret must contain at least 32 bytes.");
   const maximumClockSkewSeconds = Number.isSafeInteger(options.maximumClockSkewSeconds)
@@ -111,13 +124,30 @@ export function createHostedRequestScopeResolver(
     ? Number(options.maximumStepUpAgeSeconds)
     : 300;
 
-  return (request) => {
+  const devices = new DeviceRepository(db);
+  return (request: IncomingMessage, context: HostedRequestAuthContext = {}) => {
     const deviceToken = suppliedBearer(request);
     if (DEVICE_TOKEN_PATTERN.test(deviceToken)) {
+      const tokenHash = deviceTokenHash(deviceToken);
+      const requestPathname = pathname(request);
+      const pendingCommit = request.method === "POST"
+        && requestPathname === "/api/v1/devices/self/credential-rotation/commit";
+      const timestamp = nowIso(Date.now());
       const device = db.get<{ tenantId: string; userId: string; deviceId: string }>(
         `SELECT tenant_id AS tenantId, user_id AS userId, id AS deviceId
-         FROM extension_devices WHERE token_hash = ? AND status = 'active'`,
-        deviceTokenHash(deviceToken)
+         FROM extension_devices
+         WHERE status = 'active'
+           AND (
+             token_hash = ?
+             OR (previous_token_hash = ? AND previous_token_expires_at >= ?)
+             OR (? = 1 AND pending_token_hash = ? AND pending_token_expires_at >= ?)
+           )`,
+        tokenHash,
+        tokenHash,
+        timestamp,
+        pendingCommit ? 1 : 0,
+        tokenHash,
+        timestamp
       );
       if (device) {
         return normalizedRequestScope({
@@ -127,6 +157,20 @@ export function createHostedRequestScopeResolver(
           actorId: device.deviceId
         });
       }
+      throw new Error("The authenticated request scope is invalid.");
+    }
+
+    if (request.method === "POST" && pathname(request) === "/api/v1/devices/pair") {
+      const pairing = devices.resolvePairingCodeScope(context.body?.pairingCode);
+      if (pairing) {
+        return normalizedRequestScope({
+          tenantId: pairing.tenantId,
+          userId: pairing.userId,
+          actorKind: "device",
+          actorId: pairing.pairingCodeId
+        });
+      }
+      throw new Error("An authenticated request scope or valid one-time pairing code is required.");
     }
 
     const authenticationAssurance = header(request, "x-yoink-authentication-assurance");
@@ -194,6 +238,30 @@ export function createHostedRequestScopeResolver(
       throw new Error("The authenticated request scope nonce was already used.");
     }
     return scope;
+  };
+}
+
+function normalizedExtensionOrigin(value: string): string {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "chrome-extension:"
+    || !/^[a-p]{32}$/.test(parsed.hostname)
+    || parsed.username || parsed.password
+    || (parsed.pathname !== "" && parsed.pathname !== "/")
+    || parsed.search || parsed.hash) {
+    throw new Error("Hosted extension origins must be exact chrome-extension origins with a 32-character ID.");
+  }
+  return `chrome-extension://${parsed.hostname}`;
+}
+
+export function allowHostedExtensionOrigins(origins: readonly string[]): (request: IncomingMessage) => boolean {
+  const allowed = new Set(origins.map((value) => normalizedExtensionOrigin(value.trim())));
+  if (!allowed.size) throw new Error("At least one exact hosted Chrome extension origin is required.");
+  return (request) => {
+    try {
+      return allowed.has(normalizedExtensionOrigin(header(request, "origin")));
+    } catch {
+      return false;
+    }
   };
 }
 

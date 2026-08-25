@@ -103,7 +103,9 @@ function variantSummary(attributes) {
 function setupActionMarkup(action, label, quiet = false) {
   if (!action || !label) return "";
   if (action === "download_companion") {
-    const href = state.overview?.setup?.companion?.downloadUrl || "/api/v1/extension/release/download";
+    const configured = state.overview?.setup?.companion?.downloadUrl;
+    const href = configured === undefined ? "/api/v1/extension/release/download" : configured;
+    if (!href) return '<span>Companion installation is managed by your Yoink administrator.</span>';
     return `<a class="button ${quiet ? "quiet" : "secondary"}" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
   }
   return `<button class="button ${quiet ? "quiet" : "secondary"}" data-setup-action="${escapeHtml(action)}" type="button">${escapeHtml(label)}</button>`;
@@ -157,7 +159,13 @@ function renderOverview() {
   ];
   $("#metrics").innerHTML = metricRows.map(([value, label]) => `<article class="metric"><strong>${Number(value || 0).toLocaleString()}</strong><span>${escapeHtml(label)}</span></article>`).join("");
   $("#sourceList").innerHTML = (sources || []).map((source) => `<div class="mini-row"><span>${escapeHtml(source.name)}</span><strong>${escapeHtml(source.status)}</strong></div>`).join("") || '<div class="mini-row"><span>No sources configured</span></div>';
-  $("#companionDownloadLink").href = state.overview?.setup?.companion?.downloadUrl || "/api/v1/extension/release/download";
+  const companionLink = $("#companionDownloadLink");
+  const configuredCompanionUrl = state.overview?.setup?.companion?.downloadUrl;
+  const companionUrl = configuredCompanionUrl === undefined
+    ? "/api/v1/extension/release/download"
+    : configuredCompanionUrl;
+  companionLink.hidden = !companionUrl;
+  if (companionUrl) companionLink.href = companionUrl;
   renderSetupGuide();
   renderSpend(spend);
 }

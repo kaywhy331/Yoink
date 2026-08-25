@@ -149,9 +149,14 @@ export interface AppDependencies {
   observerRecipeTrust?: ObserverRecipeTrustAuthority;
   observerRecipeWitness?: ObserverRecipeWitnessPublisher;
   observerRecipeWitnessRequired?: boolean;
-  requestScopeResolver?: (request: IncomingMessage) => RequestScope | Promise<RequestScope>;
+  requestScopeResolver?: (
+    request: IncomingMessage,
+    context?: { body?: Record<string, unknown> }
+  ) => RequestScope | Promise<RequestScope>;
   hostValidator?: (request: IncomingMessage) => boolean;
   mutationOriginValidator?: (request: IncomingMessage) => boolean;
+  extensionOriginValidator?: (request: IncomingMessage) => boolean;
+  localExtensionReleaseEnabled?: boolean;
   backgroundWorkerStatus?: () => {
     state: "running" | "waiting" | "stopped" | "starting" | "stopping" | "disabled";
     healthy: boolean;
@@ -280,6 +285,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const requestScopeResolver = dependencies.requestScopeResolver ?? (() => LOCAL_REQUEST_SCOPE);
   const hostValidator = dependencies.hostValidator ?? allowedHost;
   const mutationOriginValidator = dependencies.mutationOriginValidator ?? sameOriginMutation;
+  const extensionOriginValidator = dependencies.extensionOriginValidator ?? chromeExtensionOrigin;
+  const localExtensionReleaseEnabled = dependencies.localExtensionReleaseEnabled !== false;
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -371,15 +378,32 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     });
     response.setHeader("X-Request-ID", correlationId);
     try {
-      const requestScope = await requestScopeResolver(request);
-      telemetryScope = requestScope;
-      telemetryActorKind = requestScope.actorKind;
-      await runWithRequestScope(requestScope, async () => {
       if (!hostValidator(request)) {
         json(response, 403, { error: "invalid_host", message: "The request Host header is not allowed." });
         return;
       }
-      const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
+      const initialRequestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
+      const pairingRoute = request.method === "POST"
+        && initialRequestUrl.pathname === "/api/v1/devices/pair";
+      const selfDeviceRoute = initialRequestUrl.pathname.startsWith("/api/v1/devices/self/");
+      if ((pairingRoute || selfDeviceRoute) && !extensionOriginValidator(request)) {
+        json(response, 403, {
+          error: "extension_origin_rejected",
+          message: pairingRoute
+            ? "Pairing must be initiated by the allowed Chrome companion."
+            : "This route is available only to the allowed Chrome companion."
+        });
+        return;
+      }
+      const pairingBody = request.method === "POST"
+        && initialRequestUrl.pathname === "/api/v1/devices/pair"
+        ? await readJson(request)
+        : undefined;
+      const requestScope = await requestScopeResolver(request, pairingBody ? { body: pairingBody } : {});
+      telemetryScope = requestScope;
+      telemetryActorKind = requestScope.actorKind;
+      await runWithRequestScope(requestScope, async () => {
+      const requestUrl = initialRequestUrl;
       if (request.method === "GET" && STATIC_FILES.has(requestUrl.pathname)) {
         authorization.require(ADMIN_STATIC_PATHS.has(requestUrl.pathname) ? "admin.read" : "user.read");
         if (staticResponse(response, webRoot, requestUrl.pathname)) return;
@@ -453,6 +477,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           nonExecutableRepairSuggestions: true,
           rotatableDeviceCredentials: true,
           recoverableTwoPhaseDeviceCredentialRotation: true,
+          hostedDeviceTransportContract: true,
+          separateExtensionRuntimeProfiles: true,
+          explicitExtensionOriginPolicy: dependencies.extensionOriginValidator !== undefined,
+          localExtensionUpdates: localExtensionReleaseEnabled,
           backgroundWorkerRuntime: backgroundWorker.state,
           backgroundWorkerHealthy: backgroundWorker.healthy,
           backgroundWorkerDeployment: backgroundWorker.runtimeKind,
@@ -476,11 +504,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/extension/release") {
+        if (!localExtensionReleaseEnabled) {
+          json(response, 404, { error: "local_extension_release_disabled", message: "Hosted companions use the managed production release channel." });
+          return;
+        }
         json(response, 200, resolveExtensionRelease(releaseRoot, version).descriptor);
         return;
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/extension/release/download") {
+        if (!localExtensionReleaseEnabled) {
+          json(response, 404, { error: "local_extension_release_disabled", message: "Hosted companions use the managed production release channel." });
+          return;
+        }
         const release = resolveExtensionRelease(releaseRoot, version);
         if (!release.descriptor.packageReady || !release.path) {
           json(response, 404, { error: "extension_release_unavailable", message: "The local extension package has not been built yet." });
@@ -540,6 +576,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           sources: sourceList,
           setup: buildUserSetupReadiness({
             version,
+            companionDownloadUrl: localExtensionReleaseEnabled
+              ? "/api/v1/extension/release/download"
+              : "",
             devices: deviceList,
             sources: sourceList,
             products: catalog.libraryCount(),
@@ -650,11 +689,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const catalogProposalDecisionMatch = /^\/api\/v1\/admin\/catalog\/proposals\/(catalog_proposal_[A-Za-z0-9_-]{16,120})\/decision$/.exec(requestUrl.pathname);
 
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/pair") {
-        if (!chromeExtensionOrigin(request)) {
-          json(response, 403, { error: "extension_origin_rejected", message: "Pairing must be initiated by a Chrome extension origin." });
-          return;
-        }
-        const body = await readJson(request);
+        const body = pairingBody ?? await readJson(request);
         const paired = devices.pair(body as unknown as PairDeviceInput);
         json(response, 201, { device: paired });
         return;
@@ -662,10 +697,6 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       const deviceRoute = requestUrl.pathname.startsWith("/api/v1/devices/self/");
       if (deviceRoute) {
-        if (!chromeExtensionOrigin(request)) {
-          json(response, 403, { error: "extension_origin_rejected", message: "This route is available only to the Chrome companion." });
-          return;
-        }
         const presentedToken = bearerToken(request);
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/credential-rotation/commit") {
           const body = await readJson(request);
@@ -1194,6 +1225,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             nonExecutableRepairSuggestions: true,
             rotatableDeviceCredentials: true,
             recoverableTwoPhaseDeviceCredentialRotation: true,
+            hostedDeviceTransportContract: true,
+            separateExtensionRuntimeProfiles: true,
+            explicitExtensionOriginPolicy: dependencies.extensionOriginValidator !== undefined,
+            hostedDevicePairingScope: dependencies.requestScopeResolver !== undefined,
             localInProcessBackgroundWorker: true,
             asyncBackgroundWorkerContract: true,
             standaloneBackgroundWorkerProcessReady: true,
@@ -1246,7 +1281,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             portabilityArchiveFormat: PORTABILITY_FORMAT,
             freshDatabaseRestoreParity: true,
             productionPostgresReady: false,
-            localExtensionUpdates: true,
+            localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length
               ? `${qualifiedAddRetailers.join(", ")} add-only execution ${qualifiedAddRetailers.length === 1 ? "is" : "are"} qualified; every other lane, checkout, and order submission remain disabled.`

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import test from "node:test";
 import {
+  allowHostedExtensionOrigins,
   allowHostedHosts,
   allowHostedMutationOrigins,
   createHostedRequestScopeResolver,
@@ -159,6 +160,87 @@ test("a paired device bearer token resolves its own tenant/user scope without pr
       actorKind: "device",
       actorId: device.id
     });
+
+    const issuedAt = Math.floor(Date.now() / 1_000);
+    const signedProxyHeaders = signHostedRequestScope(SECRET, {
+      method: "GET",
+      path: "/api/v1/admin/snapshot",
+      scope: SCOPE,
+      issuedAt,
+      nonce: "invalid_bearer_fallback_nonce"
+    });
+    assert.throws(
+      () => resolve(request("GET", "/api/v1/admin/snapshot", {
+        ...signedProxyHeaders,
+        Authorization: `Bearer ${"z".repeat(48)}`
+      })),
+      /authenticated request scope is invalid/
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("hosted pairing derives one exact tenant scope from the unconsumed one-time code body", () => {
+  const db = new YoinkDatabase();
+  try {
+    const pairing = runWithRequestScope({ ...SCOPE, actorKind: "user", actorId: LOCAL_USER_ID }, () => {
+      return new DeviceRepository(db).createPairingCode();
+    });
+    const resolve = createHostedRequestScopeResolver(db, { proxySecret: SECRET });
+    const resolved = resolve(
+      request("POST", "/api/v1/devices/pair", {}),
+      { body: { pairingCode: pairing.code } }
+    );
+    assert.equal(resolved.tenantId, LOCAL_TENANT_ID);
+    assert.equal(resolved.userId, LOCAL_USER_ID);
+    assert.equal(resolved.actorKind, "device");
+    assert.match(resolved.actorId, /^pairing_code_[a-f0-9]{32}$/);
+    assert.throws(
+      () => resolve(request("POST", "/api/v1/devices/pair", {}), { body: { pairingCode: "WRONG-CODE" } }),
+      /valid one-time pairing code/
+    );
+    assert.throws(
+      () => resolve(request("POST", "/api/v1/devices/self/heartbeat", {}), { body: { pairingCode: pairing.code } }),
+      /authenticated tenant\/user request scope/
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("hosted device scope recognizes previous grace and pending commit without widening pending authority", () => {
+  const db = new YoinkDatabase();
+  try {
+    const devices = new DeviceRepository(db);
+    const state = runWithRequestScope({ ...SCOPE, actorKind: "user", actorId: LOCAL_USER_ID }, () => {
+      const pairing = devices.createPairingCode();
+      const paired = devices.pair({ pairingCode: pairing.code });
+      const current = devices.authenticate(paired.token)!;
+      const pending = devices.beginCredentialRotation(current);
+      return { paired, pending };
+    });
+    const resolve = createHostedRequestScopeResolver(db, { proxySecret: SECRET });
+    assert.throws(
+      () => resolve(request("POST", "/api/v1/devices/self/heartbeat", {
+        Authorization: `Bearer ${state.pending.token}`
+      })),
+      /authenticated request scope/
+    );
+    const pendingCommit = resolve(request("POST", "/api/v1/devices/self/credential-rotation/commit", {
+      Authorization: `Bearer ${state.pending.token}`
+    }));
+    assert.equal(pendingCommit.actorId, state.paired.id);
+
+    runWithRequestScope(pendingCommit, () => {
+      assert.ok(devices.commitCredentialRotation(state.pending.token, state.pending.generation));
+    });
+    assert.equal(resolve(request("POST", "/api/v1/devices/self/heartbeat", {
+      Authorization: `Bearer ${state.paired.token}`
+    })).actorId, state.paired.id);
+    assert.equal(resolve(request("POST", "/api/v1/devices/self/heartbeat", {
+      Authorization: `Bearer ${state.pending.token}`
+    })).actorId, state.paired.id);
   } finally {
     db.close();
   }
@@ -177,4 +259,16 @@ test("hosted Host and browser mutation Origin policies are explicit and fail clo
   assert.equal(runWithRequestScope({ ...SCOPE, actorKind: "user" }, () => originPolicy(request("POST", "/api", {
     Origin: "https://attacker.example"
   }))), false);
+
+  const extensionOrigin = `chrome-extension://${"b".repeat(32)}`;
+  const extensionPolicy = allowHostedExtensionOrigins([extensionOrigin]);
+  assert.equal(extensionPolicy(request("POST", "/api/v1/devices/pair", { Origin: extensionOrigin })), true);
+  assert.equal(extensionPolicy(request("POST", "/api/v1/devices/pair", {
+    Origin: `chrome-extension://${"c".repeat(32)}`
+  })), false);
+  assert.equal(extensionPolicy(request("POST", "/api/v1/devices/pair", { Origin: "https://yoink.example.com" })), false);
+  assert.throws(
+    () => allowHostedExtensionOrigins(["chrome-extension://invalid"]),
+    /exact chrome-extension origins/
+  );
 });

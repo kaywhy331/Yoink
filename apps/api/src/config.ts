@@ -18,6 +18,7 @@ export interface YoinkConfig {
     proxySecret: string;
     allowedHosts: string[];
     allowedOrigins: string[];
+    allowedExtensionOrigins: string[];
   } | null;
   observerRecipeWitness: Omit<ObserverRecipeWitnessClientOptions, "fetch" | "requestTimeoutMs"> | null;
 }
@@ -37,6 +38,25 @@ function projectVersion(projectRoot: string): string {
   } catch {
     return "0.0.0";
   }
+}
+
+function hostedExtensionOrigins(value: string | undefined): string[] {
+  return [...new Set(String(value ?? "").split(",").map((candidate) => candidate.trim()).filter(Boolean).map((candidate) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      throw new Error("YOINK_HOSTED_EXTENSION_ORIGINS must contain exact chrome-extension origins with 32-character IDs.");
+    }
+    if (parsed.protocol !== "chrome-extension:"
+      || !/^[a-p]{32}$/.test(parsed.hostname)
+      || parsed.username || parsed.password
+      || (parsed.pathname !== "" && parsed.pathname !== "/")
+      || parsed.search || parsed.hash) {
+      throw new Error("YOINK_HOSTED_EXTENSION_ORIGINS must contain exact chrome-extension origins with 32-character IDs.");
+    }
+    return `chrome-extension://${parsed.hostname}`;
+  }))];
 }
 
 export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): YoinkConfig {
@@ -66,8 +86,10 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
   const proxySecret = String(env.YOINK_HOSTED_PROXY_SECRET ?? "");
   const allowedHosts = String(env.YOINK_HOSTED_HOSTS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   const allowedOrigins = String(env.YOINK_HOSTED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-  if (hostedRequested && (Buffer.byteLength(proxySecret, "utf8") < 32 || !allowedHosts.length || !allowedOrigins.length)) {
-    throw new Error("Hosted mode requires a 32-byte YOINK_HOSTED_PROXY_SECRET plus explicit YOINK_HOSTED_HOSTS and YOINK_HOSTED_ORIGINS.");
+  const allowedExtensionOrigins = hostedExtensionOrigins(env.YOINK_HOSTED_EXTENSION_ORIGINS);
+  if (hostedRequested && (Buffer.byteLength(proxySecret, "utf8") < 32
+    || !allowedHosts.length || !allowedOrigins.length || !allowedExtensionOrigins.length)) {
+    throw new Error("Hosted mode requires a 32-byte YOINK_HOSTED_PROXY_SECRET plus explicit YOINK_HOSTED_HOSTS, YOINK_HOSTED_ORIGINS, and YOINK_HOSTED_EXTENSION_ORIGINS.");
   }
   const witnessValues = {
     endpoint: String(env.YOINK_OBSERVER_RECIPE_WITNESS_URL ?? "").trim(),
@@ -107,7 +129,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     releaseRoot: join(projectRoot, "release"),
     version: projectVersion(projectRoot),
     backgroundWorkerMode,
-    hosted: hostedRequested ? { proxySecret, allowedHosts, allowedOrigins } : null,
+    hosted: hostedRequested ? { proxySecret, allowedHosts, allowedOrigins, allowedExtensionOrigins } : null,
     observerRecipeWitness
   };
 }

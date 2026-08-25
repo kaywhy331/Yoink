@@ -64,3 +64,36 @@ test("the loopback release feed serves only the current exact companion package"
     rmSync(releaseRoot, { recursive: true, force: true });
   }
 });
+
+test("the local unpacked-extension release channel is absent when explicitly disabled", async () => {
+  const db = new YoinkDatabase();
+  const server = createYoinkServer({
+    db,
+    webRoot: join(process.cwd(), "apps", "web"),
+    version: "1.2.3",
+    localExtensionReleaseEnabled: false
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    for (const path of ["/api/v1/extension/release", "/api/v1/extension/release/download"]) {
+      const response = await fetch(`${baseUrl}${path}`);
+      assert.equal(response.status, 404);
+      assert.equal((await response.json() as { error: string }).error, "local_extension_release_disabled");
+    }
+    const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as {
+      localExtensionUpdates: boolean;
+    };
+    assert.equal(health.localExtensionUpdates, false);
+    const overview = await fetch(`${baseUrl}/api/v1/user/overview`).then((response) => response.json()) as {
+      setup: { companion: { downloadUrl: string } };
+    };
+    assert.equal(overview.setup.companion.downloadUrl, "");
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});

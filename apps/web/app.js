@@ -306,6 +306,9 @@ function renderDevices() {
   }
   $("#deviceList").innerHTML = devices.length ? devices.map((device) => {
     const credential = device.credential || {};
+    const transport = device.capabilities?.productionTransportProfile === true
+      ? "pinned production transport · browser-managed updates"
+      : "local companion transport";
     const credentialState = device.status === "revoked"
       ? `credential generation ${Number(credential.generation || 1).toLocaleString()} revoked`
       : credential.pending
@@ -315,7 +318,7 @@ function renderDevices() {
         : credential.rotationDue
           ? "credential rotation due on next health check"
           : `credential generation ${Number(credential.generation || 1).toLocaleString()} · automatic rotation enabled`;
-    return `<article class="device-row"><div><h3>${statusDot(device.online ? "good" : device.status === "revoked" ? "bad" : "warning")} ${escapeHtml(device.name)}</h3><p>${escapeHtml(device.platform || "Chrome")} · extension ${escapeHtml(device.extensionVersion || "unknown")} · ${escapeHtml(device.lastSeenAt ? `seen ${relativeTime(device.lastSeenAt)}` : "never seen")} · ${escapeHtml(credentialState)}</p></div>${device.status === "active" ? `<button class="button danger" data-device-revoke="${escapeHtml(device.id)}" type="button">Revoke</button>` : '<span class="tag bad">Revoked</span>'}</article>`;
+    return `<article class="device-row"><div><h3>${statusDot(device.online ? "good" : device.status === "revoked" ? "bad" : "warning")} ${escapeHtml(device.name)}</h3><p>${escapeHtml(device.platform || "Chrome")} · extension ${escapeHtml(device.extensionVersion || "unknown")} · ${escapeHtml(transport)} · ${escapeHtml(device.lastSeenAt ? `seen ${relativeTime(device.lastSeenAt)}` : "never seen")} · ${escapeHtml(credentialState)}</p></div>${device.status === "active" ? `<button class="button danger" data-device-revoke="${escapeHtml(device.id)}" type="button">Revoke</button>` : '<span class="tag bad">Revoked</span>'}</article>`;
   }).join("") : empty("No Chrome companion is paired yet.");
 }
 

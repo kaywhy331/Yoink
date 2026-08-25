@@ -1,3 +1,29 @@
+function popupRuntimeOrigin(value, profile) {
+  const parsed = new URL(String(value || ""));
+  const exact = !parsed.username && !parsed.password && parsed.pathname === "/" && !parsed.search && !parsed.hash;
+  const loopback = parsed.hostname === "localhost" || parsed.hostname.endsWith(".localhost")
+    || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+  if (!exact
+    || (profile === "local" && (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1"))
+    || (profile === "production" && (parsed.protocol !== "https:" || loopback))) {
+    throw new Error("Yoink Companion has an invalid packaged runtime origin.");
+  }
+  return parsed.origin;
+}
+
+const POPUP_RUNTIME_CONFIG = (() => {
+  const value = globalThis.YoinkRuntimeConfig;
+  const profile = value?.profile === "production" ? "production" : value?.profile === "local" ? "local" : "";
+  if (!profile || value?.localPackageUpdates !== (profile === "local")) {
+    throw new Error("Yoink Companion has an invalid packaged runtime profile.");
+  }
+  return Object.freeze({
+    profile,
+    appOrigin: popupRuntimeOrigin(value.appOrigin, profile),
+    localPackageUpdates: value.localPackageUpdates
+  });
+})();
+const PRODUCTION_PROFILE = POPUP_RUNTIME_CONFIG.profile === "production";
 const $ = (selector) => document.querySelector(selector);
 const TARGET_ORIGINS = ["https://www.target.com/*"];
 const TRACKALACKER_ORIGINS = ["https://trackalacker.com/*", "https://www.trackalacker.com/*"];
@@ -52,10 +78,10 @@ function render(state) {
   const connected = state?.connected === true;
   const paired = state?.paired === true;
   $("#statusDot").className = `status-dot ${connected ? paired ? "ready" : "" : "error"}`;
-  $("#statusTitle").textContent = connected ? (paired ? "Paired and connected" : "Connected; pairing required") : "Local app unavailable";
+  $("#statusTitle").textContent = connected ? (paired ? "Paired and connected" : "Connected; pairing required") : `${PRODUCTION_PROFILE ? "Yoink service" : "Local app"} unavailable`;
   $("#statusCopy").textContent = connected
     ? paired ? `Yoink ${state.version || ""} recognizes this browser.` : "Create a one-time code in Yoink to pair this browser."
-    : "Start Yoink, then check again.";
+    : PRODUCTION_PROFILE ? "Check your connection, then ask your Yoink administrator if this continues." : "Start Yoink, then check again.";
   $("#device").textContent = paired ? (state.deviceName || "Paired Chrome") : "Not paired";
   $("#mode").textContent = connected ? state.executionMode : "—";
   $("#actions").textContent = connected ? (state.actionsPaused ? "Paused" : "Enabled") : "—";
@@ -93,7 +119,7 @@ function render(state) {
     $("#trackalackerMessage").textContent = trackalacker.errorCode === "silent_push_unavailable"
       ? "Connected, but this Chrome build requires a visible fallback notification and may show an extra alert."
       : trackalacker.pendingSignals
-      ? `${trackalacker.pendingSignals} sanitized signal${trackalacker.pendingSignals === 1 ? "" : "s"} waiting for the local app.`
+      ? `${trackalacker.pendingSignals} sanitized signal${trackalacker.pendingSignals === 1 ? "" : "s"} waiting for ${PRODUCTION_PROFILE ? "the Yoink service" : "the local app"}.`
       : "Silent push is active. TrackaLacker's normal browser notifications remain unchanged.";
   } else if (trackalacker.state === "error") {
     $("#trackalackerMessage").textContent = `Connection stopped safely${trackalacker.lastHttpStatus ? ` at HTTP ${trackalacker.lastHttpStatus}` : ""}. Open a signed-in TrackaLacker tab and retry.`;
@@ -103,10 +129,19 @@ function render(state) {
   }
   const reportedRelease = comparableVersion(state?.version) ? state.version : "—";
   const newerReported = compareVersions(reportedRelease, INSTALLED_VERSION) > 0;
-  $("#updateVersions").textContent = `Installed ${INSTALLED_VERSION} · local release ${reportedRelease}`;
-  $("#checkUpdate").classList.toggle("update-ready", newerReported);
-  $("#checkUpdate").textContent = newerReported ? "Check and download update" : "Check for updates";
-  $("#checkUpdate").disabled = !connected;
+  $("#updateChannel").textContent = PRODUCTION_PROFILE ? "MANAGED" : "LOCAL";
+  $("#updateVersions").textContent = PRODUCTION_PROFILE
+    ? `Installed ${INSTALLED_VERSION} · managed production channel`
+    : `Installed ${INSTALLED_VERSION} · local release ${reportedRelease}`;
+  $("#checkUpdate").classList.toggle("update-ready", !PRODUCTION_PROFILE && newerReported);
+  $("#checkUpdate").textContent = PRODUCTION_PROFILE
+    ? "Updates managed by Chrome"
+    : newerReported ? "Check and download update" : "Check for updates";
+  $("#checkUpdate").disabled = PRODUCTION_PROFILE || !connected;
+  $("#updateMessage").textContent = PRODUCTION_PROFILE
+    ? "Chrome installs production companion updates through the managed browser release channel. Yoink never downloads an unpacked ZIP in this profile."
+    : "The local Yoink app provides a hash-bound unpacked-extension package when a newer build is available.";
+  $("#forget").textContent = PRODUCTION_PROFILE ? "Forget pairing" : "Forget local pairing";
 }
 
 function renderTargetObservation(observation) {
@@ -182,7 +217,7 @@ function renderWalmartDrawScan(scan) {
 }
 
 async function check() {
-  $("#statusTitle").textContent = "Checking local app…";
+  $("#statusTitle").textContent = PRODUCTION_PROFILE ? "Checking Yoink service…" : "Checking local app…";
   try {
     const response = await chrome.runtime.sendMessage({ type: "yoink:check-health" });
     if (!response?.ok) throw new Error(response?.message || "Health check failed.");
@@ -434,6 +469,7 @@ $("#removeTarget").addEventListener("click", async () => {
   await check();
 });
 $("#checkUpdate").addEventListener("click", async () => {
+  if (PRODUCTION_PROFILE) return;
   const button = $("#checkUpdate");
   button.disabled = true;
   $("#updateMessage").textContent = "Checking the local signed-by-hash release feed…";
@@ -468,7 +504,7 @@ $("#checkUpdate").addEventListener("click", async () => {
 });
 $("#reloadExtension").addEventListener("click", () => chrome.runtime.reload());
 $("#check").addEventListener("click", check);
-$("#open").addEventListener("click", () => chrome.tabs.create({ url: "http://127.0.0.1:32991/" }));
+$("#open").addEventListener("click", () => chrome.tabs.create({ url: `${POPUP_RUNTIME_CONFIG.appOrigin}/` }));
 
 const stored = await chrome.storage.local.get("readiness");
 render(stored.readiness);

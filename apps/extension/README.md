@@ -1,7 +1,9 @@
 # Yoink Companion
 
-This unpacked Manifest V3 extension pairs with the local Yoink control plane,
-reports an authenticated readiness heartbeat, receives TrackaLacker Web Push,
+The checked-in Manifest V3 extension uses Yoink's local runtime profile and
+pairs with the loopback control plane. The same reviewed source can be packaged
+under an explicit production profile. Both profiles report an authenticated
+readiness heartbeat, receive TrackaLacker Web Push,
 supports explicit inspection for thirteen exact retailers, runs separate Target,
 Walmart, Amazon, and Best Buy no-click qualification rehearsals, and executes
 only those four independently activated guarded add-only contracts. Disney
@@ -130,6 +132,22 @@ Chrome does not let an unpacked extension overwrite its own directory, extract
 the ZIP over the same folder and use the popup's reload button. Chrome storage
 preserves the pairing and bridge state.
 
-The periodic requests remain loopback-only health, heartbeat, notification,
-durable signal-drain, and qualified-job checks. They do not poll TrackaLacker or
-any retailer.
+For a production artifact, set exact non-loopback HTTPS origins and run:
+
+```bash
+YOINK_EXTENSION_API_ORIGIN=https://api.yoink.example \
+YOINK_EXTENSION_APP_ORIGIN=https://app.yoink.example \
+npm run package:extension:production
+```
+
+The generated production archive has only the configured API host permission,
+opens only the configured app origin, reports its production transport profile,
+and delegates updates to Chrome's managed release channel. It cannot query or
+open the local unpacked-ZIP feed. Hosted Yoink must separately pin the final
+package ID with `YOINK_HOSTED_EXTENSION_ORIGINS`; packaging does not publish or
+assign that ID.
+
+Periodic requests remain restricted to the single package-owned control-plane
+origin: loopback in the local profile or exact HTTPS in production. They cover
+health, heartbeat, notification, durable signal-drain, and qualified-job checks
+and do not poll TrackaLacker or any retailer.

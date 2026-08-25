@@ -524,6 +524,25 @@ material. This is a production-shaped device-authentication seam, not the
 missing TLS ingress, fixed production extension origin, IdP, device-risk
 service, or fleet revocation infrastructure.
 
+Yoink 0.39.0 completes the repository's hosted device-transport wiring around
+that lifecycle. The request boundary prevalidates an exact configured Chrome
+extension origin, derives the initial tenant/user scope only from the hashed
+unconsumed pairing code in the exact pairing body, and treats a bearer-shaped
+authentication failure as terminal instead of falling back to proxy identity.
+Current and unexpired previous credentials may establish ordinary device scope;
+the pending credential may establish scope only for exact rotation commit.
+Repository authentication and generation checks still run after scope
+resolution, so transport scope does not become action authority.
+
+The companion package now carries an immutable local or production runtime
+profile. The production packager requires exact non-loopback HTTPS API/app
+origins, reduces manifest host permission to that API origin, disables the
+unpacked ZIP path, and produces a distinct deterministic archive. Hosted mode
+requires the final exact extension origin and removes its local release feed and
+onboarding URL. This is the application/package boundary for a future deployed
+browser channel, not TLS, publication/signing, a production IdP, PostgreSQL, or
+device-risk operations.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and
@@ -752,6 +771,8 @@ The current local release is a modular monolith with separated trust surfaces:
 - Explicit, read-only Walmart Draw discovery with exact private mission matching
   and no contingent-order entry capability
 - Exact-version local companion package feed for unpacked-extension updates
+- Deterministic HTTPS-pinned production companion profile with browser-managed
+  updates and an exact hosted extension-origin policy; publication remains open
 
 The future deployment moves shared control-plane data to PostgreSQL and adds a
 web application, durable device queues, and tenant isolation. Chrome remains the
