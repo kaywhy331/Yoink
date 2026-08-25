@@ -14,9 +14,12 @@ inactive server-bound queue writer with 11 exact operations on four tables,
 four restrictive policies, no delete access, and native two-principal write
 isolation. Yoink 0.62 advances that boundary to contract v2 with the one strict
 immutable JSON constraint helper required by task inserts and runs the actual
-tenant queue repository through two restricted native pools. Principal/
-deployment control, handlers, the runtime API, and the worker remain SQLite or
-qualification-control only.
+tenant queue repository through two restricted native pools. Yoink 0.63 advances
+to contract v3 with one `SELECT`-only grant on the singleton deployment
+expectation and makes new-work schedule/enqueue/lease attestation plus queue SQL
+one transaction.
+Principal enumeration, fleet status/stopping, handlers, the runtime API, and the
+worker remain SQLite or qualification-control only.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.

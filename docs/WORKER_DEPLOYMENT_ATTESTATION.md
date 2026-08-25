@@ -49,6 +49,15 @@ requires all of:
 3. runtime version matches; and
 4. fingerprint matches exactly.
 
+The inactive PostgreSQL qualification path enforces the same contract at a
+narrower database boundary. Queue-write contract v3 gives the server-bound
+tenant writer `SELECT` only on this singleton expectation and validates all four
+conditions inside the same `READ COMMITTED` transaction before schedule,
+enqueue, or new-lease SQL. Already-leased completion/failure recovery remains
+available. The writer cannot update the expectation. Native qualification proves a
+deliberate mismatch leaves the queue unchanged; principal enumeration, fleet
+status, and stopping still require a separate least-privilege control boundary.
+
 A mismatch may write only its normal bounded heartbeat with
 `worker_deployment_mismatch`. This gives the API and Operations workspace
 diagnostic evidence while leaving the queue untouched. External health also

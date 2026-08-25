@@ -186,8 +186,8 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
       new Date("2026-08-25T16:52:00.000Z").getTime()
     );
-    assert.equal(queueWriteBoundary.tableCount, 4);
-    assert.equal(queueWriteBoundary.grantCount, 11);
+    assert.equal(queueWriteBoundary.tableCount, 5);
+    assert.equal(queueWriteBoundary.grantCount, 12);
     assert.equal(queueWriteBoundary.functionGrantCount, 3);
     assert.equal(queueWriteBoundary.constraintHelperFunctionCount, 1);
     assert.equal(queueWriteBoundary.membershipCount, 0);
@@ -613,10 +613,64 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
     assert.equal(firstQualification.skipLockedLeaseImplemented, true);
     assert.equal(firstQualification.serverBoundQueueWriteTransactions, true);
     assert.equal(firstQualification.queueStoreWriteRoleParity, true);
-    assert.equal(firstQualification.atomicDeploymentAttestationAndQueueWrite, false);
+    assert.equal(firstQualification.atomicDeploymentAttestationAndQueueWrite, true);
     assert.equal(firstQualification.controlRepositoryParity, false);
     assert.equal(firstQualification.handlerRepositoryParity, false);
     assert.deepEqual(secondQualification, firstQualification);
+
+    assert.deepEqual(
+      await queueWriterA.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async (session) => (await session.query<{ runtimeVersion: string; fingerprint: string }>(
+          `SELECT runtime_version AS "runtimeVersion",
+                  deployment_fingerprint AS fingerprint
+           FROM "${NATIVE_SCHEMA}"."background_worker_deployment_expectations"
+           WHERE id = 'active'`
+        )).rows
+      ),
+      [{
+        runtimeVersion: POSTGRES_TEST_WORKER_VERSION,
+        fingerprint: POSTGRES_TEST_WORKER_FINGERPRINT
+      }]
+    );
+    await assert.rejects(
+      queueWriterA.writeTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        (session) => session.query(
+          `UPDATE "${NATIVE_SCHEMA}"."background_worker_deployment_expectations"
+           SET runtime_version = 'forbidden' WHERE id = 'active'`
+        )
+      ),
+      /permission denied/
+    );
+    const schedulesBeforeAttestationFailure = Number((await first.query<{
+      count: string | number | bigint;
+    }>(
+      `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."background_task_schedules"
+       WHERE tenant_id = $1 AND subject_user_id = $2`,
+      [NATIVE_TENANT, NATIVE_USER]
+    )).rows[0]?.count ?? 0);
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."background_worker_deployment_expectations"
+       SET runtime_version = '0.0.0-attestation-mismatch' WHERE id = 'active'`
+    );
+    await assert.rejects(
+      firstStore.ensureSchedules(workerContext("native_atomic_attestation_probe"), NATIVE_NOW),
+      /deployment contract does not match/
+    );
+    assert.equal(
+      Number((await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."background_task_schedules"
+         WHERE tenant_id = $1 AND subject_user_id = $2`,
+        [NATIVE_TENANT, NATIVE_USER]
+      )).rows[0]?.count ?? 0),
+      schedulesBeforeAttestationFailure
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."background_worker_deployment_expectations"
+       SET runtime_version = $1 WHERE id = 'active'`,
+      [POSTGRES_TEST_WORKER_VERSION]
+    );
 
     await first.query(
       `DELETE FROM "${NATIVE_SCHEMA}"."background_task_events"

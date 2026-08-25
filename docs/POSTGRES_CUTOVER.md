@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.62 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.63 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -133,6 +133,9 @@ principal mapping. Version 0.61's separate queue-writer contract qualifies only
 four queue tables. Version 0.62 runs the tenant queue repository through its
 contract-v2 role; production identity, principal/deployment control, task
 handlers, request repositories, and runtime activation remain separate gates.
+Version 0.63 adds only read access to the singleton deployment expectation and
+makes that attestation atomic with new-work queue SQL; principal enumeration,
+fleet status, and stopping remain separate control gates.
 
 Plan the exact role namespace without a database connection:
 
@@ -240,10 +243,12 @@ read-role, and tenant-session manifests. It is `NOLOGIN`, `NOINHERIT`,
 | `background_tasks` | `SELECT`, `INSERT`, `UPDATE` |
 | `background_task_events` | `SELECT`, `INSERT` |
 | `background_worker_heartbeats` | `SELECT`, `INSERT`, `UPDATE` |
+| `background_worker_deployment_expectations` | `SELECT` |
 
-The role has 11 operation grants in total. It has no `DELETE`, `TRUNCATE`,
+The current role has 12 operation grants in total. It has no `DELETE`, `TRUNCATE`,
 `REFERENCES`, `TRIGGER`, sequence, schema-creation, object-ownership,
-receipt-table, or other application-table access. The packaged checks and
+receipt-table, deployment-expectation mutation, or other application-table
+access. The packaged checks and
 transition triggers remain responsible for valid queue states; task events are
 append-only at this boundary.
 
@@ -256,7 +261,16 @@ The helper must be `plpgsql`, strict, immutable, non-security-definer, accept
 exactly `value text`, have no custom configuration, and remain unavailable to
 `PUBLIC`. No other application routine is executable.
 
-Each of the four tables receives an `AS RESTRICTIVE FOR ALL` policy using the
+Version 0.63 advances the queue-write contract to v3. It adds only `SELECT` on
+the singleton API-owned `background_worker_deployment_expectations` row. Before
+schedule initialization, due enqueue, or a new lease, the writer validates
+contract version, external mode, runtime version, and deployment fingerprint
+inside the same server-bound `READ COMMITTED` transaction. Already-leased
+completion/failure recovery remains available. The
+role cannot update the expectation. A mismatch
+rolls the transaction back without writing a schedule or task.
+
+Each of the four tenant queue tables receives an `AS RESTRICTIVE FOR ALL` policy using the
 same zero-argument server-owned tenant scope as the read boundary. The
 `NodePostgresTenantQueueWriteDatabase` opens a `READ COMMITTED READ WRITE`
 transaction, assumes only this role, invokes the binder, and refuses an exact
@@ -272,20 +286,21 @@ task, and append-only event creation; repository heartbeat; capability-bound
 retry and completion; locked-row skipping; exact-one-winner contention; and
 concurrent tenant isolation. It also proves denial of cross-tenant insert/
 update, delete, task-event update, unrelated-table select, mismatched expected
-identity, and an unmapped login. Those fixtures and memberships are removed
+identity, an unmapped login, and deployment-expectation mutation. It proves the
+expectation is readable and a deliberate mismatch leaves queue state unchanged.
+Those fixtures and memberships are removed
 before final receipt verification. Changing the JSON helper from immutable to
 volatile or weakening a restrictive policy invalidates the receipt.
 
-Principal enumeration, deployment attestation/status, and worker stopping still
-use the qualification/control connection. Deployment attestation and the tenant
-write are separate transactions in this proof. Those control operations need
-their own least-privilege contract and atomic composition before runtime use.
+Principal enumeration, deployment status, and worker stopping still use the
+qualification/control connection. Those control operations need their own
+least-privilege contract before runtime use.
 
 Plan the exact boundary without a database connection:
 
 ```bash
 npm run postgres:writes -- plan \
-  yoink_cutover_qualification_062 yoink_q_062 yoink_session_q_062 yoink_queue_q_062
+  yoink_cutover_qualification_063 yoink_q_063 yoink_session_q_063 yoink_queue_q_063
 ```
 
 After the current cutover, read-role, and tenant-session receipts are verified,
@@ -294,22 +309,23 @@ apply once with the qualification/control role and explicit acknowledgement:
 ```bash
 YOINK_POSTGRES_TENANT_QUEUE_WRITE_QUALIFICATION_ACK=server-bound-queue-write-qualification \
   npm run postgres:writes -- apply \
-  yoink_cutover_qualification_062 yoink_q_062 yoink_session_q_062 yoink_queue_q_062
+  yoink_cutover_qualification_063 yoink_q_063 yoink_session_q_063 yoink_queue_q_063
 ```
 
 Then independently re-inspect the catalogs and immutable receipt:
 
 ```bash
 npm run postgres:writes -- verify \
-  yoink_cutover_qualification_062 yoink_q_062 yoink_session_q_062 yoink_queue_q_062
+  yoink_cutover_qualification_063 yoink_q_063 yoink_session_q_063 yoink_queue_q_063
 ```
 
-Queue-write contract v1 is historical evidence only and cannot run the complete
-repository. Never alter or reuse its immutable receipt: import a fresh cutover
-schema and use fresh role namespaces for v2. Apply cannot create a login, role
+Queue-write contracts v1 and v2 are historical evidence only; v2 separates
+attestation from each new-work queue mutation. Never alter or reuse an immutable
+receipt: import a fresh cutover schema and use fresh role namespaces for v3.
+Apply cannot create a login, role
 membership, or principal mapping. It does not port a task handler, principal/
 deployment-control repository, or API repository and does not configure the API
-or worker to use PostgreSQL. The four-table repository boundary is qualification
+or worker to use PostgreSQL. The five-table grant boundary is qualification
 evidence only; SQLite remains authoritative.
 
 ## Requirements

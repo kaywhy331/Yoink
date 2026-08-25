@@ -20,10 +20,12 @@ function usage() {
 
 The command creates one qualification-only, server-bound tenant queue writer.
 It grants only the manifested SELECT/INSERT/UPDATE operations on four queue
-tables plus the binder, scope, and one strict immutable JSON constraint helper.
-It never grants DELETE or any other application function, creates a login or
-principal mapping, ports a task handler/control repository, enables PostgreSQL
-runtime authority, or changes retailer actions.
+tables, SELECT on the singleton deployment expectation, and the binder, scope,
+and one strict immutable JSON constraint helper. Attestation and guarded queue
+SQL share one transaction. It never grants deployment mutation, DELETE, or any
+other application function, creates a login or principal mapping, ports a task
+handler/control repository, enables PostgreSQL runtime authority, or changes
+retailer actions.
 `);
 }
 

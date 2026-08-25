@@ -212,8 +212,8 @@ test("the PostgreSQL tenant queue-write template is exact, inert, and delete-fre
   assert.equal(manifest.contractVersion, POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION);
   assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
   assert.equal(manifest.tenantSessionContractVersion, POSTGRES_TENANT_SESSION_CONTRACT_VERSION);
-  assert.equal(manifest.tableCount, 4);
-  assert.equal(manifest.grantCount, 11);
+  assert.equal(manifest.tableCount, 5);
+  assert.equal(manifest.grantCount, 12);
   assert.equal(manifest.functionGrantCount, 3);
   assert.equal(manifest.constraintHelperFunctionCount, 1);
   assert.equal(manifest.restrictivePolicyCount, 4);
@@ -228,7 +228,8 @@ test("the PostgreSQL tenant queue-write template is exact, inert, and delete-fre
     { tableName: "background_task_schedules", privileges: ["SELECT", "INSERT", "UPDATE"] },
     { tableName: "background_tasks", privileges: ["SELECT", "INSERT", "UPDATE"] },
     { tableName: "background_task_events", privileges: ["SELECT", "INSERT"] },
-    { tableName: "background_worker_heartbeats", privileges: ["SELECT", "INSERT", "UPDATE"] }
+    { tableName: "background_worker_heartbeats", privileges: ["SELECT", "INSERT", "UPDATE"] },
+    { tableName: "background_worker_deployment_expectations", privileges: ["SELECT"] }
   ]);
   assert.deepEqual(manifest.writeRole.functionGrants, [{
     functionName: "yoink_json_valid",
@@ -244,10 +245,10 @@ test("the PostgreSQL tenant queue-write template is exact, inert, and delete-fre
   assert.equal(capability.readCommittedTransactionAdapter, true);
   assert.equal(capability.nativeTwoPrincipalWriteIsolationQualified, true);
   assert.equal(capability.queueStoreRepositoryParity, true);
-  assert.equal(capability.atomicDeploymentAttestationAndQueueWrite, false);
+  assert.equal(capability.atomicDeploymentAttestationAndQueueWrite, true);
   assert.equal(capability.controlRepositoryParity, false);
-  assert.equal(capability.tableCount, 4);
-  assert.equal(capability.grantCount, 11);
+  assert.equal(capability.tableCount, 5);
+  assert.equal(capability.grantCount, 12);
   assert.equal(capability.functionGrantCount, 3);
   assert.equal(capability.constraintHelperFunctionCount, 1);
   assert.equal(capability.insertTableCount, 4);

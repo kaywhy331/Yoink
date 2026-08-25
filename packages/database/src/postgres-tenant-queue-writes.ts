@@ -24,7 +24,7 @@ import {
   type PostgresTenantSessionPrincipal
 } from "./postgres-tenant-session.js";
 
-export const POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION = 2;
+export const POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION = 3;
 export const POSTGRES_TENANT_QUEUE_WRITE_RECEIPT_TABLE = "yoink_tenant_queue_write_receipt";
 
 const SAFE_SCHEMA = /^[a-z][a-z0-9_]{2,62}$/;
@@ -68,8 +68,8 @@ export interface PostgresTenantQueueWriteManifest {
     referencesAccess: false;
     triggerAccess: false;
   };
-  tableCount: 4;
-  grantCount: 11;
+  tableCount: 5;
+  grantCount: 12;
   functionGrantCount: 3;
   constraintHelperFunctionCount: 1;
   restrictivePolicyCount: 4;
@@ -91,8 +91,8 @@ export interface PostgresTenantQueueWriteQualificationReceipt {
   roleManifestFingerprint: string;
   tenantSessionManifestFingerprint: string;
   writeRoleName: string;
-  tableCount: 4;
-  grantCount: 11;
+  tableCount: 5;
+  grantCount: 12;
   functionGrantCount: 3;
   constraintHelperFunctionCount: 1;
   membershipCount: 0;
@@ -127,10 +127,10 @@ export interface PostgresTenantQueueWriteCapabilityProjection {
   readCommittedTransactionAdapter: true;
   nativeTwoPrincipalWriteIsolationQualified: true;
   queueStoreRepositoryParity: true;
-  atomicDeploymentAttestationAndQueueWrite: false;
+  atomicDeploymentAttestationAndQueueWrite: true;
   controlRepositoryParity: false;
-  tableCount: 4;
-  grantCount: 11;
+  tableCount: 5;
+  grantCount: 12;
   functionGrantCount: 3;
   constraintHelperFunctionCount: 1;
   insertTableCount: 4;
@@ -231,7 +231,18 @@ const TABLE_GRANTS: ReadonlyArray<{
   Object.freeze({
     tableName: "background_worker_heartbeats",
     privileges: Object.freeze(["SELECT", "INSERT", "UPDATE"] as const)
+  }),
+  Object.freeze({
+    tableName: "background_worker_deployment_expectations",
+    privileges: Object.freeze(["SELECT"] as const)
   })
+]);
+
+const TENANT_QUEUE_TABLES = new Set([
+  "background_task_schedules",
+  "background_tasks",
+  "background_task_events",
+  "background_worker_heartbeats"
 ]);
 
 let cachedCapabilityProjection: PostgresTenantQueueWriteCapabilityProjection | null = null;
@@ -385,8 +396,8 @@ export function buildPostgresTenantQueueWriteManifest(
       referencesAccess: false,
       triggerAccess: false
     },
-    tableCount: 4,
-    grantCount: 11,
+    tableCount: 5,
+    grantCount: 12,
     functionGrantCount: 3,
     constraintHelperFunctionCount: 1,
     restrictivePolicyCount: 4,
@@ -416,7 +427,7 @@ export function postgresTenantQueueWriteCapabilityProjection(): PostgresTenantQu
     readCommittedTransactionAdapter: true,
     nativeTwoPrincipalWriteIsolationQualified: true,
     queueStoreRepositoryParity: true,
-    atomicDeploymentAttestationAndQueueWrite: false,
+    atomicDeploymentAttestationAndQueueWrite: true,
     controlRepositoryParity: false,
     tableCount: manifest.tableCount,
     grantCount: manifest.grantCount,
@@ -653,8 +664,9 @@ async function inspectBoundary(
     );
   }
 
-  const expectedPolicies = new Map(manifest.writeRole.tableGrants.map((grant) =>
-    [policyName(grant.tableName), grant.tableName]));
+  const expectedPolicies = new Map(manifest.writeRole.tableGrants
+    .filter((grant) => TENANT_QUEUE_TABLES.has(grant.tableName))
+    .map((grant) => [policyName(grant.tableName), grant.tableName]));
   const policies = await session.query<{
     policyName: string;
     tableName: string;
@@ -799,8 +811,8 @@ function receiptFromRow(
     roleManifestFingerprint: manifest.fingerprint,
     tenantSessionManifestFingerprint: manifest.tenantSessionManifestFingerprint,
     writeRoleName: manifest.writeRole.name,
-    tableCount: 4,
-    grantCount: 11,
+    tableCount: 5,
+    grantCount: 12,
     functionGrantCount: 3,
     constraintHelperFunctionCount: 1,
     membershipCount: 0,
@@ -937,7 +949,9 @@ export async function applyPostgresTenantQueueWriteBoundary(
         manifest.schemaName,
         POSTGRES_TENANT_QUEUE_WRITE_RECEIPT_TABLE,
         "yoink_tenant_queue_write_receipt_guard",
-        manifest.writeRole.tableGrants.map((grant) => policyName(grant.tableName))
+        manifest.writeRole.tableGrants
+          .filter((grant) => TENANT_QUEUE_TABLES.has(grant.tableName))
+          .map((grant) => policyName(grant.tableName))
       ]
     );
     if (exactInteger(existing.rows[0]?.count, "existing boundary object count") !== 0) {
@@ -979,7 +993,8 @@ export async function applyPostgresTenantQueueWriteBoundary(
     const schemaManifest = buildPostgresSchemaManifest();
     const tableByName = new Map(schemaManifest.tables.map((table) => [table.name, table]));
     const tenantExpression = `${relation(manifest.schemaName, POSTGRES_TENANT_SESSION_SCOPE_FUNCTION)}()`;
-    for (const grant of manifest.writeRole.tableGrants) {
+    for (const grant of manifest.writeRole.tableGrants
+      .filter((candidate) => TENANT_QUEUE_TABLES.has(candidate.tableName))) {
       const table = tableByName.get(grant.tableName);
       if (!table) {
         throw new PostgresTenantQueueWriteQualificationError(

@@ -358,10 +358,13 @@ prove isolation. Version 0.61 separately qualifies an inactive four-table queue
 writer with 11 exact operations, no delete access, four restrictive policies,
 and native two-principal write isolation. Version 0.62 runs the tenant queue
 repository through contract v2 of that writer, including only the imported
-immutable JSON helper required by the task constraint. Principal enumeration,
-deployment control, and atomic attestation/write composition remain on the
-qualification side. No production login, mapping, membership, handler, or API
-repository is provisioned. None of these releases deploys that runtime. Until
+immutable JSON helper required by the task constraint. Version 0.63 adds one
+`SELECT`-only deployment-expectation grant and validates the exact expectation
+inside the same tenant queue transaction before schedule, enqueue, or lease SQL.
+Already-leased completion/failure recovery remains available. Principal
+enumeration, fleet status/stopping, and their restricted control role remain on
+the qualification side. No production login, mapping, membership, handler, or
+API repository is provisioned. None of these releases deploys that runtime. Until
 it is provisioned and verified, SQLite is the source of truth and hosted
 boundary mode is suitable for integration/staging—not a claim of completed
 production hosting.

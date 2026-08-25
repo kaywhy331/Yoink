@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.62.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.63.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,23 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.63.0 closes the time-of-check/time-of-use gap between standalone
+worker deployment attestation and a tenant queue mutation. Queue-write contract
+v3 adds one `SELECT`-only grant on the singleton API-owned
+`background_worker_deployment_expectations` table. The server-bound writer now
+validates the exact deployment contract, runtime version, and public deployment
+fingerprint inside the same `READ COMMITTED` transaction before schedule
+initialization, due enqueue, or a new lease runs. Already-leased completion and
+bounded failure recovery deliberately remain available after expectation drift.
+
+The role now has 12 exact operations across five tables, while its write surface
+is unchanged: four tenant queue tables, four restrictive tenant policies, no
+deployment update, and no delete. Native PostgreSQL proves the role can read the
+expectation but cannot change it, and a deliberate attestation mismatch leaves
+the schedule count unchanged. Principal enumeration, fleet status, and worker
+stopping remain on the qualification/control connection; no runtime principal,
+handler, authority switch, dual write, or retailer capability is activated.
 
 Version 0.62.0 connects the complete PostgreSQL tenant queue repository to the
 server-bound writer qualified in 0.61. Schedule creation, due enqueue, event
@@ -29,15 +46,15 @@ Two independent server-bound writer pools now run the production queue-store
 SQL through native PostgreSQL 16 and prove schedule/task/event creation, retry,
 heartbeat, locked-row skipping, exact-one-winner contention, one-use completion,
 tenant isolation, prohibited operations, helper-definition tamper detection,
-and policy tamper detection. Principal enumeration, deployment attestation/
-status, and worker stopping still use the qualification/control connection, and
-attestation is not atomic with the tenant write. No production principal,
+and policy tamper detection. At that v2 boundary, principal enumeration,
+deployment attestation/status, and worker stopping used the qualification/
+control connection, and attestation was not atomic with the tenant write. No production principal,
 handler repository, API repository, login, membership, runtime authority, dual
 write, or retailer authority is activated; SQLite remains authoritative.
 
-Queue-write contract v1 is historical qualification evidence only. Apply v2
-only to a fresh cutover schema and fresh role namespaces; never modify or adopt
-the v1 receipt. Use `npm run postgres:writes -- plan ...` and the
+Queue-write contracts v1 and v2 are historical qualification evidence only.
+Apply v3 only to a fresh cutover schema and fresh role namespaces; never modify
+or adopt an earlier receipt. Use `npm run postgres:writes -- plan ...` and the
 [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.61.0 added the first server-bound PostgreSQL write boundary without

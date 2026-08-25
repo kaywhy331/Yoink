@@ -1014,16 +1014,18 @@ completion capabilities. An empty server-owned principal registry, zero-
 argument binder, read-only tenant adapter, and 82 restrictive policies also
 prove simultaneous mapped-principal isolation on native PostgreSQL. Custom
 tenant settings remain syntactically mutable but cannot widen scope beyond the
-server mapping. One separately qualified queue-writer role adds exactly 11
-`SELECT`/`INSERT`/`UPDATE` grants and four restrictive policies across the four
-queue tables. Queue-write contract v2 also grants the one strict immutable JSON
-constraint helper required by the task table, then runs the actual tenant queue
-repository through two native server-bound writer pools. Scheduling, enqueue,
-append-only events, retry, heartbeat, leasing, completion, contention, isolation,
+server mapping. One separately qualified queue-writer role now has exactly 12
+grants across five tables: the original four tenant queue tables plus `SELECT`
+only on the singleton deployment expectation. Four restrictive policies still
+cover the writable tenant surface. Queue-write contract v2 added the one strict
+immutable JSON constraint helper required by the task table and contract v3
+moves exact deployment attestation into the same server-bound transaction as
+each new-work schedule, enqueue, and lease mutation. Scheduling, enqueue, append-only events, retry,
+heartbeat, leasing, completion, contention, isolation, attestation mismatch,
 and prohibited operations are proven. Its principal registry remains empty;
-principal enumeration, deployment attestation/status, worker stopping, and task
-handlers are still outside this least-privilege transaction boundary. Production
-login provisioning, atomic control/write composition, remaining writer families,
+principal enumeration, deployment status, worker stopping, and task handlers
+are still outside this least-privilege transaction boundary. Production login
+provisioning, restricted fleet-control composition, remaining writer families,
 mixed shared-offer/incident semantics, PostgreSQL task handlers and request
 repositories, deployed fleet/load/outage proof, and backup/cutover drills remain
 gated, so SQLite retains runtime authority. See

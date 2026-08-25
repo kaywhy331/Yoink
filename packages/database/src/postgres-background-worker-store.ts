@@ -89,7 +89,7 @@ export interface PostgresBackgroundWorkerStoreQualification {
   multiConnectionContentionQualified: true;
   serverBoundQueueWriteTransactions: boolean;
   queueStoreWriteRoleParity: boolean;
-  atomicDeploymentAttestationAndQueueWrite: false;
+  atomicDeploymentAttestationAndQueueWrite: boolean;
   controlRepositoryParity: false;
   handlerRepositoryParity: false;
   runtimeAuthority: false;
@@ -299,9 +299,11 @@ function assertCapability(row: TaskRow | undefined, taskId: string, token: strin
  * Exercises the complete asynchronous worker-store contract against an inert,
  * verified cutover schema. When a tenant queue-write database is supplied,
  * every tenant queue transaction uses that server-bound least-privilege role;
- * principal enumeration, deployment attestation/status, and worker stopping
- * still use the cutover/control role. It is intentionally not wired into either
- * runtime, and task handlers still depend on SQLite repositories.
+ * deployment attestation executes inside the same server-bound transaction as
+ * each new-work schedule, enqueue, or lease mutation. Principal enumeration,
+ * deployment status, and worker stopping still use the cutover/control role. It is intentionally not
+ * wired into either runtime, and task handlers still depend on SQLite
+ * repositories.
  */
 export class PostgresBackgroundWorkerQualificationStore implements BackgroundWorkerStore {
   private qualified = false;
@@ -374,7 +376,7 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
       multiConnectionContentionQualified: true,
       serverBoundQueueWriteTransactions: Boolean(queueWriteManifest),
       queueStoreWriteRoleParity: Boolean(queueWriteManifest),
-      atomicDeploymentAttestationAndQueueWrite: false,
+      atomicDeploymentAttestationAndQueueWrite: Boolean(queueWriteManifest),
       controlRepositoryParity: false,
       handlerRepositoryParity: false,
       runtimeAuthority: false
@@ -874,25 +876,12 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
     const scope = contextValue(context);
     const tenantQueueWrites = this.options.tenantQueueWriteDatabase;
     if (tenantQueueWrites) {
-      if (requireAttestation) {
-        await this.database.transaction(async (session) => {
-          await session.query("SELECT set_config('yoink.tenant_id', $1, true)", [scope.tenantId]);
-          const user = await session.query<{ id: string }>(
-            `SELECT id FROM ${relation(this.schema, "users")}
-             WHERE tenant_id = $1 AND id = $2`,
-            [scope.tenantId, scope.userId]
-          );
-          if (user.rows.length !== 1) {
-            throw new PostgresBackgroundWorkerQualificationError(
-              "The PostgreSQL worker principal does not belong to the requested tenant."
-            );
-          }
-          await this.assertDeploymentExpectation(session, scope);
-        });
-      }
       return tenantQueueWrites.writeTransaction(
         { tenantId: scope.tenantId, userId: scope.userId },
-        (session) => operation(session, scope)
+        async (session) => {
+          if (requireAttestation) await this.assertDeploymentExpectation(session, scope);
+          return operation(session, scope);
+        }
       );
     }
     return this.database.transaction(async (session) => {
