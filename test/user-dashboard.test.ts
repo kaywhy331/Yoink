@@ -307,3 +307,113 @@ test("guided dashboard setup does not create a plan before review and submits ex
     browser.close();
   }
 });
+
+test("the user dashboard reviews quarantined store details with closed, revocable decisions", async () => {
+  const webRoot = join(process.cwd(), "apps", "web");
+  const html = readFileSync(join(webRoot, "user.html"), "utf8");
+  const script = readFileSync(join(webRoot, "user.js"), "utf8");
+  const dom = new JSDOM(html, {
+    url: "http://127.0.0.1:32991/",
+    runScripts: "outside-only",
+    pretendToBeVisual: true
+  });
+  const browser = dom.window;
+  const reviews: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const evidence = {
+    id: "observer_recipe_recovery_dashboard",
+    retailerId: "pokemoncenter",
+    retailerSku: "10-10320-101",
+    field: "unitPrice",
+    valueKind: "cents",
+    normalizedValue: 798,
+    reviewState: "unreviewed",
+    reviewSequence: 0,
+    confirmableByCurrentUser: true,
+    applicationState: "not_applied"
+  };
+  const overview = {
+    settings: { actionsPaused: true, executionMode: "shadow", taxBps: 0, storeAllowancesCents: {} },
+    counts: { products: 0, purchaseIntents: 0, actions: 0, pendingCatalogProposals: 0 },
+    sources: [],
+    permissions: [],
+    spend: {
+      activeReservationCount: 0,
+      activeReservedCents: 0,
+      spentTodayCents: 0,
+      policy: { revision: 1, perOrderCapCents: null, dailyCapCents: null, monthlyCapCents: null }
+    },
+    walmartDraws: { latestScan: null, items: [] }
+  };
+  Object.defineProperty(browser, "fetch", {
+    configurable: true,
+    value: async (path: string, options: { method?: string; body?: string } = {}) => {
+      if (options.method === "POST" && path.includes("/community/recovery-evidence/")) {
+        const body = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
+        reviews.push({ path, body });
+        evidence.reviewState = String(body.decision);
+        evidence.reviewSequence += 1;
+        return { ok: true, status: 200, json: async () => ({ review: {
+          disposition: "recorded",
+          applicationAffected: false,
+          fieldFillApplied: false,
+          evidence: { ...evidence }
+        } }) };
+      }
+      if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => overview };
+      if (path === "/api/v1/user/community/recovery-evidence") {
+        return { ok: true, status: 200, json: async () => ({
+          items: [{ ...evidence }],
+          reviewAffectsApplication: false,
+          fieldFillEnabled: false
+        }) };
+      }
+      if (path === "/api/v1/user/privacy") return { ok: true, status: 200, json: async () => ({ inventory: {
+        totalRecords: 1,
+        credentialMaterialsExcluded: true,
+        categories: []
+      } }) };
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }
+  });
+  Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
+
+  try {
+    browser.eval(`${script}\n//# sourceURL=user-recovery-review-dashboard-test.js`);
+    await eventually(() => assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /\$7\.98/));
+    assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /Pokémon Center item 10-10320-101/);
+    assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /never applied/i);
+    (browser.document.querySelector('[data-recovery-decision="rejected"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(reviews.length, 1));
+    assert.deepEqual(reviews[0], {
+      path: "/api/v1/user/community/recovery-evidence/observer_recipe_recovery_dashboard/review",
+      body: {
+        contractVersion: 1,
+        decision: "rejected",
+        confirmation: "REJECT_NORMALIZED_RECOVERY_EVIDENCE"
+      }
+    });
+    assert.equal("normalizedValue" in reviews[0]!.body, false);
+    await eventually(() => assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /marked this incorrect/i));
+
+    (browser.document.querySelector('[data-recovery-decision="confirmed"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(reviews.length, 2));
+    assert.deepEqual(reviews[1]?.body, {
+      contractVersion: 1,
+      decision: "confirmed",
+      confirmation: "CONFIRM_NORMALIZED_RECOVERY_EVIDENCE"
+    });
+    await eventually(() => assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /marked this correct/i));
+
+    (browser.document.querySelector('[data-recovery-decision="revoked"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(reviews.length, 3));
+    assert.deepEqual(reviews[2]?.body, {
+      contractVersion: 1,
+      decision: "revoked",
+      confirmation: "REVOKE_NORMALIZED_RECOVERY_CONFIRMATION"
+    });
+    await eventually(() => assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /confirmation withdrawn/i));
+    assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /quarantined and unused/i);
+  } finally {
+    browser.close();
+  }
+});

@@ -583,6 +583,21 @@ path exists. The recipe interpreter and ledger remain disconnected from
 identity resolution, qualifications, plans, jobs, navigation, clicks, and all
 mutation runners.
 
+Yoink 0.52 adds a user-review trust domain without joining the application
+domain. A canonical user-community API lists only the authenticated
+contributor's evidence and accepts one fixed confirm/reject/revoke decision
+with an exact confirmation phrase. Migration 45 stores each real transition as
+a sequenced append-only event whose composite foreign key binds tenant, user,
+and evidence together. Current state is a projection; evidence is never
+updated. Idempotent retries do not append events, and revocation requires a
+current confirmation.
+
+The user dashboard and admin registry expose the derived review state, but the
+review repository has no dependency on observation, qualification, planning,
+job, spend, extension, or mutation services. Health contracts explicitly keep
+review application and recipe field fill false. Review history joins the
+self-service data export and cascades only with deletion of its owning user.
+
 Yoink 0.38.0 makes the paired Chrome credential a generation-bound,
 recoverable lifecycle rather than an indefinitely static hash. Begin is
 authenticated only by the current token and stores a 10-minute next-generation
@@ -822,7 +837,9 @@ trial-stage enum and its contributor/stage index; it likewise changes no
 retailer qualification or mutation authority. Migration 44 in 0.51 adds only
 append-only, permanently quarantined normalized recovery evidence; it adds no
 field-fill transition and changes no retailer qualification or mutation
-authority.
+authority. Migration 45 in 0.52 adds only contributor-owned append-only review
+events; confirmation, rejection, and revocation likewise add no field-fill,
+qualification, job, or mutation transition.
 
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted

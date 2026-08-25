@@ -88,6 +88,12 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     assert.equal(userLibrary.status, 200);
     assert.equal(userLibrary.headers.get("x-yoink-api-surface"), "user");
     assert.equal(userLibrary.headers.has("deprecation"), false);
+    const userRecoveryEvidence = await fetch(`${baseUrl}/api/v1/user/community/recovery-evidence`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(userRecoveryEvidence.status, 200);
+    assert.equal(userRecoveryEvidence.headers.get("x-yoink-api-surface"), "user");
+    assert.deepEqual((await userRecoveryEvidence.json() as { items: unknown[] }).items, []);
 
     const legacyLibrary = await fetch(`${baseUrl}/api/v1/library`, {
       headers: { "X-Test-Principal": "user" }
@@ -117,6 +123,11 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     });
     assert.equal(wrongSurface.status, 404);
     assert.equal((await wrongSurface.json() as { error: string }).error, "api_surface_mismatch");
+    const wrongRecoverySurface = await fetch(`${baseUrl}/api/v1/admin/community/recovery-evidence`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(wrongRecoverySurface.status, 404);
+    assert.equal((await wrongRecoverySurface.json() as { error: string }).error, "api_surface_mismatch");
 
     runWithRequestScope(LOCAL_REQUEST_SCOPE, () => authorization.grantRole(LOCAL_USER_ID, "support_readonly"));
     const allowedAdmin = await fetch(`${baseUrl}/api/v1/admin/snapshot`, {

@@ -113,6 +113,11 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
         credentialMaterialsExcluded: true,
         categories: [{ id: "account_and_access", label: "Account and access", recordCount: 8 }]
       } });
+      if (path === "/api/v1/user/community/recovery-evidence") return response({
+        items: [],
+        reviewAffectsApplication: false,
+        fieldFillEnabled: false
+      });
       if (path.startsWith("/api/v1/user/library")) return response({ items: [] });
       if (path.startsWith("/api/v1/user/purchase-intents")) return response({ items: [] });
       if (path.startsWith("/api/v1/user/jobs")) return response({ items: [] });

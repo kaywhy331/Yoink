@@ -140,6 +140,53 @@ test("the signed observer registry distributes only promoted recipes to capable 
       "SELECT recipe_state_at_trial AS state FROM observer_recipe_trials WHERE recipe_id = ?",
       recipe.id
     )?.state, "shadow");
+    const userEvidenceResponse = await fetch(`${baseUrl}/api/v1/user/community/recovery-evidence`);
+    assert.equal(userEvidenceResponse.status, 200);
+    assert.equal(userEvidenceResponse.headers.get("x-yoink-api-surface"), "user");
+    const userEvidence = await userEvidenceResponse.json() as {
+      reviewAffectsApplication: boolean;
+      fieldFillEnabled: boolean;
+      items: Array<Record<string, unknown>>;
+    };
+    assert.equal(userEvidence.reviewAffectsApplication, false);
+    assert.equal(userEvidence.fieldFillEnabled, false);
+    assert.equal(userEvidence.items.length, 1);
+    assert.equal(userEvidence.items[0]?.reviewState, "unreviewed");
+    assert.equal(userEvidence.items[0]?.confirmableByCurrentUser, true);
+    const evidenceId = String(userEvidence.items[0]?.id ?? "");
+    const badReview = await fetch(`${baseUrl}/api/v1/user/community/recovery-evidence/${encodeURIComponent(evidenceId)}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        contractVersion: 1,
+        decision: "confirmed",
+        confirmation: "REJECT_NORMALIZED_RECOVERY_EVIDENCE"
+      })
+    });
+    assert.equal(badReview.status, 400);
+    assert.equal((await badReview.json() as { error: string }).error, "observer_recipe_recovery_review_confirmation_required");
+    const confirmedReview = await fetch(`${baseUrl}/api/v1/user/community/recovery-evidence/${encodeURIComponent(evidenceId)}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        contractVersion: 1,
+        decision: "confirmed",
+        confirmation: "CONFIRM_NORMALIZED_RECOVERY_EVIDENCE"
+      })
+    }).then((response) => response.json()) as { review: { disposition: string; evidence: Record<string, unknown> } };
+    assert.equal(confirmedReview.review.disposition, "recorded");
+    assert.equal(confirmedReview.review.evidence.reviewState, "confirmed");
+    const revokedReview = await fetch(`${baseUrl}/api/v1/user/community/recovery-evidence/${encodeURIComponent(evidenceId)}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        contractVersion: 1,
+        decision: "revoked",
+        confirmation: "REVOKE_NORMALIZED_RECOVERY_CONFIRMATION"
+      })
+    }).then((response) => response.json()) as { review: { applicationAffected: boolean; evidence: Record<string, unknown> } };
+    assert.equal(revokedReview.review.applicationAffected, false);
+    assert.equal(revokedReview.review.evidence.reviewState, "revoked");
     const snapshot = await fetch(`${baseUrl}/api/v1/snapshot`).then((response) => response.json()) as {
       counts: Record<string, number>;
       observerRegistry: {
@@ -150,6 +197,8 @@ test("the signed observer registry distributes only promoted recipes to capable 
         canaryRegressionAutoKill: boolean;
         publicIndependentAccountQuorum: boolean;
         recoveryEvidencePolicy: string;
+        recoveryEvidenceUserReview: string;
+        recoveryEvidenceReviewAffectsApplication: boolean;
         recoveryEvidenceApplication: boolean;
         recipeFieldFill: boolean;
         recipes: Array<Record<string, unknown>>;
@@ -162,6 +211,8 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(snapshot.counts.oracleCompleteObserverRecipeTrials, 1);
     assert.equal(snapshot.counts.autoDisabledObserverRecipesByCanaryRegression, 0);
     assert.equal(snapshot.counts.quarantinedObserverRecipeRecoveryEvidence, 1);
+    assert.equal(snapshot.counts.observerRecipeRecoveryReviewEvents, 2);
+    assert.equal(snapshot.counts.revokedObserverRecipeRecoveryEvidence, 1);
     assert.equal(snapshot.observerRegistry.mutationCapable, false);
     assert.equal(snapshot.observerRegistry.trialQuorumPolicy, "latest_per_contributor_sku_layout_stage");
     assert.equal(snapshot.observerRegistry.canaryCohortPercent, 25);
@@ -169,13 +220,19 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(snapshot.observerRegistry.canaryRegressionAutoKill, true);
     assert.equal(snapshot.observerRegistry.publicIndependentAccountQuorum, false);
     assert.equal(snapshot.observerRegistry.recoveryEvidencePolicy, "oracle_agreed_missing_field_quarantine");
+    assert.equal(snapshot.observerRegistry.recoveryEvidenceUserReview, "append_only_owner_confirm_reject_revoke");
+    assert.equal(snapshot.observerRegistry.recoveryEvidenceReviewAffectsApplication, false);
     assert.equal(snapshot.observerRegistry.recoveryEvidenceApplication, false);
     assert.equal(snapshot.observerRegistry.recipeFieldFill, false);
     assert.equal(snapshot.observerRegistry.recoveryEvidence.length, 1);
     assert.equal(snapshot.observerRegistry.recoveryEvidence[0]?.normalizedValue, 798);
+    assert.equal(snapshot.observerRegistry.recoveryEvidence[0]?.reviewState, "revoked");
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(health.observerRecipeRecoveryEvidenceStorageImplemented, true);
+    assert.equal(health.observerRecipeRecoveryUserReviewImplemented, true);
+    assert.equal(health.observerRecipeRecoveryReviewRevocationImplemented, true);
+    assert.equal(health.observerRecipeRecoveryReviewAffectsApplication, false);
     assert.equal(health.observerRecipeRecoveryEvidenceApplicationEnabled, false);
     assert.equal(health.observerRecipeFieldFillEnabled, false);
 

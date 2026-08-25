@@ -12,6 +12,7 @@ const state = {
   productLinkPreview: null,
   productLinkPreviewInput: "",
   privacy: null,
+  recoveryEvidence: [],
   query: ""
 };
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -92,6 +93,24 @@ function setTab(name) {
 
 function words(value) {
   return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function retailerDisplayName(value) {
+  return ({
+    target: "Target",
+    walmart: "Walmart",
+    amazon: "Amazon",
+    bestbuy: "Best Buy",
+    disney: "Disney Store",
+    ravensburger: "Ravensburger",
+    riot: "Riot Games Merch",
+    booksamillion: "Books-A-Million",
+    fanatics: "Fanatics",
+    kohls: "Kohl's",
+    macys: "Macy's",
+    pbandai: "Premium Bandai",
+    pokemoncenter: "Pokémon Center"
+  })[String(value || "")] || words(value);
 }
 
 function guardedLaneReady(retailerId) {
@@ -200,6 +219,47 @@ function renderPrivacy() {
   $("#privacyExportLink").hidden = inventory.credentialMaterialsExcluded !== true;
 }
 
+function recoveryValue(item) {
+  if (item.valueKind === "cents") return money(Number(item.normalizedValue), "USD");
+  if (item.valueKind === "boolean") return item.normalizedValue ? "Add control available" : "Add control unavailable";
+  if (item.valueKind === "enum") return words(item.normalizedValue);
+  return String(item.normalizedValue ?? "");
+}
+
+function renderRecoveryEvidence() {
+  const items = Array.isArray(state.recoveryEvidence) ? state.recoveryEvidence : [];
+  const waiting = items.filter((item) => !["confirmed", "rejected"].includes(item.reviewState)).length;
+  $("#recoveryReviewSummary").textContent = !items.length
+    ? "Nothing needs your review right now. Yoink will ask only when two independent page readers agree on a missing public store detail."
+    : waiting
+      ? `${waiting} of ${items.length} quarantined store detail${items.length === 1 ? "" : "s"} can use your review.`
+      : `You reviewed all ${items.length} quarantined store detail${items.length === 1 ? "" : "s"}. You can still change or withdraw an answer.`;
+  const fieldNames = {
+    availability: "Availability",
+    unitPrice: "Price",
+    seller: "Seller",
+    fulfillment: "Delivery method",
+    addControl: "Add-to-cart control"
+  };
+  $("#recoveryReviewList").innerHTML = items.map((item) => {
+    const reviewState = String(item.reviewState || "unreviewed");
+    const stateLabel = reviewState === "confirmed" ? "You marked this correct"
+      : reviewState === "rejected" ? "You marked this incorrect"
+        : reviewState === "revoked" ? "Confirmation withdrawn" : "Not reviewed";
+    const stateKind = reviewState === "confirmed" ? "good" : "warn";
+    const confirm = reviewState !== "confirmed"
+      ? `<button class="button secondary" data-recovery-evidence="${escapeHtml(item.id)}" data-recovery-decision="confirmed" type="button">${reviewState === "unreviewed" ? "Yes, correct" : "Mark correct"}</button>`
+      : "";
+    const reject = reviewState !== "rejected"
+      ? `<button class="button quiet" data-recovery-evidence="${escapeHtml(item.id)}" data-recovery-decision="rejected" type="button">No, incorrect</button>`
+      : "";
+    const revoke = reviewState === "confirmed"
+      ? `<button class="button quiet" data-recovery-evidence="${escapeHtml(item.id)}" data-recovery-decision="revoked" type="button">Withdraw confirmation</button>`
+      : "";
+    return `<article class="recovery-review-item"><div><h4>${escapeHtml(retailerDisplayName(item.retailerId))} item ${escapeHtml(item.retailerSku)} · ${escapeHtml(fieldNames[item.field] || words(item.field))}</h4><p>Yoink read <strong>${escapeHtml(recoveryValue(item))}</strong>. Does that match what the store page showed?</p><div class="recovery-review-meta"><span class="tag ${stateKind}">${escapeHtml(stateLabel)}</span><span class="tag">Quarantined · never applied</span></div></div><div class="recovery-review-actions">${item.confirmableByCurrentUser === false ? "" : `${confirm}${reject}${revoke}`}</div></article>`;
+  }).join("");
+}
+
 function renderProducts() {
   const missionByVariant = new Map(state.plans.map((plan) => [plan.variantId, plan]));
   $("#productList").innerHTML = state.products.length ? state.products.map((product) => {
@@ -293,13 +353,14 @@ function renderProposals() {
 
 async function refresh() {
   const query = state.query ? `&q=${encodeURIComponent(state.query)}` : "";
-  const [overview, products, plans, actions, proposals, privacy] = await Promise.all([
+  const [overview, products, plans, actions, proposals, privacy, recoveryEvidence] = await Promise.all([
     api("/api/v1/user/overview"),
     api(`/api/v1/user/library?limit=200&offset=0${query}`),
     api("/api/v1/user/purchase-intents?limit=200&offset=0"),
     api("/api/v1/user/jobs?limit=100&offset=0"),
     api("/api/v1/user/catalog/proposals?limit=100&offset=0"),
-    state.privacy ? Promise.resolve({ inventory: state.privacy }) : api("/api/v1/user/privacy")
+    state.privacy ? Promise.resolve({ inventory: state.privacy }) : api("/api/v1/user/privacy"),
+    api("/api/v1/user/community/recovery-evidence")
   ]);
   state.overview = overview;
   state.products = products.items || [];
@@ -307,7 +368,8 @@ async function refresh() {
   state.actions = actions.items || [];
   state.proposals = proposals.items || [];
   state.privacy = privacy.inventory || null;
-  renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals(); renderPrivacy();
+  state.recoveryEvidence = recoveryEvidence.items || [];
+  renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals(); renderPrivacy(); renderRecoveryEvidence();
 }
 
 async function toggleActions() {
@@ -730,6 +792,35 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.editPlan) await openPlan(button.dataset.editPlan);
     if (button.id === "pairButton") {
       await createPairingCode();
+    }
+    if (button.dataset.recoveryEvidence && button.dataset.recoveryDecision) {
+      const confirmations = {
+        confirmed: "CONFIRM_NORMALIZED_RECOVERY_EVIDENCE",
+        rejected: "REJECT_NORMALIZED_RECOVERY_EVIDENCE",
+        revoked: "REVOKE_NORMALIZED_RECOVERY_CONFIRMATION"
+      };
+      const decision = button.dataset.recoveryDecision;
+      const confirmation = confirmations[decision];
+      if (!confirmation) throw new Error("Choose a valid store-detail review answer.");
+      button.disabled = true;
+      try {
+        const result = await api(`/api/v1/user/community/recovery-evidence/${encodeURIComponent(button.dataset.recoveryEvidence)}/review`, {
+          method: "POST",
+          body: JSON.stringify({ contractVersion: 1, decision, confirmation })
+        });
+        await refresh();
+        setTab("preferences");
+        const review = result.review || {};
+        toast(review.disposition === "unchanged"
+          ? "That answer was already saved. The evidence remains quarantined and unused."
+          : decision === "confirmed"
+            ? "Review saved. The evidence remains quarantined and will not fill fields or trigger actions."
+            : decision === "rejected"
+              ? "Marked incorrect. The evidence remains quarantined and unused."
+              : "Confirmation withdrawn. The evidence remains quarantined and unused.");
+      } finally {
+        button.disabled = false;
+      }
     }
     if (button.dataset.setupAction === "pair_companion") await createPairingCode(true);
     if (button.dataset.setupAction === "connect_signal") {

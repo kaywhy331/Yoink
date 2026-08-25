@@ -67,19 +67,19 @@ promotion requirements remain in force.
 
 - Generated candidates are not automatically signed or promoted.
 - A recipe is not used to fill a stored observation. Version 0.51 adds only an
-  append-only `not_applied` provenance quarantine; user confirmation,
-  independent-account/region quorum, retention, and a governed application
-  projection must exist first.
+  append-only `not_applied` provenance quarantine, and 0.52 adds only
+  contributor-owned append-only review. Independent-account/region quorum,
+  retention, and a governed application projection must still exist first.
 - The packaged oracle is not a Sybil-resistant community quorum or an
   independently operated correctness service.
 - No recipe can affect selected-offer identity, qualifications, jobs,
   navigation, clicks, cart actions, checkout, drawing entry, or order
   submission.
 - A second packaged reader can share implementation assumptions with the
-  bundled observer. Redacted maintainer fixtures, explicit normalized user
-  confirmation, public reputable-account/Sybil controls, regional cohorts,
-  long-horizon false-positive SLOs, and external consistency monitoring remain
-  roadmap work.
+  bundled observer. Redacted maintainer fixtures, public reputable-account/
+  Sybil controls, regional cohorts, long-horizon false-positive SLOs, and
+  external consistency monitoring remain roadmap work. Explicit normalized
+  user review is implemented but cannot satisfy those independent gates.
 
 ## 0.50 governance follow-on
 
@@ -99,3 +99,11 @@ append-only quarantine, permanently marked `not_applied`. V1/v2 compatibility,
 packaged authority, conflict auto-kill, and every mutation boundary are
 unchanged. See
 [observer-recipe recovery evidence](OBSERVER_RECIPE_RECOVERY_EVIDENCE.md).
+
+## 0.52 recovery-review follow-on
+
+Version 0.52 adds an owner-scoped, fixed-input confirm/reject/revoke contract
+and a sequenced append-only event ledger. Review state never edits evidence and
+has no input to trial quorum, recipe lifecycle, observation projection, or
+browser behavior. See
+[observer-recipe recovery user review](OBSERVER_RECIPE_RECOVERY_USER_REVIEW.md).

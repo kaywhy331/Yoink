@@ -11,6 +11,12 @@ quarantine; those values do not count as additional contributors or trials and
 cannot fill an observation. See
 [observer-recipe recovery evidence](OBSERVER_RECIPE_RECOVERY_EVIDENCE.md).
 
+Version 0.52 likewise leaves promotion unchanged. Contributor confirmation,
+rejection, and revocation are separate review events; they do not become trial
+votes, add contributors/devices, advance lifecycle state, or authorize field
+fill. See
+[observer-recipe recovery user review](OBSERVER_RECIPE_RECOVERY_USER_REVIEW.md).
+
 ## Canonical trial cohort
 
 Migration 43 adds `recipe_state_at_trial` to the bounded trial receipt. The

@@ -18,6 +18,7 @@ import {
   type IdentityClaimReviewInput,
   type ObserverRecipePromotionInput,
   type ObserverRecipeProposalInput,
+  type ObserverRecipeRecoveryReviewInput,
   type ObserverRecipeResignInput,
   type ObserverRecipeTrustManifestInstallInput,
   type ObserverRecipeTrialInput,
@@ -575,6 +576,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const backgroundScheduleRunMatch = /^\/api\/v1\/workers\/schedules\/([A-Za-z0-9_-]{3,160})\/run$/.exec(requestUrl.pathname);
       const backgroundTaskRetryMatch = /^\/api\/v1\/workers\/tasks\/([A-Za-z0-9_-]{3,160})\/retry$/.exec(requestUrl.pathname);
       const signalInboxRetryMatch = /^\/api\/v1\/workers\/signal-inbox\/(inbox_[a-f0-9]{32})\/retry$/.exec(requestUrl.pathname);
+      const observerRecoveryReviewMatch = /^\/api\/v1\/community\/recovery-evidence\/([A-Za-z0-9_-]{3,120})\/review$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
         const settings = control.settings();
@@ -627,6 +629,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           observerRecipeCanaryMinimumDurationHours: OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS / 3_600_000,
           observerRecipeCanaryRegressionAutoKill: true,
           observerRecipeRecoveryEvidenceStorageImplemented: true,
+          observerRecipeRecoveryUserReviewImplemented: true,
+          observerRecipeRecoveryReviewRevocationImplemented: true,
+          observerRecipeRecoveryReviewAffectsApplication: false,
           observerRecipeRecoveryEvidenceApplicationEnabled: false,
           observerRecipeFieldFillEnabled: false,
           durableObserverRecipeWitnessRefresh: true,
@@ -1376,6 +1381,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             tenantContributorQuorum: true,
             publicIndependentAccountQuorum: false,
             recoveryEvidencePolicy: "oracle_agreed_missing_field_quarantine",
+            recoveryEvidenceUserReview: "append_only_owner_confirm_reject_revoke",
+            recoveryEvidenceReviewAffectsApplication: false,
             recoveryEvidenceApplication: false,
             recipeFieldFill: false,
             recipes: observerRecipes.list(),
@@ -1466,6 +1473,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             observerRecipeCanaryMinimumDurationHours: OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS / 3_600_000,
             observerRecipeCanaryRegressionAutoKill: true,
             observerRecipeRecoveryEvidenceStorageImplemented: true,
+            observerRecipeRecoveryUserReviewImplemented: true,
+            observerRecipeRecoveryReviewRevocationImplemented: true,
+            observerRecipeRecoveryReviewAffectsApplication: false,
             observerRecipeRecoveryEvidenceApplicationEnabled: false,
             observerRecipeFieldFillEnabled: false,
             durableObserverRecipeWitnessRefresh: true,
@@ -1877,6 +1887,24 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
       const communityConsentMatch = /^\/api\/v1\/community\/consents\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/community/recovery-evidence") {
+        json(response, 200, {
+          items: observerRecipes.userRecoveryEvidence(100),
+          reviewAffectsApplication: false,
+          fieldFillEnabled: false
+        });
+        return;
+      }
+      if (request.method === "POST" && observerRecoveryReviewMatch) {
+        const body = await readJson(request);
+        json(response, 200, {
+          review: observerRecipes.reviewRecoveryEvidence(
+            observerRecoveryReviewMatch[1] ?? "",
+            body as unknown as ObserverRecipeRecoveryReviewInput
+          )
+        });
+        return;
+      }
       if (request.method === "PATCH" && communityConsentMatch) {
         const retailerId = communityConsentMatch[1] as SupportedRetailerId;
         const body = await readJson(request);

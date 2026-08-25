@@ -26,6 +26,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(pageBody, /Purchase plans/);
     assert.match(pageBody, /Products, price, and purchase preferences/);
     assert.match(pageBody, /Spending limits/);
+    assert.match(pageBody, /Help improve store reading/);
+    assert.match(pageBody, /never fills a field, changes a purchase plan, qualifies a store, or clicks anything/);
     assert.match(pageBody, /Review before anything is enabled/);
     assert.match(pageBody, /Server check/);
     assert.match(pageBody, /Create purchase plan/);
@@ -72,6 +74,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Next gate: 2 contributor-deduplicated clean passes on 2 exact SKUs/);
     assert.match(adminScript, /25% deterministic cohort/);
     assert.match(adminScript, /Recipe \+ packaged oracle agreement/);
+    assert.match(adminScript, /User review:/);
+    assert.match(adminScript, /append-only and revocable/);
     assert.match(adminScript, /Application: never/);
     assert.match(adminPageBody, /Normalized missing-field previews/);
     assert.match(adminScript, /promotionReady \? "" : "disabled"/);
@@ -109,6 +113,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
       observerRecipeCanaryMinimumDurationHours: 24,
       observerRecipeCanaryRegressionAutoKill: true,
       observerRecipeRecoveryEvidenceStorageImplemented: true,
+      observerRecipeRecoveryUserReviewImplemented: true,
+      observerRecipeRecoveryReviewRevocationImplemented: true,
+      observerRecipeRecoveryReviewAffectsApplication: false,
       observerRecipeRecoveryEvidenceApplicationEnabled: false,
       observerRecipeFieldFillEnabled: false,
       durableObserverRecipeWitnessRefresh: true,
@@ -293,6 +300,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.observerRecipeCanaryMinimumDurationHours, 24);
     assert.equal(snapshot.capabilities.observerRecipeCanaryRegressionAutoKill, true);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryEvidenceStorageImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeRecoveryUserReviewImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeRecoveryReviewRevocationImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeRecoveryReviewAffectsApplication, false);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryEvidenceApplicationEnabled, false);
     assert.equal(snapshot.capabilities.observerRecipeFieldFillEnabled, false);
     assert.equal(snapshot.capabilities.durableObserverRecipeWitnessRefresh, true);

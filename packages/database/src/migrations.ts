@@ -3060,5 +3060,54 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
       BEGIN SELECT RAISE(ABORT, 'observer recipe recovery evidence is append-only'); END;
     `
+  },
+  {
+    version: 45,
+    name: "observer_recipe_recovery_user_reviews",
+    sql: `
+      CREATE UNIQUE INDEX observer_recipe_recovery_evidence_owner_idx
+        ON observer_recipe_recovery_evidence(tenant_id, user_id, id);
+
+      CREATE TABLE observer_recipe_recovery_reviews (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        evidence_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL CHECK (sequence > 0),
+        decision TEXT NOT NULL CHECK (decision IN ('confirmed', 'rejected', 'revoked')),
+        confirmation_code TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL CHECK (length(evidence_hash) = 64),
+        actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user', 'maintainer')),
+        actor_id TEXT NOT NULL CHECK (length(actor_id) BETWEEN 3 AND 120),
+        created_at TEXT NOT NULL,
+        UNIQUE(evidence_id, sequence),
+        CHECK (
+          (decision = 'confirmed' AND confirmation_code = 'CONFIRM_NORMALIZED_RECOVERY_EVIDENCE')
+          OR (decision = 'rejected' AND confirmation_code = 'REJECT_NORMALIZED_RECOVERY_EVIDENCE')
+          OR (decision = 'revoked' AND confirmation_code = 'REVOKE_NORMALIZED_RECOVERY_CONFIRMATION')
+        ),
+        FOREIGN KEY(tenant_id, user_id, evidence_id)
+          REFERENCES observer_recipe_recovery_evidence(tenant_id, user_id, id)
+          ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX observer_recipe_recovery_reviews_owner_idx
+        ON observer_recipe_recovery_reviews(
+          tenant_id, user_id, created_at DESC, id DESC
+        );
+      CREATE INDEX observer_recipe_recovery_reviews_current_idx
+        ON observer_recipe_recovery_reviews(evidence_id, sequence DESC);
+
+      CREATE TRIGGER observer_recipe_recovery_reviews_no_update
+      BEFORE UPDATE ON observer_recipe_recovery_reviews
+      BEGIN SELECT RAISE(ABORT, 'observer recipe recovery reviews are append-only'); END;
+
+      CREATE TRIGGER observer_recipe_recovery_reviews_no_delete
+      BEFORE DELETE ON observer_recipe_recovery_reviews
+      WHEN EXISTS (
+        SELECT 1 FROM users WHERE tenant_id = OLD.tenant_id AND id = OLD.user_id
+      )
+      BEGIN SELECT RAISE(ABORT, 'observer recipe recovery reviews are append-only'); END;
+    `
   }
 ]);

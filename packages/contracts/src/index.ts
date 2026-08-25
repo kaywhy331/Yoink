@@ -571,8 +571,12 @@ export interface ObserverRecipeResignInput {
 
 export const OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION = 2;
 export const OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION = 3;
+export const OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION = 1;
 export const OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE = "packaged_structured_oracle_v1";
 export const OBSERVER_RECIPE_RECOVERY_PROVENANCE = "recipe_packaged_oracle_agreement_v1";
+export const CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE = "CONFIRM_NORMALIZED_RECOVERY_EVIDENCE";
+export const REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE = "REJECT_NORMALIZED_RECOVERY_EVIDENCE";
+export const REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION = "REVOKE_NORMALIZED_RECOVERY_CONFIRMATION";
 export const OBSERVER_RECIPE_TRIAL_RECIPE_STATES = ["value", "missing", "ambiguous", "unrecognized"] as const;
 export const OBSERVER_RECIPE_TRIAL_PACKAGED_STATES = ["agreed", "conflict", "missing", "not_evaluated"] as const;
 export const OBSERVER_RECIPE_TRIAL_ORACLE_STATES = ["agreed", "conflict", "missing", "ambiguous", "not_evaluated"] as const;
@@ -604,6 +608,21 @@ export interface ObserverRecipeTrialFieldOutcome {
 export interface ObserverRecipeRecoveryEvidenceInput {
   field: ObserverRecipeField;
   normalizedValue: string | number | boolean;
+}
+
+export type ObserverRecipeRecoveryReviewDecision = "confirmed" | "rejected" | "revoked";
+
+/**
+ * A deliberately closed user-review envelope. Free text is excluded so a
+ * confirmation event cannot become a side channel for page or account data.
+ */
+export interface ObserverRecipeRecoveryReviewInput {
+  contractVersion: typeof OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION;
+  decision: ObserverRecipeRecoveryReviewDecision;
+  confirmation:
+    | typeof CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+    | typeof REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+    | typeof REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION;
 }
 
 export interface ObserverRecipeTrialInput {

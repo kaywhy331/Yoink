@@ -36,6 +36,7 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   observer_recipe_candidates: "exported",
   observer_recipe_lifecycle_events: "exported",
   observer_recipe_recovery_evidence: "exported",
+  observer_recipe_recovery_reviews: "exported",
   observer_recipe_trials: "exported",
   offer_snapshots: "exported",
   operator_alert_incidents: "safe_metadata_only",
@@ -293,10 +294,11 @@ export class UserPrivacyRepository {
            + (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_lifecycle_events WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND user_id = ?)
-           + (SELECT COUNT(*) FROM observer_recipe_recovery_evidence WHERE tenant_id = ? AND user_id = ?) AS count`,
+           + (SELECT COUNT(*) FROM observer_recipe_recovery_evidence WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM observer_recipe_recovery_reviews WHERE tenant_id = ? AND user_id = ?) AS count`,
         tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
         tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId
+        tenantId, userId, tenantId, userId
       ),
       activity_and_delivery: count(
         `SELECT
@@ -772,6 +774,13 @@ export class UserPrivacyRepository {
                 application_state, observed_at, received_at
          FROM observer_recipe_recovery_evidence WHERE tenant_id = ? AND user_id = ?
          ORDER BY received_at, id`,
+        tenantId, userId
+      ),
+      observer_recipe_recovery_reviews: this.rows(
+        `SELECT id, evidence_id, sequence, decision, confirmation_code,
+                evidence_hash, actor_kind, actor_id, created_at
+         FROM observer_recipe_recovery_reviews WHERE tenant_id = ? AND user_id = ?
+         ORDER BY evidence_id, sequence`,
         tenantId, userId
       )
     };

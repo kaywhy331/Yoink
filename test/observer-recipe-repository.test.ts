@@ -5,10 +5,14 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   AMAZON_OBSERVER_VERSION,
+  CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
   OBSERVER_RECIPE_CONTRACT_VERSION,
   OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION,
+  OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
   OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
   OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
+  REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
+  REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION,
   type ObserverRecipeField,
   type ObserverRecipeProposalInput,
   type ObserverRecipeTrialFieldOutcome,
@@ -531,25 +535,143 @@ test("oracle-agreed missing-field values enter an append-only quarantine without
       applicationState: "not_applied"
     });
     assert.match(String(evidence[0]?.contributorRef), /^[a-f0-9]{12}$/);
+    assert.equal(evidence[0]?.reviewState, "unreviewed");
+    assert.equal(evidence[0]?.reviewSequence, 0);
+    assert.equal(evidence[0]?.confirmableByCurrentUser, true);
+    assert.equal(evidence[0]?.reviewAffectsApplication, false);
+    assert.deepEqual(repository.userRecoveryEvidence().map((item) => item.id), [evidence[0]?.id]);
+    const otherScope = contributorScope("observer_recovery_other");
+    assert.deepEqual(runWithRequestScope(otherScope, () => repository.userRecoveryEvidence()), []);
+    assert.throws(
+      () => db.run(
+        `INSERT INTO observer_recipe_recovery_reviews(
+           id, tenant_id, user_id, evidence_id, sequence, decision,
+           confirmation_code, evidence_hash, actor_kind, actor_id, created_at
+         ) VALUES (?, ?, ?, ?, 1, 'confirmed', ?, ?, 'user', ?, ?)`,
+        "observer_recipe_recovery_review_wrong_owner",
+        LOCAL_TENANT_ID,
+        "observer_recovery_other",
+        String(evidence[0]?.id),
+        CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
+        "a".repeat(64),
+        "observer_recovery_other",
+        new Date(NOW + 4_900).toISOString()
+      ),
+      /FOREIGN KEY constraint failed/
+    );
+    assert.throws(
+      () => runWithRequestScope(otherScope, () => repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+        contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+        decision: "confirmed",
+        confirmation: CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+      }, NOW + 5_000)),
+      /does not belong to the authenticated user/
+    );
+    assert.throws(
+      () => repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+        contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+        decision: "confirmed",
+        confirmation: REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+      }, NOW + 5_050),
+      /explicitly confirm/
+    );
+    assert.throws(
+      () => repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+        contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+        decision: "confirmed",
+        confirmation: CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
+        note: "DO_NOT_STORE"
+      } as unknown as Parameters<ObserverRecipeRepository["reviewRecoveryEvidence"]>[1], NOW + 5_075),
+      /valid bounded recovery-evidence review decision/
+    );
+    const confirmed = repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+      contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+      decision: "confirmed",
+      confirmation: CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+    }, NOW + 5_100);
+    assert.equal(confirmed.disposition, "recorded");
+    assert.equal((confirmed.evidence as Record<string, unknown>).reviewState, "confirmed");
+    assert.equal(confirmed.applicationAffected, false);
+    assert.equal(confirmed.fieldFillApplied, false);
+    const confirmedRetry = repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+      contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+      decision: "confirmed",
+      confirmation: CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+    }, NOW + 5_200);
+    assert.equal(confirmedRetry.disposition, "unchanged");
+    assert.equal(confirmedRetry.reviewEventId, confirmed.reviewEventId);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM observer_recipe_recovery_reviews"
+    )?.count, 1);
+    const rejected = repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+      contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+      decision: "rejected",
+      confirmation: REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+    }, NOW + 5_300);
+    assert.equal((rejected.evidence as Record<string, unknown>).reviewState, "rejected");
+    assert.throws(
+      () => repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+        contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+        decision: "revoked",
+        confirmation: REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION
+      }, NOW + 5_350),
+      /Only a current confirmation can be revoked/
+    );
+    repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+      contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+      decision: "confirmed",
+      confirmation: CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+    }, NOW + 5_400);
+    const revoked = repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+      contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+      decision: "revoked",
+      confirmation: REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION
+    }, NOW + 5_500);
+    assert.equal((revoked.evidence as Record<string, unknown>).reviewState, "revoked");
+    assert.equal((revoked.evidence as Record<string, unknown>).reviewSequence, 4);
+    const revokeRetry = repository.reviewRecoveryEvidence(String(evidence[0]?.id), {
+      contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+      decision: "revoked",
+      confirmation: REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION
+    }, NOW + 5_600);
+    assert.equal(revokeRetry.disposition, "unchanged");
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM observer_recipe_recovery_reviews"
+    )?.count, 4);
+    assert.equal(JSON.stringify(db.all("SELECT * FROM observer_recipe_recovery_reviews")).includes("DO_NOT_STORE"), false);
     assert.deepEqual({
       observations: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count,
       qualifications: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_qualifications")?.count,
       jobs: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count,
       missions: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count
     }, operationalBefore);
-    assert.equal(repository.counts(NOW + 5_000).quarantinedObserverRecipeRecoveryEvidence, 1);
+    const recoveryCounts = repository.counts(NOW + 6_000);
+    assert.equal(recoveryCounts.quarantinedObserverRecipeRecoveryEvidence, 1);
+    assert.equal(recoveryCounts.observerRecipeRecoveryReviewEvents, 4);
+    assert.equal(recoveryCounts.confirmedObserverRecipeRecoveryEvidence, 0);
+    assert.equal(recoveryCounts.rejectedObserverRecipeRecoveryEvidence, 0);
+    assert.equal(recoveryCounts.revokedObserverRecipeRecoveryEvidence, 1);
+    assert.equal(recoveryCounts.unreviewedObserverRecipeRecoveryEvidence, 0);
     const audit = db.get<{ dataJson: string }>(
       "SELECT data_json AS dataJson FROM audit_events WHERE event_type = 'observer_recipe_recovery_evidence_quarantined'"
     );
     assert.ok(audit);
     assert.equal(audit.dataJson.includes("1368"), false);
     assert.equal(audit.dataJson.includes("example.com"), false);
-    const exported = new UserPrivacyRepository(db).export(NOW + 5_000);
+    const reviewAudits = db.all<{ dataJson: string }>(
+      "SELECT data_json AS dataJson FROM audit_events WHERE event_type LIKE 'observer_recipe_recovery_evidence_%'"
+    );
+    assert.equal(reviewAudits.every((item) => !item.dataJson.includes("1368")), true);
+    const exported = new UserPrivacyRepository(db).export(NOW + 6_000);
     const maintenance = exported.data.community_and_maintenance as Record<string, unknown>;
     const exportedEvidence = maintenance.observer_recipe_recovery_evidence as Array<Record<string, unknown>>;
+    const exportedReviews = maintenance.observer_recipe_recovery_reviews as Array<Record<string, unknown>>;
     assert.equal(exportedEvidence.length, 1);
     assert.equal(exportedEvidence[0]?.normalized_value, "1368");
     assert.equal(exportedEvidence[0]?.application_state, "not_applied");
+    assert.equal(exportedReviews.length, 4);
+    assert.deepEqual(exportedReviews.map((item) => item.sequence), [1, 2, 3, 4]);
+    assert.deepEqual(exportedReviews.map((item) => item.decision), ["confirmed", "rejected", "confirmed", "revoked"]);
     assert.throws(
       () => db.run("UPDATE observer_recipe_recovery_evidence SET application_state = 'not_applied'"),
       /append-only/
@@ -558,6 +680,21 @@ test("oracle-agreed missing-field values enter an append-only quarantine without
       () => db.run("DELETE FROM observer_recipe_recovery_evidence"),
       /append-only/
     );
+    assert.throws(
+      () => db.run("UPDATE observer_recipe_recovery_reviews SET decision = 'confirmed'"),
+      /append-only/
+    );
+    assert.throws(
+      () => db.run("DELETE FROM observer_recipe_recovery_reviews"),
+      /append-only/
+    );
+    db.run("DELETE FROM users WHERE id = ?", LOCAL_USER_ID);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM observer_recipe_recovery_reviews"
+    )?.count, 0);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM observer_recipe_recovery_evidence"
+    )?.count, 0);
   } finally {
     db.close();
   }

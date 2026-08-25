@@ -127,6 +127,10 @@ test("user data export is complete by declared category, tenant-isolated, and cr
       (archive.data.community_and_maintenance as Record<string, unknown>).observer_recipe_recovery_evidence,
       []
     );
+    assert.deepEqual(
+      (archive.data.community_and_maintenance as Record<string, unknown>).observer_recipe_recovery_reviews,
+      []
+    );
     assert.doesNotMatch(serialized, /OTHER_USER_DATA_MUST_NOT_EXPORT/);
     assert.doesNotMatch(serialized, /DEVICE_TOKEN_SECRET_MUST_NOT_EXPORT/);
     assert.doesNotMatch(serialized, /PAIRING_CODE_SECRET_MUST_NOT_EXPORT/);

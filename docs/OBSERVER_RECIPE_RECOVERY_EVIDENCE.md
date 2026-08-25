@@ -10,6 +10,11 @@ The result is evidence, not a fill. It cannot change a stored observation,
 catalog listing, community assertion, retailer qualification, purchase plan,
 job, browser action, or mutation runner.
 
+Yoink 0.52 adds a separate contributor-owned append-only review ledger. A
+confirmation, rejection, or revoked confirmation labels this evidence but
+still cannot apply it. See
+[observer-recipe recovery user review](OBSERVER_RECIPE_RECOVERY_USER_REVIEW.md).
+
 ## Trial contract v3
 
 Contract v3 retains every value-free v2 field-state receipt and adds an
@@ -64,6 +69,19 @@ exact SKU, layout fingerprint prefix, recipe stage, provenance, and explicit
 `Application: never` status. Audit events contain only field names and counts;
 they never duplicate recovered values.
 
+## Append-only user review
+
+Migration 45 binds a sequenced review stream to the same tenant, user, and
+evidence identity with a composite foreign key and deterministic evidence
+hash. The user API accepts only a fixed decision and exact confirmation phrase;
+free text is excluded. Repeating the current answer is idempotent, and the
+current state is derived from the latest event without editing evidence.
+
+The minimal user dashboard presents confirm, reject, and withdraw controls.
+The admin registry shows review state and event count. Review history is part
+of the user's data export. Direct updates/deletes remain blocked while deletion
+of the owning user intentionally cascades both ledgers.
+
 ## Closed application boundary
 
 There is intentionally no approve, apply, observation-update, contribution,
@@ -75,10 +93,11 @@ snapshot contracts separately report:
 - observer-recipe field fill enabled: `false`.
 
 Before a later release may apply even a read-only fill, Yoink still needs
-field-level user confirmation, production-reputable independent accounts and
-device-risk controls, contributor/region quorum, conflict and revocation
-handling, retention policy, and a separately governed provenance-aware
-projection. Remote recipes remain permanently isolated from navigation,
+production-reputable independent accounts and device-risk controls,
+contributor/region quorum, measured conflict handling, retention policy, and a
+separately governed reversible provenance-aware projection. Contributor
+confirmation/rejection/revocation now exists but supplies no application
+authority. Remote recipes remain permanently isolated from navigation,
 identity decisions, clicks, checkout, and mutation.
 
 ## Verification boundary
@@ -91,6 +110,8 @@ Automated coverage proves that:
   in Chrome and again on the server;
 - accepted evidence is append-only, tenant-scoped, exportable, and visibly
   quarantined;
+- contributor reviews are owner-scoped, sequenced, idempotent, revocable,
+  exportable, and never edit evidence;
 - evidence ingestion changes no observation, qualification, mission, or job;
   and
 - the fixed oracle still has no click, navigation, fetch, or mutation path.

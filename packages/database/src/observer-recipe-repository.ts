@@ -1,9 +1,11 @@
 import {
+  CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
   OBSERVER_RECIPE_CONTRACT_VERSION,
   OBSERVER_RECIPE_FIELDS,
   OBSERVER_RECIPE_MODES,
   OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION,
   OBSERVER_RECIPE_RECOVERY_PROVENANCE,
+  OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
   OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
   OBSERVER_RECIPE_TRIAL_DISPOSITIONS,
   OBSERVER_RECIPE_TRIAL_ORACLE_STATES,
@@ -11,12 +13,16 @@ import {
   OBSERVER_RECIPE_TRIAL_RECIPE_STATES,
   OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
   RETAILER_OBSERVER_VERSIONS,
+  REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
+  REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION,
   INSTALL_OBSERVER_RECIPE_TRUST_MANIFEST_CONFIRMATION,
   type ObserverRecipeField,
   type ObserverRecipeFieldInput,
   type ObserverRecipePromotionInput,
   type ObserverRecipeProposalInput,
   type ObserverRecipeRecoveryEvidenceInput,
+  type ObserverRecipeRecoveryReviewDecision,
+  type ObserverRecipeRecoveryReviewInput,
   type ObserverRecipeResignInput,
   type ObserverRecipeState,
   type ObserverRecipeTrialFieldOutcome,
@@ -208,6 +214,52 @@ export interface ObserverRecipeRepositoryOptions {
   witnessVerifier?: ObserverRecipeWitnessVerifier;
   witnessRequired?: boolean;
   witnessEndpointOrigin?: string;
+}
+
+interface RecoveryEvidenceRow {
+  id: string;
+  trialId: string;
+  recipeId: string;
+  deviceId: string;
+  userId: string;
+  retailerId: SupportedRetailerId;
+  retailerSku: string;
+  layoutFingerprint: string;
+  fieldName: ObserverRecipeField;
+  valueKind: "enum" | "cents" | "text" | "boolean";
+  normalizedValue: string;
+  provenanceCode: string;
+  recipeStateAtTrial: string;
+  evidenceState: string;
+  applicationState: string;
+  observedAt: string;
+  receivedAt: string;
+  reviewId: string | null;
+  reviewDecision: ObserverRecipeRecoveryReviewDecision | null;
+  reviewSequence: number | null;
+  reviewEvidenceHash: string | null;
+  reviewedAt: string | null;
+}
+
+const RECOVERY_REVIEW_CONFIRMATIONS = Object.freeze({
+  confirmed: CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
+  rejected: REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
+  revoked: REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION
+} satisfies Record<ObserverRecipeRecoveryReviewDecision, string>);
+
+export class ObserverRecipeRecoveryReviewError extends Error {
+  constructor(
+    readonly code:
+      | "observer_recipe_recovery_review_invalid"
+      | "observer_recipe_recovery_review_confirmation_required"
+      | "observer_recipe_recovery_evidence_not_found"
+      | "observer_recipe_recovery_review_state_conflict",
+    readonly status: 400 | 404 | 409,
+    message: string
+  ) {
+    super(message);
+    this.name = "ObserverRecipeRecoveryReviewError";
+  }
 }
 
 function selector(value: unknown): string {
@@ -1541,27 +1593,226 @@ export class ObserverRecipeRepository {
   }
 
   recoveryEvidence(limit = 100): Array<Record<string, unknown>> {
+    return this.recoveryEvidenceRows(limit, false).map((row) => this.recoveryEvidenceProjection(row));
+  }
+
+  userRecoveryEvidence(limit = 100): Array<Record<string, unknown>> {
+    return this.recoveryEvidenceRows(limit, true).map((row) => this.recoveryEvidenceProjection(row));
+  }
+
+  reviewRecoveryEvidence(
+    evidenceId: string,
+    input: ObserverRecipeRecoveryReviewInput,
+    now = Date.now()
+  ): Record<string, unknown> {
+    const cleanEvidenceId = cleanText(evidenceId, 120);
+    const inputKeys = input && typeof input === "object" ? Object.keys(input).sort().join(",") : "";
+    if (!ID_PATTERN.test(cleanEvidenceId)
+      || inputKeys !== "confirmation,contractVersion,decision"
+      || input.contractVersion !== OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION
+      || !Object.hasOwn(RECOVERY_REVIEW_CONFIRMATIONS, input.decision)) {
+      throw new ObserverRecipeRecoveryReviewError(
+        "observer_recipe_recovery_review_invalid",
+        400,
+        "Choose a valid bounded recovery-evidence review decision."
+      );
+    }
+    const expectedConfirmation = RECOVERY_REVIEW_CONFIRMATIONS[input.decision];
+    if (input.confirmation !== expectedConfirmation) {
+      throw new ObserverRecipeRecoveryReviewError(
+        "observer_recipe_recovery_review_confirmation_required",
+        400,
+        "Review the normalized value and explicitly confirm the selected decision."
+      );
+    }
+    const scope = currentRequestScope();
+    if (!(["user", "maintainer"] as string[]).includes(scope.actorKind)) {
+      throw new ObserverRecipeRecoveryReviewError(
+        "observer_recipe_recovery_review_invalid",
+        400,
+        "Recovery evidence can be reviewed only from the contributor's user workspace."
+      );
+    }
+    const evidence = this.recoveryEvidenceRows(1, true, cleanEvidenceId)[0];
+    if (!evidence) {
+      throw new ObserverRecipeRecoveryReviewError(
+        "observer_recipe_recovery_evidence_not_found",
+        404,
+        "That recovery evidence does not belong to the authenticated user."
+      );
+    }
+    const evidenceHash = this.recoveryEvidenceHash(evidence);
+    let disposition: "recorded" | "unchanged" = "recorded";
+    let eventId = "";
+    let previousReviewState: ObserverRecipeRecoveryReviewDecision | "unreviewed" = "unreviewed";
+    this.db.transaction(() => {
+      const latest = this.db.get<{
+        id: string;
+        sequence: number;
+        decision: ObserverRecipeRecoveryReviewDecision;
+        evidenceHash: string;
+      }>(
+        `SELECT id, sequence, decision, evidence_hash AS evidenceHash
+         FROM observer_recipe_recovery_reviews
+         WHERE tenant_id = ? AND user_id = ? AND evidence_id = ?
+         ORDER BY sequence DESC LIMIT 1`,
+        scope.tenantId,
+        scope.userId,
+        cleanEvidenceId
+      );
+      previousReviewState = latest?.decision ?? "unreviewed";
+      if (latest?.decision === input.decision) {
+        if (latest.evidenceHash !== evidenceHash) {
+          throw new ObserverRecipeRecoveryReviewError(
+            "observer_recipe_recovery_review_state_conflict",
+            409,
+            "The immutable evidence binding no longer matches its latest review."
+          );
+        }
+        disposition = "unchanged";
+        eventId = latest.id;
+        return;
+      }
+      if (input.decision === "revoked" && latest?.decision !== "confirmed") {
+        throw new ObserverRecipeRecoveryReviewError(
+          "observer_recipe_recovery_review_state_conflict",
+          409,
+          "Only a current confirmation can be revoked."
+        );
+      }
+      eventId = newId("observer_recipe_recovery_review");
+      const sequence = Number(latest?.sequence ?? 0) + 1;
+      this.db.run(
+        `INSERT INTO observer_recipe_recovery_reviews(
+           id, tenant_id, user_id, evidence_id, sequence, decision,
+           confirmation_code, evidence_hash, actor_kind, actor_id, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        eventId,
+        scope.tenantId,
+        scope.userId,
+        cleanEvidenceId,
+        sequence,
+        input.decision,
+        expectedConfirmation,
+        evidenceHash,
+        scope.actorKind,
+        scope.actorId,
+        nowIso(now)
+      );
+      this.audit.record({
+        correlationId: eventId,
+        aggregateType: "observer_recipe_recovery_evidence",
+        eventType: `observer_recipe_recovery_evidence_${input.decision}`,
+        reasonCode: `contributor_${input.decision}`,
+        message: "The contributor recorded an explicit review of quarantined normalized recovery evidence.",
+        data: {
+          evidenceId: cleanEvidenceId,
+          evidenceHash,
+          retailerId: evidence.retailerId,
+          field: evidence.fieldName,
+          previousReviewState,
+          reviewState: input.decision,
+          evidenceChanged: false,
+          applicationAffected: false,
+          qualificationAffected: false,
+          actionEnqueued: false,
+          browserInvoked: false
+        }
+      }, now);
+    });
+    const reviewed = this.recoveryEvidenceRows(1, true, cleanEvidenceId)[0];
+    if (!reviewed) {
+      throw new ObserverRecipeRecoveryReviewError(
+        "observer_recipe_recovery_evidence_not_found",
+        404,
+        "The reviewed recovery evidence is no longer available."
+      );
+    }
+    return {
+      disposition,
+      reviewEventId: eventId,
+      previousReviewState,
+      evidence: this.recoveryEvidenceProjection(reviewed),
+      applicationAffected: false,
+      fieldFillApplied: false
+    };
+  }
+
+  private recoveryEvidenceRows(
+    limit: number,
+    ownerOnly: boolean,
+    evidenceId = ""
+  ): RecoveryEvidenceRow[] {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-    return this.db.all<{
-      id: string; trialId: string; recipeId: string; userId: string;
-      retailerId: SupportedRetailerId; retailerSku: string; layoutFingerprint: string;
-      fieldName: ObserverRecipeField; valueKind: "enum" | "cents" | "text" | "boolean";
-      normalizedValue: string; provenanceCode: string; recipeStateAtTrial: string;
-      evidenceState: string; applicationState: string; observedAt: string; receivedAt: string;
-    }>(
-      `SELECT id, trial_id AS trialId, recipe_id AS recipeId, user_id AS userId,
-              retailer_id AS retailerId, retailer_sku AS retailerSku,
-              layout_fingerprint AS layoutFingerprint, field_name AS fieldName,
-              value_kind AS valueKind, normalized_value AS normalizedValue,
-              provenance_code AS provenanceCode, recipe_state_at_trial AS recipeStateAtTrial,
-              evidence_state AS evidenceState, application_state AS applicationState,
-              observed_at AS observedAt, received_at AS receivedAt
-       FROM observer_recipe_recovery_evidence
-       WHERE tenant_id = ?
-       ORDER BY received_at DESC, id DESC LIMIT ?`,
+    const scope = currentRequestScope();
+    const parameters: Array<string | number> = [scope.tenantId];
+    let ownership = "";
+    if (ownerOnly) {
+      ownership = " AND evidence.user_id = ?";
+      parameters.push(scope.userId);
+    }
+    let exactEvidence = "";
+    if (evidenceId) {
+      exactEvidence = " AND evidence.id = ?";
+      parameters.push(evidenceId);
+    }
+    parameters.push(safeLimit);
+    return this.db.all<RecoveryEvidenceRow>(
+      `SELECT evidence.id, evidence.trial_id AS trialId, evidence.recipe_id AS recipeId,
+              evidence.device_id AS deviceId,
+              evidence.user_id AS userId, evidence.retailer_id AS retailerId,
+              evidence.retailer_sku AS retailerSku,
+              evidence.layout_fingerprint AS layoutFingerprint,
+              evidence.field_name AS fieldName, evidence.value_kind AS valueKind,
+              evidence.normalized_value AS normalizedValue,
+              evidence.provenance_code AS provenanceCode,
+              evidence.recipe_state_at_trial AS recipeStateAtTrial,
+              evidence.evidence_state AS evidenceState,
+              evidence.application_state AS applicationState,
+              evidence.observed_at AS observedAt, evidence.received_at AS receivedAt,
+              review.id AS reviewId, review.decision AS reviewDecision,
+              review.sequence AS reviewSequence, review.evidence_hash AS reviewEvidenceHash,
+              review.created_at AS reviewedAt
+       FROM observer_recipe_recovery_evidence evidence
+       LEFT JOIN observer_recipe_recovery_reviews review
+         ON review.evidence_id = evidence.id
+        AND review.sequence = (
+          SELECT MAX(current_review.sequence)
+          FROM observer_recipe_recovery_reviews current_review
+          WHERE current_review.evidence_id = evidence.id
+        )
+       WHERE evidence.tenant_id = ?${ownership}${exactEvidence}
+       ORDER BY evidence.received_at DESC, evidence.id DESC LIMIT ?`,
+      ...parameters
+    );
+  }
+
+  private recoveryEvidenceHash(row: RecoveryEvidenceRow): string {
+    return stableHash(
+      "observer-recipe-recovery-evidence-review-v1",
       currentRequestScope().tenantId,
-      safeLimit
-    ).map((row) => ({
+      row.userId,
+      row.id,
+      row.deviceId,
+      row.trialId,
+      row.recipeId,
+      row.retailerId,
+      row.retailerSku,
+      row.layoutFingerprint,
+      row.fieldName,
+      row.valueKind,
+      row.normalizedValue,
+      row.provenanceCode,
+      row.recipeStateAtTrial,
+      row.evidenceState,
+      row.applicationState,
+      row.observedAt,
+      row.receivedAt
+    );
+  }
+
+  private recoveryEvidenceProjection(row: RecoveryEvidenceRow): Record<string, unknown> {
+    return {
       id: row.id,
       trialId: row.trialId,
       recipeId: row.recipeId,
@@ -1578,9 +1829,15 @@ export class ObserverRecipeRepository {
       recipeStateAtTrial: row.recipeStateAtTrial,
       evidenceState: row.evidenceState,
       applicationState: row.applicationState,
+      reviewState: row.reviewDecision ?? "unreviewed",
+      reviewSequence: Number(row.reviewSequence ?? 0),
+      reviewEvidenceHash: row.reviewEvidenceHash ?? "",
+      reviewedAt: row.reviewedAt ?? "",
+      confirmableByCurrentUser: row.userId === currentRequestScope().userId,
+      reviewAffectsApplication: false,
       observedAt: row.observedAt,
       receivedAt: row.receivedAt
-    }));
+    };
   }
 
   counts(now = Date.now()): Record<string, number> {
@@ -1651,6 +1908,31 @@ export class ObserverRecipeRepository {
        FROM observer_recipe_recovery_evidence WHERE tenant_id = ?`,
       currentRequestScope().tenantId
     );
+    const reviews = this.db.get<{
+      events: number;
+      confirmed: number;
+      rejected: number;
+      revoked: number;
+      unreviewed: number;
+    }>(
+      `SELECT
+         (SELECT COUNT(*) FROM observer_recipe_recovery_reviews WHERE tenant_id = ?) AS events,
+         SUM(CASE WHEN review.decision = 'confirmed' THEN 1 ELSE 0 END) AS confirmed,
+         SUM(CASE WHEN review.decision = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+         SUM(CASE WHEN review.decision = 'revoked' THEN 1 ELSE 0 END) AS revoked,
+         SUM(CASE WHEN review.decision IS NULL THEN 1 ELSE 0 END) AS unreviewed
+       FROM observer_recipe_recovery_evidence evidence
+       LEFT JOIN observer_recipe_recovery_reviews review
+         ON review.evidence_id = evidence.id
+        AND review.sequence = (
+          SELECT MAX(current_review.sequence)
+          FROM observer_recipe_recovery_reviews current_review
+          WHERE current_review.evidence_id = evidence.id
+        )
+       WHERE evidence.tenant_id = ?`,
+      currentRequestScope().tenantId,
+      currentRequestScope().tenantId
+    );
     return {
       observerRecipeCandidates: Number(row?.candidates ?? 0),
       activeObserverRecipes: Number(row?.active ?? 0),
@@ -1667,6 +1949,11 @@ export class ObserverRecipeRepository {
       quarantinedObserverRecipeRecoveryEvidence: Number(recovery?.total ?? 0),
       distinctObserverRecipeRecoveryFields: Number(recovery?.distinctFields ?? 0),
       distinctObserverRecipeRecoveryContributors: Number(recovery?.distinctContributors ?? 0),
+      observerRecipeRecoveryReviewEvents: Number(reviews?.events ?? 0),
+      confirmedObserverRecipeRecoveryEvidence: Number(reviews?.confirmed ?? 0),
+      rejectedObserverRecipeRecoveryEvidence: Number(reviews?.rejected ?? 0),
+      revokedObserverRecipeRecoveryEvidence: Number(reviews?.revoked ?? 0),
+      unreviewedObserverRecipeRecoveryEvidence: Number(reviews?.unreviewed ?? 0),
       observerRecipeTrustManifests: Number(row?.trustManifests ?? 0),
       observerRecipeTransparencyEvents: Number(row?.transparencyEvents ?? 0),
       observerRecipeWitnessReceipts: Number(row?.witnessReceipts ?? 0),
