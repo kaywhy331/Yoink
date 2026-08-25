@@ -40,6 +40,14 @@ a cross-account community quorum, and hosted deployments must not aggregate
 private tenant repair ledgers into a public rule without the separate shared
 evidence, reputation, deletion, governance, and independent-validation plane.
 
+Version 0.44 likewise hardens only the tenant-local community inventory read
+projection: one latest eligible vote per contributor and median/range price
+evidence. Hosted operators must not reinterpret same-tenant account IDs as a
+production community identity or merge private ledgers across tenants. A
+shared plane still requires pseudonymous cross-account identity, production
+account/device-risk signals, reputation, Sybil/abuse operations, consent and
+deletion propagation, independent canaries, and separate governance.
+
 Version 0.38 adds hash-only, generation-bound Chrome credential rotation. The
 two-phase protocol and extension recovery prevent ordinary network loss from
 forcing re-pairing, but they do not make an exposed bearer harmless. Hosted

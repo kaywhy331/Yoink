@@ -1,6 +1,6 @@
 # Background worker operations
 
-Yoink 0.43 retains two safe SQLite worker layouts. Embedded mode is the
+Yoink 0.44 retains two safe SQLite worker layouts. Embedded mode is the
 zero-configuration local default. External mode runs the same closed handler
 registry in a separately supervised process. The registry contains six closed
 task families, including durable TrackaLacker evaluation and observer-recipe

@@ -21,9 +21,11 @@ const DEVICE_HOURLY_LIMIT = 60;
 const IN_STOCK_TTL_MS = 10 * 60_000;
 const OUT_OF_STOCK_TTL_MS = 5 * 60_000;
 const RETENTION_LIMIT = 10_000;
+const HEALTHY_DEVICE_WINDOW_MS = 24 * 60 * 60_000;
 const LOCATION_SCOPE_PATTERN = /^(?:country:[A-Z]{2}|region:[A-Z]{2}-[A-Z0-9]{2,3}|store:[a-f0-9]{64})$/;
 const ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
+const DYNAMIC_CONFLICT_REASONS = new Set(["availability_conflict", "price_conflict"]);
 
 interface ConsentRow {
   retailerId: SupportedRetailerId;
@@ -155,6 +157,21 @@ function normalizedLocationScope(value: unknown): string {
 
 function nonceHash(value: string): string {
   return stableHash("community-contribution-nonce-v1", value);
+}
+
+function medianPrice(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? sorted[middle] ?? null
+    : Math.round(((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2);
+}
+
+function hasHardQuarantine(row: AssertionRow): boolean {
+  if (row.selectedOfferState !== "exact") return true;
+  if (!row.quarantineReason) return row.assertionState === "quarantined";
+  return !DYNAMIC_CONFLICT_REASONS.has(row.quarantineReason);
 }
 
 function assertionProjection(row: AssertionRow): Record<string, unknown> {
@@ -478,14 +495,26 @@ export class CommunityEvidenceRepository {
         const receipt = this.insertReceipt(cleanDeviceId, duplicate.id, "deduped", now);
         return { receipt, assertion: assertionProjection(duplicate) };
       }
-      const active = selectedOfferState === "exact" ? this.db.all<Pick<AssertionRow, "availability" | "unitPriceCents">>(
-        `SELECT availability, unit_price_cents AS unitPriceCents
-         FROM community_inventory_assertions
-         WHERE tenant_id = ? AND observation_key = ? AND deleted_at = '' AND expires_at >= ?`,
+      const activeRows = selectedOfferState === "exact" ? this.db.all<Pick<AssertionRow, "userId" | "availability" | "unitPriceCents">>(
+        `SELECT a.user_id AS userId, a.availability,
+                a.unit_price_cents AS unitPriceCents
+         FROM community_inventory_assertions a
+         JOIN extension_devices d ON d.id = a.device_id
+         WHERE a.tenant_id = ? AND a.observation_key = ?
+           AND a.user_id <> ? AND a.deleted_at = '' AND a.expires_at >= ?
+           AND d.status = 'active' AND d.last_seen_at >= ?
+         ORDER BY a.received_at DESC, a.id DESC`,
         currentRequestScope().tenantId,
         observationKey,
-        timestamp
+        currentRequestScope().userId,
+        timestamp,
+        nowIso(now - HEALTHY_DEVICE_WINDOW_MS)
       ) : [];
+      const currentByUser = new Map<string, Pick<AssertionRow, "userId" | "availability" | "unitPriceCents">>();
+      for (const row of activeRows) {
+        if (!currentByUser.has(row.userId)) currentByUser.set(row.userId, row);
+      }
+      const active = [...currentByUser.values()];
       const availabilityConflict = active.some((row) => row.availability !== observation.availability);
       const priceConflict = active.some((row) => {
         if (row.unitPriceCents === null || observation.unitPriceCents === null) return false;
@@ -637,19 +666,34 @@ export class CommunityEvidenceRepository {
     const groups = new Map<string, AssertionRow[]>();
     for (const row of rows) groups.set(row.observationKey, [...(groups.get(row.observationKey) ?? []), row]);
     return [...groups.values()].slice(0, 200).map((group) => {
-      const latest = group[0] as AssertionRow;
-      const healthy = group.filter((row) => row.deviceStatus === "active"
-        && now - new Date(row.deviceLastSeenAt ?? "").getTime() <= 24 * 60 * 60_000);
-      const devices = new Set(healthy.map((row) => row.deviceId));
-      const users = new Set(healthy.map((row) => row.userId));
-      const availabilities = new Set(group.map((row) => row.availability));
-      const prices = group.map((row) => row.unitPriceCents).filter((value): value is number => Number.isSafeInteger(value));
-      const priceSpread = prices.length ? Math.max(...prices) - Math.min(...prices) : 0;
-      const priceConflict = prices.length > 1 && priceSpread > Math.max(500, Math.round(Math.min(...prices) * 0.2));
-      const conflict = group.some((row) => row.assertionState === "quarantined" || row.selectedOfferState !== "exact")
-        || availabilities.size > 1 || priceConflict;
-      const quorumMet = !conflict && users.size >= 3 && devices.size >= 3;
-      const confidence = conflict ? 0 : Math.min(1, devices.size / 3);
+      const eligible = group.filter((row) => {
+        const lastSeenAt = new Date(row.deviceLastSeenAt ?? "").getTime();
+        return row.deviceStatus === "active" && Number.isFinite(lastSeenAt)
+          && now - lastSeenAt <= HEALTHY_DEVICE_WINDOW_MS;
+      });
+      const currentByUser = new Map<string, AssertionRow>();
+      for (const row of eligible) {
+        if (!currentByUser.has(row.userId)) currentByUser.set(row.userId, row);
+      }
+      const currentVotes = [...currentByUser.values()];
+      const latest = currentVotes[0] ?? group[0] as AssertionRow;
+      const devices = new Set(currentVotes.map((row) => row.deviceId));
+      const users = new Set(currentVotes.map((row) => row.userId));
+      const availabilities = new Set(currentVotes.map((row) => row.availability));
+      const prices = currentVotes
+        .map((row) => row.unitPriceCents)
+        .filter((value): value is number => Number.isSafeInteger(value));
+      const priceMinimum = prices.length ? Math.min(...prices) : null;
+      const priceMaximum = prices.length ? Math.max(...prices) : null;
+      const priceSpread = priceMinimum === null || priceMaximum === null ? 0 : priceMaximum - priceMinimum;
+      const priceConflict = prices.length > 1 && priceMinimum !== null
+        && priceSpread > Math.max(500, Math.round(priceMinimum * 0.2));
+      const conflict = currentVotes.some(hasHardQuarantine) || availabilities.size > 1 || priceConflict;
+      const hasEligibleVotes = currentVotes.length > 0;
+      const quorumMet = hasEligibleVotes && !conflict && users.size >= 3 && devices.size >= 3;
+      const priceQuorumMet = !conflict && prices.length >= 3;
+      const confidence = conflict || !hasEligibleVotes ? 0 : Math.min(1, currentVotes.length / 3);
+      const priceConfidence = conflict || !prices.length ? 0 : Math.min(1, prices.length / 3);
       return {
         observationKey: latest.observationKey,
         retailerId: latest.retailerId,
@@ -660,22 +704,41 @@ export class CommunityEvidenceRepository {
         sellerType: latest.sellerType,
         fulfillment: latest.fulfillment,
         locationScope: latest.locationScope,
-        availability: conflict ? "unknown" : latest.availability,
-        unitPriceCents: conflict || !prices.length ? null : Math.round(prices.reduce((sum, value) => sum + value, 0) / prices.length),
+        availability: conflict || !hasEligibleVotes ? "unknown" : latest.availability,
+        unitPriceCents: priceQuorumMet ? medianPrice(prices) : null,
         currency: latest.currency,
         assertionCount: group.length,
+        eligibleAssertionCount: eligible.length,
+        currentContributorVoteCount: currentVotes.length,
+        supersededAssertionCount: Math.max(0, eligible.length - currentVotes.length),
+        ineligibleAssertionCount: Math.max(0, group.length - eligible.length),
         independentDeviceCount: devices.size,
         independentUserCount: users.size,
+        distinctLayoutCount: new Set(currentVotes.map((row) => row.layoutFingerprint)).size,
+        distinctObserverVersionCount: new Set(currentVotes.map((row) => row.observerVersion)).size,
+        contributorVotePolicy: "latest_eligible_per_user",
+        priceProjectionMethod: "median",
+        priceVoteCount: prices.length,
+        priceQuorumMet,
+        priceMinimumCents: priceMinimum,
+        priceMaximumCents: priceMaximum,
+        priceSpreadCents: priceSpread,
+        advisoryOnly: true,
+        mutationAuthority: false,
         conflict,
-        publicationState: conflict ? "quarantined" : quorumMet ? "advisory" : "insufficient_quorum",
+        publicationState: conflict
+          ? "quarantined"
+          : quorumMet ? "advisory" : hasEligibleVotes ? "insufficient_quorum" : "insufficient_eligible_evidence",
         confidence: {
           identity: latest.selectedOfferState === "exact" ? 1 : 0,
           availability: confidence,
-          price: prices.length ? confidence : 0,
+          price: priceConfidence,
           seller: latest.sellerType === "unknown" ? 0 : confidence,
           fulfillment: latest.fulfillment === "unknown" ? 0 : confidence
         },
-        expiresAt: group.reduce((value, row) => value < row.expiresAt ? value : row.expiresAt, latest.expiresAt)
+        expiresAt: currentVotes.length
+          ? currentVotes.reduce((value, row) => value < row.expiresAt ? value : row.expiresAt, latest.expiresAt)
+          : latest.expiresAt
       };
     });
   }

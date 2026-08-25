@@ -311,6 +311,19 @@ review but receives zero identity confidence and cannot publish stock. Opaque
 offer tokens, checkout fields, and every mutation capability remain outside
 this contract.
 
+Yoink 0.44.0 changes the read projection, not the durable evidence identity.
+For each exact observation key, only a contributor's latest non-expired
+assertion from a healthy active paired device is a current vote. Older eligible
+rows remain historical receipts but cannot multiply that contributor or skew
+price. Availability and material-price conflicts are recomputed from current
+votes, so a contributor may update their own stale state and an old dynamic
+conflict stops poisoning the projection after independent votes converge.
+Hard selected-offer quarantine remains fail-closed. Current price requires
+three current price votes and is their median, with bounded minimum/maximum/
+spread metadata; advisory availability publication still requires three
+contributors and three distinct healthy devices. This entire projection is
+tenant-local and has no mutation authority.
+
 Yoink 0.26.0 advances Best Buy observation to `bestbuy-observer-v5` without a
 broader action capability. Migration 28 retires inherited Best Buy
 qualification and execution flags while leaving every other retailer

@@ -1,6 +1,35 @@
 # Yoink roadmap
 
-## Shipped through 0.43.0
+## Shipped through 0.44.0
+
+### Current-vote community projections (0.44.0)
+
+- The tenant-local inventory projection now selects only the latest eligible
+  assertion per contributor. Repeated rows and multiple devices owned by one
+  account cannot multiply that account's vote, while a distinct healthy paired
+  device remains required for each contributor counted toward quorum
+- A contributor's current assertion supersedes their own older availability or
+  price instead of self-quarantining. Ingestion compares a new assertion only
+  with the latest eligible assertion from each other contributor; historical
+  dynamic conflicts remain receipts but stop poisoning the projection after
+  current independent votes converge
+- Price requires three current price votes and is their median, with bounded
+  minimum, maximum, and spread metadata. Availability disagreement or a
+  material price range among current independent votes still fails closed;
+  listing-only, unresolved, and unknown hard-quarantine states remain
+  non-publishable
+- The API and Community workspace expose the current-vote policy, current and
+  superseded counts, median/range method, and an explicit
+  `mutationAuthority: false`. Three current contributors and three distinct
+  healthy devices remain the minimum for a tenant-local advisory projection
+- Multi-user/multi-device tests prove stale-price resistance, healthy-device
+  fallback, current stock supersession, independent conflict quarantine, later
+  convergence, exact selected-offer isolation, and the advisory-only boundary
+- This is a robust projection over the existing tenant-local ledger, not the
+  Phase 4 shared service. Cross-account pseudonyms, production identity and
+  device risk, contributor reputation, Sybil/abuse controls, deletion
+  propagation, global curation, and meaningful live community quorum remain
+  open. No database migration or retailer action widening is required
 
 ### Governed connector recovery and health (0.43.0)
 
@@ -898,8 +927,9 @@ resistance or contributor reputation.
   seller, fulfillment, and location. Exact public retailer item IDs and
   allowlisted selected dimensions remain separate; listing-only or ambiguous
   selections are quarantined instead of being collapsed. Store-local pickup
-  scopes, 60-second local/server dedupe, TTLs, basic conflict quarantine, and a
-  three-user/device projection are implemented
+  scopes, 60-second local/server dedupe, TTLs, current-vote conflict quarantine,
+  one latest eligible vote per contributor, median/range prices, and a three-
+  contributor/device projection are implemented
 - Provenance-bearing exact identity claims using validated GTIN/UPC/EAN/ISBN or
   brand+MPN plus bounded variant attributes; claims never remap the catalog or
   transfer missions. The current manual UI path does not attach a paired device,
@@ -951,9 +981,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.43.0
+## Architecture assessment after 0.44.0
 
-Yoink 0.43.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.44.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -968,7 +998,7 @@ or more autonomous behavior.
 | Primary backend database | Transactional migration-40 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, observer-witness refresh, signed operator-alert dispatch and governed exact replay, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task/connector receipts, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, signed artifact/workload identity, managed secrets, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, and an explicit managed-install boundary when hosted ZIP delivery is closed | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
-| Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, complete retention/deletion operations, or meaningful live quorum |
+| Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; a narrow stable-attribute landmark can derive a tenant-scoped non-executable maintainer suggestion; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Landmarks cover only unique Add-control selector misses and cannot synthesize a complete recipe; local device/SKU evidence is not a public community quorum or independent oracle; canary is not cohort deployment; recipe evaluation is not a worker handler; the independent witness service and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
 | Automatic purchasing | Reviewed plans can directly request guarded quantity-one work without a strategy; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
@@ -1222,6 +1252,11 @@ audit event, alert path, and redacted support view; ordinary users cannot load
 the admin bundle or call its APIs.
 
 #### Phase 4 — production community evidence and catalog governance
+
+Version 0.44 implements the latest-eligible-per-contributor and median/range
+projection semantics against the existing tenant-local ledger. It deliberately
+does not represent that ledger as the shared plane or treat local accounts as
+Sybil-resistant identities. The production work below remains the gate.
 
 - Publish accepted assertions through the separate shared evidence plane using
   pseudonymous contributor IDs. One contributor receives at most one current
@@ -1482,10 +1517,13 @@ and [optional permission guidance](https://developer.chrome.com/docs/extensions/
    catalog truth. The manual identity path cannot currently satisfy its own
    healthy-device quorum.
 3. **Local pilot implemented:** explicit one-click contribution with dedupe,
-   TTL, basic conflict quarantine, retailer-SKU/seller/fulfillment/location
-   isolation. Exact selected-variation isolation remains open.
-4. **Local pilot implemented:** tenant-scoped aggregate availability appears in
-   the control center. It is not a production cross-account community result.
+   TTL, current-vote conflict quarantine, retailer-SKU/selected-offer/seller/
+   fulfillment/location isolation. Listing-only and unresolved selections fail
+   closed.
+4. **Local projection hardened:** tenant-scoped availability selects one latest
+   eligible vote per contributor and uses median/range price evidence. Repeated
+   rows and multiple devices cannot inflate one contributor. It is not a
+   production cross-account community result.
 5. **Shadow-validation and witness seam implemented:** manually proposed signed
    declarative selectors, trial counts, lifecycle labels, kill switch,
    rollback, bundled fallback, package-rooted signing, and a deployment-pinned

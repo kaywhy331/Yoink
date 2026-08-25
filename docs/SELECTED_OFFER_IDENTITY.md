@@ -44,10 +44,15 @@ copy and are never folded into product equivalence.
 `exact` assertions may participate in the local advisory projection.
 `listing_only` and `unresolved` assertions are retained as sanitized evidence
 but immediately quarantined, receive zero identity confidence, and cannot
-publish availability. Material price or availability disagreement within one
-exact key is also quarantined. When a packaged observer recognizes variant
-controls but cannot bind one unique selection, its normal sanitized diagnostic
-path reports `selected_offer_binding_unresolved` to the adapter repair queue.
+publish availability. For each exact key, only each contributor's latest
+eligible assertion is a current vote. Material price or availability
+disagreement among current independent votes is quarantined, while a newer
+assertion may supersede that contributor's own stale state. Prices use the
+median after three current price votes and retain only bounded range metadata.
+When a packaged observer recognizes variant controls but cannot bind one unique
+selection, its
+normal sanitized diagnostic path reports `selected_offer_binding_unresolved`
+to the adapter repair queue.
 
 Target, Walmart, Amazon, Best Buy, Ravensburger, Books-A-Million, Premium
 Bandai, and Pokémon Center currently treat their exact public item IDs as child
@@ -62,4 +67,6 @@ This scope is advisory evidence only. It does not change catalog equivalence,
 mission targets, action jobs, retailer qualification, checkout, drawing entry,
 order submission, or mutation authority. It is also not contributor
 reputation, Sybil resistance, a global community quorum, or proof that a
-consented locality matches the live offer; those remain roadmap gates.
+consented locality matches the live offer. The one-vote projection is still
+tenant-local and does not provide pseudonymous cross-account identity,
+reputation, or Sybil resistance; those remain roadmap gates.

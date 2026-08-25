@@ -12,16 +12,60 @@ import {
 } from "../packages/contracts/src/index.js";
 import { AdapterDiagnosticRepository } from "../packages/database/src/adapter-diagnostic-repository.js";
 import { CommunityEvidenceRepository } from "../packages/database/src/community-evidence-repository.js";
-import { YoinkDatabase } from "../packages/database/src/database.js";
+import {
+  LOCAL_TENANT_ID,
+  LOCAL_USER_ID,
+  YoinkDatabase
+} from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
+import {
+  HOSTED_PRINCIPAL_CONFIRMATION,
+  PrincipalRepository
+} from "../packages/database/src/principal-repository.js";
+import {
+  LOCAL_REQUEST_SCOPE,
+  runWithRequestScope,
+  type RequestScope
+} from "../packages/database/src/request-scope.js";
 import { ShadowObservationRepository } from "../packages/database/src/shadow-observation-repository.js";
 
 const NOW = new Date("2026-08-24T00:00:00.000Z").getTime();
+const SERVICE_SCOPE: RequestScope = {
+  tenantId: LOCAL_TENANT_ID,
+  userId: LOCAL_USER_ID,
+  actorKind: "service",
+  actorId: "community_identity_sync"
+};
+
+function communityUserScope(userId: string): RequestScope {
+  return {
+    tenantId: LOCAL_TENANT_ID,
+    userId,
+    actorKind: "user",
+    actorId: userId
+  };
+}
+
+function provisionCommunityUser(db: YoinkDatabase, userId: string, now = NOW): RequestScope {
+  const scope = communityUserScope(userId);
+  runWithRequestScope(SERVICE_SCOPE, () => new PrincipalRepository(db).provision({
+    tenantId: LOCAL_TENANT_ID,
+    userId,
+    tenantName: "Local tenant",
+    displayName: userId,
+    confirmation: HOSTED_PRINCIPAL_CONFIRMATION
+  }, now));
+  return scope;
+}
 
 function pairedDevice(db: YoinkDatabase): { id: string; token: string } {
   const devices = new DeviceRepository(db);
   const code = devices.createPairingCode(NOW);
   return devices.pair({ pairingCode: code.code }, NOW + 1_000);
+}
+
+function pairedDeviceFor(db: YoinkDatabase, scope: RequestScope): { id: string; token: string } {
+  return runWithRequestScope(scope, () => pairedDevice(db));
 }
 
 function targetObservation(
@@ -136,6 +180,38 @@ function enable(
     privacyVersion: COMMUNITY_PRIVACY_VERSION,
     confirmation: COMMUNITY_CONTRIBUTION_CONFIRMATION
   }, NOW + 1_500);
+}
+
+function enableFor(
+  db: YoinkDatabase,
+  scope: RequestScope,
+  retailerId: "target" | "amazon",
+  locationScope = "country:US"
+): void {
+  runWithRequestScope(scope, () => enable(new CommunityEvidenceRepository(db), retailerId, locationScope));
+}
+
+function contributeTargetFor(
+  db: YoinkDatabase,
+  scope: RequestScope,
+  deviceId: string,
+  observedAt: number,
+  overrides: Partial<TargetShadowObservationInput> = {}
+): { receipt: { disposition: string }; assertion: Record<string, unknown> } {
+  return runWithRequestScope(scope, () => {
+    const community = new CommunityEvidenceRepository(db);
+    const shadow = new ShadowObservationRepository(db).record(
+      deviceId,
+      targetObservation(observedAt, overrides),
+      observedAt + 500
+    );
+    const nonce = community.issueNonce(deviceId, "target", observedAt + 700);
+    return community.contribute(deviceId, "target", {
+      contractVersion: COMMUNITY_EVIDENCE_CONTRACT_VERSION,
+      nonce: nonce.nonce,
+      shadowObservationId: shadow.id
+    }, observedAt + 900);
+  });
 }
 
 test("community evidence requires explicit per-retailer consent, a one-use nonce, and server-bound sanitized evidence", () => {
@@ -264,10 +340,11 @@ test("selected variants remain isolated and listing-only evidence is quarantined
   }
 });
 
-test("identical assertions deduplicate without reusing nonces or inflating community quorum", () => {
+test("per-device dedupe and latest eligible selection prevent multi-device quorum inflation", () => {
   const db = new YoinkDatabase();
   try {
     const device = pairedDevice(db);
+    const secondDevice = pairedDevice(db);
     const community = new CommunityEvidenceRepository(db);
     enable(community, "target");
     const shadow = new ShadowObservationRepository(db).record(
@@ -287,22 +364,49 @@ test("identical assertions deduplicate without reusing nonces or inflating commu
       nonce: secondNonce.nonce,
       shadowObservationId: shadow.id
     }, NOW + 5_500);
+    const secondDeviceShadow = new ShadowObservationRepository(db).record(
+      secondDevice.id,
+      targetObservation(NOW + 2_500, { unitPriceCents: 6099 }),
+      NOW + 3_500
+    );
+    const thirdNonce = community.issueNonce(secondDevice.id, "target", NOW + 5_600);
+    const third = community.contribute(secondDevice.id, "target", {
+      contractVersion: COMMUNITY_EVIDENCE_CONTRACT_VERSION,
+      nonce: thirdNonce.nonce,
+      shadowObservationId: secondDeviceShadow.id
+    }, NOW + 5_900);
 
     assert.equal(first.receipt.disposition, "accepted");
     assert.equal(second.receipt.disposition, "deduped");
     assert.equal(second.receipt.assertionId, first.receipt.assertionId);
-    assert.equal(community.counts(NOW + 6_000).communityAssertions, 1);
-    assert.equal(community.counts(NOW + 6_000).communityContributionReceipts, 2);
+    assert.equal(third.receipt.disposition, "accepted");
+    assert.notEqual(third.receipt.assertionId, first.receipt.assertionId);
+    assert.equal(community.counts(NOW + 6_000).communityAssertions, 2);
+    assert.equal(community.counts(NOW + 6_000).communityContributionReceipts, 3);
     const aggregate = community.aggregates(NOW + 6_000)[0];
     assert.equal(aggregate?.independentDeviceCount, 1);
     assert.equal(aggregate?.independentUserCount, 1);
+    assert.equal(aggregate?.currentContributorVoteCount, 1);
+    assert.equal(aggregate?.supersededAssertionCount, 1);
+    assert.equal(aggregate?.priceMinimumCents, 6099);
     assert.equal(aggregate?.publicationState, "insufficient_quorum");
+    assert.equal(aggregate?.unitPriceCents, null);
+    assert.equal(aggregate?.priceVoteCount, 1);
+    assert.equal(aggregate?.priceQuorumMet, false);
+
+    assert.equal(new DeviceRepository(db).revoke(secondDevice.id, NOW + 6_100), true);
+    const afterRevocation = community.aggregates(NOW + 6_200)[0];
+    assert.equal(afterRevocation?.currentContributorVoteCount, 1);
+    assert.equal(afterRevocation?.eligibleAssertionCount, 1);
+    assert.equal(afterRevocation?.ineligibleAssertionCount, 1);
+    assert.equal(afterRevocation?.supersededAssertionCount, 0);
+    assert.equal(afterRevocation?.priceMinimumCents, 5999);
   } finally {
     db.close();
   }
 });
 
-test("material stock conflicts are quarantined and cannot publish a community state", () => {
+test("a contributor's latest eligible assertion supersedes their own stale stock state", () => {
   const db = new YoinkDatabase();
   try {
     const device = pairedDevice(db);
@@ -330,13 +434,116 @@ test("material stock conflicts are quarantined and cannot publish a community st
       shadowObservationId: conflict.id
     }, later + 2_500);
 
-    assert.equal(result.receipt.disposition, "quarantined");
-    assert.equal(result.assertion.quarantineReason, "availability_conflict");
+    assert.equal(result.receipt.disposition, "accepted");
+    assert.equal(result.assertion.quarantineReason, "");
     const aggregate = community.aggregates(later + 3_000)[0];
-    assert.equal(aggregate?.conflict, true);
-    assert.equal(aggregate?.availability, "unknown");
-    assert.equal(aggregate?.publicationState, "quarantined");
-    assert.equal(aggregate?.confidence && (aggregate.confidence as Record<string, number>).availability, 0);
+    assert.equal(aggregate?.conflict, false);
+    assert.equal(aggregate?.availability, "out_of_stock");
+    assert.equal(aggregate?.publicationState, "insufficient_quorum");
+    assert.equal(aggregate?.assertionCount, 2);
+    assert.equal(aggregate?.currentContributorVoteCount, 1);
+    assert.equal(aggregate?.supersededAssertionCount, 1);
+    assert.equal(aggregate?.contributorVotePolicy, "latest_eligible_per_user");
+  } finally {
+    db.close();
+  }
+});
+
+test("one current vote per contributor reaches advisory quorum with a median price", () => {
+  const db = new YoinkDatabase();
+  try {
+    const secondScope = provisionCommunityUser(db, "community_user_two");
+    const thirdScope = provisionCommunityUser(db, "community_user_three", NOW + 1);
+    const localFirstDevice = pairedDeviceFor(db, LOCAL_REQUEST_SCOPE);
+    const localSecondDevice = pairedDeviceFor(db, LOCAL_REQUEST_SCOPE);
+    const secondDevice = pairedDeviceFor(db, secondScope);
+    const thirdDevice = pairedDeviceFor(db, thirdScope);
+    enableFor(db, LOCAL_REQUEST_SCOPE, "target");
+    enableFor(db, secondScope, "target");
+    enableFor(db, thirdScope, "target");
+
+    contributeTargetFor(db, LOCAL_REQUEST_SCOPE, localFirstDevice.id, NOW + 2_000, {
+      unitPriceCents: 999
+    });
+    const currentLocal = contributeTargetFor(db, LOCAL_REQUEST_SCOPE, localSecondDevice.id, NOW + 72_000, {
+      unitPriceCents: 5900
+    });
+    const second = contributeTargetFor(db, secondScope, secondDevice.id, NOW + 82_000, {
+      unitPriceCents: 6000
+    });
+    const third = contributeTargetFor(db, thirdScope, thirdDevice.id, NOW + 92_000, {
+      unitPriceCents: 6100
+    });
+
+    assert.equal(currentLocal.receipt.disposition, "accepted");
+    assert.equal(second.receipt.disposition, "accepted");
+    assert.equal(third.receipt.disposition, "accepted");
+    const aggregate = runWithRequestScope(
+      LOCAL_REQUEST_SCOPE,
+      () => new CommunityEvidenceRepository(db).aggregates(NOW + 94_000)[0]
+    );
+    assert.equal(aggregate?.publicationState, "advisory");
+    assert.equal(aggregate?.conflict, false);
+    assert.equal(aggregate?.assertionCount, 4);
+    assert.equal(aggregate?.eligibleAssertionCount, 4);
+    assert.equal(aggregate?.currentContributorVoteCount, 3);
+    assert.equal(aggregate?.supersededAssertionCount, 1);
+    assert.equal(aggregate?.independentUserCount, 3);
+    assert.equal(aggregate?.independentDeviceCount, 3);
+    assert.equal(aggregate?.unitPriceCents, 6000);
+    assert.equal(aggregate?.priceProjectionMethod, "median");
+    assert.equal(aggregate?.priceVoteCount, 3);
+    assert.equal(aggregate?.priceQuorumMet, true);
+    assert.equal(aggregate?.priceMinimumCents, 5900);
+    assert.equal(aggregate?.priceMaximumCents, 6100);
+    assert.equal(aggregate?.priceSpreadCents, 200);
+    assert.equal(aggregate?.advisoryOnly, true);
+    assert.equal(aggregate?.mutationAuthority, false);
+  } finally {
+    db.close();
+  }
+});
+
+test("independent current stock conflicts quarantine dynamically and recover after convergence", () => {
+  const db = new YoinkDatabase();
+  try {
+    const secondScope = provisionCommunityUser(db, "conflict_user_two");
+    const thirdScope = provisionCommunityUser(db, "conflict_user_three", NOW + 1);
+    const localDevice = pairedDeviceFor(db, LOCAL_REQUEST_SCOPE);
+    const secondDevice = pairedDeviceFor(db, secondScope);
+    const thirdDevice = pairedDeviceFor(db, thirdScope);
+    enableFor(db, LOCAL_REQUEST_SCOPE, "target");
+    enableFor(db, secondScope, "target");
+    enableFor(db, thirdScope, "target");
+
+    contributeTargetFor(db, LOCAL_REQUEST_SCOPE, localDevice.id, NOW + 2_000);
+    contributeTargetFor(db, secondScope, secondDevice.id, NOW + 12_000);
+    const conflict = contributeTargetFor(db, thirdScope, thirdDevice.id, NOW + 22_000, {
+      availability: "out_of_stock",
+      unitPriceCents: null,
+      addControlActionable: false
+    });
+    assert.equal(conflict.receipt.disposition, "quarantined");
+    assert.equal(conflict.assertion.quarantineReason, "availability_conflict");
+
+    const quarantined = runWithRequestScope(
+      LOCAL_REQUEST_SCOPE,
+      () => new CommunityEvidenceRepository(db).aggregates(NOW + 24_000)[0]
+    );
+    assert.equal(quarantined?.publicationState, "quarantined");
+    assert.equal(quarantined?.availability, "unknown");
+    assert.equal(quarantined?.currentContributorVoteCount, 3);
+
+    const converged = contributeTargetFor(db, thirdScope, thirdDevice.id, NOW + 94_000);
+    assert.equal(converged.receipt.disposition, "accepted");
+    const recovered = runWithRequestScope(
+      LOCAL_REQUEST_SCOPE,
+      () => new CommunityEvidenceRepository(db).aggregates(NOW + 96_000)[0]
+    );
+    assert.equal(recovered?.publicationState, "advisory");
+    assert.equal(recovered?.availability, "in_stock");
+    assert.equal(recovered?.currentContributorVoteCount, 3);
+    assert.equal(recovered?.supersededAssertionCount, 1);
   } finally {
     db.close();
   }

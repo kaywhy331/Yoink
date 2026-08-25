@@ -45,6 +45,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /Approval never applies a change by itself/);
     assert.match(adminPageBody, /Durable maintenance/);
     assert.match(adminPageBody, /Durable evaluation with closed browser mutation/);
+    assert.match(adminPageBody, /latest eligible assertion counts/);
     assert.match(adminPageBody, /renews its credential without asking you to pair again/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
@@ -57,6 +58,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /SAVE_OPERATOR_ALERT_CONNECTOR/);
     assert.match(adminScript, /RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY/);
     assert.match(adminScript, /operatorAlertConnectorHealthProjection|deliverySloSeconds/);
+    assert.match(adminScript, /currentContributorVoteCount/);
+    assert.match(adminScript, /Price quorum pending/);
+    assert.match(adminScript, /Observed range/);
     assert.match(adminScript, /Maintainer review ready/);
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
@@ -79,6 +83,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
       durableOperatorAlertConnectorDispatch: true,
       governedOperatorAlertConnectorReplay: true,
       operatorAlertConnectorHealthProjection: true,
+      oneCurrentCommunityVotePerContributor: true,
+      robustCommunityPriceProjection: true,
+      productionSharedCommunityEvidencePlane: false,
       operatorAlertConnectorRegistryConfigured: false,
       observerRecipeWitnessRefreshConfigured: false,
       standaloneWitnessRefreshLoadsSigningKeys: false,
@@ -213,6 +220,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.counts.consumedAdminChanges, 0);
     assert.equal(snapshot.capabilities.retailerMutation, false);
     assert.equal(snapshot.capabilities.communityReadOnlyEvidence, true);
+    assert.equal(snapshot.capabilities.oneCurrentCommunityVotePerContributor, true);
+    assert.equal(snapshot.capabilities.robustCommunityPriceProjection, true);
+    assert.equal(snapshot.capabilities.productionSharedCommunityEvidencePlane, false);
     assert.equal(snapshot.capabilities.storageEngine, "sqlite");
     assert.equal(snapshot.capabilities.freshDatabaseRestoreParity, true);
     assert.equal(snapshot.capabilities.productionPostgresReady, false);
@@ -718,6 +728,10 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       shadowObservations: Array<Record<string, unknown>>;
       community: {
         advisoryOnly: boolean;
+        mutationAuthority: boolean;
+        contributorVotePolicy: string;
+        priceProjectionMethod: string;
+        productionSharedPlane: boolean;
         assertions: Array<Record<string, unknown>>;
         aggregates: Array<Record<string, unknown>>;
       };
@@ -746,8 +760,14 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(snapshot.counts.shadowObservations, 1);
     assert.equal(snapshot.counts.communityAssertions, 1);
     assert.equal(snapshot.community.advisoryOnly, true);
+    assert.equal(snapshot.community.mutationAuthority, false);
+    assert.equal(snapshot.community.contributorVotePolicy, "latest_eligible_per_user");
+    assert.equal(snapshot.community.priceProjectionMethod, "median");
+    assert.equal(snapshot.community.productionSharedPlane, false);
     assert.equal(snapshot.community.assertions.length, 1);
     assert.equal(snapshot.community.aggregates[0]?.publicationState, "insufficient_quorum");
+    assert.equal(snapshot.community.aggregates[0]?.currentContributorVoteCount, 1);
+    assert.equal(snapshot.community.aggregates[0]?.priceProjectionMethod, "median");
     assert.deepEqual(snapshot.adapterRepairQueue[0]?.repairSuggestions, [{
       field: "addControl",
       selector: "[role='button'][data-testid='pdp-add-to-cart-control']",

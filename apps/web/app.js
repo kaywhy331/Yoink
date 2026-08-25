@@ -80,7 +80,7 @@ function protectedChangePending(result) {
 }
 
 function formatMoney(cents, currency = "USD") {
-  if (!Number.isFinite(Number(cents))) return "Not set";
+  if (cents === null || cents === undefined || cents === "" || !Number.isFinite(Number(cents))) return "Not set";
   return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(cents) / 100);
 }
 
@@ -425,8 +425,8 @@ function renderCommunity() {
   $("#communitySummary").innerHTML = [
     ["Enabled stores", enabled, "Every store starts off"],
     ["Your assertions", Number(counts.communityAssertions || 0), `${Number(counts.communityActiveAssertions || 0)} still current`],
-    ["Quarantined", quarantined, "Conflicts never publish"],
-    ["Advisory projections", aggregates.filter((item) => item.publicationState === "advisory").length, "Three-user/device minimum"]
+    ["Quarantined", quarantined, "Current conflicts fail closed"],
+    ["Advisory projections", aggregates.filter((item) => item.publicationState === "advisory").length, "Three current contributors minimum"]
   ].map(([label, value, detail]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value).toLocaleString()}</strong><small>${escapeHtml(detail)}</small></article>`).join("");
 
   $("#communityConsentList").innerHTML = consents.length ? consents.map((consent) => {
@@ -446,7 +446,14 @@ function renderCommunity() {
     const stateLabel = String(item.publicationState || "insufficient_quorum").replaceAll("_", " ");
     const kind = item.publicationState === "advisory" ? "good" : item.publicationState === "quarantined" ? "bad" : "warning";
     const confidence = item.confidence || {};
-    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</h3><p>${escapeHtml(String(item.availability || "unknown").replaceAll("_", " "))} · ${formatMoney(item.unitPriceCents, item.currency)} · ${escapeHtml(item.sellerName || "Seller unknown")} · ${escapeHtml(item.fulfillment || "unknown")}</p></div><span class="tag ${kind}">${escapeHtml(stateLabel)}</span></div><div class="card-meta"><span class="tag">${escapeHtml(communitySelectedOfferLabel(item))}</span><span class="tag">${Number(item.independentUserCount || 0)} users</span><span class="tag">${Number(item.independentDeviceCount || 0)} devices</span><span class="tag">Availability ${Math.round(Number(confidence.availability || 0) * 100)}%</span><span class="tag">Price ${Math.round(Number(confidence.price || 0) * 100)}%</span><span class="tag">Expires ${escapeHtml(relativeTime(item.expiresAt))}</span></div></article>`;
+    const superseded = Number(item.supersededAssertionCount || 0);
+    const priceRange = Number.isSafeInteger(item.priceMinimumCents) && Number.isSafeInteger(item.priceMaximumCents)
+      ? `${formatMoney(item.priceMinimumCents, item.currency)}–${formatMoney(item.priceMaximumCents, item.currency)}`
+      : "No price range";
+    const projectedPrice = item.priceQuorumMet === true
+      ? `${formatMoney(item.unitPriceCents, item.currency)} median`
+      : "Price quorum pending";
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</h3><p>${escapeHtml(String(item.availability || "unknown").replaceAll("_", " "))} · ${escapeHtml(projectedPrice)} · ${escapeHtml(item.sellerName || "Seller unknown")} · ${escapeHtml(item.fulfillment || "unknown")}</p></div><span class="tag ${kind}">${escapeHtml(stateLabel)}</span></div><div class="card-meta"><span class="tag">${escapeHtml(communitySelectedOfferLabel(item))}</span><span class="tag">${Number(item.currentContributorVoteCount || 0)} current votes</span><span class="tag">${Number(item.independentDeviceCount || 0)} devices</span>${superseded ? `<span class="tag">${superseded} superseded</span>` : ""}<span class="tag">Observed range ${escapeHtml(priceRange)}</span><span class="tag">Availability ${Math.round(Number(confidence.availability || 0) * 100)}%</span><span class="tag">Price ${Math.round(Number(confidence.price || 0) * 100)}%</span><span class="tag">Expires ${escapeHtml(relativeTime(item.expiresAt))}</span></div></article>`;
   }).join("") : empty("No current community projections. The local pilot cannot manufacture independent-user quorum.");
 
   $("#communityAssertionList").innerHTML = assertions.length ? assertions.map((item) => {
