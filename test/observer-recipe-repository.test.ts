@@ -6,6 +6,8 @@ import test from "node:test";
 import {
   AMAZON_OBSERVER_VERSION,
   CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
+  OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_CONTRACT_VERSION,
+  OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_SOURCE,
   OBSERVER_RECIPE_CONTRACT_VERSION,
   OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION,
   OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
@@ -14,12 +16,18 @@ import {
   REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE,
   REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION,
   type ObserverRecipeField,
+  type ObserverRecipeContributorEligibilityInput,
   type ObserverRecipeProposalInput,
   type ObserverRecipeTrialFieldOutcome,
   type ObserverRecipeTrialInput
 } from "../packages/contracts/src/index.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
+import {
+  OBSERVER_RECIPE_CONFLICT_SLO_POLICY_VERSION,
+  ObserverRecipeConflictSloRepository
+} from "../packages/database/src/observer-recipe-conflict-slo-repository.js";
+import { ObserverRecipeContributorEligibilityRepository } from "../packages/database/src/observer-recipe-contributor-eligibility-repository.js";
 import {
   OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS,
   ObserverRecipeRepository,
@@ -150,6 +158,72 @@ function oracleTrial(
     fieldOutcomes,
     observedAt: new Date(observedAt).toISOString()
   };
+}
+
+function oracleConflictTrial(
+  recipeId: string,
+  recipeVersion: string,
+  sku: string,
+  observedAt: number,
+  layout = "e".repeat(64)
+): ObserverRecipeTrialInput {
+  return {
+    contractVersion: OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
+    recipeId,
+    recipeVersion,
+    retailerId: "amazon",
+    retailerSku: sku,
+    observerVersion: AMAZON_OBSERVER_VERSION,
+    layoutFingerprint: layout,
+    outcome: "failed",
+    evaluatedFieldCount: 1,
+    agreedFieldCount: 0,
+    ambiguousFieldCount: 0,
+    validationProfile: OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
+    oracleEvaluatedFieldCount: 1,
+    oracleAgreedFieldCount: 0,
+    oracleConflictFieldCount: 1,
+    packagedMissingFieldCount: 0,
+    packagedConflictFieldCount: 0,
+    insufficientFieldCount: 0,
+    fieldOutcomes: [{
+      field: "unitPrice",
+      recipeState: "value",
+      packagedState: "agreed",
+      oracleState: "conflict",
+      disposition: "conflict"
+    }],
+    observedAt: new Date(observedAt).toISOString()
+  };
+}
+
+function attestEligibility(
+  db: YoinkDatabase,
+  contributor: { scope: RequestScope; paired: { id: string } },
+  contributorRefHash: string,
+  proofHash: string,
+  regionScope: string,
+  now: number
+): void {
+  const input = {
+    contractVersion: OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_CONTRACT_VERSION,
+    deviceId: contributor.paired.id,
+    contributorRefHash,
+    regionScope,
+    accountEligible: true,
+    deviceEligible: true,
+    regionEligible: true,
+    proofHash,
+    source: OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_SOURCE,
+    attestedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + 60 * 60_000).toISOString()
+  } satisfies ObserverRecipeContributorEligibilityInput;
+  runWithRequestScope({
+    tenantId: contributor.scope.tenantId,
+    userId: contributor.scope.userId,
+    actorKind: "service",
+    actorId: "external_identity_risk_test"
+  }, () => new ObserverRecipeContributorEligibilityRepository(db).attest(input, now));
 }
 
 function insufficientOracleTrial(
@@ -938,6 +1012,106 @@ test("a contributor-deduplicated canary regression breaches its SLO and auto-kil
       "SELECT DISTINCT recipe_state_at_trial AS recipeState FROM observer_recipe_trials WHERE recipe_id = ? ORDER BY recipeState",
       String(created.id)
     ).map((row) => row.recipeState), ["canary", "shadow"]);
+  } finally {
+    db.close();
+  }
+});
+
+test("only fresh externally eligible multi-account and multi-region oracle conflicts can breach the regional SLO", () => {
+  const db = new YoinkDatabase();
+  try {
+    const first = contributorDevice(db, LOCAL_USER_ID);
+    const second = contributorDevice(db, "observer_regional_two");
+    const third = contributorDevice(db, "observer_regional_three");
+    const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
+    const input = proposal("amazon-regional-conflict");
+    input.fields = { unitPrice: { mode: "text", selectors: [".a-price .a-offscreen"] } };
+    const created = repository.propose(input, NOW + 2_000);
+    repository.promote(String(created.id), {
+      targetState: "shadow",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 3_000);
+
+    const unverified = runWithRequestScope(first.scope, () => repository.recordTrial(
+      first.paired.id,
+      oracleConflictTrial(
+        String(created.id), "amazon-regional-conflict", "B002OB49L4", NOW + 3_100, "f".repeat(64)
+      ),
+      NOW + 3_200
+    ));
+    assert.equal(unverified.eligibilityState, "unverified");
+    assert.equal(unverified.autoDisabled, false);
+    assert.equal((unverified.regionalConflictSlo as Record<string, unknown>).eligibleTrials, 0);
+    assert.equal(repository.list().find((item) => item.id === created.id)?.lifecycleState, "shadow");
+
+    attestEligibility(db, first, "1".repeat(64), "a".repeat(64), "subdivision:US-CA", NOW + 4_000);
+    attestEligibility(db, second, "2".repeat(64), "b".repeat(64), "subdivision:US-NY", NOW + 4_000);
+    attestEligibility(db, third, "3".repeat(64), "c".repeat(64), "subdivision:US-CA", NOW + 4_000);
+
+    const skus = [
+      "B0DCGQ6CJD", "B0F2BDXW4J", "B081J5PW5J", "B08JZHXQDN", "B015TKSSB8",
+      "B0GF44F4MG", "B0FPPWKMGK", "B0FH8M48ZC", "B0FB21526X", "B07ZPS1KVD"
+    ];
+    const contributors = [first, second, third, first, second, third, first, second, third, first];
+    let finalReceipt: Record<string, unknown> = {};
+    for (let index = 0; index < skus.length; index += 1) {
+      const contributor = contributors[index]!;
+      const observedAt = NOW + 5_000 + index * 500;
+      const evidence = index < 2
+        ? oracleConflictTrial(
+          String(created.id), "amazon-regional-conflict", skus[index]!, observedAt,
+          index.toString(16).repeat(64)
+        )
+        : oracleTrial(
+          String(created.id), "amazon-regional-conflict", skus[index]!, observedAt,
+          ["unitPrice"], index.toString(16).repeat(64)
+        );
+      finalReceipt = runWithRequestScope(contributor.scope, () => repository.recordTrial(
+        contributor.paired.id,
+        evidence,
+        observedAt + 100
+      ));
+      if (index < skus.length - 1) assert.equal(finalReceipt.autoDisabled, false);
+    }
+    assert.equal(finalReceipt.autoDisabled, true);
+    assert.equal(finalReceipt.autoDisabledReason, "regional_oracle_conflict_slo_breach");
+    const measurement = runWithRequestScope(LOCAL_REQUEST_SCOPE, () =>
+      new ObserverRecipeConflictSloRepository(db).measure(String(created.id), NOW + 10_000));
+    assert.equal(measurement.policyVersion, OBSERVER_RECIPE_CONFLICT_SLO_POLICY_VERSION);
+    assert.deepEqual(measurement, {
+      policyVersion: OBSERVER_RECIPE_CONFLICT_SLO_POLICY_VERSION,
+      windowDays: 7,
+      cutoffAt: new Date(NOW + 10_000 - 7 * 24 * 60 * 60_000).toISOString(),
+      eligibleTrials: 10,
+      conflictTrials: 2,
+      distinctEligibleAccounts: 3,
+      distinctEligibleRegions: 2,
+      distinctConflictAccounts: 2,
+      distinctConflictRegions: 2,
+      conflictRateBasisPoints: 2_000,
+      evidenceReady: true,
+      breached: true,
+      state: "breached"
+    });
+    const disabled = repository.list().find((item) => item.id === created.id);
+    assert.equal(disabled?.lifecycleState, "disabled");
+    assert.equal(disabled?.disabledReason, "regional_oracle_conflict_slo_breach");
+    assert.equal(repository.active("amazon", NOW + 10_001), null);
+    assert.equal(repository.counts(NOW + 10_001).autoDisabledObserverRecipesByRegionalConflictSlo, 1);
+    assert.equal(db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM observer_recipe_lifecycle_events
+       WHERE recipe_id = ? AND reason_code = 'regional_oracle_conflict_slo_breach'`,
+      String(created.id)
+    )?.count, 1);
+    const storedUnverified = db.get<{ state: string; region: string }>(
+      `SELECT eligibility_state AS state, region_scope AS region
+       FROM observer_recipe_trials WHERE id = ?`,
+      String(unverified.id)
+    );
+    assert.equal(storedUnverified?.state, "unverified");
+    assert.equal(storedUnverified?.region, "");
   } finally {
     db.close();
   }

@@ -78,6 +78,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /append-only and revocable/);
     assert.match(adminScript, /Application: never/);
     assert.match(adminPageBody, /Normalized missing-field previews/);
+    assert.match(adminPageBody, /Regional conflict operations/);
+    assert.match(adminPageBody, /Local identities never count as independent public accounts/);
+    assert.match(adminScript, /Regional SLO:/);
+    assert.match(adminScript, /disable_read_only_distribution_only|read-only recipe/);
     assert.match(adminScript, /promotionReady \? "" : "disabled"/);
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
@@ -118,6 +122,15 @@ test("the loopback API serves the control center and processes a dry-run signal"
       observerRecipeRecoveryRetentionImplemented: true,
       observerRecipeRecoveryRetentionDays: 90,
       observerRecipeRecoveryRetentionReceiptsImplemented: true,
+      observerRecipeContributorEligibilitySeamImplemented: true,
+      observerRecipeContributorEligibilityPolicyVersion: "observer_recipe_contributor_eligibility_v1",
+      observerRecipeContributorEligibilityMaximumTtlHours: 24,
+      observerRecipeExternalIdentityRiskProviderConfigured: false,
+      observerRecipeRegionalConflictSloImplemented: true,
+      observerRecipeRegionalConflictSloPolicyVersion: "observer_recipe_conflict_slo_v1",
+      observerRecipeRegionalConflictSloWindowDays: 7,
+      observerRecipeRegionalConflictSloMayDisableReadOnlyDistribution: true,
+      observerRecipeRegionalConflictSloMayAuthorizeMutation: false,
       observerRecipeRecoveryReviewAffectsApplication: false,
       observerRecipeRecoveryEvidenceApplicationEnabled: false,
       observerRecipeFieldFillEnabled: false,
@@ -308,6 +321,15 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.observerRecipeRecoveryRetentionImplemented, true);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryRetentionDays, 90);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryRetentionReceiptsImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeContributorEligibilitySeamImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeContributorEligibilityPolicyVersion, "observer_recipe_contributor_eligibility_v1");
+    assert.equal(snapshot.capabilities.observerRecipeContributorEligibilityMaximumTtlHours, 24);
+    assert.equal(snapshot.capabilities.observerRecipeExternalIdentityRiskProviderConfigured, false);
+    assert.equal(snapshot.capabilities.observerRecipeRegionalConflictSloImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeRegionalConflictSloPolicyVersion, "observer_recipe_conflict_slo_v1");
+    assert.equal(snapshot.capabilities.observerRecipeRegionalConflictSloWindowDays, 7);
+    assert.equal(snapshot.capabilities.observerRecipeRegionalConflictSloMayDisableReadOnlyDistribution, true);
+    assert.equal(snapshot.capabilities.observerRecipeRegionalConflictSloMayAuthorizeMutation, false);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryReviewAffectsApplication, false);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryEvidenceApplicationEnabled, false);
     assert.equal(snapshot.capabilities.observerRecipeFieldFillEnabled, false);

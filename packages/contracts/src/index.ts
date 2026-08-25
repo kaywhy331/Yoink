@@ -572,8 +572,10 @@ export interface ObserverRecipeResignInput {
 export const OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION = 2;
 export const OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION = 3;
 export const OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION = 1;
+export const OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_CONTRACT_VERSION = 1;
 export const OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE = "packaged_structured_oracle_v1";
 export const OBSERVER_RECIPE_RECOVERY_PROVENANCE = "recipe_packaged_oracle_agreement_v1";
+export const OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_SOURCE = "external_identity_risk_v1";
 export const CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE = "CONFIRM_NORMALIZED_RECOVERY_EVIDENCE";
 export const REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE = "REJECT_NORMALIZED_RECOVERY_EVIDENCE";
 export const REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION = "REVOKE_NORMALIZED_RECOVERY_CONFIRMATION";
@@ -623,6 +625,25 @@ export interface ObserverRecipeRecoveryReviewInput {
     | typeof CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE
     | typeof REJECT_OBSERVER_RECIPE_RECOVERY_EVIDENCE
     | typeof REVOKE_OBSERVER_RECIPE_RECOVERY_CONFIRMATION;
+}
+
+/**
+ * A short-lived decision produced by a separately authenticated identity/risk
+ * service. Account and proof inputs are already pseudonymized hashes; raw IdP,
+ * device-risk, address, IP, and location payloads are outside this contract.
+ */
+export interface ObserverRecipeContributorEligibilityInput {
+  contractVersion: typeof OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_CONTRACT_VERSION;
+  deviceId: string;
+  contributorRefHash: string;
+  regionScope: string;
+  accountEligible: boolean;
+  deviceEligible: boolean;
+  regionEligible: boolean;
+  proofHash: string;
+  source: typeof OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_SOURCE;
+  attestedAt: string;
+  expiresAt: string;
 }
 
 export interface ObserverRecipeTrialInput {

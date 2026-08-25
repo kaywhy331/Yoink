@@ -54,6 +54,11 @@ import {
 import { AuditRepository } from "./audit-repository.js";
 import { YoinkDatabase } from "./database.js";
 import {
+  ObserverRecipeConflictSloRepository,
+  type ObserverRecipeConflictSloMeasurement
+} from "./observer-recipe-conflict-slo-repository.js";
+import { ObserverRecipeContributorEligibilityRepository } from "./observer-recipe-contributor-eligibility-repository.js";
+import {
   OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
   OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION,
   ObserverRecipeRecoveryRetentionRepository,
@@ -239,6 +244,9 @@ interface RecoveryEvidenceRow {
   recipeStateAtTrial: string;
   evidenceState: string;
   applicationState: string;
+  eligibilityState: "unverified" | "externally_attested";
+  contributorEligibilityRefHash: string;
+  regionScope: string;
   observedAt: string;
   receivedAt: string;
   reviewId: string | null;
@@ -690,7 +698,11 @@ function trialSummary(db: YoinkDatabase, recipeId: string, now = Date.now()): Tr
   };
 }
 
-function recipeProjection(row: RecipeRow, trials: TrialSummary): Record<string, unknown> {
+function recipeProjection(
+  row: RecipeRow,
+  trials: TrialSummary,
+  regionalConflictSlo: ObserverRecipeConflictSloMeasurement
+): Record<string, unknown> {
   return {
     id: row.id,
     retailerId: row.retailerId,
@@ -710,6 +722,7 @@ function recipeProjection(row: RecipeRow, trials: TrialSummary): Record<string, 
     expiresAt: row.expiresAt,
     disabledReason: row.disabledReason,
     trials,
+    regionalConflictSlo,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
@@ -717,6 +730,8 @@ function recipeProjection(row: RecipeRow, trials: TrialSummary): Record<string, 
 
 export class ObserverRecipeRepository {
   private readonly audit: AuditRepository;
+  private readonly conflictSlo: ObserverRecipeConflictSloRepository;
+  private readonly contributorEligibility: ObserverRecipeContributorEligibilityRepository;
   private readonly recoveryRetention: ObserverRecipeRecoveryRetentionRepository;
   private readonly witnessVerifier: ObserverRecipeWitnessVerifier | null;
   private readonly witnessRequired: boolean;
@@ -728,6 +743,8 @@ export class ObserverRecipeRepository {
     options: ObserverRecipeRepositoryOptions = {}
   ) {
     this.audit = new AuditRepository(db);
+    this.conflictSlo = new ObserverRecipeConflictSloRepository(db);
+    this.contributorEligibility = new ObserverRecipeContributorEligibilityRepository(db);
     this.recoveryRetention = new ObserverRecipeRecoveryRetentionRepository(db);
     this.witnessVerifier = options.witnessVerifier ?? null;
     this.witnessRequired = options.witnessRequired === true;
@@ -1351,6 +1368,7 @@ export class ObserverRecipeRepository {
       throw new Error("Observer recipe trial evidence is malformed or inconsistent.");
     }
     const validation = normalizedTrialValidation(input, parsedFields(recipe.recipeJson));
+    const eligibility = this.contributorEligibility.snapshotForDevice(cleanDeviceId, now);
     const id = newId("observer_recipe_trial");
     const receivedAt = nowIso(now);
     let autoDisabled = false;
@@ -1366,8 +1384,10 @@ export class ObserverRecipeRepository {
            oracle_evaluated_field_count, oracle_agreed_field_count,
            oracle_conflict_field_count, packaged_missing_field_count,
            packaged_conflict_field_count, insufficient_field_count,
-           field_outcomes_json, recipe_state_at_trial
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           field_outcomes_json, recipe_state_at_trial,
+           eligibility_policy_version, eligibility_state,
+           contributor_ref_hash, eligibility_proof_hash, region_scope
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
@@ -1391,7 +1411,12 @@ export class ObserverRecipeRepository {
         validation.packagedConflictFieldCount,
         validation.insufficientFieldCount,
         validation.fieldOutcomesJson,
-        recipe.lifecycleState
+        recipe.lifecycleState,
+        eligibility.policyVersion,
+        eligibility.state,
+        eligibility.contributorRefHash,
+        eligibility.proofHash,
+        eligibility.regionScope
       );
       trialStored = Number(inserted.changes) === 1;
       if (Number(inserted.changes) === 1 && validation.recoveryEvidence.length > 0) {
@@ -1468,6 +1493,53 @@ export class ObserverRecipeRepository {
           autoDisabledReason = "packaged_evidence_conflict";
         }
       }
+      if (Number(inserted.changes) === 1 && !autoDisabled) {
+        const conflictSlo = this.conflictSlo.measure(recipe.id, now);
+        if (conflictSlo.breached) {
+          const disabled = this.db.run(
+            `UPDATE observer_recipe_candidates SET lifecycle_state = 'disabled', kill_switch = 1,
+               disabled_reason = 'regional_oracle_conflict_slo_breach', signature = '', signed_at = '', updated_at = ?
+             WHERE id = ? AND lifecycle_state IN ('shadow', 'canary', 'trusted_read_only') AND kill_switch = 0`,
+            receivedAt,
+            recipe.id
+          );
+          if (Number(disabled.changes) === 1) {
+            this.lifecycle(
+              recipe.id,
+              recipe.lifecycleState,
+              "disabled",
+              "regional_oracle_conflict_slo_breach",
+              now
+            );
+            this.audit.record({
+              correlationId: recipe.id,
+              aggregateType: "observer_recipe",
+              eventType: "observer_recipe_auto_disabled",
+              reasonCode: "regional_oracle_conflict_slo_breach",
+              message: "An externally eligible multi-account and multi-region oracle-conflict SLO undistributed a read-only recipe.",
+              data: {
+                retailerId: input.retailerId,
+                recipeVersion: recipe.recipeVersion,
+                policyVersion: conflictSlo.policyVersion,
+                windowDays: conflictSlo.windowDays,
+                eligibleTrials: conflictSlo.eligibleTrials,
+                conflictTrials: conflictSlo.conflictTrials,
+                distinctEligibleAccounts: conflictSlo.distinctEligibleAccounts,
+                distinctEligibleRegions: conflictSlo.distinctEligibleRegions,
+                distinctConflictAccounts: conflictSlo.distinctConflictAccounts,
+                distinctConflictRegions: conflictSlo.distinctConflictRegions,
+                conflictRateBasisPoints: conflictSlo.conflictRateBasisPoints,
+                normalizedValuesRecorded: false,
+                applicationAffected: false,
+                qualificationAffected: false,
+                mutationCapable: false
+              }
+            }, now);
+            autoDisabled = true;
+            autoDisabledReason = "regional_oracle_conflict_slo_breach";
+          }
+        }
+      }
       if (Number(inserted.changes) === 1 && recipe.lifecycleState === "canary" && !autoDisabled) {
         const trials = trialSummary(this.db, recipe.id, now);
         if (trials.canaryRegressionSloBreached) {
@@ -1511,8 +1583,11 @@ export class ObserverRecipeRepository {
       retailerSku,
       outcome: input.outcome,
       validationProfile: validation.validationProfile,
+      eligibilityState: eligibility.state,
+      regionScope: eligibility.regionScope,
       recoveryEvidenceCount: trialStored ? validation.recoveryEvidence.length : 0,
       recoveryEvidenceState: trialStored && validation.recoveryEvidence.length ? "quarantined" : "none",
+      regionalConflictSlo: this.conflictSlo.measure(recipe.id, now),
       autoDisabled,
       autoDisabledReason,
       receivedAt
@@ -1598,15 +1673,23 @@ export class ObserverRecipeRepository {
   }
 
   list(): Array<Record<string, unknown>> {
-    return this.rows().map((row) => recipeProjection(row, trialSummary(this.db, row.id)));
+    return this.rows().map((row) => recipeProjection(
+      row,
+      trialSummary(this.db, row.id),
+      this.conflictSlo.measure(row.id)
+    ));
+  }
+
+  regionalConflictSloStatus(limit = 100, now = Date.now()): Record<string, unknown> {
+    return this.conflictSlo.status(limit, now);
   }
 
   recoveryEvidence(limit = 100): Array<Record<string, unknown>> {
-    return this.recoveryEvidenceRows(limit, false).map((row) => this.recoveryEvidenceProjection(row));
+    return this.recoveryEvidenceRows(limit, false).map((row) => this.recoveryEvidenceProjection(row, false));
   }
 
   userRecoveryEvidence(limit = 100): Array<Record<string, unknown>> {
-    return this.recoveryEvidenceRows(limit, true).map((row) => this.recoveryEvidenceProjection(row));
+    return this.recoveryEvidenceRows(limit, true).map((row) => this.recoveryEvidenceProjection(row, true));
   }
 
   reviewRecoveryEvidence(
@@ -1741,7 +1824,7 @@ export class ObserverRecipeRepository {
       disposition,
       reviewEventId: eventId,
       previousReviewState,
-      evidence: this.recoveryEvidenceProjection(reviewed),
+      evidence: this.recoveryEvidenceProjection(reviewed, true),
       applicationAffected: false,
       fieldFillApplied: false
     };
@@ -1786,11 +1869,16 @@ export class ObserverRecipeRepository {
               evidence.recipe_state_at_trial AS recipeStateAtTrial,
               evidence.evidence_state AS evidenceState,
               evidence.application_state AS applicationState,
+              trial.eligibility_state AS eligibilityState,
+              trial.contributor_ref_hash AS contributorEligibilityRefHash,
+              trial.region_scope AS regionScope,
               evidence.observed_at AS observedAt, evidence.received_at AS receivedAt,
               review.id AS reviewId, review.decision AS reviewDecision,
               review.sequence AS reviewSequence, review.evidence_hash AS reviewEvidenceHash,
               review.created_at AS reviewedAt
        FROM observer_recipe_recovery_evidence evidence
+       JOIN observer_recipe_trials trial
+         ON trial.tenant_id = evidence.tenant_id AND trial.id = evidence.trial_id
        LEFT JOIN observer_recipe_recovery_reviews review
          ON review.evidence_id = evidence.id
         AND review.sequence = (
@@ -1828,7 +1916,7 @@ export class ObserverRecipeRepository {
     );
   }
 
-  private recoveryEvidenceProjection(row: RecoveryEvidenceRow): Record<string, unknown> {
+  private recoveryEvidenceProjection(row: RecoveryEvidenceRow, ownerOnly: boolean): Record<string, unknown> {
     const activityAt = row.reviewedAt && row.reviewedAt > row.receivedAt ? row.reviewedAt : row.receivedAt;
     const activityTime = new Date(activityAt).getTime();
     return {
@@ -1848,6 +1936,15 @@ export class ObserverRecipeRepository {
       recipeStateAtTrial: row.recipeStateAtTrial,
       evidenceState: row.evidenceState,
       applicationState: row.applicationState,
+      contributorEligibilityState: row.eligibilityState,
+      eligibleContributorRef: row.contributorEligibilityRefHash
+        ? stableHash("observer-recipe-eligibility-contributor-v1", row.contributorEligibilityRefHash).slice(0, 12)
+        : "",
+      regionRef: row.regionScope
+        ? stableHash("observer-recipe-eligibility-region-v1", row.regionScope).slice(0, 12)
+        : "",
+      regionKind: row.regionScope.startsWith("subdivision:") ? "subdivision" : "unverified",
+      ...(ownerOnly && row.regionScope ? { regionScope: row.regionScope } : {}),
       reviewState: row.reviewDecision ?? "unreviewed",
       reviewSequence: Number(row.reviewSequence ?? 0),
       reviewEvidenceHash: row.reviewEvidenceHash ?? "",
@@ -1872,6 +1969,7 @@ export class ObserverRecipeRepository {
       generatedRepairCandidates: number; quarantinedGeneratedRepairCandidates: number;
       packagedOracleTrials: number; packagedConflictTrials: number;
       oracleCompleteTrials: number; autoDisabledConflicts: number; autoDisabledCanaryRegressions: number;
+      autoDisabledRegionalConflicts: number;
       trustManifests: number; transparencyEvents: number;
       witnessReceipts: number; witnessChecks: number; failedWitnessChecks: number;
     }>(
@@ -1901,6 +1999,8 @@ export class ObserverRecipeRepository {
             AND lifecycle_state = 'disabled' AND disabled_reason = 'packaged_evidence_conflict') AS autoDisabledConflicts,
          (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?
             AND lifecycle_state = 'disabled' AND disabled_reason = 'canary_regression_slo_breach') AS autoDisabledCanaryRegressions,
+         (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?
+            AND lifecycle_state = 'disabled' AND disabled_reason = 'regional_oracle_conflict_slo_breach') AS autoDisabledRegionalConflicts,
          (SELECT COUNT(*) FROM observer_recipe_trust_manifests WHERE tenant_id = ?) AS trustManifests,
          (SELECT COUNT(*) FROM observer_recipe_transparency_events WHERE tenant_id = ?) AS transparencyEvents,
          (SELECT COUNT(*) FROM observer_recipe_witness_receipts WHERE tenant_id = ?) AS witnessReceipts,
@@ -1911,6 +2011,7 @@ export class ObserverRecipeRepository {
       nowIso(now),
       currentTrust?.generation ?? 0,
       currentTrust?.manifestHash ?? "",
+      currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
@@ -1982,6 +2083,7 @@ export class ObserverRecipeRepository {
       oracleCompleteObserverRecipeTrials: Number(row?.oracleCompleteTrials ?? 0),
       autoDisabledObserverRecipesByPackagedConflict: Number(row?.autoDisabledConflicts ?? 0),
       autoDisabledObserverRecipesByCanaryRegression: Number(row?.autoDisabledCanaryRegressions ?? 0),
+      autoDisabledObserverRecipesByRegionalConflictSlo: Number(row?.autoDisabledRegionalConflicts ?? 0),
       quarantinedObserverRecipeRecoveryEvidence: Number(recovery?.total ?? 0),
       distinctObserverRecipeRecoveryFields: Number(recovery?.distinctFields ?? 0),
       distinctObserverRecipeRecoveryContributors: Number(recovery?.distinctContributors ?? 0),
@@ -2366,7 +2468,11 @@ export class ObserverRecipeRepository {
   private requireProjection(id: string): Record<string, unknown> {
     const row = this.row(id);
     if (!row) throw new Error("The observer recipe could not be read back.");
-    return recipeProjection(row, trialSummary(this.db, row.id));
+    return recipeProjection(
+      row,
+      trialSummary(this.db, row.id),
+      this.conflictSlo.measure(row.id)
+    );
   }
 
   private lifecycle(

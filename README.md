@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.53.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.54.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,24 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.54.0 adds a service-only contributor-eligibility boundary and a
+seven-day regional conflict SLO for read-only observer recipes. Migration 47
+stores one expiring, pre-pseudonymized account/device/coarse-region attestation
+per paired device and snapshots only fully eligible proof onto new trials. Raw
+identity, IP, postal location, and risk-provider payloads are outside the
+contract, and old evidence can never become eligible retroactively.
+
+The SLO counts only the latest eligible trial per account pseudonym, exact SKU,
+layout, and recipe stage. It is measurable at 10 trials, three accounts, and
+two coarse regions; more than 10% conflict can disable read-only distribution
+only after at least two conflicts span two accounts and two regions. A known
+packaged conflict remains an immediate kill. The local provider is deliberately
+unconfigured, so local accounts remain private, unverified evidence—not
+production public reputation. Eligibility and conflict enforcement cannot fill
+a field, apply recovery evidence, sign or promote a recipe, qualify a store,
+create a job, invoke Chrome, or mutate a retailer session. See the
+[regional conflict SLO](docs/OBSERVER_RECIPE_REGIONAL_CONFLICT_SLO.md).
 
 Version 0.53.0 adds bounded retention for quarantined observer-recipe recovery
 evidence and its contributor review history. Migration 46 defines a 90-day
@@ -45,10 +63,11 @@ Retries are idempotent, current state is a projection rather than an evidence
 edit, and user deletion remains an intentional privacy cascade. Reviews are
 included in self-service export and projected in the admin registry. They do
 not fill observations, affect promotion or qualification, change plans, create
-jobs, reserve spend, or invoke Chrome. Production account/device reputation,
-region-aware independent quorum, measured conflict SLOs, and a separately
+jobs, reserve spend, or invoke Chrome. Version 0.54 adds an expiring external
+eligibility seam and measured regional conflict SLO, while a real production
+identity/risk provider, public reputation/Sybil operations, and a separately
 governed read-only application projection remain open. The bounded retention
-policy arrives in 0.53. See
+policy arrived in 0.53. See
 [recovery user review](docs/OBSERVER_RECIPE_RECOVERY_USER_REVIEW.md).
 
 Version 0.51.0 adds the first provenance-bearing storage boundary for a field
@@ -975,5 +994,5 @@ signal, source, attribution, notification, adapter, service-worker recovery,
 and API tests.
 
 See [Architecture](docs/ARCHITECTURE.md), [Purchase-plan preflight](docs/PURCHASE_PLAN_PREFLIGHT.md), [Purchase automation readiness](docs/PURCHASE_AUTOMATION_READINESS.md), [Hosted deployment
-contract](docs/HOSTED_DEPLOYMENT.md), [Worker deployment attestation](docs/WORKER_DEPLOYMENT_ATTESTATION.md), [Observer witness refresh](docs/OBSERVER_WITNESS_REFRESH.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Durable repair candidate evaluation](docs/OBSERVER_REPAIR_CANDIDATE_EVALUATION.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
+contract](docs/HOSTED_DEPLOYMENT.md), [Worker deployment attestation](docs/WORKER_DEPLOYMENT_ATTESTATION.md), [Observer witness refresh](docs/OBSERVER_WITNESS_REFRESH.md), [Observer regional conflict SLO](docs/OBSERVER_RECIPE_REGIONAL_CONFLICT_SLO.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Durable repair candidate evaluation](docs/OBSERVER_REPAIR_CANDIDATE_EVALUATION.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
 migration](docs/CARTCOLLECT_MIGRATION.md), and [Roadmap](docs/ROADMAP.md).

@@ -153,6 +153,7 @@ test("the signed observer registry distributes only promoted recipes to capable 
         receiptCount: number;
         applicationAffected: boolean;
       };
+      contributorEligibility: Record<string, unknown>;
       items: Array<Record<string, unknown>>;
     };
     assert.equal(userEvidence.reviewAffectsApplication, false);
@@ -162,9 +163,14 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(userEvidence.retention.activityResetsExpiry, true);
     assert.equal(userEvidence.retention.receiptCount, 0);
     assert.equal(userEvidence.retention.applicationAffected, false);
+    assert.equal(userEvidence.contributorEligibility.policyVersion, "observer_recipe_contributor_eligibility_v1");
+    assert.equal(userEvidence.contributorEligibility.externallyAttestedDeviceCount, 0);
+    assert.equal(userEvidence.contributorEligibility.localAccountsCountAsPublicIndependentAccounts, false);
     assert.equal(userEvidence.items.length, 1);
     assert.equal(userEvidence.items[0]?.reviewState, "unreviewed");
     assert.equal(userEvidence.items[0]?.confirmableByCurrentUser, true);
+    assert.equal(userEvidence.items[0]?.contributorEligibilityState, "unverified");
+    assert.equal(userEvidence.items[0]?.regionRef, "");
     const evidenceId = String(userEvidence.items[0]?.id ?? "");
     const badReview = await fetch(`${baseUrl}/api/v1/user/community/recovery-evidence/${encodeURIComponent(evidenceId)}/review`, {
       method: "POST",
@@ -211,6 +217,8 @@ test("the signed observer registry distributes only promoted recipes to capable 
         recoveryEvidencePolicy: string;
         recoveryEvidenceUserReview: string;
         recoveryEvidenceRetention: Record<string, unknown>;
+        contributorEligibility: Record<string, unknown>;
+        regionalConflictSlo: Record<string, unknown>;
         recoveryEvidenceReviewAffectsApplication: boolean;
         recoveryEvidenceApplication: boolean;
         recipeFieldFill: boolean;
@@ -238,6 +246,12 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(snapshot.observerRegistry.recoveryEvidenceRetention.retentionDays, 90);
     assert.equal(snapshot.observerRegistry.recoveryEvidenceRetention.activityResetsExpiry, true);
     assert.equal(snapshot.observerRegistry.recoveryEvidenceRetention.applicationAffected, false);
+    assert.equal(snapshot.observerRegistry.contributorEligibility.policyVersion, "observer_recipe_contributor_eligibility_v1");
+    assert.equal(snapshot.observerRegistry.contributorEligibility.externallyAttestedDeviceCount, 0);
+    assert.equal(snapshot.observerRegistry.regionalConflictSlo.policyVersion, "observer_recipe_conflict_slo_v1");
+    assert.equal(snapshot.observerRegistry.regionalConflictSlo.windowDays, 7);
+    assert.equal(snapshot.observerRegistry.regionalConflictSlo.enforcement, "disable_read_only_distribution_only");
+    assert.equal(snapshot.observerRegistry.regionalConflictSlo.mutationCapable, false);
     assert.equal(snapshot.observerRegistry.recoveryEvidenceReviewAffectsApplication, false);
     assert.equal(snapshot.observerRegistry.recoveryEvidenceApplication, false);
     assert.equal(snapshot.observerRegistry.recipeFieldFill, false);
@@ -252,6 +266,15 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(health.observerRecipeRecoveryRetentionImplemented, true);
     assert.equal(health.observerRecipeRecoveryRetentionDays, 90);
     assert.equal(health.observerRecipeRecoveryRetentionReceiptsImplemented, true);
+    assert.equal(health.observerRecipeContributorEligibilitySeamImplemented, true);
+    assert.equal(health.observerRecipeContributorEligibilityPolicyVersion, "observer_recipe_contributor_eligibility_v1");
+    assert.equal(health.observerRecipeContributorEligibilityMaximumTtlHours, 24);
+    assert.equal(health.observerRecipeExternalIdentityRiskProviderConfigured, false);
+    assert.equal(health.observerRecipeRegionalConflictSloImplemented, true);
+    assert.equal(health.observerRecipeRegionalConflictSloPolicyVersion, "observer_recipe_conflict_slo_v1");
+    assert.equal(health.observerRecipeRegionalConflictSloWindowDays, 7);
+    assert.equal(health.observerRecipeRegionalConflictSloMayDisableReadOnlyDistribution, true);
+    assert.equal(health.observerRecipeRegionalConflictSloMayAuthorizeMutation, false);
     assert.equal(health.observerRecipeRecoveryReviewAffectsApplication, false);
     assert.equal(health.observerRecipeRecoveryEvidenceApplicationEnabled, false);
     assert.equal(health.observerRecipeFieldFillEnabled, false);

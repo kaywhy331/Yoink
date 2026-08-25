@@ -3187,5 +3187,124 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       )
       BEGIN SELECT RAISE(ABORT, 'observer recipe recovery evidence is retained until bounded cleanup'); END;
     `
+  },
+  {
+    version: 47,
+    name: "observer_recipe_regional_conflict_eligibility",
+    sql: `
+      INSERT INTO authorization_permissions(id, description, created_at)
+      VALUES (
+        'internal.eligibility',
+        'Maintain short-lived contributor account, device, and coarse-region eligibility.',
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      ) ON CONFLICT(id) DO NOTHING;
+
+      CREATE UNIQUE INDEX extension_devices_tenant_user_id_unique
+        ON extension_devices(tenant_id, user_id, id);
+
+      CREATE TABLE observer_recipe_contributor_eligibility_states (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        policy_version TEXT NOT NULL
+          CHECK (policy_version = 'observer_recipe_contributor_eligibility_v1'),
+        contributor_ref_hash TEXT NOT NULL
+          CHECK (length(contributor_ref_hash) = 64
+            AND contributor_ref_hash NOT GLOB '*[^a-f0-9]*'),
+        region_scope TEXT NOT NULL
+          CHECK (
+            (length(region_scope) = 10
+              AND region_scope GLOB 'country:[A-Z][A-Z]')
+            OR (length(region_scope) BETWEEN 16 AND 18
+              AND substr(region_scope, 1, 12) = 'subdivision:'
+              AND substr(region_scope, 13, 2) GLOB '[A-Z][A-Z]'
+              AND substr(region_scope, 15, 1) = '-'
+              AND substr(region_scope, 16) NOT GLOB '*[^A-Z0-9]*')
+          ),
+        account_eligible INTEGER NOT NULL CHECK (account_eligible IN (0, 1)),
+        device_eligible INTEGER NOT NULL CHECK (device_eligible IN (0, 1)),
+        region_eligible INTEGER NOT NULL CHECK (region_eligible IN (0, 1)),
+        proof_hash TEXT NOT NULL
+          CHECK (length(proof_hash) = 64 AND proof_hash NOT GLOB '*[^a-f0-9]*'),
+        source TEXT NOT NULL CHECK (source = 'external_identity_risk_v1'),
+        attested_by_actor_id TEXT NOT NULL
+          CHECK (length(attested_by_actor_id) BETWEEN 3 AND 120),
+        privacy_classification TEXT NOT NULL DEFAULT 'restricted_eligibility_metadata'
+          CHECK (privacy_classification = 'restricted_eligibility_metadata'),
+        attested_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(tenant_id, user_id, device_id),
+        CHECK (
+          region_eligible = 0
+          OR substr(region_scope, 1, 12) = 'subdivision:'
+        ),
+        CHECK (julianday(attested_at) IS NOT NULL),
+        CHECK (julianday(expires_at) IS NOT NULL),
+        CHECK (julianday(expires_at) > julianday(attested_at)),
+        CHECK (julianday(expires_at) - julianday(attested_at) <= 1.0),
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        FOREIGN KEY(tenant_id, user_id, device_id)
+          REFERENCES extension_devices(tenant_id, user_id, id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX observer_recipe_contributor_eligibility_expiry_idx
+        ON observer_recipe_contributor_eligibility_states(
+          tenant_id, expires_at, account_eligible, device_eligible, region_eligible
+        );
+
+      CREATE TRIGGER observer_recipe_contributor_eligibility_monotonic
+      BEFORE UPDATE ON observer_recipe_contributor_eligibility_states
+      WHEN NEW.tenant_id <> OLD.tenant_id
+        OR NEW.user_id <> OLD.user_id
+        OR NEW.device_id <> OLD.device_id
+        OR NEW.policy_version <> OLD.policy_version
+        OR NEW.source <> OLD.source
+        OR NEW.privacy_classification <> OLD.privacy_classification
+        OR NEW.created_at <> OLD.created_at
+        OR NEW.attested_at <= OLD.attested_at
+      BEGIN SELECT RAISE(ABORT, 'observer recipe contributor eligibility attestations must advance monotonically'); END;
+
+      CREATE TRIGGER observer_recipe_contributor_eligibility_no_delete
+      BEFORE DELETE ON observer_recipe_contributor_eligibility_states
+      WHEN EXISTS (
+        SELECT 1 FROM users WHERE tenant_id = OLD.tenant_id AND id = OLD.user_id
+      ) AND EXISTS (
+        SELECT 1 FROM extension_devices WHERE id = OLD.device_id
+      )
+      BEGIN SELECT RAISE(ABORT, 'observer recipe contributor eligibility is service-managed'); END;
+
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN eligibility_policy_version TEXT NOT NULL DEFAULT ''
+          CHECK (eligibility_policy_version IN ('', 'observer_recipe_contributor_eligibility_v1'));
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN eligibility_state TEXT NOT NULL DEFAULT 'unverified'
+          CHECK (eligibility_state IN ('unverified', 'externally_attested'));
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN contributor_ref_hash TEXT NOT NULL DEFAULT ''
+          CHECK (contributor_ref_hash = '' OR (
+            length(contributor_ref_hash) = 64
+            AND contributor_ref_hash NOT GLOB '*[^a-f0-9]*'
+          ));
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN eligibility_proof_hash TEXT NOT NULL DEFAULT ''
+          CHECK (eligibility_proof_hash = '' OR (
+            length(eligibility_proof_hash) = 64
+            AND eligibility_proof_hash NOT GLOB '*[^a-f0-9]*'
+          ));
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN region_scope TEXT NOT NULL DEFAULT ''
+          CHECK (
+            region_scope = ''
+            OR region_scope GLOB 'subdivision:[A-Z][A-Z]-[A-Z0-9]*'
+          );
+
+      CREATE INDEX observer_recipe_trials_regional_conflict_slo_idx
+        ON observer_recipe_trials(
+          tenant_id, recipe_id, eligibility_state, received_at,
+          contributor_ref_hash, region_scope
+        );
+    `
   }
 ]);

@@ -613,6 +613,25 @@ Retention has no signing authority and no dependency on observation,
 qualification, planning, job, spend, extension, or mutation services. Cleanup
 cannot create evidence, promote a recipe, fill a field, or invoke Chrome.
 
+Yoink 0.54 adds an external-eligibility trust boundary without treating local
+account IDs as public reputation. Only a service actor with the fixed
+`internal.eligibility` capability can attest the active device's
+pre-pseudonymized account hash, proof hash, coarse subdivision, and separate
+account/device/region decisions. Attestations expire within 24 hours, replace
+only monotonically, reject extra identity/risk fields, and remain bounded to
+one current row per tenant/user/device. The repository ships no provider; local
+trials therefore remain `unverified`.
+
+At trial ingestion, the server snapshots current fully eligible proof onto the
+append-only trial. It never trusts an eligibility claim from Chrome, and a
+later attestation cannot upgrade old evidence. A seven-day SLO selects only the
+latest eligible trial for each account pseudonym, exact SKU, layout, and recipe
+stage. Measurement requires 10 trials, three accounts, and two regions; a rate
+above 10 percent can disable distribution only after two conflicts span two
+accounts and two regions. Known packaged conflict remains an immediate kill.
+The SLO repository has no signing, promotion, field-application, observation,
+planning, job, browser, or mutation dependency.
+
 Yoink 0.38.0 makes the paired Chrome credential a generation-bound,
 recoverable lifecycle rather than an indefinitely static hash. Begin is
 authenticated only by the current token and stores a 10-minute next-generation
@@ -858,6 +877,10 @@ qualification, job, or mutation transition. Migration 46 in 0.53 adds only
 bounded expiry triggers, owner/activity indexes, and immutable aggregate
 retention receipts; it deletes expired quarantine provenance and adds no
 application, promotion, qualification, job, or mutation transition.
+Migration 47 in 0.54 adds only bounded current external-eligibility state,
+immutable eligibility snapshots on trials, and read-only regional conflict SLO
+indexes/enforcement. It adds no provider, application, signing, promotion,
+qualification, job, navigation, click, checkout, or mutation transition.
 
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted

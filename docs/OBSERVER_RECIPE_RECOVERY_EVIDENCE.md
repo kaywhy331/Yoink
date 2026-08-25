@@ -20,6 +20,12 @@ cleanup, and value-free aggregate deletion receipts. Expiry removes evidence
 and reviews; it does not apply them. See
 [observer-recipe recovery retention](OBSERVER_RECIPE_RECOVERY_RETENTION.md).
 
+Yoink 0.54 snapshots separately attested account/device/coarse-region
+eligibility onto new recipe trials and measures a seven-day regional conflict
+SLO. Eligibility labels whether evidence may participate in that fail-closed
+measurement; it does not approve or apply a recovered value. See
+[observer-recipe regional conflict SLO](OBSERVER_RECIPE_REGIONAL_CONFLICT_SLO.md).
+
 ## Trial contract v3
 
 Contract v3 retains every value-free v2 field-state receipt and adds an
@@ -74,6 +80,11 @@ exact SKU, layout fingerprint prefix, recipe stage, provenance, and explicit
 `Application: never` status. Audit events contain only field names and counts;
 they never duplicate recovered values.
 
+At 0.54, an administrator may additionally see a short derived eligibility and
+coarse-region reference inherited from the immutable parent trial snapshot.
+Raw account/proof hashes and provider payloads are not exposed. The owning user
+sees only whether hosted eligibility was checked and their own coarse region.
+
 ## Append-only user review
 
 Migration 45 binds a sequenced review stream to the same tenant, user, and
@@ -100,14 +111,15 @@ snapshot contracts separately report:
 - recovery-evidence application enabled: `false`; and
 - observer-recipe field fill enabled: `false`.
 
-Before a later release may apply even a read-only fill, Yoink still needs
-production-reputable independent accounts and device-risk controls,
-contributor/region quorum, measured conflict handling, external consistency
-monitoring, and a separately governed reversible provenance-aware projection.
-The local retention policy and contributor
-confirmation/rejection/revocation now exist but supply no application
-authority. Remote recipes remain permanently isolated from navigation,
-identity decisions, clicks, checkout, and mutation.
+Before a later release may apply even a read-only fill, Yoink still needs a
+deployed production identity/device-risk provider, reputable public-account
+and Sybil/abuse controls, external consistency monitoring, and a separately
+governed reversible provenance-aware projection. The 0.54 service seam and
+regional conflict SLO implement bounded eligibility ingestion and fail-closed
+measurement, not the missing provider or application authority. Local review
+and retention likewise supply no application authority. Remote recipes remain
+permanently isolated from navigation, identity decisions, clicks, checkout,
+and mutation.
 
 ## Verification boundary
 
@@ -123,6 +135,8 @@ Automated coverage proves that:
   exportable, and never edit evidence;
 - latest activity controls bounded expiry, and receipts contain counts rather
   than deleted values or item identifiers;
+- externally eligible state is snapshotted at trial ingestion, cannot be
+  retrofitted, and can only feed read-only conflict enforcement;
 - evidence ingestion changes no observation, qualification, mission, or job;
   and
 - the fixed oracle still has no click, navigation, fetch, or mutation path.

@@ -6,6 +6,10 @@ import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import { AuditRepository } from "../packages/database/src/audit-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
+import {
+  OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_CONTRACT_VERSION,
+  OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_SOURCE
+} from "../packages/contracts/src/index.js";
 import { runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
 
 const NOW = new Date("2026-08-24T09:00:00.000Z").getTime();
@@ -42,6 +46,19 @@ test("the API applies an authenticated request scope resolver before repository 
     SECOND_USER_SCOPE.userId,
     SECOND_USER_SCOPE.tenantId,
     "Second user",
+    timestamp
+  );
+  db.run(
+    `INSERT INTO extension_devices(
+       id, tenant_id, user_id, name, token_hash, extension_version,
+       status, capabilities_json, last_seen_at, created_at, updated_at
+     ) VALUES (?, ?, ?, 'Second Chrome', ?, '0.54.0', 'active', '{}', ?, ?, ?)`,
+    "device_second_eligibility",
+    SECOND_USER_SCOPE.tenantId,
+    SECOND_USER_SCOPE.userId,
+    "e".repeat(64),
+    timestamp,
+    timestamp,
     timestamp
   );
   db.run(
@@ -107,6 +124,68 @@ test("the API applies an authenticated request scope resolver before repository 
     });
     assert.equal(deniedUserDelivery.status, 403);
     assert.equal((await deniedUserDelivery.json() as { error: string }).error, "permission_denied");
+
+    const eligibilityNow = Date.now();
+    const eligibilityBody = {
+      contractVersion: OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_CONTRACT_VERSION,
+      deviceId: "device_second_eligibility",
+      contributorRefHash: "a".repeat(64),
+      regionScope: "subdivision:US-WA",
+      accountEligible: true,
+      deviceEligible: true,
+      regionEligible: true,
+      proofHash: "b".repeat(64),
+      source: OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_SOURCE,
+      attestedAt: new Date(eligibilityNow).toISOString(),
+      expiresAt: new Date(eligibilityNow + 60 * 60_000).toISOString()
+    };
+    const deniedUserEligibility = await fetch(
+      `${baseUrl}/api/v1/internal/observer-recipes/contributor-eligibility`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Test-Principal": "second-user" },
+        body: JSON.stringify(eligibilityBody)
+      }
+    );
+    assert.equal(deniedUserEligibility.status, 403);
+    assert.equal((await deniedUserEligibility.json() as { error: string }).error, "permission_denied");
+    const wrongPrincipalEligibility = await fetch(
+      `${baseUrl}/api/v1/internal/observer-recipes/contributor-eligibility`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Test-Principal": "local-service" },
+        body: JSON.stringify(eligibilityBody)
+      }
+    );
+    assert.equal(wrongPrincipalEligibility.status, 400);
+    const acceptedEligibility = await fetch(
+      `${baseUrl}/api/v1/internal/observer-recipes/contributor-eligibility`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Test-Principal": "second-service" },
+        body: JSON.stringify(eligibilityBody)
+      }
+    );
+    assert.equal(acceptedEligibility.status, 200);
+    assert.equal(acceptedEligibility.headers.get("x-yoink-api-surface"), "internal");
+    const eligibilityResponse = await acceptedEligibility.json() as {
+      eligibility: Record<string, unknown>;
+    };
+    assert.equal(eligibilityResponse.eligibility.state, "externally_attested");
+    assert.equal(eligibilityResponse.eligibility.regionScope, "subdivision:US-WA");
+    assert.doesNotMatch(JSON.stringify(eligibilityResponse), new RegExp(`a{64}|b{64}`));
+    assert.equal(db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM observer_recipe_contributor_eligibility_states
+       WHERE tenant_id = ? AND user_id = ? AND device_id = ?`,
+      SECOND_USER_SCOPE.tenantId,
+      SECOND_USER_SCOPE.userId,
+      "device_second_eligibility"
+    )?.count, 1);
+    const ownerEligibility = await fetch(`${baseUrl}/api/v1/user/community/recovery-evidence`, {
+      headers: { "X-Test-Principal": "second-user" }
+    }).then((response) => response.json()) as { contributorEligibility: Record<string, unknown> };
+    assert.equal(ownerEligibility.contributorEligibility.externallyAttestedDeviceCount, 1);
+    assert.match(JSON.stringify(ownerEligibility.contributorEligibility), /subdivision:US-WA/);
 
     const accepted = await fetch(`${baseUrl}/api/v1/internal/delivery/inbox`, {
       method: "POST",

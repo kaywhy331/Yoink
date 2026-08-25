@@ -330,6 +330,7 @@ test("the user dashboard reviews quarantined store details with closed, revocabl
     reviewSequence: 0,
     confirmableByCurrentUser: true,
     applicationState: "not_applied",
+    contributorEligibilityState: "externally_attested",
     retentionExpiresAt: "2026-11-23T12:00:00.000Z"
   };
   const overview = {
@@ -372,6 +373,11 @@ test("the user dashboard reviews quarantined store details with closed, revocabl
             applicationAffected: false,
             fieldFillEnabled: false
           },
+          contributorEligibility: {
+            policyVersion: "observer_recipe_contributor_eligibility_v1",
+            externallyAttestedDeviceCount: 1,
+            localAccountsCountAsPublicIndependentAccounts: false
+          },
           reviewAffectsApplication: false,
           fieldFillEnabled: false
         }) };
@@ -392,7 +398,9 @@ test("the user dashboard reviews quarantined store details with closed, revocabl
     assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /Pokémon Center item 10-10320-101/);
     assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /never applied/i);
     assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /Automatically removed/i);
+    assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /Hosted account \+ coarse region checked/i);
     assert.match(browser.document.querySelector("#recoveryReviewSummary")?.textContent ?? "", /90 inactive days/i);
+    assert.match(browser.document.querySelector("#recoveryReviewSummary")?.textContent ?? "", /verified 1 Chrome companion/i);
     (browser.document.querySelector('[data-recovery-decision="rejected"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(reviews.length, 1));
     assert.deepEqual(reviews[0], {

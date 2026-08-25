@@ -45,6 +45,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   }
   if (pathname.startsWith("/api/v1/devices/self/")) return "device.self";
   if (pathname === "/api/v1/hosted/principals") return "internal.principal";
+  if (pathname === "/api/v1/observer-recipe-eligibility") return "internal.eligibility";
   if (pathname.startsWith("/api/v1/hosted-delivery/")) return "internal.delivery";
 
   if (pathname === "/api/v1/snapshot") return "admin.read";
@@ -107,6 +108,9 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
   }
   if (pathname === "/api/v1/internal/hosted/principals") {
     return { pathname: "/api/v1/hosted/principals", requestedSurface: "internal" };
+  }
+  if (pathname === "/api/v1/internal/observer-recipes/contributor-eligibility") {
+    return { pathname: "/api/v1/observer-recipe-eligibility", requestedSurface: "internal" };
   }
   if (pathname.startsWith("/api/v1/internal/delivery/")) {
     return {
@@ -191,7 +195,8 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
   }),
   internal: Object.freeze({
     hosted: "principals",
-    "hosted-delivery": "delivery"
+    "hosted-delivery": "delivery",
+    "observer-recipe-eligibility": "eligibility"
   })
 });
 

@@ -30,6 +30,7 @@ export const AUTHORIZATION_PERMISSIONS = Object.freeze([
   "worker.manage",
   "change.approve",
   "internal.delivery",
+  "internal.eligibility",
   "internal.principal",
   "device.self"
 ] as const);
@@ -39,7 +40,7 @@ export type AuthorizationPermission = typeof AUTHORIZATION_PERMISSIONS[number];
 const PERMISSION_SET = new Set<string>(AUTHORIZATION_PERMISSIONS);
 const FIXED_ACTOR_PERMISSIONS = {
   device: ["device.self"],
-  service: ["internal.delivery", "internal.principal"]
+  service: ["internal.delivery", "internal.eligibility", "internal.principal"]
 } as const satisfies Readonly<Record<"device" | "service", readonly AuthorizationPermission[]>>;
 const ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 

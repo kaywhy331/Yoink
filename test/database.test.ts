@@ -31,10 +31,11 @@ test("initial migration creates the normalized graph and safe local defaults", (
         'identity_equivalence_claims', 'identity_claim_reviews',
         'observer_recipe_candidates', 'observer_recipe_trials', 'observer_recipe_recovery_evidence',
         'observer_recipe_recovery_reviews', 'observer_recipe_recovery_retention_receipts',
+        'observer_recipe_contributor_eligibility_states',
         'observer_recipe_lifecycle_events', 'inbox_messages',
         'hosted_delivery_receipts', 'hosted_request_nonces'
-      )`)?.count, 15);
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM authorization_permissions")?.count, 27);
+      )`)?.count, 16);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM authorization_permissions")?.count, 28);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM authorization_roles")?.count, 7);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM authorization_memberships WHERE user_id = ? AND role_id = 'yoink_user' AND status = 'active'",
@@ -1587,7 +1588,7 @@ test("migration 41 adds bounded observer-repair evaluation without losing durabl
   }
 });
 
-test("migrations 42 through 46 preserve legacy trials and add bounded oracle, canary, recovery, review, and retention governance", () => {
+test("migrations 42 through 47 preserve legacy trials and add bounded oracle, recovery, retention, and regional eligibility governance", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-observer-oracle-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -1659,9 +1660,14 @@ test("migrations 42 through 46 preserve legacy trials and add bounded oracle, ca
       assert.equal(upgraded.get<{ count: number }>(
         "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 46 AND name = 'observer_recipe_recovery_retention'"
       )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 47 AND name = 'observer_recipe_regional_conflict_eligibility'"
+      )?.count, 1);
       const preserved = upgraded.get<Record<string, unknown>>(
         `SELECT validation_profile, oracle_evaluated_field_count,
-                packaged_conflict_field_count, field_outcomes_json, recipe_state_at_trial
+                packaged_conflict_field_count, field_outcomes_json, recipe_state_at_trial,
+                eligibility_policy_version, eligibility_state,
+                contributor_ref_hash, eligibility_proof_hash, region_scope
          FROM observer_recipe_trials WHERE id = 'observer_recipe_trial_upgrade_42'`
       );
       assert.deepEqual({ ...preserved }, {
@@ -1669,7 +1675,12 @@ test("migrations 42 through 46 preserve legacy trials and add bounded oracle, ca
         oracle_evaluated_field_count: 0,
         packaged_conflict_field_count: 0,
         field_outcomes_json: "[]",
-        recipe_state_at_trial: "legacy_unknown"
+        recipe_state_at_trial: "legacy_unknown",
+        eligibility_policy_version: "",
+        eligibility_state: "unverified",
+        contributor_ref_hash: "",
+        eligibility_proof_hash: "",
+        region_scope: ""
       });
       assert.equal(upgraded.get<{ count: number }>(
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'observer_recipe_trials_oracle_gate_idx'"
@@ -1701,6 +1712,18 @@ test("migrations 42 through 46 preserve legacy trials and add bounded oracle, ca
       assert.equal(upgraded.get<{ count: number }>(
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name IN ('observer_recipe_recovery_retention_receipts_no_update', 'observer_recipe_recovery_retention_receipts_no_delete')"
       )?.count, 2);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authorization_permissions WHERE id = 'internal.eligibility'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM observer_recipe_contributor_eligibility_states"
+      )?.count, 0);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name IN ('extension_devices_tenant_user_id_unique', 'observer_recipe_contributor_eligibility_expiry_idx', 'observer_recipe_trials_regional_conflict_slo_idx')"
+      )?.count, 3);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name IN ('observer_recipe_contributor_eligibility_monotonic', 'observer_recipe_contributor_eligibility_no_delete')"
+      )?.count, 2);
       assert.throws(
         () => upgraded.run("UPDATE observer_recipe_trials SET validation_profile = 'untrusted_page_script'"),
         /constraint failed/
@@ -1711,6 +1734,10 @@ test("migrations 42 through 46 preserve legacy trials and add bounded oracle, ca
       );
       assert.throws(
         () => upgraded.run("UPDATE observer_recipe_trials SET recipe_state_at_trial = 'checkout'"),
+        /constraint failed/
+      );
+      assert.throws(
+        () => upgraded.run("UPDATE observer_recipe_trials SET eligibility_state = 'trusted_local_user'"),
         /constraint failed/
       );
       assert.equal(upgraded.get<{ count: number }>(

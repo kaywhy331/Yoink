@@ -120,7 +120,7 @@ test("device and service actors receive only their fixed capabilities", () => {
     });
     runWithRequestScope(SERVICE_SCOPE, () => {
       const authorization = new AuthorizationRepository(db);
-      assert.deepEqual(authorization.permissions(), ["internal.delivery", "internal.principal"]);
+      assert.deepEqual(authorization.permissions(), ["internal.delivery", "internal.eligibility", "internal.principal"]);
       assert.equal(authorization.has("admin.read"), false);
     });
   } finally {

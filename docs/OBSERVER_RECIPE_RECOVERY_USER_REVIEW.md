@@ -9,6 +9,10 @@ A review is provenance, not permission. It cannot change the evidence value,
 fill an observation, promote or sign a recipe, qualify a retailer, change a
 purchase plan, enqueue a job, reserve spend, or invoke Chrome.
 
+Yoink 0.54 may label the parent trial as externally eligible for a separate
+regional conflict SLO. A user's review does not create that eligibility, count
+as an independent oracle, or enter the conflict numerator or denominator.
+
 ## Closed review contract
 
 The user API accepts exactly three fields: contract version, decision, and the
@@ -86,13 +90,16 @@ Automated coverage proves:
   field fill, and browser invocation.
 
 Before a later release can use confirmed evidence in even a read-only
-observation projection, Yoink still needs production IdP and device-risk
-eligibility, reputable independent-account and region quorum, conflict SLOs,
-external consistency monitoring, and a separately governed reversible
-application projection. The local retention/deletion policy ships in 0.53;
-mutation runners remain permanently outside the recipe registry.
+observation projection, Yoink still needs a deployed production IdP/device-risk
+provider, reputable public-account and Sybil/abuse controls, external
+consistency monitoring, and a separately governed reversible application
+projection. Version 0.54 supplies a bounded service eligibility seam and
+regional conflict SLO, but no provider is configured locally and reviews remain
+outside both eligibility and application. Mutation runners remain permanently
+outside the recipe registry.
 
 See also [recovery evidence](OBSERVER_RECIPE_RECOVERY_EVIDENCE.md),
 [recovery retention](OBSERVER_RECIPE_RECOVERY_RETENTION.md),
+[regional conflict SLO](OBSERVER_RECIPE_REGIONAL_CONFLICT_SLO.md),
 [packaged oracle](OBSERVER_RECIPE_ORACLE.md), and
 [canary governance](OBSERVER_RECIPE_CANARY_GOVERNANCE.md).

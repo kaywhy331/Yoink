@@ -18,6 +18,7 @@ import {
   type IdentityClaimReviewInput,
   type ObserverRecipePromotionInput,
   type ObserverRecipeProposalInput,
+  type ObserverRecipeContributorEligibilityInput,
   type ObserverRecipeRecoveryReviewInput,
   type ObserverRecipeResignInput,
   type ObserverRecipeTrustManifestInstallInput,
@@ -94,6 +95,15 @@ import {
   OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS,
   ObserverRecipeRepository
 } from "../../../packages/database/src/observer-recipe-repository.js";
+import {
+  OBSERVER_RECIPE_CONFLICT_SLO_POLICY_VERSION,
+  OBSERVER_RECIPE_CONFLICT_SLO_WINDOW_DAYS
+} from "../../../packages/database/src/observer-recipe-conflict-slo-repository.js";
+import {
+  OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_MAXIMUM_TTL_MS,
+  OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_POLICY_VERSION,
+  ObserverRecipeContributorEligibilityRepository
+} from "../../../packages/database/src/observer-recipe-contributor-eligibility-repository.js";
 import {
   OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
   OBSERVER_RECIPE_RECOVERY_RETENTION_MAXIMUM_BATCH,
@@ -374,6 +384,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const identityClaims = new IdentityClaimRepository(db);
   const notifications = new NotificationRepository(db);
   const mutationLanes = new MutationLaneRepository(db);
+  const observerContributorEligibility = new ObserverRecipeContributorEligibilityRepository(db);
   const observerRecipes = new ObserverRecipeRepository(
     db,
     dependencies.observerRecipeTrust ?? ObserverRecipeTrustAuthority.ephemeral(),
@@ -639,6 +650,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           observerRecipeRecoveryRetentionImplemented: true,
           observerRecipeRecoveryRetentionDays: OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
           observerRecipeRecoveryRetentionReceiptsImplemented: true,
+          observerRecipeContributorEligibilitySeamImplemented: true,
+          observerRecipeContributorEligibilityPolicyVersion: OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_POLICY_VERSION,
+          observerRecipeContributorEligibilityMaximumTtlHours:
+            OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_MAXIMUM_TTL_MS / 3_600_000,
+          observerRecipeExternalIdentityRiskProviderConfigured: false,
+          observerRecipeRegionalConflictSloImplemented: true,
+          observerRecipeRegionalConflictSloPolicyVersion: OBSERVER_RECIPE_CONFLICT_SLO_POLICY_VERSION,
+          observerRecipeRegionalConflictSloWindowDays: OBSERVER_RECIPE_CONFLICT_SLO_WINDOW_DAYS,
+          observerRecipeRegionalConflictSloMayDisableReadOnlyDistribution: true,
+          observerRecipeRegionalConflictSloMayAuthorizeMutation: false,
           observerRecipeRecoveryReviewAffectsApplication: false,
           observerRecipeRecoveryEvidenceApplicationEnabled: false,
           observerRecipeFieldFillEnabled: false,
@@ -1397,6 +1418,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               activityResetsExpiry: true,
               ...observerRecipes.recoveryRetentionStatus(20, false)
             },
+            contributorEligibility: observerContributorEligibility.status(100, false),
+            regionalConflictSlo: observerRecipes.regionalConflictSloStatus(100),
             recoveryEvidenceReviewAffectsApplication: false,
             recoveryEvidenceApplication: false,
             recipeFieldFill: false,
@@ -1493,6 +1516,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             observerRecipeRecoveryRetentionImplemented: true,
             observerRecipeRecoveryRetentionDays: OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
             observerRecipeRecoveryRetentionReceiptsImplemented: true,
+            observerRecipeContributorEligibilitySeamImplemented: true,
+            observerRecipeContributorEligibilityPolicyVersion: OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_POLICY_VERSION,
+            observerRecipeContributorEligibilityMaximumTtlHours:
+              OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_MAXIMUM_TTL_MS / 3_600_000,
+            observerRecipeExternalIdentityRiskProviderConfigured: false,
+            observerRecipeRegionalConflictSloImplemented: true,
+            observerRecipeRegionalConflictSloPolicyVersion: OBSERVER_RECIPE_CONFLICT_SLO_POLICY_VERSION,
+            observerRecipeRegionalConflictSloWindowDays: OBSERVER_RECIPE_CONFLICT_SLO_WINDOW_DAYS,
+            observerRecipeRegionalConflictSloMayDisableReadOnlyDistribution: true,
+            observerRecipeRegionalConflictSloMayAuthorizeMutation: false,
             observerRecipeRecoveryReviewAffectsApplication: false,
             observerRecipeRecoveryEvidenceApplicationEnabled: false,
             observerRecipeFieldFillEnabled: false,
@@ -1853,6 +1886,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 201, { principal: principals.provision(body as unknown as HostedPrincipalInput) });
         return;
       }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/observer-recipe-eligibility") {
+        const body = await readJson(request);
+        json(response, 200, {
+          eligibility: observerContributorEligibility.attest(
+            body as unknown as ObserverRecipeContributorEligibilityInput
+          )
+        });
+        return;
+      }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/hosted-delivery/inbox/lease") {
         const body = await readJson(request);
         json(response, 200, { lease: hostedDelivery.leaseInbox(Number(body.leaseSeconds ?? 60)) });
@@ -1909,6 +1951,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           items: observerRecipes.userRecoveryEvidence(100),
           retention: observerRecipes.recoveryRetentionStatus(20, true),
+          contributorEligibility: observerContributorEligibility.status(20, true),
           reviewAffectsApplication: false,
           fieldFillEnabled: false
         });

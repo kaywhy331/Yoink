@@ -48,6 +48,15 @@ shared plane still requires pseudonymous cross-account identity, production
 account/device-risk signals, reputation, Sybil/abuse operations, consent and
 deletion propagation, independent canaries, and separate governance.
 
+Version 0.54 adds the server-side ingestion seam for one such provider, not the
+provider itself. A trusted service may submit a pre-pseudonymized account and
+proof hash, coarse subdivision, and separate account/device/region eligibility
+decisions with at most a 24-hour lifetime. New observer-recipe trials snapshot
+only fully eligible proof and feed a seven-day regional conflict circuit
+breaker that can disable read-only distribution. Hosted operators must supply,
+audit, and monitor the independent IdP/device-risk decision service; setting
+booleans directly does not establish public reputation or Sybil resistance.
+
 Version 0.38 adds hash-only, generation-bound Chrome credential rotation. The
 two-phase protocol and extension recovery prevent ordinary network loss from
 forcing re-pairing, but they do not make an exposed bearer harmless. Hosted
@@ -298,6 +307,23 @@ They require the fixed `internal.delivery` service capability. A maintainer
 actor label and ordinary user role cannot access them. Secrets, cookies,
 authorization values, offer tokens, and other sensitive diagnostic keys are
 redacted before persistence.
+
+## Observer contributor eligibility
+
+The canonical route
+`POST /api/v1/internal/observer-recipes/contributor-eligibility` requires a
+signed `service` actor with the fixed `internal.eligibility` capability. It is
+separate from principal provisioning, delivery, ordinary user roles, and paired
+device bearer scope. The body is an exact closed contract; unknown keys and raw
+identity, network/postal location, risk features, or proof payloads fail closed.
+
+The upstream provider must create stable pseudonyms before ingestion, issue
+fresh non-replayable proof decisions, use only canonical coarse subdivisions,
+expire state within 24 hours, propagate revocation/deletion, and be monitored
+independently. Yoink stores only the current bounded state plus redacted audit
+evidence and immutable trial snapshots. Its health projection truthfully
+reports the seam and SLO implemented while `productionIdentityRiskProvider`
+remains false for this repository's local deployment.
 
 ## PostgreSQL boundary
 

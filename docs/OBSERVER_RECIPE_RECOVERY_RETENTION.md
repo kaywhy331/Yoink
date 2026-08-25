@@ -82,13 +82,15 @@ Automated coverage proves:
 - unchanged observations, qualifications, missions, jobs, application state,
   field fill, and browser invocation.
 
-This release completes the local recovery-ledger retention/deletion policy. A
-future read-only application projection still requires production IdP and
-device-risk eligibility, reputable independent-account and region quorum,
-measured conflict SLOs, external consistency monitoring, and separately
-governed reversible application. Mutation runners remain permanently outside
-the recipe registry.
+This release completes the local recovery-ledger retention/deletion policy.
+Version 0.54 subsequently adds a bounded service-attested eligibility seam and
+measured regional conflict SLO without changing retention or application. A
+future read-only application projection still requires a deployed production
+IdP/device-risk provider, reputable public-account and Sybil/abuse controls,
+external consistency monitoring, and separately governed reversible
+application. Mutation runners remain permanently outside the recipe registry.
 
 See also [recovery evidence](OBSERVER_RECIPE_RECOVERY_EVIDENCE.md),
-[recovery user review](OBSERVER_RECIPE_RECOVERY_USER_REVIEW.md), and
+[recovery user review](OBSERVER_RECIPE_RECOVERY_USER_REVIEW.md),
+[regional conflict SLO](OBSERVER_RECIPE_REGIONAL_CONFLICT_SLO.md), and
 [canary governance](OBSERVER_RECIPE_CANARY_GOVERNANCE.md).

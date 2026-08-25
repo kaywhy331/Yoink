@@ -34,6 +34,7 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   missions: "exported",
   notification_deliveries: "safe_metadata_only",
   observer_recipe_candidates: "exported",
+  observer_recipe_contributor_eligibility_states: "exported",
   observer_recipe_lifecycle_events: "exported",
   observer_recipe_recovery_evidence: "exported",
   observer_recipe_recovery_retention_receipts: "exported",
@@ -293,6 +294,8 @@ export class UserPrivacyRepository {
            + (SELECT COUNT(*) FROM identity_equivalence_claims WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM identity_claim_reviews WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM observer_recipe_contributor_eligibility_states
+               WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_lifecycle_events WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_recovery_evidence WHERE tenant_id = ? AND user_id = ?)
@@ -301,7 +304,7 @@ export class UserPrivacyRepository {
                WHERE tenant_id = ? AND user_id = ?) AS count`,
         tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
         tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId, tenantId, userId, tenantId, userId
+        tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId
       ),
       activity_and_delivery: count(
         `SELECT
@@ -765,11 +768,22 @@ export class UserPrivacyRepository {
                 oracle_agreed_field_count, oracle_conflict_field_count,
                 packaged_missing_field_count, packaged_conflict_field_count,
                 insufficient_field_count, field_outcomes_json,
-                recipe_state_at_trial, observed_at, received_at
+                recipe_state_at_trial, eligibility_policy_version,
+                eligibility_state, contributor_ref_hash,
+                eligibility_proof_hash, region_scope, observed_at, received_at
          FROM observer_recipe_trials WHERE tenant_id = ? AND user_id = ?
          ORDER BY received_at, id`,
         tenantId, userId
       ), ["field_outcomes_json"]),
+      observer_recipe_contributor_eligibility_states: this.rows(
+        `SELECT device_id, policy_version, contributor_ref_hash, region_scope,
+                account_eligible, device_eligible, region_eligible, proof_hash,
+                source, attested_at, expires_at, created_at, updated_at
+         FROM observer_recipe_contributor_eligibility_states
+         WHERE tenant_id = ? AND user_id = ?
+         ORDER BY updated_at, device_id`,
+        tenantId, userId
+      ),
       observer_recipe_recovery_evidence: this.rows(
         `SELECT id, device_id, trial_id, recipe_id, retailer_id, retailer_sku,
                 layout_fingerprint, field_name, value_kind, normalized_value,
