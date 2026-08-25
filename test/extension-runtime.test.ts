@@ -519,6 +519,7 @@ interface HarnessOptions {
   observerRecipeDistribution?: Record<string, unknown>;
   observerRecipeRoot?: Record<string, unknown>;
   observerRecipeTrustState?: Record<string, unknown>;
+  observerRecipeEvaluation?: Record<string, unknown>;
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -952,12 +953,26 @@ function harness(options: HarnessOptions = {}) {
         if (args?.[0] === "disney") return [{ frameId: 0, result: { ok: true, observation: DISNEY_OBSERVATION, diagnostic: diagnosticFor(DISNEY_OBSERVATION) } }];
         if (args?.[0] === "pbandai") return [{ frameId: 0, result: { ok: true, observation: PBANDAI_OBSERVATION, diagnostic: diagnosticFor(PBANDAI_OBSERVATION) } }];
         if (args?.[0] === "pokemoncenter") return [{ frameId: 0, result: { ok: true, observation: POKEMONCENTER_OBSERVATION, diagnostic: diagnosticFor(POKEMONCENTER_OBSERVATION) } }];
-        if (args?.[0] && typeof args[0] === "object" && "availability" in (args[0] as Record<string, unknown>)) {
-          return [{ frameId: 0, result: {
+        if (args?.[0] === "evaluateObserverRecipeEvidence") {
+          return [{ frameId: 0, result: options.observerRecipeEvaluation ?? {
+            validationProfile: "packaged_structured_oracle_v1",
             evaluatedFieldCount: 5,
             agreedFieldCount: 5,
             ambiguousFieldCount: 0,
-            shape: "availability:agreed|unitPrice:agreed|seller:agreed|fulfillment:agreed|addControl:agreed"
+            oracleEvaluatedFieldCount: 5,
+            oracleAgreedFieldCount: 5,
+            oracleConflictFieldCount: 0,
+            packagedMissingFieldCount: 0,
+            packagedConflictFieldCount: 0,
+            insufficientFieldCount: 0,
+            fieldOutcomes: ["availability", "unitPrice", "seller", "fulfillment", "addControl"].map((field) => ({
+              field,
+              recipeState: "value",
+              packagedState: "agreed",
+              oracleState: "agreed",
+              disposition: "verified"
+            })),
+            shape: "availability:value:agreed:agreed:verified|unitPrice:value:agreed:agreed:verified|seller:value:agreed:agreed:verified|fulfillment:value:agreed:agreed:verified|addControl:value:agreed:agreed:verified"
           } }];
         }
         return [{ frameId: 0, result: { ok: true, observation: OBSERVATION } }];
@@ -1834,10 +1849,16 @@ test("the packaged interpreter verifies and pins a signed observer-only recipe b
   const body = JSON.parse(String(trial.options.body)) as Record<string, unknown>;
   assert.deepEqual(Object.keys(body).sort(), [
     "agreedFieldCount", "ambiguousFieldCount", "contractVersion", "evaluatedFieldCount",
-    "layoutFingerprint", "observedAt", "observerVersion", "outcome", "recipeId",
-    "recipeVersion", "retailerId", "retailerSku"
+    "fieldOutcomes", "insufficientFieldCount", "layoutFingerprint", "observedAt",
+    "observerVersion", "oracleAgreedFieldCount", "oracleConflictFieldCount",
+    "oracleEvaluatedFieldCount", "outcome", "packagedConflictFieldCount",
+    "packagedMissingFieldCount", "recipeId", "recipeVersion", "retailerId",
+    "retailerSku", "validationProfile"
   ]);
+  assert.equal(body.contractVersion, 2);
   assert.equal(body.outcome, "passed");
+  assert.equal(body.validationProfile, "packaged_structured_oracle_v1");
+  assert.equal(body.oracleAgreedFieldCount, 5);
   assert.equal(body.retailerSku, "B0GYTRYV7P");
   assert.match(String(body.layoutFingerprint), /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(body).includes("Amazon.com"), false);
@@ -1847,6 +1868,51 @@ test("the packaged interpreter verifies and pins a signed observer-only recipe b
   assert.match(String(trust.manifestHash), /^[a-f0-9]{64}$/);
   assert.match(String(trust.activeKeyId), /^[a-f0-9]{64}$/);
   assert.equal(runtime.storage.yoinkObserverRecipeKeyPinV1, undefined);
+});
+
+test("a packaged observer conflict is reported immediately without invoking a mutation runner", async () => {
+  const fixture = signedObserverRecipe();
+  const fieldOutcomes = ["availability", "unitPrice", "seller", "fulfillment", "addControl"].map((field) => ({
+    field,
+    recipeState: "value",
+    packagedState: field === "unitPrice" ? "conflict" : "agreed",
+    oracleState: field === "unitPrice" ? "not_evaluated" : "agreed",
+    disposition: field === "unitPrice" ? "conflict" : "verified"
+  }));
+  const runtime = harness({
+    activeUrl: AMAZON_PRODUCT_URL,
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root,
+    observerRecipeEvaluation: {
+      validationProfile: "packaged_structured_oracle_v1",
+      evaluatedFieldCount: 5,
+      agreedFieldCount: 4,
+      ambiguousFieldCount: 0,
+      oracleEvaluatedFieldCount: 4,
+      oracleAgreedFieldCount: 4,
+      oracleConflictFieldCount: 0,
+      packagedMissingFieldCount: 0,
+      packagedConflictFieldCount: 1,
+      insufficientFieldCount: 0,
+      fieldOutcomes,
+      shape: "unitPrice:value:conflict:not_evaluated:conflict"
+    }
+  });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  const trial = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/observer-recipe-trials/amazon"));
+  assert.ok(trial);
+  const body = JSON.parse(String(trial.options.body)) as Record<string, unknown>;
+  assert.equal(body.outcome, "failed");
+  assert.equal(body.packagedConflictFieldCount, 1);
+  assert.equal(JSON.stringify(body).includes("2186"), false);
+  assert.equal(JSON.stringify(body).includes("Amazon.com"), false);
+  const injectedFiles = runtime.injections.flatMap((entry) => Array.isArray(entry.files) ? entry.files as string[] : []);
+  assert.equal(injectedFiles.includes("observer-recipe-oracle.js"), true);
+  assert.equal(injectedFiles.some((file) => ["amazon-action.js", "walmart-action.js", "target-action.js", "bestbuy-action.js"].includes(file)), false);
+  const status = runtime.storage.yoinkObserverRecipeStatusV1 as Record<string, unknown>;
+  assert.equal(status.outcome, "failed");
+  assert.equal(status.packagedConflictFieldCount, 1);
 });
 
 test("a bad observer recipe signature fails closed without affecting bundled evidence", async () => {

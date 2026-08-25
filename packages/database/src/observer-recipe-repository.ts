@@ -2,6 +2,12 @@ import {
   OBSERVER_RECIPE_CONTRACT_VERSION,
   OBSERVER_RECIPE_FIELDS,
   OBSERVER_RECIPE_MODES,
+  OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
+  OBSERVER_RECIPE_TRIAL_DISPOSITIONS,
+  OBSERVER_RECIPE_TRIAL_ORACLE_STATES,
+  OBSERVER_RECIPE_TRIAL_PACKAGED_STATES,
+  OBSERVER_RECIPE_TRIAL_RECIPE_STATES,
+  OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
   RETAILER_OBSERVER_VERSIONS,
   INSTALL_OBSERVER_RECIPE_TRUST_MANIFEST_CONFIRMATION,
   type ObserverRecipeField,
@@ -10,6 +16,7 @@ import {
   type ObserverRecipeProposalInput,
   type ObserverRecipeResignInput,
   type ObserverRecipeState,
+  type ObserverRecipeTrialFieldOutcome,
   type ObserverRecipeTrialInput,
   type ObserverRecipeTrustManifestInstallInput,
   type ObserverRecipeTrustTransparencyReceipt,
@@ -108,6 +115,13 @@ interface TrialSummary {
   failed: number;
   distinctSkus: number;
   distinctLayouts: number;
+  packagedOracleTrials: number;
+  oracleCompletePassed: number;
+  distinctOracleSkus: number;
+  distinctOracleLayouts: number;
+  packagedConflictTrials: number;
+  oracleConflictTrials: number;
+  insufficientTrials: number;
 }
 
 interface WitnessReceiptRow {
@@ -211,13 +225,149 @@ function parsedFields(value: string): Partial<Record<ObserverRecipeField, Observ
   return normalizedFields(JSON.parse(value) as unknown);
 }
 
+interface NormalizedTrialValidation {
+  validationProfile: "legacy_packaged_comparison" | typeof OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE;
+  oracleEvaluatedFieldCount: number;
+  oracleAgreedFieldCount: number;
+  oracleConflictFieldCount: number;
+  packagedMissingFieldCount: number;
+  packagedConflictFieldCount: number;
+  insufficientFieldCount: number;
+  fieldOutcomesJson: string;
+}
+
+const TRIAL_RECIPE_STATES = new Set(OBSERVER_RECIPE_TRIAL_RECIPE_STATES);
+const TRIAL_PACKAGED_STATES = new Set(OBSERVER_RECIPE_TRIAL_PACKAGED_STATES);
+const TRIAL_ORACLE_STATES = new Set(OBSERVER_RECIPE_TRIAL_ORACLE_STATES);
+const TRIAL_DISPOSITIONS = new Set(OBSERVER_RECIPE_TRIAL_DISPOSITIONS);
+
+function normalizedTrialValidation(
+  input: ObserverRecipeTrialInput,
+  recipeFields: Partial<Record<ObserverRecipeField, ObserverRecipeFieldInput>>
+): NormalizedTrialValidation {
+  if (input.contractVersion === OBSERVER_RECIPE_CONTRACT_VERSION) {
+    return {
+      validationProfile: "legacy_packaged_comparison",
+      oracleEvaluatedFieldCount: 0,
+      oracleAgreedFieldCount: 0,
+      oracleConflictFieldCount: 0,
+      packagedMissingFieldCount: 0,
+      packagedConflictFieldCount: 0,
+      insufficientFieldCount: 0,
+      fieldOutcomesJson: "[]"
+    };
+  }
+  if (input.contractVersion !== OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION
+    || input.validationProfile !== OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE
+    || !Array.isArray(input.fieldOutcomes)) {
+    throw new Error("Observer recipe trial oracle evidence is required for contract version 2.");
+  }
+  const fieldOrder = new Map(OBSERVER_RECIPE_FIELDS.map((field, index) => [field, index]));
+  const outcomes: ObserverRecipeTrialFieldOutcome[] = [];
+  for (const value of input.fieldOutcomes) {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify([
+        "disposition", "field", "oracleState", "packagedState", "recipeState"
+      ].sort())
+      || !FIELD_NAMES.has(value.field)
+      || !TRIAL_RECIPE_STATES.has(value.recipeState)
+      || !TRIAL_PACKAGED_STATES.has(value.packagedState)
+      || !TRIAL_ORACLE_STATES.has(value.oracleState)
+      || !TRIAL_DISPOSITIONS.has(value.disposition)) {
+      throw new Error("Observer recipe trial field evidence is outside the bounded state schema.");
+    }
+    const extracting = value.recipeState === "value";
+    const expectedDisposition = !extracting ? "insufficient"
+      : value.packagedState === "conflict" ? "conflict"
+        : value.oracleState === "conflict" ? "conflict"
+          : value.oracleState === "ambiguous" ? "insufficient"
+            : value.packagedState === "missing" && value.oracleState === "missing" ? "insufficient"
+              : "verified";
+    const validStateCombination = extracting
+      ? ["agreed", "missing", "conflict"].includes(value.packagedState)
+        && (value.packagedState === "conflict"
+          ? value.oracleState === "not_evaluated"
+          : ["agreed", "conflict", "missing", "ambiguous"].includes(value.oracleState))
+      : value.packagedState === "not_evaluated" && value.oracleState === "not_evaluated";
+    if (!validStateCombination || value.disposition !== expectedDisposition) {
+      throw new Error("Observer recipe trial field states are internally inconsistent.");
+    }
+    outcomes.push({ ...value });
+  }
+  outcomes.sort((left, right) => Number(fieldOrder.get(left.field)) - Number(fieldOrder.get(right.field)));
+  const expectedFields = Object.keys(recipeFields).sort();
+  if (outcomes.length < 1 || outcomes.length > 5
+    || new Set(outcomes.map((item) => item.field)).size !== outcomes.length
+    || JSON.stringify(outcomes.map((item) => item.field).sort()) !== JSON.stringify(expectedFields)) {
+    throw new Error("Observer recipe trial field evidence must cover each signed recipe field exactly once.");
+  }
+  const count = (predicate: (item: ObserverRecipeTrialFieldOutcome) => boolean): number => outcomes.filter(predicate).length;
+  const derived = {
+    evaluatedFieldCount: outcomes.length,
+    agreedFieldCount: count((item) => item.disposition === "verified"),
+    ambiguousFieldCount: count((item) => item.recipeState === "ambiguous" || item.oracleState === "ambiguous"),
+    oracleEvaluatedFieldCount: count((item) => item.oracleState === "agreed" || item.oracleState === "conflict"),
+    oracleAgreedFieldCount: count((item) => item.oracleState === "agreed"),
+    oracleConflictFieldCount: count((item) => item.oracleState === "conflict"),
+    packagedMissingFieldCount: count((item) => item.packagedState === "missing"),
+    packagedConflictFieldCount: count((item) => item.packagedState === "conflict"),
+    insufficientFieldCount: count((item) => item.disposition === "insufficient")
+  };
+  for (const [key, value] of Object.entries(derived)) {
+    if (Number(input[key as keyof ObserverRecipeTrialInput]) !== value) {
+      throw new Error("Observer recipe trial counts do not match its bounded field evidence.");
+    }
+  }
+  const passed = derived.agreedFieldCount === derived.evaluatedFieldCount
+    && derived.ambiguousFieldCount === 0
+    && derived.oracleConflictFieldCount === 0
+    && derived.packagedConflictFieldCount === 0
+    && derived.insufficientFieldCount === 0;
+  if ((input.outcome === "passed") !== passed) {
+    throw new Error("Observer recipe trial outcome does not match its bounded field evidence.");
+  }
+  const fieldOutcomesJson = JSON.stringify(outcomes);
+  if (fieldOutcomesJson.length > 1200) throw new Error("Observer recipe trial field evidence exceeds its privacy bound.");
+  return {
+    validationProfile: OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
+    oracleEvaluatedFieldCount: derived.oracleEvaluatedFieldCount,
+    oracleAgreedFieldCount: derived.oracleAgreedFieldCount,
+    oracleConflictFieldCount: derived.oracleConflictFieldCount,
+    packagedMissingFieldCount: derived.packagedMissingFieldCount,
+    packagedConflictFieldCount: derived.packagedConflictFieldCount,
+    insufficientFieldCount: derived.insufficientFieldCount,
+    fieldOutcomesJson
+  };
+}
+
 function trialSummary(db: YoinkDatabase, recipeId: string): TrialSummary {
-  const row = db.get<{ passed: number; failed: number; distinctSkus: number; distinctLayouts: number }>(
+  const row = db.get<{
+    passed: number; failed: number; distinctSkus: number; distinctLayouts: number;
+    packagedOracleTrials: number; oracleCompletePassed: number;
+    distinctOracleSkus: number; distinctOracleLayouts: number;
+    packagedConflictTrials: number; oracleConflictTrials: number; insufficientTrials: number;
+  }>(
     `SELECT
        SUM(CASE WHEN outcome = 'passed' THEN 1 ELSE 0 END) AS passed,
        SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failed,
        COUNT(DISTINCT CASE WHEN outcome = 'passed' THEN retailer_sku END) AS distinctSkus,
-       COUNT(DISTINCT CASE WHEN outcome = 'passed' THEN layout_fingerprint END) AS distinctLayouts
+       COUNT(DISTINCT CASE WHEN outcome = 'passed' THEN layout_fingerprint END) AS distinctLayouts,
+       SUM(CASE WHEN validation_profile = 'packaged_structured_oracle_v1' THEN 1 ELSE 0 END) AS packagedOracleTrials,
+       SUM(CASE WHEN validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+         AND oracle_agreed_field_count = evaluated_field_count
+         AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+         AND insufficient_field_count = 0 THEN 1 ELSE 0 END) AS oracleCompletePassed,
+       COUNT(DISTINCT CASE WHEN validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+         AND oracle_agreed_field_count = evaluated_field_count
+         AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+         AND insufficient_field_count = 0 THEN retailer_sku END) AS distinctOracleSkus,
+       COUNT(DISTINCT CASE WHEN validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+         AND oracle_agreed_field_count = evaluated_field_count
+         AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+         AND insufficient_field_count = 0 THEN layout_fingerprint END) AS distinctOracleLayouts,
+       SUM(CASE WHEN packaged_conflict_field_count > 0 THEN 1 ELSE 0 END) AS packagedConflictTrials,
+       SUM(CASE WHEN oracle_conflict_field_count > 0 THEN 1 ELSE 0 END) AS oracleConflictTrials,
+       SUM(CASE WHEN insufficient_field_count > 0 THEN 1 ELSE 0 END) AS insufficientTrials
      FROM observer_recipe_trials WHERE recipe_id = ?`,
     recipeId
   );
@@ -225,7 +375,14 @@ function trialSummary(db: YoinkDatabase, recipeId: string): TrialSummary {
     passed: Number(row?.passed ?? 0),
     failed: Number(row?.failed ?? 0),
     distinctSkus: Number(row?.distinctSkus ?? 0),
-    distinctLayouts: Number(row?.distinctLayouts ?? 0)
+    distinctLayouts: Number(row?.distinctLayouts ?? 0),
+    packagedOracleTrials: Number(row?.packagedOracleTrials ?? 0),
+    oracleCompletePassed: Number(row?.oracleCompletePassed ?? 0),
+    distinctOracleSkus: Number(row?.distinctOracleSkus ?? 0),
+    distinctOracleLayouts: Number(row?.distinctOracleLayouts ?? 0),
+    packagedConflictTrials: Number(row?.packagedConflictTrials ?? 0),
+    oracleConflictTrials: Number(row?.oracleConflictTrials ?? 0),
+    insufficientTrials: Number(row?.insufficientTrials ?? 0)
   };
 }
 
@@ -733,9 +890,19 @@ export class ObserverRecipeRepository {
     if (input.targetState === "canary" && (trials.failed > 0 || trials.passed < 2 || trials.distinctSkus < 2)) {
       throw new Error("Canary promotion requires two passing shadow trials on two exact SKUs and no failures.");
     }
+    if (row.provenanceCode === "privacy_bounded_repair_miner" && input.targetState === "canary"
+      && (trials.oracleCompletePassed < 2 || trials.distinctOracleSkus < 2
+        || trials.packagedConflictTrials > 0 || trials.oracleConflictTrials > 0)) {
+      throw new Error("Generated repair canary promotion requires packaged-oracle agreement on every field across two exact SKUs and no conflicts.");
+    }
     if (input.targetState === "trusted_read_only"
       && (trials.failed > 0 || trials.passed < 5 || trials.distinctSkus < 3 || trials.distinctLayouts < 2)) {
       throw new Error("Trusted read-only promotion requires five passing trials, three exact SKUs, two layouts, and no failures.");
+    }
+    if (row.provenanceCode === "privacy_bounded_repair_miner" && input.targetState === "trusted_read_only"
+      && (trials.oracleCompletePassed < 5 || trials.distinctOracleSkus < 3 || trials.distinctOracleLayouts < 2
+        || trials.packagedConflictTrials > 0 || trials.oracleConflictTrials > 0)) {
+      throw new Error("Generated repair trusted promotion requires five oracle-complete trials, three exact SKUs, two layouts, and no conflicts.");
     }
     const rootedTrust = this.requireRootedTrust(now);
     const signedAt = nowIso(now);
@@ -817,7 +984,8 @@ export class ObserverRecipeRepository {
 
   recordTrial(deviceId: string, input: ObserverRecipeTrialInput, now = Date.now()): Record<string, unknown> {
     const cleanDeviceId = cleanText(deviceId, 120);
-    if (!input || typeof input !== "object" || input.contractVersion !== OBSERVER_RECIPE_CONTRACT_VERSION
+    if (!input || typeof input !== "object"
+      || ![OBSERVER_RECIPE_CONTRACT_VERSION, OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION].includes(input.contractVersion)
       || !Object.hasOwn(RETAILER_OBSERVER_VERSIONS, input.retailerId)
       || !["passed", "failed"].includes(input.outcome)) {
       throw new Error("A valid observer recipe trial is required.");
@@ -830,7 +998,11 @@ export class ObserverRecipeRepository {
     );
     let capabilities: Record<string, unknown> = {};
     try { capabilities = JSON.parse(device?.capabilitiesJson ?? "{}") as Record<string, unknown>; } catch { capabilities = {}; }
-    if (!device || capabilities.observerRecipeShadow !== true) throw new Error("Upgrade the paired Chrome companion before running recipe trials.");
+    if (!device || capabilities.observerRecipeShadow !== true
+      || (input.contractVersion === OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION
+        && capabilities.observerRecipePackagedOracle !== true)) {
+      throw new Error("Upgrade the paired Chrome companion before running recipe trials.");
+    }
     const recipe = this.row(cleanText(input.recipeId, 120));
     if (!recipe || !ACTIVE_STATES.has(recipe.lifecycleState) || recipe.killSwitch === 1
       || recipe.retailerId !== input.retailerId || recipe.recipeVersion !== input.recipeVersion
@@ -851,16 +1023,22 @@ export class ObserverRecipeRepository {
       || (input.outcome === "passed" && (agreed !== evaluated || ambiguous !== 0))) {
       throw new Error("Observer recipe trial evidence is malformed or inconsistent.");
     }
+    const validation = normalizedTrialValidation(input, parsedFields(recipe.recipeJson));
     const id = newId("observer_recipe_trial");
     const receivedAt = nowIso(now);
+    let autoDisabled = false;
     this.db.transaction(() => {
-      this.db.run(
+      const inserted = this.db.run(
         `INSERT OR IGNORE INTO observer_recipe_trials(
            id, tenant_id, user_id, device_id, recipe_id, retailer_id,
            retailer_sku, observer_version, layout_fingerprint, outcome,
            evaluated_field_count, agreed_field_count, ambiguous_field_count,
-           observed_at, received_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           observed_at, received_at, validation_profile,
+           oracle_evaluated_field_count, oracle_agreed_field_count,
+           oracle_conflict_field_count, packaged_missing_field_count,
+           packaged_conflict_field_count, insufficient_field_count,
+           field_outcomes_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
@@ -875,10 +1053,54 @@ export class ObserverRecipeRepository {
         agreed,
         ambiguous,
         new Date(observedTime).toISOString(),
-        receivedAt
+        receivedAt,
+        validation.validationProfile,
+        validation.oracleEvaluatedFieldCount,
+        validation.oracleAgreedFieldCount,
+        validation.oracleConflictFieldCount,
+        validation.packagedMissingFieldCount,
+        validation.packagedConflictFieldCount,
+        validation.insufficientFieldCount,
+        validation.fieldOutcomesJson
       );
+      if (Number(inserted.changes) === 1 && validation.packagedConflictFieldCount > 0) {
+        const disabled = this.db.run(
+          `UPDATE observer_recipe_candidates SET lifecycle_state = 'disabled', kill_switch = 1,
+             disabled_reason = 'packaged_evidence_conflict', signature = '', signed_at = '', updated_at = ?
+           WHERE id = ? AND lifecycle_state <> 'disabled' AND kill_switch = 0`,
+          receivedAt,
+          recipe.id
+        );
+        if (Number(disabled.changes) === 1) {
+          this.lifecycle(recipe.id, recipe.lifecycleState, "disabled", "packaged_evidence_conflict", now);
+          this.audit.record({
+            correlationId: recipe.id,
+            aggregateType: "observer_recipe",
+            eventType: "observer_recipe_auto_disabled",
+            reasonCode: "packaged_evidence_conflict",
+            message: "A packaged observer conflict immediately killed and undistributed a read-only recipe.",
+            data: {
+              retailerId: input.retailerId,
+              recipeVersion: recipe.recipeVersion,
+              packagedConflictFieldCount: validation.packagedConflictFieldCount,
+              mutationCapable: false,
+              rawValuesStored: false
+            }
+          }, now);
+          autoDisabled = true;
+        }
+      }
     });
-    return { id, recipeId: recipe.id, retailerId: input.retailerId, retailerSku, outcome: input.outcome, receivedAt };
+    return {
+      id,
+      recipeId: recipe.id,
+      retailerId: input.retailerId,
+      retailerSku,
+      outcome: input.outcome,
+      validationProfile: validation.validationProfile,
+      autoDisabled,
+      receivedAt
+    };
   }
 
   disable(id: string, reason = "maintainer_kill_switch", now = Date.now()): Record<string, unknown> {
@@ -962,6 +1184,8 @@ export class ObserverRecipeRepository {
     const row = this.db.get<{
       candidates: number; active: number; disabled: number; trials: number; failedTrials: number;
       generatedRepairCandidates: number; quarantinedGeneratedRepairCandidates: number;
+      packagedOracleTrials: number; packagedConflictTrials: number;
+      oracleCompleteTrials: number; autoDisabledConflicts: number;
       trustManifests: number; transparencyEvents: number;
       witnessReceipts: number; witnessChecks: number; failedWitnessChecks: number;
     }>(
@@ -978,6 +1202,17 @@ export class ObserverRecipeRepository {
             AND lifecycle_state = 'quarantined') AS quarantinedGeneratedRepairCandidates,
          (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ?) AS trials,
          (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND outcome = 'failed') AS failedTrials,
+         (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ?
+            AND validation_profile = 'packaged_structured_oracle_v1') AS packagedOracleTrials,
+         (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ?
+            AND packaged_conflict_field_count > 0) AS packagedConflictTrials,
+         (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ?
+            AND validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+            AND oracle_agreed_field_count = evaluated_field_count
+            AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+            AND insufficient_field_count = 0) AS oracleCompleteTrials,
+         (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?
+            AND lifecycle_state = 'disabled' AND disabled_reason = 'packaged_evidence_conflict') AS autoDisabledConflicts,
          (SELECT COUNT(*) FROM observer_recipe_trust_manifests WHERE tenant_id = ?) AS trustManifests,
          (SELECT COUNT(*) FROM observer_recipe_transparency_events WHERE tenant_id = ?) AS transparencyEvents,
          (SELECT COUNT(*) FROM observer_recipe_witness_receipts WHERE tenant_id = ?) AS witnessReceipts,
@@ -997,6 +1232,10 @@ export class ObserverRecipeRepository {
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
+      currentRequestScope().tenantId,
+      currentRequestScope().tenantId,
+      currentRequestScope().tenantId,
+      currentRequestScope().tenantId,
       currentRequestScope().tenantId
     );
     return {
@@ -1007,6 +1246,10 @@ export class ObserverRecipeRepository {
       quarantinedGeneratedObserverRepairCandidates: Number(row?.quarantinedGeneratedRepairCandidates ?? 0),
       observerRecipeTrials: Number(row?.trials ?? 0),
       failedObserverRecipeTrials: Number(row?.failedTrials ?? 0),
+      packagedOracleObserverRecipeTrials: Number(row?.packagedOracleTrials ?? 0),
+      packagedConflictObserverRecipeTrials: Number(row?.packagedConflictTrials ?? 0),
+      oracleCompleteObserverRecipeTrials: Number(row?.oracleCompleteTrials ?? 0),
+      autoDisabledObserverRecipesByPackagedConflict: Number(row?.autoDisabledConflicts ?? 0),
       observerRecipeTrustManifests: Number(row?.trustManifests ?? 0),
       observerRecipeTransparencyEvents: Number(row?.transparencyEvents ?? 0),
       observerRecipeWitnessReceipts: Number(row?.witnessReceipts ?? 0),

@@ -530,6 +530,23 @@ rollback, kill switch, or external witness enforcement. Because aggregation rema
 tenant/user scoped, it is not yet a cross-account community quorum or an
 independent correctness oracle.
 
+Yoink 0.49 adds a second fixed packaged reader at the signed-recipe trial
+boundary. The downloaded recipe is interpreted by one fixed path; a separate
+path reads exact-SKU-bound JSON-LD, semantic microdata/meta, and a unique
+accessible Add control. The result is a trial-v2 array of field/state enums and
+counts only. The server reconstructs and validates those counts against the
+signed recipe's exact fields. Migration 42 retains old trials under
+`legacy_packaged_comparison` and stores no extracted recipe or oracle values.
+
+Known packaged evidence remains authoritative. A conflict transactionally
+records the trial, changes the recipe to `disabled`, activates its kill switch,
+clears distribution, and appends lifecycle plus audit/outbox evidence.
+Generated recipes require oracle-complete multi-SKU/layout trials before
+canary or trusted-read-only promotion. The packaged reader is still one
+software trust domain rather than an independent account/service, and recipe
+field-fill remains disabled until stored observations can expose and govern
+that provenance.
+
 Yoink 0.38.0 makes the paired Chrome credential a generation-bound,
 recoverable lifecycle rather than an indefinitely static hash. Begin is
 authenticated only by the current token and stores a 10-minute next-generation
@@ -760,9 +777,11 @@ ordinary proposal API. Replays reuse the existing row. Promotion, signing,
 trial collection, witness-gated distribution, and every mutation boundary stay
 in their existing explicit trust domains.
 
-No schema migration is needed for 0.48. Optional field-specific structural
+No schema migration was needed for 0.48. Optional field-specific structural
 counts remain in the existing diagnostic JSON, and the recipe JSON already
-stores a field map. Migration 41 remains current.
+stores a field map. Migration 42 in 0.49 adds only bounded recipe-trial oracle
+states/counts and preserves every legacy trial; it does not widen retailer or
+mutation authority.
 
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted
@@ -770,11 +789,11 @@ structural diagnostic for explicit inspections, rehearsals, and guarded live
 verification. Migration 10 stores bounded counts/enums and a server-derived
 layout fingerprint, then projects open and recovered groups into the control
 center. Raw DOM/text and session, account, address, CSRF, cookie, or offer-token
-data are outside the contract and never stored. In the current release,
-persistent incidents require a reviewed adapter release and the server never
-downloads selectors or self-modifying retailer code. The roadmap's possible
-future registry is limited to signed, expiring, observer-only selector data
-interpreted by fixed packaged logic; it can never supply mutation behavior.
+data are outside the contract and never stored. Persistent incidents may use a
+reviewed packaged adapter release or a rooted, signed, expiring observer-only
+recipe interpreted by fixed packaged logic. The server distributes declarative
+selectors, never self-modifying code; recipes can never supply mutation
+behavior, and generated repairs are never automatically signed or promoted.
 
 Target, Walmart, Amazon, and Best Buy capabilities are named and adapter-version-bound.
 The legacy generic `retailerMutation` flag is normalized to false and cannot

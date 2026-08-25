@@ -2948,5 +2948,43 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         ON observer_recipe_candidates(tenant_id, recipe_fingerprint)
         WHERE provenance_code = 'privacy_bounded_repair_miner';
     `
+  },
+  {
+    version: 42,
+    name: "packaged_observer_recipe_oracle",
+    sql: `
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN validation_profile TEXT NOT NULL DEFAULT 'legacy_packaged_comparison'
+          CHECK (validation_profile IN ('legacy_packaged_comparison', 'packaged_structured_oracle_v1'));
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN oracle_evaluated_field_count INTEGER NOT NULL DEFAULT 0
+          CHECK (oracle_evaluated_field_count BETWEEN 0 AND 5);
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN oracle_agreed_field_count INTEGER NOT NULL DEFAULT 0
+          CHECK (oracle_agreed_field_count BETWEEN 0 AND 5);
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN oracle_conflict_field_count INTEGER NOT NULL DEFAULT 0
+          CHECK (oracle_conflict_field_count BETWEEN 0 AND 5);
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN packaged_missing_field_count INTEGER NOT NULL DEFAULT 0
+          CHECK (packaged_missing_field_count BETWEEN 0 AND 5);
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN packaged_conflict_field_count INTEGER NOT NULL DEFAULT 0
+          CHECK (packaged_conflict_field_count BETWEEN 0 AND 5);
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN insufficient_field_count INTEGER NOT NULL DEFAULT 0
+          CHECK (insufficient_field_count BETWEEN 0 AND 5);
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN field_outcomes_json TEXT NOT NULL DEFAULT '[]'
+          CHECK (json_valid(field_outcomes_json) AND json_type(field_outcomes_json) = 'array'
+            AND length(field_outcomes_json) <= 1200);
+
+      CREATE INDEX observer_recipe_trials_oracle_gate_idx
+        ON observer_recipe_trials(
+          recipe_id, validation_profile, outcome,
+          packaged_conflict_field_count, oracle_conflict_field_count,
+          oracle_agreed_field_count, received_at DESC
+        );
+    `
   }
 ]);

@@ -6,12 +6,17 @@ import test from "node:test";
 import {
   AMAZON_OBSERVER_VERSION,
   OBSERVER_RECIPE_CONTRACT_VERSION,
+  OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
+  OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
+  type ObserverRecipeField,
   type ObserverRecipeProposalInput,
+  type ObserverRecipeTrialFieldOutcome,
   type ObserverRecipeTrialInput
 } from "../packages/contracts/src/index.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { ObserverRecipeRepository } from "../packages/database/src/observer-recipe-repository.js";
+import { ObserverRepairCandidateRepository } from "../packages/database/src/observer-repair-candidate-repository.js";
 import { ObserverRecipeSigner } from "../packages/observer-registry/src/signer.js";
 import {
   createObserverRecipeTrustManifest,
@@ -46,8 +51,49 @@ function device(db: YoinkDatabase): { id: string; token: string } {
   return devices.pair({
     pairingCode: code.code,
     extensionVersion: "0.13.0",
-    capabilities: { observerRecipeShadow: true }
+    capabilities: { observerRecipeShadow: true, observerRecipePackagedOracle: true }
   }, NOW + 1_000);
+}
+
+function oracleTrial(
+  recipeId: string,
+  recipeVersion: string,
+  sku: string,
+  observedAt: number,
+  fields: ObserverRecipeField[],
+  layout = "a".repeat(64),
+  conflictField: ObserverRecipeField | "" = ""
+): ObserverRecipeTrialInput {
+  const fieldOutcomes: ObserverRecipeTrialFieldOutcome[] = fields.map((field) => ({
+    field,
+    recipeState: "value",
+    packagedState: field === conflictField ? "conflict" : "agreed",
+    oracleState: field === conflictField ? "not_evaluated" : "agreed",
+    disposition: field === conflictField ? "conflict" : "verified"
+  }));
+  const conflictCount = conflictField ? 1 : 0;
+  return {
+    contractVersion: OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
+    recipeId,
+    recipeVersion,
+    retailerId: "amazon",
+    retailerSku: sku,
+    observerVersion: AMAZON_OBSERVER_VERSION,
+    layoutFingerprint: layout,
+    outcome: conflictField ? "failed" : "passed",
+    evaluatedFieldCount: fields.length,
+    agreedFieldCount: fields.length - conflictCount,
+    ambiguousFieldCount: 0,
+    validationProfile: OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
+    oracleEvaluatedFieldCount: fields.length - conflictCount,
+    oracleAgreedFieldCount: fields.length - conflictCount,
+    oracleConflictFieldCount: 0,
+    packagedMissingFieldCount: 0,
+    packagedConflictFieldCount: conflictCount,
+    insufficientFieldCount: 0,
+    fieldOutcomes,
+    observedAt: new Date(observedAt).toISOString()
+  };
 }
 
 function trial(
@@ -132,9 +178,127 @@ test("observer recipes advance only through signed, measured, observer-only life
       confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
     }, NOW + 16_000);
     assert.equal(trusted.lifecycleState, "trusted_read_only");
-    assert.deepEqual(trusted.trials, { passed: 5, failed: 0, distinctSkus: 3, distinctLayouts: 2 });
+    assert.deepEqual(trusted.trials, {
+      passed: 5,
+      failed: 0,
+      distinctSkus: 3,
+      distinctLayouts: 2,
+      packagedOracleTrials: 0,
+      oracleCompletePassed: 0,
+      distinctOracleSkus: 0,
+      distinctOracleLayouts: 0,
+      packagedConflictTrials: 0,
+      oracleConflictTrials: 0,
+      insufficientTrials: 0
+    });
     assert.equal(repository.active("amazon", NOW + 17_000)?.payload.state, "trusted_read_only");
     assert.equal(repository.counts(NOW + 17_000).activeObserverRecipes, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("worker-generated repairs require oracle-complete evidence while legacy trials remain compatible", () => {
+  const db = new YoinkDatabase();
+  try {
+    const paired = device(db);
+    const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
+    const generated = new ObserverRepairCandidateRepository(db).ensure({
+      retailerId: "amazon",
+      layoutFingerprint: "c".repeat(64),
+      fields: {
+        unitPrice: { mode: "text", selectors: ["span[data-testid='product-price']"] }
+      },
+      minimumExtensionVersion: "0.49.0",
+      occurrenceCount: 3,
+      minimumDistinctDeviceCount: 3,
+      minimumDistinctSkuCount: 2
+    }, NOW + 2_000);
+    repository.promote(generated.id, {
+      targetState: "shadow",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 3_000);
+    repository.recordTrial(paired.id, trial(generated.id, generated.recipeVersion, "B002OB49L4", NOW + 4_000), NOW + 4_500);
+    repository.recordTrial(paired.id, trial(generated.id, generated.recipeVersion, "B0DCGQ6CJD", NOW + 5_000), NOW + 5_500);
+    assert.throws(() => repository.promote(generated.id, {
+      targetState: "canary",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 6_000), /packaged-oracle agreement/);
+
+    repository.recordTrial(paired.id, oracleTrial(
+      generated.id, generated.recipeVersion, "B002OB49L4", NOW + 7_000, ["unitPrice"]
+    ), NOW + 7_500);
+    repository.recordTrial(paired.id, oracleTrial(
+      generated.id, generated.recipeVersion, "B0DCGQ6CJD", NOW + 8_000, ["unitPrice"]
+    ), NOW + 8_500);
+    const canary = repository.promote(generated.id, {
+      targetState: "canary",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 9_000);
+    assert.equal(canary.lifecycleState, "canary");
+    const summary = canary.trials as Record<string, number>;
+    assert.equal(summary.packagedOracleTrials, 2);
+    assert.equal(summary.oracleCompletePassed, 2);
+    assert.equal(summary.distinctOracleSkus, 2);
+  } finally {
+    db.close();
+  }
+});
+
+test("one packaged conflict durably records bounded evidence and immediately kills distribution", () => {
+  const db = new YoinkDatabase();
+  try {
+    const paired = device(db);
+    const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
+    const created = repository.propose(proposal("amazon-conflict-kill"), NOW + 2_000);
+    repository.promote(String(created.id), {
+      targetState: "shadow",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 3_000);
+    const conflict = oracleTrial(
+      String(created.id), "amazon-conflict-kill", "B002OB49L4", NOW + 4_000,
+      ["availability", "unitPrice", "seller", "fulfillment", "addControl"],
+      "d".repeat(64),
+      "unitPrice"
+    );
+    assert.throws(
+      () => repository.recordTrial(paired.id, { ...conflict, agreedFieldCount: 5 }, NOW + 4_250),
+      /counts do not match/
+    );
+    const unsafe = structuredClone(conflict) as ObserverRecipeTrialInput & {
+      fieldOutcomes: Array<ObserverRecipeTrialFieldOutcome & { rawValue?: string }>;
+    };
+    assert.ok(unsafe.fieldOutcomes);
+    unsafe.fieldOutcomes[0] = { ...unsafe.fieldOutcomes[0]!, rawValue: "DO_NOT_STORE" };
+    assert.throws(
+      () => repository.recordTrial(paired.id, unsafe, NOW + 4_300),
+      /bounded state schema/
+    );
+    assert.ok(repository.active("amazon", NOW + 4_400));
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM observer_recipe_trials")?.count, 0);
+    const receipt = repository.recordTrial(paired.id, conflict, NOW + 4_500);
+    assert.equal(receipt.autoDisabled, true);
+    assert.equal(repository.active("amazon", NOW + 5_000), null);
+    const disabled = repository.list().find((recipe) => recipe.id === created.id);
+    assert.equal(disabled?.lifecycleState, "disabled");
+    assert.equal(disabled?.disabledReason, "packaged_evidence_conflict");
+    assert.equal((disabled?.trials as Record<string, number>).packagedConflictTrials, 1);
+    const stored = db.get<Record<string, unknown>>(
+      "SELECT validation_profile, packaged_conflict_field_count, field_outcomes_json FROM observer_recipe_trials WHERE recipe_id = ?",
+      String(created.id)
+    );
+    assert.equal(stored?.validation_profile, "packaged_structured_oracle_v1");
+    assert.equal(stored?.packaged_conflict_field_count, 1);
+    assert.equal(JSON.stringify(stored).includes("DO_NOT_STORE"), false);
+    assert.equal(repository.counts(NOW + 5_000).autoDisabledObserverRecipesByPackagedConflict, 1);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM observer_recipe_lifecycle_events WHERE recipe_id = ? AND reason_code = 'packaged_evidence_conflict'",
+      String(created.id)
+    )?.count, 1);
   } finally {
     db.close();
   }

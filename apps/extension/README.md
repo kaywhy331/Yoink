@@ -46,6 +46,15 @@ rejects wrong-field vocabulary, sensitive/dynamic values, unknown properties,
 and Add controls that are not button-like. Observed page text and offer values
 never enter the diagnostic repair payload.
 
+Companion 0.49 packages a second fixed observer-recipe reader. After rooted
+signature verification, it compares recipe output with authoritative packaged
+evidence and exact-product structured/semantic page evidence. It reports only
+field/state enums and counts under trial contract v2. A packaged conflict is
+sent immediately so the server can kill distribution; raw values, recipe
+selectors, DOM, URLs, and session/account context are not sent. The oracle
+bundle has no network or mutation path and none of the four add-only runners
+consume its output.
+
 If that canonical diagnostic cannot reach the loopback server because of a
 transient network, timeout/rate-limit, or server failure, companion 0.17.0 keeps
 it in a paired-device-bound local outbox and retries on startup and the

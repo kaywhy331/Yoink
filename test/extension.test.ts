@@ -43,7 +43,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.equal(manifest.host_permissions.includes("https://www.target.com/*"), false);
   assert.equal(manifest.host_permissions.includes("https://*.walmart.com/*"), false);
 
-  for (const file of ["background.js", "popup.js", "runtime-config.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js"]) {
+  for (const file of ["background.js", "popup.js", "runtime-config.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js", "observer-recipe-oracle.js"]) {
     const result = spawnSync(process.execPath, ["--check", join(extensionRoot, file)], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
   }
@@ -57,6 +57,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   const amazonActionBundle = readFileSync(join(extensionRoot, "amazon-action.js"), "utf8");
   const bestBuyActionBundle = readFileSync(join(extensionRoot, "bestbuy-action.js"), "utf8");
   const retailerBundle = readFileSync(join(extensionRoot, "retailer-shadow.js"), "utf8");
+  const observerRecipeOracle = readFileSync(join(extensionRoot, "observer-recipe-oracle.js"), "utf8");
   const trackalackerPush = readFileSync(join(extensionRoot, "trackalacker-push.js"), "utf8");
   const observerRecipeRoot = readFileSync(join(extensionRoot, "observer-recipe-root.js"), "utf8");
   assert.match(background, /setAccessLevel\(\{ accessLevel: "TRUSTED_CONTEXTS" \}\)/);
@@ -68,6 +69,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /communityReadOnlyEvidence: true/);
   assert.match(background, /exactSelectedOfferEvidence: true/);
   assert.match(background, /observerRecipeShadow: true/);
+  assert.match(background, /observerRecipePackagedOracle: true/);
   assert.match(background, /durableAdapterDiagnostics: true/);
   assert.match(background, /privacyBoundedRepairLandmarks: true/);
   assert.match(background, /rotatableDeviceCredentials: true/);
@@ -84,6 +86,8 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /Ed25519/);
   assert.match(background, /observer-recipe-trials/);
   assert.match(background, /observer-recipe-root\.js/);
+  assert.match(background, /observer-recipe-oracle\.js/);
+  assert.match(background, /packaged_structured_oracle_v1/);
   assert.match(background, /yoinkObserverRecipeTrustStateV1/);
   assert.doesNotMatch(background, /const OBSERVER_RECIPE_KEY_PIN/);
   assert.match(background, /yoink:contribute-retailer/);
@@ -112,6 +116,8 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(runtimeConfig, /localPackageUpdates: true/);
   assert.doesNotMatch(targetBundle, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
   assert.doesNotMatch(retailerBundle, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
+  assert.doesNotMatch(observerRecipeOracle, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
+  assert.match(observerRecipeOracle, /application\/ld\+json|packaged_structured_oracle_v1/);
   assert.match(retailerBundle, /pdp-add|repairLandmarks/);
   assert.match(targetActionBundle, /\.click\s*\(/);
   assert.doesNotMatch(targetActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);

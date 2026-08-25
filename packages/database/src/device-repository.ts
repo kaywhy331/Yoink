@@ -27,6 +27,7 @@ export interface DeviceCapabilities {
   communityReadOnlyEvidence: boolean;
   exactSelectedOfferEvidence: boolean;
   observerRecipeShadow: boolean;
+  observerRecipePackagedOracle: boolean;
   durableAdapterDiagnostics: boolean;
   privacyBoundedRepairLandmarks: boolean;
   rotatableDeviceCredentials: boolean;
@@ -172,6 +173,7 @@ function capabilities(input: Partial<DeviceCapabilities> | undefined): DeviceCap
     communityReadOnlyEvidence: input?.communityReadOnlyEvidence === true,
     exactSelectedOfferEvidence: input?.exactSelectedOfferEvidence === true,
     observerRecipeShadow: input?.observerRecipeShadow === true,
+    observerRecipePackagedOracle: input?.observerRecipePackagedOracle === true,
     durableAdapterDiagnostics: input?.durableAdapterDiagnostics === true,
     privacyBoundedRepairLandmarks: input?.privacyBoundedRepairLandmarks === true,
     rotatableDeviceCredentials: input?.rotatableDeviceCredentials === true,

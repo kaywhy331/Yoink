@@ -66,7 +66,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /worker-generated candidate/);
     assert.match(adminPageBody, /may be compiled into one bounded multi-field recipe candidate/);
     assert.match(adminPageBody, /availability, unit price, seller, fulfillment, and add control/);
-    assert.match(adminScript, /independent oracle pending/);
+    assert.match(adminScript, /packaged-oracle complete/);
+    assert.match(adminScript, /independent account quorum pending/);
+    assert.match(adminScript, /single packaged conflict auto-kills distribution/);
+    assert.match(adminScript, /Next gate: 2 clean passes on 2 exact SKUs/);
+    assert.match(adminScript, /promotionReady \? "" : "disabled"/);
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
@@ -90,6 +94,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
       generatedObserverRepairCandidatesAutoPromoted: false,
       generatedObserverRepairRequiresIndependentOracle: true,
       generatedObserverRepairIndependentOracleImplemented: false,
+      generatedObserverRepairPackagedOracleImplemented: true,
+      generatedObserverRepairPackagedOracleRequiredForPromotion: true,
+      generatedObserverRepairIndependentAccountOracleImplemented: false,
+      observerRecipePackagedConflictAutoKill: true,
+      observerRecipeFieldFillEnabled: false,
       durableObserverRecipeWitnessRefresh: true,
       durableOperatorAlertConnectorDispatch: true,
       governedOperatorAlertConnectorReplay: true,
@@ -261,6 +270,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.generatedObserverRepairCandidatesAutoPromoted, false);
     assert.equal(snapshot.capabilities.generatedObserverRepairRequiresIndependentOracle, true);
     assert.equal(snapshot.capabilities.generatedObserverRepairIndependentOracleImplemented, false);
+    assert.equal(snapshot.capabilities.generatedObserverRepairPackagedOracleImplemented, true);
+    assert.equal(snapshot.capabilities.generatedObserverRepairPackagedOracleRequiredForPromotion, true);
+    assert.equal(snapshot.capabilities.generatedObserverRepairIndependentAccountOracleImplemented, false);
+    assert.equal(snapshot.capabilities.observerRecipePackagedConflictAutoKill, true);
+    assert.equal(snapshot.capabilities.observerRecipeFieldFillEnabled, false);
     assert.equal(snapshot.capabilities.durableObserverRecipeWitnessRefresh, true);
     assert.equal(snapshot.capabilities.attestedBackgroundWorkerDeployment, true);
     assert.equal(snapshot.capabilities.observerRecipeWitnessRefreshConfigured, false);

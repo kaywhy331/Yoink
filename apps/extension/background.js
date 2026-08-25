@@ -215,6 +215,7 @@ function targetCapabilities() {
     communityReadOnlyEvidence: true,
     exactSelectedOfferEvidence: true,
     observerRecipeShadow: true,
+    observerRecipePackagedOracle: true,
     sanitizedAdapterDiagnostics: true,
     durableAdapterDiagnostics: true,
     privacyBoundedRepairLandmarks: true,
@@ -1492,91 +1493,55 @@ async function verifiedObserverRecipe(value, rootedTrust, retailerId) {
   return normalized.envelope.payload;
 }
 
-async function evaluateObserverRecipe(tabId, fields, bundledObservation) {
+async function evaluateObserverRecipe(tabId, fields, bundledObservation, diagnostic) {
+  const packagedPassed = !diagnostic || ["passed", "recovered"].includes(String(diagnostic.outcome || ""));
+  const failureStage = String(diagnostic?.failureStage || "");
+  const expected = {
+    retailerSku: bundledObservation.retailerSku,
+    availability: bundledObservation.availability,
+    unitPriceCents: bundledObservation.unitPriceCents,
+    sellerName: bundledObservation.sellerName,
+    fulfillment: bundledObservation.fulfillment,
+    addControlActionable: bundledObservation.addControlActionable,
+    known: {
+      availability: bundledObservation.availability !== "unknown" && failureStage !== "availability_binding",
+      unitPrice: Number.isSafeInteger(bundledObservation.unitPriceCents)
+        && !["price_binding", "offer_binding"].includes(failureStage),
+      seller: Boolean(bundledObservation.sellerName) && bundledObservation.sellerType !== "unknown"
+        && !["seller_binding", "offer_binding"].includes(failureStage),
+      fulfillment: bundledObservation.fulfillment !== "unknown"
+        && !["fulfillment_binding", "offer_binding"].includes(failureStage),
+      addControl: packagedPassed
+    }
+  };
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    files: ["observer-recipe-oracle.js"]
+  });
   const injections = await chrome.scripting.executeScript({
     target: { tabId },
     world: "ISOLATED",
-    args: [fields, {
-      availability: bundledObservation.availability,
-      unitPriceCents: bundledObservation.unitPriceCents,
-      sellerName: bundledObservation.sellerName,
-      fulfillment: bundledObservation.fulfillment,
-      addControlActionable: bundledObservation.addControlActionable
-    }],
-    func: (recipeFields, expected) => {
-      const tidy = (value) => String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
-      const visible = (element) => {
-        if (!(element instanceof Element)) return false;
-        const style = getComputedStyle(element);
-        return style.display !== "none" && style.visibility !== "hidden" && element.getAttribute("aria-hidden") !== "true";
-      };
-      const selected = (definition) => {
-        const elements = new Set();
-        let selectorAmbiguity = false;
-        for (const candidate of definition.selectors) {
-          let matches = [];
-          try { matches = [...document.querySelectorAll(candidate)].filter(visible); } catch { return { element: null, ambiguous: true }; }
-          if (matches.length > 1) selectorAmbiguity = true;
-          for (const match of matches.slice(0, 2)) elements.add(match);
-        }
-        return { element: elements.size === 1 ? [...elements][0] : null, ambiguous: selectorAmbiguity || elements.size > 1 };
-      };
-      const textValue = (element, definition) => definition.mode === "attribute"
-        ? tidy(element.getAttribute(definition.attribute)) : tidy(element.textContent);
-      const parseAvailability = (text) => {
-        const value = text.toLocaleLowerCase("en-US");
-        if (/out of stock|sold out|unavailable|currently unavailable/.test(value)) return "out_of_stock";
-        if (/pre[- ]?order|preorder/.test(value)) return "preorder";
-        if (/in stock|available|add to cart/.test(value)) return "in_stock";
-        return "unknown";
-      };
-      const parsePrice = (text) => {
-        const match = text.replace(/,/g, "").match(/(?:\$|usd\s*)?(\d{1,7})(?:\.(\d{2}))?/i);
-        return match ? Number(match[1]) * 100 + Number((match[2] || "00").padEnd(2, "0")) : null;
-      };
-      const results = [];
-      for (const [field, definition] of Object.entries(recipeFields)) {
-        const found = selected(definition);
-        if (found.ambiguous) { results.push({ field, state: "ambiguous" }); continue; }
-        if (!found.element) { results.push({ field, state: "missing" }); continue; }
-        let agreed = false;
-        if (field === "availability") {
-          const actual = definition.mode === "presence" ? "in_stock"
-            : definition.mode === "disabled_state"
-              ? (found.element.disabled || found.element.getAttribute("aria-disabled") === "true" ? "out_of_stock" : "in_stock")
-              : parseAvailability(textValue(found.element, definition));
-          agreed = actual !== "unknown" && actual === expected.availability;
-        } else if (field === "unitPrice") {
-          const actual = parsePrice(textValue(found.element, definition));
-          agreed = Number.isSafeInteger(actual) && actual === expected.unitPriceCents;
-        } else if (field === "seller") {
-          const actual = textValue(found.element, definition).toLocaleLowerCase("en-US");
-          const target = tidy(expected.sellerName).toLocaleLowerCase("en-US");
-          agreed = Boolean(target) && (actual === target || actual.includes(target));
-        } else if (field === "fulfillment") {
-          const actualText = definition.mode === "presence" ? "shipping" : textValue(found.element, definition).toLocaleLowerCase("en-US");
-          const actual = /pick ?up|store pickup|curbside/.test(actualText) ? "pickup"
-            : /ship|delivery/.test(actualText) ? "shipping" : "unknown";
-          agreed = actual !== "unknown" && actual === expected.fulfillment;
-        } else if (field === "addControl") {
-          const actionable = definition.mode === "presence" ? true
-            : definition.mode === "disabled_state"
-              ? !(found.element.disabled || found.element.getAttribute("aria-disabled") === "true")
-              : /add to cart|add to bag/.test(textValue(found.element, definition).toLocaleLowerCase("en-US"));
-          agreed = actionable === expected.addControlActionable;
-        }
-        results.push({ field, state: agreed ? "agreed" : "disagreed" });
-      }
-      return {
-        evaluatedFieldCount: results.length,
-        agreedFieldCount: results.filter((item) => item.state === "agreed").length,
-        ambiguousFieldCount: results.filter((item) => item.state === "ambiguous").length,
-        shape: results.map((item) => `${item.field}:${item.state}`).join("|")
-      };
+    args: ["evaluateObserverRecipeEvidence", fields, expected],
+    func: (operation, recipeFields, packagedEvidence) => {
+      const oracle = globalThis.YoinkObserverRecipeOracle;
+      if (operation !== "evaluateObserverRecipeEvidence"
+        || !oracle || typeof oracle.evaluateObserverRecipeEvidence !== "function") return null;
+      return oracle.evaluateObserverRecipeEvidence(document, recipeFields, packagedEvidence);
     }
   });
   const result = injections.find((entry) => entry.frameId === 0)?.result;
-  if (!result || !Number.isInteger(result.evaluatedFieldCount)) throw new Error("The packaged observer recipe interpreter returned no bounded result.");
+  const counts = [
+    "evaluatedFieldCount", "agreedFieldCount", "ambiguousFieldCount",
+    "oracleEvaluatedFieldCount", "oracleAgreedFieldCount", "oracleConflictFieldCount",
+    "packagedMissingFieldCount", "packagedConflictFieldCount", "insufficientFieldCount"
+  ];
+  if (!result || result.validationProfile !== "packaged_structured_oracle_v1"
+    || !Array.isArray(result.fieldOutcomes) || result.fieldOutcomes.length < 1 || result.fieldOutcomes.length > 5
+    || counts.some((key) => !Number.isInteger(result[key]) || result[key] < 0 || result[key] > 5)
+    || typeof result.shape !== "string" || result.shape.length > 600) {
+    throw new Error("The packaged observer recipe oracle returned no bounded result.");
+  }
   return result;
 }
 
@@ -1590,18 +1555,21 @@ async function runObserverRecipeShadow(tabId, retailerId, observation, diagnosti
     const recipe = await verifiedObserverRecipe(distributed.recipe, rootedTrust, retailerId);
     await chrome.storage.local.set({ [OBSERVER_RECIPE_TRUST_STATE_KEY]: rootedTrust.state });
     await chrome.storage.local.remove(LEGACY_OBSERVER_RECIPE_KEY_PIN);
-    const evaluation = await evaluateObserverRecipe(tabId, recipe.fields, observation);
+    const evaluation = await evaluateObserverRecipe(tabId, recipe.fields, observation, diagnostic);
     const diagnosticFingerprint = String(diagnostic?.layoutFingerprint || "");
     const layoutFingerprint = /^[a-f0-9]{64}$/.test(diagnosticFingerprint)
       ? diagnosticFingerprint
       : await sha256Hex(`observer-recipe-bounded-layout-v1|${retailerId}|${evaluation.shape}`);
     const outcome = evaluation.agreedFieldCount === evaluation.evaluatedFieldCount
-      && evaluation.ambiguousFieldCount === 0 ? "passed" : "failed";
+      && evaluation.ambiguousFieldCount === 0
+      && evaluation.oracleConflictFieldCount === 0
+      && evaluation.packagedConflictFieldCount === 0
+      && evaluation.insufficientFieldCount === 0 ? "passed" : "failed";
     const payload = await request(`/devices/self/observer-recipe-trials/${encodeURIComponent(retailerId)}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${device.token}` },
       body: JSON.stringify({
-        contractVersion: 1,
+        contractVersion: 2,
         recipeId: recipe.recipeId,
         recipeVersion: recipe.recipeVersion,
         retailerId,
@@ -1612,6 +1580,14 @@ async function runObserverRecipeShadow(tabId, retailerId, observation, diagnosti
         evaluatedFieldCount: evaluation.evaluatedFieldCount,
         agreedFieldCount: evaluation.agreedFieldCount,
         ambiguousFieldCount: evaluation.ambiguousFieldCount,
+        validationProfile: evaluation.validationProfile,
+        oracleEvaluatedFieldCount: evaluation.oracleEvaluatedFieldCount,
+        oracleAgreedFieldCount: evaluation.oracleAgreedFieldCount,
+        oracleConflictFieldCount: evaluation.oracleConflictFieldCount,
+        packagedMissingFieldCount: evaluation.packagedMissingFieldCount,
+        packagedConflictFieldCount: evaluation.packagedConflictFieldCount,
+        insufficientFieldCount: evaluation.insufficientFieldCount,
+        fieldOutcomes: evaluation.fieldOutcomes,
         observedAt: new Date().toISOString()
       })
     }, EVIDENCE_REQUEST_TIMEOUT_MS);
@@ -1621,6 +1597,9 @@ async function runObserverRecipeShadow(tabId, retailerId, observation, diagnosti
         retailerId,
         state: recipe.state,
         outcome,
+        validationProfile: evaluation.validationProfile,
+        oracleAgreedFieldCount: evaluation.oracleAgreedFieldCount,
+        packagedConflictFieldCount: evaluation.packagedConflictFieldCount,
         checkedAt: new Date().toISOString()
       }
     });

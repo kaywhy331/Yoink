@@ -569,8 +569,33 @@ export interface ObserverRecipeResignInput {
   confirmation: "RESIGN_ROOTED_OBSERVER_RECIPE";
 }
 
+export const OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION = 2;
+export const OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE = "packaged_structured_oracle_v1";
+export const OBSERVER_RECIPE_TRIAL_RECIPE_STATES = ["value", "missing", "ambiguous", "unrecognized"] as const;
+export const OBSERVER_RECIPE_TRIAL_PACKAGED_STATES = ["agreed", "conflict", "missing", "not_evaluated"] as const;
+export const OBSERVER_RECIPE_TRIAL_ORACLE_STATES = ["agreed", "conflict", "missing", "ambiguous", "not_evaluated"] as const;
+export const OBSERVER_RECIPE_TRIAL_DISPOSITIONS = ["verified", "conflict", "insufficient"] as const;
+export type ObserverRecipeTrialRecipeState = (typeof OBSERVER_RECIPE_TRIAL_RECIPE_STATES)[number];
+export type ObserverRecipeTrialPackagedState = (typeof OBSERVER_RECIPE_TRIAL_PACKAGED_STATES)[number];
+export type ObserverRecipeTrialOracleState = (typeof OBSERVER_RECIPE_TRIAL_ORACLE_STATES)[number];
+export type ObserverRecipeTrialDisposition = (typeof OBSERVER_RECIPE_TRIAL_DISPOSITIONS)[number];
+
+/**
+ * Privacy-bounded comparison receipt. It identifies only a fixed commerce
+ * field and state enums; extracted values, selectors, URLs, DOM, and account
+ * context are deliberately excluded.
+ */
+export interface ObserverRecipeTrialFieldOutcome {
+  field: ObserverRecipeField;
+  recipeState: ObserverRecipeTrialRecipeState;
+  packagedState: ObserverRecipeTrialPackagedState;
+  oracleState: ObserverRecipeTrialOracleState;
+  disposition: ObserverRecipeTrialDisposition;
+}
+
 export interface ObserverRecipeTrialInput {
-  contractVersion: typeof OBSERVER_RECIPE_CONTRACT_VERSION;
+  /** Version 1 remains ingestible for older companions but is never oracle evidence. */
+  contractVersion: typeof OBSERVER_RECIPE_CONTRACT_VERSION | typeof OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION;
   recipeId: string;
   recipeVersion: string;
   retailerId: SupportedRetailerId;
@@ -581,6 +606,14 @@ export interface ObserverRecipeTrialInput {
   evaluatedFieldCount: number;
   agreedFieldCount: number;
   ambiguousFieldCount: number;
+  validationProfile?: typeof OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE;
+  oracleEvaluatedFieldCount?: number;
+  oracleAgreedFieldCount?: number;
+  oracleConflictFieldCount?: number;
+  packagedMissingFieldCount?: number;
+  packagedConflictFieldCount?: number;
+  insufficientFieldCount?: number;
+  fieldOutcomes?: ObserverRecipeTrialFieldOutcome[];
   observedAt: string;
 }
 

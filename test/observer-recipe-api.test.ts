@@ -33,7 +33,7 @@ test("the signed observer registry distributes only promoted recipes to capable 
       body: JSON.stringify({
         pairingCode: pairing.pairing.code,
         extensionVersion: "0.13.0",
-        capabilities: { observerRecipeShadow: true }
+        capabilities: { observerRecipeShadow: true, observerRecipePackagedOracle: true }
       })
     });
     assert.equal(pairedResponse.status, 201);
@@ -98,7 +98,7 @@ test("the signed observer registry distributes only promoted recipes to capable 
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        contractVersion: 1,
+        contractVersion: 2,
         recipeId: recipe.id,
         recipeVersion: "amazon-api-shadow",
         retailerId: "amazon",
@@ -109,6 +109,20 @@ test("the signed observer registry distributes only promoted recipes to capable 
         evaluatedFieldCount: 2,
         agreedFieldCount: 2,
         ambiguousFieldCount: 0,
+        validationProfile: "packaged_structured_oracle_v1",
+        oracleEvaluatedFieldCount: 2,
+        oracleAgreedFieldCount: 2,
+        oracleConflictFieldCount: 0,
+        packagedMissingFieldCount: 0,
+        packagedConflictFieldCount: 0,
+        insufficientFieldCount: 0,
+        fieldOutcomes: ["availability", "unitPrice"].map((field) => ({
+          field,
+          recipeState: "value",
+          packagedState: "agreed",
+          oracleState: "agreed",
+          disposition: "verified"
+        })),
         observedAt: new Date().toISOString(),
         extractedText: "DO_NOT_STORE"
       })
@@ -121,7 +135,63 @@ test("the signed observer registry distributes only promoted recipes to capable 
     };
     assert.equal(snapshot.counts.activeObserverRecipes, 1);
     assert.equal(snapshot.counts.observerRecipeTrials, 1);
+    assert.equal(snapshot.counts.packagedOracleObserverRecipeTrials, 1);
+    assert.equal(snapshot.counts.oracleCompleteObserverRecipeTrials, 1);
     assert.equal(snapshot.observerRegistry.mutationCapable, false);
+
+    const conflictResponse = await fetch(`${baseUrl}/api/v1/devices/self/observer-recipe-trials/amazon`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: extensionOrigin,
+        Authorization: `Bearer ${paired.token}`
+      },
+      body: JSON.stringify({
+        contractVersion: 2,
+        recipeId: recipe.id,
+        recipeVersion: "amazon-api-shadow",
+        retailerId: "amazon",
+        retailerSku: "B0DCGQ6CJD",
+        observerVersion: "amazon-observer-v6",
+        layoutFingerprint: "b".repeat(64),
+        outcome: "failed",
+        evaluatedFieldCount: 2,
+        agreedFieldCount: 1,
+        ambiguousFieldCount: 0,
+        validationProfile: "packaged_structured_oracle_v1",
+        oracleEvaluatedFieldCount: 1,
+        oracleAgreedFieldCount: 1,
+        oracleConflictFieldCount: 0,
+        packagedMissingFieldCount: 0,
+        packagedConflictFieldCount: 1,
+        insufficientFieldCount: 0,
+        fieldOutcomes: [{
+          field: "availability",
+          recipeState: "value",
+          packagedState: "agreed",
+          oracleState: "agreed",
+          disposition: "verified"
+        }, {
+          field: "unitPrice",
+          recipeState: "value",
+          packagedState: "conflict",
+          oracleState: "not_evaluated",
+          disposition: "conflict"
+        }],
+        observedAt: new Date().toISOString()
+      })
+    });
+    assert.equal(conflictResponse.status, 201);
+    assert.equal((await conflictResponse.json() as { trial: { autoDisabled: boolean } }).trial.autoDisabled, true);
+    const afterConflict = await fetch(`${baseUrl}/api/v1/devices/self/observer-recipes/amazon`, {
+      headers: { Origin: extensionOrigin, Authorization: `Bearer ${paired.token}` }
+    }).then((response) => response.json()) as { recipe: unknown };
+    assert.equal(afterConflict.recipe, null);
+    const conflictSnapshot = await fetch(`${baseUrl}/api/v1/snapshot`).then((response) => response.json()) as {
+      counts: Record<string, number>;
+    };
+    assert.equal(conflictSnapshot.counts.packagedConflictObserverRecipeTrials, 1);
+    assert.equal(conflictSnapshot.counts.autoDisabledObserverRecipesByPackagedConflict, 1);
 
     const disabled = await fetch(`${baseUrl}/api/v1/observer-recipes/${encodeURIComponent(recipe.id)}/disable`, {
       method: "POST",

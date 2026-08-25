@@ -749,15 +749,19 @@ export class UserPrivacyRepository {
          ORDER BY created_at, id`,
         tenantId, userId
       ),
-      observer_recipe_trials: this.rows(
+      observer_recipe_trials: parseJsonFields(this.rows(
         `SELECT id, device_id, recipe_id, retailer_id, retailer_sku,
                 observer_version, layout_fingerprint, outcome,
                 evaluated_field_count, agreed_field_count, ambiguous_field_count,
+                validation_profile, oracle_evaluated_field_count,
+                oracle_agreed_field_count, oracle_conflict_field_count,
+                packaged_missing_field_count, packaged_conflict_field_count,
+                insufficient_field_count, field_outcomes_json,
                 observed_at, received_at
          FROM observer_recipe_trials WHERE tenant_id = ? AND user_id = ?
          ORDER BY received_at, id`,
         tenantId, userId
-      )
+      ), ["field_outcomes_json"])
     };
   }
 

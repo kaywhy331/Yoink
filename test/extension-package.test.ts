@@ -15,6 +15,7 @@ test("the extension release allowlist contains every packaged observer and mutat
     "amazon-action.js",
     "bestbuy-action.js",
     "retailer-shadow.js",
+    "observer-recipe-oracle.js",
     "trackalacker-push.js",
     "trackalacker-sync.js",
     "observer-recipe-root.js",

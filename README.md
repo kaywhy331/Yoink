@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.48.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.49.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,7 +15,24 @@ new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
 
-Version 0.48.0 extends privacy-bounded observer repair mining across all five
+Version 0.49.0 adds a fixed packaged structured-page oracle for the five-field
+observer-repair lifecycle introduced in 0.48. Signed recipes are now compared
+against both authoritative packaged evidence and a separately implemented
+JSON-LD/microdata/accessibility reader. Trial v2 sends only fixed field/state
+enums and derived counts; extracted values, selectors, DOM, URLs, and account
+context never enter the receipt. Migration 42 preserves version-1 trials as
+legacy evidence, which cannot satisfy a generated-repair oracle gate.
+
+A worker-generated repair still requires explicit review before shadow
+distribution. Canary promotion now requires oracle-complete agreement on every
+field across two exact SKUs; trusted read-only promotion requires five complete
+trials, three SKUs, and two layouts. One conflict with known packaged evidence
+immediately kills and undistributes the recipe with bounded lifecycle and audit
+evidence. Automatic signing/promotion, recipe-derived observation field-fill,
+independent-account consensus, checkout, and order submission remain closed.
+See [packaged observer-recipe oracle](docs/OBSERVER_RECIPE_ORACLE.md).
+
+Version 0.48.0 extended privacy-bounded observer repair mining across all five
 fixed read-only fields: availability, unit price, seller, fulfillment, and add
 control. On an exact unblocked product/offer page, field semantics are evaluated
 locally and only one globally unique allowlisted element/attribute/value
@@ -25,12 +42,12 @@ and offer/session material remain outside the repair payload.
 
 The durable signing-free compiler can group mature field suggestions for one
 layout into a single fixed-mode recipe candidate. A five-field candidate is now
-representable and tested; partial candidates may fill only a missing read-only
-field. Automatic processing still stops at unsigned 30-day quarantine. The
-independent correctness oracle, cross-account/Sybil-resistant consensus,
-cohort canaries, and automatic validation/promotion remain deliberately open.
-No schema migration or retailer authority changes in 0.48; migration 41 remains
-current. See [adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md)
+representable and tested; partial candidates are intended only for missing
+read-only fields, but runtime field-fill remains disabled. Automatic processing
+still stops at unsigned 30-day quarantine. The
+external or independent-account correctness oracle, cross-account/Sybil-resistant
+consensus, cohort canaries, and automatic validation/promotion remain deliberately
+open. See [adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md)
 and [durable observer-repair candidate evaluation](docs/OBSERVER_REPAIR_CANDIDATE_EVALUATION.md).
 
 Version 0.47.0 gives privacy-bounded observer correction its own durable worker

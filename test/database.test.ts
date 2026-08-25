@@ -1586,6 +1586,101 @@ test("migration 41 adds bounded observer-repair evaluation without losing durabl
   }
 });
 
+test("migration 42 preserves legacy recipe trials and adds bounded packaged-oracle evidence", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-observer-oracle-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 41)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        "2026-08-25T13:00:00.000Z"
+      );
+    }
+    legacy.exec("PRAGMA foreign_keys = OFF;");
+    legacy.exec(`
+      INSERT INTO extension_devices(
+        id, tenant_id, user_id, name, token_hash, extension_version,
+        status, capabilities_json, last_seen_at, created_at, updated_at
+      ) VALUES (
+        'device_oracle_upgrade_42', 'tenant_local', 'user_local', 'Legacy Chrome',
+        '${"a".repeat(64)}', '0.48.0', 'active', '{"observerRecipeShadow":true}',
+        '2026-08-25T13:00:00.000Z', '2026-08-25T13:00:00.000Z', '2026-08-25T13:00:00.000Z'
+      );
+      INSERT INTO observer_recipe_candidates(
+        id, tenant_id, user_id, retailer_id, recipe_version,
+        minimum_extension_version, recipe_json, recipe_fingerprint,
+        lifecycle_state, rollback_recipe_id, kill_switch, provenance_code,
+        signature_key_id, signature, signed_at, expires_at, disabled_reason,
+        trust_manifest_generation, trust_manifest_hash, created_at, updated_at
+      ) VALUES (
+        'observer_recipe_oracle_upgrade_42', 'tenant_local', 'user_local', 'amazon',
+        'amazon-oracle-upgrade', '0.48.0',
+        '{"unitPrice":{"mode":"text","selectors":[".a-price .a-offscreen"]}}',
+        '${"b".repeat(64)}', 'shadow', '', 0, 'sanitized_layout_repair', '', '', '',
+        '2026-09-25T13:00:00.000Z', '', 0, '',
+        '2026-08-25T13:00:00.000Z', '2026-08-25T13:00:00.000Z'
+      );
+      INSERT INTO observer_recipe_trials(
+        id, tenant_id, user_id, device_id, recipe_id, retailer_id,
+        retailer_sku, observer_version, layout_fingerprint, outcome,
+        evaluated_field_count, agreed_field_count, ambiguous_field_count,
+        observed_at, received_at
+      ) VALUES (
+        'observer_recipe_trial_upgrade_42', 'tenant_local', 'user_local',
+        'device_oracle_upgrade_42', 'observer_recipe_oracle_upgrade_42', 'amazon',
+        'B002OB49L4', 'amazon-observer-v6', '${"c".repeat(64)}', 'passed',
+        1, 1, 0, '2026-08-25T13:00:00.000Z', '2026-08-25T13:00:01.000Z'
+      );
+    `);
+    const qualificationCount = Number(legacy.prepare(
+      "SELECT COUNT(*) AS count FROM retailer_adapter_qualifications"
+    ).get()?.count ?? 0);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 42 AND name = 'packaged_observer_recipe_oracle'"
+      )?.count, 1);
+      const preserved = upgraded.get<Record<string, unknown>>(
+        `SELECT validation_profile, oracle_evaluated_field_count,
+                packaged_conflict_field_count, field_outcomes_json
+         FROM observer_recipe_trials WHERE id = 'observer_recipe_trial_upgrade_42'`
+      );
+      assert.deepEqual({ ...preserved }, {
+        validation_profile: "legacy_packaged_comparison",
+        oracle_evaluated_field_count: 0,
+        packaged_conflict_field_count: 0,
+        field_outcomes_json: "[]"
+      });
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'observer_recipe_trials_oracle_gate_idx'"
+      )?.count, 1);
+      assert.throws(
+        () => upgraded.run("UPDATE observer_recipe_trials SET validation_profile = 'untrusted_page_script'"),
+        /constraint failed/
+      );
+      assert.throws(
+        () => upgraded.run("UPDATE observer_recipe_trials SET field_outcomes_json = '{\"rawDom\":\"DO_NOT_STORE\"}'"),
+        /constraint failed/
+      );
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM retailer_adapter_qualifications"
+      )?.count, qualificationCount);
+      assert.deepEqual(upgraded.all("PRAGMA foreign_key_check"), []);
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("catalog identity history is immutable during normal operation and purges with its tenant", () => {
   const db = new YoinkDatabase();
   const tenantId = "tenant_identity_lifecycle";
