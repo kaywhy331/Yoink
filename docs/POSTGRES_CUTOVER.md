@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.57 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.58 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -64,6 +64,61 @@ cannot flip receipt authority, cannot enable dual writes, and does not give the
 PostgreSQL process any retailer-session capability. The task handlers still use
 SQLite repositories. Single-connection state-machine semantics are proven;
 independent multi-connection contention is not.
+
+## Restricted read-role qualification seam
+
+Version 0.58 derives five fresh group roles from the exact contract-v2 schema
+manifest. They are qualification artifacts, not production principals:
+
+| Role class | Exact portable tables | Boundary |
+| --- | ---: | --- |
+| Tenant reader | 82 | 68 direct, 13 inherited, and one mixed table under forced RLS; source-less mixed offers remain hidden |
+| Shared-catalog reader | 6 | Shared catalog only; no tenant or mixed-offer access |
+| Authorization-catalog reader | 3 | Packaged authorization definitions only |
+| Deployment-control reader | 2 | Worker deployment control only |
+| Tenant-registry reader | 1 | Tenant registry only; no private user rows |
+
+All five roles are `NOLOGIN`, `NOINHERIT`, `NOSUPERUSER`, `NOCREATEROLE`,
+`NOCREATEDB`, `NOREPLICATION`, and `NOBYPASSRLS`. They receive schema `USAGE`
+and exact table `SELECT` only. The qualifier revokes public access in the
+private schema and verifies exact table grants, rejects extra column grants,
+routine/sequence access, object ownership, memberships, schema `CREATE`, or an
+unsafe role attribute. `signal_incidents` remains unresolved and receives no
+grant. The two cutover-control receipt tables also receive no runtime grant.
+
+The test suite proves default denial, exact tenant selection, inherited and
+mixed tenant filtering, cross-role denial, write denial, tamper detection, and
+an immutable role receipt against real PostgreSQL semantics. It deliberately
+does not create a login, grant membership, bind a tenant setting to an
+authenticated workload, define write roles, or connect these roles to the API
+or worker. A future runtime contract must prevent clients from choosing
+`yoink.tenant_id`, add cryptographic workload identity, and independently
+qualify write transactions before any role becomes active.
+
+Plan the exact role namespace without a database connection:
+
+```bash
+npm run postgres:roles -- plan yoink_cutover_qualification yoink_q_058
+```
+
+After the exact current cutover receipt is verified, apply once with the
+qualification/control role and an explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_ROLE_QUALIFICATION_ACK=read-only-qualification \
+  npm run postgres:roles -- apply yoink_cutover_qualification yoink_q_058
+```
+
+Then re-inspect the live catalogs and immutable receipt:
+
+```bash
+npm run postgres:roles -- verify yoink_cutover_qualification yoink_q_058
+```
+
+Role names are cluster-global. The command rejects an existing role or receipt
+instead of adopting it, and it never drops roles. Use a new namespace for each
+qualification. Retention or cleanup of an old schema and its five roles is a
+separate reviewed database-operator change.
 
 ## Requirements
 
@@ -169,9 +224,9 @@ confirms that the operator intentionally requested an offline, one-shot load.
 The admin Operations projection lists these as required, not complete:
 
 - PostgreSQL implementations for task handlers and every API repository;
-- independent tenant, shared-catalog, authorization, deployment-control, and
-  registry runtime roles without superuser or `BYPASSRLS`, plus governed
-  semantics for mixed source-less offers and the unresolved incident table;
+- independently authenticated login/session binding and restricted write roles,
+  plus governed semantics for mixed source-less offers and the unresolved
+  incident table; the five read-only group-role templates remain inactive;
 - real multi-connection `SKIP LOCKED` lease contention, idempotent replay,
   isolation, load, and outage drills;
 - encrypted backups, PITR, restore/reconcile drills, and rollback evidence;

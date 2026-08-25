@@ -996,14 +996,20 @@ application table from one read transaction, preserves exact integers/blobs,
 and binds every table plus the aggregate logical dataset to SHA-256 counts and
 hashes. Restore is permitted only into a new database with an exact migration
 and schema match, followed by foreign-key, integrity, and data-parity checks.
-Version 0.57 can additionally stream one verified archive through the
+Version 0.58 can additionally stream one verified archive through the
 production PostgreSQL driver into a new private schema inside a serializable
 transaction, preserve packaged relational invariants, classify every table,
 force direct and exact inherited-tenant RLS, and reconcile exact logical hashes.
 A qualification-only PostgreSQL store exercises the complete asynchronous
 worker queue port, including tenant-bound `SKIP LOCKED` selection and capability
-transitions. That schema remains qualification-only: shared/control runtime
-roles, PostgreSQL task handlers and request repositories, independent fleet
+transitions. Five inactive least-privilege read group roles divide 94 exact
+tables into tenant, shared-catalog, authorization, deployment-control, and
+tenant-registry surfaces; the unresolved incident table receives no grant.
+Their live-catalog verifier rejects extra table/column grants, memberships,
+ownership, routine/sequence access, and unsafe attributes. That schema remains
+qualification-only: authenticated runtime login/session binding, write roles,
+mixed shared-offer/incident semantics, PostgreSQL task handlers and request
+repositories, independent fleet
 contention, and backup/cutover drills remain gated, so SQLite retains runtime
 authority. See
 [Data portability and recovery](DATA_PORTABILITY.md) and

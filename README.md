@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.57.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.58.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,7 +15,24 @@ new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
 
-Version 0.57.0 completes explicit tenant-scope classification for all 95
+Version 0.58.0 adds a deterministic, qualification-only PostgreSQL read-role
+boundary over the table classifications completed in 0.57. Five fresh
+`NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` roles receive 94 exact `SELECT` grants:
+82 tenant-RLS tables, six shared-catalog tables, three authorization-catalog
+tables, two deployment-control tables, and the tenant registry. The unresolved
+incident table, source-less mixed offers, every write privilege, role
+membership, and application-schema routine or sequence access remain closed.
+The verifier detects role-attribute, membership, ownership, schema, table,
+column, routine, and sequence privilege drift, and records an immutable inert
+receipt. Health and the admin Operations workspace expose the exact proof
+without claiming active PostgreSQL roles or production authority.
+
+The roles are group-role templates only: the API and worker do not assume them,
+no login role is created, and no tenant session-binding or write-role contract
+is implied. SQLite remains the sole runtime source of truth. See
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md).
+
+Version 0.57.0 completed explicit tenant-scope classification for all 95
 portable tables. Forced PostgreSQL RLS now covers 68 direct-owner tables and
 13 tables whose ownership is inherited through exact foreign keys. The one
 mixed-scope offer-observation table hides source-less shared rows from tenant
@@ -30,7 +47,8 @@ passes bounded principal pagination, schedule/dedupe behavior, tenant-bound
 `FOR UPDATE SKIP LOCKED` leasing, capability-protected completion and retry,
 heartbeats, stopping, and deployment attestation. It is deliberately not wired
 to the API or worker: PostgreSQL task handlers, independent multi-connection
-contention, runtime roles, backup/restore, and the authority switch remain
+contention, runtime login/session and write roles, backup/restore, and the
+authority switch remain
 closed. SQLite is still the sole runtime source of truth. See
 [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md).
 

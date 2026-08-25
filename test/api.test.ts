@@ -7,6 +7,7 @@ import { createYoinkServer } from "../apps/api/src/app.js";
 import { emptyInternalServiceCapabilityProjection } from "../apps/api/src/internal-service-capabilities.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { postgresCutoverCapabilityProjection } from "../packages/database/src/postgres-cutover.js";
+import { postgresRuntimeReadRoleCapabilityProjection } from "../packages/database/src/postgres-runtime-roles.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -97,6 +98,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     const emptyInternalServices = emptyInternalServiceCapabilityProjection();
     const postgresCutover = postgresCutoverCapabilityProjection();
+    const postgresRuntimeReadRoles = postgresRuntimeReadRoleCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -107,6 +109,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       selfServiceUserDataExport: true,
       productionPostgresReady: false,
       postgresCutover,
+      postgresRuntimeReadRoles,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -306,9 +309,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.freshDatabaseRestoreParity, true);
     assert.equal(snapshot.capabilities.productionPostgresReady, false);
     assert.deepEqual(snapshot.capabilities.postgresCutover, postgresCutover);
+    assert.deepEqual(snapshot.capabilities.postgresRuntimeReadRoles, postgresRuntimeReadRoles);
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
-      postgresCutover
+      postgresCutover,
+      postgresRuntimeReadRoles
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

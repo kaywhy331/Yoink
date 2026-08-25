@@ -12,6 +12,7 @@ import {
 } from "../apps/api/src/internal-service-capabilities.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { postgresCutoverCapabilityProjection } from "../packages/database/src/postgres-cutover.js";
+import { postgresRuntimeReadRoleCapabilityProjection } from "../packages/database/src/postgres-runtime-roles.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -89,7 +90,11 @@ test("health and the admin Access workspace expose only safe workload capability
 
     const snapshot = await fetch(`${baseUrl}/api/v1/admin/snapshot`).then((response) => response.json()) as {
       authorization: { internalServices: typeof safeRegistry };
-      dataPlane: { activeStorageEngine: string; postgresCutover: ReturnType<typeof postgresCutoverCapabilityProjection> };
+      dataPlane: {
+        activeStorageEngine: string;
+        postgresCutover: ReturnType<typeof postgresCutoverCapabilityProjection>;
+        postgresRuntimeReadRoles: ReturnType<typeof postgresRuntimeReadRoleCapabilityProjection>;
+      };
       capabilities: Record<string, unknown>;
     };
     assert.deepEqual(snapshot.authorization.internalServices, safeRegistry);
@@ -97,6 +102,7 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.equal(snapshot.capabilities.internalServiceCapabilityHeaderAccepted, false);
     assert.equal(snapshot.dataPlane.activeStorageEngine, "sqlite");
     assert.deepEqual(snapshot.dataPlane.postgresCutover, postgresCutoverCapabilityProjection());
+    assert.deepEqual(snapshot.dataPlane.postgresRuntimeReadRoles, postgresRuntimeReadRoleCapabilityProjection());
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -115,6 +121,8 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /One-shot archive import/);
     assert.match(cutoverText, /Tenant-scope classification/);
     assert.match(cutoverText, /PostgreSQL worker-store contract/);
+    assert.match(cutoverText, /Least-privilege read roles/);
+    assert.match(cutoverText, /5 NOLOGIN roles hold 94 exact SELECT grants/);
     assert.match(cutoverText, /Runtime repository and fleet proof/);
     assert.match(cutoverText, /Exact logical reconciliation/);
     assert.match(cutoverText, /Production authority/);

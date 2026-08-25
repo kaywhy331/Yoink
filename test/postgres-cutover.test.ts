@@ -12,6 +12,13 @@ import { PGlite } from "@electric-sql/pglite";
 import { SqliteBackgroundWorkerStore } from "../packages/database/src/background-worker-store.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { PostgresBackgroundWorkerQualificationStore } from "../packages/database/src/postgres-background-worker-store.js";
+import {
+  POSTGRES_RUNTIME_READ_ROLE_CONTRACT_VERSION,
+  applyPostgresRuntimeReadRoles,
+  buildPostgresRuntimeReadRoleManifest,
+  postgresRuntimeReadRoleCapabilityProjection,
+  verifyPostgresRuntimeReadRoles
+} from "../packages/database/src/postgres-runtime-roles.js";
 import { exportPortabilityArchive } from "../packages/database/src/portability.js";
 import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
@@ -225,6 +232,57 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.match(first.fingerprint, /^[a-f0-9]{64}$/);
   assert.ok(first.tables.every((table) => table.name !== "schema_migrations"));
   assert.ok(first.tables.every((table) => table.indexes.every((index) => Buffer.byteLength(index.name) <= 63)));
+
+  const readRoles = buildPostgresRuntimeReadRoleManifest("yoink_cutover_test", "yoink_q_test");
+  assert.deepEqual(buildPostgresRuntimeReadRoleManifest("yoink_cutover_test", "yoink_q_test"), readRoles);
+  assert.equal(readRoles.contractVersion, POSTGRES_RUNTIME_READ_ROLE_CONTRACT_VERSION);
+  assert.equal(readRoles.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(readRoles.roleCount, 5);
+  assert.equal(readRoles.grantedTableCount, 94);
+  assert.equal(readRoles.unresolvedTableCount, 1);
+  assert.deepEqual(readRoles.unresolvedTables, ["signal_incidents"]);
+  assert.equal(readRoles.roles.find((role) => role.kind === "tenant_reader")?.tableNames.length, 82);
+  assert.equal(readRoles.roles.find((role) => role.kind === "shared_catalog_reader")?.tableNames.length, 6);
+  assert.equal(readRoles.roles.find((role) => role.kind === "authorization_catalog_reader")?.tableNames.length, 3);
+  assert.equal(readRoles.roles.find((role) => role.kind === "deployment_control_reader")?.tableNames.length, 2);
+  assert.equal(readRoles.roles.find((role) => role.kind === "tenant_registry_reader")?.tableNames.length, 1);
+  assert.ok(readRoles.roles.every((role) => role.login === false
+    && role.inherit === false
+    && role.bypassRls === false
+    && role.writeAccess === false
+    && role.privileges.join(",") === "SELECT"));
+  assert.match(readRoles.fingerprint, /^[a-f0-9]{64}$/);
+  assert.deepEqual(postgresRuntimeReadRoleCapabilityProjection(), {
+    contractVersion: 1,
+    cutoverContractVersion: 2,
+    deterministicManifestImplemented: true,
+    atomicQualificationApplyImplemented: true,
+    exactGrantVerificationImplemented: true,
+    qualificationSuiteParity: true,
+    noLogin: true,
+    noInherit: true,
+    noBypassRls: true,
+    readOnly: true,
+    roleCount: 5,
+    grantedTableCount: 94,
+    tenantRlsTableCount: 82,
+    sharedCatalogTableCount: 6,
+    authorizationCatalogTableCount: 3,
+    deploymentControlTableCount: 2,
+    tenantRegistryTableCount: 1,
+    unresolvedTableCount: 1,
+    unresolvedTables: ["signal_incidents"],
+    mixedSharedOfferAccess: false,
+    runtimeWriteRoleParity: false,
+    activeRuntimeRolesApplied: false,
+    runtimeAuthority: false,
+    productionReady: false,
+    roleTemplateFingerprint: buildPostgresRuntimeReadRoleManifest().fingerprint
+  });
+  assert.throws(
+    () => buildPostgresRuntimeReadRoleManifest("yoink_cutover_test", "Unsafe-Role"),
+    /role namespace/
+  );
 });
 
 test("one verified archive imports atomically into real PostgreSQL semantics and reconciles exactly", async () => {
@@ -485,6 +543,167 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     assert.equal(blocked.rows.length, 0);
     await postgres.query("RESET ROLE");
     await postgres.query("RESET yoink.tenant_id");
+
+    const runtimeRoles = await applyPostgresRuntimeReadRoles(
+      postgres,
+      "yoink_cutover_test",
+      "yoink_q_test",
+      new Date("2026-08-25T14:45:00.000Z").getTime()
+    );
+    assert.equal(runtimeRoles.contractVersion, POSTGRES_RUNTIME_READ_ROLE_CONTRACT_VERSION);
+    assert.equal(runtimeRoles.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+    assert.equal(runtimeRoles.phase, "verified");
+    assert.equal(runtimeRoles.roleCount, 5);
+    assert.equal(runtimeRoles.grantedTableCount, 94);
+    assert.equal(runtimeRoles.grantCount, 94);
+    assert.equal(runtimeRoles.tenantPolicyCount, 82);
+    assert.equal(runtimeRoles.membershipCount, 0);
+    assert.deepEqual(runtimeRoles.unresolvedTables, ["signal_incidents"]);
+    assert.equal(runtimeRoles.readOnly, true);
+    assert.equal(runtimeRoles.runtimeAuthority, false);
+    assert.equal(runtimeRoles.productionReady, false);
+    assert.equal(runtimeRoles.appliedAt, "2026-08-25T14:45:00.000Z");
+    assert.equal(runtimeRoles.verifiedAt, "2026-08-25T14:45:00.001Z");
+
+    const role = (kind: typeof runtimeRoles.roles[number]["kind"]): string => {
+      const match = runtimeRoles.roles.find((candidate) => candidate.kind === kind)?.name;
+      assert.ok(match);
+      return match;
+    };
+    const tenantReader = role("tenant_reader");
+    const sharedReader = role("shared_catalog_reader");
+    const authorizationReader = role("authorization_catalog_reader");
+    const deploymentReader = role("deployment_control_reader");
+    const registryReader = role("tenant_registry_reader");
+
+    await postgres.query(`SET ROLE "${tenantReader}"`);
+    const tenantDefaultDenied = await postgres.query<{ id: string }>(
+      "SELECT id FROM yoink_cutover_test.users"
+    );
+    assert.deepEqual(tenantDefaultDenied.rows, []);
+    await postgres.query("SET yoink.tenant_id = 'tenant_cutover_other'");
+    const tenantUsers = await postgres.query<{ id: string }>(
+      "SELECT id FROM yoink_cutover_test.users ORDER BY id"
+    );
+    assert.deepEqual(tenantUsers.rows.map((row) => row.id), ["user_cutover_other"]);
+    const tenantInherited = await postgres.query<{ user_id: string }>(
+      "SELECT user_id FROM yoink_cutover_test.app_settings ORDER BY user_id"
+    );
+    assert.deepEqual(tenantInherited.rows.map((row) => row.user_id), ["user_cutover_other"]);
+    const tenantMixed = await postgres.query<{ id: string }>(
+      "SELECT id FROM yoink_cutover_test.offer_observations ORDER BY id"
+    );
+    assert.deepEqual(tenantMixed.rows.map((row) => row.id), ["offer_cutover_other"]);
+    await assert.rejects(
+      postgres.query("SELECT id FROM yoink_cutover_test.retailers"),
+      /permission denied/i
+    );
+    await assert.rejects(
+      postgres.query("INSERT INTO yoink_cutover_test.app_settings(user_id, updated_at) VALUES ('user_cutover_other', '')"),
+      /permission denied/i
+    );
+    await assert.rejects(
+      postgres.query("SELECT yoink_cutover_test.yoink_json_valid('{}')"),
+      /permission denied/i
+    );
+    await assert.rejects(
+      postgres.query("CREATE TABLE yoink_cutover_test.tenant_reader_escape(id TEXT)"),
+      /permission denied/i
+    );
+    await postgres.query("RESET yoink.tenant_id");
+    await postgres.query("RESET ROLE");
+
+    await postgres.query(`SET ROLE "${sharedReader}"`);
+    const sharedCatalog = await postgres.query<{ count: number }>(
+      "SELECT COUNT(*)::integer AS count FROM yoink_cutover_test.retailers"
+    );
+    assert.ok(Number(sharedCatalog.rows[0]?.count ?? 0) > 0);
+    await assert.rejects(postgres.query("SELECT id FROM yoink_cutover_test.users"), /permission denied/i);
+    await assert.rejects(
+      postgres.query("SELECT id FROM yoink_cutover_test.offer_observations"),
+      /permission denied/i
+    );
+    await assert.rejects(
+      postgres.query("SELECT id FROM yoink_cutover_test.signal_incidents"),
+      /permission denied/i
+    );
+    await postgres.query("RESET ROLE");
+
+    await postgres.query(`SET ROLE "${authorizationReader}"`);
+    const authorizationCatalog = await postgres.query<{ count: number }>(
+      "SELECT COUNT(*)::integer AS count FROM yoink_cutover_test.authorization_roles"
+    );
+    assert.ok(Number(authorizationCatalog.rows[0]?.count ?? 0) > 0);
+    await assert.rejects(postgres.query("SELECT id FROM yoink_cutover_test.retailers"), /permission denied/i);
+    await postgres.query("RESET ROLE");
+
+    await postgres.query(`SET ROLE "${deploymentReader}"`);
+    const deploymentControl = await postgres.query<{ count: number }>(
+      "SELECT COUNT(*)::integer AS count FROM yoink_cutover_test.background_worker_deployment_expectations"
+    );
+    assert.equal(deploymentControl.rows[0]?.count, 1);
+    await assert.rejects(postgres.query("SELECT id FROM yoink_cutover_test.tenants"), /permission denied/i);
+    await postgres.query("RESET ROLE");
+
+    await postgres.query(`SET ROLE "${registryReader}"`);
+    const tenantRegistry = await postgres.query<{ id: string }>(
+      "SELECT id FROM yoink_cutover_test.tenants ORDER BY id"
+    );
+    assert.deepEqual(tenantRegistry.rows.map((row) => row.id), ["tenant_cutover_other", "tenant_local"]);
+    await assert.rejects(postgres.query("SELECT id FROM yoink_cutover_test.users"), /permission denied/i);
+    await postgres.query("RESET ROLE");
+
+    const verifiedRuntimeRoles = await verifyPostgresRuntimeReadRoles(
+      postgres,
+      "yoink_cutover_test",
+      "yoink_q_test"
+    );
+    assert.deepEqual(verifiedRuntimeRoles, runtimeRoles);
+    const afterRuntimeRoles = await verifyPostgresCutoverArchive(
+      postgres,
+      paths.archivePath,
+      "yoink_cutover_test"
+    );
+    assert.equal(afterRuntimeRoles.matched, true);
+    await assert.rejects(
+      applyPostgresRuntimeReadRoles(postgres, "yoink_cutover_test", "yoink_q_test", WORKER_NOW),
+      /refuses existing roles/
+    );
+
+    await postgres.query(
+      `GRANT SELECT ON yoink_cutover_test.signal_incidents TO "${sharedReader}"`
+    );
+    await assert.rejects(
+      verifyPostgresRuntimeReadRoles(postgres, "yoink_cutover_test", "yoink_q_test"),
+      /grants differ/
+    );
+    await postgres.query(
+      `REVOKE SELECT ON yoink_cutover_test.signal_incidents FROM "${sharedReader}"`
+    );
+    assert.equal(
+      (await verifyPostgresRuntimeReadRoles(postgres, "yoink_cutover_test", "yoink_q_test")).phase,
+      "verified"
+    );
+    await postgres.query(
+      `GRANT UPDATE (display_name) ON yoink_cutover_test.users TO "${tenantReader}"`
+    );
+    await assert.rejects(
+      verifyPostgresRuntimeReadRoles(postgres, "yoink_cutover_test", "yoink_q_test"),
+      /column privilege/
+    );
+    await postgres.query(
+      `REVOKE UPDATE (display_name) ON yoink_cutover_test.users FROM "${tenantReader}"`
+    );
+    assert.equal(
+      (await verifyPostgresRuntimeReadRoles(postgres, "yoink_cutover_test", "yoink_q_test")).phase,
+      "verified"
+    );
+    await assert.rejects(
+      postgres.query(
+        "UPDATE yoink_cutover_test.yoink_runtime_read_role_receipt SET grant_count = 0 WHERE id = 'active'"
+      ),
+      /immutable/i
+    );
 
     await postgres.query(
       "UPDATE yoink_cutover_test.users SET display_name = 'Changed after reconciliation' WHERE id = 'user_cutover_other'"

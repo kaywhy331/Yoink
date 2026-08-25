@@ -5,7 +5,8 @@ operator-controlled SQLite database. Yoink 0.56 added an offline PostgreSQL
 qualification importer that consumes the same contract, creates a new private
 schema atomically, and reconciles every table exactly. Yoink 0.57 completes the
 tenant-ownership policy manifest and adds the qualification-only PostgreSQL
-worker-store port. The runtime API and worker remain SQLite-only.
+worker-store port. Yoink 0.58 adds five inactive exact read-role templates and
+live-catalog drift verification. The runtime API and worker remain SQLite-only.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -95,12 +96,17 @@ fail-closed behavior, tamper closure, and the same canonical table/data
 reconciliation. A qualification-only asynchronous worker store also exercises
 the queue state machine and single-connection `SKIP LOCKED` path on that inert
 schema.
+The optional role qualifier then divides 94 portable tables into five exact
+read-only group roles and leaves the unresolved incident table inaccessible.
+It creates no login, membership, write role, tenant-session binding, or runtime
+authority.
 Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
 A production cutover must still add PostgreSQL task handlers and request
-repositories, restricted tenant/shared/control roles, independent fleet lease
+repositories, authenticated runtime login/session binding and write roles,
+governed mixed/incident access, independent fleet lease
 contention, production identity, backup/PITR and restore, outage/load testing,
 and controlled authority-switch evidence. It must quiesce SQLite, load
 PostgreSQL once, reconcile, and switch authority once. Dual writes remain

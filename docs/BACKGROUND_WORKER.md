@@ -250,8 +250,11 @@ The separate process proves lifecycle, asynchronous port, bounded enumeration,
 and recovery semantics against SQLite. Version 0.57 additionally qualifies a
 complete PostgreSQL worker-store port on an inert imported schema, including
 direct/inherited tenant isolation and single-connection `SKIP LOCKED` queue
-semantics. Production still requires PostgreSQL task-handler repositories,
-restricted runtime roles, independent multi-connection fleet contention,
+semantics. Version 0.58 qualifies five inactive least-privilege read group
+roles but creates no runtime login, membership, tenant-session binding, or write
+role. Production still requires PostgreSQL task-handler repositories,
+runtime identity/session and write-role integration, independent multi-
+connection fleet contention,
 production identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode
 or the qualification store as a production worker fleet.

@@ -1,6 +1,6 @@
 {
   "name": "yoink",
-  "version": "0.57.0",
+  "version": "0.58.0",
   "private": true,
   "type": "module",
   "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",
@@ -19,7 +19,8 @@
     "package:extension:production": "npm run build:extension && node scripts/package-extension.mjs --profile=production",
     "recipe-trust": "tsx scripts/observer-recipe-trust.ts",
     "portability": "npm run build:types && node scripts/portability.mjs",
-    "postgres:cutover": "npm run build:types && node scripts/postgres-cutover.mjs"
+    "postgres:cutover": "npm run build:types && node scripts/postgres-cutover.mjs",
+    "postgres:roles": "npm run build:types && node scripts/postgres-runtime-roles.mjs"
   },
   "engines": {
     "node": ">=22.5.0"
