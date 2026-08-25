@@ -70,6 +70,7 @@ test("the packaged structured oracle independently agrees across all five fixed 
   assert.equal(result.oracleAgreedFieldCount, 5);
   assert.equal(result.packagedConflictFieldCount, 0);
   assert.equal(result.insufficientFieldCount, 0);
+  assert.deepEqual(result.recoveryEvidence, []);
   assert.deepEqual(result.fieldOutcomes.map((item) => [item.field, item.packagedState, item.oracleState, item.disposition]), [
     ["availability", "agreed", "agreed", "verified"],
     ["unitPrice", "agreed", "agreed", "verified"],
@@ -97,6 +98,7 @@ test("a structured oracle can validate a recipe when the packaged reader is miss
     oracleState: "agreed",
     disposition: "verified"
   });
+  assert.deepEqual(result.recoveryEvidence, [{ field: "unitPrice", normalizedValue: 798 }]);
 });
 
 test("whole-dollar structured prices are normalized as dollars rather than cents", () => {
@@ -121,6 +123,7 @@ test("packaged evidence is authoritative and conflicts never reach the oracle as
   assert.equal(result.agreedFieldCount, 0);
   assert.equal(result.packagedConflictFieldCount, 1);
   assert.equal(result.oracleAgreedFieldCount, 0);
+  assert.deepEqual(result.recoveryEvidence, []);
   assert.deepEqual(result.fieldOutcomes[0], {
     field: "unitPrice",
     recipeState: "value",

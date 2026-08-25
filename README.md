@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.50.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.51.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,23 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.51.0 adds the first provenance-bearing storage boundary for a field
+that a signed observer recipe can recover while the bundled observer is
+missing it. Trial contract v3 may send only a normalized availability, USD
+cents, bounded public seller name, shipping/pickup state, or Add-control
+boolean—and only when the fixed packaged structured-page oracle reads the exact
+same value. Chrome and the server independently validate the payload.
+
+Migration 44 stores that evidence in an append-only quarantine bound to the
+authenticated contributor/device, exact SKU, layout, recipe, trial, and
+server-known lifecycle stage. Every row is `not_applied`; the admin UI exposes
+its provenance and the user-data export includes it. There is no endpoint or
+repository path that can apply it to an observation, catalog, qualification,
+plan, job, or browser action. Automatic field fill, public account reputation,
+regional quorum, signing/promotion, mutation, checkout, and order submission
+remain closed. See
+[observer-recipe recovery evidence](docs/OBSERVER_RECIPE_RECOVERY_EVIDENCE.md).
 
 Version 0.50.0 makes signed observer-recipe canaries contributor-aware and
 stage-aware before any recipe-derived field can become product evidence.

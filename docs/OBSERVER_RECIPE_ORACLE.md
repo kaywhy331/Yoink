@@ -66,8 +66,10 @@ promotion requirements remain in force.
 ## Deliberately closed
 
 - Generated candidates are not automatically signed or promoted.
-- A recipe is not used to fill a stored observation yet. Provenance-aware
-  observation storage and conflict projection must exist first.
+- A recipe is not used to fill a stored observation. Version 0.51 adds only an
+  append-only `not_applied` provenance quarantine; user confirmation,
+  independent-account/region quorum, retention, and a governed application
+  projection must exist first.
 - The packaged oracle is not a Sybil-resistant community quorum or an
   independently operated correctness service.
 - No recipe can affect selected-offer identity, qualifications, jobs,
@@ -87,3 +89,13 @@ deterministic 25% canary, a 24-hour burn-in, and a multi-contributor regression
 auto-kill. It does not turn tenant user IDs into reputable public identities;
 production IdP/device risk, region, reputation, and Sybil defenses remain
 closed. See [observer-recipe canary governance](OBSERVER_RECIPE_CANARY_GOVERNANCE.md).
+
+## 0.51 recovery-evidence follow-on
+
+Version 0.51 retains the value-free v2 receipt and introduces trial v3 for the
+one case where bundled evidence is missing and the signed recipe exactly agrees
+with this packaged oracle. Only the normalized fixed-field value enters an
+append-only quarantine, permanently marked `not_applied`. V1/v2 compatibility,
+packaged authority, conflict auto-kill, and every mutation boundary are
+unchanged. See
+[observer-recipe recovery evidence](OBSERVER_RECIPE_RECOVERY_EVIDENCE.md).

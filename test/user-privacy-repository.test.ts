@@ -123,6 +123,10 @@ test("user data export is complete by declared category, tenant-isolated, and cr
     assert.equal((deviceEvidence.devices as Array<Record<string, unknown>>)[0]?.credential_generation, 1);
     assert.equal((deviceEvidence.devices as Array<Record<string, unknown>>)[0]?.credential_issued_at, NOW);
     assert.equal((deviceEvidence.devices as Array<Record<string, unknown>>)[0]?.credential_rotation_pending, 0);
+    assert.deepEqual(
+      (archive.data.community_and_maintenance as Record<string, unknown>).observer_recipe_recovery_evidence,
+      []
+    );
     assert.doesNotMatch(serialized, /OTHER_USER_DATA_MUST_NOT_EXPORT/);
     assert.doesNotMatch(serialized, /DEVICE_TOKEN_SECRET_MUST_NOT_EXPORT/);
     assert.doesNotMatch(serialized, /PAIRING_CODE_SECRET_MUST_NOT_EXPORT/);

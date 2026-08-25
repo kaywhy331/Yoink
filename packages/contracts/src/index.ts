@@ -570,7 +570,9 @@ export interface ObserverRecipeResignInput {
 }
 
 export const OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION = 2;
+export const OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION = 3;
 export const OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE = "packaged_structured_oracle_v1";
+export const OBSERVER_RECIPE_RECOVERY_PROVENANCE = "recipe_packaged_oracle_agreement_v1";
 export const OBSERVER_RECIPE_TRIAL_RECIPE_STATES = ["value", "missing", "ambiguous", "unrecognized"] as const;
 export const OBSERVER_RECIPE_TRIAL_PACKAGED_STATES = ["agreed", "conflict", "missing", "not_evaluated"] as const;
 export const OBSERVER_RECIPE_TRIAL_ORACLE_STATES = ["agreed", "conflict", "missing", "ambiguous", "not_evaluated"] as const;
@@ -593,9 +595,22 @@ export interface ObserverRecipeTrialFieldOutcome {
   disposition: ObserverRecipeTrialDisposition;
 }
 
+/**
+ * A normalized public commerce value recovered only when a signed recipe and
+ * the packaged structured-page oracle agree while the bundled observer has no
+ * value. These values enter quarantine evidence; they never fill an
+ * observation or authorize an action.
+ */
+export interface ObserverRecipeRecoveryEvidenceInput {
+  field: ObserverRecipeField;
+  normalizedValue: string | number | boolean;
+}
+
 export interface ObserverRecipeTrialInput {
   /** Version 1 remains ingestible for older companions but is never oracle evidence. */
-  contractVersion: typeof OBSERVER_RECIPE_CONTRACT_VERSION | typeof OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION;
+  contractVersion: typeof OBSERVER_RECIPE_CONTRACT_VERSION
+    | typeof OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION
+    | typeof OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION;
   recipeId: string;
   recipeVersion: string;
   retailerId: SupportedRetailerId;
@@ -614,6 +629,7 @@ export interface ObserverRecipeTrialInput {
   packagedConflictFieldCount?: number;
   insufficientFieldCount?: number;
   fieldOutcomes?: ObserverRecipeTrialFieldOutcome[];
+  recoveryEvidence?: ObserverRecipeRecoveryEvidenceInput[];
   observedAt: string;
 }
 

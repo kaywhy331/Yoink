@@ -3001,5 +3001,64 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
           retailer_sku, layout_fingerprint, observed_at DESC, received_at DESC
         );
     `
+  },
+  {
+    version: 44,
+    name: "quarantined_observer_recipe_recovery_evidence",
+    sql: `
+      CREATE TABLE observer_recipe_recovery_evidence (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        device_id TEXT NOT NULL REFERENCES extension_devices(id) ON DELETE CASCADE,
+        trial_id TEXT NOT NULL REFERENCES observer_recipe_trials(id) ON DELETE CASCADE,
+        recipe_id TEXT NOT NULL REFERENCES observer_recipe_candidates(id) ON DELETE CASCADE,
+        retailer_id TEXT NOT NULL REFERENCES retailers(id) ON DELETE RESTRICT,
+        retailer_sku TEXT NOT NULL,
+        layout_fingerprint TEXT NOT NULL CHECK (length(layout_fingerprint) = 64),
+        field_name TEXT NOT NULL CHECK (field_name IN (
+          'availability', 'unitPrice', 'seller', 'fulfillment', 'addControl'
+        )),
+        value_kind TEXT NOT NULL CHECK (value_kind IN ('enum', 'cents', 'text', 'boolean')),
+        normalized_value TEXT NOT NULL CHECK (length(normalized_value) BETWEEN 1 AND 160),
+        provenance_code TEXT NOT NULL DEFAULT 'recipe_packaged_oracle_agreement_v1'
+          CHECK (provenance_code = 'recipe_packaged_oracle_agreement_v1'),
+        recipe_state_at_trial TEXT NOT NULL CHECK (recipe_state_at_trial IN (
+          'shadow', 'canary', 'trusted_read_only'
+        )),
+        evidence_state TEXT NOT NULL DEFAULT 'quarantined'
+          CHECK (evidence_state = 'quarantined'),
+        application_state TEXT NOT NULL DEFAULT 'not_applied'
+          CHECK (application_state = 'not_applied'),
+        observed_at TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        UNIQUE(trial_id, field_name),
+        CHECK (
+          (field_name IN ('availability', 'fulfillment') AND value_kind = 'enum')
+          OR (field_name = 'unitPrice' AND value_kind = 'cents')
+          OR (field_name = 'seller' AND value_kind = 'text')
+          OR (field_name = 'addControl' AND value_kind = 'boolean')
+        )
+      ) STRICT;
+
+      CREATE INDEX observer_recipe_recovery_evidence_review_idx
+        ON observer_recipe_recovery_evidence(
+          tenant_id, evidence_state, retailer_id, received_at DESC, id DESC
+        );
+      CREATE INDEX observer_recipe_recovery_evidence_recipe_field_idx
+        ON observer_recipe_recovery_evidence(
+          recipe_id, field_name, user_id, retailer_sku, layout_fingerprint,
+          observed_at DESC, received_at DESC
+        );
+
+      CREATE TRIGGER observer_recipe_recovery_evidence_no_update
+      BEFORE UPDATE ON observer_recipe_recovery_evidence
+      BEGIN SELECT RAISE(ABORT, 'observer recipe recovery evidence is append-only'); END;
+
+      CREATE TRIGGER observer_recipe_recovery_evidence_no_delete
+      BEFORE DELETE ON observer_recipe_recovery_evidence
+      WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+      BEGIN SELECT RAISE(ABORT, 'observer recipe recovery evidence is append-only'); END;
+    `
   }
 ]);

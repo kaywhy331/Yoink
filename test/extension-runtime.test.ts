@@ -972,6 +972,7 @@ function harness(options: HarnessOptions = {}) {
               oracleState: "agreed",
               disposition: "verified"
             })),
+            recoveryEvidence: [],
             shape: "availability:value:agreed:agreed:verified|unitPrice:value:agreed:agreed:verified|seller:value:agreed:agreed:verified|fulfillment:value:agreed:agreed:verified|addControl:value:agreed:agreed:verified"
           } }];
         }
@@ -1852,10 +1853,11 @@ test("the packaged interpreter verifies and pins a signed observer-only recipe b
     "fieldOutcomes", "insufficientFieldCount", "layoutFingerprint", "observedAt",
     "observerVersion", "oracleAgreedFieldCount", "oracleConflictFieldCount",
     "oracleEvaluatedFieldCount", "outcome", "packagedConflictFieldCount",
-    "packagedMissingFieldCount", "recipeId", "recipeVersion", "retailerId",
+    "packagedMissingFieldCount", "recipeId", "recipeVersion", "recoveryEvidence", "retailerId",
     "retailerSku", "validationProfile"
   ]);
-  assert.equal(body.contractVersion, 2);
+  assert.equal(body.contractVersion, 3);
+  assert.deepEqual(body.recoveryEvidence, []);
   assert.equal(body.outcome, "passed");
   assert.equal(body.validationProfile, "packaged_structured_oracle_v1");
   assert.equal(body.oracleAgreedFieldCount, 5);
@@ -1895,6 +1897,7 @@ test("a packaged observer conflict is reported immediately without invoking a mu
       packagedConflictFieldCount: 1,
       insufficientFieldCount: 0,
       fieldOutcomes,
+      recoveryEvidence: [],
       shape: "unitPrice:value:conflict:not_evaluated:conflict"
     }
   });
@@ -1913,6 +1916,86 @@ test("a packaged observer conflict is reported immediately without invoking a mu
   const status = runtime.storage.yoinkObserverRecipeStatusV1 as Record<string, unknown>;
   assert.equal(status.outcome, "failed");
   assert.equal(status.packagedConflictFieldCount, 1);
+});
+
+test("the packaged interpreter sends only normalized missing-field recovery evidence", async () => {
+  const fixture = signedObserverRecipe();
+  const fieldOutcomes = ["availability", "unitPrice", "seller", "fulfillment", "addControl"].map((field) => ({
+    field,
+    recipeState: "value",
+    packagedState: field === "unitPrice" ? "missing" : "agreed",
+    oracleState: "agreed",
+    disposition: "verified"
+  }));
+  const runtime = harness({
+    activeUrl: AMAZON_PRODUCT_URL,
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root,
+    observerRecipeEvaluation: {
+      validationProfile: "packaged_structured_oracle_v1",
+      evaluatedFieldCount: 5,
+      agreedFieldCount: 5,
+      ambiguousFieldCount: 0,
+      oracleEvaluatedFieldCount: 5,
+      oracleAgreedFieldCount: 5,
+      oracleConflictFieldCount: 0,
+      packagedMissingFieldCount: 1,
+      packagedConflictFieldCount: 0,
+      insufficientFieldCount: 0,
+      fieldOutcomes,
+      recoveryEvidence: [{ field: "unitPrice", normalizedValue: 798 }],
+      shape: "unitPrice:value:missing:agreed:verified"
+    }
+  });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  const trial = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/observer-recipe-trials/amazon"));
+  assert.ok(trial);
+  const body = JSON.parse(String(trial.options.body)) as Record<string, unknown>;
+  assert.equal(body.contractVersion, 3);
+  assert.deepEqual(body.recoveryEvidence, [{ field: "unitPrice", normalizedValue: 798 }]);
+  assert.equal(JSON.stringify(body).includes("Amazon.com"), false);
+  assert.equal(JSON.stringify(body).includes("#merchant-info"), false);
+  const injectedFiles = runtime.injections.flatMap((entry) => Array.isArray(entry.files) ? entry.files as string[] : []);
+  assert.equal(injectedFiles.some((file) => ["amazon-action.js", "walmart-action.js", "target-action.js", "bestbuy-action.js"].includes(file)), false);
+});
+
+test("inconsistent recovery values fail closed before the trial leaves Chrome", async () => {
+  const fixture = signedObserverRecipe();
+  const fieldOutcomes = ["availability", "unitPrice", "seller", "fulfillment", "addControl"].map((field) => ({
+    field,
+    recipeState: "value",
+    packagedState: "agreed",
+    oracleState: "agreed",
+    disposition: "verified"
+  }));
+  const runtime = harness({
+    activeUrl: AMAZON_PRODUCT_URL,
+    observerRecipeDistribution: fixture.distribution,
+    observerRecipeRoot: fixture.root,
+    observerRecipeEvaluation: {
+      validationProfile: "packaged_structured_oracle_v1",
+      evaluatedFieldCount: 5,
+      agreedFieldCount: 5,
+      ambiguousFieldCount: 0,
+      oracleEvaluatedFieldCount: 5,
+      oracleAgreedFieldCount: 5,
+      oracleConflictFieldCount: 0,
+      packagedMissingFieldCount: 0,
+      packagedConflictFieldCount: 0,
+      insufficientFieldCount: 0,
+      fieldOutcomes,
+      recoveryEvidence: [{ field: "unitPrice", normalizedValue: 798 }],
+      shape: "unitPrice:value:agreed:agreed:verified"
+    }
+  });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  assert.equal(response.recipeTrial, null);
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.includes("/observer-recipe-trials/")), false);
+  const status = runtime.storage.yoinkObserverRecipeStatusV1 as Record<string, unknown>;
+  assert.equal(status.outcome, "failed_closed");
+  assert.match(String(status.message), /inconsistent recovery evidence/);
 });
 
 test("a bad observer recipe signature fails closed without affecting bundled evidence", async () => {

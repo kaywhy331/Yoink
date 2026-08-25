@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   AMAZON_OBSERVER_VERSION,
   OBSERVER_RECIPE_CONTRACT_VERSION,
+  OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION,
   OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
   OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
   type ObserverRecipeField,
@@ -30,6 +31,7 @@ import {
   runWithRequestScope,
   type RequestScope
 } from "../packages/database/src/request-scope.js";
+import { UserPrivacyRepository } from "../packages/database/src/user-privacy-repository.js";
 import { ObserverRecipeSigner } from "../packages/observer-registry/src/signer.js";
 import {
   createObserverRecipeTrustManifest,
@@ -74,7 +76,11 @@ function device(db: YoinkDatabase, now = NOW): { id: string; token: string } {
   return devices.pair({
     pairingCode: code.code,
     extensionVersion: "0.13.0",
-    capabilities: { observerRecipeShadow: true, observerRecipePackagedOracle: true }
+    capabilities: {
+      observerRecipeShadow: true,
+      observerRecipePackagedOracle: true,
+      observerRecipeRecoveryEvidence: true
+    }
   }, now + 1_000);
 }
 
@@ -171,6 +177,46 @@ function insufficientOracleTrial(
       oracleState: "missing",
       disposition: "insufficient"
     }],
+    observedAt: new Date(observedAt).toISOString()
+  };
+}
+
+function recoveryTrial(
+  recipeId: string,
+  recipeVersion: string,
+  sku: string,
+  observedAt: number,
+  field: ObserverRecipeField,
+  normalizedValue: string | number | boolean,
+  layout = "9".repeat(64)
+): ObserverRecipeTrialInput {
+  return {
+    contractVersion: OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION,
+    recipeId,
+    recipeVersion,
+    retailerId: "amazon",
+    retailerSku: sku,
+    observerVersion: AMAZON_OBSERVER_VERSION,
+    layoutFingerprint: layout,
+    outcome: "passed",
+    evaluatedFieldCount: 1,
+    agreedFieldCount: 1,
+    ambiguousFieldCount: 0,
+    validationProfile: OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
+    oracleEvaluatedFieldCount: 1,
+    oracleAgreedFieldCount: 1,
+    oracleConflictFieldCount: 0,
+    packagedMissingFieldCount: 1,
+    packagedConflictFieldCount: 0,
+    insufficientFieldCount: 0,
+    fieldOutcomes: [{
+      field,
+      recipeState: "value",
+      packagedState: "missing",
+      oracleState: "agreed",
+      disposition: "verified"
+    }],
+    recoveryEvidence: [{ field, normalizedValue }],
     observedAt: new Date(observedAt).toISOString()
   };
 }
@@ -402,6 +448,116 @@ test("worker-generated repairs require oracle-complete evidence while legacy tri
     assert.equal(trustedSummary.distinctCanaryOracleDevices, 3);
     assert.equal(trustedSummary.distinctCanaryOracleSkus, 3);
     assert.equal(trustedSummary.distinctCanaryOracleLayouts, 2);
+  } finally {
+    db.close();
+  }
+});
+
+test("oracle-agreed missing-field values enter an append-only quarantine without filling or executing", () => {
+  const db = new YoinkDatabase();
+  try {
+    const paired = device(db);
+    const devices = new DeviceRepository(db);
+    const legacyCode = devices.createPairingCode(NOW + 100);
+    const legacyCompanion = devices.pair({
+      pairingCode: legacyCode.code,
+      extensionVersion: "0.50.0",
+      capabilities: { observerRecipeShadow: true, observerRecipePackagedOracle: true }
+    }, NOW + 200);
+    const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
+    const input = proposal("amazon-recovery-ledger");
+    input.fields = { unitPrice: { mode: "text", selectors: [".a-price .a-offscreen"] } };
+    const created = repository.propose(input, NOW + 2_000);
+    repository.promote(String(created.id), {
+      targetState: "shadow",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 3_000);
+    const operationalBefore = {
+      observations: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count,
+      qualifications: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_qualifications")?.count,
+      jobs: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count,
+      missions: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count
+    };
+    const valid = recoveryTrial(
+      String(created.id), "amazon-recovery-ledger", "B002OB49L4", NOW + 4_000, "unitPrice", 1_368
+    );
+    assert.throws(
+      () => repository.recordTrial(legacyCompanion.id, valid, NOW + 4_250),
+      /Upgrade the paired Chrome companion/
+    );
+    assert.throws(
+      () => repository.recordTrial(paired.id, { ...valid, contractVersion: OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION }, NOW + 4_300),
+      /contract version 3/
+    );
+    const missingRecovery = structuredClone(valid);
+    delete missingRecovery.recoveryEvidence;
+    assert.throws(
+      () => repository.recordTrial(paired.id, missingRecovery, NOW + 4_350),
+      /requires bounded recovery evidence/
+    );
+    assert.throws(
+      () => repository.recordTrial(paired.id, {
+        ...valid,
+        recoveryEvidence: [{ field: "seller", normalizedValue: "buyer@example.com" }]
+      }, NOW + 4_400),
+      /bounded public-name schema/
+    );
+    const receipt = repository.recordTrial(paired.id, valid, NOW + 4_500);
+    assert.equal(receipt.recoveryEvidenceCount, 1);
+    assert.equal(receipt.recoveryEvidenceState, "quarantined");
+    const evidence = repository.recoveryEvidence();
+    assert.equal(evidence.length, 1);
+    assert.deepEqual({
+      recipeId: evidence[0]?.recipeId,
+      retailerId: evidence[0]?.retailerId,
+      retailerSku: evidence[0]?.retailerSku,
+      field: evidence[0]?.field,
+      normalizedValue: evidence[0]?.normalizedValue,
+      provenanceCode: evidence[0]?.provenanceCode,
+      recipeStateAtTrial: evidence[0]?.recipeStateAtTrial,
+      evidenceState: evidence[0]?.evidenceState,
+      applicationState: evidence[0]?.applicationState
+    }, {
+      recipeId: created.id,
+      retailerId: "amazon",
+      retailerSku: "B002OB49L4",
+      field: "unitPrice",
+      normalizedValue: 1_368,
+      provenanceCode: "recipe_packaged_oracle_agreement_v1",
+      recipeStateAtTrial: "shadow",
+      evidenceState: "quarantined",
+      applicationState: "not_applied"
+    });
+    assert.match(String(evidence[0]?.contributorRef), /^[a-f0-9]{12}$/);
+    assert.deepEqual({
+      observations: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count,
+      qualifications: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_qualifications")?.count,
+      jobs: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count,
+      missions: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count
+    }, operationalBefore);
+    assert.equal(repository.counts(NOW + 5_000).quarantinedObserverRecipeRecoveryEvidence, 1);
+    const audit = db.get<{ dataJson: string }>(
+      "SELECT data_json AS dataJson FROM audit_events WHERE event_type = 'observer_recipe_recovery_evidence_quarantined'"
+    );
+    assert.ok(audit);
+    assert.equal(audit.dataJson.includes("1368"), false);
+    assert.equal(audit.dataJson.includes("example.com"), false);
+    const exported = new UserPrivacyRepository(db).export(NOW + 5_000);
+    const maintenance = exported.data.community_and_maintenance as Record<string, unknown>;
+    const exportedEvidence = maintenance.observer_recipe_recovery_evidence as Array<Record<string, unknown>>;
+    assert.equal(exportedEvidence.length, 1);
+    assert.equal(exportedEvidence[0]?.normalized_value, "1368");
+    assert.equal(exportedEvidence[0]?.application_state, "not_applied");
+    assert.throws(
+      () => db.run("UPDATE observer_recipe_recovery_evidence SET application_state = 'not_applied'"),
+      /append-only/
+    );
+    assert.throws(
+      () => db.run("DELETE FROM observer_recipe_recovery_evidence"),
+      /append-only/
+    );
   } finally {
     db.close();
   }

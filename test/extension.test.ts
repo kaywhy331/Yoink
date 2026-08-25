@@ -70,6 +70,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /exactSelectedOfferEvidence: true/);
   assert.match(background, /observerRecipeShadow: true/);
   assert.match(background, /observerRecipePackagedOracle: true/);
+  assert.match(background, /observerRecipeRecoveryEvidence: true/);
   assert.match(background, /durableAdapterDiagnostics: true/);
   assert.match(background, /privacyBoundedRepairLandmarks: true/);
   assert.match(background, /rotatableDeviceCredentials: true/);
@@ -88,6 +89,8 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /observer-recipe-root\.js/);
   assert.match(background, /observer-recipe-oracle\.js/);
   assert.match(background, /packaged_structured_oracle_v1/);
+  assert.match(background, /contractVersion: 3/);
+  assert.match(background, /recoveryEvidence/);
   assert.match(background, /yoinkObserverRecipeTrustStateV1/);
   assert.doesNotMatch(background, /const OBSERVER_RECIPE_KEY_PIN/);
   assert.match(background, /yoink:contribute-retailer/);

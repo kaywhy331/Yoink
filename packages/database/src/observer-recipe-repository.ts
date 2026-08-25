@@ -2,6 +2,8 @@ import {
   OBSERVER_RECIPE_CONTRACT_VERSION,
   OBSERVER_RECIPE_FIELDS,
   OBSERVER_RECIPE_MODES,
+  OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION,
+  OBSERVER_RECIPE_RECOVERY_PROVENANCE,
   OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
   OBSERVER_RECIPE_TRIAL_DISPOSITIONS,
   OBSERVER_RECIPE_TRIAL_ORACLE_STATES,
@@ -14,6 +16,7 @@ import {
   type ObserverRecipeFieldInput,
   type ObserverRecipePromotionInput,
   type ObserverRecipeProposalInput,
+  type ObserverRecipeRecoveryEvidenceInput,
   type ObserverRecipeResignInput,
   type ObserverRecipeState,
   type ObserverRecipeTrialFieldOutcome,
@@ -283,12 +286,63 @@ interface NormalizedTrialValidation {
   packagedConflictFieldCount: number;
   insufficientFieldCount: number;
   fieldOutcomesJson: string;
+  recoveryEvidence: NormalizedRecoveryEvidence[];
+}
+
+interface NormalizedRecoveryEvidence {
+  field: ObserverRecipeField;
+  valueKind: "enum" | "cents" | "text" | "boolean";
+  normalizedValue: string;
 }
 
 const TRIAL_RECIPE_STATES = new Set(OBSERVER_RECIPE_TRIAL_RECIPE_STATES);
 const TRIAL_PACKAGED_STATES = new Set(OBSERVER_RECIPE_TRIAL_PACKAGED_STATES);
 const TRIAL_ORACLE_STATES = new Set(OBSERVER_RECIPE_TRIAL_ORACLE_STATES);
 const TRIAL_DISPOSITIONS = new Set(OBSERVER_RECIPE_TRIAL_DISPOSITIONS);
+
+function normalizedRecoveryValue(input: ObserverRecipeRecoveryEvidenceInput): NormalizedRecoveryEvidence {
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || JSON.stringify(Object.keys(input).sort()) !== JSON.stringify(["field", "normalizedValue"].sort())
+    || !FIELD_NAMES.has(input.field)) {
+    throw new Error("Observer recipe recovery evidence is outside the fixed-field schema.");
+  }
+  if (input.field === "availability") {
+    if (!["in_stock", "preorder", "out_of_stock"].includes(String(input.normalizedValue))) {
+      throw new Error("Recovered availability must be a bounded known state.");
+    }
+    return { field: input.field, valueKind: "enum", normalizedValue: String(input.normalizedValue) };
+  }
+  if (input.field === "unitPrice") {
+    if (typeof input.normalizedValue !== "number" || !Number.isSafeInteger(input.normalizedValue)
+      || input.normalizedValue <= 0 || input.normalizedValue > 100_000_000) {
+      throw new Error("Recovered unit price must be bounded positive integer cents.");
+    }
+    return { field: input.field, valueKind: "cents", normalizedValue: String(input.normalizedValue) };
+  }
+  if (input.field === "seller") {
+    if (typeof input.normalizedValue !== "string") throw new Error("Recovered seller evidence must be public text.");
+    const seller = cleanText(input.normalizedValue, 160);
+    const lower = seller.toLocaleLowerCase("en-US");
+    const forbidden = ["password", "payment", "credit card", "card number", "cvv", "address", "email", "phone", "cookie", "token"];
+    if (!seller || seller !== input.normalizedValue || seller !== lower
+      || !/^[\p{L}\p{N} .,&'()_+-]+$/u.test(seller)
+      || seller.includes("@") || /https?:|\d{12,}/i.test(seller)
+      || forbidden.some((term) => lower.includes(term))) {
+      throw new Error("Recovered seller evidence exceeds the bounded public-name schema.");
+    }
+    return { field: input.field, valueKind: "text", normalizedValue: seller };
+  }
+  if (input.field === "fulfillment") {
+    if (!["shipping", "pickup"].includes(String(input.normalizedValue))) {
+      throw new Error("Recovered fulfillment must be shipping or pickup.");
+    }
+    return { field: input.field, valueKind: "enum", normalizedValue: String(input.normalizedValue) };
+  }
+  if (typeof input.normalizedValue !== "boolean") {
+    throw new Error("Recovered Add-control evidence must be boolean.");
+  }
+  return { field: input.field, valueKind: "boolean", normalizedValue: String(input.normalizedValue) };
+}
 
 function normalizedTrialValidation(
   input: ObserverRecipeTrialInput,
@@ -303,13 +357,15 @@ function normalizedTrialValidation(
       packagedMissingFieldCount: 0,
       packagedConflictFieldCount: 0,
       insufficientFieldCount: 0,
-      fieldOutcomesJson: "[]"
+      fieldOutcomesJson: "[]",
+      recoveryEvidence: []
     };
   }
-  if (input.contractVersion !== OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION
+  if (![OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION, OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION]
+    .includes(input.contractVersion)
     || input.validationProfile !== OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE
     || !Array.isArray(input.fieldOutcomes)) {
-    throw new Error("Observer recipe trial oracle evidence is required for contract version 2.");
+    throw new Error("Observer recipe trial oracle evidence is required for contract versions 2 and 3.");
   }
   const fieldOrder = new Map(OBSERVER_RECIPE_FIELDS.map((field, index) => [field, index]));
   const outcomes: ObserverRecipeTrialFieldOutcome[] = [];
@@ -377,6 +433,24 @@ function normalizedTrialValidation(
   }
   const fieldOutcomesJson = JSON.stringify(outcomes);
   if (fieldOutcomesJson.length > 1200) throw new Error("Observer recipe trial field evidence exceeds its privacy bound.");
+  let recoveryEvidence: NormalizedRecoveryEvidence[] = [];
+  if (input.contractVersion === OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION) {
+    if (!Array.isArray(input.recoveryEvidence) || input.recoveryEvidence.length > 5) {
+      throw new Error("Contract version 3 requires bounded recovery evidence.");
+    }
+    recoveryEvidence = input.recoveryEvidence.map(normalizedRecoveryValue)
+      .sort((left, right) => Number(fieldOrder.get(left.field)) - Number(fieldOrder.get(right.field)));
+    const eligibleFields = outcomes.filter((item) => item.recipeState === "value"
+      && item.packagedState === "missing" && item.oracleState === "agreed"
+      && item.disposition === "verified").map((item) => item.field).sort();
+    const recoveredFields = recoveryEvidence.map((item) => item.field).sort();
+    if (new Set(recoveredFields).size !== recoveredFields.length
+      || JSON.stringify(recoveredFields) !== JSON.stringify(eligibleFields)) {
+      throw new Error("Recovery evidence must cover exactly the oracle-agreed fields missing from the bundled observer.");
+    }
+  } else if (input.recoveryEvidence !== undefined) {
+    throw new Error("Recovery values require observer recipe trial contract version 3.");
+  }
   return {
     validationProfile: OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
     oracleEvaluatedFieldCount: derived.oracleEvaluatedFieldCount,
@@ -385,7 +459,8 @@ function normalizedTrialValidation(
     packagedMissingFieldCount: derived.packagedMissingFieldCount,
     packagedConflictFieldCount: derived.packagedConflictFieldCount,
     insufficientFieldCount: derived.insufficientFieldCount,
-    fieldOutcomesJson
+    fieldOutcomesJson,
+    recoveryEvidence
   };
 }
 
@@ -1170,7 +1245,11 @@ export class ObserverRecipeRepository {
   recordTrial(deviceId: string, input: ObserverRecipeTrialInput, now = Date.now()): Record<string, unknown> {
     const cleanDeviceId = cleanText(deviceId, 120);
     if (!input || typeof input !== "object"
-      || ![OBSERVER_RECIPE_CONTRACT_VERSION, OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION].includes(input.contractVersion)
+      || ![
+        OBSERVER_RECIPE_CONTRACT_VERSION,
+        OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
+        OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION
+      ].includes(input.contractVersion)
       || !Object.hasOwn(RETAILER_OBSERVER_VERSIONS, input.retailerId)
       || !["passed", "failed"].includes(input.outcome)) {
       throw new Error("A valid observer recipe trial is required.");
@@ -1184,8 +1263,10 @@ export class ObserverRecipeRepository {
     let capabilities: Record<string, unknown> = {};
     try { capabilities = JSON.parse(device?.capabilitiesJson ?? "{}") as Record<string, unknown>; } catch { capabilities = {}; }
     if (!device || capabilities.observerRecipeShadow !== true
-      || (input.contractVersion === OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION
-        && capabilities.observerRecipePackagedOracle !== true)) {
+      || (input.contractVersion !== OBSERVER_RECIPE_CONTRACT_VERSION
+        && capabilities.observerRecipePackagedOracle !== true)
+      || (input.contractVersion === OBSERVER_RECIPE_RECOVERY_EVIDENCE_CONTRACT_VERSION
+        && capabilities.observerRecipeRecoveryEvidence !== true)) {
       throw new Error("Upgrade the paired Chrome companion before running recipe trials.");
     }
     const recipe = this.row(cleanText(input.recipeId, 120));
@@ -1213,6 +1294,7 @@ export class ObserverRecipeRepository {
     const receivedAt = nowIso(now);
     let autoDisabled = false;
     let autoDisabledReason = "";
+    let trialStored = false;
     this.db.transaction(() => {
       const inserted = this.db.run(
         `INSERT OR IGNORE INTO observer_recipe_trials(
@@ -1250,6 +1332,53 @@ export class ObserverRecipeRepository {
         validation.fieldOutcomesJson,
         recipe.lifecycleState
       );
+      trialStored = Number(inserted.changes) === 1;
+      if (Number(inserted.changes) === 1 && validation.recoveryEvidence.length > 0) {
+        for (const evidence of validation.recoveryEvidence) {
+          this.db.run(
+            `INSERT INTO observer_recipe_recovery_evidence(
+               id, tenant_id, user_id, device_id, trial_id, recipe_id,
+               retailer_id, retailer_sku, layout_fingerprint, field_name,
+               value_kind, normalized_value, provenance_code,
+               recipe_state_at_trial, evidence_state, application_state,
+               observed_at, received_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'quarantined', 'not_applied', ?, ?)`,
+            newId("observer_recipe_recovery"),
+            currentRequestScope().tenantId,
+            currentRequestScope().userId,
+            cleanDeviceId,
+            id,
+            recipe.id,
+            input.retailerId,
+            retailerSku,
+            input.layoutFingerprint,
+            evidence.field,
+            evidence.valueKind,
+            evidence.normalizedValue,
+            OBSERVER_RECIPE_RECOVERY_PROVENANCE,
+            recipe.lifecycleState,
+            new Date(observedTime).toISOString(),
+            receivedAt
+          );
+        }
+        this.audit.record({
+          correlationId: id,
+          aggregateType: "observer_recipe",
+          eventType: "observer_recipe_recovery_evidence_quarantined",
+          reasonCode: OBSERVER_RECIPE_RECOVERY_PROVENANCE,
+          message: "Oracle-agreed normalized recovery evidence entered the review-only quarantine ledger.",
+          data: {
+            recipeId: recipe.id,
+            retailerId: input.retailerId,
+            recoveryEvidenceCount: validation.recoveryEvidence.length,
+            fields: validation.recoveryEvidence.map((item) => item.field),
+            applicationState: "not_applied",
+            observationUpdated: false,
+            mutationCapable: false,
+            rawPageDataStored: false
+          }
+        }, now);
+      }
       if (Number(inserted.changes) === 1 && validation.packagedConflictFieldCount > 0) {
         const disabled = this.db.run(
           `UPDATE observer_recipe_candidates SET lifecycle_state = 'disabled', kill_switch = 1,
@@ -1321,6 +1450,8 @@ export class ObserverRecipeRepository {
       retailerSku,
       outcome: input.outcome,
       validationProfile: validation.validationProfile,
+      recoveryEvidenceCount: trialStored ? validation.recoveryEvidence.length : 0,
+      recoveryEvidenceState: trialStored && validation.recoveryEvidence.length ? "quarantined" : "none",
       autoDisabled,
       autoDisabledReason,
       receivedAt
@@ -1409,6 +1540,49 @@ export class ObserverRecipeRepository {
     return this.rows().map((row) => recipeProjection(row, trialSummary(this.db, row.id)));
   }
 
+  recoveryEvidence(limit = 100): Array<Record<string, unknown>> {
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    return this.db.all<{
+      id: string; trialId: string; recipeId: string; userId: string;
+      retailerId: SupportedRetailerId; retailerSku: string; layoutFingerprint: string;
+      fieldName: ObserverRecipeField; valueKind: "enum" | "cents" | "text" | "boolean";
+      normalizedValue: string; provenanceCode: string; recipeStateAtTrial: string;
+      evidenceState: string; applicationState: string; observedAt: string; receivedAt: string;
+    }>(
+      `SELECT id, trial_id AS trialId, recipe_id AS recipeId, user_id AS userId,
+              retailer_id AS retailerId, retailer_sku AS retailerSku,
+              layout_fingerprint AS layoutFingerprint, field_name AS fieldName,
+              value_kind AS valueKind, normalized_value AS normalizedValue,
+              provenance_code AS provenanceCode, recipe_state_at_trial AS recipeStateAtTrial,
+              evidence_state AS evidenceState, application_state AS applicationState,
+              observed_at AS observedAt, received_at AS receivedAt
+       FROM observer_recipe_recovery_evidence
+       WHERE tenant_id = ?
+       ORDER BY received_at DESC, id DESC LIMIT ?`,
+      currentRequestScope().tenantId,
+      safeLimit
+    ).map((row) => ({
+      id: row.id,
+      trialId: row.trialId,
+      recipeId: row.recipeId,
+      contributorRef: stableHash("observer-recipe-recovery-contributor-v1", row.userId).slice(0, 12),
+      retailerId: row.retailerId,
+      retailerSku: row.retailerSku,
+      layoutFingerprint: row.layoutFingerprint,
+      field: row.fieldName,
+      valueKind: row.valueKind,
+      normalizedValue: row.valueKind === "cents" ? Number(row.normalizedValue)
+        : row.valueKind === "boolean" ? row.normalizedValue === "true"
+          : row.normalizedValue,
+      provenanceCode: row.provenanceCode,
+      recipeStateAtTrial: row.recipeStateAtTrial,
+      evidenceState: row.evidenceState,
+      applicationState: row.applicationState,
+      observedAt: row.observedAt,
+      receivedAt: row.receivedAt
+    }));
+  }
+
   counts(now = Date.now()): Record<string, number> {
     const currentTrust = this.currentTrustManifest();
     const row = this.db.get<{
@@ -1471,6 +1645,12 @@ export class ObserverRecipeRepository {
       currentRequestScope().tenantId,
       currentRequestScope().tenantId
     );
+    const recovery = this.db.get<{ total: number; distinctFields: number; distinctContributors: number }>(
+      `SELECT COUNT(*) AS total, COUNT(DISTINCT field_name) AS distinctFields,
+              COUNT(DISTINCT user_id) AS distinctContributors
+       FROM observer_recipe_recovery_evidence WHERE tenant_id = ?`,
+      currentRequestScope().tenantId
+    );
     return {
       observerRecipeCandidates: Number(row?.candidates ?? 0),
       activeObserverRecipes: Number(row?.active ?? 0),
@@ -1484,6 +1664,9 @@ export class ObserverRecipeRepository {
       oracleCompleteObserverRecipeTrials: Number(row?.oracleCompleteTrials ?? 0),
       autoDisabledObserverRecipesByPackagedConflict: Number(row?.autoDisabledConflicts ?? 0),
       autoDisabledObserverRecipesByCanaryRegression: Number(row?.autoDisabledCanaryRegressions ?? 0),
+      quarantinedObserverRecipeRecoveryEvidence: Number(recovery?.total ?? 0),
+      distinctObserverRecipeRecoveryFields: Number(recovery?.distinctFields ?? 0),
+      distinctObserverRecipeRecoveryContributors: Number(recovery?.distinctContributors ?? 0),
       observerRecipeTrustManifests: Number(row?.trustManifests ?? 0),
       observerRecipeTransparencyEvents: Number(row?.transparencyEvents ?? 0),
       observerRecipeWitnessReceipts: Number(row?.witnessReceipts ?? 0),

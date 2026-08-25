@@ -28,6 +28,11 @@ export interface ObserverRecipeFieldOutcome {
   disposition: "verified" | "conflict" | "insufficient";
 }
 
+export interface ObserverRecipeRecoveryEvidence {
+  field: Field;
+  normalizedValue: NormalizedValue;
+}
+
 export interface ObserverRecipeOracleEvaluation {
   validationProfile: typeof OBSERVER_RECIPE_ORACLE_PROFILE;
   evaluatedFieldCount: number;
@@ -40,6 +45,7 @@ export interface ObserverRecipeOracleEvaluation {
   packagedConflictFieldCount: number;
   insufficientFieldCount: number;
   fieldOutcomes: ObserverRecipeFieldOutcome[];
+  recoveryEvidence: ObserverRecipeRecoveryEvidence[];
   shape: string;
 }
 
@@ -291,6 +297,7 @@ export function evaluateObserverRecipeEvidence(
 ): ObserverRecipeOracleEvaluation {
   const oracle = semanticOracle(document, expected);
   const fieldOutcomes: ObserverRecipeFieldOutcome[] = [];
+  const recoveryEvidence: ObserverRecipeRecoveryEvidence[] = [];
   for (const field of FIELD_ORDER) {
     const definition = fields[field];
     if (!definition) continue;
@@ -331,6 +338,7 @@ export function evaluateObserverRecipeEvidence(
       });
     } else if (equal(field, recipe.value, oracleRead.value)) {
       fieldOutcomes.push({ field, recipeState: "value", packagedState, oracleState: "agreed", disposition: "verified" });
+      if (!packagedKnown) recoveryEvidence.push({ field, normalizedValue: recipe.value });
     } else {
       fieldOutcomes.push({ field, recipeState: "value", packagedState, oracleState: "conflict", disposition: "conflict" });
     }
@@ -348,6 +356,7 @@ export function evaluateObserverRecipeEvidence(
     packagedConflictFieldCount: count((item) => item.packagedState === "conflict"),
     insufficientFieldCount: count((item) => item.disposition === "insufficient"),
     fieldOutcomes,
+    recoveryEvidence,
     shape: fieldOutcomes.map((item) => `${item.field}:${item.recipeState}:${item.packagedState}:${item.oracleState}:${item.disposition}`).join("|")
   };
 }

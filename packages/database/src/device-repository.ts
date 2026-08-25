@@ -28,6 +28,7 @@ export interface DeviceCapabilities {
   exactSelectedOfferEvidence: boolean;
   observerRecipeShadow: boolean;
   observerRecipePackagedOracle: boolean;
+  observerRecipeRecoveryEvidence: boolean;
   durableAdapterDiagnostics: boolean;
   privacyBoundedRepairLandmarks: boolean;
   rotatableDeviceCredentials: boolean;
@@ -174,6 +175,7 @@ function capabilities(input: Partial<DeviceCapabilities> | undefined): DeviceCap
     exactSelectedOfferEvidence: input?.exactSelectedOfferEvidence === true,
     observerRecipeShadow: input?.observerRecipeShadow === true,
     observerRecipePackagedOracle: input?.observerRecipePackagedOracle === true,
+    observerRecipeRecoveryEvidence: input?.observerRecipeRecoveryEvidence === true,
     durableAdapterDiagnostics: input?.durableAdapterDiagnostics === true,
     privacyBoundedRepairLandmarks: input?.privacyBoundedRepairLandmarks === true,
     rotatableDeviceCredentials: input?.rotatableDeviceCredentials === true,

@@ -35,6 +35,7 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   notification_deliveries: "safe_metadata_only",
   observer_recipe_candidates: "exported",
   observer_recipe_lifecycle_events: "exported",
+  observer_recipe_recovery_evidence: "exported",
   observer_recipe_trials: "exported",
   offer_snapshots: "exported",
   operator_alert_incidents: "safe_metadata_only",
@@ -291,9 +292,11 @@ export class UserPrivacyRepository {
            + (SELECT COUNT(*) FROM identity_claim_reviews WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_lifecycle_events WHERE tenant_id = ? AND user_id = ?)
-           + (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND user_id = ?) AS count`,
+           + (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM observer_recipe_recovery_evidence WHERE tenant_id = ? AND user_id = ?) AS count`,
         tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId
+        tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
+        tenantId, userId
       ),
       activity_and_delivery: count(
         `SELECT
@@ -761,7 +764,16 @@ export class UserPrivacyRepository {
          FROM observer_recipe_trials WHERE tenant_id = ? AND user_id = ?
          ORDER BY received_at, id`,
         tenantId, userId
-      ), ["field_outcomes_json"])
+      ), ["field_outcomes_json"]),
+      observer_recipe_recovery_evidence: this.rows(
+        `SELECT id, device_id, trial_id, recipe_id, retailer_id, retailer_sku,
+                layout_fingerprint, field_name, value_kind, normalized_value,
+                provenance_code, recipe_state_at_trial, evidence_state,
+                application_state, observed_at, received_at
+         FROM observer_recipe_recovery_evidence WHERE tenant_id = ? AND user_id = ?
+         ORDER BY received_at, id`,
+        tenantId, userId
+      )
     };
   }
 

@@ -566,6 +566,23 @@ trials exist. This tenant-account seam is not public identity reputation or
 Sybil resistance. Region, recipe-derived field fill, automatic promotion, and
 all mutation uses remain closed.
 
+Yoink 0.51 adds a provenance ledger without enabling field fill. Trial v3
+retains the value-free field-state receipt and may add a normalized value only
+when the bundled observer marked that field missing and the signed recipe
+exactly agrees with the fixed packaged structured-page oracle. Chrome and the
+server independently enforce field-specific enums/types, bounded cents, and a
+restricted public seller-name grammar. Older v1/v2 receipts remain compatible
+and cannot carry values.
+
+Migration 44 stores each accepted value in an append-only table bound to its
+authenticated contributor/device, exact trial, recipe, SKU, layout, lifecycle
+stage, and fixed provenance code. Both evidence and application states are
+schema-locked to `quarantined` and `not_applied`. The admin plane and user data
+export expose provenance, but no apply endpoint or canonical-observation write
+path exists. The recipe interpreter and ledger remain disconnected from
+identity resolution, qualifications, plans, jobs, navigation, clicks, and all
+mutation runners.
+
 Yoink 0.38.0 makes the paired Chrome credential a generation-bound,
 recoverable lifecycle rather than an indefinitely static hash. Begin is
 authenticated only by the current token and stores a 10-minute next-generation
@@ -802,7 +819,10 @@ stores a field map. Migration 42 in 0.49 adds only bounded recipe-trial oracle
 states/counts and preserves every legacy trial; it does not widen retailer or
 mutation authority. Migration 43 in 0.50 adds only a bounded server-derived
 trial-stage enum and its contributor/stage index; it likewise changes no
-retailer qualification or mutation authority.
+retailer qualification or mutation authority. Migration 44 in 0.51 adds only
+append-only, permanently quarantined normalized recovery evidence; it adds no
+field-fill transition and changes no retailer qualification or mutation
+authority.
 
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted

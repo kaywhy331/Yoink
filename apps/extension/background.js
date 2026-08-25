@@ -216,6 +216,7 @@ function targetCapabilities() {
     exactSelectedOfferEvidence: true,
     observerRecipeShadow: true,
     observerRecipePackagedOracle: true,
+    observerRecipeRecoveryEvidence: true,
     sanitizedAdapterDiagnostics: true,
     durableAdapterDiagnostics: true,
     privacyBoundedRepairLandmarks: true,
@@ -1493,6 +1494,56 @@ async function verifiedObserverRecipe(value, rootedTrust, retailerId) {
   return normalized.envelope.payload;
 }
 
+function boundedObserverRecoveryEvidence(value, fieldOutcomes) {
+  if (!Array.isArray(value) || value.length > 5) {
+    throw new Error("The packaged observer recipe oracle returned invalid recovery evidence.");
+  }
+  const order = new Map(["availability", "unitPrice", "seller", "fulfillment", "addControl"]
+    .map((field, index) => [field, index]));
+  const evidence = value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)
+      || JSON.stringify(Object.keys(item).sort()) !== JSON.stringify(["field", "normalizedValue"].sort())
+      || !order.has(item.field)) {
+      throw new Error("The packaged observer recipe oracle returned invalid recovery evidence.");
+    }
+    const normalizedValue = item.normalizedValue;
+    if (item.field === "availability" && !["in_stock", "preorder", "out_of_stock"].includes(normalizedValue)) {
+      throw new Error("The packaged observer recipe oracle returned invalid recovery evidence.");
+    }
+    if (item.field === "unitPrice" && (!Number.isSafeInteger(normalizedValue)
+      || normalizedValue <= 0 || normalizedValue > 100_000_000)) {
+      throw new Error("The packaged observer recipe oracle returned invalid recovery evidence.");
+    }
+    if (item.field === "seller") {
+      const seller = String(normalizedValue || "");
+      const lower = seller.toLocaleLowerCase("en-US");
+      const forbidden = ["password", "payment", "credit card", "card number", "cvv", "address", "email", "phone", "cookie", "token"];
+      if (!seller || seller.length > 160 || seller !== lower || seller.trim() !== seller
+        || !/^[\p{L}\p{N} .,&'()_+-]+$/u.test(seller)
+        || seller.includes("@") || /https?:|\d{12,}/i.test(seller)
+        || forbidden.some((term) => lower.includes(term))) {
+        throw new Error("The packaged observer recipe oracle returned invalid recovery evidence.");
+      }
+    }
+    if (item.field === "fulfillment" && !["shipping", "pickup"].includes(normalizedValue)) {
+      throw new Error("The packaged observer recipe oracle returned invalid recovery evidence.");
+    }
+    if (item.field === "addControl" && typeof normalizedValue !== "boolean") {
+      throw new Error("The packaged observer recipe oracle returned invalid recovery evidence.");
+    }
+    return { field: item.field, normalizedValue };
+  }).sort((left, right) => Number(order.get(left.field)) - Number(order.get(right.field)));
+  const eligibleFields = fieldOutcomes.filter((item) => item?.recipeState === "value"
+    && item.packagedState === "missing" && item.oracleState === "agreed"
+    && item.disposition === "verified").map((item) => item.field).sort();
+  const recoveredFields = evidence.map((item) => item.field).sort();
+  if (new Set(recoveredFields).size !== recoveredFields.length
+    || JSON.stringify(recoveredFields) !== JSON.stringify(eligibleFields)) {
+    throw new Error("The packaged observer recipe oracle returned inconsistent recovery evidence.");
+  }
+  return evidence;
+}
+
 async function evaluateObserverRecipe(tabId, fields, bundledObservation, diagnostic) {
   const packagedPassed = !diagnostic || ["passed", "recovered"].includes(String(diagnostic.outcome || ""));
   const failureStage = String(diagnostic?.failureStage || "");
@@ -1542,7 +1593,7 @@ async function evaluateObserverRecipe(tabId, fields, bundledObservation, diagnos
     || typeof result.shape !== "string" || result.shape.length > 600) {
     throw new Error("The packaged observer recipe oracle returned no bounded result.");
   }
-  return result;
+  return { ...result, recoveryEvidence: boundedObserverRecoveryEvidence(result.recoveryEvidence, result.fieldOutcomes) };
 }
 
 async function runObserverRecipeShadow(tabId, retailerId, observation, diagnostic, device) {
@@ -1569,7 +1620,7 @@ async function runObserverRecipeShadow(tabId, retailerId, observation, diagnosti
       method: "POST",
       headers: { Authorization: `Bearer ${device.token}` },
       body: JSON.stringify({
-        contractVersion: 2,
+        contractVersion: 3,
         recipeId: recipe.recipeId,
         recipeVersion: recipe.recipeVersion,
         retailerId,
@@ -1588,6 +1639,7 @@ async function runObserverRecipeShadow(tabId, retailerId, observation, diagnosti
         packagedConflictFieldCount: evaluation.packagedConflictFieldCount,
         insufficientFieldCount: evaluation.insufficientFieldCount,
         fieldOutcomes: evaluation.fieldOutcomes,
+        recoveryEvidence: evaluation.recoveryEvidence,
         observedAt: new Date().toISOString()
       })
     }, EVIDENCE_REQUEST_TIMEOUT_MS);

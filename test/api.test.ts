@@ -71,6 +71,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /multi-contributor regression SLO auto-kill/);
     assert.match(adminScript, /Next gate: 2 contributor-deduplicated clean passes on 2 exact SKUs/);
     assert.match(adminScript, /25% deterministic cohort/);
+    assert.match(adminScript, /Recipe \+ packaged oracle agreement/);
+    assert.match(adminScript, /Application: never/);
+    assert.match(adminPageBody, /Normalized missing-field previews/);
     assert.match(adminScript, /promotionReady \? "" : "disabled"/);
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
@@ -105,6 +108,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       observerRecipeCanaryCohortPercent: 25,
       observerRecipeCanaryMinimumDurationHours: 24,
       observerRecipeCanaryRegressionAutoKill: true,
+      observerRecipeRecoveryEvidenceStorageImplemented: true,
+      observerRecipeRecoveryEvidenceApplicationEnabled: false,
       observerRecipeFieldFillEnabled: false,
       durableObserverRecipeWitnessRefresh: true,
       durableOperatorAlertConnectorDispatch: true,
@@ -287,6 +292,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.observerRecipeCanaryCohortPercent, 25);
     assert.equal(snapshot.capabilities.observerRecipeCanaryMinimumDurationHours, 24);
     assert.equal(snapshot.capabilities.observerRecipeCanaryRegressionAutoKill, true);
+    assert.equal(snapshot.capabilities.observerRecipeRecoveryEvidenceStorageImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeRecoveryEvidenceApplicationEnabled, false);
     assert.equal(snapshot.capabilities.observerRecipeFieldFillEnabled, false);
     assert.equal(snapshot.capabilities.durableObserverRecipeWitnessRefresh, true);
     assert.equal(snapshot.capabilities.attestedBackgroundWorkerDeployment, true);

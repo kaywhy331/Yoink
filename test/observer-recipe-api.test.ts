@@ -33,7 +33,11 @@ test("the signed observer registry distributes only promoted recipes to capable 
       body: JSON.stringify({
         pairingCode: pairing.pairing.code,
         extensionVersion: "0.13.0",
-        capabilities: { observerRecipeShadow: true, observerRecipePackagedOracle: true }
+        capabilities: {
+          observerRecipeShadow: true,
+          observerRecipePackagedOracle: true,
+          observerRecipeRecoveryEvidence: true
+        }
       })
     });
     assert.equal(pairedResponse.status, 201);
@@ -98,7 +102,7 @@ test("the signed observer registry distributes only promoted recipes to capable 
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        contractVersion: 2,
+        contractVersion: 3,
         recipeId: recipe.id,
         recipeVersion: "amazon-api-shadow",
         retailerId: "amazon",
@@ -113,16 +117,17 @@ test("the signed observer registry distributes only promoted recipes to capable 
         oracleEvaluatedFieldCount: 2,
         oracleAgreedFieldCount: 2,
         oracleConflictFieldCount: 0,
-        packagedMissingFieldCount: 0,
+        packagedMissingFieldCount: 1,
         packagedConflictFieldCount: 0,
         insufficientFieldCount: 0,
         fieldOutcomes: ["availability", "unitPrice"].map((field) => ({
           field,
           recipeState: "value",
-          packagedState: "agreed",
+          packagedState: field === "unitPrice" ? "missing" : "agreed",
           oracleState: "agreed",
           disposition: "verified"
         })),
+        recoveryEvidence: [{ field: "unitPrice", normalizedValue: 798 }],
         observedAt: new Date().toISOString(),
         recipeStateAtTrial: "trusted_read_only",
         extractedText: "DO_NOT_STORE"
@@ -130,6 +135,7 @@ test("the signed observer registry distributes only promoted recipes to capable 
     });
     assert.equal(trialResponse.status, 201);
     assert.equal(JSON.stringify(db.all("SELECT * FROM observer_recipe_trials")).includes("DO_NOT_STORE"), false);
+    assert.equal(JSON.stringify(db.all("SELECT * FROM observer_recipe_recovery_evidence")).includes("DO_NOT_STORE"), false);
     assert.equal(db.get<{ state: string }>(
       "SELECT recipe_state_at_trial AS state FROM observer_recipe_trials WHERE recipe_id = ?",
       recipe.id
@@ -143,8 +149,11 @@ test("the signed observer registry distributes only promoted recipes to capable 
         canaryMinimumDurationHours: number;
         canaryRegressionAutoKill: boolean;
         publicIndependentAccountQuorum: boolean;
+        recoveryEvidencePolicy: string;
+        recoveryEvidenceApplication: boolean;
         recipeFieldFill: boolean;
         recipes: Array<Record<string, unknown>>;
+        recoveryEvidence: Array<Record<string, unknown>>;
       };
     };
     assert.equal(snapshot.counts.activeObserverRecipes, 1);
@@ -152,13 +161,23 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(snapshot.counts.packagedOracleObserverRecipeTrials, 1);
     assert.equal(snapshot.counts.oracleCompleteObserverRecipeTrials, 1);
     assert.equal(snapshot.counts.autoDisabledObserverRecipesByCanaryRegression, 0);
+    assert.equal(snapshot.counts.quarantinedObserverRecipeRecoveryEvidence, 1);
     assert.equal(snapshot.observerRegistry.mutationCapable, false);
     assert.equal(snapshot.observerRegistry.trialQuorumPolicy, "latest_per_contributor_sku_layout_stage");
     assert.equal(snapshot.observerRegistry.canaryCohortPercent, 25);
     assert.equal(snapshot.observerRegistry.canaryMinimumDurationHours, 24);
     assert.equal(snapshot.observerRegistry.canaryRegressionAutoKill, true);
     assert.equal(snapshot.observerRegistry.publicIndependentAccountQuorum, false);
+    assert.equal(snapshot.observerRegistry.recoveryEvidencePolicy, "oracle_agreed_missing_field_quarantine");
+    assert.equal(snapshot.observerRegistry.recoveryEvidenceApplication, false);
     assert.equal(snapshot.observerRegistry.recipeFieldFill, false);
+    assert.equal(snapshot.observerRegistry.recoveryEvidence.length, 1);
+    assert.equal(snapshot.observerRegistry.recoveryEvidence[0]?.normalizedValue, 798);
+
+    const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    assert.equal(health.observerRecipeRecoveryEvidenceStorageImplemented, true);
+    assert.equal(health.observerRecipeRecoveryEvidenceApplicationEnabled, false);
+    assert.equal(health.observerRecipeFieldFillEnabled, false);
 
     const conflictResponse = await fetch(`${baseUrl}/api/v1/devices/self/observer-recipe-trials/amazon`, {
       method: "POST",

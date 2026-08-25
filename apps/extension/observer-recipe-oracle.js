@@ -219,6 +219,7 @@ var YoinkObserverRecipeOracleModule = (() => {
   function evaluateObserverRecipeEvidence(document, fields, expected) {
     const oracle = semanticOracle(document, expected);
     const fieldOutcomes = [];
+    const recoveryEvidence = [];
     for (const field of FIELD_ORDER) {
       const definition = fields[field];
       if (!definition) continue;
@@ -259,6 +260,7 @@ var YoinkObserverRecipeOracleModule = (() => {
         });
       } else if (equal(field, recipe.value, oracleRead.value)) {
         fieldOutcomes.push({ field, recipeState: "value", packagedState, oracleState: "agreed", disposition: "verified" });
+        if (!packagedKnown) recoveryEvidence.push({ field, normalizedValue: recipe.value });
       } else {
         fieldOutcomes.push({ field, recipeState: "value", packagedState, oracleState: "conflict", disposition: "conflict" });
       }
@@ -276,6 +278,7 @@ var YoinkObserverRecipeOracleModule = (() => {
       packagedConflictFieldCount: count((item) => item.packagedState === "conflict"),
       insufficientFieldCount: count((item) => item.disposition === "insufficient"),
       fieldOutcomes,
+      recoveryEvidence,
       shape: fieldOutcomes.map((item) => `${item.field}:${item.recipeState}:${item.packagedState}:${item.oracleState}:${item.disposition}`).join("|")
     };
   }

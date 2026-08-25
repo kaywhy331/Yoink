@@ -63,6 +63,15 @@ account cannot multiply its contributor quorum. No new page data, account
 identifier, region, or recipe value is added to the browser receipt; recipe
 field-fill and every mutation runner remain disconnected.
 
+Companion 0.51 adds trial contract v3 for one narrower case: when the bundled
+observer is missing a fixed field and the signed recipe exactly agrees with the
+separate packaged structured-page oracle. Only the normalized public commerce
+value may accompany the existing state receipt. Chrome independently rejects
+extra fields, mismatched recovery sets, unsafe seller text, unbounded cents,
+and unknown enums before transport; the server repeats those checks. Accepted
+values enter an append-only server quarantine as `not_applied`. They do not
+change the observation shown to the user and cannot reach any Add runner.
+
 If that canonical diagnostic cannot reach the loopback server because of a
 transient network, timeout/rate-limit, or server failure, companion 0.17.0 keeps
 it in a paired-device-bound local outbox and retries on startup and the

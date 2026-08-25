@@ -5,6 +5,12 @@ observer-recipe lifecycle. It limits how read-only recipes accumulate promotion
 evidence and how a canary is distributed. It does not authorize automatic
 signing, automatic promotion, product-evidence field fill, or browser mutation.
 
+Version 0.51 leaves these cohort and promotion rules unchanged. It can retain
+oracle-agreed normalized values only in a separate append-only `not_applied`
+quarantine; those values do not count as additional contributors or trials and
+cannot fill an observation. See
+[observer-recipe recovery evidence](OBSERVER_RECIPE_RECOVERY_EVIDENCE.md).
+
 ## Canonical trial cohort
 
 Migration 43 adds `recipe_state_at_trial` to the bounded trial receipt. The

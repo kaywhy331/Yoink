@@ -626,6 +626,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           observerRecipeCanaryCohortPercent: OBSERVER_RECIPE_CANARY_COHORT_PERCENT,
           observerRecipeCanaryMinimumDurationHours: OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS / 3_600_000,
           observerRecipeCanaryRegressionAutoKill: true,
+          observerRecipeRecoveryEvidenceStorageImplemented: true,
+          observerRecipeRecoveryEvidenceApplicationEnabled: false,
           observerRecipeFieldFillEnabled: false,
           durableObserverRecipeWitnessRefresh: true,
           durableOperatorAlertConnectorDispatch: true,
@@ -1373,8 +1375,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             canaryRegressionAutoKill: true,
             tenantContributorQuorum: true,
             publicIndependentAccountQuorum: false,
+            recoveryEvidencePolicy: "oracle_agreed_missing_field_quarantine",
+            recoveryEvidenceApplication: false,
             recipeFieldFill: false,
-            recipes: observerRecipes.list()
+            recipes: observerRecipes.list(),
+            recoveryEvidence: observerRecipes.recoveryEvidence()
           },
           catalogGovernance: {
             directUserWritesEnabled: false,
@@ -1460,6 +1465,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             observerRecipeCanaryCohortPercent: OBSERVER_RECIPE_CANARY_COHORT_PERCENT,
             observerRecipeCanaryMinimumDurationHours: OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS / 3_600_000,
             observerRecipeCanaryRegressionAutoKill: true,
+            observerRecipeRecoveryEvidenceStorageImplemented: true,
+            observerRecipeRecoveryEvidenceApplicationEnabled: false,
             observerRecipeFieldFillEnabled: false,
             durableObserverRecipeWitnessRefresh: true,
             attestedBackgroundWorkerDeployment: true,
