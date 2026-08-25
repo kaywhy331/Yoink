@@ -39,6 +39,7 @@ export interface PostgresCutoverConnectionConfig {
 export interface NodePostgresCutoverDatabaseOptions {
   maxConnections?: 1 | 2;
   applicationName?: "yoink_postgres_cutover" | "yoink_postgres_fleet_qualification";
+  transactionIsolation?: "serializable" | "read-committed";
 }
 
 export interface PostgresQueryResult<T extends Record<string, unknown> = Record<string, unknown>> {
@@ -639,6 +640,7 @@ export function loadPostgresCutoverConnectionConfig(
 
 export class NodePostgresCutoverDatabase implements PostgresCutoverDatabase {
   private readonly pool: Pool;
+  private readonly transactionIsolation: "serializable" | "read-committed";
 
   constructor(
     config: PostgresCutoverConnectionConfig,
@@ -646,11 +648,17 @@ export class NodePostgresCutoverDatabase implements PostgresCutoverDatabase {
   ) {
     const maxConnections = options.maxConnections ?? 2;
     const applicationName = options.applicationName ?? "yoink_postgres_cutover";
+    const transactionIsolation = options.transactionIsolation
+      ?? (applicationName === "yoink_postgres_fleet_qualification" ? "read-committed" : "serializable");
     if (!(maxConnections === 1 || maxConnections === 2)
       || !(applicationName === "yoink_postgres_cutover"
-        || applicationName === "yoink_postgres_fleet_qualification")) {
+        || applicationName === "yoink_postgres_fleet_qualification")
+      || !(transactionIsolation === "serializable" || transactionIsolation === "read-committed")
+      || (applicationName === "yoink_postgres_cutover" && transactionIsolation !== "serializable")
+      || (applicationName === "yoink_postgres_fleet_qualification" && transactionIsolation !== "read-committed")) {
       throw new Error("The PostgreSQL connection-pool qualification options are invalid.");
     }
+    this.transactionIsolation = transactionIsolation;
     const base: PoolConfig = {
       connectionString: config.connectionString,
       max: maxConnections,
@@ -679,7 +687,9 @@ export class NodePostgresCutoverDatabase implements PostgresCutoverDatabase {
     const client = await this.pool.connect();
     let destroyed = false;
     try {
-      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      await client.query(this.transactionIsolation === "serializable"
+        ? "BEGIN ISOLATION LEVEL SERIALIZABLE"
+        : "BEGIN ISOLATION LEVEL READ COMMITTED");
       const result = await operation(new NodePostgresSession(client));
       await client.query("COMMIT");
       return result;

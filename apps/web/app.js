@@ -977,6 +977,7 @@ function renderPostgresCutover() {
   const dataPlane = state.snapshot.dataPlane || {};
   const model = dataPlane.postgresCutover || state.snapshot.capabilities?.postgresCutover;
   const roleModel = dataPlane.postgresRuntimeReadRoles || state.snapshot.capabilities?.postgresRuntimeReadRoles;
+  const sessionModel = dataPlane.postgresTenantSessions || state.snapshot.capabilities?.postgresTenantSessions;
   const gate = $("#postgresCutoverGate");
   if (!model) {
     gate.textContent = "UNAVAILABLE";
@@ -993,7 +994,8 @@ function renderPostgresCutover() {
     ["Column defaults", model.defaultExpressionCount, "Safely translated expressions"],
     ["Direct tenant RLS", model.directTenantRlsTableCount, "Forced, default-deny policies"],
     ["Inherited tenant RLS", model.inheritedTenantRlsTableCount, `${Number(model.mixedTenantRlsTableCount || 0).toLocaleString()} mixed table fails closed`],
-    ["Restricted read roles", roleModel?.roleCount, `${Number(roleModel?.grantedTableCount || 0).toLocaleString()} exact table grants`]
+    ["Restricted read roles", roleModel?.roleCount, `${Number(roleModel?.grantedTableCount || 0).toLocaleString()} exact table grants`],
+    ["Server-bound session policies", sessionModel?.tenantRlsTableCount, "Restrictive tenant intersections"]
   ];
   $("#postgresCutoverMetricGrid").innerHTML = metrics.map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong><small>${escapeHtml(note)}</small></article>`).join("");
   const checks = [
@@ -1005,6 +1007,8 @@ function renderPostgresCutover() {
     ["Immutable trigger parity", model.triggerParity === true, `${Number(model.triggerCount || 0).toLocaleString()} packaged trigger invariants receive validated PostgreSQL equivalents.`],
     ["PostgreSQL worker-store contract", model.postgresAsyncWorkerStoreContractParity === true && model.singleConnectionWorkerLeaseSemanticsQualified === true, "Principal pagination, scheduling, tenant-bound SKIP LOCKED leasing, capability transitions, heartbeats, and deployment attestation pass on the inert qualification schema."],
     ["Least-privilege read roles", roleModel?.qualificationSuiteParity === true && roleModel?.noLogin === true && roleModel?.noInherit === true && roleModel?.noBypassRls === true && roleModel?.readOnly === true, `${Number(roleModel?.roleCount || 0).toLocaleString()} NOLOGIN roles hold ${Number(roleModel?.grantedTableCount || 0).toLocaleString()} exact SELECT grants; ${Number(roleModel?.unresolvedTableCount || 0).toLocaleString()} unresolved table remains inaccessible.`],
+    ["Server-bound tenant sessions", sessionModel?.qualificationSuiteParity === true && sessionModel?.serverBoundRestrictivePolicies === true && sessionModel?.directParameterScopeExpansionPrevented === true, `${Number(sessionModel?.tenantRlsTableCount || 0).toLocaleString()} restrictive policies intersect the server-owned session principal with every tenant RLS table. PostgreSQL permits custom parameter changes, but they cannot widen the mapped tenant.`],
+    ["Runtime principals and write roles", sessionModel?.principalProvisioningImplemented === true && sessionModel?.runtimeWriteRoleParity === true && sessionModel?.productionIdentityQualified === true, "No login principal or tenant mapping is activated; production identity provisioning and least-privilege write roles remain required."],
     ["Native multi-session lease contention", model.nativePostgresQualificationSuite === true && model.fleetLeaseContentionQualified === true, `${Number(model.independentBackendSessionCount || 0).toLocaleString()} independent PostgreSQL ${Number(model.nativePostgresMajorVersion || 0)} backend sessions prove locked-row skipping, distinct work distribution, and one race winner.`],
     ["Runtime repositories and deployment drills", model.asyncRuntimeRepositoryParity === true && model.backupRestoreQualified === true, "PostgreSQL request/task-handler repositories, idempotent handler replay, production load/outage, backup, and restore drills must still pass."],
     ["Production authority", model.productionReady === true, `Active source: ${dataPlane.activeStorageEngine || "sqlite"} · dual write: ${model.dualWriteSupported === true ? "enabled" : "prohibited"}.`]

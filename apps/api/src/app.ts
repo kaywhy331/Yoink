@@ -120,6 +120,7 @@ import { MutationLaneRepository } from "../../../packages/database/src/mutation-
 import { PORTABILITY_FORMAT } from "../../../packages/database/src/portability.js";
 import { postgresCutoverCapabilityProjection } from "../../../packages/database/src/postgres-cutover.js";
 import { postgresRuntimeReadRoleCapabilityProjection } from "../../../packages/database/src/postgres-runtime-roles.js";
+import { postgresTenantSessionCapabilityProjection } from "../../../packages/database/src/postgres-tenant-session.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -372,6 +373,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     ?? emptyInternalServiceCapabilityProjection();
   const postgresCutover = postgresCutoverCapabilityProjection();
   const postgresRuntimeReadRoles = postgresRuntimeReadRoleCapabilityProjection();
+  const postgresTenantSessions = postgresTenantSessionCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -638,6 +640,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           productionPostgresReady: false,
           postgresCutover,
           postgresRuntimeReadRoles,
+          postgresTenantSessions,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1481,7 +1484,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           dataPlane: {
             activeStorageEngine: "sqlite",
             postgresCutover,
-            postgresRuntimeReadRoles
+            postgresRuntimeReadRoles,
+            postgresTenantSessions
           },
           capabilities: {
             catalog: true,
@@ -1631,6 +1635,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             productionPostgresReady: false,
             postgresCutover,
             postgresRuntimeReadRoles,
+            postgresTenantSessions,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

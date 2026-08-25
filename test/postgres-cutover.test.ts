@@ -31,6 +31,11 @@ import {
   buildPostgresSchemaManifest
 } from "../packages/database/src/postgres-schema-manifest.js";
 import {
+  POSTGRES_TENANT_SESSION_CONTRACT_VERSION,
+  buildPostgresTenantSessionManifest,
+  postgresTenantSessionCapabilityProjection
+} from "../packages/database/src/postgres-tenant-session.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -138,6 +143,48 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.throws(
     () => buildPostgresRuntimeReadRoleManifest("yoink_cutover_test", "Unsafe-Role"),
     /role namespace/
+  );
+});
+
+test("the PostgreSQL tenant-session template is deterministic, inactive, and restrictive", () => {
+  const manifest = buildPostgresTenantSessionManifest(
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test"
+  );
+  assert.deepEqual(
+    buildPostgresTenantSessionManifest("yoink_cutover_test", "yoink_q_test", "yoink_session_test"),
+    manifest
+  );
+  assert.equal(manifest.contractVersion, POSTGRES_TENANT_SESSION_CONTRACT_VERSION);
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(manifest.tenantRlsTableCount, 82);
+  assert.equal(manifest.restrictivePolicyCount, 82);
+  assert.equal(manifest.activePrincipalCount, 0);
+  assert.equal(manifest.runtimeAuthority, false);
+  assert.equal(manifest.sessionRole.login, false);
+  assert.equal(manifest.sessionRole.inherit, false);
+  assert.equal(manifest.sessionRole.bypassRls, false);
+  assert.equal(manifest.sessionRole.writeAccess, false);
+  assert.equal(manifest.sessionRole.directParameterSetPrevented, false);
+  assert.equal(manifest.sessionRole.directParameterScopeExpansionPrevented, true);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+  const capability = postgresTenantSessionCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_TENANT_SESSION_CONTRACT_VERSION);
+  assert.equal(capability.serverBoundRestrictivePolicies, true);
+  assert.equal(capability.directParameterSetPrevented, false);
+  assert.equal(capability.directParameterScopeExpansionPrevented, true);
+  assert.equal(capability.nativeTwoPrincipalIsolationQualified, true);
+  assert.equal(capability.tenantRlsTableCount, 82);
+  assert.equal(capability.activePrincipalCount, 0);
+  assert.equal(capability.principalProvisioningImplemented, false);
+  assert.equal(capability.runtimeWriteRoleParity, false);
+  assert.equal(capability.productionIdentityQualified, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresTenantSessionManifest("yoink_cutover_test", "same_namespace", "same_namespace"),
+    /must differ/
   );
 });
 
@@ -811,6 +858,17 @@ test("PostgreSQL qualification pools accept only bounded connection counts and a
   assert.throws(
     () => new NodePostgresCutoverDatabase(config, {
       applicationName: "unbounded_client" as "yoink_postgres_cutover"
+    }),
+    /qualification options/
+  );
+  assert.throws(
+    () => new NodePostgresCutoverDatabase(config, { transactionIsolation: "read-committed" }),
+    /qualification options/
+  );
+  assert.throws(
+    () => new NodePostgresCutoverDatabase(config, {
+      applicationName: "yoink_postgres_fleet_qualification",
+      transactionIsolation: "serializable"
     }),
     /qualification options/
   );

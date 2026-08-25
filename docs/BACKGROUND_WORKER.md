@@ -254,8 +254,11 @@ semantics. Version 0.58 qualifies five inactive least-privilege read group
 roles but creates no runtime login, membership, tenant-session binding, or write
 role. Version 0.59 additionally proves `SKIP LOCKED` distribution, an exact-one-
 winner lease race, and one-use completion across three distinct native
-PostgreSQL 16 backend sessions using the production driver. Production still
-requires PostgreSQL task-handler repositories, runtime identity/session and
+PostgreSQL 16 backend sessions using the production driver. Version 0.60 pins
+worker qualification pools to `READ COMMITTED` and separately proves an inert
+server-bound, read-only tenant session across simultaneous native principals;
+its registry remains empty outside disposable tests. Production still requires
+PostgreSQL task-handler repositories, production login provisioning and
 write-role integration, a deployed multi-process worker fleet with handler
 replay and failure testing,
 production identity and secrets, backups/PITR, load and outage drills, SLO

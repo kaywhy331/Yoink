@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.59 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.60 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -94,10 +94,13 @@ npm run test:postgres:native
 ```
 
 The server is loopback-only, mutation-isolated, configured for test durability,
-and deleted after success or failure. This proves the queue algorithm and
-production driver against native PostgreSQL; it does not deploy independent
-worker processes, execute task handlers, measure production load/outage
-behavior, or establish runtime authority.
+and deleted after success or failure. Worker qualification pools use
+`READ COMMITTED`, the PostgreSQL isolation level intended for competing
+`FOR UPDATE SKIP LOCKED` consumers; the offline cutover importer remains
+strictly `SERIALIZABLE`. This proves the queue algorithm and production driver
+against native PostgreSQL; it does not deploy independent worker processes,
+execute task handlers, measure production load/outage behavior, or establish
+runtime authority.
 
 ## Restricted read-role qualification seam
 
@@ -125,9 +128,9 @@ mixed tenant filtering, cross-role denial, write denial, tamper detection, and
 an immutable role receipt against real PostgreSQL semantics. It deliberately
 does not create a login, grant membership, bind a tenant setting to an
 authenticated workload, define write roles, or connect these roles to the API
-or worker. A future runtime contract must prevent clients from choosing
-`yoink.tenant_id`, add cryptographic workload identity, and independently
-qualify write transactions before any role becomes active.
+or worker. Version 0.60's separate tenant-session qualification contract binds
+the tenant role to a server-owned principal mapping; production identity and
+write transactions remain separate gates.
 
 Plan the exact role namespace without a database connection:
 
@@ -153,6 +156,74 @@ Role names are cluster-global. The command rejects an existing role or receipt
 instead of adopting it, and it never drops roles. Use a new namespace for each
 qualification. Retention or cleanup of an old schema and its five roles is a
 separate reviewed database-operator change.
+
+## Server-bound tenant-session qualification seam
+
+Version 0.60 derives one additional tenant-session reader from the exact schema
+and read-role manifests. The role is `NOLOGIN`, `NOINHERIT`,
+`NOSUPERUSER`, `NOCREATEROLE`, `NOCREATEDB`, `NOREPLICATION`, and
+`NOBYPASSRLS`. It receives schema `USAGE` and `SELECT` on the 82 tenant-RLS
+tables only. It owns no object and receives no table write, sequence, routine,
+membership, or runtime privilege.
+
+The qualifier creates an empty, server-owned principal registry keyed by the
+PostgreSQL login role. A zero-argument `SECURITY DEFINER` binder reads
+`session_user`, requires exactly one active tenant/user mapping, installs those
+two values transaction-locally, and returns them to the read adapter for an
+exact comparison with its expected authenticated principal. Neither tenant nor
+user identity is accepted as a binder argument.
+
+PostgreSQL permits any session to create or change arbitrary custom settings;
+there is no safe `REVOKE SET` mechanism for placeholder parameters such as
+`yoink.tenant_id`. Yoink therefore does not claim direct setting prevention.
+Instead, every tenant table receives a separately named `AS RESTRICTIVE` RLS
+policy that resolves the server-owned mapping from `session_user` through a
+locked-down security-definer scope function. The existing tenant-setting policy
+and the restrictive server policy must both pass. A client setting the wrong
+tenant can hide its own rows, but it cannot reveal another tenant's rows.
+
+The `NodePostgresTenantReadDatabase` opens a `READ COMMITTED READ ONLY`
+transaction, assumes only the qualified session role, invokes the binder, and
+refuses a mismatched principal before handing a query session to the caller.
+The immutable receipt seals a SHA-256 fingerprint over the exact function
+definitions, owners, configuration, policy commands, role arrays, and both RLS
+expressions; verification rejects later catalog drift rather than trusting
+names and counts alone.
+The native PostgreSQL 16 suite uses two disposable mapped logins and one
+unmapped login concurrently to prove exact isolation, mismatch and unmapped
+denial, setting-mutation containment, write denial, and transaction-local
+cleanup. Those logins and mappings are test fixtures only and disappear with
+the isolated cluster.
+
+Plan the contract without connecting to PostgreSQL:
+
+```bash
+npm run postgres:sessions -- plan \
+  yoink_cutover_qualification yoink_q_060 yoink_session_q_060
+```
+
+After the current cutover and read-role receipts are verified, apply the empty
+qualification boundary once with the qualification/control role:
+
+```bash
+YOINK_POSTGRES_TENANT_SESSION_QUALIFICATION_ACK=server-bound-read-qualification \
+  npm run postgres:sessions -- apply \
+  yoink_cutover_qualification yoink_q_060 yoink_session_q_060
+```
+
+Then inspect the live catalogs and immutable receipt independently:
+
+```bash
+npm run postgres:sessions -- verify \
+  yoink_cutover_qualification yoink_q_060 yoink_session_q_060
+```
+
+Apply is intentionally incapable of creating a login or mapping a principal.
+The verifier requires zero memberships and zero active principals. There is no
+production provisioning CLI in this release. A future deployment must bind
+cryptographically authenticated application identities to narrowly scoped
+database logins through a separately reviewed lifecycle before this adapter can
+become a runtime repository boundary.
 
 ## Requirements
 
@@ -258,9 +329,10 @@ confirms that the operator intentionally requested an offline, one-shot load.
 The admin Operations projection lists these as required, not complete:
 
 - PostgreSQL implementations for task handlers and every API repository;
-- independently authenticated login/session binding and restricted write roles,
-  plus governed semantics for mixed source-less offers and the unresolved
-  incident table; the five read-only group-role templates remain inactive;
+- production identity-to-login provisioning and restricted write roles, plus
+  governed semantics for mixed source-less offers and the unresolved incident
+  table; the five read-only group-role templates and server-bound tenant-session
+  reader remain inactive;
 - deployed multi-process worker isolation, task-handler idempotent replay,
   sustained load, connection-failure, failover, and outage drills;
 - encrypted backups, PITR, restore/reconcile drills, and rollback evidence;

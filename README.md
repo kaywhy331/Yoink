@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.59.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.60.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,28 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.60.0 adds a qualification-only PostgreSQL tenant-session boundary.
+One `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` reader receives exact `SELECT` access
+to the 82 tenant-scoped tables. A server-owned principal registry and
+zero-argument security-definer binder derive tenant and user from PostgreSQL
+`session_user`; callers never pass identity into the binder. Eighty-two
+restrictive policies intersect that server-bound identity with the existing
+forced RLS policies. PostgreSQL permits clients to change custom settings, so
+Yoink does not claim otherwise: changing `yoink.tenant_id` or `yoink.user_id`
+can narrow a session but cannot widen it beyond the registered principal.
+An immutable receipt seals the exact policy expressions and security-definer
+function definitions so later catalog drift fails verification.
+
+A read-only production-driver adapter verifies the exact expected principal at
+the start of every transaction. Native PostgreSQL 16 tests prove simultaneous
+tenant isolation, mismatch and unmapped-principal denial, write denial, and
+scope containment after hostile setting changes. The shipped registry is
+empty, creates no login, grants no membership, and activates no API, worker,
+retailer, or write authority. SQLite remains the sole runtime source of truth.
+Use `npm run postgres:sessions -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook for the
+bounded operator workflow.
 
 Version 0.59.0 adds a hermetic native PostgreSQL 16 qualification suite for the
 asynchronous worker queue. After importing the complete verified archive and
@@ -821,7 +843,10 @@ files.
 
 For a separate offline PostgreSQL qualification, first export and verify an
 archive, then run `npm run postgres:cutover -- preflight`, the acknowledged
-one-shot `import`, and an independent `verify`. Follow the
+one-shot `import`, and an independent `verify`. The subsequent inactive
+least-privilege boundaries are operated with `npm run postgres:roles -- ...`
+and `npm run postgres:sessions -- ...`; both require their documented explicit
+acknowledgement for apply and neither provisions a runtime login. Follow the
 [PostgreSQL cutover runbook](docs/POSTGRES_CUTOVER.md); the result is not a
 runtime cutover and cannot authorize actions.
 

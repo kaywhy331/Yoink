@@ -347,14 +347,17 @@ false. See [Data portability and recovery](DATA_PORTABILITY.md) and the
 [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md) runbook.
 
 PostgreSQL must still be delivered as async repository implementations with
-transactional equivalents for every domain operation, inherited tenant-scope
-policies, active restricted runtime roles, deployed worker-fleet load/outage
-and handler-replay drills, PostgreSQL backup/PITR and restore drills, and a
+transactional equivalents for every domain operation, active production
+principals and restricted write roles, deployed worker-fleet load/outage and
+handler-replay drills, PostgreSQL backup/PITR and restore drills, and a
 controlled cutover. Version 0.59 proves the lease algorithm across three native
-PostgreSQL 16 backend sessions, but does not deploy that runtime. Until it is
-provisioned and verified, SQLite is the source of truth and hosted boundary
-mode is suitable for integration/staging—not a claim of completed production
-hosting.
+PostgreSQL 16 backend sessions. Version 0.60 separately qualifies an empty
+server-owned tenant-principal registry, zero-argument binder, read-only adapter,
+and restrictive policies across all 82 tenant tables; native fixture principals
+prove isolation, but no production login or mapping is provisioned. Neither
+release deploys that runtime. Until it is provisioned and verified, SQLite is
+the source of truth and hosted boundary mode is suitable for integration/
+staging—not a claim of completed production hosting.
 
 Do not use dual writes as a shortcut. The transactional inbox/outbox protocol is
 the supported seam for migration and reconciliation.

@@ -509,7 +509,7 @@ async function inspectRoles(
     + schemaManifest.inheritedTenantTableCount
     + schemaManifest.mixedTenantTableCount;
   const policies = await session.query<{ count: string | number | bigint }>(
-    `SELECT COUNT(*) AS count
+    `SELECT COUNT(DISTINCT relation.oid) AS count
      FROM pg_catalog.pg_policies policy
      JOIN pg_catalog.pg_class relation ON relation.relname = policy.tablename
      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace

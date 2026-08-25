@@ -325,7 +325,7 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
       );
     }
     const policies = await this.database.query<{ count: string | number | bigint }>(
-      `SELECT COUNT(*) AS count FROM pg_catalog.pg_policies WHERE schemaname = $1`,
+      `SELECT COUNT(DISTINCT tablename) AS count FROM pg_catalog.pg_policies WHERE schemaname = $1`,
       [this.schema]
     );
     const verifiedTenantPolicyCount = exactCount(policies.rows[0]?.count, "tenant policy count");

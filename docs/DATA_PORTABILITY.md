@@ -7,8 +7,10 @@ schema atomically, and reconciles every table exactly. Yoink 0.57 completes the
 tenant-ownership policy manifest and adds the qualification-only PostgreSQL
 worker-store port. Yoink 0.58 adds five inactive exact read-role templates and
 live-catalog drift verification. Yoink 0.59 adds a native PostgreSQL 16
-three-session worker-lease contention proof. The runtime API and worker remain
-SQLite-only.
+three-session worker-lease contention proof. Yoink 0.60 adds an inert
+server-bound, read-only tenant-session qualification with an empty principal
+registry and restrictive policies over all 82 tenant tables. The runtime API
+and worker remain SQLite-only.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -102,14 +104,17 @@ session to prove `SKIP LOCKED` distribution, an exact-one-winner race, and
 one-use completion capabilities.
 The optional role qualifier then divides 94 portable tables into five exact
 read-only group roles and leaves the unresolved incident table inaccessible.
-It creates no login, membership, write role, tenant-session binding, or runtime
-authority.
+The optional tenant-session qualifier adds an empty server-owned principal
+registry, zero-argument binder, read-only adapter, and 82 restrictive policies.
+Native tests prove that custom setting changes cannot widen a mapped tenant's
+scope. It creates no production login, membership, principal mapping, write
+role, or runtime authority.
 Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
 A production cutover must still add PostgreSQL task handlers and request
-repositories, authenticated runtime login/session binding and write roles,
+repositories, production identity-to-login provisioning and write roles,
 governed mixed/incident access, deployed worker-fleet and handler replay proof,
 production identity, backup/PITR and restore, outage/load testing, and
 controlled authority-switch evidence. It must quiesce SQLite, load

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
-import type { Client } from "pg";
+import { Client } from "pg";
 import { PostgresBackgroundWorkerQualificationStore } from "../packages/database/src/postgres-background-worker-store.js";
 import {
   applyPostgresRuntimeReadRoles,
@@ -16,6 +16,13 @@ import {
   importPostgresCutoverArchive,
   type PostgresCutoverDatabase
 } from "../packages/database/src/postgres-cutover.js";
+import {
+  NodePostgresTenantReadDatabase,
+  POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE,
+  applyPostgresTenantSessionBoundary,
+  buildPostgresTenantSessionManifest,
+  verifyPostgresTenantSessionBoundary
+} from "../packages/database/src/postgres-tenant-session.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
 import {
   POSTGRES_TEST_WORKER_FINGERPRINT,
@@ -28,6 +35,11 @@ const NATIVE_SCHEMA = "yoink_native_qualification";
 const NATIVE_ROLE_NAMESPACE = "yoink_native_q";
 const NATIVE_TENANT = "tenant_cutover_other";
 const NATIVE_USER = "user_cutover_other";
+const NATIVE_SESSION_ROLE_NAMESPACE = "yoink_native_session";
+const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
+const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
+const NATIVE_PRINCIPAL_UNMAPPED = "yoink_native_principal_unmapped";
+const NATIVE_PRINCIPAL_PASSWORD = "yoink_native_principal_only";
 
 async function availableLoopbackPort(): Promise<number> {
   const server = createServer();
@@ -72,7 +84,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves independent-session SKIP LOCKED leasing and one-use completion", {
+test("native PostgreSQL proves server-bound tenant isolation and independent SKIP LOCKED leasing", {
   timeout: 180_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -96,6 +108,10 @@ test("native PostgreSQL proves independent-session SKIP LOCKED leasing and one-u
   let first: NodePostgresCutoverDatabase | null = null;
   let second: NodePostgresCutoverDatabase | null = null;
   let locker: Client | null = null;
+  let directClient: Client | null = null;
+  let tenantReaderA: NodePostgresTenantReadDatabase | null = null;
+  let tenantReaderB: NodePostgresTenantReadDatabase | null = null;
+  let tenantReaderUnmapped: NodePostgresTenantReadDatabase | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -125,6 +141,32 @@ test("native PostgreSQL proves independent-session SKIP LOCKED leasing and one-u
       NATIVE_SCHEMA,
       NATIVE_ROLE_NAMESPACE
     )).phase, "verified");
+    const sessionBoundary = await applyPostgresTenantSessionBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:50:00.000Z").getTime()
+    );
+    assert.equal(sessionBoundary.tenantRlsTableCount, 82);
+    assert.equal(sessionBoundary.grantCount, 82);
+    assert.equal(sessionBoundary.membershipCount, 0);
+    assert.equal(sessionBoundary.activePrincipalCount, 0);
+    assert.equal(sessionBoundary.restrictivePolicyCount, 82);
+    assert.match(sessionBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(sessionBoundary.directParameterSetPrevented, false);
+    assert.equal(sessionBoundary.directParameterScopeExpansionPrevented, true);
+    assert.equal(sessionBoundary.serverBoundRestrictivePolicies, true);
+    assert.equal(sessionBoundary.runtimeAuthority, false);
+    assert.deepEqual(
+      await verifyPostgresTenantSessionBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE
+      ),
+      sessionBoundary
+    );
     await importer.close();
     importer = null;
 
@@ -135,11 +177,13 @@ test("native PostgreSQL proves independent-session SKIP LOCKED leasing and one-u
     };
     first = new NodePostgresCutoverDatabase(qualificationConfig, {
       maxConnections: 1,
-      applicationName: "yoink_postgres_fleet_qualification"
+      applicationName: "yoink_postgres_fleet_qualification",
+      transactionIsolation: "read-committed"
     });
     second = new NodePostgresCutoverDatabase(qualificationConfig, {
       maxConnections: 1,
-      applicationName: "yoink_postgres_fleet_qualification"
+      applicationName: "yoink_postgres_fleet_qualification",
+      transactionIsolation: "read-committed"
     });
     locker = postgres.getPgClient("postgres", "127.0.0.1");
     await locker.connect();
@@ -168,6 +212,155 @@ test("native PostgreSQL proves independent-session SKIP LOCKED leasing and one-u
     assert.equal(lockerIdentity.rows[0]?.serverVersion, firstIdentity.rows[0]?.serverVersion);
     assert.equal(firstIdentity.rows[0]?.applicationName, "yoink_postgres_fleet_qualification");
     assert.equal(secondIdentity.rows[0]?.applicationName, "yoink_postgres_fleet_qualification");
+
+    const tenantSessionManifest = buildPostgresTenantSessionManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE
+    );
+    for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
+      await first.query(
+        `CREATE ROLE "${principalRole}"
+         LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+         PASSWORD '${NATIVE_PRINCIPAL_PASSWORD}'`
+      );
+      await first.query(
+        `GRANT "${tenantSessionManifest.sessionRole.name}" TO "${principalRole}"`
+      );
+    }
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4), ($5, $6, $7, TRUE, $4)`,
+      [
+        NATIVE_PRINCIPAL_A,
+        NATIVE_TENANT,
+        NATIVE_USER,
+        "2026-08-25T16:55:00.000Z",
+        NATIVE_PRINCIPAL_B,
+        "tenant_local",
+        "user_local"
+      ]
+    );
+    const principalConnection = (principalRole: string): string =>
+      `postgresql://${principalRole}:${NATIVE_PRINCIPAL_PASSWORD}@127.0.0.1:${port}/postgres`;
+    tenantReaderA = new NodePostgresTenantReadDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE, { maxConnections: 1 });
+    tenantReaderB = new NodePostgresTenantReadDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_B),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE, { maxConnections: 1 });
+    tenantReaderUnmapped = new NodePostgresTenantReadDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_UNMAPPED),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE, { maxConnections: 1 });
+
+    directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
+    directClient.on("error", () => undefined);
+    await directClient.connect();
+    await directClient.query(`SET ROLE "${tenantSessionManifest.sessionRole.name}"`);
+    await directClient.query(`SET ${"yoink.tenant_id"} = 'tenant_local'`);
+    assert.deepEqual(
+      (await directClient.query<{ id: string }>(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."users" ORDER BY id`
+      )).rows,
+      []
+    );
+    await directClient.query(`SET ${"yoink.tenant_id"} = '${NATIVE_TENANT}'`);
+    assert.deepEqual(
+      (await directClient.query<{ id: string }>(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."users" ORDER BY id`
+      )).rows.map((row) => row.id),
+      [NATIVE_USER]
+    );
+    await directClient.end();
+    directClient = null;
+
+    const [principalAView, principalBView] = await Promise.all([
+      tenantReaderA.readTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async (session) => {
+          const users = await session.query<{ id: string }>(
+            `SELECT id FROM "${NATIVE_SCHEMA}"."users" ORDER BY id`
+          );
+          const offers = await session.query<{ id: string }>(
+            `SELECT id FROM "${NATIVE_SCHEMA}"."offer_observations" ORDER BY id`
+          );
+          return { users: users.rows.map((row) => row.id), offers: offers.rows.map((row) => row.id) };
+        }
+      ),
+      tenantReaderB.readTransaction(
+        { tenantId: "tenant_local", userId: "user_local" },
+        async (session) => {
+          const users = await session.query<{ id: string }>(
+            `SELECT id FROM "${NATIVE_SCHEMA}"."users" ORDER BY id`
+          );
+          const offers = await session.query<{ id: string }>(
+            `SELECT id FROM "${NATIVE_SCHEMA}"."offer_observations" ORDER BY id`
+          );
+          return { users: users.rows.map((row) => row.id), offers: offers.rows.map((row) => row.id) };
+        }
+      )
+    ]);
+    assert.deepEqual(principalAView, {
+      users: [NATIVE_USER],
+      offers: ["offer_cutover_other"]
+    });
+    assert.deepEqual(principalBView, {
+      users: ["user_local"],
+      offers: []
+    });
+    await assert.rejects(
+      tenantReaderA.readTransaction(
+        { tenantId: "tenant_local", userId: "user_local" },
+        async () => undefined
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      tenantReaderUnmapped.readTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async () => undefined
+      ),
+      /tenant session principal is not active/
+    );
+    assert.deepEqual(
+      await tenantReaderA.readTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async (session) => {
+          await session.query(`SET LOCAL ${"yoink.tenant_id"} = 'tenant_local'`);
+          return (await session.query<{ id: string }>(
+            `SELECT id FROM "${NATIVE_SCHEMA}"."users" ORDER BY id`
+          )).rows;
+        }
+      ),
+      []
+    );
+    await assert.rejects(
+      tenantReaderA.readTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        (session) => session.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."app_settings"(user_id, updated_at) VALUES ($1, $2)`,
+          [NATIVE_USER, "2026-08-25T16:56:00.000Z"]
+        )
+      ),
+      /read-only|permission denied/i
+    );
+    assert.deepEqual(
+      await tenantReaderA.readTransaction(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        async (session) => (await session.query<{ tenantId: string; userId: string }>(
+          `SELECT current_setting('yoink.tenant_id') AS "tenantId",
+                  current_setting('yoink.user_id') AS "userId"`
+        )).rows[0]
+      ),
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }
+    );
 
     const firstStore = new PostgresBackgroundWorkerQualificationStore(first, NATIVE_SCHEMA);
     const secondStore = new PostgresBackgroundWorkerQualificationStore(second, NATIVE_SCHEMA);
@@ -300,13 +493,46 @@ test("native PostgreSQL proves independent-session SKIP LOCKED leasing and one-u
       { taskId: "native_contention_skipped", eventType: "leased", count: 1 },
       { taskId: "native_contention_skipped", eventType: "succeeded", count: 1 }
     ]);
+
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"`
+    );
+    for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
+      await first.query(
+        `REVOKE "${tenantSessionManifest.sessionRole.name}" FROM "${principalRole}"`
+      );
+    }
+    const cleanBoundary = await verifyPostgresTenantSessionBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE
+    );
+    assert.equal(cleanBoundary.boundaryCatalogFingerprint, sessionBoundary.boundaryCatalogFingerprint);
+    await first.query(
+      `ALTER POLICY "yoink_server_bound_users" ON "${NATIVE_SCHEMA}"."users"
+       USING (TRUE) WITH CHECK (TRUE)`
+    );
+    await assert.rejects(
+      verifyPostgresTenantSessionBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE
+      ),
+      /no longer matches its verified receipt/
+    );
   } finally {
     await locker?.query("ROLLBACK").catch(() => undefined);
     await Promise.allSettled([
       importer?.close(),
       first?.close(),
       second?.close(),
-      locker?.end()
+      locker?.end(),
+      directClient?.end(),
+      tenantReaderA?.close(),
+      tenantReaderB?.close(),
+      tenantReaderUnmapped?.close()
     ].filter(Boolean) as Array<Promise<void>>);
     await postgres.stop().catch(() => undefined);
     if (existsSync(parent)) rmSync(parent, { recursive: true, force: true });
