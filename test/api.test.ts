@@ -67,6 +67,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
       backgroundWorkerRuntime: "stopped",
       backgroundWorkerHealthy: false,
       backgroundWorkerDeployment: "local_in_process",
+      backgroundWorkerMode: "disabled",
+      asyncBackgroundWorkerContract: true,
+      standaloneBackgroundWorkerProcessReady: true,
       productionWorkerFleetReady: false,
       executionMode: "shadow",
       actionsPaused: true,
@@ -173,6 +176,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.productionIdentityProvider, false);
     assert.equal(snapshot.capabilities.durableBackgroundTasks, true);
     assert.equal(snapshot.capabilities.backgroundWorkOutsideRequestHandling, true);
+    assert.equal(snapshot.capabilities.asyncBackgroundWorkerContract, true);
+    assert.equal(snapshot.capabilities.standaloneBackgroundWorkerProcessReady, true);
+    assert.equal(snapshot.capabilities.boundedMultiPrincipalWorker, true);
     assert.equal(snapshot.capabilities.productionWorkerFleetReady, false);
 
     const libraryPage = await fetch(`${baseUrl}/api/v1/library?limit=1&offset=0&q=Yoink%20API`).then((response) => response.json()) as {

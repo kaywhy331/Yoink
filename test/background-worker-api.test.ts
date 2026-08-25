@@ -34,6 +34,9 @@ test("the admin worker API exposes safe controls without lease capability materi
     assert.equal(health.durableBackgroundTasks, true);
     assert.equal(health.backgroundWorkerRuntime, "running");
     assert.equal(health.backgroundWorkerHealthy, true);
+    assert.equal(health.backgroundWorkerMode, "embedded");
+    assert.equal(health.asyncBackgroundWorkerContract, true);
+    assert.equal(health.standaloneBackgroundWorkerProcessReady, true);
     assert.equal(health.productionWorkerFleetReady, false);
 
     const initialResponse = await fetch(`${baseUrl}/api/v1/admin/workers`);
@@ -42,12 +45,18 @@ test("the admin worker API exposes safe controls without lease capability materi
     const initial = await initialResponse.json() as {
       backgroundWork: {
         containsCapabilityMaterial: boolean;
+        asyncPersistenceContract: boolean;
+        standaloneProcessCompatible: boolean;
+        boundedPrincipalPagination: boolean;
         successfulHistoryRetentionDays: number;
         canManage: boolean;
         schedules: Array<{ id: string; enabled: boolean }>;
       };
     };
     assert.equal(initial.backgroundWork.containsCapabilityMaterial, false);
+    assert.equal(initial.backgroundWork.asyncPersistenceContract, true);
+    assert.equal(initial.backgroundWork.standaloneProcessCompatible, true);
+    assert.equal(initial.backgroundWork.boundedPrincipalPagination, true);
     assert.equal(initial.backgroundWork.successfulHistoryRetentionDays, 30);
     assert.equal((initial.backgroundWork as { executionBoundary?: string }).executionBoundary, "outside_request_handler");
     assert.equal(initial.backgroundWork.canManage, true);
@@ -108,6 +117,7 @@ test("the admin worker API exposes safe controls without lease capability materi
     const script = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(page, /Durable maintenance/);
     assert.match(page, /Closed maintenance tasks only/);
+    assert.match(page, /separately supervised standalone process/);
     assert.match(script, /renderBackgroundWork/);
     assert.match(script, /data-worker-task-retry/);
   } finally {

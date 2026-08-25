@@ -13,7 +13,7 @@ export interface YoinkConfig {
   webRoot: string;
   releaseRoot: string;
   version: string;
-  backgroundWorkerEnabled: boolean;
+  backgroundWorkerMode: "embedded" | "external" | "disabled";
   hosted: {
     proxySecret: string;
     allowedHosts: string[];
@@ -42,14 +42,27 @@ function projectVersion(projectRoot: string): string {
 export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): YoinkConfig {
   const projectRoot = resolve(cwd);
   const requestedDataDirectory = String(env.YOINK_DATA_DIR ?? "data").trim();
+  if (!requestedDataDirectory) throw new Error("YOINK_DATA_DIR must identify a non-empty directory.");
   const dataDirectory = isAbsolute(requestedDataDirectory)
     ? requestedDataDirectory
     : resolve(projectRoot, requestedDataDirectory);
   const hostedRequested = env.YOINK_HOSTED_MODE === "1";
-  const backgroundWorkerValue = String(env.YOINK_BACKGROUND_WORKER ?? "1").trim();
-  if (!["0", "1"].includes(backgroundWorkerValue)) {
-    throw new Error("YOINK_BACKGROUND_WORKER must be 1 (enabled) or 0 (disabled).");
+  const legacyWorkerValue = env.YOINK_BACKGROUND_WORKER;
+  const requestedWorkerMode = env.YOINK_BACKGROUND_WORKER_MODE;
+  if (legacyWorkerValue !== undefined && requestedWorkerMode !== undefined) {
+    throw new Error("Choose YOINK_BACKGROUND_WORKER_MODE or the legacy YOINK_BACKGROUND_WORKER switch, not both.");
   }
+  if (legacyWorkerValue !== undefined && !["0", "1"].includes(String(legacyWorkerValue).trim())) {
+    throw new Error("YOINK_BACKGROUND_WORKER must be 1 (embedded) or 0 (disabled).");
+  }
+  if (requestedWorkerMode !== undefined && !["embedded", "external", "disabled"].includes(String(requestedWorkerMode).trim())) {
+    throw new Error("YOINK_BACKGROUND_WORKER_MODE must be embedded, external, or disabled.");
+  }
+  const backgroundWorkerMode: YoinkConfig["backgroundWorkerMode"] = requestedWorkerMode !== undefined
+    ? String(requestedWorkerMode).trim() as YoinkConfig["backgroundWorkerMode"]
+    : legacyWorkerValue !== undefined
+      ? String(legacyWorkerValue).trim() === "1" ? "embedded" : "disabled"
+      : hostedRequested ? "external" : "embedded";
   const proxySecret = String(env.YOINK_HOSTED_PROXY_SECRET ?? "");
   const allowedHosts = String(env.YOINK_HOSTED_HOSTS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   const allowedOrigins = String(env.YOINK_HOSTED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
@@ -93,7 +106,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     webRoot: join(projectRoot, "apps", "web"),
     releaseRoot: join(projectRoot, "release"),
     version: projectVersion(projectRoot),
-    backgroundWorkerEnabled: backgroundWorkerValue === "1",
+    backgroundWorkerMode,
     hosted: hostedRequested ? { proxySecret, allowedHosts, allowedOrigins } : null,
     observerRecipeWitness
   };

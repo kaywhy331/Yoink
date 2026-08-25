@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.34.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.35.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,24 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.35.0 extracts background execution behind an asynchronous store and
+handler contract and ships a separately runnable worker process. The SQLite
+adapter enumerates tenant/user principals with bounded keyset pagination,
+scopes every schedule, lease, transition, and heartbeat to its owner, and keeps
+the embedded worker as the zero-configuration local default. Operators can set
+the API to `external` mode and supervise `npm run start:worker` independently;
+health then reflects the standalone heartbeat and complete principal coverage.
+
+The worker refuses to create or migrate a database: the API remains the sole
+schema owner and must initialize the exact current schema first. Ambiguous
+completion is fail-closed—the worker never attempts a contradictory failure
+transition after an uncertain success—and exception content is not persisted
+or printed at startup. A real child-process integration test covers startup,
+all-principal work, external API health, graceful shutdown, and outage
+reporting. This is a strong SQLite process boundary for local and staging use,
+not PostgreSQL or a production worker fleet, and it widens no retailer lane.
+Migration 34 remains the current schema; this release needs no migration.
 
 Version 0.34.0 adds a durable local background-work boundary. Migration 34
 stores five closed maintenance schedules, capability-leased tasks, append-only
@@ -335,12 +353,40 @@ setup; the API process and paired Chrome companion continue handling push and
 qualified work. Local data is stored under `data/` unless `YOINK_DATA_DIR`
 points to another explicit directory.
 
-The durable local worker starts with the API and is visible under **Admin →
-Operations → Background work**. Set `YOINK_BACKGROUND_WORKER=0` only for an
-intentional maintenance stop; health then reports `disabled`, schedules and
-queued tasks remain durable, and no task handler runs until the worker is
-re-enabled. This switch does not pause signal intake or retailer actions—use
-the user-facing **Pause Actions** control for the latter.
+The durable local worker starts embedded with the API and is visible under
+**Admin → Operations → Background work**. For an intentional maintenance stop,
+set `YOINK_BACKGROUND_WORKER_MODE=disabled`; health then reports `disabled`,
+schedules and queued tasks remain durable, and no task handler runs until the
+worker is re-enabled. This does not pause signal intake or retailer actions—use
+the user-facing **Pause Actions** control for the latter. The legacy
+`YOINK_BACKGROUND_WORKER=1|0` switch remains compatible but cannot be combined
+with the mode setting.
+
+For independently supervised local/staging execution, build first, start the
+API once in external mode so it owns database migration, and then start the
+worker in a second process:
+
+```bash
+npm run build
+```
+
+Then run the API in terminal 1:
+
+```bash
+YOINK_BACKGROUND_WORKER_MODE=external npm start
+```
+
+And the worker in terminal 2:
+
+```bash
+npm run start:worker
+```
+
+Both processes must use the same explicit `YOINK_DATA_DIR`. See the
+[background worker runbook](docs/BACKGROUND_WORKER.md) for modes, bounded
+settings, health semantics, shutdown, and recovery. External SQLite mode is
+not a substitute for the roadmap's PostgreSQL, fleet, backup/PITR, and
+production identity gates.
 
 SQLite migrations are transactional. An existing file is integrity-checked and
 backed up with a `.before-vN.<timestamp>.sqlite` suffix before a pending schema

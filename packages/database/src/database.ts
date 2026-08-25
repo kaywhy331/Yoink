@@ -11,24 +11,30 @@ type Row = Record<string, unknown>;
 
 export interface YoinkDatabaseOptions {
   readOnly?: boolean;
+  migrationMode?: "apply" | "require_current";
 }
 
 export class YoinkDatabase {
   readonly path: string;
   readonly connection: DatabaseSync;
   readonly readOnly: boolean;
+  readonly migrationMode: "apply" | "require_current";
   private transactionDepth = 0;
   private savepointSequence = 0;
 
   constructor(filePath = ":memory:", options: YoinkDatabaseOptions = {}) {
     this.path = filePath;
     this.readOnly = options.readOnly === true;
+    this.migrationMode = options.migrationMode ?? "apply";
     if (this.readOnly && filePath === ":memory:") {
       throw new Error("A read-only Yoink database must use an existing file path.");
     }
     const existed = filePath !== ":memory:" && existsSync(filePath);
     if (this.readOnly && !existed) {
       throw new Error("The read-only Yoink database file does not exist.");
+    }
+    if (this.migrationMode === "require_current" && !existed) {
+      throw new Error("The Yoink database must be initialized and migrated by the API before this process starts.");
     }
     if (filePath !== ":memory:" && !this.readOnly) {
       mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
@@ -37,11 +43,27 @@ export class YoinkDatabase {
     this.connection = new DatabaseSync(filePath, { readOnly: this.readOnly });
     this.connection.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     if (this.readOnly) {
-      this.assertIntegrity();
+      try {
+        this.assertIntegrity();
+        if (this.migrationMode === "require_current") this.assertCurrentSchema();
+      } catch (error) {
+        this.connection.close();
+        throw error;
+      }
       return;
     }
     if (filePath !== ":memory:") this.connection.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
     this.secureDatabaseFiles();
+    if (this.migrationMode === "require_current") {
+      try {
+        this.assertIntegrity();
+        this.assertCurrentSchema();
+      } catch (error) {
+        this.connection.close();
+        throw error;
+      }
+      return;
+    }
     this.connection.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
@@ -108,6 +130,22 @@ export class YoinkDatabase {
   assertIntegrity(): void {
     const result = this.get<{ integrity_check: string }>("PRAGMA integrity_check");
     if (result?.integrity_check !== "ok") throw new Error("Yoink database integrity check failed; startup was stopped safely.");
+  }
+
+  private assertCurrentSchema(): void {
+    try {
+      const applied = this.all<{ version: number; name: string }>(
+        "SELECT version, name FROM schema_migrations ORDER BY version"
+      );
+      const current = applied.length === MIGRATIONS.length
+        && MIGRATIONS.every((migration, index) => {
+          const row = applied[index];
+          return Number(row?.version) === migration.version && row?.name === migration.name;
+        });
+      if (!current) throw new Error("schema mismatch");
+    } catch {
+      throw new Error("The Yoink database schema is not current; start the API migration owner before this process.");
+    }
   }
 
   private applyMigrations(existed: boolean): void {

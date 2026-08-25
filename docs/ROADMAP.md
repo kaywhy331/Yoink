@@ -1,6 +1,38 @@
 # Yoink roadmap
 
-## Shipped through 0.34.0
+## Shipped through 0.35.0
+
+### Async worker port and standalone SQLite process (0.35.0)
+
+- Background execution now depends on asynchronous persistence and handler
+  contracts in shared packages rather than the API application. The existing
+  five closed maintenance families use the same contract in embedded and
+  standalone layouts; no remotely supplied task kind or executable payload is
+  accepted
+- The SQLite adapter supports fixed-local or bounded all-principal keyset
+  pagination. Every schedule, lease, transition, handler scope, and heartbeat
+  remains bound to an exact tenant/user principal, while cycle and per-principal
+  task limits prevent an unbounded sweep or one busy principal monopolizing a
+  cycle
+- `YOINK_BACKGROUND_WORKER_MODE` makes `embedded`, `external`, and `disabled`
+  explicit. Local setup remains embedded by default; hosted boundary mode
+  defaults external. API health reports the selected mode, actual runtime kind,
+  liveness, error state, and complete standalone-principal coverage rather than
+  treating process configuration as readiness
+- `apps/worker` is an independently runnable and gracefully stoppable process.
+  It refuses to create, seed, or migrate SQLite and requires the API-owned
+  migration ledger to match the package exactly. Startup failures are fixed and
+  redacted; no exception or filesystem detail is printed
+- An uncertain completion persistence result never triggers a contradictory
+  failure transition. The lease remains recoverable after expiry with a new
+  one-use capability. Focused tests cover asynchronous failure, ambiguous
+  completion, cursor tampering, multi-principal fairness, exact-schema refusal,
+  startup redaction, real child-process execution, health, and shutdown
+- This completes a local/staging process-extraction milestone, not the Phase 2
+  production exit gate. The shared store still uses synchronous SQLite; no
+  PostgreSQL implementation, production fleet scheduler, backup/PITR service,
+  production IdP, or fleet cutover is claimed, and no retailer capability is
+  widened
 
 ### Durable local background-work boundary (0.34.0)
 
@@ -27,11 +59,11 @@
   recent bounded results, dead letters, and 30-second worker heartbeats. An
   authorized operator can pause/resume a schedule, run it once, or retry a dead
   letter; none of those controls has retailer mutation authority
-- This is a production-shaped local modular-monolith seam. The runtime is still
-  in-process with SQLite; async repository contracts, PostgreSQL, production
-  tenant enumeration, an independently deployed worker fleet, external
-  connectors, signal/recipe evaluation workers, and deletion orchestration
-  remain open Phase 2/3 work
+- At 0.34 this is a production-shaped local modular-monolith seam with an
+  in-process SQLite runtime. Version 0.35 extracts the async worker port and a
+  standalone bounded-principal SQLite adapter; PostgreSQL, a production fleet,
+  external connectors, signal/recipe evaluation workers, and deletion
+  orchestration remain open Phase 2/3 work
 - Target and Walmart retain their existing independently qualified add-only
   state. Amazon, Best Buy, marketplace, pickup, checkout, drawing entry,
   payment, and order submission are not widened
@@ -655,9 +687,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.34.0
+## Architecture assessment after 0.35.0
 
-Yoink 0.34.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.35.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -669,11 +701,11 @@ or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-34 SQLite schema plus deterministic operator portability, a capability-leased local maintenance queue, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation, production identity provider, backup/PITR service, independently deployed worker fleet, or hosted cutover |
+| Primary backend database | Transactional migration-34 SQLite schema plus deterministic operator portability, an asynchronous worker port with embedded and standalone SQLite adapters, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, bounded service-health telemetry, durable-worker schedules/dead letters/heartbeats, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, secret references, external alert connectors or connector dispatch workers, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, and source/review status | Production onboarding still depends on Phase 2 IdP/hosted deployment; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, complete retention/deletion operations, or meaningful live quorum |
-| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and a durable local reconciliation schedule; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; recipe evaluation is not a worker handler; the independent witness service, refresh scheduler, and public consistency monitor are not deployed by this repository |
+| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; recipe evaluation is not a worker handler; the independent witness service, refresh scheduler, and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
 | Automatic purchasing | Reviewed plans can directly request guarded quantity-one work without a strategy; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 | Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
@@ -821,17 +853,17 @@ prove quantity and budget reservations.
 
 #### Phase 2 — production backend and device transport
 
-0.34.0 establishes the local durable-work contract: closed task kinds,
-tenant/user scope, hashed one-use lease capabilities, two-connection
-contention, crash recovery, bounded retry/dead letter, heartbeats, safe
-maintenance handlers, and operator controls. It moves those five maintenance
-families outside HTTP request handling in the local process. It does not satisfy
-the Phase 2 exit gate because the repositories remain synchronous SQLite and
-the worker is not an independently deployed, multi-tenant PostgreSQL fleet.
+0.34.0 establishes the durable-work state machine, and 0.35.0 extracts its
+runtime behind asynchronous store/handler contracts with bounded tenant/user
+pagination and a separately supervised SQLite process. This proves process
+lifecycle, schema ownership, health, outage, and recovery locally without
+placing work in HTTP request handling. It does not satisfy the Phase 2 exit gate
+because the persistence adapter remains synchronous SQLite and the standalone
+process is not a multi-tenant PostgreSQL fleet.
 
-- Implement async repository contracts and PostgreSQL migrations/importer with
-  transactional and isolation parity, row-level tenant tests, lease-contention
-  tests, idempotent workers, and no dual-write shortcut
+- Implement the async PostgreSQL repository family and migrations/importer with
+  transactional and isolation parity, row-level tenant tests, fleet lease-
+  contention tests, idempotent workers, and no dual-write shortcut
 - Add production IdP sessions, lifecycle/provisioning, TLS ingress, CSRF/session
   protection, secrets management, encryption, production retention/deletion,
   backups/PITR, restore drills, load tests, SLOs, and on-call alerting
@@ -857,7 +889,9 @@ history, acknowledgement, and resolution. 0.31.0 adds the signed step-up
 enforcement seam, independent exact-change approval, immutable receipts, and
 the Approvals workspace. 0.33.0 adds self-service user inventory/export with a
 closed credential boundary. 0.34.0 adds the local Background work operations
-view, permission-gated schedules, dead-letter retry, and runtime heartbeats.
+view, permission-gated schedules, dead-letter retry, and runtime heartbeats;
+0.35.0 makes embedded versus standalone runtime state explicit without
+claiming production deployment.
 Production IdP/MFA integration, account deletion, support break-glass,
 connectors, independently deployed connector workers, and broader alert
 families remain open.

@@ -438,6 +438,28 @@ schedules, counts, dead letters, results, and heartbeats, never lease capability
 hashes. This is an extraction seam for a future standalone PostgreSQL worker
 fleet, not that production deployment.
 
+Yoink 0.35.0 moves that seam into shared asynchronous contracts. The engine
+depends only on `BackgroundWorkerStore` and `BackgroundWorkerTaskHandler`; the
+SQLite adapter supplies scoped schedules, leases, transitions, heartbeats, and
+canonical keyset pagination over persisted tenant/user principals. A cycle has
+independent principal, total-task, and per-principal task bounds. Embedded mode
+uses one fixed local principal by default, while hosted-boundary and standalone
+layouts enumerate all persisted principals without loading an unbounded user
+set.
+
+`apps/worker` runs the closed handler registry as a separate process. It opens
+SQLite in `require_current` migration mode, so it cannot create, seed, upgrade,
+or accept an older/newer migration ledger; the API remains the sole schema
+owner. Graceful shutdown waits for the active cycle, writes stopped heartbeats,
+then closes its connection. External API health derives readiness from fresh
+standalone heartbeat coverage rather than configuration alone. A handler
+failure may make one bounded failure transition, but an uncertain completion
+transition is never followed by a contradictory failure transition; its lease
+is left for expiry and recovery. This process boundary remains local/staging
+infrastructure: the adapter still performs synchronous SQLite calls and does
+not implement PostgreSQL isolation, fleet scheduling, PITR, or production
+cutover.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and

@@ -33,6 +33,8 @@ export const BACKGROUND_TASK_DEFINITIONS = Object.freeze({
 
 export type BackgroundTaskKind = keyof typeof BACKGROUND_TASK_DEFINITIONS;
 export type BackgroundTaskState = "pending" | "leased" | "retry_wait" | "succeeded" | "dead_letter" | "cancelled";
+export type BackgroundTaskResultValue = string | number | boolean | null;
+export type BackgroundTaskResult = Record<string, BackgroundTaskResultValue>;
 export type BackgroundTaskEventType =
   | "scheduled"
   | "leased"

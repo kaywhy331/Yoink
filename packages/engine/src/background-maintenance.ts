@@ -1,7 +1,13 @@
-import type { BackgroundTaskKind } from "../../domain/src/background-task.js";
+import type {
+  BackgroundWorkerContext,
+  BackgroundWorkerTaskHandler
+} from "../../contracts/src/background-worker.js";
+import type {
+  BackgroundTaskKind,
+  BackgroundTaskResult
+} from "../../domain/src/background-task.js";
 import {
-  BackgroundTaskRepository,
-  type BackgroundTaskResult
+  BackgroundTaskRepository
 } from "../../database/src/background-task-repository.js";
 import { AdapterDiagnosticRepository } from "../../database/src/adapter-diagnostic-repository.js";
 import type { YoinkDatabase } from "../../database/src/database.js";
@@ -11,12 +17,11 @@ import { NotificationRepository } from "../../database/src/notification-reposito
 import { OperationalTelemetryRepository } from "../../database/src/operational-telemetry-repository.js";
 import { OperatorAlertRepository } from "../../database/src/operator-alert-repository.js";
 import { SpendLedgerRepository } from "../../database/src/spend-ledger-repository.js";
+import { runWithRequestScope } from "../../database/src/request-scope.js";
 
-export interface BackgroundTaskHandler {
-  execute(taskKind: BackgroundTaskKind, now?: number): BackgroundTaskResult;
-}
+export type BackgroundTaskHandler = BackgroundWorkerTaskHandler;
 
-export class BackgroundMaintenanceHandler implements BackgroundTaskHandler {
+export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler {
   private readonly adapterDiagnostics: AdapterDiagnosticRepository;
   private readonly backgroundTasks: BackgroundTaskRepository;
   private readonly execution: ExecutionRepository;
@@ -37,7 +42,20 @@ export class BackgroundMaintenanceHandler implements BackgroundTaskHandler {
     this.spendLedger = new SpendLedgerRepository(db);
   }
 
-  execute(taskKind: BackgroundTaskKind, now = Date.now()): BackgroundTaskResult {
+  async execute(
+    context: BackgroundWorkerContext,
+    taskKind: BackgroundTaskKind,
+    now = Date.now()
+  ): Promise<BackgroundTaskResult> {
+    return runWithRequestScope({
+      tenantId: context.principal.tenantId,
+      userId: context.principal.userId,
+      actorKind: "service",
+      actorId: context.workerId
+    }, () => this.executeScoped(taskKind, now));
+  }
+
+  private executeScoped(taskKind: BackgroundTaskKind, now: number): BackgroundTaskResult {
     switch (taskKind) {
       case "execution_recovery":
         return {

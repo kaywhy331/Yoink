@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -87,6 +87,32 @@ test("initial migration creates the normalized graph and safe local defaults", (
     db.assertIntegrity();
   } finally {
     db.close();
+  }
+});
+
+test("non-owner processes require an existing database at the exact current schema", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-current-schema-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    assert.throws(
+      () => new YoinkDatabase(filePath, { migrationMode: "require_current" }),
+      /initialized and migrated by the API/
+    );
+    assert.equal(existsSync(filePath), false);
+
+    new YoinkDatabase(filePath).close();
+    const current = new YoinkDatabase(filePath, { migrationMode: "require_current" });
+    assert.equal(current.migrationMode, "require_current");
+    assert.equal(current.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 34);
+    current.run("UPDATE schema_migrations SET name = 'tampered_name' WHERE version = 34");
+    current.close();
+
+    assert.throws(
+      () => new YoinkDatabase(filePath, { migrationMode: "require_current" }),
+      /schema is not current/
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

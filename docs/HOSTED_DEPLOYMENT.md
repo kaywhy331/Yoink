@@ -19,6 +19,11 @@ transparency witness. Hosted boundary mode now refuses startup without its
 public endpoint/log/key configuration. The repository still does not provide
 that independent service, its private key, refresh worker, or public monitor.
 
+Version 0.35 adds an asynchronous background-worker contract and a separately
+runnable SQLite worker. Hosted boundary configuration defaults the API to
+`external` worker mode, but that is a staging/integration process boundary—not
+the missing PostgreSQL implementation or production fleet.
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting
@@ -42,11 +47,31 @@ YOINK_OBSERVER_RECIPE_WITNESS_LOG_ID=yoink-production
 YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID=<sha256 of witness Ed25519 SPKI>
 YOINK_OBSERVER_RECIPE_WITNESS_PUBLIC_KEY_SPKI=<base64url DER SPKI>
 YOINK_OBSERVER_RECIPE_WITNESS_MAX_AGE_SECONDS=900
+YOINK_BACKGROUND_WORKER_MODE=external
 ```
 
 The Node process still binds to loopback. Put an authenticated TLS reverse proxy
 on the same host in front of it. Do not expose port 32991 directly and do not
 rewrite untrusted client headers into Yoink scope headers.
+
+## Background worker process boundary
+
+In external mode, start the API first with the deployment's explicit
+`YOINK_DATA_DIR`, then start `npm run start:worker` with the same directory and
+the exact same package version. The API owns migrations. The worker uses exact-
+schema mode and refuses to create, seed, or upgrade the database. Supervision
+must stop the worker before the API and restart it after API migration.
+
+External health is healthy only while fresh standalone heartbeats cover every
+persisted principal without a bounded worker error. A configured external mode
+with no live process reports waiting/stopped and unhealthy. See the
+[background worker runbook](BACKGROUND_WORKER.md) for commands, settings, and
+recovery.
+
+Do not scale this SQLite process layout into a production claim. Multiple
+hosts, PostgreSQL transactions and row-level tenant isolation, fleet-safe
+leases, backup/PITR, production secrets/identity, load and outage drills, SLOs,
+and controlled cutover remain required.
 
 ## Observer-recipe transparency witness
 

@@ -4,6 +4,7 @@ import {
   BACKGROUND_TASK_KINDS,
   type BackgroundTaskEventType,
   type BackgroundTaskKind,
+  type BackgroundTaskResult,
   type BackgroundTaskState
 } from "../../domain/src/background-task.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
@@ -22,8 +23,7 @@ const DAY_MS = 24 * 60 * 60_000;
 export const BACKGROUND_TASK_HISTORY_RETENTION_DAYS = 30;
 const FORBIDDEN_RESULT_KEY = /(token|secret|password|cookie|credential|authorization|nonce|address|payment|url|sku|product|account)/i;
 
-type ResultValue = string | number | boolean | null;
-export type BackgroundTaskResult = Record<string, ResultValue>;
+export type { BackgroundTaskResult } from "../../domain/src/background-task.js";
 
 export interface BackgroundTaskSchedule {
   id: string;
@@ -90,6 +90,9 @@ export interface BackgroundWorkerRecord {
 export interface BackgroundWorkSnapshot {
   durable: true;
   executionBoundary: "outside_request_handler";
+  asyncPersistenceContract: true;
+  standaloneProcessCompatible: true;
+  boundedPrincipalPagination: true;
   productionWorkerFleetReady: false;
   containsCapabilityMaterial: false;
   successfulHistoryRetentionDays: number;
@@ -720,6 +723,9 @@ export class BackgroundTaskRepository {
     return {
       durable: true,
       executionBoundary: "outside_request_handler",
+      asyncPersistenceContract: true,
+      standaloneProcessCompatible: true,
+      boundedPrincipalPagination: true,
       productionWorkerFleetReady: false,
       containsCapabilityMaterial: false,
       successfulHistoryRetentionDays: BACKGROUND_TASK_HISTORY_RETENTION_DAYS,

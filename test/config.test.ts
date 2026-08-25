@@ -8,9 +8,17 @@ test("configuration keeps hosted authentication disabled by default", () => {
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.hosted, null);
   assert.equal(config.observerRecipeWitness, null);
-  assert.equal(config.backgroundWorkerEnabled, true);
-  assert.equal(loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER: "0" }).backgroundWorkerEnabled, false);
+  assert.equal(config.backgroundWorkerMode, "embedded");
+  assert.equal(loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER: "0" }).backgroundWorkerMode, "disabled");
+  assert.equal(loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER: "1" }).backgroundWorkerMode, "embedded");
+  assert.equal(loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER_MODE: "external" }).backgroundWorkerMode, "external");
   assert.throws(() => loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER: "sometimes" }), /must be 1.*or 0/);
+  assert.throws(() => loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER_MODE: "sometimes" }), /embedded, external, or disabled/);
+  assert.throws(() => loadConfig(process.cwd(), {
+    YOINK_BACKGROUND_WORKER: "1",
+    YOINK_BACKGROUND_WORKER_MODE: "embedded"
+  }), /not both/);
+  assert.throws(() => loadConfig(process.cwd(), { YOINK_DATA_DIR: "" }), /non-empty directory/);
 });
 
 test("hosted configuration requires authentication allowlists and an independently pinned recipe witness", () => {
@@ -42,6 +50,7 @@ test("hosted configuration requires authentication allowlists and an independent
     key: { algorithm: "Ed25519", keyId: witness.keyId, publicKeySpki: witness.publicKeySpki },
     maxAgeSeconds: 600
   });
+  assert.equal(config.backgroundWorkerMode, "external");
 });
 
 test("observer recipe witness configuration rejects partial, insecure, or mismatched public pins", () => {

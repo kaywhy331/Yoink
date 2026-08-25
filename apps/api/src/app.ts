@@ -151,12 +151,20 @@ export interface AppDependencies {
   hostValidator?: (request: IncomingMessage) => boolean;
   mutationOriginValidator?: (request: IncomingMessage) => boolean;
   backgroundWorkerStatus?: () => {
-    state: "running" | "stopped" | "disabled";
+    state: "running" | "waiting" | "stopped" | "starting" | "stopping" | "disabled";
     healthy: boolean;
-    runtimeKind: "local_in_process";
+    runtimeKind: "local_in_process" | "standalone";
+    mode?: "embedded" | "external" | "disabled";
     lastHeartbeatAt: string;
     lastErrorCode: string;
-  };
+  } | Promise<{
+    state: "running" | "waiting" | "stopped" | "starting" | "stopping" | "disabled";
+    healthy: boolean;
+    runtimeKind: "local_in_process" | "standalone";
+    mode?: "embedded" | "external" | "disabled";
+    lastHeartbeatAt: string;
+    lastErrorCode: string;
+  }>;
   version: string;
 }
 
@@ -417,10 +425,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           healthy?: boolean;
           deliveryAllowed?: boolean;
         };
-        const backgroundWorker = dependencies.backgroundWorkerStatus?.() ?? {
+        const backgroundWorker = await dependencies.backgroundWorkerStatus?.() ?? {
           state: "stopped" as const,
           healthy: false,
           runtimeKind: "local_in_process" as const,
+          mode: "disabled" as const,
           lastHeartbeatAt: "",
           lastErrorCode: "not_attached"
         };
@@ -437,6 +446,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           backgroundWorkerRuntime: backgroundWorker.state,
           backgroundWorkerHealthy: backgroundWorker.healthy,
           backgroundWorkerDeployment: backgroundWorker.runtimeKind,
+          backgroundWorkerMode: backgroundWorker.mode ?? "embedded",
+          asyncBackgroundWorkerContract: true,
+          standaloneBackgroundWorkerProcessReady: true,
           productionWorkerFleetReady: false,
           executionMode: settings.executionMode,
           actionsPaused: settings.actionsPaused,
@@ -1123,6 +1135,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             durableBackgroundTasks: true,
             backgroundWorkOutsideRequestHandling: true,
             localInProcessBackgroundWorker: true,
+            asyncBackgroundWorkerContract: true,
+            standaloneBackgroundWorkerProcessReady: true,
+            boundedMultiPrincipalWorker: true,
             productionWorkerFleetReady: false,
             rawRequestCapture: false,
             signedAuthenticationAssurance: true,
