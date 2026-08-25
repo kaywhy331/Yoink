@@ -6,6 +6,7 @@ import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import { emptyInternalServiceCapabilityProjection } from "../apps/api/src/internal-service-capabilities.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { postgresCutoverCapabilityProjection } from "../packages/database/src/postgres-cutover.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -53,6 +54,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /renews its credential without asking you to pair again/);
     assert.match(adminPageBody, /Internal service identities/);
     assert.match(adminPageBody, /Unconfigured services are denied/);
+    assert.match(adminPageBody, /PostgreSQL cutover/);
+    assert.match(adminPageBody, /One source of truth, never dual write/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
     assert.match(adminScript, /renderOperationalTelemetry/);
@@ -60,6 +63,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /renderAdminChanges/);
     assert.match(adminScript, /\/api\/v1\/admin\/workers/);
     assert.match(adminScript, /renderBackgroundWork/);
+    assert.match(adminScript, /renderPostgresCutover/);
     assert.match(adminScript, /renderOperatorAlerts/);
     assert.match(adminScript, /SAVE_OPERATOR_ALERT_CONNECTOR/);
     assert.match(adminScript, /RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY/);
@@ -92,6 +96,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     const emptyInternalServices = emptyInternalServiceCapabilityProjection();
+    const postgresCutover = postgresCutoverCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -101,6 +106,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       userDataExportFormat: "yoink-user-data-json-v1",
       selfServiceUserDataExport: true,
       productionPostgresReady: false,
+      postgresCutover,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -257,6 +263,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const snapshot = await fetch(`${baseUrl}/api/v1/snapshot`).then((response) => response.json()) as {
       counts: Record<string, number>;
       capabilities: Record<string, unknown>;
+      dataPlane: Record<string, unknown>;
       signalIngress: {
         durable: boolean;
         evaluationBoundary: string;
@@ -298,6 +305,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.storageEngine, "sqlite");
     assert.equal(snapshot.capabilities.freshDatabaseRestoreParity, true);
     assert.equal(snapshot.capabilities.productionPostgresReady, false);
+    assert.deepEqual(snapshot.capabilities.postgresCutover, postgresCutover);
+    assert.deepEqual(snapshot.dataPlane, {
+      activeStorageEngine: "sqlite",
+      postgresCutover
+    });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);
     assert.equal(snapshot.capabilities.signedAuthenticationAssurance, true);

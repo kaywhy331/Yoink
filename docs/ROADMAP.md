@@ -1,6 +1,34 @@
 # Yoink roadmap
 
-## Shipped through 0.55.0
+## Shipped through 0.56.0
+
+### PostgreSQL cutover qualification plane (0.56.0)
+
+- A production `pg` driver adapter now enforces explicit verified TLS by
+  default, loopback-only insecure development, bounded pooling, and one checked-
+  out connection per serializable transaction
+- The offline one-shot importer accepts only a fully verified archive matching
+  the exact current migration/table contract. It creates a new private schema,
+  streams bounded row batches, re-verifies the file after streaming, and rolls
+  the whole schema back on any failure
+- All 95 portable application tables, 243 foreign keys, 177 unique/query
+  indexes, 282 safe literal defaults, 327 checks, and 50 immutable/state-guard
+  triggers are manifested deterministically and accepted by a real PostgreSQL
+  engine in the qualification suite
+- Exact per-table and aggregate canonical hashes must reconcile before the
+  receipt becomes verified. Corruption, target reuse, and post-import mutation
+  fail closed or report the exact mismatched table family
+- Forced default-deny RLS is installed and exercised through a non-superuser
+  role on 68 tables with direct tenant ownership. Fourteen inherited tenant
+  paths and 13 tables without a tenant FK path are projected explicitly and
+  remain a production gate rather than receiving an unsafe guessed policy
+- Health and the admin Operations workspace expose one honest data-plane
+  projection: SQLite is active; dual write, runtime PostgreSQL authority, fleet
+  contention, backup/restore, and production readiness remain false
+- No SQLite migration or retailer evidence/qualification/action state changes.
+  The qualification role and schema are never used by the API or worker
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### Workload-scoped internal service identities (0.55.0)
 
@@ -1308,9 +1336,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.55.0
+## Architecture assessment after 0.56.0
 
-Yoink 0.55.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.56.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1323,7 +1351,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-47 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, deny-by-default singular internal service capabilities, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, observer-witness refresh, signed operator-alert dispatch and governed exact replay, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task/connector receipts, 90-day recovery-evidence/review expiry with aggregate receipts, bounded expiring observer-trial eligibility state, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, deployed production identity/risk provider, backup/PITR service, fleet-safe scheduler, cryptographic workload identity, signed artifacts, managed secrets, or hosted cutover |
+| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, direct-tenant RLS qualification, and permanently inert receipt; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | No async PostgreSQL runtime repository family, inherited tenant-policy parity, restricted runtime roles, production identity/risk provider, backup/PITR service, independently tested fleet scheduler, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -1510,12 +1538,17 @@ denies unconfigured workloads, and repeats enforcement inside the sensitive
 repositories. It materially narrows compromise blast radius but does not prove
 the workload cryptographically: the shared HMAC proxy remains a deployment
 trust root until mTLS/OIDC workload identity and managed keys are deployed.
-None of these releases turns the SQLite process into a production fleet or
-proves signed artifact/workload identity.
+Version 0.56 adds the PostgreSQL qualification plane: strict driver/TLS
+configuration, deterministic schema manifest, bounded one-shot import, exact
+reconciliation, packaged invariant translation, and direct-tenant RLS tests.
+It deliberately cannot become runtime authority. None of these releases turns
+the SQLite process into a production fleet or proves signed artifact/workload
+identity.
 
-- Implement the async PostgreSQL repository family and migrations/importer with
-  transactional and isolation parity, row-level tenant tests, fleet lease-
-  contention tests, idempotent workers, and no dual-write shortcut
+- Implement the async PostgreSQL repository family over the qualified schema,
+  complete inherited tenant ownership and shared-table classification, use
+  restricted runtime roles, and pass transactional/isolation parity, real
+  multi-connection lease contention, idempotent replay, and no-dual-write tests
 - Add production IdP sessions, lifecycle/provisioning, TLS ingress, CSRF/session
   protection, secrets management, encryption, production retention/deletion,
   backups/PITR, restore drills, load tests, SLOs, and on-call alerting
@@ -1936,11 +1969,13 @@ Deployment-dependent work that cannot be truthfully completed in this local
 repository alone:
 
 - PostgreSQL source of truth and production migration/cutover. The logical
-  archive and reconcile receipt are implemented, but the current synchronous
-  repository is SQLite; a real PostgreSQL port/importer must be async and pass
-  migration parity, contention, isolation, PostgreSQL backup/restore, and
-  reconcile tests. Dual-write emulation is explicitly rejected. See
-  [HOSTED_DEPLOYMENT.md](HOSTED_DEPLOYMENT.md).
+  archive, production-driver qualification importer, relational-invariant
+  manifest, direct-tenant RLS proof, and exact reconcile receipt are
+  implemented, but the synchronous runtime repository remains SQLite. The
+  PostgreSQL runtime port must be async and pass inherited isolation,
+  restricted-role, multi-connection contention, backup/PITR/restore, outage,
+  and authority-switch drills. Dual-write emulation is explicitly rejected.
+  See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 - Production identity provider, TLS reverse proxy, secrets manager, monitoring,
   abuse operations, and independent security/privacy review
 - Windows/Electron packaged lifecycle only after install, upgrade, backup,

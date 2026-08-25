@@ -12,7 +12,8 @@ contains more than one tenant; tenant roles are not global catalog authority.
 A hosted operator must still provide TLS termination,
 an identity-aware reverse proxy, explicit Host/Origin allowlists, principal
 lifecycle management, backups, monitoring, and a PostgreSQL implementation
-before treating a deployment as production hosted.
+with qualified runtime repositories before treating a deployment as production
+hosted.
 
 Version 0.27 adds the client side of an independently operated observer-recipe
 transparency witness. Hosted boundary mode now refuses startup without its
@@ -22,7 +23,7 @@ that independent service, its private key, refresh worker, or public monitor.
 Version 0.35 adds an asynchronous background-worker contract and a separately
 runnable SQLite worker. Hosted boundary configuration defaults the API to
 `external` worker mode, but that is a staging/integration process boundary—not
-the missing PostgreSQL implementation or production fleet.
+the missing PostgreSQL runtime repository family or production fleet.
 
 Version 0.36 moves authenticated TrackaLacker device-signal evaluation behind
 that worker boundary. The API commits the normalized `signal_event_v1` inbox
@@ -334,19 +335,24 @@ remains false for this repository's local deployment.
 
 ## PostgreSQL boundary
 
-The current repository implementation uses synchronous `node:sqlite`; simply
+The runtime repository implementation uses synchronous `node:sqlite`; simply
 pointing it at PostgreSQL is impossible and unsafe. The
-`yoink-portability-ndjson-v1` archive now supplies a deterministic logical
-dataset, exact schema/migration manifest, table hashes, fresh-SQLite restore,
-and reconciliation receipt. See [Data portability and recovery](DATA_PORTABILITY.md).
+`yoink-portability-ndjson-v1` archive supplies a deterministic logical dataset,
+exact schema/migration manifest, table hashes, fresh-SQLite restore, and
+reconciliation receipt. Version 0.56 adds a production-driver-backed,
+serializable one-shot qualification importer into a new private PostgreSQL
+schema. It preserves the packaged relational invariants, forces direct-tenant
+RLS, reconciles exact logical hashes, and permanently leaves runtime authority
+false. See [Data portability and recovery](DATA_PORTABILITY.md) and the
+[PostgreSQL cutover qualification](POSTGRES_CUTOVER.md) runbook.
 
-PostgreSQL must still be delivered as an async repository implementation and
-importer with transactional equivalents for every domain operation, migration
-parity, row-level tenant tests, lease contention tests, PostgreSQL
-backup/restore drills, and a controlled cutover. Until that implementation is
-provisioned and verified, SQLite is the runtime source of truth and hosted
-boundary mode is suitable for integration/staging—not a claim of completed
-production hosting.
+PostgreSQL must still be delivered as async repository implementations with
+transactional equivalents for every domain operation, inherited tenant-scope
+policies, restricted runtime roles, fleet lease-contention tests, PostgreSQL
+backup/PITR and restore drills, and a controlled cutover. Until that runtime is
+provisioned and verified, SQLite is the source of truth and hosted boundary
+mode is suitable for integration/staging—not a claim of completed production
+hosting.
 
 Do not use dual writes as a shortcut. The transactional inbox/outbox protocol is
 the supported seam for migration and reconciliation.

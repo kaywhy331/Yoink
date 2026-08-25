@@ -2,6 +2,7 @@ import { createHash, type Hash } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  createReadStream,
   existsSync,
   fsyncSync,
   mkdirSync,
@@ -12,6 +13,7 @@ import {
   writeSync
 } from "node:fs";
 import { dirname } from "node:path";
+import { createInterface } from "node:readline";
 import type { SQLInputValue, StatementSync } from "node:sqlite";
 import { nowIso } from "../../domain/src/ids.js";
 import { YoinkDatabase } from "./database.js";
@@ -76,11 +78,16 @@ export interface PortabilityParityResult {
   archive: PortabilityArchiveVerification;
 }
 
-type PortableTaggedValue =
+export type PortableTaggedValue =
   | { $type: "bigint"; value: string }
   | { $type: "blob"; base64: string };
-type PortableValue = null | string | number | PortableTaggedValue;
+export type PortableValue = null | string | number | PortableTaggedValue;
 type JsonRecord = Record<string, unknown>;
+
+export interface PortabilityRowBatch {
+  table: PortabilityTableDescriptor;
+  values: PortableValue[][];
+}
 
 interface TableInfoRow {
   cid: number;
@@ -95,22 +102,22 @@ interface TableInfoRow {
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 
-function canonicalJson(value: unknown): string {
+export function canonicalPortabilityJson(value: unknown): string {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error("Portability data contains a non-finite number.");
     return JSON.stringify(value);
   }
-  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalPortabilityJson(entry)).join(",")}]`;
   if (typeof value === "object") {
     const record = value as JsonRecord;
-    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalPortabilityJson(record[key])}`).join(",")}}`;
   }
   throw new Error("Portability data contains an unsupported value.");
 }
 
 function hashLine(hash: Hash, value: unknown): void {
-  hash.update(canonicalJson(value));
+  hash.update(canonicalPortabilityJson(value));
   hash.update("\n");
 }
 
@@ -157,7 +164,7 @@ function encodeValue(value: unknown): PortableValue {
   throw new Error("SQLite returned an unsupported value during portability export.");
 }
 
-function decodeValue(value: unknown): SQLInputValue {
+export function decodePortabilityValue(value: unknown): SQLInputValue {
   if (value === null || typeof value === "string") return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (!isRecord(value)) throw new Error("A portability row contains an unsupported value.");
@@ -297,7 +304,7 @@ class ArchiveWriter {
   constructor(private readonly descriptor: number) {}
 
   write(value: unknown): void {
-    const body = Buffer.from(`${canonicalJson(value)}\n`, "utf8");
+    const body = Buffer.from(`${canonicalPortabilityJson(value)}\n`, "utf8");
     let offset = 0;
     while (offset < body.length) offset += writeSync(this.descriptor, body, offset);
     this.hash.update(body);
@@ -523,7 +530,7 @@ function validateRowValues(value: unknown, table: PortabilityTableDescriptor): P
   if (!Array.isArray(value) || value.length !== table.columns.length) {
     throw new Error(`A portability row for ${table.name} has the wrong column count.`);
   }
-  for (const entry of value) decodeValue(entry);
+  for (const entry of value) decodePortabilityValue(entry);
   return value as PortableValue[];
 }
 
@@ -614,14 +621,128 @@ export function verifyPortabilityArchive(filePath: string): PortabilityArchiveVe
   };
 }
 
+export async function streamVerifiedPortabilityRows(
+  filePath: string,
+  expected: PortabilityArchiveVerification,
+  consumer: (batch: PortabilityRowBatch) => Promise<void> | void,
+  batchSize = 250
+): Promise<void> {
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
+    throw new Error("A portability stream batch must contain 1 through 1000 rows.");
+  }
+  const before = verifyPortabilityArchive(filePath);
+  if (before.fileSha256 !== expected.fileSha256
+    || before.byteLength !== expected.byteLength
+    || before.dataSha256 !== expected.dataSha256) {
+    throw new Error("The portability archive changed before streaming began.");
+  }
+
+  const input = createReadStream(filePath, { encoding: "utf8" });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  let lineNumber = 0;
+  let tableIndex = -1;
+  let currentTable: PortabilityTableDescriptor | null = null;
+  let currentRows = 0;
+  let batch: PortableValue[][] = [];
+  let headerSeen = false;
+  let footerSeen = false;
+
+  const flush = async (): Promise<void> => {
+    if (!currentTable || !batch.length) return;
+    const values = batch;
+    batch = [];
+    await consumer({ table: currentTable, values });
+  };
+
+  try {
+    for await (const line of lines) {
+      lineNumber += 1;
+      const record = parseJsonLine(Buffer.from(line, "utf8"), lineNumber);
+      if (!headerSeen) {
+        const header = validateHeader(record);
+        if (canonicalPortabilityJson(header) !== canonicalPortabilityJson(expected.header)) {
+          throw new Error("The portability archive header changed during streaming.");
+        }
+        headerSeen = true;
+        continue;
+      }
+      if (footerSeen) throw new Error("The portability archive contains records after its footer.");
+      if (!currentTable) {
+        if (record.record === "footer") {
+          exactKeys(record, ["record", "tableCount", "rowCount", "dataSha256"], "The portability footer");
+          if (tableIndex + 1 !== expected.header.tables.length
+            || Number(record.tableCount) !== expected.tableCount
+            || Number(record.rowCount) !== expected.rowCount
+            || record.dataSha256 !== expected.dataSha256) {
+            throw new Error("The portability archive footer changed during streaming.");
+          }
+          footerSeen = true;
+          continue;
+        }
+        exactKeys(record, ["record", "table"], "A portability table-start record");
+        tableIndex += 1;
+        currentTable = expected.header.tables[tableIndex] ?? null;
+        currentRows = 0;
+        if (!currentTable || record.record !== "table_start" || record.table !== currentTable.name) {
+          throw new Error("The portability table sequence changed during streaming.");
+        }
+        continue;
+      }
+      if (record.record === "row") {
+        exactKeys(record, ["record", "values"], `A portability row for ${currentTable.name}`);
+        batch.push(validateRowValues(record.values, currentTable));
+        currentRows += 1;
+        if (batch.length >= batchSize) await flush();
+        continue;
+      }
+      exactKeys(record, ["record", "table", "rowCount", "contentSha256"], `The portability table-end record for ${currentTable.name}`);
+      const expectedSummary = expected.tables[tableIndex];
+      if (record.record !== "table_end"
+        || record.table !== currentTable.name
+        || Number(record.rowCount) !== currentRows
+        || Number(record.rowCount) !== expectedSummary?.rowCount
+        || record.contentSha256 !== expectedSummary?.contentSha256) {
+        throw new Error(`Portable table ${currentTable.name} changed during streaming.`);
+      }
+      await flush();
+      currentTable = null;
+      currentRows = 0;
+    }
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+
+  if (!headerSeen || !footerSeen || currentTable || tableIndex + 1 !== expected.header.tables.length) {
+    throw new Error("The portability archive became incomplete during streaming.");
+  }
+  const after = verifyPortabilityArchive(filePath);
+  if (after.fileSha256 !== expected.fileSha256
+    || after.byteLength !== expected.byteLength
+    || after.dataSha256 !== expected.dataSha256) {
+    throw new Error("The portability archive changed during streaming.");
+  }
+}
+
 function assertCompatibleSchema(db: YoinkDatabase, archive: PortabilityArchiveVerification): void {
   const currentMigrations = migrations(db);
   const currentTables = tableDescriptors(db);
-  if (canonicalJson(currentMigrations) !== canonicalJson(archive.header.migrations)) {
+  if (canonicalPortabilityJson(currentMigrations) !== canonicalPortabilityJson(archive.header.migrations)) {
     throw new Error("The portability archive migration ledger does not exactly match this Yoink build.");
   }
-  if (canonicalJson(currentTables) !== canonicalJson(archive.header.tables)) {
+  if (canonicalPortabilityJson(currentTables) !== canonicalPortabilityJson(archive.header.tables)) {
     throw new Error("The portability archive table schema does not exactly match this Yoink build.");
+  }
+}
+
+export function assertPortabilityArchiveCompatibleWithCurrentBuild(
+  archive: PortabilityArchiveVerification
+): void {
+  const current = new YoinkDatabase(":memory:");
+  try {
+    assertCompatibleSchema(current, archive);
+  } finally {
+    current.close();
   }
 }
 
@@ -672,7 +793,7 @@ function importVerifiedRows(
       return;
     }
     if (record.record !== "row" || !table || !statement) throw new Error("The portability archive changed during restore.");
-    const values = validateRowValues(record.values, table).map(decodeValue);
+    const values = validateRowValues(record.values, table).map(decodePortabilityValue);
     statement.run(...values);
   });
   if (rescanned.fileSha256 !== archive.fileSha256 || rescanned.byteLength !== archive.byteLength) {

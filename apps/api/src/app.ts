@@ -118,6 +118,7 @@ import {
 import { OperatorAlertRepository } from "../../../packages/database/src/operator-alert-repository.js";
 import { MutationLaneRepository } from "../../../packages/database/src/mutation-lane-repository.js";
 import { PORTABILITY_FORMAT } from "../../../packages/database/src/portability.js";
+import { postgresCutoverCapabilityProjection } from "../../../packages/database/src/postgres-cutover.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -368,6 +369,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const localExtensionReleaseEnabled = dependencies.localExtensionReleaseEnabled !== false;
   const internalServiceCapabilities = dependencies.internalServiceCapabilityRegistry
     ?? emptyInternalServiceCapabilityProjection();
+  const postgresCutover = postgresCutoverCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -632,6 +634,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           userDataExportFormat: USER_DATA_EXPORT_FORMAT,
           selfServiceUserDataExport: true,
           productionPostgresReady: false,
+          postgresCutover,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1472,6 +1475,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           bestBuyQualification,
           futureMutationLanes: mutationLanes.readiness(),
           trackalacker: sourceRuntime.trackalackerStatus(),
+          dataPlane: {
+            activeStorageEngine: "sqlite",
+            postgresCutover
+          },
           capabilities: {
             catalog: true,
             selfServiceExactProductLinks: true,
@@ -1618,6 +1625,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             portabilityArchiveFormat: PORTABILITY_FORMAT,
             freshDatabaseRestoreParity: true,
             productionPostgresReady: false,
+            postgresCutover,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

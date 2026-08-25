@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.55.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.56.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,17 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.56.0 adds an offline PostgreSQL cutover qualification plane without
+changing runtime authority. A verified portability archive can be streamed in
+bounded batches through the production `pg` driver into one new private schema
+inside a serializable transaction. The importer preserves packaged keys,
+foreign keys, indexes, safe defaults, checks, and state-guard triggers; forces
+default-deny RLS on direct-tenant tables; and requires exact logical hashes
+before issuing an inert verified receipt. SQLite remains active, dual write is
+prohibited, and inherited tenant policies, async repositories, fleet
+contention, backup/restore, and authority-switch drills remain open. See
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md).
 
 Version 0.55.0 makes internal service authorization workload-scoped and
 deny-by-default. A hosted deployment must explicitly map each signed service
@@ -641,8 +652,10 @@ replay-protected signed proxy scopes, automatic paired-device scope resolution,
 idempotent principal provisioning, and leased inbox/outbox delivery with
 dead-letter receipts. A streaming, checksummed portability archive can be
 verified, restored into a fresh SQLite database, and reconciled table by table
-without an item-count cap. Local mode remains the default; see the hosted
-deployment contract before enabling the boundary mode.
+without an item-count cap. It can also qualify one new PostgreSQL schema through
+an exact one-shot import and reconciliation receipt, but no API or worker uses
+that schema. Local mode remains the default; see the hosted deployment contract
+before enabling the boundary mode.
 
 Version 0.19.0 adds the first production-shaped application spine without
 changing retailer mutation authority. Persisted roles and granular permissions
@@ -756,6 +769,12 @@ portability -- drill ...` and follow the [data portability
 contract](docs/DATA_PORTABILITY.md). Archives contain private state, are never
 served over HTTP, and do not include observer-recipe root or intermediate key
 files.
+
+For a separate offline PostgreSQL qualification, first export and verify an
+archive, then run `npm run postgres:cutover -- preflight`, the acknowledged
+one-shot `import`, and an independent `verify`. Follow the
+[PostgreSQL cutover runbook](docs/POSTGRES_CUTOVER.md); the result is not a
+runtime cutover and cannot authorize actions.
 
 Observer-recipe trust initialization, renewal, rotation, revocation, restart,
 and recovery procedures are documented in the [rooted trust
@@ -1009,5 +1028,5 @@ signal, source, attribution, notification, adapter, service-worker recovery,
 and API tests.
 
 See [Architecture](docs/ARCHITECTURE.md), [Purchase-plan preflight](docs/PURCHASE_PLAN_PREFLIGHT.md), [Purchase automation readiness](docs/PURCHASE_AUTOMATION_READINESS.md), [Hosted deployment
-contract](docs/HOSTED_DEPLOYMENT.md), [Worker deployment attestation](docs/WORKER_DEPLOYMENT_ATTESTATION.md), [Observer witness refresh](docs/OBSERVER_WITNESS_REFRESH.md), [Observer regional conflict SLO](docs/OBSERVER_RECIPE_REGIONAL_CONFLICT_SLO.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Durable repair candidate evaluation](docs/OBSERVER_REPAIR_CANDIDATE_EVALUATION.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
+contract](docs/HOSTED_DEPLOYMENT.md), [Worker deployment attestation](docs/WORKER_DEPLOYMENT_ATTESTATION.md), [Observer witness refresh](docs/OBSERVER_WITNESS_REFRESH.md), [Observer regional conflict SLO](docs/OBSERVER_RECIPE_REGIONAL_CONFLICT_SLO.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Durable repair candidate evaluation](docs/OBSERVER_REPAIR_CANDIDATE_EVALUATION.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md), [CartCollect browser-safety
 migration](docs/CARTCOLLECT_MIGRATION.md), and [Roadmap](docs/ROADMAP.md).

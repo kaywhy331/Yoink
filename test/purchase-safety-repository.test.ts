@@ -125,7 +125,7 @@ test("purchase intents append revisions and reject stale concurrent edits", () =
         expiresAt: new Date(NOW + 86_400_000).toISOString(),
         changeReason: "Fixture preferences"
       }
-    }) as { intentPolicy: { revision: number; quantity: number; maxAllInCents: number } };
+    }, NOW) as { intentPolicy: { revision: number; quantity: number; maxAllInCents: number } };
     assert.equal(updated.intentPolicy.revision, 2);
     assert.equal(updated.intentPolicy.quantity, 2);
     assert.equal(updated.intentPolicy.maxAllInCents, 10_000);
@@ -137,7 +137,7 @@ test("purchase intents append revisions and reject stale concurrent edits", () =
         sellerPolicy: "first_party_only", fulfillment: "shipping"
       }],
       policy: { expectedRevision: 1, maxAllInCents: 9000 }
-    }), /changed after it was loaded/);
+    }, NOW), /changed after it was loaded/);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM mission_intent_revisions WHERE mission_id = ?",
       mission.mission.id

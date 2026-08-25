@@ -1,10 +1,10 @@
 # Data portability and recovery drill
 
 Yoink 0.14 provides a streaming, deterministic portability archive for an
-operator-controlled SQLite database. Its immediate purpose is to prove that all
-application tables can be exported, verified, restored into a fresh database,
-and reconciled exactly before the same contract is used to qualify a future
-PostgreSQL importer.
+operator-controlled SQLite database. Yoink 0.56 adds an offline PostgreSQL
+qualification importer that consumes the same contract, creates a new private
+schema atomically, and reconciles every table exactly. The runtime API and
+worker remain SQLite-only.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -87,13 +87,21 @@ the source during a controlled recovery.
    maintenance action and retain the old source read-only until post-startup
    reconciliation passes.
 
-A future PostgreSQL cutover must add an async PostgreSQL repository and importer
-that consumes this logical contract, then prove migration parity, tenant
-isolation, lease contention, backup/restore, foreign-key equivalents, and the
-same canonical table/data reconciliation. The cutover must quiesce SQLite,
-load PostgreSQL once, reconcile, and switch authority once. Dual writes remain
-rejected because they create two competing transaction authorities.
+The PostgreSQL qualification importer now proves a one-shot, bounded load,
+primary/not-null/foreign-key/index/default/check/trigger translation, direct
+tenant RLS, tamper closure, and the same canonical table/data reconciliation.
+Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
+runbook; its receipt permanently records that runtime authority and cutover
+readiness are false.
+
+A production cutover must still add the async PostgreSQL repository family,
+complete inherited tenant isolation, fleet lease contention, production
+identity, backup/PITR and restore, outage/load testing, and controlled authority
+switch evidence. It must quiesce SQLite, load PostgreSQL once, reconcile, and
+switch authority once. Dual writes remain rejected because they create two
+competing transaction authorities.
 
 This archive and drill establish the portable dataset and recovery receipt.
-They do not claim that PostgreSQL, a production identity provider, TLS,
-monitoring, Windows packaging, or an off-host backup system has been deployed.
+They do not claim that PostgreSQL is the runtime source of truth or that a
+production identity provider, TLS ingress, monitoring, Windows packaging, or
+an off-host backup system has been deployed.
