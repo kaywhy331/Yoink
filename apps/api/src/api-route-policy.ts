@@ -27,6 +27,7 @@ const ADMIN_PERMISSIONS = new Set<AuthorizationPermission>([
   "security.manage",
   "user.lifecycle.manage",
   "alert.manage",
+  "worker.manage",
   "change.approve"
 ]);
 
@@ -48,6 +49,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 
   if (pathname === "/api/v1/snapshot") return "admin.read";
   if (pathname === "/api/v1/operations/telemetry") return "admin.read";
+  if (pathname === "/api/v1/workers") return "admin.read";
+  if (pathname.startsWith("/api/v1/workers/")) return method === "GET" ? "admin.read" : "worker.manage";
   if (/^\/api\/v1\/change-requests\/[A-Za-z0-9_-]{3,120}\/decision$/.test(pathname)) return "change.approve";
   if (pathname.startsWith("/api/v1/change-requests")) return "admin.read";
   if (pathname === "/api/v1/admin/attribution-policies") return "affiliate.manage";
@@ -169,7 +172,8 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     alerts: "alerts",
     sources: "sources",
     "attribution-policies": "attribution",
-    "change-requests": "change_control"
+    "change-requests": "change_control",
+    workers: "workers"
   }),
   device: Object.freeze({
     heartbeat: "heartbeat",

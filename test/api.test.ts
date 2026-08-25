@@ -42,11 +42,15 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /raw URLs, request bodies, product identifiers/);
     assert.match(adminPageBody, /High-risk change control/);
     assert.match(adminPageBody, /Approval never applies a change by itself/);
+    assert.match(adminPageBody, /Durable maintenance/);
+    assert.match(adminPageBody, /Closed maintenance tasks only/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
     assert.match(adminScript, /renderOperationalTelemetry/);
     assert.match(adminScript, /\/api\/v1\/admin\/change-requests/);
     assert.match(adminScript, /renderAdminChanges/);
+    assert.match(adminScript, /\/api\/v1\/admin\/workers/);
+    assert.match(adminScript, /renderBackgroundWork/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
@@ -59,6 +63,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
       userDataExportFormat: "yoink-user-data-json-v1",
       selfServiceUserDataExport: true,
       productionPostgresReady: false,
+      durableBackgroundTasks: true,
+      backgroundWorkerRuntime: "stopped",
+      backgroundWorkerHealthy: false,
+      backgroundWorkerDeployment: "local_in_process",
+      productionWorkerFleetReady: false,
       executionMode: "shadow",
       actionsPaused: true,
       chromeMutationEnabled: false,
@@ -162,6 +171,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.selfServiceAccountDeletion, false);
     assert.equal(snapshot.capabilities.independentSafetyExpansionApproval, true);
     assert.equal(snapshot.capabilities.productionIdentityProvider, false);
+    assert.equal(snapshot.capabilities.durableBackgroundTasks, true);
+    assert.equal(snapshot.capabilities.backgroundWorkOutsideRequestHandling, true);
+    assert.equal(snapshot.capabilities.productionWorkerFleetReady, false);
 
     const libraryPage = await fetch(`${baseUrl}/api/v1/library?limit=1&offset=0&q=Yoink%20API`).then((response) => response.json()) as {
       items: Array<Record<string, unknown>>;

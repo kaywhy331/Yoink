@@ -109,27 +109,7 @@ export class NotificationRepository {
       if (capabilities.notifications !== true) return { notification: null, reason: "device_unavailable" };
 
       const timestamp = nowIso(now);
-      this.db.run(
-        `UPDATE notification_deliveries SET state = 'expired', capability_hash = '',
-           lease_expires_at = '', updated_at = ?
-         WHERE user_id = ? AND state IN ('pending', 'leased')
-           AND job_id IN (SELECT id FROM action_jobs WHERE expires_at <= ?)`,
-        timestamp,
-        currentRequestScope().userId,
-        timestamp
-      );
-      this.db.run(
-        `UPDATE notification_deliveries SET state = CASE WHEN attempts >= ? THEN 'failed' ELSE 'pending' END,
-           assigned_device_id = NULL, capability_hash = '', lease_expires_at = '',
-           failure_code = CASE WHEN attempts >= ? THEN 'delivery_attempts_exhausted' ELSE failure_code END,
-           updated_at = ?
-         WHERE user_id = ? AND state = 'leased' AND lease_expires_at <> '' AND lease_expires_at <= ?`,
-        MAX_ATTEMPTS,
-        MAX_ATTEMPTS,
-        timestamp,
-        currentRequestScope().userId,
-        timestamp
-      );
+      this.recoverExpired(now);
 
       const candidate = this.db.get<DeliveryCandidate>(
         `SELECT nd.id, v.title, l.retailer_id, l.retailer_sku,
@@ -186,6 +166,46 @@ export class NotificationRepository {
           leaseExpiresAt
         }
       };
+    });
+  }
+
+  recoverExpired(now = Date.now()): {
+    expiredNotifications: number;
+    requeuedLeases: number;
+    failedLeases: number;
+  } {
+    const timestamp = nowIso(now);
+    return this.db.transaction(() => {
+      const expiredNotifications = Number(this.db.run(
+        `UPDATE notification_deliveries SET state = 'expired', assigned_device_id = NULL,
+           capability_hash = '', lease_expires_at = '', failure_code = 'job_window_expired', updated_at = ?
+         WHERE user_id = ? AND state IN ('pending', 'leased')
+           AND job_id IN (SELECT id FROM action_jobs WHERE expires_at <= ?)`,
+        timestamp,
+        currentRequestScope().userId,
+        timestamp
+      ).changes);
+      const failedLeases = Number(this.db.run(
+        `UPDATE notification_deliveries SET state = 'failed', assigned_device_id = NULL,
+           capability_hash = '', lease_expires_at = '', failure_code = 'delivery_attempts_exhausted', updated_at = ?
+         WHERE user_id = ? AND state = 'leased' AND attempts >= ?
+           AND lease_expires_at <> '' AND lease_expires_at <= ?`,
+        timestamp,
+        currentRequestScope().userId,
+        MAX_ATTEMPTS,
+        timestamp
+      ).changes);
+      const requeuedLeases = Number(this.db.run(
+        `UPDATE notification_deliveries SET state = 'pending', assigned_device_id = NULL,
+           capability_hash = '', lease_expires_at = '', failure_code = 'lease_expired_requeued', updated_at = ?
+         WHERE user_id = ? AND state = 'leased' AND attempts < ?
+           AND lease_expires_at <> '' AND lease_expires_at <= ?`,
+        timestamp,
+        currentRequestScope().userId,
+        MAX_ATTEMPTS,
+        timestamp
+      ).changes);
+      return { expiredNotifications, requeuedLeases, failedLeases };
     });
   }
 

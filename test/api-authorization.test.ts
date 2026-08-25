@@ -67,6 +67,10 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
       headers: { "X-Test-Principal": "user" }
     });
     assert.equal(deniedOperationalTelemetry.status, 403);
+    const deniedWorkers = await fetch(`${baseUrl}/api/v1/admin/workers`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(deniedWorkers.status, 403);
     const deniedTrustInstall = await fetch(`${baseUrl}/api/v1/admin/observer-recipes/trust-manifests`, {
       method: "POST",
       headers: {
@@ -144,6 +148,21 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     assert.equal(operationalTelemetry.privacyClassification, "operational_aggregate");
     assert.equal(operationalTelemetry.containsRequestBodies, false);
     assert.equal(operationalTelemetry.containsRawUrls, false);
+    const allowedWorkerRead = await fetch(`${baseUrl}/api/v1/admin/workers`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(allowedWorkerRead.status, 200);
+    assert.equal(allowedWorkerRead.headers.get("x-yoink-api-surface"), "admin");
+    const deniedWorkerMutation = await fetch(`${baseUrl}/api/v1/admin/workers/schedules/background_schedule_missing`, {
+      method: "PATCH",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: JSON.stringify({ enabled: false })
+    });
+    assert.equal(deniedWorkerMutation.status, 403);
     const deniedAlertMutation = await fetch(`${baseUrl}/api/v1/admin/alerts/rules`, {
       method: "POST",
       headers: {
@@ -215,6 +234,17 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     });
     assert.equal(permittedAlertMutation.status, 400);
     assert.equal((await permittedAlertMutation.json() as { error: string }).error, "operator_alert_confirmation_required");
+    const permittedWorkerMutation = await fetch(`${baseUrl}/api/v1/admin/workers/schedules/background_schedule_missing`, {
+      method: "PATCH",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: JSON.stringify({ enabled: false })
+    });
+    assert.equal(permittedWorkerMutation.status, 404);
+    assert.equal((await permittedWorkerMutation.json() as { error: string }).error, "background_task_not_found");
   } finally {
     server.close();
     await once(server, "close");

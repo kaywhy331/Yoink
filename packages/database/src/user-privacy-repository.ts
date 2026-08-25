@@ -13,6 +13,10 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   attribution_receipts: "exported",
   audit_events: "exported",
   authorization_memberships: "exported",
+  background_task_events: "operational_metadata_excluded",
+  background_task_schedules: "operational_metadata_excluded",
+  background_tasks: "credential_material_excluded",
+  background_worker_heartbeats: "operational_metadata_excluded",
   catalog_change_proposals: "exported",
   catalog_identity_operations: "exported",
   community_contribution_consents: "exported",
@@ -131,7 +135,7 @@ const CATEGORY_METADATA = Object.freeze([
 ] as const);
 
 const EXPORT_EXCLUSIONS = Object.freeze([
-  "Device tokens, pairing-code hashes, request nonces, and action or notification capability secrets.",
+  "Device tokens, pairing-code hashes, request nonces, and action, notification, or background-task lease capabilities.",
   "Other users' records and tenant-wide security, alert-routing, telemetry, outbox, and administrator configuration.",
   "Shared catalog and community projections except exact public product or offer references attached to your own records.",
   "Raw DOM, page text, screenshots, cookies, credentials, addresses, and payment data, which Yoink does not accept into this export path."

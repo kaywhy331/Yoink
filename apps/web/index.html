@@ -151,6 +151,17 @@
       </div>
       <section class="metric-grid operational-metric-grid" id="operationalMetricGrid" aria-label="Operational health totals"></section>
       <section class="panel operator-alert-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Durable maintenance</p><h2>Background work</h2><p>Safety recovery, delivery cleanup, alert reconciliation, and retention run from a durable queue outside HTTP request handling.</p></div><span class="mode-chip" id="backgroundWorkerGate">CHECKING</span></div>
+        <div class="safety-banner compact"><span class="safety-icon">↻</span><div><strong>Closed maintenance tasks only</strong><p>This worker cannot create a product signal, authorize a cart action, click a retailer control, enter checkout, or submit an order. Lease capabilities are one-use and never appear in this view.</p></div></div>
+        <section class="metric-grid operational-metric-grid" id="backgroundWorkerMetricGrid" aria-label="Background work totals"></section>
+        <div class="panel-heading"><div><p class="eyebrow">Operator controls</p><h2>Schedules</h2><p>Pause one maintenance family, run it once, or leave the safe defaults enabled.</p></div></div>
+        <div class="card-list" id="backgroundWorkerScheduleList"></div>
+        <div class="panel-heading governance-heading"><div><p class="eyebrow">Recovery queue</p><h2>Recent task runs</h2><p>Failed handlers retry with bounded backoff. Exhausted work stops in dead letter until an authorized operator retries it; successful history is retained for 30 days.</p></div></div>
+        <div class="card-list" id="backgroundWorkerTaskList"></div>
+        <div class="panel-heading governance-heading"><div><p class="eyebrow">Runtime heartbeat</p><h2>Worker instances</h2><p>A heartbeat is online for 30 seconds. The bundled runtime is local and in-process; a production worker fleet remains a separate deployment gate.</p></div></div>
+        <div class="card-list" id="backgroundWorkerInstanceList"></div>
+      </section>
+      <section class="panel operator-alert-panel">
         <div class="panel-heading"><div><p class="eyebrow">Fixed route groups</p><h2>Request health</h2><p>Groups are compiled into the server package. Dynamic path segments and query strings never become telemetry dimensions.</p></div><span class="mode-chip" id="operationalGate">CHECKING</span></div>
         <div class="card-list" id="operationalRouteList"></div>
       </section>

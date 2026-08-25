@@ -176,3 +176,45 @@ test("the twentieth failed inbox lease is durably dead-lettered", () => {
     db.close();
   }
 });
+
+test("background recovery retires abandoned hosted inbox and outbox capabilities", () => {
+  const db = new YoinkDatabase();
+  try {
+    const audit = new AuditRepository(db);
+    const delivery = new HostedDeliveryRepository(db);
+    runWithRequestScope(scope(), () => {
+      delivery.acceptInbox({
+        source: "worker",
+        messageKey: "recovery:inbox:1",
+        eventType: "recovery_test",
+        payload: { safe: true }
+      }, NOW);
+      audit.record({
+        correlationId: "recovery_outbox_001",
+        eventType: "recovery_test",
+        reasonCode: "fixture",
+        message: "Bounded recovery fixture"
+      }, NOW);
+      const inbox = delivery.leaseInbox(15, NOW + 1);
+      const outbox = delivery.leaseOutbox(15, NOW + 1);
+      assert.ok(inbox);
+      assert.ok(outbox);
+      assert.deepEqual(delivery.recoverExpiredLeases(NOW + 15_002), {
+        inboxRequeued: 1,
+        inboxDeadLettered: 0,
+        outboxRequeued: 1,
+        outboxDeadLettered: 0
+      });
+      assert.throws(() => delivery.completeInbox(inbox.id, inbox.capabilityToken, NOW + 15_003), /invalid or expired/);
+      assert.throws(() => delivery.completeOutbox(outbox.id, outbox.capabilityToken, NOW + 15_003), /invalid or expired/);
+      const recoveredInbox = delivery.leaseInbox(15, NOW + 15_004);
+      const recoveredOutbox = delivery.leaseOutbox(15, NOW + 15_004);
+      assert.ok(recoveredInbox);
+      assert.ok(recoveredOutbox);
+      assert.notEqual(recoveredInbox.capabilityToken, inbox.capabilityToken);
+      assert.notEqual(recoveredOutbox.capabilityToken, outbox.capabilityToken);
+    });
+  } finally {
+    db.close();
+  }
+});

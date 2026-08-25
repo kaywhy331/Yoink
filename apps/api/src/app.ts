@@ -63,6 +63,7 @@ import {
 } from "../../../packages/database/src/catalog-link-repository.js";
 import { CatalogIdentityGovernanceRepository } from "../../../packages/database/src/catalog-identity-governance-repository.js";
 import { AttributionRepository } from "../../../packages/database/src/attribution-repository.js";
+import { BackgroundTaskRepository } from "../../../packages/database/src/background-task-repository.js";
 import { AdapterDiagnosticRepository } from "../../../packages/database/src/adapter-diagnostic-repository.js";
 import {
   ADMIN_CHANGE_OPERATION_POLICIES,
@@ -149,6 +150,13 @@ export interface AppDependencies {
   requestScopeResolver?: (request: IncomingMessage) => RequestScope | Promise<RequestScope>;
   hostValidator?: (request: IncomingMessage) => boolean;
   mutationOriginValidator?: (request: IncomingMessage) => boolean;
+  backgroundWorkerStatus?: () => {
+    state: "running" | "stopped" | "disabled";
+    healthy: boolean;
+    runtimeKind: "local_in_process";
+    lastHeartbeatAt: string;
+    lastErrorCode: string;
+  };
   version: string;
 }
 
@@ -267,6 +275,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const catalogLinks = new CatalogLinkRepository(db);
   const catalogIdentityGovernance = new CatalogIdentityGovernanceRepository(db);
   const attribution = new AttributionRepository(db);
+  const backgroundTasks = new BackgroundTaskRepository(db);
   const adapterDiagnostics = new AdapterDiagnosticRepository(db);
   const adminChanges = new AdminChangeControlRepository(db);
   const authorization = new AuthorizationRepository(db);
@@ -392,6 +401,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const operatorAlertIncidentActionMatch = /^\/api\/v1\/alerts\/incidents\/([A-Za-z0-9_-]{3,120})\/(acknowledge|resolve)$/.exec(requestUrl.pathname);
       const adminChangeRequestDetailMatch = /^\/api\/v1\/change-requests\/(admin_change_[a-f0-9]{32})$/.exec(requestUrl.pathname);
       const adminChangeRequestDecisionMatch = /^\/api\/v1\/change-requests\/(admin_change_[a-f0-9]{32})\/decision$/.exec(requestUrl.pathname);
+      const backgroundScheduleMatch = /^\/api\/v1\/workers\/schedules\/([A-Za-z0-9_-]{3,160})$/.exec(requestUrl.pathname);
+      const backgroundScheduleRunMatch = /^\/api\/v1\/workers\/schedules\/([A-Za-z0-9_-]{3,160})\/run$/.exec(requestUrl.pathname);
+      const backgroundTaskRetryMatch = /^\/api\/v1\/workers\/tasks\/([A-Za-z0-9_-]{3,160})\/retry$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
         const settings = control.settings();
@@ -405,6 +417,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           healthy?: boolean;
           deliveryAllowed?: boolean;
         };
+        const backgroundWorker = dependencies.backgroundWorkerStatus?.() ?? {
+          state: "stopped" as const,
+          healthy: false,
+          runtimeKind: "local_in_process" as const,
+          lastHeartbeatAt: "",
+          lastErrorCode: "not_attached"
+        };
         json(response, 200, {
           status: "ready",
           version,
@@ -414,6 +433,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           userDataExportFormat: USER_DATA_EXPORT_FORMAT,
           selfServiceUserDataExport: true,
           productionPostgresReady: false,
+          durableBackgroundTasks: true,
+          backgroundWorkerRuntime: backgroundWorker.state,
+          backgroundWorkerHealthy: backgroundWorker.healthy,
+          backgroundWorkerDeployment: backgroundWorker.runtimeKind,
+          productionWorkerFleetReady: false,
           executionMode: settings.executionMode,
           actionsPaused: settings.actionsPaused,
           chromeMutationEnabled: targetAddQualified || walmartAddQualified || amazonAddQualified || bestBuyAddQualified,
@@ -893,6 +917,36 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/workers") {
+        json(response, 200, { backgroundWork: backgroundTasks.snapshot() });
+        return;
+      }
+
+      if (request.method === "PATCH" && backgroundScheduleMatch) {
+        const body = await readJson(request);
+        json(response, 200, {
+          schedule: backgroundTasks.updateSchedule(backgroundScheduleMatch[1] ?? "", {
+            ...(body.enabled !== undefined ? { enabled: body.enabled as boolean } : {}),
+            ...(body.intervalSeconds !== undefined ? { intervalSeconds: Number(body.intervalSeconds) } : {})
+          }, correlationId)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && backgroundScheduleRunMatch) {
+        json(response, 202, {
+          task: backgroundTasks.enqueueScheduleNow(backgroundScheduleRunMatch[1] ?? "", correlationId)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && backgroundTaskRetryMatch) {
+        json(response, 202, {
+          task: backgroundTasks.retryDeadLetter(backgroundTaskRetryMatch[1] ?? "", correlationId)
+        });
+        return;
+      }
+
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/change-requests") {
         const status = String(requestUrl.searchParams.get("status") ?? "all") as AdminChangeStatus | "all";
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
@@ -930,6 +984,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const amazonQualification = shadowObservations.amazonQualificationReadiness();
         const bestBuyQualification = shadowObservations.bestBuyQualificationReadiness();
         const adminChangeCounts = adminChanges.counts();
+        const backgroundWork = backgroundTasks.snapshot();
         const qualifiedAddRetailers = [
           targetQualification.addToCartQualified ? "Target" : "",
           walmartQualification.addToCartQualified ? "Walmart" : "",
@@ -965,6 +1020,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             consumedAdminChanges: adminChangeCounts.consumed,
             rejectedAdminChanges: adminChangeCounts.rejected,
             expiredAdminChanges: adminChangeCounts.expired,
+            backgroundSchedules: backgroundWork.counts.schedules,
+            enabledBackgroundSchedules: backgroundWork.counts.enabledSchedules,
+            pendingBackgroundTasks: backgroundWork.counts.pendingTasks,
+            retryingBackgroundTasks: backgroundWork.counts.retryingTasks,
+            deadLetterBackgroundTasks: backgroundWork.counts.deadLetterTasks,
+            onlineBackgroundWorkers: backgroundWork.counts.onlineWorkers,
             ...operatorAlertCounts
           },
           sources: control.listSources(),
@@ -1026,6 +1087,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             assurance: adminChanges.assuranceStatus()
           },
           operatorAlerts: operatorAlertSnapshot,
+          backgroundWork,
           retailerEvidence: shadowObservations.retailerEvidenceReadiness(),
           targetQualification,
           walmartQualification,
@@ -1058,6 +1120,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             durableAdapterDiagnosticDelivery: true,
             privacyClassifiedOperatorAlerts: true,
             privacyBoundedOperationalTelemetry: true,
+            durableBackgroundTasks: true,
+            backgroundWorkOutsideRequestHandling: true,
+            localInProcessBackgroundWorker: true,
+            productionWorkerFleetReady: false,
             rawRequestCapture: false,
             signedAuthenticationAssurance: true,
             highRiskChangeControl: true,

@@ -46,6 +46,7 @@ export const OPERATIONAL_ROUTE_KEYS = Object.freeze([
   "admin.sources",
   "admin.attribution",
   "admin.change_control",
+  "admin.workers",
   "admin.other",
   "device.heartbeat",
   "device.adapter_diagnostics",

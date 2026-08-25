@@ -8,6 +8,9 @@ test("configuration keeps hosted authentication disabled by default", () => {
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.hosted, null);
   assert.equal(config.observerRecipeWitness, null);
+  assert.equal(config.backgroundWorkerEnabled, true);
+  assert.equal(loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER: "0" }).backgroundWorkerEnabled, false);
+  assert.throws(() => loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER: "sometimes" }), /must be 1.*or 0/);
 });
 
 test("hosted configuration requires authentication allowlists and an independently pinned recipe witness", () => {

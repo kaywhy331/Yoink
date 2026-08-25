@@ -9,6 +9,7 @@ const state = {
   observerRecipeDirty: false,
   editingOperatorAlertRuleId: "",
   operationalTelemetry: null,
+  backgroundWork: null,
   adminChanges: null,
   pairing: null,
   libraryItems: [],
@@ -826,6 +827,48 @@ function renderOperationalTelemetry() {
   }).join("") : empty("No recent errors exist in this window.");
 }
 
+function backgroundTaskLabel(taskKind) {
+  const schedule = (state.backgroundWork?.schedules || []).find((item) => item.taskKind === taskKind);
+  return schedule?.displayName || operationalLabel(taskKind);
+}
+
+function renderBackgroundWork() {
+  const model = state.backgroundWork;
+  if (!model) {
+    $("#backgroundWorkerMetricGrid").innerHTML = empty("Background work is loading.");
+    $("#backgroundWorkerScheduleList").innerHTML = "";
+    $("#backgroundWorkerTaskList").innerHTML = "";
+    $("#backgroundWorkerInstanceList").innerHTML = "";
+    return;
+  }
+  const counts = model.counts || {};
+  const activeProblems = Number(counts.deadLetterTasks || 0) + Number(counts.retryingTasks || 0);
+  const gate = $("#backgroundWorkerGate");
+  gate.textContent = Number(counts.onlineWorkers || 0)
+    ? activeProblems ? `${activeProblems} NEED ATTENTION` : "RUNNING"
+    : "OFFLINE";
+  gate.classList.toggle("danger", activeProblems > 0 || Number(counts.onlineWorkers || 0) === 0);
+  const metrics = [
+    ["Workers online", counts.onlineWorkers, "30-second heartbeat"],
+    ["Schedules", counts.enabledSchedules, `${Number(counts.schedules || 0).toLocaleString()} configured`],
+    ["Waiting", Number(counts.pendingTasks || 0) + Number(counts.retryingTasks || 0), `${Number(counts.retryingTasks || 0).toLocaleString()} retrying`],
+    ["Dead letter", counts.deadLetterTasks, `${Number(counts.succeededTasks || 0).toLocaleString()} completed`]
+  ];
+  $("#backgroundWorkerMetricGrid").innerHTML = metrics.map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong><small>${escapeHtml(note)}</small></article>`).join("");
+  $("#backgroundWorkerScheduleList").innerHTML = (model.schedules || []).length ? model.schedules.map((schedule) => `<article class="card">
+    <div class="card-top"><div><h3>${escapeHtml(schedule.displayName)}</h3><p>${escapeHtml(schedule.description)}</p></div><span class="tag ${schedule.enabled ? "good" : "warning"}">${schedule.enabled ? "enabled" : "paused"}</span></div>
+    <div class="card-meta"><span class="tag">every ${Number(schedule.intervalSeconds).toLocaleString()}s</span><span class="tag">next ${escapeHtml(relativeTime(schedule.nextRunAt))}</span>${schedule.lastEnqueuedAt ? `<span class="tag">last queued ${escapeHtml(relativeTime(schedule.lastEnqueuedAt))}</span>` : ""}</div>
+    <div class="card-actions"><button class="button secondary" data-worker-schedule-run="${escapeHtml(schedule.id)}" type="button" ${model.canManage ? "" : "disabled"}>Run once</button><button class="button ${schedule.enabled ? "danger" : "primary"}" data-worker-schedule-toggle="${escapeHtml(schedule.id)}" type="button" ${model.canManage ? "" : "disabled"}>${schedule.enabled ? "Pause schedule" : "Resume schedule"}</button></div>
+  </article>`).join("") : empty("No background schedules have been initialized yet.");
+  const recentTasks = (model.tasks || []).slice(0, 18);
+  $("#backgroundWorkerTaskList").innerHTML = recentTasks.length ? recentTasks.map((task) => {
+    const kind = task.state === "succeeded" ? "good" : task.state === "dead_letter" ? "bad" : "warning";
+    const results = Object.entries(task.result || {}).slice(0, 8).map(([key, value]) => `<span class="tag">${escapeHtml(operationalLabel(key))}: ${escapeHtml(value)}</span>`).join("");
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(backgroundTaskLabel(task.taskKind))}</h3><p>Attempt ${Number(task.attemptCount)} of ${Number(task.maximumAttempts)} · queued ${escapeHtml(relativeTime(task.createdAt))}</p></div><span class="tag ${kind}">${escapeHtml(String(task.state).replaceAll("_", " "))}</span></div><div class="card-meta">${task.lastErrorCode ? `<span class="tag bad">${escapeHtml(operationalLabel(task.lastErrorCode))}</span>` : ""}${results || '<span class="tag">no sensitive payload</span>'}</div>${task.state === "dead_letter" ? `<div class="card-actions"><button class="button primary" data-worker-task-retry="${escapeHtml(task.id)}" type="button" ${model.canManage ? "" : "disabled"}>Retry safely</button></div>` : ""}</article>`;
+  }).join("") : empty("No background task has run yet.");
+  $("#backgroundWorkerInstanceList").innerHTML = (model.workers || []).length ? model.workers.map((worker) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(worker.runtimeKind.replaceAll("_", " "))}</h3><p>${escapeHtml(worker.workerId)} · version ${escapeHtml(worker.runtimeVersion)}</p></div><span class="tag ${worker.online ? "good" : "warning"}">${worker.online ? "online" : worker.state}</span></div><div class="card-meta"><span class="tag">heartbeat ${escapeHtml(relativeTime(worker.heartbeatAt))}</span>${worker.lastErrorCode ? `<span class="tag warning">${escapeHtml(operationalLabel(worker.lastErrorCode))}</span>` : ""}<span class="tag">operational aggregate</span></div></article>`).join("") : empty("No worker heartbeat has been recorded. Start the local background runtime or inspect its service configuration.");
+}
+
 function adminChangeLabel(value) {
   return String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
@@ -883,7 +926,7 @@ function renderAdminChanges() {
 }
 
 function render() {
-  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts(); renderOperationalTelemetry(); renderAdminChanges();
+  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts(); renderOperationalTelemetry(); renderBackgroundWork(); renderAdminChanges();
 }
 
 async function storeFingerprint(retailerId, localStoreId) {
@@ -959,13 +1002,18 @@ async function loadOperationalTelemetry() {
   state.operationalTelemetry = result.telemetry || null;
 }
 
+async function loadBackgroundWork() {
+  const result = await api("/api/v1/admin/workers");
+  state.backgroundWork = result.backgroundWork || null;
+}
+
 async function loadAdminChanges() {
   state.adminChanges = await api("/api/v1/admin/change-requests?status=all&limit=100");
 }
 
 async function refresh(reloadCollections = true) {
   state.snapshot = await api("/api/v1/admin/snapshot");
-  await Promise.all([loadOperationalTelemetry(), loadAdminChanges()]);
+  await Promise.all([loadOperationalTelemetry(), loadBackgroundWork(), loadAdminChanges()]);
   if (state.snapshot.authorization?.roleAdministrationEnabled === true) {
     const [users, roles] = await Promise.all([
       api("/api/v1/admin/authorization/users"),
@@ -1104,6 +1152,36 @@ document.addEventListener("click", async (event) => {
     if (button.id === "proposeCatalogMergeButton") openCatalogIdentityForm("merge_variants");
     if (button.id === "proposeCatalogSplitButton") openCatalogIdentityForm("split_variant");
     if (button.id === "addOperatorAlertRuleButton") openOperatorAlertRule();
+    if (button.dataset.workerScheduleToggle) {
+      const schedule = (state.backgroundWork?.schedules || []).find((item) => item.id === button.dataset.workerScheduleToggle);
+      if (!schedule) throw new Error("The background schedule is unavailable.");
+      if (!confirm(`${schedule.enabled ? "Pause" : "Resume"} ${schedule.displayName}? This changes maintenance only and cannot authorize a retailer action.`)) return;
+      await api(`/api/v1/admin/workers/schedules/${encodeURIComponent(schedule.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: !schedule.enabled })
+      });
+      await loadBackgroundWork(); renderBackgroundWork();
+      toast(`${schedule.displayName} ${schedule.enabled ? "paused" : "resumed"}.`);
+    }
+    if (button.dataset.workerScheduleRun) {
+      const schedule = (state.backgroundWork?.schedules || []).find((item) => item.id === button.dataset.workerScheduleRun);
+      if (!schedule) throw new Error("The background schedule is unavailable.");
+      await api(`/api/v1/admin/workers/schedules/${encodeURIComponent(schedule.id)}/run`, {
+        method: "POST",
+        body: "{}"
+      });
+      await loadBackgroundWork(); renderBackgroundWork();
+      toast(`${schedule.displayName} queued for one bounded run.`);
+    }
+    if (button.dataset.workerTaskRetry) {
+      if (!confirm("Retry this dead-lettered maintenance task? Attempts restart from zero, and the task still has no retailer mutation authority.")) return;
+      await api(`/api/v1/admin/workers/tasks/${encodeURIComponent(button.dataset.workerTaskRetry)}/retry`, {
+        method: "POST",
+        body: "{}"
+      });
+      await loadBackgroundWork(); renderBackgroundWork();
+      toast("Dead-lettered maintenance task queued for a bounded retry.");
+    }
     if (button.dataset.adminChangeApprove) {
       if (!confirm("Approve this exact protected change? Approval does not apply it; the original operation must still be retried unchanged before expiry.")) return;
       await api(`/api/v1/admin/change-requests/${encodeURIComponent(button.dataset.adminChangeApprove)}/decision`, {

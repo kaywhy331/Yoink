@@ -13,6 +13,7 @@ export interface YoinkConfig {
   webRoot: string;
   releaseRoot: string;
   version: string;
+  backgroundWorkerEnabled: boolean;
   hosted: {
     proxySecret: string;
     allowedHosts: string[];
@@ -45,6 +46,10 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     ? requestedDataDirectory
     : resolve(projectRoot, requestedDataDirectory);
   const hostedRequested = env.YOINK_HOSTED_MODE === "1";
+  const backgroundWorkerValue = String(env.YOINK_BACKGROUND_WORKER ?? "1").trim();
+  if (!["0", "1"].includes(backgroundWorkerValue)) {
+    throw new Error("YOINK_BACKGROUND_WORKER must be 1 (enabled) or 0 (disabled).");
+  }
   const proxySecret = String(env.YOINK_HOSTED_PROXY_SECRET ?? "");
   const allowedHosts = String(env.YOINK_HOSTED_HOSTS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   const allowedOrigins = String(env.YOINK_HOSTED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
@@ -88,6 +93,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     webRoot: join(projectRoot, "apps", "web"),
     releaseRoot: join(projectRoot, "release"),
     version: projectVersion(projectRoot),
+    backgroundWorkerEnabled: backgroundWorkerValue === "1",
     hosted: hostedRequested ? { proxySecret, allowedHosts, allowedOrigins } : null,
     observerRecipeWitness
   };

@@ -410,8 +410,33 @@ cannot silently create an unreviewed export family. The API uses a dedicated
 baseline permission, returns `no-store` JSON with exact length and SHA-256, and
 the user dashboard exposes only inventory counts and the download. This is a
 self-service data-access seam, not full account erasure: identity-provider
-revocation, durable cleanup workers, reconciliation, retention policy, and
-production privacy operations remain deployment work.
+revocation, a deletion-specific workflow on a deployed worker fleet,
+reconciliation, retention policy, and production privacy operations remain
+deployment work.
+
+Yoink 0.34.0 adds a durable local background-work boundary. Migration 34 stores
+closed maintenance schedules, task state, append-only transition events, and
+worker heartbeats. A lease returns a random one-use capability while persisting
+only its task-bound hash; an expired lease is reclaimed with a new capability,
+and the old capability cannot complete the task. Bounded exponential retry ends
+in dead letter, where only `worker.manage` can reset the attempt budget.
+Successful and cancelled runs retain append-only transitions for 30 days before
+the packaged retention handler removes their task graph; unresolved dead letters
+remain visible for operator action.
+
+The packaged handler registry contains exactly five idempotent maintenance
+families: action/spend recovery, notification lease recovery, hosted
+inbox/outbox lease recovery, sanitized adapter-alert reconciliation, and
+operational telemetry retention. Results accept only a small primitive map and
+reject credential, account, URL, product, address, and payment-shaped fields;
+exception text is never persisted. The local server starts this runtime after
+HTTP listen and stops it before closing SQLite, so handler work is not invoked
+from an HTTP request handler. Because it remains in-process with synchronous
+SQLite, a maintenance cycle can still contend briefly for event-loop and
+database time. The permission-gated Operations projection exposes safe
+schedules, counts, dead letters, results, and heartbeats, never lease capability
+hashes. This is an extraction seam for a future standalone PostgreSQL worker
+fleet, not that production deployment.
 
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
@@ -552,6 +577,8 @@ activation writes the exact qualification record.
 - Tenant-scoped transactional outbox events
 - Sanitized, device-attributed retailer shadow observations
 - Durable source-sync runs and per-product receipts
+- Durable background schedules, capability-leased maintenance tasks,
+  append-only task transitions, and worker heartbeats
 
 Private source data is tenant-owned. Exact catalog identities may eventually be
 shared, but no private follow or signal becomes global automatically.
@@ -559,7 +586,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 33. Foreign keys are mandatory.
+numbered; the current schema is migration 34. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 

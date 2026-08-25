@@ -5,6 +5,7 @@ import { CatalogIdentityGovernanceError } from "../../../packages/database/src/c
 import { OperatorAlertError } from "../../../packages/database/src/operator-alert-repository.js";
 import { AdminChangeControlError } from "../../../packages/database/src/admin-change-control-repository.js";
 import { CatalogLinkError } from "../../../packages/database/src/catalog-link-repository.js";
+import { BackgroundTaskError } from "../../../packages/database/src/background-task-repository.js";
 
 export interface ApiErrorPayload {
   error: string;
@@ -55,6 +56,12 @@ export function apiErrorPayload(error: unknown, correlationId: string): { status
     };
   }
   if (error instanceof CatalogLinkError) {
+    return {
+      status: error.status,
+      payload: { error: error.code, message: error.message, correlationId }
+    };
+  }
+  if (error instanceof BackgroundTaskError) {
     return {
       status: error.status,
       payload: { error: error.code, message: error.message, correlationId }

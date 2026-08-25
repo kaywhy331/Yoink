@@ -395,6 +395,71 @@ export class HostedDeliveryRepository {
     return deadLetter ? "dead_letter" : "retry";
   }
 
+  recoverExpiredLeases(now = Date.now()): {
+    inboxRequeued: number;
+    inboxDeadLettered: number;
+    outboxRequeued: number;
+    outboxDeadLettered: number;
+  } {
+    allowedWorker();
+    const scope = currentRequestScope();
+    const timestamp = nowIso(now);
+    return this.db.transaction(() => {
+      const result = { inboxRequeued: 0, inboxDeadLettered: 0, outboxRequeued: 0, outboxDeadLettered: 0 };
+      const inbox = this.db.all<{ id: string; attempt: number }>(
+        `SELECT id, delivery_attempts AS attempt FROM inbox_messages
+         WHERE tenant_id = ? AND user_id = ? AND state = 'processing'
+           AND lease_capability_hash <> '' AND lease_expires_at <> '' AND lease_expires_at <= ?
+         ORDER BY lease_expires_at, id`,
+        scope.tenantId,
+        scope.userId,
+        timestamp
+      );
+      for (const message of inbox) {
+        const deadLetter = Number(message.attempt) >= MAX_DELIVERY_ATTEMPTS;
+        this.db.run(
+          `UPDATE inbox_messages SET state = ?, lease_capability_hash = '', lease_expires_at = '',
+             next_attempt_at = ?, last_error_code = 'lease_expired', updated_at = ?
+           WHERE id = ? AND tenant_id = ? AND user_id = ? AND state = 'processing'`,
+          deadLetter ? "dead_letter" : "failed",
+          deadLetter ? "" : timestamp,
+          timestamp,
+          message.id,
+          scope.tenantId,
+          scope.userId
+        );
+        this.recordReceipt("inbox", message.id, deadLetter ? "dead_letter" : "retry", Number(message.attempt), "lease_expired", now);
+        if (deadLetter) result.inboxDeadLettered += 1;
+        else result.inboxRequeued += 1;
+      }
+      const outbox = this.db.all<{ id: string; attempt: number }>(
+        `SELECT id, delivery_attempts AS attempt FROM outbox_events
+         WHERE tenant_id = ? AND delivery_state = 'pending' AND delivered_at = ''
+           AND lease_capability_hash <> '' AND lease_expires_at <> '' AND lease_expires_at <= ?
+         ORDER BY lease_expires_at, id`,
+        scope.tenantId,
+        timestamp
+      );
+      for (const message of outbox) {
+        const deadLetter = Number(message.attempt) >= MAX_DELIVERY_ATTEMPTS;
+        this.db.run(
+          `UPDATE outbox_events SET delivery_state = ?, lease_capability_hash = '', lease_expires_at = '',
+             next_attempt_at = ?, last_error_code = 'lease_expired', updated_at = ?
+           WHERE id = ? AND tenant_id = ? AND delivery_state = 'pending' AND delivered_at = ''`,
+          deadLetter ? "dead_letter" : "pending",
+          deadLetter ? "" : timestamp,
+          timestamp,
+          message.id,
+          scope.tenantId
+        );
+        this.recordReceipt("outbox", message.id, deadLetter ? "dead_letter" : "retry", Number(message.attempt), "lease_expired", now);
+        if (deadLetter) result.outboxDeadLettered += 1;
+        else result.outboxRequeued += 1;
+      }
+      return result;
+    });
+  }
+
   counts(): { inboxPending: number; inboxProcessed: number; outboxPending: number; outboxDelivered: number } {
     const scope = currentRequestScope();
     const inbox = this.db.get<{ pending: number; processed: number }>(

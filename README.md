@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.33.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.34.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,29 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.34.0 adds a durable local background-work boundary. Migration 34
+stores five closed maintenance schedules, capability-leased tasks, append-only
+transition receipts, and runtime heartbeats. The bundled worker runs outside
+HTTP request handling and performs only idempotent action/spend safety recovery,
+Chrome notification lease recovery, hosted inbox/outbox lease recovery,
+sanitized adapter-alert reconciliation, and operational telemetry retention.
+It cannot create a signal, authorize a retailer action, click an Add control,
+enter checkout, or submit an order.
+
+Task claims use one-use random capabilities whose hashes alone reach SQLite.
+Expired claims receive a new capability, handler failures retry with bounded
+backoff, and exhausted tasks stop in dead letter until an authorized operator
+retries them. Successful and cancelled task history is retained for 30 days
+and pruned by the retention handler; unresolved dead letters are preserved.
+Schedule changes, manual runs, and retries require the new
+`worker.manage` permission and write audit/outbox receipts. The **Operations**
+workspace shows safe counts, results, schedules, task states, and 30-second
+worker heartbeats, with pause/resume, run-once, and retry controls that expose no
+payload or capability material. Two-connection contention, crash recovery,
+tenant isolation, failure redaction, and route authorization are covered by
+automated tests. This is the local modular-monolith seam, not PostgreSQL or a
+deployed production worker fleet, and it widens no retailer capability.
 
 Version 0.33.0 adds a self-service **My data** inventory and a versioned,
 privacy-scoped JSON download. Migration 33 grants the baseline user role a
@@ -32,9 +55,10 @@ a user-ownership edge without an explicit export disposition, and cross-tenant
 fixtures prove another user's records cannot enter the file. Downloads are
 `no-store`, carry an exact byte length and SHA-256 header, and remain separate
 from the full-database operator portability archive. Broader account deletion
-stays visibly closed until production identity revocation and durable cleanup
-workers can prove complete cleanup; existing contribution-specific deletion
-controls are unchanged. No seller, fulfillment, checkout, drawing-entry,
+stays visibly closed until production identity revocation and a deletion-
+specific cleanup/reconciliation workflow on a deployed worker fleet can prove
+complete cleanup; existing contribution-specific deletion controls are
+unchanged. No seller, fulfillment, checkout, drawing-entry,
 payment, or order capability is widened.
 
 Version 0.32.0 adds a five-step, plain-language setup guide to the user
@@ -310,6 +334,13 @@ center is at <http://127.0.0.1:32991/admin>. Either page may be closed after
 setup; the API process and paired Chrome companion continue handling push and
 qualified work. Local data is stored under `data/` unless `YOINK_DATA_DIR`
 points to another explicit directory.
+
+The durable local worker starts with the API and is visible under **Admin →
+Operations → Background work**. Set `YOINK_BACKGROUND_WORKER=0` only for an
+intentional maintenance stop; health then reports `disabled`, schedules and
+queued tasks remain durable, and no task handler runs until the worker is
+re-enabled. This switch does not pause signal intake or retailer actions—use
+the user-facing **Pause Actions** control for the latter.
 
 SQLite migrations are transactional. An existing file is integrity-checked and
 backed up with a `.before-vN.<timestamp>.sqlite` suffix before a pending schema

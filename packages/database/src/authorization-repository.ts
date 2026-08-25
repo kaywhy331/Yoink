@@ -27,6 +27,7 @@ export const AUTHORIZATION_PERMISSIONS = Object.freeze([
   "security.manage",
   "user.lifecycle.manage",
   "alert.manage",
+  "worker.manage",
   "change.approve",
   "internal.delivery",
   "internal.principal",

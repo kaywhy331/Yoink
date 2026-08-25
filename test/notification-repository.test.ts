@@ -100,3 +100,39 @@ test("notification delivery refuses devices that did not declare the notificatio
     db.close();
   }
 });
+
+test("abandoned notification leases are requeued or failed by bounded background recovery", () => {
+  const { db, device } = notificationFixture();
+  try {
+    const notifications = new NotificationRepository(db);
+    db.run("UPDATE action_jobs SET expires_at = ?", new Date(NOW + 86_400_000).toISOString());
+    const first = notifications.leaseNext(device.id, NOW + 200);
+    assert.equal(first.reason, "leased");
+    if (first.reason !== "leased") return;
+    assert.deepEqual(notifications.recoverExpired(NOW + 60_201), {
+      expiredNotifications: 0,
+      requeuedLeases: 1,
+      failedLeases: 0
+    });
+    assert.throws(
+      () => notifications.acknowledge(device.id, first.notification.id, first.notification.capabilityToken, "delivered", "", NOW + 60_202),
+      /invalid/
+    );
+    const second = notifications.leaseNext(device.id, NOW + 60_203);
+    assert.equal(second.reason, "leased");
+    if (second.reason !== "leased") return;
+    db.run(
+      "UPDATE notification_deliveries SET attempts = 3, lease_expires_at = ? WHERE id = ?",
+      new Date(NOW + 60_204).toISOString(),
+      second.notification.id
+    );
+    assert.deepEqual(notifications.recoverExpired(NOW + 60_205), {
+      expiredNotifications: 0,
+      requeuedLeases: 0,
+      failedLeases: 1
+    });
+    assert.equal(notifications.listRecent()[0]?.state, "failed");
+  } finally {
+    db.close();
+  }
+});
