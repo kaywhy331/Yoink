@@ -84,5 +84,6 @@ does not hide an online mismatched worker.
 The contract catches accidental version, task-registry, public witness, and
 public alert-registry drift in this SQLite process layout. Production still needs
 signed artifact provenance, workload identity, managed secret retrieval and rotation,
-PostgreSQL roles and row isolation, fleet-safe leases, deployment orchestration,
+active PostgreSQL roles and row isolation, deployment of the natively qualified
+lease algorithm across a supervised fleet, deployment orchestration,
 independent monitoring, and tested rollback/outage procedures.

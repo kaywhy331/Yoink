@@ -1,6 +1,6 @@
 {
   "name": "yoink",
-  "version": "0.58.0",
+  "version": "0.59.0",
   "private": true,
   "type": "module",
   "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",
@@ -14,6 +14,7 @@
     "start:worker": "node dist/apps/worker/src/server.js",
     "check": "tsc -p tsconfig.json",
     "test": "node --import tsx --test test/*.test.ts",
+    "test:postgres:native": "node --import tsx --test test/postgres-native.test.ts",
     "verify": "npm run check && npm run build && npm test",
     "package:extension": "npm run build:extension && node scripts/package-extension.mjs",
     "package:extension:production": "npm run build:extension && node scripts/package-extension.mjs --profile=production",
@@ -29,6 +30,7 @@
     "@electric-sql/pglite": "^0.5.7",
     "@types/node": "^22.15.0",
     "@types/pg": "^8.23.1",
+    "embedded-postgres": "16.14.0-beta.17",
     "esbuild": "^0.28.2",
     "jsdom": "^26.1.0",
     "tsx": "^4.20.0",

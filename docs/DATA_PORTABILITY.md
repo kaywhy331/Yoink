@@ -6,7 +6,9 @@ qualification importer that consumes the same contract, creates a new private
 schema atomically, and reconciles every table exactly. Yoink 0.57 completes the
 tenant-ownership policy manifest and adds the qualification-only PostgreSQL
 worker-store port. Yoink 0.58 adds five inactive exact read-role templates and
-live-catalog drift verification. The runtime API and worker remain SQLite-only.
+live-catalog drift verification. Yoink 0.59 adds a native PostgreSQL 16
+three-session worker-lease contention proof. The runtime API and worker remain
+SQLite-only.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -94,8 +96,10 @@ primary/not-null/foreign-key/index/default/check/trigger translation, complete
 table-scope classification, direct and inherited tenant RLS, mixed-source
 fail-closed behavior, tamper closure, and the same canonical table/data
 reconciliation. A qualification-only asynchronous worker store also exercises
-the queue state machine and single-connection `SKIP LOCKED` path on that inert
-schema.
+the queue state machine on that inert schema. The native qualification suite
+uses two independent production-driver worker pools plus a third lock-holder
+session to prove `SKIP LOCKED` distribution, an exact-one-winner race, and
+one-use completion capabilities.
 The optional role qualifier then divides 94 portable tables into five exact
 read-only group roles and leaves the unresolved incident table inaccessible.
 It creates no login, membership, write role, tenant-session binding, or runtime
@@ -106,9 +110,9 @@ readiness are false.
 
 A production cutover must still add PostgreSQL task handlers and request
 repositories, authenticated runtime login/session binding and write roles,
-governed mixed/incident access, independent fleet lease
-contention, production identity, backup/PITR and restore, outage/load testing,
-and controlled authority-switch evidence. It must quiesce SQLite, load
+governed mixed/incident access, deployed worker-fleet and handler replay proof,
+production identity, backup/PITR and restore, outage/load testing, and
+controlled authority-switch evidence. It must quiesce SQLite, load
 PostgreSQL once, reconcile, and switch authority once. Dual writes remain
 rejected because they create two competing transaction authorities.
 

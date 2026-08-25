@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.58 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.59 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -37,10 +37,13 @@ The importer re-verifies the file after streaming, so a file changed between
 the initial check and the final row does not produce a committed schema. A
 failed import rolls back the new schema and receipt atomically.
 
-Cutover contract v2 changes the schema manifest, receipt, and tenant-policy
-surface. A schema created by contract v1 remains historical qualification
-evidence only. Never upgrade, alter, or reuse it; export again and import into a
-new schema with the current build.
+Cutover contract v3 adds release-level native multi-session worker-lease
+qualification to the receipt and capability projection. The relational schema
+manifest remains contract v2 with the same fingerprint because the tables,
+policies, and translated invariants did not change. A schema created by cutover
+contract v1 or v2 remains historical qualification evidence only. Never
+upgrade, alter, or reuse it; export again and import into a new schema with the
+current build.
 
 ## Worker-store qualification seam
 
@@ -62,8 +65,39 @@ Automated real-engine tests cover:
 This class is not imported by the API or standalone worker entry points. It
 cannot flip receipt authority, cannot enable dual writes, and does not give the
 PostgreSQL process any retailer-session capability. The task handlers still use
-SQLite repositories. Single-connection state-machine semantics are proven;
-independent multi-connection contention is not.
+SQLite repositories. The emulated real-semantics suite continues to prove the
+complete store state machine; the separate native suite now proves the
+contention-critical path across independent server sessions.
+
+## Native lease-contention qualification
+
+Version 0.59 pins an isolated PostgreSQL 16 test server and runs it inside the
+ordinary release suite. The production `NodePostgresCutoverDatabase` driver
+imports the complete fixture archive, applies and verifies the read roles, and
+then uses two independent one-connection worker pools plus a third lock-holder
+connection. The test requires three distinct `pg_backend_pid()` values and the
+exact qualification `application_name` before exercising work.
+
+The lock holder takes the highest-priority task row. A second worker must skip
+that row with `FOR UPDATE SKIP LOCKED`, lease and complete the next task, then
+observe no additional work until the lock is released. The released task is
+leased exactly once; an invalid capability is denied and its correct ephemeral
+capability succeeds once. A simultaneous two-worker race for a third task must
+have exactly one winner. Final rows must all be succeeded on attempt one with
+capability hashes erased and exactly one `leased` plus one `succeeded` event per
+task.
+
+Run the focused proof with:
+
+```bash
+npm run test:postgres:native
+```
+
+The server is loopback-only, mutation-isolated, configured for test durability,
+and deleted after success or failure. This proves the queue algorithm and
+production driver against native PostgreSQL; it does not deploy independent
+worker processes, execute task handlers, measure production load/outage
+behavior, or establish runtime authority.
 
 ## Restricted read-role qualification seam
 
@@ -98,7 +132,7 @@ qualify write transactions before any role becomes active.
 Plan the exact role namespace without a database connection:
 
 ```bash
-npm run postgres:roles -- plan yoink_cutover_qualification yoink_q_058
+npm run postgres:roles -- plan yoink_cutover_qualification yoink_q_059
 ```
 
 After the exact current cutover receipt is verified, apply once with the
@@ -106,13 +140,13 @@ qualification/control role and an explicit acknowledgement:
 
 ```bash
 YOINK_POSTGRES_ROLE_QUALIFICATION_ACK=read-only-qualification \
-  npm run postgres:roles -- apply yoink_cutover_qualification yoink_q_058
+  npm run postgres:roles -- apply yoink_cutover_qualification yoink_q_059
 ```
 
 Then re-inspect the live catalogs and immutable receipt:
 
 ```bash
-npm run postgres:roles -- verify yoink_cutover_qualification yoink_q_058
+npm run postgres:roles -- verify yoink_cutover_qualification yoink_q_059
 ```
 
 Role names are cluster-global. The command rejects an existing role or receipt
@@ -227,8 +261,8 @@ The admin Operations projection lists these as required, not complete:
 - independently authenticated login/session binding and restricted write roles,
   plus governed semantics for mixed source-less offers and the unresolved
   incident table; the five read-only group-role templates remain inactive;
-- real multi-connection `SKIP LOCKED` lease contention, idempotent replay,
-  isolation, load, and outage drills;
+- deployed multi-process worker isolation, task-handler idempotent replay,
+  sustained load, connection-failure, failover, and outage drills;
 - encrypted backups, PITR, restore/reconcile drills, and rollback evidence;
 - production TLS ingress, IdP/device risk, workload identity, managed secrets,
   monitoring, paging, and signed deployment artifacts; and

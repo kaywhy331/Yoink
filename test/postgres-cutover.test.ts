@@ -1,16 +1,12 @@
 import assert from "node:assert/strict";
 import {
-  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { SqliteBackgroundWorkerStore } from "../packages/database/src/background-worker-store.js";
-import { YoinkDatabase } from "../packages/database/src/database.js";
 import { PostgresBackgroundWorkerQualificationStore } from "../packages/database/src/postgres-background-worker-store.js";
 import {
   POSTGRES_RUNTIME_READ_ROLE_CONTRACT_VERSION,
@@ -19,8 +15,8 @@ import {
   postgresRuntimeReadRoleCapabilityProjection,
   verifyPostgresRuntimeReadRoles
 } from "../packages/database/src/postgres-runtime-roles.js";
-import { exportPortabilityArchive } from "../packages/database/src/portability.js";
 import {
+  NodePostgresCutoverDatabase,
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   importPostgresCutoverArchive,
   inspectPostgresCutoverPreflight,
@@ -30,10 +26,16 @@ import {
   type PostgresQueryResult,
   type PostgresQuerySession
 } from "../packages/database/src/postgres-cutover.js";
-import { buildPostgresSchemaManifest } from "../packages/database/src/postgres-schema-manifest.js";
+import {
+  POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION,
+  buildPostgresSchemaManifest
+} from "../packages/database/src/postgres-schema-manifest.js";
+import {
+  POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
+  POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
+  createPostgresCutoverFixture
+} from "./support/postgres-cutover-fixture.js";
 
-const WORKER_FINGERPRINT = "d".repeat(64);
-const WORKER_VERSION = "postgres-worker-test";
 const WORKER_NOW = new Date("2026-08-25T15:00:00.000Z").getTime();
 
 class PgliteCutoverDatabase implements PostgresCutoverDatabase {
@@ -60,157 +62,11 @@ class PgliteCutoverDatabase implements PostgresCutoverDatabase {
   }
 }
 
-function fixture(): {
-  directory: string;
-  sourcePath: string;
-  archivePath: string;
-} {
-  const directory = mkdtempSync(join(tmpdir(), "yoink-postgres-cutover-"));
-  const sourcePath = join(directory, "source.sqlite");
-  const archivePath = join(directory, "snapshot.yoink.ndjson");
-  const source = new YoinkDatabase(sourcePath);
-  try {
-    source.run(
-      "INSERT INTO tenants(id, name, created_at) VALUES (?, ?, ?)",
-      "tenant_cutover_other",
-      "Other cutover tenant",
-      "2026-08-25T12:00:00.000Z"
-    );
-    source.run(
-      "INSERT INTO users(id, tenant_id, display_name, created_at) VALUES (?, ?, ?, ?)",
-      "user_cutover_other",
-      "tenant_cutover_other",
-      "Other cutover user",
-      "2026-08-25T12:00:00.000Z"
-    );
-    source.run(
-      "INSERT INTO app_settings(user_id, updated_at) VALUES (?, ?)",
-      "user_cutover_other",
-      "2026-08-25T12:00:00.000Z"
-    );
-    source.run(
-      `INSERT INTO source_connections(
-         id, tenant_id, user_id, source, name, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      "source_cutover_other",
-      "tenant_cutover_other",
-      "user_cutover_other",
-      "fixture",
-      "PostgreSQL fixture",
-      "2026-08-25T12:00:00.000Z",
-      "2026-08-25T12:00:00.000Z"
-    );
-    source.run(
-      "INSERT INTO product_families(id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-      "family_cutover_scope",
-      "Cutover scope family",
-      "2026-08-25T12:00:00.000Z",
-      "2026-08-25T12:00:00.000Z"
-    );
-    source.run(
-      "INSERT INTO variants(id, family_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-      "variant_cutover_scope",
-      "family_cutover_scope",
-      "Cutover scope variant",
-      "2026-08-25T12:00:00.000Z",
-      "2026-08-25T12:00:00.000Z"
-    );
-    source.run(
-      `INSERT INTO listings(
-         id, variant_id, retailer_id, retailer_sku, canonical_url, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      "listing_cutover_scope",
-      "variant_cutover_scope",
-      "target",
-      "cutover-scope-sku",
-      "https://www.target.com/p/-/A-cutover-scope-sku",
-      "2026-08-25T12:00:00.000Z",
-      "2026-08-25T12:00:00.000Z"
-    );
-    for (const [id, tenantId, userId] of [
-      ["mission_cutover_local", "tenant_local", "user_local"],
-      ["mission_cutover_other", "tenant_cutover_other", "user_cutover_other"]
-    ] as const) {
-      source.run(
-        `INSERT INTO missions(id, tenant_id, user_id, variant_id, created_at, updated_at)
-         VALUES (?, ?, ?, 'variant_cutover_scope', ?, ?)`,
-        id,
-        tenantId,
-        userId,
-        "2026-08-25T12:00:00.000Z",
-        "2026-08-25T12:00:00.000Z"
-      );
-    }
-    source.run(
-      `INSERT INTO signal_events(
-         id, tenant_id, user_id, source_connection_id, signal_id,
-         external_event_id, transport_hash, schema_version, source, event_type,
-         observed_at, received_at, identity_json, offer_json, evidence_json,
-         parser_version, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'fixture', 'restock', ?, ?, '{}', '{}', '{}', 'fixture-v1', ?)`,
-      "signal_cutover_other",
-      "tenant_cutover_other",
-      "user_cutover_other",
-      "source_cutover_other",
-      "signal-cutover-other",
-      "external-cutover-other",
-      "transport-cutover-other",
-      "2026-08-25T12:00:00.000Z",
-      "2026-08-25T12:00:00.000Z",
-      "2026-08-25T12:00:00.000Z"
-    );
-    source.run(
-      `INSERT INTO offer_observations(
-         id, listing_id, source_connection_id, availability, observed_at, created_at
-       ) VALUES (?, 'listing_cutover_scope', ?, 'in_stock', ?, ?)`,
-      "offer_cutover_other",
-      "source_cutover_other",
-      "2026-08-25T12:00:00.000Z",
-      "2026-08-25T12:00:00.000Z"
-    );
-    source.run(
-      `INSERT INTO offer_observations(
-         id, listing_id, source_connection_id, availability, observed_at, created_at
-       ) VALUES (?, 'listing_cutover_scope', NULL, 'unknown', ?, ?)`,
-      "offer_cutover_shared",
-      "2026-08-25T12:00:00.000Z",
-      "2026-08-25T12:00:00.000Z"
-    );
-    for (let index = 0; index < 520; index += 1) {
-      source.run(
-        `INSERT INTO audit_events(
-           id, tenant_id, user_id, correlation_id, event_type,
-           reason_code, message, data_json, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        `audit_cutover_${index.toString().padStart(4, "0")}`,
-        "tenant_cutover_other",
-        "user_cutover_other",
-        `correlation_cutover_${index}`,
-        "postgres_cutover_fixture",
-        "fixture",
-        `Cutover event ${index}`,
-        JSON.stringify({ index, bounded: true }),
-        "2026-08-25T12:00:00.000Z"
-      );
-    }
-    new SqliteBackgroundWorkerStore(source).configureDeploymentExpectation(
-      "external",
-      WORKER_FINGERPRINT,
-      WORKER_VERSION,
-      new Date("2026-08-25T12:30:00.000Z").getTime()
-    );
-    exportPortabilityArchive(source, archivePath, "2026-08-25T13:00:00.000Z");
-  } finally {
-    source.close();
-  }
-  return { directory, sourcePath, archivePath };
-}
-
 test("the PostgreSQL cutover manifest covers every current invariant family deterministically", () => {
   const first = buildPostgresSchemaManifest();
   const second = buildPostgresSchemaManifest();
   assert.deepEqual(second, first);
-  assert.equal(first.contractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(first.contractVersion, POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION);
   assert.equal(first.tableCount, 95);
   assert.equal(first.foreignKeyCount, 243);
   assert.equal(first.indexCount, 177);
@@ -254,7 +110,7 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.match(readRoles.fingerprint, /^[a-f0-9]{64}$/);
   assert.deepEqual(postgresRuntimeReadRoleCapabilityProjection(), {
     contractVersion: 1,
-    cutoverContractVersion: 2,
+    cutoverContractVersion: POSTGRES_CUTOVER_CONTRACT_VERSION,
     deterministicManifestImplemented: true,
     atomicQualificationApplyImplemented: true,
     exactGrantVerificationImplemented: true,
@@ -286,7 +142,7 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
 });
 
 test("one verified archive imports atomically into real PostgreSQL semantics and reconciles exactly", async () => {
-  const paths = fixture();
+  const paths = createPostgresCutoverFixture();
   const postgres = new PgliteCutoverDatabase();
   try {
     const preflight = await inspectPostgresCutoverPreflight(postgres);
@@ -317,6 +173,10 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     assert.equal(imported.receipt.qualification.postgresAsyncWorkerStoreImplemented, true);
     assert.equal(imported.receipt.qualification.postgresAsyncWorkerStoreContractParity, true);
     assert.equal(imported.receipt.qualification.singleConnectionWorkerLeaseSemanticsQualified, true);
+    assert.equal(imported.receipt.qualification.nativePostgresQualificationSuite, true);
+    assert.equal(imported.receipt.qualification.nativePostgresMajorVersion, 16);
+    assert.equal(imported.receipt.qualification.independentBackendSessionCount, 3);
+    assert.equal(imported.receipt.qualification.fleetLeaseContentionQualified, true);
     assert.equal(imported.receipt.qualification.postgresBackgroundHandlerParity, false);
     assert.equal(imported.receipt.qualification.checkConstraintParity, true);
     assert.equal(imported.receipt.qualification.triggerParity, true);
@@ -345,7 +205,9 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
       tenantPredicatesApplied: true,
       skipLockedLeaseImplemented: true,
       singleConnectionSemanticsQualified: true,
-      multiConnectionContentionQualified: false,
+      nativePostgresQualificationSuite: true,
+      independentBackendSessionCount: 3,
+      multiConnectionContentionQualified: true,
       handlerRepositoryParity: false,
       runtimeAuthority: false
     });
@@ -872,7 +734,7 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
 });
 
 test("corruption and reused schemas fail closed without replacing a verified cutover receipt", async () => {
-  const paths = fixture();
+  const paths = createPostgresCutoverFixture();
   const postgres = new PgliteCutoverDatabase();
   try {
     const imported = await importPostgresCutoverArchive(postgres, paths.archivePath, "yoink_cutover_guard");
@@ -934,4 +796,27 @@ test("PostgreSQL connection configuration keeps TLS explicit and loopback-only e
     /TLS policy/
   );
   assert.throws(() => loadPostgresCutoverConnectionConfig({}), /YOINK_POSTGRES_URL/);
+});
+
+test("PostgreSQL qualification pools accept only bounded connection counts and application names", async () => {
+  const config = {
+    connectionString: "postgresql://yoink@127.0.0.1/yoink",
+    tlsMode: "local-insecure" as const,
+    certificateAuthorityPem: ""
+  };
+  assert.throws(
+    () => new NodePostgresCutoverDatabase(config, { maxConnections: 3 as 1 }),
+    /qualification options/
+  );
+  assert.throws(
+    () => new NodePostgresCutoverDatabase(config, {
+      applicationName: "unbounded_client" as "yoink_postgres_cutover"
+    }),
+    /qualification options/
+  );
+  const bounded = new NodePostgresCutoverDatabase(config, {
+    maxConnections: 1,
+    applicationName: "yoink_postgres_fleet_qualification"
+  });
+  await bounded.close();
 });

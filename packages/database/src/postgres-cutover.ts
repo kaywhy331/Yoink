@@ -24,7 +24,7 @@ import {
   type PostgresTableSchemaDescriptor
 } from "./postgres-schema-manifest.js";
 
-export const POSTGRES_CUTOVER_CONTRACT_VERSION = 2;
+export const POSTGRES_CUTOVER_CONTRACT_VERSION = 3;
 export const POSTGRES_CUTOVER_MINIMUM_MAJOR_VERSION = 15;
 export const POSTGRES_CUTOVER_DEFAULT_SCHEMA = "yoink_cutover";
 
@@ -34,6 +34,11 @@ export interface PostgresCutoverConnectionConfig {
   connectionString: string;
   tlsMode: PostgresCutoverTlsMode;
   certificateAuthorityPem: string;
+}
+
+export interface NodePostgresCutoverDatabaseOptions {
+  maxConnections?: 1 | 2;
+  applicationName?: "yoink_postgres_cutover" | "yoink_postgres_fleet_qualification";
 }
 
 export interface PostgresQueryResult<T extends Record<string, unknown> = Record<string, unknown>> {
@@ -83,9 +88,12 @@ export interface PostgresCutoverQualification {
   postgresAsyncWorkerStoreImplemented: true;
   postgresAsyncWorkerStoreContractParity: true;
   singleConnectionWorkerLeaseSemanticsQualified: true;
+  nativePostgresQualificationSuite: true;
+  nativePostgresMajorVersion: 16;
+  independentBackendSessionCount: 3;
   postgresBackgroundHandlerParity: false;
   asyncRuntimeRepositoryParity: false;
-  fleetLeaseContentionQualified: false;
+  fleetLeaseContentionQualified: true;
   backupRestoreQualified: false;
   productionIdentityQualified: false;
   runtimeAuthority: false;
@@ -156,9 +164,12 @@ export interface PostgresCutoverCapabilityProjection {
   postgresAsyncWorkerStoreImplemented: true;
   postgresAsyncWorkerStoreContractParity: true;
   singleConnectionWorkerLeaseSemanticsQualified: true;
+  nativePostgresQualificationSuite: true;
+  nativePostgresMajorVersion: 16;
+  independentBackendSessionCount: 3;
   postgresBackgroundHandlerParity: false;
   asyncRuntimeRepositoryParity: false;
-  fleetLeaseContentionQualified: false;
+  fleetLeaseContentionQualified: true;
   backupRestoreQualified: false;
   schemaManifestFingerprint: string;
 }
@@ -488,9 +499,12 @@ function receiptQualification(): PostgresCutoverQualification {
     postgresAsyncWorkerStoreImplemented: true,
     postgresAsyncWorkerStoreContractParity: true,
     singleConnectionWorkerLeaseSemanticsQualified: true,
+    nativePostgresQualificationSuite: true,
+    nativePostgresMajorVersion: 16,
+    independentBackendSessionCount: 3,
     postgresBackgroundHandlerParity: false,
     asyncRuntimeRepositoryParity: false,
-    fleetLeaseContentionQualified: false,
+    fleetLeaseContentionQualified: true,
     backupRestoreQualified: false,
     productionIdentityQualified: false,
     runtimeAuthority: false,
@@ -538,9 +552,12 @@ export function postgresCutoverCapabilityProjection(): PostgresCutoverCapability
     postgresAsyncWorkerStoreImplemented: true,
     postgresAsyncWorkerStoreContractParity: true,
     singleConnectionWorkerLeaseSemanticsQualified: true,
+    nativePostgresQualificationSuite: true,
+    nativePostgresMajorVersion: 16,
+    independentBackendSessionCount: 3,
     postgresBackgroundHandlerParity: false,
     asyncRuntimeRepositoryParity: false,
-    fleetLeaseContentionQualified: false,
+    fleetLeaseContentionQualified: true,
     backupRestoreQualified: false,
     schemaManifestFingerprint: manifest.fingerprint
   });
@@ -623,15 +640,25 @@ export function loadPostgresCutoverConnectionConfig(
 export class NodePostgresCutoverDatabase implements PostgresCutoverDatabase {
   private readonly pool: Pool;
 
-  constructor(config: PostgresCutoverConnectionConfig) {
+  constructor(
+    config: PostgresCutoverConnectionConfig,
+    options: NodePostgresCutoverDatabaseOptions = {}
+  ) {
+    const maxConnections = options.maxConnections ?? 2;
+    const applicationName = options.applicationName ?? "yoink_postgres_cutover";
+    if (!(maxConnections === 1 || maxConnections === 2)
+      || !(applicationName === "yoink_postgres_cutover"
+        || applicationName === "yoink_postgres_fleet_qualification")) {
+      throw new Error("The PostgreSQL connection-pool qualification options are invalid.");
+    }
     const base: PoolConfig = {
       connectionString: config.connectionString,
-      max: 2,
+      max: maxConnections,
       connectionTimeoutMillis: 10_000,
       idleTimeoutMillis: 10_000,
       maxLifetimeSeconds: 300,
       statement_timeout: 120_000,
-      application_name: "yoink_postgres_cutover"
+      application_name: applicationName
     };
     this.pool = new Pool(config.tlsMode === "verify-full" ? {
       ...base,

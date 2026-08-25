@@ -252,9 +252,12 @@ complete PostgreSQL worker-store port on an inert imported schema, including
 direct/inherited tenant isolation and single-connection `SKIP LOCKED` queue
 semantics. Version 0.58 qualifies five inactive least-privilege read group
 roles but creates no runtime login, membership, tenant-session binding, or write
-role. Production still requires PostgreSQL task-handler repositories,
-runtime identity/session and write-role integration, independent multi-
-connection fleet contention,
+role. Version 0.59 additionally proves `SKIP LOCKED` distribution, an exact-one-
+winner lease race, and one-use completion across three distinct native
+PostgreSQL 16 backend sessions using the production driver. Production still
+requires PostgreSQL task-handler repositories, runtime identity/session and
+write-role integration, a deployed multi-process worker fleet with handler
+replay and failure testing,
 production identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode
 or the qualification store as a production worker fleet.

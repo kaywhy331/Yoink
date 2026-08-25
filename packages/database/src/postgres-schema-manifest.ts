@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { canonicalPortabilityJson } from "./portability.js";
 import { YoinkDatabase } from "./database.js";
 
+export const POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION = 2;
+
 export interface PostgresForeignKeyColumn {
   from: string;
   to: string;
@@ -73,7 +75,7 @@ export interface PostgresTableSchemaDescriptor {
 }
 
 export interface PostgresSchemaManifest {
-  contractVersion: 2;
+  contractVersion: typeof POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION;
   tableCount: number;
   foreignKeyCount: number;
   indexCount: number;
@@ -479,7 +481,7 @@ export function buildPostgresSchemaManifest(): PostgresSchemaManifest {
     }
     const directTenantTableCount = tables.filter((table) => table.directTenantScope).length;
     const withoutFingerprint: Omit<PostgresSchemaManifest, "fingerprint"> = {
-      contractVersion: 2,
+      contractVersion: POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION,
       tableCount: tables.length,
       foreignKeyCount: tables.reduce((count, table) => count + table.foreignKeys.length, 0),
       indexCount: tables.reduce((count, table) => count + table.indexes.length, 0),

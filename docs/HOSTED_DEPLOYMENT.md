@@ -348,8 +348,10 @@ false. See [Data portability and recovery](DATA_PORTABILITY.md) and the
 
 PostgreSQL must still be delivered as async repository implementations with
 transactional equivalents for every domain operation, inherited tenant-scope
-policies, restricted runtime roles, fleet lease-contention tests, PostgreSQL
-backup/PITR and restore drills, and a controlled cutover. Until that runtime is
+policies, active restricted runtime roles, deployed worker-fleet load/outage
+and handler-replay drills, PostgreSQL backup/PITR and restore drills, and a
+controlled cutover. Version 0.59 proves the lease algorithm across three native
+PostgreSQL 16 backend sessions, but does not deploy that runtime. Until it is
 provisioned and verified, SQLite is the source of truth and hosted boundary
 mode is suitable for integration/staging—not a claim of completed production
 hosting.

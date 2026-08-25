@@ -83,7 +83,9 @@ export interface PostgresBackgroundWorkerStoreQualification {
   tenantPredicatesApplied: true;
   skipLockedLeaseImplemented: true;
   singleConnectionSemanticsQualified: true;
-  multiConnectionContentionQualified: false;
+  nativePostgresQualificationSuite: true;
+  independentBackendSessionCount: 3;
+  multiConnectionContentionQualified: true;
   handlerRepositoryParity: false;
   runtimeAuthority: false;
 }
@@ -346,7 +348,9 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
       tenantPredicatesApplied: true,
       skipLockedLeaseImplemented: true,
       singleConnectionSemanticsQualified: true,
-      multiConnectionContentionQualified: false,
+      nativePostgresQualificationSuite: true,
+      independentBackendSessionCount: 3,
+      multiConnectionContentionQualified: true,
       handlerRepositoryParity: false,
       runtimeAuthority: false
     };

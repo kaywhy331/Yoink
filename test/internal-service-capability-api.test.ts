@@ -123,7 +123,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /PostgreSQL worker-store contract/);
     assert.match(cutoverText, /Least-privilege read roles/);
     assert.match(cutoverText, /5 NOLOGIN roles hold 94 exact SELECT grants/);
-    assert.match(cutoverText, /Runtime repository and fleet proof/);
+    assert.match(cutoverText, /Native multi-session lease contention/);
+    assert.match(cutoverText, /3 independent PostgreSQL 16 backend sessions/);
+    assert.match(cutoverText, /Runtime repositories and deployment drills/);
     assert.match(cutoverText, /Exact logical reconciliation/);
     assert.match(cutoverText, /Production authority/);
     assert.match(cutoverText, /required/);

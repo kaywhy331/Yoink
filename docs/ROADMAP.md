@@ -1,6 +1,33 @@
 # Yoink roadmap
 
-## Shipped through 0.58.0
+## Shipped through 0.59.0
+
+### Native PostgreSQL worker-lease contention qualification (0.59.0)
+
+- A hermetic PostgreSQL 16 server now runs as part of the release test suite;
+  its native binary dependency is exact-lockfile pinned and the isolated
+  cluster is removed after every pass or failure
+- The production `pg` cutover driver imports the complete verified portability
+  archive, applies and verifies the five restricted read-role templates, then
+  opens two independently bounded worker pools plus a third lock-holder session.
+  Exact server backend PIDs and the qualification application name prove these
+  are distinct native sessions rather than one emulated connection
+- One session locks the highest-priority task while another must skip it and
+  lease the next task. Releasing the lock exposes the original task; a separate
+  simultaneous two-worker race yields exactly one winner. Invalid completion
+  capability, attempt count, capability erasure, and one leased/one succeeded
+  event per task are all asserted
+- Cutover contract v3 records the release-level native proof and reports three
+  PostgreSQL 16 backend sessions. The relational schema manifest deliberately
+  remains contract v2 with the same fingerprint because no table, policy, or
+  translated invariant changed
+- This closes the native queue-contention qualification gap only. The API and
+  worker remain SQLite-backed; PostgreSQL request/task-handler repositories,
+  authenticated login/session binding and write roles, production fleet/load/
+  outage and idempotent-handler drills, backup/PITR, and authority switch remain
+  required. Retailer evidence and action authorization are unchanged
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### PostgreSQL least-privilege read-role qualification (0.58.0)
 
@@ -1393,9 +1420,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.58.0
+## Architecture assessment after 0.59.0
 
-Yoink 0.58.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.59.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1408,7 +1435,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete table-scope classification, direct/inherited forced-RLS qualification, a complete qualification-only asynchronous worker store, five exact inactive least-privilege read-role templates with immutable receipt, and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | No PostgreSQL handler/request repository family, authenticated runtime login/tenant-session binding, restricted write roles, governed mixed shared-offer/incident access, independent multi-connection fleet proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
+| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete table-scope classification, direct/inherited forced-RLS qualification, a complete qualification-only asynchronous worker store, five exact inactive least-privilege read-role templates with immutable receipt, a native PostgreSQL 16 three-session lease-contention proof, and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | No PostgreSQL handler/request repository family, authenticated runtime login/tenant-session binding, restricted write roles, governed mixed shared-offer/incident access, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -1606,17 +1633,20 @@ cannot become runtime authority. Version 0.58 derives five isolated read-only
 group-role templates from those classifications and proves their exact grants,
 cross-role denial, and drift detection. It creates no login or membership and
 does not solve authenticated tenant-session binding, write-role parity, mixed
-shared-offer access, or the unresolved incident table. None of these releases
-turns
-the SQLite process into a production fleet or proves signed artifact/workload
+shared-offer access, or the unresolved incident table. Version 0.59 runs the
+production driver against a hermetic native PostgreSQL 16 server and proves the
+worker lease algorithm across three distinct backend sessions, including
+locked-row skipping and an exact-one-winner race. It is test qualification, not
+a deployed production fleet or handler/repository port. None of these releases
+turns the SQLite process into a production fleet or proves signed artifact/workload
 identity.
 
 - Implement PostgreSQL task-handler and request-repository families over the
   qualified schema, add authenticated login/session binding and restricted
   write roles around the qualified read-role classes, resolve the remaining
   incident and mixed/shared access semantics, and pass transactional/isolation
-  parity, real multi-
-  connection lease contention, idempotent replay, and no-dual-write tests
+  parity, deployed multi-process lease/load/outage drills, idempotent handler
+  replay, and no-dual-write tests
 - Add production IdP sessions, lifecycle/provisioning, TLS ingress, CSRF/session
   protection, secrets management, encryption, production retention/deletion,
   backups/PITR, restore drills, load tests, SLOs, and on-call alerting

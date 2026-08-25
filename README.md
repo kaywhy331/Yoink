@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.58.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.59.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,7 +15,22 @@ new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
 
-Version 0.58.0 adds a deterministic, qualification-only PostgreSQL read-role
+Version 0.59.0 adds a hermetic native PostgreSQL 16 qualification suite for the
+asynchronous worker queue. After importing the complete verified archive and
+applying the restricted read-role contract through the production `pg` driver,
+three distinct server backend sessions prove locked-row skipping, delivery of
+the next eligible task, an exact-one-winner two-worker race, one-use capability
+completion, and invalid-capability denial. The test runs inside `npm test` and
+can be invoked alone with `npm run test:postgres:native`.
+
+Cutover contract v3 records this release-level proof while the unchanged schema
+manifest remains at v2. This is qualification evidence, not a deployed worker
+fleet: PostgreSQL request/task-handler repositories, authenticated runtime
+session and write roles, idempotent handler replay, production load/outage,
+backup/PITR, and authority-switch drills remain closed. SQLite remains the sole
+runtime source of truth.
+
+Version 0.58.0 added a deterministic, qualification-only PostgreSQL read-role
 boundary over the table classifications completed in 0.57. Five fresh
 `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` roles receive 94 exact `SELECT` grants:
 82 tenant-RLS tables, six shared-catalog tables, three authorization-catalog
