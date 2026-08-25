@@ -1,11 +1,11 @@
 # Background worker operations
 
-Yoink 0.39 retains two safe SQLite worker layouts. Embedded mode is the
+Yoink 0.40 retains two safe SQLite worker layouts. Embedded mode is the
 zero-configuration local default. External mode runs the same closed handler
-registry in a separately supervised process. The registry now evaluates only
-durably accepted packaged TrackaLacker signals in addition to its maintenance
-families. Neither mode can execute retailer mutation, checkout, payment,
-drawing entry, or order submission.
+registry in a separately supervised process. The registry contains six closed
+task families, including durable TrackaLacker evaluation and observer-recipe
+witness receipt refresh. Neither mode can execute retailer mutation, checkout,
+payment, drawing entry, or order submission.
 
 ## Choose a mode
 
@@ -66,9 +66,12 @@ The standalone process accepts only bounded operational settings:
 - `YOINK_WORKER_TASKS_PER_CYCLE`: 1–1,000 tasks;
 - `YOINK_WORKER_TASKS_PER_PRINCIPAL`: 1–100 tasks.
 
-The worker configuration has no retailer, account, payment, or credential
-inputs. Principal iteration uses a canonical opaque keyset cursor rather than
-an unbounded table sweep.
+In hosted mode, give the worker the same complete
+`YOINK_OBSERVER_RECIPE_WITNESS_*` public configuration as the API. Partial
+configuration is rejected, and `YOINK_HOSTED_MODE=1` refuses worker startup
+when it is absent. The worker has no retailer, account, payment, device-token,
+witness-private-key, or observer-private-signing-key input. Principal iteration
+uses a canonical opaque keyset cursor rather than an unbounded table sweep.
 
 ## Signal inbox behavior
 
@@ -91,6 +94,26 @@ evaluation correction. The reset, audit/outbox receipt, and worker wake commit
 atomically. See [durable signal ingress](SIGNAL_INGRESS.md) for the complete
 contract and failure semantics.
 
+## Observer-recipe witness refresh
+
+The **Observer trust witness refresh** schedule runs every 60 seconds. It
+operates only on the exact installed manifest and latest append-only
+transparency event. With no checkpoint it succeeds without a network request;
+with a matching receipt well outside its refresh window it also performs no
+network request. Otherwise it sends the same bounded public checkpoint used by
+the manual admin operation and accepts only a correctly pinned, chained,
+current Ed25519 receipt.
+
+The standalone worker reconstructs a verification-only trust authority on
+every run. It reloads the package-rooted public manifest so a reviewed key
+rotation does not require worker restart, but it never opens or creates the
+intermediate private signer. Failed publication records one fixed witness
+failure class and follows normal bounded retry/dead-letter behavior; exception
+or response content is not retained. Never disable the schedule or weaken
+hosted delivery to work around an outage. See
+[observer witness refresh](OBSERVER_WITNESS_REFRESH.md) for bootstrap,
+recovery, and key-separation requirements.
+
 ## Health and operator checks
 
 `GET /api/v1/health` exposes fixed operational facts:
@@ -102,6 +125,10 @@ contract and failure semantics.
   error, and—in external mode—coverage of every persisted principal;
 - `durableSignalIngress` and `signalEvaluationOutsideDeviceRequest` remain
   `true` for the packaged TrackaLacker device path;
+- `durableObserverRecipeWitnessRefresh` is `true`, while
+  `observerRecipeWitnessRefreshConfigured` reports whether this process has a
+  complete public witness configuration;
+- `standaloneWitnessRefreshLoadsSigningKeys` remains `false`;
 - `productionWorkerFleetReady` remains `false`.
 
 The admin view considers a heartbeat online for 30 seconds. It shows only
@@ -131,6 +158,12 @@ Recovery sequence:
    principal coverage without task or signal-inbox dead-letter growth.
 5. If the worker reports an initialization failure, stop it and let the API
    apply migrations first; never bypass the exact-schema check.
+
+For hosted recovery, also confirm the API and worker have the same witness URL,
+log ID, key ID, public SPKI, and maximum age. A witness-refresh dead letter is
+an availability or consistency incident: inspect the independent service and
+public log, correct the deployment, then use the normal authorized task retry.
+Do not copy either observer or witness private signing material onto the worker.
 
 ## Production gate
 

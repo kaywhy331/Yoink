@@ -19,8 +19,13 @@ import { OperatorAlertRepository } from "../../database/src/operator-alert-repos
 import { SpendLedgerRepository } from "../../database/src/spend-ledger-repository.js";
 import { runWithRequestScope } from "../../database/src/request-scope.js";
 import { DurableSignalIngressProcessor } from "./signal-ingress.js";
+import type { ObserverRecipeWitnessRefreshService } from "./observer-recipe-witness-refresh.js";
 
 export type BackgroundTaskHandler = BackgroundWorkerTaskHandler;
+
+export interface BackgroundMaintenanceHandlerOptions {
+  observerRecipeWitnessRefresh?: Pick<ObserverRecipeWitnessRefreshService, "execute">;
+}
 
 export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler {
   private readonly adapterDiagnostics: AdapterDiagnosticRepository;
@@ -33,7 +38,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
   private readonly spendLedger: SpendLedgerRepository;
   private readonly signalIngress: DurableSignalIngressProcessor;
 
-  constructor(db: YoinkDatabase) {
+  constructor(db: YoinkDatabase, private readonly options: BackgroundMaintenanceHandlerOptions = {}) {
     this.adapterDiagnostics = new AdapterDiagnosticRepository(db);
     this.backgroundTasks = new BackgroundTaskRepository(db);
     this.execution = new ExecutionRepository(db);
@@ -58,7 +63,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
     }, () => this.executeScoped(taskKind, now));
   }
 
-  private executeScoped(taskKind: BackgroundTaskKind, now: number): BackgroundTaskResult {
+  private async executeScoped(taskKind: BackgroundTaskKind, now: number): Promise<BackgroundTaskResult> {
     switch (taskKind) {
       case "execution_recovery":
         return {
@@ -79,6 +84,18 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
           `background_alert_reconciliation_${new Date(now).toISOString().replace(/[^0-9]/g, "").slice(0, 17)}`,
           now
         );
+      case "observer_recipe_witness_refresh":
+        return this.options.observerRecipeWitnessRefresh
+          ? this.options.observerRecipeWitnessRefresh.execute(now)
+          : {
+              witnessConfigured: false,
+              checkpointReady: false,
+              refreshAttempted: false,
+              receiptAccepted: false,
+              deliveryAllowed: true,
+              witnessState: "disabled",
+              witnessSequence: 0
+            };
       case "operational_telemetry_retention": {
         const result = this.operationalTelemetry.pruneExpired(now);
         const taskHistory = this.backgroundTasks.pruneCompletedHistory(now);

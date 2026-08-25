@@ -4,7 +4,7 @@ import type {
   BackgroundWorkerContext,
   BackgroundWorkerTaskHandler
 } from "../packages/contracts/src/background-worker.js";
-import type { BackgroundTaskKind } from "../packages/domain/src/background-task.js";
+import { BACKGROUND_TASK_KINDS, type BackgroundTaskKind } from "../packages/domain/src/background-task.js";
 import { SqliteBackgroundWorkerStore } from "../packages/database/src/background-worker-store.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
@@ -44,16 +44,16 @@ test("the async runtime executes every due idempotent maintenance handler outsid
     const cycle = await runtime.runOnce(NOW);
     assert.deepEqual(cycle, {
       principalsVisited: 1,
-      enqueued: 5,
-      leased: 5,
-      succeeded: 5,
+      enqueued: BACKGROUND_TASK_KINDS.length,
+      leased: BACKGROUND_TASK_KINDS.length,
+      succeeded: BACKGROUND_TASK_KINDS.length,
       failed: 0,
       uncertainTransitions: 0,
       principalFailures: 0
     });
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE state = 'succeeded'"
-    )?.count, 5);
+    )?.count, BACKGROUND_TASK_KINDS.length);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE state IN ('leased', 'retry_wait', 'dead_letter')"
     )?.count, 0);
@@ -62,11 +62,64 @@ test("the async runtime executes every due idempotent maintenance handler outsid
     )?.resultJson ?? "{}") as Record<string, unknown>;
     assert.equal(retentionResult.deletedTaskRuns, 0);
     assert.match(String(retentionResult.taskHistoryCutoffAt), /^\d{4}-\d{2}-\d{2}T/);
+    const witnessResult = JSON.parse(db.get<{ resultJson: string }>(
+      "SELECT result_json AS resultJson FROM background_tasks WHERE task_kind = 'observer_recipe_witness_refresh'"
+    )?.resultJson ?? "{}") as Record<string, unknown>;
+    assert.deepEqual(witnessResult, {
+      witnessConfigured: false,
+      checkpointReady: false,
+      refreshAttempted: false,
+      receiptAccepted: false,
+      deliveryAllowed: true,
+      witnessState: "disabled",
+      witnessSequence: 0
+    });
     const second = await runtime.runOnce(NOW + 1_000);
     assert.equal(second.enqueued, 0);
     assert.equal(second.leased, 0);
-    assert.equal(runtime.status(NOW + 1_000).tasksSucceeded, 5);
+    assert.equal(runtime.status(NOW + 1_000).tasksSucceeded, BACKGROUND_TASK_KINDS.length);
     db.assertIntegrity();
+  } finally {
+    db.close();
+  }
+});
+
+test("the maintenance handler awaits the configured witness refresh service", async () => {
+  const db = new YoinkDatabase();
+  try {
+    let calls = 0;
+    const handler = new BackgroundMaintenanceHandler(db, {
+      observerRecipeWitnessRefresh: {
+        async execute(now) {
+          calls += 1;
+          return {
+            witnessConfigured: true,
+            checkpointReady: true,
+            refreshAttempted: true,
+            receiptAccepted: true,
+            deliveryAllowed: true,
+            witnessState: "healthy",
+            witnessSequence: now === NOW ? 2 : 0
+          };
+        }
+      }
+    });
+    const result = await handler.execute({
+      principal: { tenantId: LOCAL_TENANT_ID, userId: LOCAL_USER_ID },
+      workerId: "background_worker_witness_test",
+      runtimeKind: "standalone",
+      runtimeVersion: "witness-test"
+    }, "observer_recipe_witness_refresh", NOW);
+    assert.equal(calls, 1);
+    assert.deepEqual(result, {
+      witnessConfigured: true,
+      checkpointReady: true,
+      refreshAttempted: true,
+      receiptAccepted: true,
+      deliveryAllowed: true,
+      witnessState: "healthy",
+      witnessSequence: 2
+    });
   } finally {
     db.close();
   }
@@ -82,11 +135,11 @@ test("handler failures retry durably without persisting exception text", async (
     };
     const { runtime } = runtimeFor(db, { handler });
     const cycle = await runtime.runOnce(NOW);
-    assert.equal(cycle.failed, 5);
+    assert.equal(cycle.failed, BACKGROUND_TASK_KINDS.length);
     assert.equal(cycle.uncertainTransitions, 0);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE state = 'retry_wait' AND last_error_code = 'background_handler_failed'"
-    )?.count, 5);
+    )?.count, BACKGROUND_TASK_KINDS.length);
     assert.equal(JSON.stringify(db.all("SELECT * FROM background_tasks")).includes("secret checkout"), false);
     assert.equal(runtime.status(NOW).lastErrorCode, "background_handler_failed");
   } finally {

@@ -71,6 +71,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
+      durableObserverRecipeWitnessRefresh: true,
+      observerRecipeWitnessRefreshConfigured: false,
+      standaloneWitnessRefreshLoadsSigningKeys: false,
       privacyBoundedRepairLandmarks: true,
       nonExecutableRepairSuggestions: true,
       rotatableDeviceCredentials: true,
@@ -216,6 +219,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.backgroundWorkOutsideRequestHandling, true);
     assert.equal(snapshot.capabilities.durableSignalIngress, true);
     assert.equal(snapshot.capabilities.signalEvaluationOutsideDeviceRequest, true);
+    assert.equal(snapshot.capabilities.durableObserverRecipeWitnessRefresh, true);
+    assert.equal(snapshot.capabilities.observerRecipeWitnessRefreshConfigured, false);
+    assert.equal(snapshot.capabilities.standaloneWitnessRefreshLoadsSigningKeys, false);
     assert.equal(snapshot.capabilities.privacyBoundedRepairLandmarks, true);
     assert.equal(snapshot.capabilities.nonExecutableRepairSuggestions, true);
     assert.equal(snapshot.capabilities.rotatableDeviceCredentials, true);

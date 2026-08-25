@@ -36,6 +36,9 @@ test("the admin worker API exposes safe controls without lease capability materi
     assert.equal(health.durableBackgroundTasks, true);
     assert.equal(health.durableSignalIngress, true);
     assert.equal(health.signalEvaluationOutsideDeviceRequest, true);
+    assert.equal(health.durableObserverRecipeWitnessRefresh, true);
+    assert.equal(health.observerRecipeWitnessRefreshConfigured, false);
+    assert.equal(health.standaloneWitnessRefreshLoadsSigningKeys, false);
     assert.equal(health.backgroundWorkerRuntime, "running");
     assert.equal(health.backgroundWorkerHealthy, true);
     assert.equal(health.backgroundWorkerMode, "embedded");
@@ -54,7 +57,7 @@ test("the admin worker API exposes safe controls without lease capability materi
         boundedPrincipalPagination: boolean;
         successfulHistoryRetentionDays: number;
         canManage: boolean;
-        schedules: Array<{ id: string; enabled: boolean }>;
+        schedules: Array<{ id: string; taskKind: string; enabled: boolean }>;
         signalIngress: {
           eventType: string;
           accepted: number;
@@ -74,7 +77,10 @@ test("the admin worker API exposes safe controls without lease capability materi
     assert.equal(initial.backgroundWork.successfulHistoryRetentionDays, 30);
     assert.equal((initial.backgroundWork as { executionBoundary?: string }).executionBoundary, "outside_request_handler");
     assert.equal(initial.backgroundWork.canManage, true);
-    assert.equal(initial.backgroundWork.schedules.length, 5);
+    assert.equal(initial.backgroundWork.schedules.length, 6);
+    assert.equal(initial.backgroundWork.schedules.some(
+      (schedule) => schedule.taskKind === "observer_recipe_witness_refresh" && schedule.enabled
+    ), true);
     assert.deepEqual(initial.backgroundWork.signalIngress, {
       eventType: "signal_event_v1",
       accepted: 0,

@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.39.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.40.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,24 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.40.0 makes observer-recipe witness freshness durable worker work
+instead of a manual production dependency. Migration 37 adds a sixth closed
+task family that checks the exact installed, package-rooted transparency tip,
+skips network access while its matching independent receipt is comfortably
+fresh, and refreshes it before either configured freshness or signed validity
+expires. Unavailable, invalid, conflicting, or stale witness responses remain
+bounded retry failures and hosted recipe delivery continues to fail closed.
+
+The standalone worker receives only the pinned witness public configuration
+and reloads the root-signed public trust manifest for every bounded run. It
+does not load the observer intermediate private signer, and the external
+witness private key remains outside Yoink entirely. Hosted API and worker
+processes must receive the same witness configuration; local deployments with
+no witness retain a transparent safe no-op. This automates receipt renewal but
+does not provide the independently operated witness service, a public
+consistency monitor, PostgreSQL, or automatic recipe promotion, and it widens
+no retailer action. See [observer witness refresh](docs/OBSERVER_WITNESS_REFRESH.md).
 
 Version 0.39.0 completes the repository-side hosted Chrome transport seam.
 Hosted mode now requires an exact allowlist of packaged Chrome extension
@@ -727,5 +745,5 @@ signal, source, attribution, notification, adapter, service-worker recovery,
 and API tests.
 
 See [Architecture](docs/ARCHITECTURE.md), [Hosted deployment
-contract](docs/HOSTED_DEPLOYMENT.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
+contract](docs/HOSTED_DEPLOYMENT.md), [Observer witness refresh](docs/OBSERVER_WITNESS_REFRESH.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
 migration](docs/CARTCOLLECT_MIGRATION.md), and [Roadmap](docs/ROADMAP.md).

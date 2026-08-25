@@ -424,11 +424,13 @@ Successful and cancelled runs retain append-only transitions for 30 days before
 the packaged retention handler removes their task graph; unresolved dead letters
 remain visible for operator action.
 
-The packaged handler registry contains exactly five idempotent maintenance
+The packaged handler registry initially contained five idempotent maintenance
 families: action/spend recovery, notification lease recovery, hosted
 inbox/outbox lease recovery, sanitized adapter-alert reconciliation, and
-operational telemetry retention. Results accept only a small primitive map and
-reject credential, account, URL, product, address, and payment-shaped fields;
+operational telemetry retention. Version 0.40 adds a sixth closed family for
+independent observer-recipe witness receipt refresh. Results accept only a
+small primitive map and reject credential, account, URL, product, address, and
+payment-shaped fields;
 exception text is never persisted. The local server starts this runtime after
 HTTP listen and stops it before closing SQLite, so handler work is not invoked
 from an HTTP request handler. Because it remains in-process with synchronous
@@ -542,6 +544,25 @@ requires the final exact extension origin and removes its local release feed and
 onboarding URL. This is the application/package boundary for a future deployed
 browser channel, not TLS, publication/signing, a production IdP, PostgreSQL, or
 device-risk operations.
+
+Yoink 0.40.0 moves external witness renewal onto the durable worker seam.
+Migration 37 adds the fixed `observer_recipe_witness_refresh` kind and its
+60-second schedule without accepting a remote payload. The handler binds the
+installed root-signed manifest to the latest local transparency event, reuses a
+matching comfortably fresh receipt without network traffic, and otherwise
+publishes that exact checkpoint with the preceding receipt hash. Verification,
+monotonic chaining, expiry, acceptance, and fail-closed delivery remain in the
+observer-recipe repository.
+
+The standalone worker receives the pinned witness endpoint and public key but
+constructs a verification-only trust authority for every run. That authority
+reloads the public root-signed manifest and cannot expose or use an observer
+intermediate signer; the independent witness signer is never part of this
+repository. Refresh failures enter the existing bounded retry/dead-letter
+lifecycle with fixed reason codes. This closes the scheduling and key-isolation
+portion of the witness seam, not the independent service, external public-log
+monitor, alert connector, PostgreSQL fleet, or automatic recipe generation and
+promotion.
 
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
@@ -693,7 +714,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 36. Foreign keys are mandatory.
+numbered; the current schema is migration 37. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 

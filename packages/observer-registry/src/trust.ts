@@ -195,7 +195,7 @@ export class ObserverRecipeTrustAuthority {
 
   private constructor(
     readonly root: ObserverRecipeRootInfo,
-    readonly intermediateSigner: ObserverRecipeSigner,
+    private readonly onlineSigner: ObserverRecipeSigner | null,
     current: ValidatedObserverRecipeTrustManifest | null,
     private readonly manifestPath: string | null
   ) {
@@ -265,6 +265,38 @@ export class ObserverRecipeTrustAuthority {
     return new ObserverRecipeTrustAuthority(PACKAGED_OBSERVER_RECIPE_ROOT, signer, current, manifestPath);
   }
 
+  /**
+   * Builds a deliberately non-signing authority for worker-side public witness
+   * verification. Only the root-signed public manifest may be loaded; no
+   * signer is available, so ready() is false and envelope creation fails
+   * closed.
+   */
+  static witnessVerificationOnly(dataDirectory = ""): ObserverRecipeTrustAuthority {
+    const manifestPath = dataDirectory ? join(dataDirectory, MANIFEST_FILE) : "";
+    let current: ValidatedObserverRecipeTrustManifest | null = null;
+    if (manifestPath && existsSync(manifestPath)) {
+      const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
+      current = validateObserverRecipeTrustManifest(
+        parsed,
+        PACKAGED_OBSERVER_RECIPE_ROOT,
+        historicalValidationTime(parsed),
+        undefined
+      );
+      chmodSync(manifestPath, 0o600);
+    }
+    return new ObserverRecipeTrustAuthority(
+      PACKAGED_OBSERVER_RECIPE_ROOT,
+      null,
+      current,
+      null
+    );
+  }
+
+  get intermediateSigner(): ObserverRecipeSigner {
+    if (!this.onlineSigner) throw new Error("Observer recipe signing is unavailable in verification-only mode.");
+    return this.onlineSigner;
+  }
+
   manifest(): ValidatedObserverRecipeTrustManifest | null {
     return this.current;
   }
@@ -272,8 +304,9 @@ export class ObserverRecipeTrustAuthority {
   ready(now = Date.now()): boolean {
     const current = this.current;
     return Boolean(current
-      && current.activeKey.keyId === this.intermediateSigner.keyId
-      && current.activeKey.publicKeySpki === this.intermediateSigner.publicKeySpki
+      && this.onlineSigner
+      && current.activeKey.keyId === this.onlineSigner.keyId
+      && current.activeKey.publicKeySpki === this.onlineSigner.publicKeySpki
       && new Date(current.manifest.payload.expiresAt).getTime() > now
       && new Date(current.activeKey.notAfter).getTime() > now);
   }
@@ -300,13 +333,13 @@ export class ObserverRecipeTrustAuthority {
 
   envelope(payload: SignedObserverRecipePayload, now = Date.now()): SignedObserverRecipeEnvelope {
     if (!this.ready(now)) throw new Error("Rooted observer recipe signing is unavailable.");
-    return this.intermediateSigner.envelope(payload);
+    return (this.onlineSigner as ObserverRecipeSigner).envelope(payload);
   }
 
   verifyEnvelope(envelope: SignedObserverRecipeEnvelope, now = Date.now()): boolean {
     if (!this.ready(now) || envelope.keyId !== this.current?.activeKey.keyId
       || envelope.publicKeySpki !== this.current.activeKey.publicKeySpki
       || this.current.manifest.payload.revokedKeyIds.includes(envelope.keyId)) return false;
-    return this.intermediateSigner.verify(envelope);
+    return (this.onlineSigner as ObserverRecipeSigner).verify(envelope);
   }
 }

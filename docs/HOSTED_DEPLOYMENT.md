@@ -59,6 +59,16 @@ onboarding link. A separate deterministic production extension profile accepts
 only explicit non-loopback HTTPS origins and uses browser-managed updates. See
 [hosted Chrome device transport](HOSTED_DEVICE_TRANSPORT.md).
 
+Version 0.40 adds the durable observer-recipe witness refresh task. The API and
+standalone worker must receive the same complete pinned public witness
+configuration. Hosted worker startup fails when it is absent. Each bounded run
+uses the exact installed transparency checkpoint and reloads only the
+package-rooted public manifest; the standalone process never loads the observer
+intermediate private signer. Receipt renewal is now scheduled, but the witness
+service and its key, independent public-log monitoring, and alert delivery
+remain deployment responsibilities. See
+[observer witness refresh](OBSERVER_WITNESS_REFRESH.md).
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting
@@ -159,11 +169,14 @@ receipt. Availability or consistency failures expose fixed-code alarms in
 transport details are discarded. A prior fresh receipt may remain usable until
 its configured maximum age during a degraded refresh, then delivery closes.
 
-The admin button is an explicit staging/local operation. Production must invoke
-the same authenticated route from an idempotent scheduled worker, monitor
-witness availability and public log consistency independently, rotate pins via
-reviewed deployment changes, and alert before receipt expiry. Do not weaken the
-gate or point the URL back at the Yoink process to claim independence.
+The admin button remains an explicit bootstrap/recovery operation. Version 0.40
+runs the same bounded publish-and-accept contract through the durable
+`observer_recipe_witness_refresh` task before receipt expiry. Give API and
+worker the exact same witness settings and supervise the worker independently.
+Production must still monitor witness availability and public log consistency
+outside Yoink, rotate pins through reviewed deployment changes, and alert on
+task failure or freshness loss. Do not weaken the gate or point the URL back at
+the Yoink process to claim independence.
 
 ## Authenticated request scope
 

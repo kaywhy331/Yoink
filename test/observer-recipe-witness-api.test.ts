@@ -118,6 +118,9 @@ test("hosted observer recipe delivery requires the current independently witness
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(health.observerRecipeWitnessRequired, true);
     assert.equal(health.observerRecipeWitnessHealthy, true);
+    assert.equal(health.durableObserverRecipeWitnessRefresh, true);
+    assert.equal(health.observerRecipeWitnessRefreshConfigured, true);
+    assert.equal(health.standaloneWitnessRefreshLoadsSigningKeys, false);
   } finally {
     server.close();
     await once(server, "close");

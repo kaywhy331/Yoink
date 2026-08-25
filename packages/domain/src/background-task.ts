@@ -23,6 +23,12 @@ export const BACKGROUND_TASK_DEFINITIONS = Object.freeze({
     intervalSeconds: 60,
     maximumAttempts: 5
   }),
+  observer_recipe_witness_refresh: Object.freeze({
+    label: "Observer trust witness refresh",
+    description: "Refresh independently signed observer-recipe transparency receipts before they become stale.",
+    intervalSeconds: 60,
+    maximumAttempts: 5
+  }),
   operational_telemetry_retention: Object.freeze({
     label: "Telemetry retention",
     description: "Apply the bounded operational telemetry retention policy and preserve deletion receipts.",

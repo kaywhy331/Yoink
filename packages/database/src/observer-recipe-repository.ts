@@ -377,8 +377,15 @@ export class ObserverRecipeRepository {
 
   witnessCheckpoint(): ObserverRecipeWitnessCheckpoint | null {
     if (!this.witnessVerifier) return null;
+    const installed = this.currentTrustManifest();
+    const authority = this.trust.manifest();
+    if (!installed || !authority
+      || installed.rootKeyId !== this.trust.root.keyId
+      || installed.generation !== authority.manifest.payload.generation
+      || installed.manifestHash !== authority.manifestHash) return null;
     const event = this.latestTransparencyEvent();
-    if (!event) return null;
+    if (!event || event.manifestGeneration !== installed.generation
+      || event.manifestHash !== installed.manifestHash) return null;
     return {
       contractVersion: 1,
       logId: this.witnessLogId(),

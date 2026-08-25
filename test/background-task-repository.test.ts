@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { BackgroundTaskRepository } from "../packages/database/src/background-task-repository.js";
+import { BACKGROUND_TASK_KINDS } from "../packages/domain/src/background-task.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { LOCAL_REQUEST_SCOPE, runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
 
@@ -24,8 +25,8 @@ test("durable background schedules enqueue once and leases use one-use capabilit
   try {
     const tasks = new BackgroundTaskRepository(db);
     runWithRequestScope(workerScope(), () => {
-      assert.equal(tasks.ensureDefaultSchedules(NOW).length, 5);
-      assert.equal(tasks.enqueueDueSchedules(NOW), 5);
+      assert.equal(tasks.ensureDefaultSchedules(NOW).length, BACKGROUND_TASK_KINDS.length);
+      assert.equal(tasks.enqueueDueSchedules(NOW), BACKGROUND_TASK_KINDS.length);
       assert.equal(tasks.enqueueDueSchedules(NOW), 0);
       const lease = tasks.leaseNext("background_worker_a", 60, NOW + 1);
       assert.ok(lease);
@@ -55,7 +56,7 @@ test("durable background schedules enqueue once and leases use one-use capabilit
     const snapshot = runWithRequestScope(LOCAL_REQUEST_SCOPE, () => tasks.snapshot(NOW + 3));
     assert.equal(snapshot.durable, true);
     assert.equal(snapshot.containsCapabilityMaterial, false);
-    assert.equal(snapshot.counts.schedules, 5);
+    assert.equal(snapshot.counts.schedules, BACKGROUND_TASK_KINDS.length);
     assert.equal(snapshot.counts.succeededTasks, 1);
     assert.equal(JSON.stringify(snapshot).includes("containsCapabilityMaterial"), true);
     assert.equal(JSON.stringify(snapshot).includes("capabilityToken"), false);
@@ -138,10 +139,10 @@ test("background work remains tenant and user scoped", () => {
       "SELECT COUNT(*) AS count FROM background_tasks WHERE tenant_id = ? AND subject_user_id = ?",
       LOCAL_TENANT_ID,
       LOCAL_USER_ID
-    )?.count, 5);
+    )?.count, BACKGROUND_TASK_KINDS.length);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE tenant_id = 'tenant_background_second' AND subject_user_id = 'user_background_second'"
-    )?.count, 5);
+    )?.count, BACKGROUND_TASK_KINDS.length);
     const localSnapshot = runWithRequestScope(LOCAL_REQUEST_SCOPE, () => tasks.snapshot(NOW + 2));
     assert.equal(localSnapshot.counts.onlineWorkers, 1);
     assert.deepEqual(localSnapshot.workers.map((worker) => worker.workerId), ["background_worker_local"]);
@@ -220,7 +221,7 @@ test("successful task history is retained for 30 days and then pruned without de
     )?.count, 0);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE state = 'pending'"
-    )?.count, 4);
+    )?.count, BACKGROUND_TASK_KINDS.length - 1);
     db.assertIntegrity();
   } finally {
     db.close();

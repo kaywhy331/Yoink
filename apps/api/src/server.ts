@@ -13,16 +13,34 @@ import {
 import { SqliteBackgroundWorkerStore } from "../../../packages/database/src/background-worker-store.js";
 import { BackgroundMaintenanceHandler } from "../../../packages/engine/src/background-maintenance.js";
 import { BackgroundWorkerRuntime } from "../../../packages/engine/src/background-worker-runtime.js";
+import { ObserverRecipeRepository } from "../../../packages/database/src/observer-recipe-repository.js";
+import { ObserverRecipeWitnessRefreshService } from "../../../packages/engine/src/observer-recipe-witness-refresh.js";
 
 const config = loadConfig();
 mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
 const db = new YoinkDatabase(config.databasePath);
+const observerRecipeTrust = ObserverRecipeTrustAuthority.persistent(config.dataDirectory);
+const observerRecipeWitness = config.observerRecipeWitness
+  ? new ObserverRecipeWitnessClient(config.observerRecipeWitness)
+  : null;
+const observerRecipeWitnessRefresh = observerRecipeWitness
+  ? new ObserverRecipeWitnessRefreshService(
+      new ObserverRecipeRepository(db, observerRecipeTrust, {
+        witnessVerifier: observerRecipeWitness.verifier,
+        witnessEndpointOrigin: observerRecipeWitness.endpointOrigin,
+        witnessRequired: config.hosted !== null
+      }),
+      observerRecipeWitness
+    )
+  : undefined;
 const backgroundWorkerStore = new SqliteBackgroundWorkerStore(db, {
   principalMode: config.hosted ? "all" : "fixed"
 });
 const backgroundWorker = new BackgroundWorkerRuntime({
   store: backgroundWorkerStore,
-  handler: new BackgroundMaintenanceHandler(db),
+  handler: new BackgroundMaintenanceHandler(db, observerRecipeWitnessRefresh
+    ? { observerRecipeWitnessRefresh }
+    : {}),
   version: config.version,
   runtimeKind: "local_in_process",
   workerId: "background_worker_embedded"
@@ -34,8 +52,8 @@ const hostedDependencies = config.hosted ? {
   extensionOriginValidator: allowHostedExtensionOrigins(config.hosted.allowedExtensionOrigins),
   localExtensionReleaseEnabled: false
 } : {};
-const witnessDependencies = config.observerRecipeWitness ? {
-  observerRecipeWitness: new ObserverRecipeWitnessClient(config.observerRecipeWitness),
+const witnessDependencies = observerRecipeWitness ? {
+  observerRecipeWitness,
   observerRecipeWitnessRequired: config.hosted !== null
 } : {
   observerRecipeWitnessRequired: false
@@ -44,7 +62,7 @@ const server = createYoinkServer({
   db,
   webRoot: config.webRoot,
   releaseRoot: config.releaseRoot,
-  observerRecipeTrust: ObserverRecipeTrustAuthority.persistent(config.dataDirectory),
+  observerRecipeTrust,
   version: config.version,
   backgroundWorkerStatus: async () => {
     if (config.backgroundWorkerMode === "embedded") {

@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
+import { MIGRATIONS } from "../packages/database/src/migrations.js";
 import {
   compareDatabaseToPortabilityArchive,
   exportPortabilityArchive,
@@ -74,7 +75,7 @@ test("the streaming portability archive round-trips every table with exact parit
 
       const exported = exportPortabilityArchive(source, paths.archive, "2026-08-24T01:00:00.000Z");
       assert.equal(statSync(paths.archive).mode & 0o777, 0o600);
-      assert.equal(exported.schemaVersion, 36);
+      assert.equal(exported.schemaVersion, MIGRATIONS.length);
       assert.ok(exported.tableCount > 40);
       assert.ok(exported.rowCount > 250);
       assert.match(exported.fileSha256, /^[a-f0-9]{64}$/);

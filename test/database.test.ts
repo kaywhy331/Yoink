@@ -10,7 +10,7 @@ import { MIGRATIONS } from "../packages/database/src/migrations.js";
 test("initial migration creates the normalized graph and safe local defaults", () => {
   const db = new YoinkDatabase();
   try {
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 36);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, MIGRATIONS.length);
     assert.equal(db.get<{ name: string }>("SELECT name FROM tenants WHERE id = ?", LOCAL_TENANT_ID)?.name, "Local");
     assert.equal(db.get<{ display_name: string }>("SELECT display_name FROM users WHERE id = ?", LOCAL_USER_ID)?.display_name, "Local user");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailers")?.count, 13);
@@ -103,7 +103,7 @@ test("non-owner processes require an existing database at the exact current sche
     new YoinkDatabase(filePath).close();
     const current = new YoinkDatabase(filePath, { migrationMode: "require_current" });
     assert.equal(current.migrationMode, "require_current");
-    assert.equal(current.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 36);
+    assert.equal(current.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, MIGRATIONS.length);
     current.run("UPDATE schema_migrations SET name = 'tampered_name' WHERE version = 35");
     current.close();
 
@@ -129,7 +129,7 @@ test("a file database reopens idempotently", () => {
     const second = new YoinkDatabase(filePath);
     try {
       assert.equal(second.get<{ pause_reason: string }>("SELECT pause_reason FROM app_settings WHERE user_id = ?", LOCAL_USER_ID)?.pause_reason, "Preserved");
-      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 36);
+      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, MIGRATIONS.length);
       second.assertIntegrity();
     } finally {
       second.close();
@@ -157,7 +157,7 @@ test("an existing 0.2 database upgrades transactionally to shadow observations a
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 36);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, MIGRATIONS.length);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_trials")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics")?.count, 0);
@@ -210,7 +210,7 @@ test("migration 11 closes any inherited Best Buy execution and qualification sta
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 36);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, MIGRATIONS.length);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>("SELECT status FROM retailer_adapter_qualifications WHERE retailer_id = 'bestbuy'")?.status, "retired");
       assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name IN (
@@ -254,7 +254,7 @@ test("migration 19 retires Best Buy v2 qualification before the v4/v3 boundary",
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 36);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, MIGRATIONS.length);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>(
         "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'bestbuy'"
@@ -1251,6 +1251,105 @@ test("migration 36 backfills recoverable device credential state without exposin
         ),
         /credential state is invalid/
       );
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("migration 37 adds the witness-refresh task kind without losing durable worker history", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-witness-worker-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 36)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        "2026-08-25T10:00:00.000Z"
+      );
+    }
+    legacy.exec(`
+      INSERT INTO tenants(id, name, created_at)
+      VALUES ('tenant_witness_upgrade_37', 'Witness upgrade tenant', '2026-08-25T10:00:00.000Z');
+      INSERT INTO users(id, tenant_id, display_name, created_at)
+      VALUES ('user_witness_upgrade_37', 'tenant_witness_upgrade_37', 'Witness upgrade user', '2026-08-25T10:00:00.000Z');
+      INSERT INTO background_task_schedules(
+        id, tenant_id, subject_user_id, task_kind, display_name, description,
+        enabled, interval_seconds, next_run_at, last_enqueued_at,
+        created_by_actor_id, updated_by_actor_id, privacy_classification,
+        created_at, updated_at
+      ) VALUES (
+        'background_schedule_upgrade_37', 'tenant_witness_upgrade_37', 'user_witness_upgrade_37',
+        'execution_recovery', 'Preserved schedule', 'Preserved before migration 37.',
+        1, 30, '2026-08-25T10:00:00.000Z', '', 'legacy_worker', 'legacy_worker',
+        'operational_configuration', '2026-08-25T10:00:00.000Z', '2026-08-25T10:00:00.000Z'
+      );
+      INSERT INTO background_tasks(
+        id, tenant_id, subject_user_id, schedule_id, task_kind, dedupe_key,
+        state, priority, attempt_count, maximum_attempts, scheduled_for,
+        privacy_classification, created_at, updated_at
+      ) VALUES (
+        'background_task_upgrade_37', 'tenant_witness_upgrade_37', 'user_witness_upgrade_37',
+        'background_schedule_upgrade_37', 'execution_recovery', 'upgrade-37-fixture',
+        'pending', 50, 0, 5, '2026-08-25T10:00:00.000Z',
+        'operational_aggregate', '2026-08-25T10:00:00.000Z', '2026-08-25T10:00:00.000Z'
+      );
+      INSERT INTO background_task_events(
+        id, tenant_id, subject_user_id, task_id, sequence, event_type, attempt,
+        reason_code, worker_id, privacy_classification, created_at
+      ) VALUES (
+        'background_task_event_upgrade_37', 'tenant_witness_upgrade_37', 'user_witness_upgrade_37',
+        'background_task_upgrade_37', 1, 'scheduled', 0, 'migration_fixture', '',
+        'operational_aggregate', '2026-08-25T10:00:00.000Z'
+      );
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 37 AND name = 'durable_observer_witness_refresh'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM background_task_schedules WHERE id = 'background_schedule_upgrade_37'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM background_tasks WHERE id = 'background_task_upgrade_37'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM background_task_events WHERE id = 'background_task_event_upgrade_37'"
+      )?.count, 1);
+      upgraded.run(
+        `INSERT INTO background_task_schedules(
+           id, tenant_id, subject_user_id, task_kind, display_name, description,
+           enabled, interval_seconds, next_run_at, created_by_actor_id, updated_by_actor_id,
+           privacy_classification, created_at, updated_at
+         ) VALUES (?, ?, ?, 'observer_recipe_witness_refresh', ?, ?, 1, 60, ?, ?, ?,
+           'operational_configuration', ?, ?)`,
+        "background_schedule_witness_upgrade_37",
+        "tenant_witness_upgrade_37",
+        "user_witness_upgrade_37",
+        "Observer trust witness refresh",
+        "Refresh independent witness receipts.",
+        "2026-08-25T10:00:00.000Z",
+        "migration_37",
+        "migration_37",
+        "2026-08-25T10:00:00.000Z",
+        "2026-08-25T10:00:00.000Z"
+      );
+      assert.throws(
+        () => upgraded.run(
+          "UPDATE background_task_events SET reason_code = 'changed' WHERE id = 'background_task_event_upgrade_37'"
+        ),
+        /append-only/
+      );
+      assert.deepEqual(upgraded.all("PRAGMA foreign_key_check"), []);
       upgraded.assertIntegrity();
     } finally {
       upgraded.close();

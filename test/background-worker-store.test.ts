@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
+import { BACKGROUND_TASK_KINDS } from "../packages/domain/src/background-task.js";
 import { SqliteBackgroundWorkerStore } from "../packages/database/src/background-worker-store.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 
@@ -60,15 +61,15 @@ test("the async SQLite worker store scopes queues and reports complete standalon
     for (const owner of page.principals) {
       const worker = context(owner.tenantId, owner.userId);
       await store.ensureSchedules(worker, NOW);
-      assert.equal(await store.enqueueDueSchedules(worker, NOW), 5);
+      assert.equal(await store.enqueueDueSchedules(worker, NOW), BACKGROUND_TASK_KINDS.length);
       await store.heartbeat(worker, "", NOW);
     }
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_task_schedules WHERE tenant_id = 'tenant_worker_coverage' AND subject_user_id = 'user_worker_coverage'"
-    )?.count, 5);
+    )?.count, BACKGROUND_TASK_KINDS.length);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE tenant_id = 'tenant_worker_coverage' AND subject_user_id = 'user_worker_coverage'"
-    )?.count, 5);
+    )?.count, BACKGROUND_TASK_KINDS.length);
     assert.deepEqual(await store.deploymentStatus("standalone", NOW + 1), {
       state: "running",
       healthy: true,

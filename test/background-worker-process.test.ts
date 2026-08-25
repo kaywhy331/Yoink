@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import { loadWorkerConfig } from "../apps/worker/src/config.js";
+import { BACKGROUND_TASK_KINDS } from "../packages/domain/src/background-task.js";
+import { ObserverRecipeSigner } from "../packages/observer-registry/src/signer.js";
 import { SqliteBackgroundWorkerStore } from "../packages/database/src/background-worker-store.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 
@@ -37,6 +39,9 @@ function capture(child: ChildProcessWithoutNullStreams): { output: () => string 
 }
 
 test("standalone worker configuration is bounded and credential-free", () => {
+  const workerSource = readFileSync(join(process.cwd(), "apps", "worker", "src", "server.ts"), "utf8");
+  assert.match(workerSource, /witnessVerificationOnly\(config\.dataDirectory\)/);
+  assert.doesNotMatch(workerSource, /ObserverRecipeTrustAuthority\.persistent/);
   const config = loadWorkerConfig(process.cwd(), {
     YOINK_DATA_DIR: "worker-data",
     YOINK_WORKER_ID: "worker_process_01",
@@ -52,10 +57,27 @@ test("standalone worker configuration is bounded and credential-free", () => {
   assert.equal(config.maximumPrincipalsPerCycle, 25);
   assert.equal(config.maximumTasksPerCycle, 80);
   assert.equal(config.maximumTasksPerPrincipal, 8);
+  assert.equal(config.observerRecipeWitness, null);
+  assert.equal(config.observerRecipeWitnessRequired, false);
   assert.equal(Object.keys(config).some((key) => /secret|token|password|credential/i.test(key)), false);
   assert.throws(() => loadWorkerConfig(process.cwd(), { YOINK_WORKER_ID: "bad worker" }), /WORKER_ID/);
   assert.throws(() => loadWorkerConfig(process.cwd(), { YOINK_WORKER_POLL_MS: "499" }), /500 through 60000/);
   assert.throws(() => loadWorkerConfig(process.cwd(), { YOINK_DATA_DIR: "" }), /non-empty directory/);
+
+  assert.throws(
+    () => loadWorkerConfig(process.cwd(), { YOINK_HOSTED_MODE: "1" }),
+    /Hosted workers require an independently operated observer recipe witness/
+  );
+  const witness = ObserverRecipeSigner.ephemeral();
+  const hosted = loadWorkerConfig(process.cwd(), {
+    YOINK_HOSTED_MODE: "1",
+    YOINK_OBSERVER_RECIPE_WITNESS_URL: "https://witness.example.net/v1/checkpoints",
+    YOINK_OBSERVER_RECIPE_WITNESS_LOG_ID: "yoink-production",
+    YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID: witness.keyId,
+    YOINK_OBSERVER_RECIPE_WITNESS_PUBLIC_KEY_SPKI: witness.publicKeySpki
+  });
+  assert.equal(hosted.observerRecipeWitnessRequired, true);
+  assert.equal(hosted.observerRecipeWitness?.key.keyId, witness.keyId);
 });
 
 test("the standalone worker fails closed and redacts startup errors before API initialization", async () => {
@@ -120,7 +142,7 @@ test("a separate worker process serves every principal and drives truthful exter
     assert.equal(status.coveredPrincipals, status.totalPrincipals);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE state = 'succeeded'"
-    )?.count, 10);
+    )?.count, BACKGROUND_TASK_KINDS.length * 2);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_worker_heartbeats WHERE runtime_kind = 'local_in_process'"
     )?.count, 0);

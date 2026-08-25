@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import {
+  loadObserverRecipeWitnessConfig,
+  type ObserverRecipeWitnessRuntimeConfig
+} from "../../../packages/observer-registry/src/config.js";
 
 const WORKER_ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 
@@ -13,6 +17,8 @@ export interface YoinkWorkerConfig {
   maximumPrincipalsPerCycle: number;
   maximumTasksPerCycle: number;
   maximumTasksPerPrincipal: number;
+  observerRecipeWitness: ObserverRecipeWitnessRuntimeConfig | null;
+  observerRecipeWitnessRequired: boolean;
 }
 
 function projectVersion(projectRoot: string): string {
@@ -49,6 +55,11 @@ export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
   if (!WORKER_ID_PATTERN.test(workerId)) {
     throw new Error("YOINK_WORKER_ID must contain 3 through 120 letters, numbers, underscores, or hyphens.");
   }
+  const observerRecipeWitnessRequired = env.YOINK_HOSTED_MODE === "1";
+  const observerRecipeWitness = loadObserverRecipeWitnessConfig(env);
+  if (observerRecipeWitnessRequired && !observerRecipeWitness) {
+    throw new Error("Hosted workers require an independently operated observer recipe witness.");
+  }
   return {
     dataDirectory,
     databasePath: join(dataDirectory, "yoink.sqlite"),
@@ -76,6 +87,8 @@ export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
       1,
       100,
       "YOINK_WORKER_TASKS_PER_PRINCIPAL"
-    )
+    ),
+    observerRecipeWitness,
+    observerRecipeWitnessRequired
   };
 }

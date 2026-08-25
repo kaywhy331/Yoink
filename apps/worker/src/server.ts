@@ -3,6 +3,10 @@ import { SqliteBackgroundWorkerStore } from "../../../packages/database/src/back
 import { YoinkDatabase } from "../../../packages/database/src/database.js";
 import { BackgroundMaintenanceHandler } from "../../../packages/engine/src/background-maintenance.js";
 import { BackgroundWorkerRuntime } from "../../../packages/engine/src/background-worker-runtime.js";
+import { ObserverRecipeRepository } from "../../../packages/database/src/observer-recipe-repository.js";
+import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
+import { ObserverRecipeWitnessClient } from "../../../packages/observer-registry/src/witness.js";
+import { ObserverRecipeWitnessRefreshService } from "../../../packages/engine/src/observer-recipe-witness-refresh.js";
 import { loadWorkerConfig } from "./config.js";
 
 let db: YoinkDatabase | null = null;
@@ -36,10 +40,33 @@ async function start(): Promise<void> {
     const config = loadWorkerConfig();
     mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
     db = new YoinkDatabase(config.databasePath, { migrationMode: "require_current" });
-    const store = new SqliteBackgroundWorkerStore(db, { principalMode: "all" });
+    const workerDb = db;
+    const store = new SqliteBackgroundWorkerStore(workerDb, { principalMode: "all" });
+    const observerRecipeWitness = config.observerRecipeWitness
+      ? new ObserverRecipeWitnessClient(config.observerRecipeWitness)
+      : null;
+    const observerRecipeWitnessRefresh = observerRecipeWitness
+      ? {
+          execute(now: number) {
+            // Reload only the root-signed public manifest for every bounded run
+            // so key rotation does not require loading a private signer or
+            // restarting the worker.
+            return new ObserverRecipeWitnessRefreshService(
+              new ObserverRecipeRepository(workerDb, ObserverRecipeTrustAuthority.witnessVerificationOnly(config.dataDirectory), {
+                witnessVerifier: observerRecipeWitness.verifier,
+                witnessEndpointOrigin: observerRecipeWitness.endpointOrigin,
+                witnessRequired: config.observerRecipeWitnessRequired
+              }),
+              observerRecipeWitness
+            ).execute(now);
+          }
+        }
+      : undefined;
     runtime = new BackgroundWorkerRuntime({
       store,
-      handler: new BackgroundMaintenanceHandler(db),
+      handler: new BackgroundMaintenanceHandler(workerDb, observerRecipeWitnessRefresh
+        ? { observerRecipeWitnessRefresh }
+        : {}),
       version: config.version,
       runtimeKind: "standalone",
       workerId: config.workerId,
