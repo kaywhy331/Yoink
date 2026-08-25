@@ -57,6 +57,17 @@ const REASON_PATTERN = /^[a-z][a-z0-9_]{1,79}$/;
 const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
 const RESERVED_PROVENANCE_CODES = new Set(["privacy_bounded_repair_miner"]);
 const MAX_TRIAL_AGE_MS = 10 * 60_000;
+export const OBSERVER_RECIPE_CANARY_COHORT_PERCENT = 25;
+export const OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS = 24 * 60 * 60_000;
+const GENERATED_CANARY_MINIMUM_CONTRIBUTORS = 2;
+const GENERATED_TRUSTED_MINIMUM_CONTRIBUTORS = 3;
+const CANARY_MINIMUM_COHORT_TRIALS = 3;
+const CANARY_MINIMUM_DISTINCT_SKUS = 3;
+const CANARY_MINIMUM_DISTINCT_LAYOUTS = 2;
+const CANARY_REGRESSION_MINIMUM_TRIALS = 4;
+const CANARY_REGRESSION_MINIMUM_FAILURES = 2;
+const CANARY_REGRESSION_MINIMUM_FAILURE_CONTRIBUTORS = 2;
+const CANARY_REGRESSION_FAILURE_PERCENT = 50;
 const SKU_PATTERNS: Record<SupportedRetailerId, RegExp> = {
   target: /^\d{6,20}$/,
   walmart: /^\d{5,20}$/,
@@ -72,6 +83,15 @@ const SKU_PATTERNS: Record<SupportedRetailerId, RegExp> = {
   pbandai: /^[A-Z]\d{10}$/,
   pokemoncenter: /^\d{2,3}-\d{5}(?:-\d{3})?$/
 };
+
+export function observerRecipeCanaryCohortEligible(recipeId: string, contributorId: string): boolean {
+  if (!ID_PATTERN.test(recipeId) || !ID_PATTERN.test(contributorId)) return false;
+  const bucket = Number.parseInt(
+    stableHash("observer-recipe-canary-cohort-v1", recipeId, contributorId).slice(0, 8),
+    16
+  ) % 100;
+  return bucket < OBSERVER_RECIPE_CANARY_COHORT_PERCENT;
+}
 
 interface RecipeRow {
   id: string;
@@ -122,6 +142,35 @@ interface TrialSummary {
   packagedConflictTrials: number;
   oracleConflictTrials: number;
   insufficientTrials: number;
+  cohortTrials: number;
+  cohortPassed: number;
+  cohortFailed: number;
+  distinctCohortContributors: number;
+  distinctCohortDevices: number;
+  distinctCohortSkus: number;
+  distinctCohortLayouts: number;
+  oracleCompleteCohortPassed: number;
+  distinctOracleContributors: number;
+  distinctOracleDevices: number;
+  distinctOracleCohortSkus: number;
+  distinctOracleCohortLayouts: number;
+  canaryCohortTrials: number;
+  canaryCohortPassed: number;
+  canaryCohortFailed: number;
+  distinctCanaryContributors: number;
+  distinctCanaryFailureContributors: number;
+  distinctCanarySkus: number;
+  distinctCanaryLayouts: number;
+  canaryOracleCompletePassed: number;
+  distinctCanaryOracleContributors: number;
+  distinctCanaryOracleDevices: number;
+  distinctCanaryOracleSkus: number;
+  distinctCanaryOracleLayouts: number;
+  canaryStartedAt: string;
+  canaryAgeSeconds: number;
+  canaryMinimumDurationSeconds: number;
+  canaryCohortPercent: number;
+  canaryRegressionSloBreached: boolean;
 }
 
 interface WitnessReceiptRow {
@@ -340,37 +389,129 @@ function normalizedTrialValidation(
   };
 }
 
-function trialSummary(db: YoinkDatabase, recipeId: string): TrialSummary {
-  const row = db.get<{
-    passed: number; failed: number; distinctSkus: number; distinctLayouts: number;
-    packagedOracleTrials: number; oracleCompletePassed: number;
-    distinctOracleSkus: number; distinctOracleLayouts: number;
-    packagedConflictTrials: number; oracleConflictTrials: number; insufficientTrials: number;
-  }>(
-    `SELECT
-       SUM(CASE WHEN outcome = 'passed' THEN 1 ELSE 0 END) AS passed,
-       SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failed,
-       COUNT(DISTINCT CASE WHEN outcome = 'passed' THEN retailer_sku END) AS distinctSkus,
-       COUNT(DISTINCT CASE WHEN outcome = 'passed' THEN layout_fingerprint END) AS distinctLayouts,
-       SUM(CASE WHEN validation_profile = 'packaged_structured_oracle_v1' THEN 1 ELSE 0 END) AS packagedOracleTrials,
-       SUM(CASE WHEN validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+function trialSummary(db: YoinkDatabase, recipeId: string, now = Date.now()): TrialSummary {
+  const row = db.get<Record<string, number>>(
+    `WITH ranked AS (
+       SELECT trial.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY user_id, retailer_sku, layout_fingerprint, recipe_state_at_trial
+                ORDER BY observed_at DESC, received_at DESC, id DESC
+              ) AS contributor_rank
+       FROM observer_recipe_trials trial
+       WHERE recipe_id = ?
+     ), cohort AS (
+       SELECT * FROM ranked WHERE contributor_rank = 1
+     )
+     SELECT
+       (SELECT COUNT(*) FROM ranked WHERE outcome = 'passed') AS passed,
+       (SELECT COUNT(*) FROM ranked WHERE outcome = 'failed') AS failed,
+       (SELECT COUNT(DISTINCT retailer_sku) FROM ranked WHERE outcome = 'passed') AS distinctSkus,
+       (SELECT COUNT(DISTINCT layout_fingerprint) FROM ranked WHERE outcome = 'passed') AS distinctLayouts,
+       (SELECT COUNT(*) FROM ranked WHERE validation_profile = 'packaged_structured_oracle_v1') AS packagedOracleTrials,
+       (SELECT COUNT(*) FROM ranked WHERE validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
          AND oracle_agreed_field_count = evaluated_field_count
          AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
-         AND insufficient_field_count = 0 THEN 1 ELSE 0 END) AS oracleCompletePassed,
-       COUNT(DISTINCT CASE WHEN validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+         AND insufficient_field_count = 0) AS oracleCompletePassed,
+       (SELECT COUNT(DISTINCT retailer_sku) FROM ranked
+         WHERE validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+           AND oracle_agreed_field_count = evaluated_field_count
+           AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+           AND insufficient_field_count = 0) AS distinctOracleSkus,
+       (SELECT COUNT(DISTINCT layout_fingerprint) FROM ranked
+         WHERE validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+           AND oracle_agreed_field_count = evaluated_field_count
+           AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+           AND insufficient_field_count = 0) AS distinctOracleLayouts,
+       (SELECT COUNT(*) FROM ranked WHERE packaged_conflict_field_count > 0) AS packagedConflictTrials,
+       (SELECT COUNT(*) FROM ranked WHERE oracle_conflict_field_count > 0) AS oracleConflictTrials,
+       (SELECT COUNT(*) FROM ranked WHERE insufficient_field_count > 0) AS insufficientTrials,
+       (SELECT COUNT(*) FROM cohort) AS cohortTrials,
+       (SELECT COUNT(*) FROM cohort WHERE outcome = 'passed') AS cohortPassed,
+       (SELECT COUNT(*) FROM cohort WHERE outcome = 'failed') AS cohortFailed,
+       (SELECT COUNT(DISTINCT user_id) FROM cohort) AS distinctCohortContributors,
+       (SELECT COUNT(DISTINCT device_id) FROM cohort) AS distinctCohortDevices,
+       (SELECT COUNT(DISTINCT retailer_sku) FROM cohort WHERE outcome = 'passed') AS distinctCohortSkus,
+       (SELECT COUNT(DISTINCT layout_fingerprint) FROM cohort WHERE outcome = 'passed') AS distinctCohortLayouts,
+       (SELECT COUNT(*) FROM cohort WHERE validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
          AND oracle_agreed_field_count = evaluated_field_count
          AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
-         AND insufficient_field_count = 0 THEN retailer_sku END) AS distinctOracleSkus,
-       COUNT(DISTINCT CASE WHEN validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+         AND insufficient_field_count = 0) AS oracleCompleteCohortPassed,
+       (SELECT COUNT(DISTINCT user_id) FROM cohort
+         WHERE validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+           AND oracle_agreed_field_count = evaluated_field_count
+           AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+           AND insufficient_field_count = 0) AS distinctOracleContributors,
+       (SELECT COUNT(DISTINCT device_id) FROM cohort
+         WHERE validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+           AND oracle_agreed_field_count = evaluated_field_count
+           AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+           AND insufficient_field_count = 0) AS distinctOracleDevices,
+       (SELECT COUNT(DISTINCT retailer_sku) FROM cohort
+         WHERE validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+           AND oracle_agreed_field_count = evaluated_field_count
+           AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+           AND insufficient_field_count = 0) AS distinctOracleCohortSkus,
+       (SELECT COUNT(DISTINCT layout_fingerprint) FROM cohort
+         WHERE validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+           AND oracle_agreed_field_count = evaluated_field_count
+           AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+           AND insufficient_field_count = 0) AS distinctOracleCohortLayouts,
+       (SELECT COUNT(*) FROM cohort WHERE recipe_state_at_trial = 'canary') AS canaryCohortTrials,
+       (SELECT COUNT(*) FROM cohort WHERE recipe_state_at_trial = 'canary' AND outcome = 'passed') AS canaryCohortPassed,
+       (SELECT COUNT(*) FROM cohort WHERE recipe_state_at_trial = 'canary' AND outcome = 'failed') AS canaryCohortFailed,
+       (SELECT COUNT(DISTINCT user_id) FROM cohort WHERE recipe_state_at_trial = 'canary') AS distinctCanaryContributors,
+       (SELECT COUNT(DISTINCT user_id) FROM cohort
+         WHERE recipe_state_at_trial = 'canary' AND outcome = 'failed') AS distinctCanaryFailureContributors,
+       (SELECT COUNT(DISTINCT retailer_sku) FROM cohort
+         WHERE recipe_state_at_trial = 'canary' AND outcome = 'passed') AS distinctCanarySkus,
+       (SELECT COUNT(DISTINCT layout_fingerprint) FROM cohort
+         WHERE recipe_state_at_trial = 'canary' AND outcome = 'passed') AS distinctCanaryLayouts,
+       (SELECT COUNT(*) FROM cohort WHERE recipe_state_at_trial = 'canary'
+         AND validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
          AND oracle_agreed_field_count = evaluated_field_count
          AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
-         AND insufficient_field_count = 0 THEN layout_fingerprint END) AS distinctOracleLayouts,
-       SUM(CASE WHEN packaged_conflict_field_count > 0 THEN 1 ELSE 0 END) AS packagedConflictTrials,
-       SUM(CASE WHEN oracle_conflict_field_count > 0 THEN 1 ELSE 0 END) AS oracleConflictTrials,
-       SUM(CASE WHEN insufficient_field_count > 0 THEN 1 ELSE 0 END) AS insufficientTrials
-     FROM observer_recipe_trials WHERE recipe_id = ?`,
+         AND insufficient_field_count = 0) AS canaryOracleCompletePassed,
+       (SELECT COUNT(DISTINCT user_id) FROM cohort WHERE recipe_state_at_trial = 'canary'
+         AND validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+         AND oracle_agreed_field_count = evaluated_field_count
+         AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+         AND insufficient_field_count = 0) AS distinctCanaryOracleContributors,
+       (SELECT COUNT(DISTINCT device_id) FROM cohort WHERE recipe_state_at_trial = 'canary'
+         AND validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+         AND oracle_agreed_field_count = evaluated_field_count
+         AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+         AND insufficient_field_count = 0) AS distinctCanaryOracleDevices,
+       (SELECT COUNT(DISTINCT retailer_sku) FROM cohort WHERE recipe_state_at_trial = 'canary'
+         AND validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+         AND oracle_agreed_field_count = evaluated_field_count
+         AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+         AND insufficient_field_count = 0) AS distinctCanaryOracleSkus,
+       (SELECT COUNT(DISTINCT layout_fingerprint) FROM cohort WHERE recipe_state_at_trial = 'canary'
+         AND validation_profile = 'packaged_structured_oracle_v1' AND outcome = 'passed'
+         AND oracle_agreed_field_count = evaluated_field_count
+         AND oracle_conflict_field_count = 0 AND packaged_conflict_field_count = 0
+         AND insufficient_field_count = 0) AS distinctCanaryOracleLayouts`,
     recipeId
   );
+  const canaryStartedAt = String(db.get<{ createdAt: string }>(
+    `SELECT created_at AS createdAt FROM observer_recipe_lifecycle_events
+     WHERE recipe_id = ? AND to_state = 'canary'
+     ORDER BY created_at DESC, id DESC LIMIT 1`,
+    recipeId
+  )?.createdAt ?? "");
+  const canaryStartedTime = new Date(canaryStartedAt).getTime();
+  const canaryAgeSeconds = Number.isFinite(canaryStartedTime)
+    ? Math.max(0, Math.floor((now - canaryStartedTime) / 1000))
+    : 0;
+  const canaryCohortTrials = Number(row?.canaryCohortTrials ?? 0);
+  const canaryCohortFailed = Number(row?.canaryCohortFailed ?? 0);
+  const distinctCanaryContributors = Number(row?.distinctCanaryContributors ?? 0);
+  const distinctCanaryFailureContributors = Number(row?.distinctCanaryFailureContributors ?? 0);
+  const canaryRegressionSloBreached = canaryCohortTrials >= CANARY_REGRESSION_MINIMUM_TRIALS
+    && canaryCohortFailed >= CANARY_REGRESSION_MINIMUM_FAILURES
+    && distinctCanaryFailureContributors >= CANARY_REGRESSION_MINIMUM_FAILURE_CONTRIBUTORS
+    && distinctCanaryFailureContributors * 100
+      >= distinctCanaryContributors * CANARY_REGRESSION_FAILURE_PERCENT;
   return {
     passed: Number(row?.passed ?? 0),
     failed: Number(row?.failed ?? 0),
@@ -382,7 +523,36 @@ function trialSummary(db: YoinkDatabase, recipeId: string): TrialSummary {
     distinctOracleLayouts: Number(row?.distinctOracleLayouts ?? 0),
     packagedConflictTrials: Number(row?.packagedConflictTrials ?? 0),
     oracleConflictTrials: Number(row?.oracleConflictTrials ?? 0),
-    insufficientTrials: Number(row?.insufficientTrials ?? 0)
+    insufficientTrials: Number(row?.insufficientTrials ?? 0),
+    cohortTrials: Number(row?.cohortTrials ?? 0),
+    cohortPassed: Number(row?.cohortPassed ?? 0),
+    cohortFailed: Number(row?.cohortFailed ?? 0),
+    distinctCohortContributors: Number(row?.distinctCohortContributors ?? 0),
+    distinctCohortDevices: Number(row?.distinctCohortDevices ?? 0),
+    distinctCohortSkus: Number(row?.distinctCohortSkus ?? 0),
+    distinctCohortLayouts: Number(row?.distinctCohortLayouts ?? 0),
+    oracleCompleteCohortPassed: Number(row?.oracleCompleteCohortPassed ?? 0),
+    distinctOracleContributors: Number(row?.distinctOracleContributors ?? 0),
+    distinctOracleDevices: Number(row?.distinctOracleDevices ?? 0),
+    distinctOracleCohortSkus: Number(row?.distinctOracleCohortSkus ?? 0),
+    distinctOracleCohortLayouts: Number(row?.distinctOracleCohortLayouts ?? 0),
+    canaryCohortTrials,
+    canaryCohortPassed: Number(row?.canaryCohortPassed ?? 0),
+    canaryCohortFailed,
+    distinctCanaryContributors,
+    distinctCanaryFailureContributors,
+    distinctCanarySkus: Number(row?.distinctCanarySkus ?? 0),
+    distinctCanaryLayouts: Number(row?.distinctCanaryLayouts ?? 0),
+    canaryOracleCompletePassed: Number(row?.canaryOracleCompletePassed ?? 0),
+    distinctCanaryOracleContributors: Number(row?.distinctCanaryOracleContributors ?? 0),
+    distinctCanaryOracleDevices: Number(row?.distinctCanaryOracleDevices ?? 0),
+    distinctCanaryOracleSkus: Number(row?.distinctCanaryOracleSkus ?? 0),
+    distinctCanaryOracleLayouts: Number(row?.distinctCanaryOracleLayouts ?? 0),
+    canaryStartedAt,
+    canaryAgeSeconds,
+    canaryMinimumDurationSeconds: Math.floor(OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS / 1000),
+    canaryCohortPercent: OBSERVER_RECIPE_CANARY_COHORT_PERCENT,
+    canaryRegressionSloBreached
   };
 }
 
@@ -886,23 +1056,38 @@ export class ObserverRecipeRepository {
       : row.lifecycleState === "shadow" ? "canary"
         : row.lifecycleState === "canary" ? "trusted_read_only" : "";
     if (input.targetState !== expected) throw new Error("Observer recipes must advance through quarantine, shadow, canary, and trusted-read-only in order.");
-    const trials = trialSummary(this.db, recipeId);
-    if (input.targetState === "canary" && (trials.failed > 0 || trials.passed < 2 || trials.distinctSkus < 2)) {
-      throw new Error("Canary promotion requires two passing shadow trials on two exact SKUs and no failures.");
+    const trials = trialSummary(this.db, recipeId, now);
+    if (input.targetState === "canary"
+      && (trials.failed > 0 || trials.cohortPassed < 2 || trials.distinctCohortSkus < 2)) {
+      throw new Error("Canary promotion requires two contributor-deduplicated passing shadow trials on two exact SKUs and no failures.");
     }
     if (row.provenanceCode === "privacy_bounded_repair_miner" && input.targetState === "canary"
-      && (trials.oracleCompletePassed < 2 || trials.distinctOracleSkus < 2
+      && (trials.oracleCompleteCohortPassed < 2 || trials.distinctOracleCohortSkus < 2
+        || trials.distinctOracleContributors < GENERATED_CANARY_MINIMUM_CONTRIBUTORS
+        || trials.distinctOracleDevices < GENERATED_CANARY_MINIMUM_CONTRIBUTORS
         || trials.packagedConflictTrials > 0 || trials.oracleConflictTrials > 0)) {
-      throw new Error("Generated repair canary promotion requires packaged-oracle agreement on every field across two exact SKUs and no conflicts.");
+      throw new Error("Generated repair canary promotion requires packaged-oracle agreement from two independent contributors and devices across two exact SKUs with no conflicts.");
     }
     if (input.targetState === "trusted_read_only"
-      && (trials.failed > 0 || trials.passed < 5 || trials.distinctSkus < 3 || trials.distinctLayouts < 2)) {
-      throw new Error("Trusted read-only promotion requires five passing trials, three exact SKUs, two layouts, and no failures.");
+      && (trials.failed > 0 || trials.cohortPassed < 5 || trials.distinctCohortSkus < 3
+        || trials.distinctCohortLayouts < 2 || !trials.canaryStartedAt
+        || trials.canaryAgeSeconds < trials.canaryMinimumDurationSeconds
+        || trials.canaryCohortPassed < CANARY_MINIMUM_COHORT_TRIALS
+        || trials.distinctCanarySkus < CANARY_MINIMUM_DISTINCT_SKUS
+        || trials.distinctCanaryLayouts < CANARY_MINIMUM_DISTINCT_LAYOUTS
+        || trials.canaryRegressionSloBreached)) {
+      throw new Error("Trusted read-only promotion requires a 24-hour canary, five contributor-deduplicated passes, and three clean canary trials across three exact SKUs and two layouts.");
     }
     if (row.provenanceCode === "privacy_bounded_repair_miner" && input.targetState === "trusted_read_only"
-      && (trials.oracleCompletePassed < 5 || trials.distinctOracleSkus < 3 || trials.distinctOracleLayouts < 2
+      && (trials.oracleCompleteCohortPassed < 5 || trials.distinctOracleCohortSkus < 3
+        || trials.distinctOracleCohortLayouts < 2
+        || trials.canaryOracleCompletePassed < CANARY_MINIMUM_COHORT_TRIALS
+        || trials.distinctCanaryOracleContributors < GENERATED_TRUSTED_MINIMUM_CONTRIBUTORS
+        || trials.distinctCanaryOracleDevices < GENERATED_TRUSTED_MINIMUM_CONTRIBUTORS
+        || trials.distinctCanaryOracleSkus < CANARY_MINIMUM_DISTINCT_SKUS
+        || trials.distinctCanaryOracleLayouts < CANARY_MINIMUM_DISTINCT_LAYOUTS
         || trials.packagedConflictTrials > 0 || trials.oracleConflictTrials > 0)) {
-      throw new Error("Generated repair trusted promotion requires five oracle-complete trials, three exact SKUs, two layouts, and no conflicts.");
+      throw new Error("Generated repair trusted promotion requires a clean 24-hour canary with three independent contributors and devices across three exact SKUs and two layouts.");
     }
     const rootedTrust = this.requireRootedTrust(now);
     const signedAt = nowIso(now);
@@ -1027,6 +1212,7 @@ export class ObserverRecipeRepository {
     const id = newId("observer_recipe_trial");
     const receivedAt = nowIso(now);
     let autoDisabled = false;
+    let autoDisabledReason = "";
     this.db.transaction(() => {
       const inserted = this.db.run(
         `INSERT OR IGNORE INTO observer_recipe_trials(
@@ -1037,8 +1223,8 @@ export class ObserverRecipeRepository {
            oracle_evaluated_field_count, oracle_agreed_field_count,
            oracle_conflict_field_count, packaged_missing_field_count,
            packaged_conflict_field_count, insufficient_field_count,
-           field_outcomes_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           field_outcomes_json, recipe_state_at_trial
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
@@ -1061,7 +1247,8 @@ export class ObserverRecipeRepository {
         validation.packagedMissingFieldCount,
         validation.packagedConflictFieldCount,
         validation.insufficientFieldCount,
-        validation.fieldOutcomesJson
+        validation.fieldOutcomesJson,
+        recipe.lifecycleState
       );
       if (Number(inserted.changes) === 1 && validation.packagedConflictFieldCount > 0) {
         const disabled = this.db.run(
@@ -1088,6 +1275,42 @@ export class ObserverRecipeRepository {
             }
           }, now);
           autoDisabled = true;
+          autoDisabledReason = "packaged_evidence_conflict";
+        }
+      }
+      if (Number(inserted.changes) === 1 && recipe.lifecycleState === "canary" && !autoDisabled) {
+        const trials = trialSummary(this.db, recipe.id, now);
+        if (trials.canaryRegressionSloBreached) {
+          const disabled = this.db.run(
+            `UPDATE observer_recipe_candidates SET lifecycle_state = 'disabled', kill_switch = 1,
+               disabled_reason = 'canary_regression_slo_breach', signature = '', signed_at = '', updated_at = ?
+             WHERE id = ? AND lifecycle_state = 'canary' AND kill_switch = 0`,
+            receivedAt,
+            recipe.id
+          );
+          if (Number(disabled.changes) === 1) {
+            this.lifecycle(recipe.id, "canary", "disabled", "canary_regression_slo_breach", now);
+            this.audit.record({
+              correlationId: recipe.id,
+              aggregateType: "observer_recipe",
+              eventType: "observer_recipe_auto_disabled",
+              reasonCode: "canary_regression_slo_breach",
+              message: "A contributor-deduplicated canary regression breached its bounded failure SLO and was undistributed.",
+              data: {
+                retailerId: input.retailerId,
+                recipeVersion: recipe.recipeVersion,
+                canaryCohortTrials: trials.canaryCohortTrials,
+                canaryCohortFailed: trials.canaryCohortFailed,
+                distinctCanaryContributors: trials.distinctCanaryContributors,
+                distinctFailureContributors: trials.distinctCanaryFailureContributors,
+                failurePercentThreshold: CANARY_REGRESSION_FAILURE_PERCENT,
+                mutationCapable: false,
+                rawValuesStored: false
+              }
+            }, now);
+            autoDisabled = true;
+            autoDisabledReason = "canary_regression_slo_breach";
+          }
         }
       }
     });
@@ -1099,6 +1322,7 @@ export class ObserverRecipeRepository {
       outcome: input.outcome,
       validationProfile: validation.validationProfile,
       autoDisabled,
+      autoDisabledReason,
       receivedAt
     };
   }
@@ -1146,7 +1370,11 @@ export class ObserverRecipeRepository {
     return { disabled, active };
   }
 
-  active(retailerId: SupportedRetailerId, now = Date.now()): SignedObserverRecipeEnvelope | null {
+  active(
+    retailerId: SupportedRetailerId,
+    now = Date.now(),
+    canaryContributorId = ""
+  ): SignedObserverRecipeEnvelope | null {
     if (!Object.hasOwn(RETAILER_OBSERVER_VERSIONS, retailerId)) throw new Error("The observer recipe retailer is unsupported.");
     const rows = this.db.all<RecipeRow>(
       `SELECT id, retailer_id AS retailerId, recipe_version AS recipeVersion,
@@ -1169,6 +1397,8 @@ export class ObserverRecipeRepository {
       nowIso(now)
     );
     for (const row of rows) {
+      if (row.lifecycleState === "canary" && canaryContributorId
+        && !observerRecipeCanaryCohortEligible(row.id, canaryContributorId)) continue;
       const envelope = this.envelope(row, now);
       if (envelope) return envelope;
     }
@@ -1185,7 +1415,7 @@ export class ObserverRecipeRepository {
       candidates: number; active: number; disabled: number; trials: number; failedTrials: number;
       generatedRepairCandidates: number; quarantinedGeneratedRepairCandidates: number;
       packagedOracleTrials: number; packagedConflictTrials: number;
-      oracleCompleteTrials: number; autoDisabledConflicts: number;
+      oracleCompleteTrials: number; autoDisabledConflicts: number; autoDisabledCanaryRegressions: number;
       trustManifests: number; transparencyEvents: number;
       witnessReceipts: number; witnessChecks: number; failedWitnessChecks: number;
     }>(
@@ -1213,6 +1443,8 @@ export class ObserverRecipeRepository {
             AND insufficient_field_count = 0) AS oracleCompleteTrials,
          (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?
             AND lifecycle_state = 'disabled' AND disabled_reason = 'packaged_evidence_conflict') AS autoDisabledConflicts,
+         (SELECT COUNT(*) FROM observer_recipe_candidates WHERE tenant_id = ?
+            AND lifecycle_state = 'disabled' AND disabled_reason = 'canary_regression_slo_breach') AS autoDisabledCanaryRegressions,
          (SELECT COUNT(*) FROM observer_recipe_trust_manifests WHERE tenant_id = ?) AS trustManifests,
          (SELECT COUNT(*) FROM observer_recipe_transparency_events WHERE tenant_id = ?) AS transparencyEvents,
          (SELECT COUNT(*) FROM observer_recipe_witness_receipts WHERE tenant_id = ?) AS witnessReceipts,
@@ -1223,6 +1455,7 @@ export class ObserverRecipeRepository {
       nowIso(now),
       currentTrust?.generation ?? 0,
       currentTrust?.manifestHash ?? "",
+      currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
       currentRequestScope().tenantId,
@@ -1250,6 +1483,7 @@ export class ObserverRecipeRepository {
       packagedConflictObserverRecipeTrials: Number(row?.packagedConflictTrials ?? 0),
       oracleCompleteObserverRecipeTrials: Number(row?.oracleCompleteTrials ?? 0),
       autoDisabledObserverRecipesByPackagedConflict: Number(row?.autoDisabledConflicts ?? 0),
+      autoDisabledObserverRecipesByCanaryRegression: Number(row?.autoDisabledCanaryRegressions ?? 0),
       observerRecipeTrustManifests: Number(row?.trustManifests ?? 0),
       observerRecipeTransparencyEvents: Number(row?.transparencyEvents ?? 0),
       observerRecipeWitnessReceipts: Number(row?.witnessReceipts ?? 0),

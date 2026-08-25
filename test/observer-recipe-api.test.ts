@@ -124,20 +124,41 @@ test("the signed observer registry distributes only promoted recipes to capable 
           disposition: "verified"
         })),
         observedAt: new Date().toISOString(),
+        recipeStateAtTrial: "trusted_read_only",
         extractedText: "DO_NOT_STORE"
       })
     });
     assert.equal(trialResponse.status, 201);
     assert.equal(JSON.stringify(db.all("SELECT * FROM observer_recipe_trials")).includes("DO_NOT_STORE"), false);
+    assert.equal(db.get<{ state: string }>(
+      "SELECT recipe_state_at_trial AS state FROM observer_recipe_trials WHERE recipe_id = ?",
+      recipe.id
+    )?.state, "shadow");
     const snapshot = await fetch(`${baseUrl}/api/v1/snapshot`).then((response) => response.json()) as {
       counts: Record<string, number>;
-      observerRegistry: { mutationCapable: boolean; recipes: Array<Record<string, unknown>> };
+      observerRegistry: {
+        mutationCapable: boolean;
+        trialQuorumPolicy: string;
+        canaryCohortPercent: number;
+        canaryMinimumDurationHours: number;
+        canaryRegressionAutoKill: boolean;
+        publicIndependentAccountQuorum: boolean;
+        recipeFieldFill: boolean;
+        recipes: Array<Record<string, unknown>>;
+      };
     };
     assert.equal(snapshot.counts.activeObserverRecipes, 1);
     assert.equal(snapshot.counts.observerRecipeTrials, 1);
     assert.equal(snapshot.counts.packagedOracleObserverRecipeTrials, 1);
     assert.equal(snapshot.counts.oracleCompleteObserverRecipeTrials, 1);
+    assert.equal(snapshot.counts.autoDisabledObserverRecipesByCanaryRegression, 0);
     assert.equal(snapshot.observerRegistry.mutationCapable, false);
+    assert.equal(snapshot.observerRegistry.trialQuorumPolicy, "latest_per_contributor_sku_layout_stage");
+    assert.equal(snapshot.observerRegistry.canaryCohortPercent, 25);
+    assert.equal(snapshot.observerRegistry.canaryMinimumDurationHours, 24);
+    assert.equal(snapshot.observerRegistry.canaryRegressionAutoKill, true);
+    assert.equal(snapshot.observerRegistry.publicIndependentAccountQuorum, false);
+    assert.equal(snapshot.observerRegistry.recipeFieldFill, false);
 
     const conflictResponse = await fetch(`${baseUrl}/api/v1/devices/self/observer-recipe-trials/amazon`, {
       method: "POST",

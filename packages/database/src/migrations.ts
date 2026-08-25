@@ -2986,5 +2986,20 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
           oracle_agreed_field_count, received_at DESC
         );
     `
+  },
+  {
+    version: 43,
+    name: "observer_recipe_contributor_canary_governance",
+    sql: `
+      ALTER TABLE observer_recipe_trials
+        ADD COLUMN recipe_state_at_trial TEXT NOT NULL DEFAULT 'legacy_unknown'
+          CHECK (recipe_state_at_trial IN ('legacy_unknown', 'shadow', 'canary', 'trusted_read_only'));
+
+      CREATE INDEX observer_recipe_trials_contributor_stage_idx
+        ON observer_recipe_trials(
+          recipe_id, recipe_state_at_trial, user_id,
+          retailer_sku, layout_fingerprint, observed_at DESC, received_at DESC
+        );
+    `
   }
 ]);

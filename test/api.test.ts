@@ -66,10 +66,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /worker-generated candidate/);
     assert.match(adminPageBody, /may be compiled into one bounded multi-field recipe candidate/);
     assert.match(adminPageBody, /availability, unit price, seller, fulfillment, and add control/);
-    assert.match(adminScript, /packaged-oracle complete/);
-    assert.match(adminScript, /independent account quorum pending/);
-    assert.match(adminScript, /single packaged conflict auto-kills distribution/);
-    assert.match(adminScript, /Next gate: 2 clean passes on 2 exact SKUs/);
+    assert.match(adminScript, /deduplicated oracle passes/);
+    assert.match(adminScript, /public anti-Sybil quorum pending/);
+    assert.match(adminScript, /multi-contributor regression SLO auto-kill/);
+    assert.match(adminScript, /Next gate: 2 contributor-deduplicated clean passes on 2 exact SKUs/);
+    assert.match(adminScript, /25% deterministic cohort/);
     assert.match(adminScript, /promotionReady \? "" : "disabled"/);
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
@@ -97,7 +98,13 @@ test("the loopback API serves the control center and processes a dry-run signal"
       generatedObserverRepairPackagedOracleImplemented: true,
       generatedObserverRepairPackagedOracleRequiredForPromotion: true,
       generatedObserverRepairIndependentAccountOracleImplemented: false,
+      generatedObserverRepairTenantContributorQuorumImplemented: true,
+      generatedObserverRepairPublicIndependentAccountQuorumImplemented: false,
       observerRecipePackagedConflictAutoKill: true,
+      observerRecipeContributorDeduplicatedQuorumImplemented: true,
+      observerRecipeCanaryCohortPercent: 25,
+      observerRecipeCanaryMinimumDurationHours: 24,
+      observerRecipeCanaryRegressionAutoKill: true,
       observerRecipeFieldFillEnabled: false,
       durableObserverRecipeWitnessRefresh: true,
       durableOperatorAlertConnectorDispatch: true,
@@ -273,7 +280,13 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.generatedObserverRepairPackagedOracleImplemented, true);
     assert.equal(snapshot.capabilities.generatedObserverRepairPackagedOracleRequiredForPromotion, true);
     assert.equal(snapshot.capabilities.generatedObserverRepairIndependentAccountOracleImplemented, false);
+    assert.equal(snapshot.capabilities.generatedObserverRepairTenantContributorQuorumImplemented, true);
+    assert.equal(snapshot.capabilities.generatedObserverRepairPublicIndependentAccountQuorumImplemented, false);
     assert.equal(snapshot.capabilities.observerRecipePackagedConflictAutoKill, true);
+    assert.equal(snapshot.capabilities.observerRecipeContributorDeduplicatedQuorumImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeCanaryCohortPercent, 25);
+    assert.equal(snapshot.capabilities.observerRecipeCanaryMinimumDurationHours, 24);
+    assert.equal(snapshot.capabilities.observerRecipeCanaryRegressionAutoKill, true);
     assert.equal(snapshot.capabilities.observerRecipeFieldFillEnabled, false);
     assert.equal(snapshot.capabilities.durableObserverRecipeWitnessRefresh, true);
     assert.equal(snapshot.capabilities.attestedBackgroundWorkerDeployment, true);

@@ -13,10 +13,23 @@ import {
   type ObserverRecipeTrialFieldOutcome,
   type ObserverRecipeTrialInput
 } from "../packages/contracts/src/index.js";
-import { YoinkDatabase } from "../packages/database/src/database.js";
+import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
-import { ObserverRecipeRepository } from "../packages/database/src/observer-recipe-repository.js";
+import {
+  OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS,
+  ObserverRecipeRepository,
+  observerRecipeCanaryCohortEligible
+} from "../packages/database/src/observer-recipe-repository.js";
 import { ObserverRepairCandidateRepository } from "../packages/database/src/observer-repair-candidate-repository.js";
+import {
+  HOSTED_PRINCIPAL_CONFIRMATION,
+  PrincipalRepository
+} from "../packages/database/src/principal-repository.js";
+import {
+  LOCAL_REQUEST_SCOPE,
+  runWithRequestScope,
+  type RequestScope
+} from "../packages/database/src/request-scope.js";
 import { ObserverRecipeSigner } from "../packages/observer-registry/src/signer.js";
 import {
   createObserverRecipeTrustManifest,
@@ -24,6 +37,16 @@ import {
 } from "../packages/observer-registry/src/trust.js";
 
 const NOW = new Date("2026-08-24T05:00:00.000Z").getTime();
+const SERVICE_SCOPE: RequestScope = {
+  tenantId: LOCAL_TENANT_ID,
+  userId: LOCAL_USER_ID,
+  actorKind: "service",
+  actorId: "observer_recipe_test_identity"
+};
+
+function contributorScope(userId: string): RequestScope {
+  return { tenantId: LOCAL_TENANT_ID, userId, actorKind: "user", actorId: userId };
+}
 
 function proposal(version = "amazon-layout-1", rollbackRecipeId = ""): ObserverRecipeProposalInput {
   return {
@@ -45,14 +68,32 @@ function proposal(version = "amazon-layout-1", rollbackRecipeId = ""): ObserverR
   };
 }
 
-function device(db: YoinkDatabase): { id: string; token: string } {
+function device(db: YoinkDatabase, now = NOW): { id: string; token: string } {
   const devices = new DeviceRepository(db);
-  const code = devices.createPairingCode(NOW);
+  const code = devices.createPairingCode(now);
   return devices.pair({
     pairingCode: code.code,
     extensionVersion: "0.13.0",
     capabilities: { observerRecipeShadow: true, observerRecipePackagedOracle: true }
-  }, NOW + 1_000);
+  }, now + 1_000);
+}
+
+function contributorDevice(
+  db: YoinkDatabase,
+  userId: string,
+  now = NOW
+): { scope: RequestScope; paired: { id: string; token: string } } {
+  const scope = userId === LOCAL_USER_ID ? LOCAL_REQUEST_SCOPE : contributorScope(userId);
+  if (userId !== LOCAL_USER_ID) {
+    runWithRequestScope(SERVICE_SCOPE, () => new PrincipalRepository(db).provision({
+      tenantId: LOCAL_TENANT_ID,
+      userId,
+      tenantName: "Local tenant",
+      displayName: userId,
+      confirmation: HOSTED_PRINCIPAL_CONFIRMATION
+    }, now));
+  }
+  return { scope, paired: runWithRequestScope(scope, () => device(db, now)) };
 }
 
 function oracleTrial(
@@ -92,6 +133,44 @@ function oracleTrial(
     packagedConflictFieldCount: conflictCount,
     insufficientFieldCount: 0,
     fieldOutcomes,
+    observedAt: new Date(observedAt).toISOString()
+  };
+}
+
+function insufficientOracleTrial(
+  recipeId: string,
+  recipeVersion: string,
+  sku: string,
+  observedAt: number,
+  field: ObserverRecipeField,
+  layout = "f".repeat(64)
+): ObserverRecipeTrialInput {
+  return {
+    contractVersion: OBSERVER_RECIPE_TRIAL_CONTRACT_VERSION,
+    recipeId,
+    recipeVersion,
+    retailerId: "amazon",
+    retailerSku: sku,
+    observerVersion: AMAZON_OBSERVER_VERSION,
+    layoutFingerprint: layout,
+    outcome: "failed",
+    evaluatedFieldCount: 1,
+    agreedFieldCount: 0,
+    ambiguousFieldCount: 0,
+    validationProfile: OBSERVER_RECIPE_TRIAL_VALIDATION_PROFILE,
+    oracleEvaluatedFieldCount: 0,
+    oracleAgreedFieldCount: 0,
+    oracleConflictFieldCount: 0,
+    packagedMissingFieldCount: 1,
+    packagedConflictFieldCount: 0,
+    insufficientFieldCount: 1,
+    fieldOutcomes: [{
+      field,
+      recipeState: "value",
+      packagedState: "missing",
+      oracleState: "missing",
+      disposition: "insufficient"
+    }],
     observedAt: new Date(observedAt).toISOString()
   };
 }
@@ -161,7 +240,7 @@ test("observer recipes advance only through signed, measured, observer-only life
     assert.throws(() => repository.promote(String(created.id), {
       targetState: "canary",
       confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
-    }, NOW + 4_000), /two passing/);
+    }, NOW + 4_000), /contributor-deduplicated passing/);
 
     repository.recordTrial(paired.id, trial(String(created.id), "amazon-layout-1", "B002OB49L4", NOW + 5_000), NOW + 6_000);
     repository.recordTrial(paired.id, trial(String(created.id), "amazon-layout-1", "B0DCGQ6CJD", NOW + 7_000), NOW + 8_000);
@@ -170,15 +249,19 @@ test("observer recipes advance only through signed, measured, observer-only life
       confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
     }, NOW + 9_000).lifecycleState, "canary");
 
-    repository.recordTrial(paired.id, trial(String(created.id), "amazon-layout-1", "B0F2BDXW4J", NOW + 10_000, "b".repeat(64)), NOW + 11_000);
-    repository.recordTrial(paired.id, trial(String(created.id), "amazon-layout-1", "B002OB49L4", NOW + 12_000, "b".repeat(64)), NOW + 13_000);
-    repository.recordTrial(paired.id, trial(String(created.id), "amazon-layout-1", "B0DCGQ6CJD", NOW + 14_000, "b".repeat(64)), NOW + 15_000);
+    const burnIn = NOW + 9_000 + OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS;
+    repository.recordTrial(paired.id, trial(String(created.id), "amazon-layout-1", "B0F2BDXW4J", burnIn + 1_000, "b".repeat(64)), burnIn + 2_000);
+    repository.recordTrial(paired.id, trial(String(created.id), "amazon-layout-1", "B002OB49L4", burnIn + 3_000, "b".repeat(64)), burnIn + 4_000);
+    repository.recordTrial(paired.id, trial(String(created.id), "amazon-layout-1", "B0DCGQ6CJD", burnIn + 5_000, "a".repeat(64)), burnIn + 6_000);
     const trusted = repository.promote(String(created.id), {
       targetState: "trusted_read_only",
       confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
-    }, NOW + 16_000);
+    }, burnIn + 7_000);
     assert.equal(trusted.lifecycleState, "trusted_read_only");
-    assert.deepEqual(trusted.trials, {
+    const stableTrials = { ...(trusted.trials as Record<string, unknown>) };
+    assert.ok(Number(stableTrials.canaryAgeSeconds) >= 86_400);
+    delete stableTrials.canaryAgeSeconds;
+    assert.deepEqual(stableTrials, {
       passed: 5,
       failed: 0,
       distinctSkus: 3,
@@ -189,10 +272,38 @@ test("observer recipes advance only through signed, measured, observer-only life
       distinctOracleLayouts: 0,
       packagedConflictTrials: 0,
       oracleConflictTrials: 0,
-      insufficientTrials: 0
+      insufficientTrials: 0,
+      cohortTrials: 5,
+      cohortPassed: 5,
+      cohortFailed: 0,
+      distinctCohortContributors: 1,
+      distinctCohortDevices: 1,
+      distinctCohortSkus: 3,
+      distinctCohortLayouts: 2,
+      oracleCompleteCohortPassed: 0,
+      distinctOracleContributors: 0,
+      distinctOracleDevices: 0,
+      distinctOracleCohortSkus: 0,
+      distinctOracleCohortLayouts: 0,
+      canaryCohortTrials: 3,
+      canaryCohortPassed: 3,
+      canaryCohortFailed: 0,
+      distinctCanaryContributors: 1,
+      distinctCanaryFailureContributors: 0,
+      distinctCanarySkus: 3,
+      distinctCanaryLayouts: 2,
+      canaryOracleCompletePassed: 0,
+      distinctCanaryOracleContributors: 0,
+      distinctCanaryOracleDevices: 0,
+      distinctCanaryOracleSkus: 0,
+      distinctCanaryOracleLayouts: 0,
+      canaryStartedAt: new Date(NOW + 9_000).toISOString(),
+      canaryMinimumDurationSeconds: 86_400,
+      canaryCohortPercent: 25,
+      canaryRegressionSloBreached: false
     });
-    assert.equal(repository.active("amazon", NOW + 17_000)?.payload.state, "trusted_read_only");
-    assert.equal(repository.counts(NOW + 17_000).activeObserverRecipes, 1);
+    assert.equal(repository.active("amazon", burnIn + 8_000)?.payload.state, "trusted_read_only");
+    assert.equal(repository.counts(burnIn + 8_000).activeObserverRecipes, 1);
   } finally {
     db.close();
   }
@@ -201,7 +312,10 @@ test("observer recipes advance only through signed, measured, observer-only life
 test("worker-generated repairs require oracle-complete evidence while legacy trials remain compatible", () => {
   const db = new YoinkDatabase();
   try {
-    const paired = device(db);
+    const first = contributorDevice(db, LOCAL_USER_ID);
+    const sameAccountSecondDevice = contributorDevice(db, LOCAL_USER_ID, NOW + 100);
+    const second = contributorDevice(db, "observer_contributor_two");
+    const third = contributorDevice(db, "observer_contributor_three");
     const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
     const repository = new ObserverRecipeRepository(db, trust);
     installRootedTrust(repository, trust);
@@ -220,28 +334,149 @@ test("worker-generated repairs require oracle-complete evidence while legacy tri
       targetState: "shadow",
       confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
     }, NOW + 3_000);
-    repository.recordTrial(paired.id, trial(generated.id, generated.recipeVersion, "B002OB49L4", NOW + 4_000), NOW + 4_500);
-    repository.recordTrial(paired.id, trial(generated.id, generated.recipeVersion, "B0DCGQ6CJD", NOW + 5_000), NOW + 5_500);
+    repository.recordTrial(first.paired.id, trial(generated.id, generated.recipeVersion, "B002OB49L4", NOW + 4_000), NOW + 4_500);
+    repository.recordTrial(first.paired.id, trial(generated.id, generated.recipeVersion, "B0DCGQ6CJD", NOW + 5_000), NOW + 5_500);
     assert.throws(() => repository.promote(generated.id, {
       targetState: "canary",
       confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
     }, NOW + 6_000), /packaged-oracle agreement/);
 
-    repository.recordTrial(paired.id, oracleTrial(
+    repository.recordTrial(first.paired.id, oracleTrial(
       generated.id, generated.recipeVersion, "B002OB49L4", NOW + 7_000, ["unitPrice"]
     ), NOW + 7_500);
-    repository.recordTrial(paired.id, oracleTrial(
+    repository.recordTrial(sameAccountSecondDevice.paired.id, oracleTrial(
+      generated.id, generated.recipeVersion, "B002OB49L4", NOW + 7_200, ["unitPrice"]
+    ), NOW + 7_600);
+    assert.throws(() => repository.promote(generated.id, {
+      targetState: "canary",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 7_750), /two independent contributors/);
+    runWithRequestScope(second.scope, () => repository.recordTrial(second.paired.id, oracleTrial(
       generated.id, generated.recipeVersion, "B0DCGQ6CJD", NOW + 8_000, ["unitPrice"]
-    ), NOW + 8_500);
+    ), NOW + 8_500));
     const canary = repository.promote(generated.id, {
       targetState: "canary",
       confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
     }, NOW + 9_000);
     assert.equal(canary.lifecycleState, "canary");
-    const summary = canary.trials as Record<string, number>;
-    assert.equal(summary.packagedOracleTrials, 2);
-    assert.equal(summary.oracleCompletePassed, 2);
+    const summary = canary.trials as Record<string, unknown>;
+    assert.equal(summary.packagedOracleTrials, 3);
+    assert.equal(summary.oracleCompletePassed, 3);
     assert.equal(summary.distinctOracleSkus, 2);
+    assert.equal(summary.oracleCompleteCohortPassed, 2);
+    assert.equal(summary.cohortTrials, 3);
+    assert.equal(summary.distinctOracleContributors, 2);
+    assert.equal(summary.distinctOracleDevices, 2);
+
+    let eligibleContributor = "";
+    let excludedContributor = "";
+    for (let index = 0; index < 1_000 && (!eligibleContributor || !excludedContributor); index += 1) {
+      const candidate = `cohort_contributor_${index}`;
+      if (observerRecipeCanaryCohortEligible(generated.id, candidate)) eligibleContributor ||= candidate;
+      else excludedContributor ||= candidate;
+    }
+    assert.ok(eligibleContributor);
+    assert.ok(excludedContributor);
+    assert.equal(repository.active("amazon", NOW + 10_000, eligibleContributor)?.payload.state, "canary");
+    assert.equal(repository.active("amazon", NOW + 10_000, excludedContributor), null);
+    assert.equal(observerRecipeCanaryCohortEligible(generated.id, eligibleContributor), true);
+
+    const burnIn = NOW + 9_000 + OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS;
+    repository.recordTrial(first.paired.id, oracleTrial(
+      generated.id, generated.recipeVersion, "B002OB49L4", burnIn + 1_000, ["unitPrice"], "d".repeat(64)
+    ), burnIn + 2_000);
+    runWithRequestScope(second.scope, () => repository.recordTrial(second.paired.id, oracleTrial(
+      generated.id, generated.recipeVersion, "B0DCGQ6CJD", burnIn + 3_000, ["unitPrice"], "d".repeat(64)
+    ), burnIn + 4_000));
+    runWithRequestScope(third.scope, () => repository.recordTrial(third.paired.id, oracleTrial(
+      generated.id, generated.recipeVersion, "B0F2BDXW4J", burnIn + 5_000, ["unitPrice"], "e".repeat(64)
+    ), burnIn + 6_000));
+    const trusted = repository.promote(generated.id, {
+      targetState: "trusted_read_only",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, burnIn + 7_000);
+    assert.equal(trusted.lifecycleState, "trusted_read_only");
+    const trustedSummary = trusted.trials as Record<string, unknown>;
+    assert.equal(trustedSummary.canaryOracleCompletePassed, 3);
+    assert.equal(trustedSummary.distinctCanaryOracleContributors, 3);
+    assert.equal(trustedSummary.distinctCanaryOracleDevices, 3);
+    assert.equal(trustedSummary.distinctCanaryOracleSkus, 3);
+    assert.equal(trustedSummary.distinctCanaryOracleLayouts, 2);
+  } finally {
+    db.close();
+  }
+});
+
+test("a contributor-deduplicated canary regression breaches its SLO and auto-kills distribution", () => {
+  const db = new YoinkDatabase();
+  try {
+    const first = contributorDevice(db, LOCAL_USER_ID);
+    const second = contributorDevice(db, "observer_regression_two");
+    const trust = ObserverRecipeTrustAuthority.ephemeral(NOW);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust);
+    const input = proposal("amazon-canary-regression");
+    input.fields = { unitPrice: { mode: "text", selectors: [".a-price .a-offscreen"] } };
+    const created = repository.propose(input, NOW + 2_000);
+    repository.promote(String(created.id), {
+      targetState: "shadow",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 3_000);
+    repository.recordTrial(first.paired.id, oracleTrial(
+      String(created.id), "amazon-canary-regression", "B002OB49L4", NOW + 4_000, ["unitPrice"]
+    ), NOW + 4_500);
+    repository.recordTrial(first.paired.id, oracleTrial(
+      String(created.id), "amazon-canary-regression", "B0DCGQ6CJD", NOW + 5_000, ["unitPrice"]
+    ), NOW + 5_500);
+    repository.promote(String(created.id), {
+      targetState: "canary",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, NOW + 6_000);
+
+    repository.recordTrial(first.paired.id, oracleTrial(
+      String(created.id), "amazon-canary-regression", "B0F2BDXW4J", NOW + 7_000, ["unitPrice"], "a".repeat(64)
+    ), NOW + 7_500);
+    runWithRequestScope(second.scope, () => repository.recordTrial(second.paired.id, oracleTrial(
+      String(created.id), "amazon-canary-regression", "B081J5PW5J", NOW + 8_000, ["unitPrice"], "b".repeat(64)
+    ), NOW + 8_500));
+    const firstFailure = repository.recordTrial(first.paired.id, insufficientOracleTrial(
+      String(created.id), "amazon-canary-regression", "B08JZHXQDN", NOW + 9_000, "unitPrice", "c".repeat(64)
+    ), NOW + 9_500);
+    assert.equal(firstFailure.autoDisabled, false);
+    const sameContributorFailure = repository.recordTrial(first.paired.id, insufficientOracleTrial(
+      String(created.id), "amazon-canary-regression", "B015TKSSB8", NOW + 10_000, "unitPrice", "d".repeat(64)
+    ), NOW + 10_500);
+    assert.equal(sameContributorFailure.autoDisabled, false);
+    assert.equal(repository.list().find((item) => item.id === created.id)?.lifecycleState, "canary");
+
+    const independentFailure = runWithRequestScope(second.scope, () => repository.recordTrial(
+      second.paired.id,
+      insufficientOracleTrial(
+        String(created.id), "amazon-canary-regression", "B0GF44F4MG", NOW + 11_000, "unitPrice", "e".repeat(64)
+      ),
+      NOW + 11_500
+    ));
+    assert.equal(independentFailure.autoDisabled, true);
+    assert.equal(independentFailure.autoDisabledReason, "canary_regression_slo_breach");
+    assert.equal(repository.active("amazon", NOW + 12_000), null);
+    const disabled = repository.list().find((item) => item.id === created.id);
+    assert.ok(disabled);
+    assert.equal(disabled.lifecycleState, "disabled");
+    assert.equal(disabled.disabledReason, "canary_regression_slo_breach");
+    const summary = disabled.trials as Record<string, unknown>;
+    assert.equal(summary.canaryCohortTrials, 5);
+    assert.equal(summary.canaryCohortFailed, 3);
+    assert.equal(summary.distinctCanaryFailureContributors, 2);
+    assert.equal(summary.canaryRegressionSloBreached, true);
+    assert.equal(repository.counts(NOW + 12_000).autoDisabledObserverRecipesByCanaryRegression, 1);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM observer_recipe_lifecycle_events WHERE recipe_id = ? AND reason_code = 'canary_regression_slo_breach'",
+      String(created.id)
+    )?.count, 1);
+    assert.deepEqual(db.all<{ recipeState: string }>(
+      "SELECT DISTINCT recipe_state_at_trial AS recipeState FROM observer_recipe_trials WHERE recipe_id = ? ORDER BY recipeState",
+      String(created.id)
+    ).map((row) => row.recipeState), ["canary", "shadow"]);
   } finally {
     db.close();
   }

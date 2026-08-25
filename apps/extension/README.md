@@ -55,6 +55,14 @@ selectors, DOM, URLs, and session/account context are not sent. The oracle
 bundle has no network or mutation path and none of the four add-only runners
 consume its output.
 
+Companion 0.50 uses the same value-free trial-v2 payload. The server—not the
+extension—stamps the signed recipe's lifecycle stage, deduplicates repeated
+evidence by authenticated tenant contributor/SKU/layout/stage, and assigns a
+stable 25% account cohort for canary delivery. Multiple Chrome devices for one
+account cannot multiply its contributor quorum. No new page data, account
+identifier, region, or recipe value is added to the browser receipt; recipe
+field-fill and every mutation runner remain disconnected.
+
 If that canonical diagnostic cannot reach the loopback server because of a
 transient network, timeout/rate-limit, or server failure, companion 0.17.0 keeps
 it in a paired-device-bound local outbox and retries on startup and the

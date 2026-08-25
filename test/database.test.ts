@@ -1586,7 +1586,7 @@ test("migration 41 adds bounded observer-repair evaluation without losing durabl
   }
 });
 
-test("migration 42 preserves legacy recipe trials and adds bounded packaged-oracle evidence", () => {
+test("migrations 42 and 43 preserve legacy trials while adding bounded oracle and canary governance", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-observer-oracle-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -1646,19 +1646,26 @@ test("migration 42 preserves legacy recipe trials and adds bounded packaged-orac
       assert.equal(upgraded.get<{ count: number }>(
         "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 42 AND name = 'packaged_observer_recipe_oracle'"
       )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 43 AND name = 'observer_recipe_contributor_canary_governance'"
+      )?.count, 1);
       const preserved = upgraded.get<Record<string, unknown>>(
         `SELECT validation_profile, oracle_evaluated_field_count,
-                packaged_conflict_field_count, field_outcomes_json
+                packaged_conflict_field_count, field_outcomes_json, recipe_state_at_trial
          FROM observer_recipe_trials WHERE id = 'observer_recipe_trial_upgrade_42'`
       );
       assert.deepEqual({ ...preserved }, {
         validation_profile: "legacy_packaged_comparison",
         oracle_evaluated_field_count: 0,
         packaged_conflict_field_count: 0,
-        field_outcomes_json: "[]"
+        field_outcomes_json: "[]",
+        recipe_state_at_trial: "legacy_unknown"
       });
       assert.equal(upgraded.get<{ count: number }>(
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'observer_recipe_trials_oracle_gate_idx'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'observer_recipe_trials_contributor_stage_idx'"
       )?.count, 1);
       assert.throws(
         () => upgraded.run("UPDATE observer_recipe_trials SET validation_profile = 'untrusted_page_script'"),
@@ -1666,6 +1673,10 @@ test("migration 42 preserves legacy recipe trials and adds bounded packaged-orac
       );
       assert.throws(
         () => upgraded.run("UPDATE observer_recipe_trials SET field_outcomes_json = '{\"rawDom\":\"DO_NOT_STORE\"}'"),
+        /constraint failed/
+      );
+      assert.throws(
+        () => upgraded.run("UPDATE observer_recipe_trials SET recipe_state_at_trial = 'checkout'"),
         /constraint failed/
       );
       assert.equal(upgraded.get<{ count: number }>(

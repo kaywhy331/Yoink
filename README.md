@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.49.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.50.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,24 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.50.0 makes signed observer-recipe canaries contributor-aware and
+stage-aware before any recipe-derived field can become product evidence.
+Migration 43 stamps each new trial with the server-known recipe lifecycle
+stage. Promotion counts only the latest trial for one tenant contributor,
+exact SKU, layout, and stage, so retries and extra paired devices cannot inflate
+quorum. Worker-generated canary entry requires two distinct tenant users and
+devices; trusted read-only requires a 24-hour burn-in plus three canary users,
+devices, SKUs, and two layouts.
+
+Canary delivery is assigned deterministically to 25% of tenant accounts. A
+canary with at least four current cohort trials automatically kills and
+undistributes when at least two contributors fail and failing contributors are
+at least half of the cohort. This is a conservative tenant-scoped safety seam,
+not public account reputation or Sybil resistance. Automatic signing,
+promotion, recipe field-fill, cross-region quorum, mutation, checkout, and
+order submission remain closed. See
+[observer-recipe canary governance](docs/OBSERVER_RECIPE_CANARY_GOVERNANCE.md).
 
 Version 0.49.0 adds a fixed packaged structured-page oracle for the five-field
 observer-repair lifecycle introduced in 0.48. Signed recipes are now compared
@@ -29,7 +47,7 @@ field across two exact SKUs; trusted read-only promotion requires five complete
 trials, three SKUs, and two layouts. One conflict with known packaged evidence
 immediately kills and undistributes the recipe with bounded lifecycle and audit
 evidence. Automatic signing/promotion, recipe-derived observation field-fill,
-independent-account consensus, checkout, and order submission remain closed.
+public independent-account consensus, checkout, and order submission remain closed.
 See [packaged observer-recipe oracle](docs/OBSERVER_RECIPE_ORACLE.md).
 
 Version 0.48.0 extended privacy-bounded observer repair mining across all five
@@ -46,7 +64,7 @@ representable and tested; partial candidates are intended only for missing
 read-only fields, but runtime field-fill remains disabled. Automatic processing
 still stops at unsigned 30-day quarantine. The
 external or independent-account correctness oracle, cross-account/Sybil-resistant
-consensus, cohort canaries, and automatic validation/promotion remain deliberately
+consensus, regional/public-reputation canaries, and automatic validation/promotion remain deliberately
 open. See [adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md)
 and [durable observer-repair candidate evaluation](docs/OBSERVER_REPAIR_CANDIDATE_EVALUATION.md).
 

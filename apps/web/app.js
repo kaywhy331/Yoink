@@ -544,25 +544,43 @@ function renderObserverRegistry() {
     const selectorCount = Object.values(recipe.fields || {}).reduce((sum, field) => sum + Number(field.selectors?.length || 0), 0);
     const generated = recipe.provenanceCode === "privacy_bounded_repair_miner";
     const fieldNames = Object.keys(recipe.fields || {}).map(observerFieldName).join(", ");
-    const oracleComplete = Number(trials.oracleCompletePassed || 0);
+    const oracleComplete = Number(trials.oracleCompleteCohortPassed || 0);
     const packagedConflicts = Number(trials.packagedConflictTrials || 0);
     const oracleConflicts = Number(trials.oracleConflictTrials || 0);
-    const canaryReady = Number(trials.failed || 0) === 0 && Number(trials.passed || 0) >= 2
-      && Number(trials.distinctSkus || 0) >= 2
-      && (!generated || (oracleComplete >= 2 && Number(trials.distinctOracleSkus || 0) >= 2
-        && packagedConflicts === 0 && oracleConflicts === 0));
-    const trustedReady = Number(trials.failed || 0) === 0 && Number(trials.passed || 0) >= 5
-      && Number(trials.distinctSkus || 0) >= 3 && Number(trials.distinctLayouts || 0) >= 2
-      && (!generated || (oracleComplete >= 5 && Number(trials.distinctOracleSkus || 0) >= 3
-        && Number(trials.distinctOracleLayouts || 0) >= 2 && packagedConflicts === 0 && oracleConflicts === 0));
+    const cohortPassed = Number(trials.cohortPassed || 0);
+    const cohortSkus = Number(trials.distinctCohortSkus || 0);
+    const cohortLayouts = Number(trials.distinctCohortLayouts || 0);
+    const oracleContributors = Number(trials.distinctOracleContributors || 0);
+    const oracleDevices = Number(trials.distinctOracleDevices || 0);
+    const canaryPasses = Number(trials.canaryCohortPassed || 0);
+    const canarySkus = Number(trials.distinctCanarySkus || 0);
+    const canaryLayouts = Number(trials.distinctCanaryLayouts || 0);
+    const canaryOraclePasses = Number(trials.canaryOracleCompletePassed || 0);
+    const canaryOracleContributors = Number(trials.distinctCanaryOracleContributors || 0);
+    const canaryOracleDevices = Number(trials.distinctCanaryOracleDevices || 0);
+    const canaryAgeSeconds = Number(trials.canaryAgeSeconds || 0);
+    const canaryMinimumSeconds = Number(trials.canaryMinimumDurationSeconds || 86_400);
+    const burnInReady = Boolean(trials.canaryStartedAt) && canaryAgeSeconds >= canaryMinimumSeconds;
+    const clean = Number(trials.failed || 0) === 0 && packagedConflicts === 0
+      && oracleConflicts === 0 && trials.canaryRegressionSloBreached !== true;
+    const canaryReady = clean && cohortPassed >= 2 && cohortSkus >= 2
+      && (!generated || (oracleComplete >= 2 && Number(trials.distinctOracleCohortSkus || 0) >= 2
+        && oracleContributors >= 2 && oracleDevices >= 2));
+    const trustedReady = clean && cohortPassed >= 5 && cohortSkus >= 3 && cohortLayouts >= 2
+      && burnInReady && canaryPasses >= 3 && canarySkus >= 3 && canaryLayouts >= 2
+      && (!generated || (oracleComplete >= 5 && Number(trials.distinctOracleCohortSkus || 0) >= 3
+        && Number(trials.distinctOracleCohortLayouts || 0) >= 2 && canaryOraclePasses >= 3
+        && canaryOracleContributors >= 3 && canaryOracleDevices >= 3
+        && Number(trials.distinctCanaryOracleSkus || 0) >= 3
+        && Number(trials.distinctCanaryOracleLayouts || 0) >= 2));
     const promotionReady = nextState === "shadow" || (nextState === "canary" && canaryReady)
       || (nextState === "trusted_read_only" && trustedReady);
     const promotionHint = nextState === "canary" && !promotionReady
-      ? `Next gate: 2 clean passes on 2 exact SKUs${generated ? ", with every field confirmed by the packaged oracle" : ""}.`
+      ? `Next gate: 2 contributor-deduplicated clean passes on 2 exact SKUs${generated ? ", with 2 tenant contributors/devices and every field confirmed by the packaged oracle" : ""}.`
       : nextState === "trusted_read_only" && !promotionReady
-        ? `Next gate: 5 clean passes on 3 exact SKUs and 2 layouts${generated ? ", all packaged-oracle complete" : ""}.`
+        ? `Next gate: a clean 24-hour canary, 5 deduplicated passes, and 3 canary passes on 3 exact SKUs and 2 layouts${generated ? ", including 3 tenant contributors/devices with every field oracle-complete" : ""}.`
         : "";
-    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(recipe.retailerId))} · ${escapeHtml(recipe.recipeVersion)}</h3><p>${Object.keys(recipe.fields || {}).length} fields (${escapeHtml(fieldNames)}) · ${selectorCount} bounded selectors · minimum extension ${escapeHtml(recipe.minimumExtensionVersion)} · expires ${escapeHtml(relativeTime(recipe.expiresAt))}</p></div><span class="tag ${kind}">${escapeHtml(String(recipe.lifecycleState).replaceAll("_", " "))}</span></div><div class="card-meta">${generated ? `<span class="tag warning">worker-generated candidate</span><span class="tag ${oracleComplete ? "good" : "warning"}">${oracleComplete} packaged-oracle complete</span><span class="tag">independent account quorum pending</span>` : ""}<span class="tag">${Number(trials.passed || 0)} passed</span><span class="tag ${Number(trials.failed || 0) ? "bad" : ""}">${Number(trials.failed || 0)} failed</span><span class="tag">${Number(trials.distinctSkus || 0)} SKUs</span><span class="tag">${Number(trials.distinctLayouts || 0)} layouts</span><span class="tag ${packagedConflicts ? "bad" : ""}">${packagedConflicts} packaged conflicts</span><span class="tag ${oracleConflicts ? "bad" : ""}">${oracleConflicts} oracle conflicts</span><span class="tag">Fingerprint ${escapeHtml(String(recipe.recipeFingerprint).slice(0, 12))}</span><span class="tag ${needsResign ? "bad" : ""}">Root G${Number(recipe.trustManifestGeneration || 0)}</span>${recipe.rollbackRecipeId ? `<span class="tag">Rollback ${escapeHtml(String(recipe.rollbackRecipeId).slice(0, 12))}</span>` : ""}</div>${generated ? '<p class="fine-print">Compiled from thresholded structural landmarks only. Shadow distribution requires explicit review; canary and trusted promotion require packaged structured-oracle agreement on every field. A single packaged conflict auto-kills distribution. Recipe field-fill and all mutation authority remain closed.</p>' : ""}${promotionHint ? `<p class="fine-print">${escapeHtml(promotionHint)}</p>` : ""}<div class="card-actions">${needsResign && trust.signingReady ? `<button class="button secondary" data-observer-resign="${escapeHtml(recipe.id)}" type="button">Re-sign at root G${generation}</button>` : ""}${nextState ? `<button class="button primary" data-observer-promote="${escapeHtml(recipe.id)}" data-observer-target="${escapeHtml(nextState)}" type="button" ${promotionReady ? "" : "disabled"}>Promote to ${escapeHtml(nextState.replaceAll("_", " "))}</button>` : ""}${recipe.lifecycleState !== "disabled" ? `<button class="button danger" data-observer-disable="${escapeHtml(recipe.id)}" type="button">Kill switch</button>` : ""}${recipe.rollbackRecipeId && recipe.lifecycleState !== "disabled" ? `<button class="button secondary" data-observer-rollback="${escapeHtml(recipe.id)}" type="button">Rollback</button>` : ""}</div>${recipe.disabledReason ? `<p class="identity-conflict">Disabled: ${escapeHtml(String(recipe.disabledReason).replaceAll("_", " "))}</p>` : ""}</article>`;
+    return `<article class="community-evidence-row"><div class="card-top"><div><h3>${escapeHtml(retailerName(recipe.retailerId))} · ${escapeHtml(recipe.recipeVersion)}</h3><p>${Object.keys(recipe.fields || {}).length} fields (${escapeHtml(fieldNames)}) · ${selectorCount} bounded selectors · minimum extension ${escapeHtml(recipe.minimumExtensionVersion)} · expires ${escapeHtml(relativeTime(recipe.expiresAt))}</p></div><span class="tag ${kind}">${escapeHtml(String(recipe.lifecycleState).replaceAll("_", " "))}</span></div><div class="card-meta">${generated ? `<span class="tag warning">worker-generated candidate</span><span class="tag ${oracleComplete ? "good" : "warning"}">${oracleComplete} deduplicated oracle passes</span><span class="tag ${oracleContributors >= 2 ? "good" : "warning"}">${oracleContributors} tenant contributors</span><span class="tag">public anti-Sybil quorum pending</span>` : ""}<span class="tag">${cohortPassed} deduplicated passes</span><span class="tag ${Number(trials.failed || 0) ? "bad" : ""}">${Number(trials.failed || 0)} raw failures</span><span class="tag">${cohortSkus} SKUs</span><span class="tag">${cohortLayouts} layouts</span>${recipe.lifecycleState === "canary" ? `<span class="tag ${burnInReady ? "good" : "warning"}">${Math.floor(canaryAgeSeconds / 3_600)}h / 24h canary</span><span class="tag">25% deterministic cohort</span>` : ""}<span class="tag ${packagedConflicts ? "bad" : ""}">${packagedConflicts} packaged conflicts</span><span class="tag ${oracleConflicts ? "bad" : ""}">${oracleConflicts} oracle conflicts</span><span class="tag">Fingerprint ${escapeHtml(String(recipe.recipeFingerprint).slice(0, 12))}</span><span class="tag ${needsResign ? "bad" : ""}">Root G${Number(recipe.trustManifestGeneration || 0)}</span>${recipe.rollbackRecipeId ? `<span class="tag">Rollback ${escapeHtml(String(recipe.rollbackRecipeId).slice(0, 12))}</span>` : ""}</div>${generated ? '<p class="fine-print">Compiled from thresholded structural landmarks only. Promotion counts only the latest result per tenant contributor, exact SKU, layout, and stage. Canary delivery is deterministic and bounded; packaged conflicts and a multi-contributor regression SLO auto-kill distribution. Public account reputation, recipe field-fill, and all mutation authority remain closed.</p>' : ""}${promotionHint ? `<p class="fine-print">${escapeHtml(promotionHint)}</p>` : ""}<div class="card-actions">${needsResign && trust.signingReady ? `<button class="button secondary" data-observer-resign="${escapeHtml(recipe.id)}" type="button">Re-sign at root G${generation}</button>` : ""}${nextState ? `<button class="button primary" data-observer-promote="${escapeHtml(recipe.id)}" data-observer-target="${escapeHtml(nextState)}" type="button" ${promotionReady ? "" : "disabled"}>Promote to ${escapeHtml(nextState.replaceAll("_", " "))}</button>` : ""}${recipe.lifecycleState !== "disabled" ? `<button class="button danger" data-observer-disable="${escapeHtml(recipe.id)}" type="button">Kill switch</button>` : ""}${recipe.rollbackRecipeId && recipe.lifecycleState !== "disabled" ? `<button class="button secondary" data-observer-rollback="${escapeHtml(recipe.id)}" type="button">Rollback</button>` : ""}</div>${recipe.disabledReason ? `<p class="identity-conflict">Disabled: ${escapeHtml(String(recipe.disabledReason).replaceAll("_", " "))}</p>` : ""}</article>`;
   }).join("") : empty("No declarative observer recipes. Bundled observer versions remain authoritative.");
 }
 

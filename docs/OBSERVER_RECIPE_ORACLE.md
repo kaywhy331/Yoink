@@ -75,6 +75,15 @@ promotion requirements remain in force.
   submission.
 - A second packaged reader can share implementation assumptions with the
   bundled observer. Redacted maintainer fixtures, explicit normalized user
-  confirmation, contributor-deduplicated devices/accounts, cohort canaries,
-  measured false-positive SLOs, and external consistency monitoring remain
+  confirmation, public reputable-account/Sybil controls, regional cohorts,
+  long-horizon false-positive SLOs, and external consistency monitoring remain
   roadmap work.
+
+## 0.50 governance follow-on
+
+Version 0.50 implements the tenant-scoped portion of the final bullet:
+latest-per-contributor/SKU/layout/stage quorum, distinct user/device gates, a
+deterministic 25% canary, a 24-hour burn-in, and a multi-contributor regression
+auto-kill. It does not turn tenant user IDs into reputable public identities;
+production IdP/device risk, region, reputation, and Sybil defenses remain
+closed. See [observer-recipe canary governance](OBSERVER_RECIPE_CANARY_GOVERNANCE.md).

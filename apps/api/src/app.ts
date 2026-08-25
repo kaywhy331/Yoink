@@ -88,7 +88,11 @@ import {
 } from "../../../packages/database/src/hosted-delivery-repository.js";
 import { IdentityClaimRepository } from "../../../packages/database/src/identity-claim-repository.js";
 import { NotificationRepository } from "../../../packages/database/src/notification-repository.js";
-import { ObserverRecipeRepository } from "../../../packages/database/src/observer-recipe-repository.js";
+import {
+  OBSERVER_RECIPE_CANARY_COHORT_PERCENT,
+  OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS,
+  ObserverRecipeRepository
+} from "../../../packages/database/src/observer-recipe-repository.js";
 import {
   OPERATIONAL_TELEMETRY_WINDOWS,
   OperationalTelemetryRepository,
@@ -615,7 +619,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           generatedObserverRepairPackagedOracleImplemented: true,
           generatedObserverRepairPackagedOracleRequiredForPromotion: true,
           generatedObserverRepairIndependentAccountOracleImplemented: false,
+          generatedObserverRepairTenantContributorQuorumImplemented: true,
+          generatedObserverRepairPublicIndependentAccountQuorumImplemented: false,
           observerRecipePackagedConflictAutoKill: true,
+          observerRecipeContributorDeduplicatedQuorumImplemented: true,
+          observerRecipeCanaryCohortPercent: OBSERVER_RECIPE_CANARY_COHORT_PERCENT,
+          observerRecipeCanaryMinimumDurationHours: OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS / 3_600_000,
+          observerRecipeCanaryRegressionAutoKill: true,
           observerRecipeFieldFillEnabled: false,
           durableObserverRecipeWitnessRefresh: true,
           durableOperatorAlertConnectorDispatch: true,
@@ -987,7 +997,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             throw new Error("Upgrade the Chrome companion before requesting observer recipes.");
           }
           const retailerId = observerRecipeMatch[1] as SupportedRetailerId;
-          const recipe = observerRecipes.active(retailerId);
+          const recipe = observerRecipes.active(retailerId, Date.now(), currentRequestScope().userId);
           const witness = observerRecipes.witnessStatus() as { deliveryAllowed?: boolean; state?: string };
           if (recipe && witness.deliveryAllowed !== true) {
             throw new ApiError(
@@ -1357,6 +1367,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             key: observerRecipes.keyInfo(),
             trust: observerTrust,
             mutationCapable: false,
+            trialQuorumPolicy: "latest_per_contributor_sku_layout_stage",
+            canaryCohortPercent: OBSERVER_RECIPE_CANARY_COHORT_PERCENT,
+            canaryMinimumDurationHours: OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS / 3_600_000,
+            canaryRegressionAutoKill: true,
+            tenantContributorQuorum: true,
+            publicIndependentAccountQuorum: false,
+            recipeFieldFill: false,
             recipes: observerRecipes.list()
           },
           catalogGovernance: {
@@ -1436,7 +1453,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             generatedObserverRepairPackagedOracleImplemented: true,
             generatedObserverRepairPackagedOracleRequiredForPromotion: true,
             generatedObserverRepairIndependentAccountOracleImplemented: false,
+            generatedObserverRepairTenantContributorQuorumImplemented: true,
+            generatedObserverRepairPublicIndependentAccountQuorumImplemented: false,
             observerRecipePackagedConflictAutoKill: true,
+            observerRecipeContributorDeduplicatedQuorumImplemented: true,
+            observerRecipeCanaryCohortPercent: OBSERVER_RECIPE_CANARY_COHORT_PERCENT,
+            observerRecipeCanaryMinimumDurationHours: OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS / 3_600_000,
+            observerRecipeCanaryRegressionAutoKill: true,
             observerRecipeFieldFillEnabled: false,
             durableObserverRecipeWitnessRefresh: true,
             attestedBackgroundWorkerDeployment: true,

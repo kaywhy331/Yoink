@@ -547,6 +547,25 @@ software trust domain rather than an independent account/service, and recipe
 field-fill remains disabled until stored observations can expose and govern
 that provenance.
 
+Yoink 0.50 makes that trial ledger stage-aware and contributor-deduplicated.
+Migration 43 adds only the server-derived `recipe_state_at_trial`; existing
+receipts become `legacy_unknown`. Promotion queries retain raw append-only
+failure totals but count only the latest row for one tenant user, exact SKU,
+layout fingerprint, and lifecycle stage. Generated canary entry therefore
+requires two distinct users and devices rather than repeated evidence from one
+account. Trusted read-only adds a 24-hour canary and three-user/device canary
+coverage across three SKUs and two layouts.
+
+Device recipe fetches pass the authenticated user boundary into deterministic
+cohort selection. A canary is returned only for 25 percent of stable
+recipe/user buckets; excluded accounts fall back to another signed recipe or
+the packaged observer. After accepted canary trials, a conditional transaction
+auto-disables a recipe when at least two contributors fail, failing
+contributors are at least half of the current cohort, and four current cohort
+trials exist. This tenant-account seam is not public identity reputation or
+Sybil resistance. Region, recipe-derived field fill, automatic promotion, and
+all mutation uses remain closed.
+
 Yoink 0.38.0 makes the paired Chrome credential a generation-bound,
 recoverable lifecycle rather than an indefinitely static hash. Begin is
 authenticated only by the current token and stores a 10-minute next-generation
@@ -781,7 +800,9 @@ No schema migration was needed for 0.48. Optional field-specific structural
 counts remain in the existing diagnostic JSON, and the recipe JSON already
 stores a field map. Migration 42 in 0.49 adds only bounded recipe-trial oracle
 states/counts and preserves every legacy trial; it does not widen retailer or
-mutation authority.
+mutation authority. Migration 43 in 0.50 adds only a bounded server-derived
+trial-stage enum and its contributor/stage index; it likewise changes no
+retailer qualification or mutation authority.
 
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted

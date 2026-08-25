@@ -757,7 +757,7 @@ export class UserPrivacyRepository {
                 oracle_agreed_field_count, oracle_conflict_field_count,
                 packaged_missing_field_count, packaged_conflict_field_count,
                 insufficient_field_count, field_outcomes_json,
-                observed_at, received_at
+                recipe_state_at_trial, observed_at, received_at
          FROM observer_recipe_trials WHERE tenant_id = ? AND user_id = ?
          ORDER BY received_at, id`,
         tenantId, userId
