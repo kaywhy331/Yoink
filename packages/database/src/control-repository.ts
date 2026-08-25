@@ -4,6 +4,8 @@ import {
   type Fulfillment,
   type AppSettingsUpdateInput,
   type MissionContext,
+  type PurchaseIntentCreateInput,
+  type PurchaseIntentPolicyUpdateInput,
   type MissionUpdateInput,
   type SellerPolicy,
   type StrategyDefinition
@@ -13,7 +15,7 @@ import { cleanText } from "../../domain/src/normalize.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 import { AuditRepository } from "./audit-repository.js";
-import { PurchasePolicyRepository } from "./purchase-policy-repository.js";
+import { PurchasePolicyRepository, PurchaseSafetyError } from "./purchase-policy-repository.js";
 import { SignalRepository } from "./signal-repository.js";
 
 interface StrategyRow {
@@ -39,6 +41,15 @@ interface MissionRow {
 export interface MissionEnsureResult {
   mission: MissionContext;
   created: boolean;
+}
+
+interface MissionCreationConfiguration {
+  targetQuantity: number;
+  selectedOnly: boolean;
+  selectedMaxUnitPriceCents: number | null;
+  selectedSellerPolicy: SellerPolicy | "inherit";
+  selectedFulfillment: Fulfillment | "inherit";
+  initialPolicy: PurchaseIntentPolicyUpdateInput;
 }
 
 export interface AppSettings {
@@ -317,10 +328,133 @@ export class ControlRepository {
   }
 
   ensureMission(variantId: string, listingId: string, origin: string, now = Date.now()): MissionEnsureResult {
+    return this.ensureMissionInternal(variantId, listingId, origin, now);
+  }
+
+  ensureUserMission(variantId: string, listingId: string, now = Date.now()): MissionEnsureResult {
+    return this.ensureMissionInternal(variantId, listingId, "user_selected_legacy", now, {
+      targetQuantity: 1,
+      selectedOnly: true,
+      selectedMaxUnitPriceCents: null,
+      selectedSellerPolicy: "first_party_only",
+      selectedFulfillment: "inherit",
+      initialPolicy: {
+        actionCeiling: "notify",
+        substitutionPolicy: "exact_only",
+        cooldownSeconds: 0,
+        changeReason: "Safe user draft created; explicit limits are still required before automated cart actions."
+      }
+    });
+  }
+
+  createConfiguredMission(input: PurchaseIntentCreateInput, now = Date.now()): MissionEnsureResult {
+    if (input?.contractVersion !== 1) {
+      throw new PurchaseSafetyError("purchase_intent_contract_unsupported", 400, "A supported purchase-plan contract version is required.");
+    }
+    const listingId = cleanText(input?.listingId, 120);
+    const listing = this.db.get<{ variantId: string; retailerId: string; executionSupported: number }>(
+      `SELECT variant_id AS variantId, retailer_id AS retailerId,
+              execution_supported AS executionSupported
+       FROM listings WHERE id = ?`,
+      listingId
+    );
+    if (!listing) throw new PurchaseSafetyError("purchase_listing_not_found", 404, "The exact retailer listing no longer exists.");
+    const targetQuantity = Number(input?.targetQuantity);
+    const maxUnitPriceCents = Number(input?.maxUnitPriceCents);
+    const maxAllInCents = Number(input?.maxAllInCents);
+    const cooldownSeconds = Number(input?.cooldownSeconds);
+    if (typeof input?.targetQuantity !== "number" || !Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > 99) {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Quantity must be 1 through 99.");
+    }
+    if (typeof input?.maxUnitPriceCents !== "number" || !Number.isSafeInteger(maxUnitPriceCents) || maxUnitPriceCents <= 0 || maxUnitPriceCents > 100_000_000) {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "The maximum item price must be a positive number of cents.");
+    }
+    if (typeof input?.maxAllInCents !== "number" || !Number.isSafeInteger(maxAllInCents) || maxAllInCents <= 0 || maxAllInCents > 100_000_000) {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "The maximum all-in total must be a positive number of cents.");
+    }
+    const boundedItemTotal = maxUnitPriceCents * targetQuantity;
+    if (!Number.isSafeInteger(boundedItemTotal) || boundedItemTotal > maxAllInCents) {
+      throw new PurchaseSafetyError(
+        "purchase_intent_invalid",
+        400,
+        "The maximum all-in total must cover the maximum item price multiplied by the requested quantity."
+      );
+    }
+    if (typeof input?.cooldownSeconds !== "number" || !Number.isInteger(cooldownSeconds) || cooldownSeconds < 0 || cooldownSeconds > 2_592_000) {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "The wait between attempts must be from zero through 30 days.");
+    }
+    if (!["notify", "add_to_cart"].includes(String(input?.actionCeiling))) {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Yoink may only notify or add an exact item to the cart from this setup flow.");
+    }
+    if (input?.sellerPolicy !== "first_party_only" || input?.substitutionPolicy !== "exact_only") {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Guided purchase plans require the retailer itself and the exact selected item.");
+    }
+    if (!["shipping", "pickup", "either", "manual"].includes(String(input?.fulfillment))) {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Choose shipping, pickup, either, or manual fulfillment.");
+    }
+    if (input.actionCeiling === "add_to_cart" && input.fulfillment !== "shipping") {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Automatic cart actions currently require an explicitly selected shipping offer.");
+    }
+    if (input.actionCeiling === "add_to_cart" && Number(listing.executionSupported) !== 1) {
+      throw new PurchaseSafetyError("purchase_intent_execution_unavailable", 409, "This store is monitor-only until its add-to-cart mapping is separately qualified.");
+    }
+    if (input.actionCeiling === "add_to_cart") {
+      const settings = this.settings();
+      const storeReserveCents = Math.max(0, Number(settings.storeAllowancesCents[listing.retailerId] ?? 0));
+      const requiredAllInCents = Math.ceil(
+        boundedItemTotal * (10_000 + settings.taxBps) / 10_000
+      ) + storeReserveCents;
+      if (!Number.isSafeInteger(requiredAllInCents) || maxAllInCents < requiredAllInCents) {
+        throw new PurchaseSafetyError(
+          "purchase_intent_all_in_bound_too_low",
+          400,
+          `Automatic cart actions need a maximum total of at least $${(requiredAllInCents / 100).toFixed(2)} under the current tax and store-fee safety reserve. Choose notifications only or raise the reviewed total.`
+        );
+      }
+    }
+    if (input?.confirmation !== "CREATE_EXACT_PURCHASE_PLAN") {
+      throw new PurchaseSafetyError("purchase_intent_confirmation_required", 400, "Review and confirm the exact purchase plan before creating it.");
+    }
+
+    return this.db.transaction(() => {
+      const result = this.ensureMissionInternal(listing.variantId, listingId, "user_guided", now, {
+        targetQuantity,
+        selectedOnly: true,
+        selectedMaxUnitPriceCents: maxUnitPriceCents,
+        selectedSellerPolicy: "first_party_only",
+        selectedFulfillment: input.fulfillment,
+        initialPolicy: {
+          maxAllInCents,
+          actionCeiling: input.actionCeiling,
+          substitutionPolicy: "exact_only",
+          expiresAt: input.expiresAt ?? "",
+          cooldownSeconds,
+          changeReason: "Exact purchase plan reviewed and created from the guided user setup."
+        }
+      });
+      if (!result.created) {
+        throw new PurchaseSafetyError(
+          "purchase_intent_exists",
+          409,
+          "A purchase plan already exists for this exact product. Open it to review the current limits."
+        );
+      }
+      return result;
+    });
+  }
+
+  private ensureMissionInternal(
+    variantId: string,
+    listingId: string,
+    origin: string,
+    now: number,
+    creation?: MissionCreationConfiguration
+  ): MissionEnsureResult {
     return this.db.transaction(() => {
       const timestamp = nowIso(now);
       let mission = this.db.get<{ id: string }>(
-        "SELECT id FROM missions WHERE user_id = ? AND variant_id = ?",
+        "SELECT id FROM missions WHERE tenant_id = ? AND user_id = ? AND variant_id = ?",
+        currentRequestScope().tenantId,
         currentRequestScope().userId,
         variantId
       );
@@ -331,12 +465,13 @@ export class ControlRepository {
           `INSERT INTO missions(
              id, tenant_id, user_id, variant_id, status, origin,
              target_quantity, fulfilled_quantity, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, 'active', ?, 1, 0, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, 'active', ?, ?, 0, ?, ?)`,
           mission.id,
           currentRequestScope().tenantId,
           currentRequestScope().userId,
           variantId,
           cleanText(origin, 60),
+          creation?.targetQuantity ?? 1,
           timestamp,
           timestamp
         );
@@ -348,15 +483,24 @@ export class ControlRepository {
         variantId
       );
       for (const target of variantListings) {
+        const selected = target.id === listingId;
+        const enabled = creation?.selectedOnly ? selected : true;
+        const maxUnitPriceCents = creation && selected ? creation.selectedMaxUnitPriceCents : null;
+        const sellerPolicy = creation && selected ? creation.selectedSellerPolicy : "inherit";
+        const fulfillment = creation && selected ? creation.selectedFulfillment : "inherit";
         this.db.run(
           `INSERT OR IGNORE INTO mission_targets(
              id, mission_id, listing_id, enabled, max_unit_price_cents,
              currency, seller_policy, fulfillment, created_at, updated_at
-           ) VALUES (?, ?, ?, 1, NULL, ?, 'inherit', 'inherit', ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           newId("mission_target"),
           mission.id,
           target.id,
+          enabled ? 1 : 0,
+          maxUnitPriceCents,
           target.currency,
+          sellerPolicy,
+          fulfillment,
           timestamp,
           timestamp
         );
@@ -368,10 +512,16 @@ export class ControlRepository {
           eventType: "mission_created",
           reasonCode: cleanText(origin, 60) || "created",
           message: "A mission was created for an exact product variant and all known retailer targets were attached.",
-          data: { variantId, initialListingId: listingId, targetCount: variantListings.length }
+          data: {
+            variantId,
+            initialListingId: listingId,
+            targetCount: variantListings.length,
+            enabledTargetCount: creation?.selectedOnly ? 1 : variantListings.length,
+            creationMode: creation ? "explicit_user_configuration" : "strategy_or_internal"
+          }
         }, now);
       }
-      this.purchasePolicies.ensureCurrent(mission.id, now);
+      this.purchasePolicies.ensureCurrent(mission.id, now, creation?.initialPolicy);
       return { mission: this.requireMissionContext(mission.id, listingId), created };
     });
   }
@@ -382,9 +532,11 @@ export class ControlRepository {
               mt.enabled AS target_enabled, mt.max_unit_price_cents,
               mt.seller_policy, mt.fulfillment
        FROM missions m JOIN mission_targets mt ON mt.mission_id = m.id
-       WHERE m.id = ? AND mt.listing_id = ?`,
+       WHERE m.id = ? AND mt.listing_id = ? AND m.tenant_id = ? AND m.user_id = ?`,
       missionId,
-      listingId
+      listingId,
+      currentRequestScope().tenantId,
+      currentRequestScope().userId
     );
     if (!row) throw new Error("The mission target no longer exists.");
     return missionContext(row);
@@ -582,6 +734,31 @@ export class ControlRepository {
                WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS maxAllInCents,
               (SELECT ir.action_ceiling FROM mission_intent_revisions ir
                WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS actionCeiling,
+              (SELECT r2.display_name FROM mission_targets mt2
+               JOIN listings l2 ON l2.id = mt2.listing_id
+               JOIN retailers r2 ON r2.id = l2.retailer_id
+               WHERE mt2.mission_id = m.id AND mt2.enabled = 1
+               ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryRetailerName,
+              (SELECT l2.retailer_sku FROM mission_targets mt2
+               JOIN listings l2 ON l2.id = mt2.listing_id
+               WHERE mt2.mission_id = m.id AND mt2.enabled = 1
+               ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryRetailerSku,
+              (SELECT mt2.max_unit_price_cents FROM mission_targets mt2
+               WHERE mt2.mission_id = m.id AND mt2.enabled = 1
+               ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryMaxUnitPriceCents,
+              (SELECT mt2.seller_policy FROM mission_targets mt2
+               WHERE mt2.mission_id = m.id AND mt2.enabled = 1
+               ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primarySellerPolicy,
+              (SELECT mt2.fulfillment FROM mission_targets mt2
+               WHERE mt2.mission_id = m.id AND mt2.enabled = 1
+               ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryFulfillment,
+              (SELECT oo.unit_price_cents FROM offer_observations oo
+               WHERE oo.listing_id = (
+                 SELECT mt2.listing_id FROM mission_targets mt2
+                 WHERE mt2.mission_id = m.id AND mt2.enabled = 1
+                 ORDER BY mt2.created_at, mt2.id LIMIT 1
+               ) AND oo.unit_price_cents IS NOT NULL
+               ORDER BY oo.observed_at DESC LIMIT 1) AS primaryCurrentPriceCents,
               m.created_at AS createdAt, m.updated_at AS updatedAt
        FROM missions m
        JOIN variants v ON v.id = m.variant_id

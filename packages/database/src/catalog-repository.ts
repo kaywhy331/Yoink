@@ -311,7 +311,7 @@ export class CatalogRepository {
           `INSERT OR IGNORE INTO mission_targets(
              id, mission_id, listing_id, enabled, max_unit_price_cents,
              currency, seller_policy, fulfillment, created_at, updated_at
-           ) VALUES (?, ?, ?, 1, NULL, ?, 'inherit', 'inherit', ?, ?)`,
+           ) VALUES (?, ?, ?, 0, NULL, ?, 'inherit', 'inherit', ?, ?)`,
           newId("mission_target"),
           existingMission.id,
           listingId,
@@ -470,12 +470,19 @@ export class CatalogRepository {
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 500)));
     const safeOffset = Number.isSafeInteger(Number(offset)) && Number(offset) >= 0 ? Math.floor(Number(offset)) : 0;
-    return this.db.all(
+    const rows = this.db.all<Record<string, unknown>>(
       `SELECT v.id AS variantId, v.title, l.id AS listingId, l.retailer_id AS retailerId,
               r.display_name AS retailerName, l.retailer_sku AS retailerSku,
               l.canonical_url AS canonicalUrl, l.status,
               l.execution_supported AS executionSupported, l.msrp_cents AS msrpCents,
-              l.currency, l.updated_at AS updatedAt,
+              l.currency, v.attributes_json AS variantAttributesJson,
+              (SELECT oo.unit_price_cents FROM offer_observations oo
+               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
+               ORDER BY oo.observed_at DESC LIMIT 1) AS currentPriceCents,
+              (SELECT oo.observed_at FROM offer_observations oo
+               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
+               ORDER BY oo.observed_at DESC LIMIT 1) AS priceObservedAt,
+              l.updated_at AS updatedAt,
               COUNT(slr.id) AS sourceMappingCount
        FROM variants v
        JOIN listings l ON l.variant_id = v.id
@@ -494,6 +501,26 @@ export class CatalogRepository {
       safeLimit,
       safeOffset
     );
+    return rows.map((row) => {
+      let variantAttributes: Record<string, string> = {};
+      try {
+        const parsed = JSON.parse(String(row.variantAttributesJson ?? "{}")) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          variantAttributes = Object.fromEntries(
+            Object.entries(parsed as Record<string, unknown>)
+              .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+          );
+        }
+      } catch {
+        variantAttributes = {};
+      }
+      const { variantAttributesJson: _discarded, ...item } = row;
+      return {
+        ...item,
+        executionSupported: Number(row.executionSupported) === 1,
+        variantAttributes
+      };
+    });
   }
 
   libraryCount(search = ""): number {

@@ -140,10 +140,18 @@ export class PurchasePolicyRepository {
     return row ? intentPolicy(row) : null;
   }
 
-  ensureCurrent(missionId: string, now = Date.now()): PurchaseIntentPolicy {
+  ensureCurrent(
+    missionId: string,
+    now = Date.now(),
+    initialInput: PurchaseIntentPolicyUpdateInput = {}
+  ): PurchaseIntentPolicy {
     const existing = this.current(missionId);
     if (existing) return existing;
-    return this.revise(missionId, { changeReason: "Initial exact purchase policy." }, now, true);
+    const { expectedRevision: _discardedRevision, ...initial } = initialInput;
+    return this.revise(missionId, {
+      ...initial,
+      changeReason: cleanText(initialInput.changeReason, 300) || "Initial exact purchase policy."
+    }, now, true);
   }
 
   revise(

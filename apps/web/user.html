@@ -38,7 +38,7 @@
 
     <section class="workspace active" data-panel="products">
       <div class="section-heading">
-        <div><p class="eyebrow">Exact catalog matches</p><h2>Products</h2><p>Track a listing to create one private purchase plan for its exact product.</p></div>
+        <div><p class="eyebrow">Exact catalog matches</p><h2>Products</h2><p>Choose a store listing, review every limit, then create one private plan for that exact product.</p></div>
         <label class="search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label>
       </div>
       <div class="card-grid" id="productList"></div>
@@ -72,6 +72,67 @@
     </section>
   </main>
 
+  <dialog id="setupDialog" class="setup-dialog">
+    <form id="setupForm">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Review before anything is enabled</p><h2>Set up this purchase</h2></div>
+        <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
+      </div>
+      <input name="listingId" type="hidden">
+      <section class="selected-product" id="setupProductSummary" aria-live="polite"></section>
+      <div class="setup-layout">
+        <div class="setup-fields">
+          <fieldset class="setup-section">
+            <legend><span>1</span> Item and price</legend>
+            <p>These limits apply only to the exact store item shown above.</p>
+            <div class="form-row three">
+              <label><span>Quantity wanted</span><input name="targetQuantity" type="number" min="1" max="99" value="1" required></label>
+              <label><span>Maximum price per item</span><span class="money-field"><b>$</b><input name="maxUnitPrice" inputmode="decimal" placeholder="0.00" required></span></label>
+              <label><span>Maximum total for all items</span><span class="money-field"><b>$</b><input name="maxAllIn" inputmode="decimal" placeholder="0.00" required></span></label>
+            </div>
+            <small>Yoink will reject a price above either limit. Taxes, shipping, and discounts are never guessed.</small>
+          </fieldset>
+
+          <fieldset class="setup-section">
+            <legend><span>2</span> Store and delivery</legend>
+            <div class="store-commitment">
+              <div><small>Store</small><strong id="setupStore">—</strong></div>
+              <div><small>Seller</small><strong>The retailer itself</strong></div>
+              <div><small>Substitutions</small><strong>Exact item only</strong></div>
+            </div>
+            <label><span>How should it be available?</span><select name="fulfillment"><option value="shipping">Shipping</option><option value="pickup">Pickup</option><option value="either">Shipping or pickup</option><option value="manual">I will choose manually</option></select></label>
+          </fieldset>
+
+          <fieldset class="setup-section">
+            <legend><span>3</span> What may Yoink do?</legend>
+            <div class="action-choices">
+              <label class="action-choice"><input name="actionCeiling" type="radio" value="notify" checked><span><strong>Tell me when it matches</strong><small>No store button is clicked.</small></span></label>
+              <label class="action-choice" id="addChoice"><input name="actionCeiling" type="radio" value="add_to_cart"><span><strong>Add one to my cart</strong><small>Only a qualified first-party shipping offer. Checkout stays manual.</small></span></label>
+            </div>
+            <p class="boundary-note" id="setupExecutionNote"></p>
+          </fieldset>
+
+          <details class="setup-advanced">
+            <summary>Timing preferences</summary>
+            <div class="form-row">
+              <label><span>Wait between automatic attempts (minutes)</span><input name="cooldownMinutes" type="number" min="0" max="43200" step="1" value="15"></label>
+              <label><span>Stop watching after</span><input name="expiresAt" type="datetime-local"></label>
+            </div>
+          </details>
+        </div>
+
+        <aside class="plan-review" aria-label="Purchase plan summary">
+          <p class="eyebrow">Your plan</p>
+          <h3 id="setupReviewTitle">Exact product</h3>
+          <div id="setupReviewRows"></div>
+          <p class="review-boundary"><strong>Always manual:</strong> checkout, payment, and order submission.</p>
+        </aside>
+      </div>
+      <label class="review-confirm"><input name="reviewed" type="checkbox" required><span>I reviewed the exact item, store, quantity, price limits, and allowed action above.</span></label>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="createPlanButton" type="submit">Create purchase plan</button></div>
+    </form>
+  </dialog>
+
   <dialog id="planDialog">
     <form id="planForm">
       <div class="dialog-heading"><div><p class="eyebrow">Purchase preferences</p><h2 id="planDialogTitle">Product</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
@@ -85,7 +146,7 @@
         <label><span>Yoink may</span><select name="actionCeiling"><option value="notify">Notify me only</option><option value="add_to_cart">Add one to cart</option></select></label>
       </div>
       <div class="form-row">
-        <label><span>Substitutions</span><select name="substitutionPolicy"><option value="exact_only">Exact item only</option><option value="verified_equivalent">Only independently verified equivalents</option></select></label>
+        <label><span>Substitutions</span><select name="substitutionPolicy"><option value="exact_only">Exact item only</option><option value="verified_equivalent" disabled>Verified equivalents (not available yet)</option></select></label>
         <label><span>Cooldown between attempts (minutes)</span><input name="cooldownMinutes" type="number" min="0" max="43200" step="1" value="0"></label>
       </div>
       <div class="form-row">

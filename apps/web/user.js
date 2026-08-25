@@ -1,4 +1,13 @@
-const state = { overview: null, products: [], plans: [], actions: [], proposals: [], editingPlan: null, query: "" };
+const state = {
+  overview: null,
+  products: [],
+  plans: [],
+  actions: [],
+  proposals: [],
+  editingPlan: null,
+  setupProduct: null,
+  query: ""
+};
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -9,19 +18,21 @@ function escapeHtml(value) {
 }
 
 function money(cents, currency = "USD") {
-  if (!Number.isFinite(Number(cents))) return "No price recorded";
+  if (cents === null || cents === undefined || cents === "" || !Number.isFinite(Number(cents))) return "No price recorded";
   return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(cents) / 100);
 }
 
 function moneyInput(cents) {
-  return Number.isFinite(Number(cents)) ? (Number(cents) / 100).toFixed(2) : "";
+  return cents !== null && cents !== undefined && cents !== "" && Number.isFinite(Number(cents))
+    ? (Number(cents) / 100).toFixed(2)
+    : "";
 }
 
 function centsInput(value, label) {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
   const dollars = Number(raw);
-  if (!Number.isFinite(dollars) || dollars <= 0 || Math.round(dollars * 100) > 1_000_000_000) {
+  if (!Number.isFinite(dollars) || dollars <= 0 || Math.round(dollars * 100) > 100_000_000) {
     throw new Error(`${label} must be a positive dollar amount or blank.`);
   }
   return Math.round(dollars * 100);
@@ -50,7 +61,10 @@ async function api(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const reference = payload.correlationId ? ` Reference ${payload.correlationId}.` : "";
-    throw new Error(`${payload.message || `Yoink request failed with HTTP ${response.status}.`}${reference}`);
+    const error = new Error(`${payload.message || `Yoink request failed with HTTP ${response.status}.`}${reference}`);
+    error.code = String(payload.error || "request_failed");
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
@@ -68,6 +82,19 @@ function toast(message, error = false) {
 function setTab(name) {
   $$("[data-tab]").forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
   $$("[data-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === name));
+}
+
+function words(value) {
+  return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function variantSummary(attributes) {
+  if (!attributes || typeof attributes !== "object") return "";
+  return Object.entries(attributes)
+    .filter(([, value]) => typeof value === "string" && value.trim())
+    .sort(([first], [second]) => first.localeCompare(second))
+    .map(([name, value]) => `${words(name)} ${value}`)
+    .join(" · ");
 }
 
 function renderOverview() {
@@ -114,13 +141,21 @@ function renderProducts() {
   $("#productList").innerHTML = state.products.length ? state.products.map((product) => {
     const plan = missionByVariant.get(product.variantId);
     const available = ["in_stock", "preorder"].includes(product.status);
+    const exactVariant = variantSummary(product.variantAttributes);
+    const hasCurrentPrice = product.currentPriceCents !== null
+      && product.currentPriceCents !== undefined
+      && Number.isFinite(Number(product.currentPriceCents));
+    const currentPrice = hasCurrentPrice
+      ? product.currentPriceCents
+      : product.msrpCents;
+    const priceKind = hasCurrentPrice ? "Last seen" : "Catalog price";
     return `<article class="product-card">
       <div class="card-top"><span class="store">${escapeHtml(product.retailerName)}</span><span class="tag ${available ? "good" : "warn"}">${escapeHtml(String(product.status).replaceAll("_", " "))}</span></div>
       <h3>${escapeHtml(product.title)}</h3>
-      <p>Exact store item ${escapeHtml(product.retailerSku)}</p>
-      <div class="tags"><span class="tag">${escapeHtml(money(product.msrpCents, product.currency))}</span><span class="tag">${product.executionSupported ? "Qualified mapping" : "Monitor only"}</span></div>
+      <p>Exact store item ${escapeHtml(product.retailerSku)}${exactVariant ? ` · ${escapeHtml(exactVariant)}` : ""}</p>
+      <div class="tags"><span class="tag">${escapeHtml(priceKind)} ${escapeHtml(money(currentPrice, product.currency))}${hasCurrentPrice && product.priceObservedAt ? ` · ${escapeHtml(relative(product.priceObservedAt))}` : ""}</span><span class="tag">${product.executionSupported ? "Qualified add mapping" : "Monitor only"}</span></div>
       <div class="card-actions">
-        ${plan ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit preferences</button>` : `<button class="button primary" data-track-listing="${escapeHtml(product.listingId)}" type="button">Track product</button>`}
+        ${plan ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit purchase plan</button>` : `<button class="button primary" data-track-listing="${escapeHtml(product.listingId)}" type="button">Set up purchase</button>`}
         <a class="canonical" href="${escapeHtml(product.canonicalUrl)}" target="_blank" rel="noreferrer">View at store ↗</a>
       </div>
     </article>`;
@@ -142,11 +177,19 @@ function renderWalmartDraws() {
 }
 
 function renderPlans() {
-  $("#planList").innerHTML = state.plans.length ? state.plans.map((plan) => `<article class="plan-card">
-    <div><div class="card-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(plan.status)}</span></div>
-    <p>${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled · quantity ${Number(plan.targetQuantity || 1)} · ${escapeHtml(String(plan.actionCeiling || "add_to_cart").replaceAll("_", " "))} · all-in cap ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · revision ${Number(plan.intentRevision || 1)}</p></div>
-    <button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Price & store preferences</button>
-  </article>`).join("") : '<div class="empty">You have no purchase plans. Choose “Track product” from the Products tab.</div>';
+  $("#planList").innerHTML = state.plans.length ? state.plans.map((plan) => {
+    const store = plan.primaryRetailerName || "No store enabled";
+    const current = plan.primaryCurrentPriceCents ? money(plan.primaryCurrentPriceCents) : "not seen yet";
+    const maximum = plan.primaryMaxUnitPriceCents ? money(plan.primaryMaxUnitPriceCents) : "not set";
+    const fulfillment = words(plan.primaryFulfillment || "not selected");
+    const action = plan.actionCeiling === "add_to_cart" ? "May add one to cart" : "Notifications only";
+    return `<article class="plan-card">
+      <div><div class="card-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(plan.status)}</span></div>
+      <p><strong>${escapeHtml(store)}</strong>${plan.primaryRetailerSku ? ` · exact item ${escapeHtml(plan.primaryRetailerSku)}` : ""} · last seen ${escapeHtml(current)} · maximum ${escapeHtml(maximum)}</p>
+      <p>Quantity ${Number(plan.targetQuantity || 1)} · ${escapeHtml(fulfillment)} · ${escapeHtml(action)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p></div>
+      <button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Review or change</button>
+    </article>`;
+  }).join("") : '<div class="empty">You have no purchase plans. Choose “Set up purchase” from the Products tab and review the exact limits before creating one.</div>';
 }
 
 function renderActions() {
@@ -192,6 +235,109 @@ async function toggleActions() {
   toast(paused ? "All purchase actions are paused." : "Qualified purchase actions are enabled within your saved limits.");
 }
 
+function setupAmount(name, label, required = false) {
+  try {
+    const value = centsInput($("#setupForm").elements[name].value, label);
+    if (required && value === null) throw new Error(`${label} is required.`);
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function setupAutomaticMinimum() {
+  const form = $("#setupForm");
+  const product = state.setupProduct;
+  const quantity = Number(form.elements.targetQuantity.value || 0);
+  const unit = setupAmount("maxUnitPrice", "Maximum item price");
+  if (!product || unit === null || !Number.isInteger(quantity) || quantity < 1) return null;
+  const taxBps = Math.max(0, Number(state.overview?.settings?.taxBps || 0));
+  const storeReserve = Math.max(0, Number(state.overview?.settings?.storeAllowancesCents?.[product.retailerId] || 0));
+  const required = Math.ceil(unit * quantity * (10_000 + taxBps) / 10_000) + storeReserve;
+  return Number.isSafeInteger(required) ? { required, taxBps, storeReserve } : null;
+}
+
+function syncSetupAction() {
+  const form = $("#setupForm");
+  const adding = form.elements.actionCeiling.value === "add_to_cart";
+  if (adding) form.elements.fulfillment.value = "shipping";
+  form.elements.fulfillment.disabled = adding;
+  const note = $("#setupExecutionNote");
+  const minimum = setupAutomaticMinimum();
+  const reviewedTotal = setupAmount("maxAllIn", "Maximum total");
+  const totalTooLow = adding && minimum && (reviewedTotal === null || reviewedTotal < minimum.required);
+  form.elements.maxAllIn.setAttribute("aria-invalid", totalTooLow ? "true" : "false");
+  note.className = `boundary-note ${state.setupProduct?.executionSupported && !totalTooLow ? "good" : "warn"}`;
+  note.textContent = state.setupProduct?.executionSupported
+    ? adding
+      ? minimum
+        ? totalTooLow
+          ? `Your current maximum total is below the ${money(minimum.required)} tax and store-fee safety bound. Raise it only if that remains an amount you accept, or choose notifications.`
+          : `Your reviewed total covers the current ${money(minimum.required)} tax and store-fee safety bound. A cart click still requires fresh exact-offer verification in Chrome.`
+        : "Enter the item price and quantity to calculate the minimum safe total for a cart action."
+      : "This store has a packaged add mapping, but this plan currently authorizes notifications only."
+    : "This store is monitor-only. Yoink can notify you, but it cannot click its cart control.";
+}
+
+function renderSetupReview() {
+  const form = $("#setupForm");
+  const product = state.setupProduct;
+  if (!product) return;
+  const quantity = Math.max(1, Number(form.elements.targetQuantity.value || 1));
+  const unit = setupAmount("maxUnitPrice", "Maximum item price");
+  const allIn = setupAmount("maxAllIn", "Maximum total");
+  const action = form.elements.actionCeiling.value === "add_to_cart" ? "Add one to cart" : "Notify me only";
+  const automaticMinimum = setupAutomaticMinimum();
+  const expiry = form.elements.expiresAt.value
+    ? new Date(form.elements.expiresAt.value).toLocaleString()
+    : "No end date";
+  const rows = [
+    ["Exact item", product.retailerSku],
+    ["Store / seller", `${product.retailerName} itself`],
+    ["Quantity", String(quantity)],
+    ["Maximum each", unit === null ? "Enter an amount" : money(unit, product.currency)],
+    ["Maximum total", allIn === null ? "Enter an amount" : money(allIn, product.currency)],
+    ...(form.elements.actionCeiling.value === "add_to_cart" && automaticMinimum
+      ? [["Minimum safe cart bound", money(automaticMinimum.required, product.currency)]]
+      : []),
+    ["Availability", words(form.elements.fulfillment.value)],
+    ["Yoink may", action],
+    ["Substitutions", "None — exact item only"],
+    ["Stops", expiry]
+  ];
+  $("#setupReviewRows").innerHTML = rows.map(([label, value]) => `<div class="review-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+}
+
+function openSetup(listingId) {
+  const product = state.products.find((item) => item.listingId === listingId);
+  if (!product) throw new Error("That exact product is no longer in the current catalog view. Refresh and try again.");
+  const existing = state.plans.find((plan) => plan.variantId === product.variantId);
+  if (existing) return openPlan(existing.id);
+  state.setupProduct = product;
+  const form = $("#setupForm");
+  form.reset();
+  form.elements.listingId.value = product.listingId;
+  const hasCurrentPrice = product.currentPriceCents !== null
+    && product.currentPriceCents !== undefined
+    && Number.isFinite(Number(product.currentPriceCents));
+  const knownPrice = hasCurrentPrice ? Number(product.currentPriceCents) : Number(product.msrpCents);
+  if (Number.isSafeInteger(knownPrice) && knownPrice > 0) {
+    form.elements.maxUnitPrice.value = moneyInput(knownPrice);
+    form.elements.maxAllIn.value = moneyInput(knownPrice);
+  }
+  const addRadio = form.querySelector('input[value="add_to_cart"]');
+  addRadio.disabled = product.executionSupported !== true;
+  if (addRadio.disabled) form.elements.actionCeiling.value = "notify";
+  const exactVariant = variantSummary(product.variantAttributes);
+  $("#setupProductSummary").innerHTML = `<div><span class="store">${escapeHtml(product.retailerName)}</span><h3>${escapeHtml(product.title)}</h3><p>Exact item ${escapeHtml(product.retailerSku)}${exactVariant ? ` · ${escapeHtml(exactVariant)}` : ""}</p></div><strong class="exact-price">${escapeHtml(hasCurrentPrice ? money(knownPrice, product.currency) : money(product.msrpCents, product.currency))}</strong>`;
+  $("#setupStore").textContent = product.retailerName;
+  $("#setupReviewTitle").textContent = product.title;
+  syncSetupAction();
+  renderSetupReview();
+  $("#setupDialog").showModal();
+  requestAnimationFrame(() => form.elements.targetQuantity.focus());
+}
+
 async function openPlan(id) {
   const { purchaseIntent: mission } = await api(`/api/v1/user/purchase-intents/${encodeURIComponent(id)}`);
   state.editingPlan = mission;
@@ -226,8 +372,7 @@ document.addEventListener("click", async (event) => {
     if (button.hasAttribute("data-close-dialog")) button.closest("dialog")?.close();
     if (button.id === "pauseButton" || button.id === "preferencePauseButton") await toggleActions();
     if (button.dataset.trackListing) {
-      await api("/api/v1/user/purchase-intents", { method: "POST", body: JSON.stringify({ listingId: button.dataset.trackListing }) });
-      await refresh(); setTab("plans"); toast("Purchase plan created. Add your price and store preferences next.");
+      await openSetup(button.dataset.trackListing);
     }
     if (button.dataset.editPlan) await openPlan(button.dataset.editPlan);
     if (button.id === "pairButton") {
@@ -237,6 +382,99 @@ document.addEventListener("click", async (event) => {
       toast("Enter this one-time code in the Yoink Chrome companion.");
     }
   } catch (error) { toast(error.message || "The request failed.", true); }
+});
+
+$("#setupForm").addEventListener("input", (event) => {
+  syncSetupAction();
+  renderSetupReview();
+});
+
+$("#setupForm").addEventListener("change", (event) => {
+  const form = event.currentTarget;
+  if (["targetQuantity", "maxUnitPrice"].includes(event.target.name)) {
+    const quantity = Number(form.elements.targetQuantity.value);
+    const unit = setupAmount("maxUnitPrice", "Maximum item price");
+    const currentTotal = setupAmount("maxAllIn", "Maximum total");
+    const minimum = unit === null ? null : unit * quantity;
+    if (Number.isSafeInteger(minimum) && minimum > 0 && (currentTotal === null || currentTotal < minimum)) {
+      form.elements.maxAllIn.value = moneyInput(minimum);
+    }
+  }
+  syncSetupAction();
+  renderSetupReview();
+});
+
+$("#setupForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = $("#createPlanButton");
+  try {
+    const targetQuantity = Number(form.elements.targetQuantity.value);
+    if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > 99) {
+      throw new Error("Quantity must be 1 through 99.");
+    }
+    const maxUnitPriceCents = centsInput(form.elements.maxUnitPrice.value, "The maximum item price");
+    const maxAllInCents = centsInput(form.elements.maxAllIn.value, "The maximum total");
+    if (maxUnitPriceCents === null || maxAllInCents === null) {
+      throw new Error("Enter both a maximum item price and maximum total.");
+    }
+    if (maxAllInCents < maxUnitPriceCents * targetQuantity) {
+      throw new Error("The maximum total must cover the maximum item price for every requested item.");
+    }
+    const cooldownMinutes = Number(form.elements.cooldownMinutes.value || 0);
+    if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 43_200) {
+      throw new Error("The wait between attempts must be from zero through 43,200 minutes.");
+    }
+    const actionCeiling = form.elements.actionCeiling.value;
+    if (actionCeiling === "add_to_cart" && state.setupProduct?.executionSupported !== true) {
+      throw new Error("This store is monitor-only and cannot be authorized for cart actions.");
+    }
+    const automaticMinimum = setupAutomaticMinimum();
+    if (actionCeiling === "add_to_cart" && automaticMinimum && maxAllInCents < automaticMinimum.required) {
+      throw new Error(`Automatic cart actions need a maximum total of at least ${money(automaticMinimum.required)} under your current tax and store-fee safety reserve.`);
+    }
+    const expiresValue = form.elements.expiresAt.value;
+    const expiresAt = expiresValue ? new Date(expiresValue).toISOString() : "";
+    button.disabled = true;
+    button.textContent = "Creating safely…";
+    await api("/api/v1/user/purchase-intents", {
+      method: "POST",
+      body: JSON.stringify({
+        contractVersion: 1,
+        listingId: form.elements.listingId.value,
+        targetQuantity,
+        maxUnitPriceCents,
+        maxAllInCents,
+        actionCeiling,
+        sellerPolicy: "first_party_only",
+        fulfillment: form.elements.fulfillment.value,
+        substitutionPolicy: "exact_only",
+        expiresAt,
+        cooldownSeconds: cooldownMinutes * 60,
+        confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+      })
+    });
+    $("#setupDialog").close();
+    state.setupProduct = null;
+    await refresh();
+    setTab("plans");
+    toast(actionCeiling === "add_to_cart"
+      ? "Purchase plan created. Only a qualified exact shipping offer may be added to your cart; checkout stays manual."
+      : "Purchase plan created in notification-only mode.");
+  } catch (error) {
+    if (error.code === "purchase_intent_exists") {
+      $("#setupDialog").close();
+      state.setupProduct = null;
+      await refresh();
+      setTab("plans");
+      toast("That exact product already has a purchase plan. Review its current limits before changing it.");
+    } else {
+      toast(error.message || "The purchase plan could not be created.", true);
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = "Create purchase plan";
+  }
 });
 
 $("#planForm").addEventListener("submit", async (event) => {

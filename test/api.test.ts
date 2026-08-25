@@ -26,6 +26,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(pageBody, /Purchase plans/);
     assert.match(pageBody, /Products, price, and purchase preferences/);
     assert.match(pageBody, /Spending limits/);
+    assert.match(pageBody, /Review before anything is enabled/);
+    assert.match(pageBody, /Create purchase plan/);
     assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
 
     const adminPage = await fetch(`${baseUrl}/admin`);
@@ -154,18 +156,77 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const purchaseIntentResponse = await fetch(`${baseUrl}/api/v1/user/purchase-intents`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
-      body: JSON.stringify({ listingId: String(libraryPage.items[0]?.listingId ?? "") })
+      body: JSON.stringify({
+        contractVersion: 1,
+        listingId: String(libraryPage.items[0]?.listingId ?? ""),
+        targetQuantity: 1,
+        maxUnitPriceCents: 6999,
+        maxAllInCents: 6999,
+        actionCeiling: "notify",
+        sellerPolicy: "first_party_only",
+        fulfillment: "shipping",
+        substitutionPolicy: "exact_only",
+        cooldownSeconds: 900,
+        confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+      })
     });
     assert.equal(purchaseIntentResponse.status, 201);
     const createdPurchaseIntent = await purchaseIntentResponse.json() as {
       created: boolean;
-      purchaseIntent: { id: string; intentPolicy: { revision: number }; targets: Array<Record<string, unknown>> };
+      purchaseIntent: {
+        id: string;
+        intentPolicy: { revision: number; actionCeiling: string; maxAllInCents: number };
+        targets: Array<Record<string, unknown>>;
+      };
     };
     assert.equal(createdPurchaseIntent.created, true);
     assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.revision, 1);
+    assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.actionCeiling, "notify");
+    assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.maxAllInCents, 6999);
     const intentId = createdPurchaseIntent.purchaseIntent.id;
     const target = createdPurchaseIntent.purchaseIntent.targets[0];
     assert.ok(target);
+    assert.equal(target.maxUnitPriceCents, 6999);
+    assert.equal(target.sellerPolicy, "first_party_only");
+    assert.equal(target.fulfillment, "shipping");
+    const duplicateIntent = await fetch(`${baseUrl}/api/v1/user/purchase-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        contractVersion: 1,
+        listingId: String(libraryPage.items[0]?.listingId ?? ""),
+        targetQuantity: 1,
+        maxUnitPriceCents: 6999,
+        maxAllInCents: 6999,
+        actionCeiling: "notify",
+        sellerPolicy: "first_party_only",
+        fulfillment: "shipping",
+        substitutionPolicy: "exact_only",
+        cooldownSeconds: 900,
+        confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+      })
+    });
+    assert.equal(duplicateIntent.status, 409);
+    assert.equal((await duplicateIntent.json() as { error: string }).error, "purchase_intent_exists");
+    const malformedContract = await fetch(`${baseUrl}/api/v1/user/purchase-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        contractVersion: "1",
+        listingId: String(libraryPage.items[0]?.listingId ?? ""),
+        targetQuantity: "1",
+        maxUnitPriceCents: "6999",
+        maxAllInCents: "6999",
+        actionCeiling: "notify",
+        sellerPolicy: "first_party_only",
+        fulfillment: "shipping",
+        substitutionPolicy: "exact_only",
+        cooldownSeconds: "0",
+        confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+      })
+    });
+    assert.equal(malformedContract.status, 400);
+    assert.equal((await malformedContract.json() as { error: string }).error, "purchase_intent_contract_unsupported");
     const updateIntent = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(intentId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Origin: baseUrl },

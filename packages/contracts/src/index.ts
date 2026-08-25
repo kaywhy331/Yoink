@@ -955,6 +955,21 @@ export interface PurchaseIntentPolicyUpdateInput {
   changeReason?: string;
 }
 
+export interface PurchaseIntentCreateInput {
+  contractVersion: 1;
+  listingId: string;
+  targetQuantity: number;
+  maxUnitPriceCents: number;
+  maxAllInCents: number;
+  actionCeiling: "notify" | "add_to_cart";
+  sellerPolicy: "first_party_only";
+  fulfillment: "shipping" | "pickup" | "either" | "manual";
+  substitutionPolicy: "exact_only";
+  expiresAt?: string;
+  cooldownSeconds: number;
+  confirmation: "CREATE_EXACT_PURCHASE_PLAN";
+}
+
 export interface MissionUpdateInput {
   status: MissionStatus;
   targetQuantity: number;

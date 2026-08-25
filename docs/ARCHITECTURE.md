@@ -341,6 +341,28 @@ audit operations. The bundles call explicit `/api/v1/user` and
 `/api/v1/admin` contracts. Legacy unprefixed application paths remain only as a
 deprecated compatibility facade during migration.
 
+Yoink 0.28.0 makes the user creation boundary explicit without adding a second
+intent model. `PurchaseIntentCreateInput` version 1 names one existing exact
+listing and carries quantity, unit/all-in caps, first-party seller policy,
+fulfillment, exact-only substitution, timing, action ceiling, and a review
+confirmation. The repository validates that entire contract before opening one
+nested-safe transaction, creates all known variant targets with only the chosen
+listing enabled, and writes the configured immutable intent directly as
+revision 1. Policy validation failure rolls back mission, targets, audit/outbox,
+and revision together. A concurrent duplicate returns a conflict rather than
+overwriting the existing plan. The compatibility user request creates a
+notification-only draft; signal/internal callers retain their strategy-owned
+creation path.
+
+Catalog expansion cannot expand consent. A later listing for an existing exact
+variant is attached to its mission disabled and is absent from the frozen
+current revision until the user reviews and saves the complete target set. The
+user library projects the last numeric offer observation separately from MSRP,
+along with its observation time and normalized variant dimensions. The guided
+cart choice also recomputes the same conservative tax-plus-store allowance
+bound used by action-job reservation, so a plan cannot appear cart-ready with
+an all-in cap the engine will deterministically reject.
+
 Yoink 0.20.0 adds the private intent and spend boundary in migration 22.
 `exact_offer_keys` freezes an exact listing/SKU with allowlisted variant
 dimensions, condition, seller, fulfillment, and explicit region/store slots;
@@ -505,7 +527,8 @@ it revalidates the same in-memory token and clicks only Add to Cart.
 The current local release is a modular monolith with separated trust surfaces:
 
 - Local API and SQLite control plane
-- Minimal user product dashboard plus a separately permission-gated admin UI
+- Guided exact-product purchase dashboard plus a separately permission-gated
+  admin UI
 - Persisted RBAC and a governed manual catalog-write queue
 - Chrome companion with independently qualification-gated Target, Walmart, and
   Amazon, and Best Buy add-only executors

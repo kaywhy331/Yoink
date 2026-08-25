@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.27.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.28.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,23 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.28.0 replaces the dashboard's create-then-edit shortcut with one
+guided exact-purchase review. Choosing a catalog listing does not write a
+mission or authorize a click. The user first reviews the exact SKU and variant,
+retailer-as-seller, fulfillment, quantity, per-item cap, all-in cap, timing,
+and either notification-only or guarded add-to-cart authority. One confirmed
+request then creates the mission, complete target set, and custom immutable
+intent revision atomically; only the chosen listing starts enabled. Invalid or
+duplicate reviews leave no partial state. Legacy user API creation now starts
+notification-only, while signal/internal creation retains its existing
+strategy behavior. Newly discovered sibling listings join existing missions
+disabled so catalog growth cannot silently widen store consent. Product cards
+distinguish the latest observed numeric price from catalog MSRP and expose
+exact variant dimensions; cart review also shows the conservative tax/store-fee
+bound used by the action engine. Checkout, payment, marketplace sellers,
+substitutions, pickup mutation, and order submission remain closed. This
+release needs no database migration and changes no retailer qualification.
 
 Version 0.27.0 adds migration 29 and a deployment-pinned external-witness seam
 for observer-recipe transparency. The server publishes only a bounded public
@@ -237,8 +254,13 @@ events continue to arrive through Web Push.
 ## Configure behavior
 
 The user dashboard stays focused on exact products, purchase plans, recent
-actions, and preferences. Track a known exact listing, then edit its store,
-seller, fulfillment, quantity, and maximum-price preferences. Catalog
+actions, and preferences. Choose **Set up purchase** on a known exact listing,
+then review the item/SKU, store-as-seller, fulfillment, quantity, unit and total
+caps, timing, and allowed action before anything is created. Notifications are
+the default; add-to-cart is offered only for a qualified mapping, requires an
+explicit shipping choice and a total that covers the current conservative tax
+and store-fee safety bound, and still leaves checkout manual. Later changes use
+the same revisioned plan editor. Catalog
 suggestions remain pending until reviewed in the admin control center. Detailed
 source health, diagnostics, privacy-classified operator alerts, retailer
 qualification, recipes, affiliate setup, catalog review, reversible
@@ -251,6 +273,8 @@ There is no separate Signals start switch:
 - The default catchall strategy produces notifications.
 - An exact trusted signal can create a new mission and attach all known retailer
   listings without overwriting user settings.
+- A retailer listing discovered after a mission exists is attached disabled
+  until the user explicitly includes it in a new intent revision.
 - Higher strategy rows win. Empty keywords mean catchall; quoted phrases, `+`
   terms, alternatives, and exclusions are supported.
 - MSRP policies are maximums and include every lower price.

@@ -1,6 +1,35 @@
 # Yoink roadmap
 
-## Shipped through 0.27.0
+## Shipped through 0.28.0
+
+### Guided exact purchase-plan creation (0.28.0)
+
+- The user dashboard no longer creates an active default plan and asks for
+  limits afterward. Selecting a product opens a plain-language review of the
+  exact SKU/variant, retailer-as-seller, fulfillment, quantity, unit/all-in
+  caps, timing, and allowed notification or cart action; no server write occurs
+  before the final reviewed submission
+- A versioned creation contract validates strict numeric bounds, first-party
+  seller, exact-only substitution, supported fulfillment/action combinations,
+  current listing execution support, expiry/cooldown, and an explicit review
+  confirmation. Guarded cart selection additionally requires an all-in cap at
+  least as large as the action engine's current tax and store-fee safety bound
+- Mission, complete variant target set, custom intent revision 1, audit, and
+  outbox commit atomically. Only the selected listing starts enabled; invalid
+  policy data rolls everything back, and a concurrent/duplicate create returns
+  a conflict without overwriting the existing plan
+- Legacy user creation is now a notification-only draft. Signal/internal
+  mission creation retains its strategy behavior. Listings discovered after a
+  mission exists attach disabled and cannot silently expand retailer consent or
+  the frozen current target policy
+- Product and plan cards now distinguish last numeric observed price from MSRP,
+  expose normalized exact-variant dimensions and observation age, and summarize
+  the primary store, current/maximum prices, quantity, fulfillment, action, and
+  all-in cap. A dashboard interaction test proves opening setup performs no
+  POST and the confirmed payload contains every visible bound
+- No migration or mutation-capability change is included. Marketplace sellers,
+  verified-equivalent execution, pickup mutation, checkout, payment, drawing
+  entry, and order submission remain closed
 
 ### External observer-recipe witness seam (0.27.0)
 
@@ -456,9 +485,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.27.0
+## Architecture assessment after 0.28.0
 
-Yoink 0.27.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.28.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -472,7 +501,7 @@ behavior.
 | --- | --- | --- |
 | Primary backend database | Transactional migration-29 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, role administration, diagnostics, privacy-classified adapter-repair alerts, retailer/source/affiliate controls, and audit | No production IdP/step-up, secret references, external alert connectors/background escalation worker, break-glass workflow, cross-tenant global curator, or retailer-configuration rollback |
-| Minimal user application | Separate `/` dashboard for exact products, revisioned intent, store/seller/fulfillment/unit/all-in limits, action ceiling, expiry/cooldown/substitution preferences, periodic spend caps, activity, pause, pairing, and source/review status | Some style-level retailers still report `listing_only`; region/store scope is consent-derived rather than verified from each live offer; verified-equivalent substitution is policy-only and non-executable |
+| Minimal user application | Separate `/` dashboard with a no-write-before-review guided setup, atomic exact intent revision 1, notification-default compatibility path, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action ceiling, expiry/cooldown, periodic spend caps, activity, pause, pairing, and source/review status | Some style-level retailers still report `listing_only`; region/store scope is consent-derived rather than verified from each live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; the independent witness service, scheduler, and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
@@ -574,7 +603,11 @@ cooldown controls, transactional quantity/spend reservations, and an
 append-only ledger. Concurrent quantity and daily-budget tests pass, stale
 policy leases fail closed, and cart-only confirmation cannot record a purchase.
 0.25.0 adds the community-side selected-offer scope and refuses to publish
-listing-only or ambiguous variants. The broader phase exit remains **open**
+listing-only or ambiguous variants. 0.28.0 completes the local non-technical
+creation path: one reviewed request atomically creates the exact plan and
+configured revision, legacy user creation defaults to notifications, later
+catalog targets stay disabled, and the UI test proves no pre-review write. The
+broader phase exit remains **open**
 until style-level observers supply stable child offers, applicable region/store
 scope is live-offer verified, verified-equivalent selection has independently
 governed identity evidence, and a future checkout/order path can prove and

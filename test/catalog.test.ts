@@ -32,6 +32,37 @@ test("catalog keeps out-of-stock unsupported listings for attribution", () => {
   }
 });
 
+test("the user library keeps the latest observed price separate from catalog MSRP", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "observed-price-product",
+      sourceListingId: "observed-price-listing",
+      title: "Observed Price Fixture",
+      retailerId: "target",
+      retailerSku: "95280899",
+      canonicalUrl: "https://www.target.com/p/-/A-95280899",
+      listingStatus: "in_stock",
+      executionSupported: true,
+      msrpCents: 2495,
+      observedPriceCents: 798,
+      currency: "USD",
+      variantAttributes: { edition: "First", color: "Forest" }
+    });
+    const item = catalog.listLibrary()[0];
+    assert.equal(item?.msrpCents, 2495);
+    assert.equal(item?.currentPriceCents, 798);
+    assert.equal(typeof item?.variantAttributes, "object");
+    assert.deepEqual(item?.variantAttributes, { edition: "First", color: "Forest" });
+    assert.equal(item?.executionSupported, true);
+  } finally {
+    db.close();
+  }
+});
+
 test("one variant can retain multiple same-retailer listings and one mission owns both targets", () => {
   const db = new YoinkDatabase();
   try {

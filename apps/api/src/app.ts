@@ -23,6 +23,7 @@ import {
   type CatalogIdentityOperationProposalInput,
   type JobState,
   type MissionUpdateInput,
+  type PurchaseIntentCreateInput,
   type OperatorAlertAcknowledgeInput,
   type OperatorAlertResolveInput,
   type OperatorAlertRuleInput,
@@ -1054,8 +1055,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents") {
         const body = await readJson(request);
-        const listing = catalog.requireListing(String(body.listingId ?? ""));
-        const result = control.ensureMission(listing.variantId, listing.id, "user_selected");
+        let result;
+        if (body.contractVersion === undefined) {
+          const listing = catalog.requireListing(String(body.listingId ?? ""));
+          result = control.ensureUserMission(listing.variantId, listing.id);
+        } else {
+          result = control.createConfiguredMission(body as unknown as PurchaseIntentCreateInput);
+        }
         json(response, result.created ? 201 : 200, {
           purchaseIntent: control.missionDetail(result.mission.id),
           created: result.created
