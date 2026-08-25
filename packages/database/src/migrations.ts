@@ -2301,5 +2301,21 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         )
       BEGIN SELECT RAISE(ABORT, 'background tasks are retained until bounded cleanup'); END;
     `
+  },
+  {
+    version: 35,
+    name: "durable_signal_ingress",
+    sql: `
+      UPDATE background_task_schedules
+      SET display_name = 'Signal inbox and delivery recovery',
+          description = 'Process packaged signal messages, then retire expired inbox and outbox capabilities safely.',
+          interval_seconds = 15,
+          updated_by_actor_id = 'migration_35',
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE task_kind = 'hosted_delivery_recovery'
+        AND display_name = 'Inbox and outbox recovery'
+        AND description = 'Retire expired hosted delivery capabilities and requeue or dead-letter abandoned work.'
+        AND interval_seconds = 60;
+    `
   }
 ]);

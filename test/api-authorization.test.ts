@@ -163,6 +163,16 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
       body: JSON.stringify({ enabled: false })
     });
     assert.equal(deniedWorkerMutation.status, 403);
+    const deniedSignalRetry = await fetch(`${baseUrl}/api/v1/admin/workers/signal-inbox/inbox_${"a".repeat(32)}/retry`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: "{}"
+    });
+    assert.equal(deniedSignalRetry.status, 403);
     const deniedAlertMutation = await fetch(`${baseUrl}/api/v1/admin/alerts/rules`, {
       method: "POST",
       headers: {
@@ -245,6 +255,17 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     });
     assert.equal(permittedWorkerMutation.status, 404);
     assert.equal((await permittedWorkerMutation.json() as { error: string }).error, "background_task_not_found");
+    const permittedSignalRetry = await fetch(`${baseUrl}/api/v1/admin/workers/signal-inbox/inbox_${"a".repeat(32)}/retry`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: "{}"
+    });
+    assert.equal(permittedSignalRetry.status, 404);
+    assert.equal((await permittedSignalRetry.json() as { error: string }).error, "hosted_inbox_not_found");
   } finally {
     server.close();
     await once(server, "close");

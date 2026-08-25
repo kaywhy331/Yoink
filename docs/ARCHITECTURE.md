@@ -460,6 +460,31 @@ infrastructure: the adapter still performs synchronous SQLite calls and does
 not implement PostgreSQL isolation, fleet scheduling, PITR, or production
 cutover.
 
+Yoink 0.36.0 uses that seam for authenticated TrackaLacker signal evaluation.
+The device handler still parses the fixed push envelope, but it no longer calls
+the signal engine. It normalizes the resulting source-neutral contract, removes
+the ephemeral offer ID, and commits an idempotent `signal_event_v1` inbox row
+and immediate task wake atomically. A successful response therefore means
+durable acceptance, not completed evaluation. The generic local/manual signal
+route remains synchronous and is not the Chrome transport contract.
+
+The existing `hosted_delivery_recovery` family is now **Signal inbox and
+delivery recovery** rather than a remotely extensible task kind. Its processor
+leases only the packaged event type and handles at most 25 messages per task.
+It runs the transactional signal engine under the worker's exact tenant/user
+scope, then consumes the inbox capability. Normal engine failures use the
+inbox's 20-attempt retry/dead-letter state. An acknowledgement failure after an
+engine commit is treated as uncertain: no opposite transition is attempted,
+the lease expires, and replay reaches transport deduplication.
+
+An immediate wake uses a per-inbox active dedupe key and priority 80. The
+15-second schedule is only a recovery/drain fallback and remains operator
+controlled; paused schedules retain intake without creating new wakes. Admin
+projections expose aggregate states and payload-free dead-letter metadata. An
+authorized corrected-message retry atomically resets the inbox attempt budget,
+writes audit/outbox evidence, and enqueues or defers a wake. Neither that
+control nor signal evaluation carries Chrome mutation capability.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and
@@ -601,6 +626,8 @@ activation writes the exact qualification record.
 - Durable source-sync runs and per-product receipts
 - Durable background schedules, capability-leased maintenance tasks,
   append-only task transitions, and worker heartbeats
+- Tenant/user-scoped `signal_event_v1` inbox messages, delivery receipts, and
+  bounded payload-free dead-letter recovery metadata
 
 Private source data is tenant-owned. Exact catalog identities may eventually be
 shared, but no private follow or signal becomes global automatically.
@@ -608,7 +635,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 34. Foreign keys are mandatory.
+numbered; the current schema is migration 35. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 

@@ -52,6 +52,7 @@ import {
   type WalmartAddRehearsalInput,
   type WalmartDrawScanInput
 } from "../../../packages/contracts/src/index.js";
+import { SIGNAL_INGRESS_EVENT_TYPE } from "../../../packages/contracts/src/signal-ingress.js";
 import { CatalogRepository } from "../../../packages/database/src/catalog-repository.js";
 import {
   CatalogGovernanceRepository,
@@ -115,6 +116,7 @@ import {
   UserPrivacyRepository
 } from "../../../packages/database/src/user-privacy-repository.js";
 import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
+import { DurableSignalIngressService } from "../../../packages/engine/src/signal-ingress.js";
 import { newId } from "../../../packages/domain/src/ids.js";
 import { buildUserSetupReadiness } from "../../../packages/domain/src/user-setup.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
@@ -294,6 +296,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const offerIdentity = new OfferIdentityRepository(db);
   const spendLedger = new SpendLedgerRepository(db);
   const engine = new SignalEngine(db);
+  const signalIngress = new DurableSignalIngressService(db);
   const devices = new DeviceRepository(db);
   const execution = new ExecutionRepository(db);
   const hostedDelivery = new HostedDeliveryRepository(db);
@@ -412,6 +415,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const backgroundScheduleMatch = /^\/api\/v1\/workers\/schedules\/([A-Za-z0-9_-]{3,160})$/.exec(requestUrl.pathname);
       const backgroundScheduleRunMatch = /^\/api\/v1\/workers\/schedules\/([A-Za-z0-9_-]{3,160})\/run$/.exec(requestUrl.pathname);
       const backgroundTaskRetryMatch = /^\/api\/v1\/workers\/tasks\/([A-Za-z0-9_-]{3,160})\/retry$/.exec(requestUrl.pathname);
+      const signalInboxRetryMatch = /^\/api\/v1\/workers\/signal-inbox\/(inbox_[a-f0-9]{32})\/retry$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
         const settings = control.settings();
@@ -443,6 +447,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           selfServiceUserDataExport: true,
           productionPostgresReady: false,
           durableBackgroundTasks: true,
+          durableSignalIngress: true,
+          signalEvaluationOutsideDeviceRequest: true,
           backgroundWorkerRuntime: backgroundWorker.state,
           backgroundWorkerHealthy: backgroundWorker.healthy,
           backgroundWorkerDeployment: backgroundWorker.runtimeKind,
@@ -834,7 +840,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             request.headers["idempotency-key"],
             scopedSourceConnectionId("trackalacker")
           );
-          json(response, 202, engine.process(input));
+          json(response, 202, signalIngress.acceptTrackalacker(input));
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/catalog") {
@@ -930,7 +936,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/workers") {
-        json(response, 200, { backgroundWork: backgroundTasks.snapshot() });
+        json(response, 200, {
+          backgroundWork: {
+            ...backgroundTasks.snapshot(),
+            signalIngress: hostedDelivery.inboxEventCounts(SIGNAL_INGRESS_EVENT_TYPE),
+            signalDeadLetters: hostedDelivery.listInboxDeadLettersByEventType(SIGNAL_INGRESS_EVENT_TYPE)
+          }
+        });
         return;
       }
 
@@ -955,6 +967,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && backgroundTaskRetryMatch) {
         json(response, 202, {
           task: backgroundTasks.retryDeadLetter(backgroundTaskRetryMatch[1] ?? "", correlationId)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && signalInboxRetryMatch) {
+        json(response, 202, {
+          receipt: signalIngress.retryDeadLetter(signalInboxRetryMatch[1] ?? "", correlationId)
         });
         return;
       }
@@ -997,6 +1016,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const bestBuyQualification = shadowObservations.bestBuyQualificationReadiness();
         const adminChangeCounts = adminChanges.counts();
         const backgroundWork = backgroundTasks.snapshot();
+        const signalIngressCounts = hostedDelivery.inboxEventCounts(SIGNAL_INGRESS_EVENT_TYPE);
         const qualifiedAddRetailers = [
           targetQualification.addToCartQualified ? "Target" : "",
           walmartQualification.addToCartQualified ? "Walmart" : "",
@@ -1038,6 +1058,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             retryingBackgroundTasks: backgroundWork.counts.retryingTasks,
             deadLetterBackgroundTasks: backgroundWork.counts.deadLetterTasks,
             onlineBackgroundWorkers: backgroundWork.counts.onlineWorkers,
+            queuedSignalMessages: signalIngressCounts.accepted + signalIngressCounts.processing + signalIngressCounts.failed,
+            processedSignalMessages: signalIngressCounts.processed,
+            deadLetterSignalMessages: signalIngressCounts.deadLetter,
             ...operatorAlertCounts
           },
           sources: control.listSources(),
@@ -1100,6 +1123,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           },
           operatorAlerts: operatorAlertSnapshot,
           backgroundWork,
+          signalIngress: {
+            durable: true,
+            evaluationBoundary: "standalone_background_worker",
+            packagedEventType: SIGNAL_INGRESS_EVENT_TYPE,
+            counts: signalIngressCounts
+          },
           retailerEvidence: shadowObservations.retailerEvidenceReadiness(),
           targetQualification,
           walmartQualification,
@@ -1134,6 +1163,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             privacyBoundedOperationalTelemetry: true,
             durableBackgroundTasks: true,
             backgroundWorkOutsideRequestHandling: true,
+            durableSignalIngress: true,
+            signalEvaluationOutsideDeviceRequest: true,
             localInProcessBackgroundWorker: true,
             asyncBackgroundWorkerContract: true,
             standaloneBackgroundWorkerProcessReady: true,

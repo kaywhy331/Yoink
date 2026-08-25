@@ -43,7 +43,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /High-risk change control/);
     assert.match(adminPageBody, /Approval never applies a change by itself/);
     assert.match(adminPageBody, /Durable maintenance/);
-    assert.match(adminPageBody, /Closed maintenance tasks only/);
+    assert.match(adminPageBody, /Durable evaluation with closed browser mutation/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
     assert.match(adminScript, /renderOperationalTelemetry/);
@@ -64,6 +64,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       selfServiceUserDataExport: true,
       productionPostgresReady: false,
       durableBackgroundTasks: true,
+      durableSignalIngress: true,
+      signalEvaluationOutsideDeviceRequest: true,
       backgroundWorkerRuntime: "stopped",
       backgroundWorkerHealthy: false,
       backgroundWorkerDeployment: "local_in_process",
@@ -150,12 +152,35 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const snapshot = await fetch(`${baseUrl}/api/v1/snapshot`).then((response) => response.json()) as {
       counts: Record<string, number>;
       capabilities: Record<string, unknown>;
+      signalIngress: {
+        durable: boolean;
+        evaluationBoundary: string;
+        packagedEventType: string;
+        counts: { total: number };
+      };
     };
     assert.equal(snapshot.counts.listings, 1);
     assert.equal(snapshot.counts.catalogProposals, 1);
     assert.equal(snapshot.counts.pendingCatalogProposals, 0);
     assert.equal(snapshot.counts.signals, 1);
     assert.equal(snapshot.counts.actionJobs, 0);
+    assert.equal(snapshot.counts.queuedSignalMessages, 0);
+    assert.equal(snapshot.counts.processedSignalMessages, 0);
+    assert.equal(snapshot.counts.deadLetterSignalMessages, 0);
+    assert.deepEqual(snapshot.signalIngress, {
+      durable: true,
+      evaluationBoundary: "standalone_background_worker",
+      packagedEventType: "signal_event_v1",
+      counts: {
+        eventType: "signal_event_v1",
+        accepted: 0,
+        processing: 0,
+        failed: 0,
+        processed: 0,
+        deadLetter: 0,
+        total: 0
+      }
+    });
     assert.equal(snapshot.counts.catalogIdentityOperations, 0);
     assert.equal(snapshot.counts.pendingCatalogIdentityOperations, 0);
     assert.equal(snapshot.counts.adminChangeRequests, 0);
@@ -176,6 +201,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.productionIdentityProvider, false);
     assert.equal(snapshot.capabilities.durableBackgroundTasks, true);
     assert.equal(snapshot.capabilities.backgroundWorkOutsideRequestHandling, true);
+    assert.equal(snapshot.capabilities.durableSignalIngress, true);
+    assert.equal(snapshot.capabilities.signalEvaluationOutsideDeviceRequest, true);
     assert.equal(snapshot.capabilities.asyncBackgroundWorkerContract, true);
     assert.equal(snapshot.capabilities.standaloneBackgroundWorkerProcessReady, true);
     assert.equal(snapshot.capabilities.boundedMultiPrincipalWorker, true);

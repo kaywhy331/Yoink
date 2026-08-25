@@ -1,6 +1,39 @@
 # Yoink roadmap
 
-## Shipped through 0.35.0
+## Shipped through 0.36.0
+
+### Durable TrackaLacker signal evaluation boundary (0.36.0)
+
+- Authenticated Chrome delivery no longer evaluates a TrackaLacker signal in
+  the device HTTP request. The packaged parser output is normalized, stripped
+  of ephemeral offer material, accepted into the existing tenant/user inbox,
+  and paired with an immediate priority-80 worker wake in one transaction
+  before the endpoint returns `202`
+- The durable `signal_event_v1` contract is the only inbox event leased by the
+  packaged signal processor. One task evaluates at most 25 messages; unrelated
+  hosted inbox contracts remain untouched. The generic local/manual signal
+  endpoint remains synchronous and is explicitly outside the device path
+- Signal-engine transactions remain transport idempotent. A failure before
+  evaluation acknowledgement retries with one fixed redacted code and stops at
+  the existing 20-attempt inbox dead-letter bound. If evaluation commits but
+  acknowledgement is uncertain, lease recovery replays into the engine's
+  duplicate path rather than applying the signal twice
+- Migration 35 updates only an untouched 0.35 hosted-delivery default into the
+  15-second **Signal inbox and delivery recovery** fallback. Immediate wakes
+  respect operator pause: intake remains durable while evaluation is deferred,
+  and resume drains the queue
+- Operations exposes scoped aggregate inbox states and payload-free dead-letter
+  metadata. `worker.manage` can reset one corrected signal message; its state
+  reset, audit/outbox receipt, and new wake are atomic. The UI never receives
+  the sanitized signal payload, raw offer ID, or lease capability
+- Focused tests cover atomic queue rollback, active deduplication, schedule
+  pause/resume, exact event-type leasing, poison dead letter, bounded batches,
+  post-commit acknowledgement uncertainty, operator retry, API status taxonomy,
+  and the paired-device-to-worker integration
+- This completes the TrackaLacker device-signal portion of Phase 2 request-path
+  extraction. It does not provide PostgreSQL, a fleet scheduler, external
+  outbox dispatch, recipe evaluation workers, notification dispatch workers,
+  or production identity, and it widens no retailer capability
 
 ### Async worker port and standalone SQLite process (0.35.0)
 
@@ -61,9 +94,10 @@
   letter; none of those controls has retailer mutation authority
 - At 0.34 this is a production-shaped local modular-monolith seam with an
   in-process SQLite runtime. Version 0.35 extracts the async worker port and a
-  standalone bounded-principal SQLite adapter; PostgreSQL, a production fleet,
-  external connectors, signal/recipe evaluation workers, and deletion
-  orchestration remain open Phase 2/3 work
+  standalone bounded-principal SQLite adapter, and 0.36 adds the first packaged
+  signal-evaluation consumer. PostgreSQL, a production fleet, external
+  connectors, recipe workers, and deletion orchestration remain open Phase 2/3
+  work
 - Target and Walmart retain their existing independently qualified add-only
   state. Amazon, Best Buy, marketplace, pickup, checkout, drawing entry,
   payment, and order submission are not widened
@@ -687,9 +721,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.35.0
+## Architecture assessment after 0.36.0
 
-Yoink 0.35.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.36.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -701,8 +735,8 @@ or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-34 SQLite schema plus deterministic operator portability, an asynchronous worker port with embedded and standalone SQLite adapters, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, or hosted cutover |
-| Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, bounded service-health telemetry, durable-worker schedules/dead letters/heartbeats, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, secret references, external alert connectors or connector dispatch workers, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
+| Primary backend database | Transactional migration-35 SQLite schema plus deterministic operator portability, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, or hosted cutover |
+| Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, bounded service-health telemetry, durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, secret references, external alert connectors or connector dispatch workers, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, and source/review status | Production onboarding still depends on Phase 2 IdP/hosted deployment; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, complete retention/deletion operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; recipe evaluation is not a worker handler; the independent witness service, refresh scheduler, and public consistency monitor are not deployed by this repository |
@@ -853,13 +887,16 @@ prove quantity and budget reservations.
 
 #### Phase 2 — production backend and device transport
 
-0.34.0 establishes the durable-work state machine, and 0.35.0 extracts its
+0.34.0 establishes the durable-work state machine, 0.35.0 extracts its
 runtime behind asynchronous store/handler contracts with bounded tenant/user
 pagination and a separately supervised SQLite process. This proves process
 lifecycle, schema ownership, health, outage, and recovery locally without
 placing work in HTTP request handling. It does not satisfy the Phase 2 exit gate
 because the persistence adapter remains synchronous SQLite and the standalone
-process is not a multi-tenant PostgreSQL fleet.
+process is not a multi-tenant PostgreSQL fleet. Version 0.36 moves authenticated
+TrackaLacker signal evaluation behind that boundary with atomic inbox/wake
+acceptance, bounded processing, and operable dead letters; other asynchronous
+families and the production persistence/deployment gate remain open.
 
 - Implement the async PostgreSQL repository family and migrations/importer with
   transactional and isolation parity, row-level tenant tests, fleet lease-
@@ -867,8 +904,11 @@ process is not a multi-tenant PostgreSQL fleet.
 - Add production IdP sessions, lifecycle/provisioning, TLS ingress, CSRF/session
   protection, secrets management, encryption, production retention/deletion,
   backups/PITR, restore drills, load tests, SLOs, and on-call alerting
-- Run durable inbox/outbox, signal evaluation, projection cleanup, recipe
-  evaluation, and notification work outside request latency
+- Keep authenticated TrackaLacker device-signal evaluation outside request
+  latency using the shipped `signal_event_v1` inbox contract. Move remaining
+  external inbox/outbox dispatch, projection cleanup, recipe evaluation,
+  notification dispatch, and generic hosted signal sources onto explicit
+  idempotent worker contracts
 - Ship separate dev and production extension configurations. Production uses
   rotatable device credentials, a package-allowlisted HTTPS origin,
   authenticated pull, Web Push only as a wake hint, and alarms as fallback.
@@ -891,7 +931,9 @@ the Approvals workspace. 0.33.0 adds self-service user inventory/export with a
 closed credential boundary. 0.34.0 adds the local Background work operations
 view, permission-gated schedules, dead-letter retry, and runtime heartbeats;
 0.35.0 makes embedded versus standalone runtime state explicit without
-claiming production deployment.
+claiming production deployment. Version 0.36 adds payload-free signal-inbox
+counts and a permission-gated, audited retry for one corrected signal dead
+letter without exposing its retained signal payload.
 Production IdP/MFA integration, account deletion, support break-glass,
 connectors, independently deployed connector workers, and broader alert
 families remain open.

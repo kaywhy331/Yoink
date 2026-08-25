@@ -1,9 +1,11 @@
 # Background worker operations
 
-Yoink 0.35 supports two safe SQLite worker layouts. Embedded mode is the
+Yoink 0.36 supports two safe SQLite worker layouts. Embedded mode is the
 zero-configuration local default. External mode runs the same closed handler
-registry in a separately supervised process. Neither mode authorizes retailer
-mutation, checkout, payment, drawing entry, or order submission.
+registry in a separately supervised process. The registry now evaluates only
+durably accepted packaged TrackaLacker signals in addition to its maintenance
+families. Neither mode can execute retailer mutation, checkout, payment,
+drawing entry, or order submission.
 
 ## Choose a mode
 
@@ -11,7 +13,7 @@ mutation, checkout, payment, drawing entry, or order submission.
 | --- | --- | --- | --- |
 | `embedded` | API process | Default nontechnical local setup | Reports the in-process runtime |
 | `external` | `start:worker` process | Local/staging supervision and process-failure drills | Reports standalone heartbeat coverage |
-| `disabled` | Nowhere | Intentional maintenance stop | Reports disabled and unhealthy; queued work remains durable |
+| `disabled` | Nowhere | Intentional work stop | Reports disabled and unhealthy; accepted signals and queued work remain durable but unevaluated |
 
 Local mode defaults to `embedded`. Hosted boundary mode defaults to `external`,
 but hosted SQLite remains an integration/staging boundary and is not production
@@ -68,6 +70,27 @@ The worker configuration has no retailer, account, payment, or credential
 inputs. Principal iteration uses a canonical opaque keyset cursor rather than
 an unbounded table sweep.
 
+## Signal inbox behavior
+
+The authenticated Chrome signal endpoint stores `signal_event_v1` and an
+immediate priority wake atomically. The worker leases only that exact event
+contract and evaluates at most 25 messages per handler run. Ephemeral offer
+IDs, device credentials, push subscription keys, and lease capabilities are
+not in its durable payload.
+
+The **Signal inbox and delivery recovery** schedule is a 15-second fallback.
+Pausing it prevents new immediate signal wakes as well as periodic draining;
+device intake continues and reports `backgroundWakeState=schedule_paused`.
+Resume makes the schedule immediately due. This schedule changes evaluation
+latency only—it does not change user intent or grant browser action authority.
+
+Signal failures retry from the inbox after 30 seconds and stop after 20 claims.
+The Operations view exposes only fixed error metadata for stopped messages. Use
+**Retry corrected signal** only after deploying the relevant packaged parser or
+evaluation correction. The reset, audit/outbox receipt, and worker wake commit
+atomically. See [durable signal ingress](SIGNAL_INGRESS.md) for the complete
+contract and failure semantics.
+
 ## Health and operator checks
 
 `GET /api/v1/health` exposes fixed operational facts:
@@ -77,6 +100,8 @@ an unbounded table sweep.
 - `backgroundWorkerRuntime` reports the current lifecycle state;
 - `backgroundWorkerHealthy` requires a current heartbeat, no bounded worker
   error, and—in external mode—coverage of every persisted principal;
+- `durableSignalIngress` and `signalEvaluationOutsideDeviceRequest` remain
+  `true` for the packaged TrackaLacker device path;
 - `productionWorkerFleetReady` remains `false`.
 
 The admin view considers a heartbeat online for 30 seconds. It shows only
@@ -103,7 +128,7 @@ Recovery sequence:
 2. Confirm the API and worker are built from the exact same Yoink version.
 3. Start the standalone worker once and wait for `standalone worker ready`.
 4. Confirm external health is running/healthy and the admin view shows complete
-   principal coverage without dead-letter growth.
+   principal coverage without task or signal-inbox dead-letter growth.
 5. If the worker reports an initialization failure, stop it and let the API
    apply migrations first; never bypass the exact-schema check.
 

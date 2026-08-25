@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.35.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.36.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,27 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.36.0 makes authenticated TrackaLacker signal intake durable before
+evaluation. The Chrome device request validates and normalizes the packaged
+push contract, discards any ephemeral offer ID, atomically accepts or
+deduplicates a tenant/user-scoped `signal_event_v1` inbox row, and queues an
+immediate priority worker wake before returning `202`. `SignalEngine` no longer
+runs in that device request; the embedded or standalone worker evaluates at
+most 25 messages per task under the same principal scope. The local/manual
+`POST /api/v1/signals` compatibility route remains synchronous.
+
+Processing failures retry with a fixed redacted code and stop after 20 inbox
+claims. An uncertain post-commit acknowledgement is left for lease recovery;
+transport idempotency makes the recovered evaluation a duplicate instead of a
+second side effect. Migration 35 changes only the untouched hosted-delivery
+schedule default to a 15-second **Signal inbox and delivery recovery** fallback.
+Pausing that schedule defers new wakes without losing intake. The Operations
+workspace shows bounded signal-inbox state and lets an authorized operator
+retry one dead letter after a correction, without exposing its payload or any
+capability. Health advertises the durable request boundary. This remains a
+SQLite local/staging milestone, not PostgreSQL or a production worker fleet,
+and it widens no retailer action. See [durable signal ingress](docs/SIGNAL_INGRESS.md).
 
 Version 0.35.0 extracts background execution behind an asynchronous store and
 handler contract and ships a separately runnable worker process. The SQLite
@@ -31,7 +52,6 @@ or printed at startup. A real child-process integration test covers startup,
 all-principal work, external API health, graceful shutdown, and outage
 reporting. This is a strong SQLite process boundary for local and staging use,
 not PostgreSQL or a production worker fleet, and it widens no retailer lane.
-Migration 34 remains the current schema; this release needs no migration.
 
 Version 0.34.0 adds a durable local background-work boundary. Migration 34
 stores five closed maintenance schedules, capability-leased tasks, append-only
@@ -357,8 +377,10 @@ The durable local worker starts embedded with the API and is visible under
 **Admin → Operations → Background work**. For an intentional maintenance stop,
 set `YOINK_BACKGROUND_WORKER_MODE=disabled`; health then reports `disabled`,
 schedules and queued tasks remain durable, and no task handler runs until the
-worker is re-enabled. This does not pause signal intake or retailer actions—use
-the user-facing **Pause Actions** control for the latter. The legacy
+worker is re-enabled. Signal intake still returns a durable queued receipt, but
+evaluation waits for the worker. Disabling the worker does not cancel an
+already leased retailer action—use the user-facing **Pause Actions** control
+for retailer mutation. The legacy
 `YOINK_BACKGROUND_WORKER=1|0` switch remains compatible but cannot be combined
 with the mode setting.
 
@@ -638,5 +660,5 @@ signal, source, attribution, notification, adapter, service-worker recovery,
 and API tests.
 
 See [Architecture](docs/ARCHITECTURE.md), [Hosted deployment
-contract](docs/HOSTED_DEPLOYMENT.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
+contract](docs/HOSTED_DEPLOYMENT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
 migration](docs/CARTCOLLECT_MIGRATION.md), and [Roadmap](docs/ROADMAP.md).

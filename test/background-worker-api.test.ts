@@ -4,7 +4,9 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
+import { SIGNAL_INGRESS_EVENT_TYPE } from "../packages/contracts/src/signal-ingress.js";
 import { BackgroundTaskRepository } from "../packages/database/src/background-task-repository.js";
+import { HostedDeliveryRepository } from "../packages/database/src/hosted-delivery-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { LOCAL_REQUEST_SCOPE, runWithRequestScope } from "../packages/database/src/request-scope.js";
 
@@ -32,6 +34,8 @@ test("the admin worker API exposes safe controls without lease capability materi
   try {
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(health.durableBackgroundTasks, true);
+    assert.equal(health.durableSignalIngress, true);
+    assert.equal(health.signalEvaluationOutsideDeviceRequest, true);
     assert.equal(health.backgroundWorkerRuntime, "running");
     assert.equal(health.backgroundWorkerHealthy, true);
     assert.equal(health.backgroundWorkerMode, "embedded");
@@ -51,6 +55,16 @@ test("the admin worker API exposes safe controls without lease capability materi
         successfulHistoryRetentionDays: number;
         canManage: boolean;
         schedules: Array<{ id: string; enabled: boolean }>;
+        signalIngress: {
+          eventType: string;
+          accepted: number;
+          processing: number;
+          failed: number;
+          processed: number;
+          deadLetter: number;
+          total: number;
+        };
+        signalDeadLetters: Array<{ id: string; attempt: number; lastErrorCode: string }>;
       };
     };
     assert.equal(initial.backgroundWork.containsCapabilityMaterial, false);
@@ -61,6 +75,16 @@ test("the admin worker API exposes safe controls without lease capability materi
     assert.equal((initial.backgroundWork as { executionBoundary?: string }).executionBoundary, "outside_request_handler");
     assert.equal(initial.backgroundWork.canManage, true);
     assert.equal(initial.backgroundWork.schedules.length, 5);
+    assert.deepEqual(initial.backgroundWork.signalIngress, {
+      eventType: "signal_event_v1",
+      accepted: 0,
+      processing: 0,
+      failed: 0,
+      processed: 0,
+      deadLetter: 0,
+      total: 0
+    });
+    assert.deepEqual(initial.backgroundWork.signalDeadLetters, []);
     assert.equal(JSON.stringify(initial).includes("capabilityToken"), false);
 
     const schedule = schedules[0];
@@ -113,13 +137,52 @@ test("the admin worker API exposes safe controls without lease capability materi
       "SELECT COUNT(*) AS count FROM audit_events WHERE event_type IN ('background_schedule_updated', 'background_task_requested', 'background_task_retried')"
     )?.count ?? 0) >= 3);
 
+    const delivery = new HostedDeliveryRepository(db);
+    const deadLetter = runWithRequestScope(LOCAL_REQUEST_SCOPE, () => delivery.acceptInbox({
+      source: "trackalacker",
+      messageKey: "worker-api:dead-signal:1",
+      eventType: SIGNAL_INGRESS_EVENT_TYPE,
+      payload: { parserVersion: "trackalacker-push-v1" }
+    }, now + 2));
+    db.run(
+      "UPDATE inbox_messages SET state = 'dead_letter', delivery_attempts = 20, last_error_code = 'signal_processing_failed' WHERE id = ?",
+      deadLetter.id
+    );
+    const withDeadLetter = await fetch(`${baseUrl}/api/v1/admin/workers`).then((response) => response.json()) as {
+      backgroundWork: { signalDeadLetters: Array<{ id: string; attempt: number; lastErrorCode: string }> };
+    };
+    assert.deepEqual(withDeadLetter.backgroundWork.signalDeadLetters.map((item) => ({ ...item })), [{
+      id: deadLetter.id,
+      eventType: SIGNAL_INGRESS_EVENT_TYPE,
+      attempt: 20,
+      lastErrorCode: "signal_processing_failed",
+      receivedAt: new Date(now + 2).toISOString(),
+      updatedAt: new Date(now + 2).toISOString(),
+      privacyClassification: "operational_aggregate"
+    }]);
+    const signalRetry = await fetch(`${baseUrl}/api/v1/admin/workers/signal-inbox/${encodeURIComponent(deadLetter.id)}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: "{}"
+    });
+    assert.equal(signalRetry.status, 202);
+    assert.equal((await signalRetry.json() as { receipt: { backgroundWakeState: string } }).receipt.backgroundWakeState, "created");
+    const repeatedSignalRetry = await fetch(`${baseUrl}/api/v1/admin/workers/signal-inbox/${encodeURIComponent(deadLetter.id)}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: "{}"
+    });
+    assert.equal(repeatedSignalRetry.status, 409);
+    assert.equal((await repeatedSignalRetry.json() as { error: string }).error, "hosted_inbox_state_conflict");
+
     const page = await fetch(`${baseUrl}/admin`).then((response) => response.text());
     const script = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(page, /Durable maintenance/);
-    assert.match(page, /Closed maintenance tasks only/);
+    assert.match(page, /Durable evaluation with closed browser mutation/);
     assert.match(page, /separately supervised standalone process/);
     assert.match(script, /renderBackgroundWork/);
     assert.match(script, /data-worker-task-retry/);
+    assert.match(script, /data-signal-inbox-retry/);
   } finally {
     server.close();
     await once(server, "close");

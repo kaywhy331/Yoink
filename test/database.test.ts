@@ -10,7 +10,7 @@ import { MIGRATIONS } from "../packages/database/src/migrations.js";
 test("initial migration creates the normalized graph and safe local defaults", () => {
   const db = new YoinkDatabase();
   try {
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 34);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 35);
     assert.equal(db.get<{ name: string }>("SELECT name FROM tenants WHERE id = ?", LOCAL_TENANT_ID)?.name, "Local");
     assert.equal(db.get<{ display_name: string }>("SELECT display_name FROM users WHERE id = ?", LOCAL_USER_ID)?.display_name, "Local user");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailers")?.count, 13);
@@ -103,8 +103,8 @@ test("non-owner processes require an existing database at the exact current sche
     new YoinkDatabase(filePath).close();
     const current = new YoinkDatabase(filePath, { migrationMode: "require_current" });
     assert.equal(current.migrationMode, "require_current");
-    assert.equal(current.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 34);
-    current.run("UPDATE schema_migrations SET name = 'tampered_name' WHERE version = 34");
+    assert.equal(current.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 35);
+    current.run("UPDATE schema_migrations SET name = 'tampered_name' WHERE version = 35");
     current.close();
 
     assert.throws(
@@ -129,7 +129,7 @@ test("a file database reopens idempotently", () => {
     const second = new YoinkDatabase(filePath);
     try {
       assert.equal(second.get<{ pause_reason: string }>("SELECT pause_reason FROM app_settings WHERE user_id = ?", LOCAL_USER_ID)?.pause_reason, "Preserved");
-      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 34);
+      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 35);
       second.assertIntegrity();
     } finally {
       second.close();
@@ -157,7 +157,7 @@ test("an existing 0.2 database upgrades transactionally to shadow observations a
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 34);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 35);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_trials")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics")?.count, 0);
@@ -210,7 +210,7 @@ test("migration 11 closes any inherited Best Buy execution and qualification sta
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 34);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 35);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>("SELECT status FROM retailer_adapter_qualifications WHERE retailer_id = 'bestbuy'")?.status, "retired");
       assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name IN (
@@ -254,7 +254,7 @@ test("migration 19 retires Best Buy v2 qualification before the v4/v3 boundary",
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 34);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 35);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>(
         "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'bestbuy'"
@@ -1075,6 +1075,93 @@ test("migration 34 adds durable background work without widening retailer execut
         "SELECT actions_paused AS actionsPaused, execution_mode AS executionMode FROM app_settings WHERE user_id = ?",
         LOCAL_USER_ID
       )?.actionsPaused, 1);
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("migration 35 upgrades only the packaged signal-recovery schedule default", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-signal-ingress-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 34)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        "2026-08-25T08:00:00.000Z"
+      );
+    }
+    legacy.exec(`
+      INSERT INTO background_task_schedules(
+        id, tenant_id, subject_user_id, task_kind, display_name, description,
+        enabled, interval_seconds, next_run_at, last_enqueued_at,
+        created_by_actor_id, updated_by_actor_id, privacy_classification,
+        created_at, updated_at
+      ) VALUES (
+        'background_schedule_upgrade_35', '${LOCAL_TENANT_ID}', '${LOCAL_USER_ID}',
+        'hosted_delivery_recovery', 'Inbox and outbox recovery',
+        'Retire expired hosted delivery capabilities and requeue or dead-letter abandoned work.',
+        1, 60, '2026-08-25T08:00:00.000Z', '', 'legacy_worker', 'legacy_worker',
+        'operational_configuration', '2026-08-25T08:00:00.000Z', '2026-08-25T08:00:00.000Z'
+      );
+      INSERT INTO tenants(id, name, created_at)
+      VALUES ('tenant_schedule_custom_35', 'Custom schedule tenant', '2026-08-25T08:00:00.000Z');
+      INSERT INTO users(id, tenant_id, display_name, created_at)
+      VALUES ('user_schedule_custom_35', 'tenant_schedule_custom_35', 'Custom schedule user', '2026-08-25T08:00:00.000Z');
+      INSERT INTO background_task_schedules(
+        id, tenant_id, subject_user_id, task_kind, display_name, description,
+        enabled, interval_seconds, next_run_at, last_enqueued_at,
+        created_by_actor_id, updated_by_actor_id, privacy_classification,
+        created_at, updated_at
+      ) VALUES (
+        'background_schedule_custom_35', 'tenant_schedule_custom_35', 'user_schedule_custom_35',
+        'hosted_delivery_recovery', 'Inbox and outbox recovery',
+        'Retire expired hosted delivery capabilities and requeue or dead-letter abandoned work.',
+        1, 45, '2026-08-25T08:00:00.000Z', '', 'custom_operator', 'custom_operator',
+        'operational_configuration', '2026-08-25T08:00:00.000Z', '2026-08-25T08:00:00.000Z'
+      );
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 35 AND name = 'durable_signal_ingress'"
+      )?.count, 1);
+      assert.deepEqual({ ...upgraded.get<{
+        displayName: string;
+        description: string;
+        intervalSeconds: number;
+        updatedByActorId: string;
+      }>(
+        `SELECT display_name AS displayName, description, interval_seconds AS intervalSeconds,
+                updated_by_actor_id AS updatedByActorId
+         FROM background_task_schedules WHERE id = 'background_schedule_upgrade_35'`
+      ) }, {
+        displayName: "Signal inbox and delivery recovery",
+        description: "Process packaged signal messages, then retire expired inbox and outbox capabilities safely.",
+        intervalSeconds: 15,
+        updatedByActorId: "migration_35"
+      });
+      assert.equal(upgraded.get<{ executionSupported: number }>(
+        "SELECT execution_supported AS executionSupported FROM retailers WHERE id = 'bestbuy'"
+      )?.executionSupported, 0);
+      assert.deepEqual({ ...upgraded.get<{ displayName: string; intervalSeconds: number; updatedByActorId: string }>(
+        `SELECT display_name AS displayName, interval_seconds AS intervalSeconds,
+                updated_by_actor_id AS updatedByActorId
+         FROM background_task_schedules WHERE id = 'background_schedule_custom_35'`
+      ) }, {
+        displayName: "Inbox and outbox recovery",
+        intervalSeconds: 45,
+        updatedByActorId: "custom_operator"
+      });
       upgraded.assertIntegrity();
     } finally {
       upgraded.close();

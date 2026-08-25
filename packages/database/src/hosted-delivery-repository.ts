@@ -2,6 +2,8 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { sanitizeDiagnosticData } from "../../domain/src/redaction.js";
+import { AuditRepository } from "./audit-repository.js";
+import { AuthorizationRepository } from "./authorization-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 
@@ -45,6 +47,37 @@ export interface HostedOutboxLease {
   createdAt: string;
   leaseExpiresAt: string;
   capabilityToken: string;
+}
+
+export interface HostedInboxEventCounts {
+  eventType: string;
+  accepted: number;
+  processing: number;
+  failed: number;
+  processed: number;
+  deadLetter: number;
+  total: number;
+}
+
+export interface HostedInboxDeadLetter {
+  id: string;
+  eventType: string;
+  attempt: number;
+  lastErrorCode: string;
+  receivedAt: string;
+  updatedAt: string;
+  privacyClassification: "operational_aggregate";
+}
+
+export class HostedDeliveryError extends Error {
+  constructor(
+    readonly code: "hosted_inbox_not_found" | "hosted_inbox_state_conflict",
+    readonly status: 404 | 409,
+    message: string
+  ) {
+    super(message);
+    this.name = "HostedDeliveryError";
+  }
 }
 
 function deliveryIdentifier(value: unknown, label: string): string {
@@ -99,7 +132,13 @@ function safeSeconds(value: number, fallback: number, minimum: number, maximum: 
 }
 
 export class HostedDeliveryRepository {
-  constructor(private readonly db: YoinkDatabase) {}
+  private readonly audit: AuditRepository;
+  private readonly authorization: AuthorizationRepository;
+
+  constructor(private readonly db: YoinkDatabase) {
+    this.audit = new AuditRepository(db);
+    this.authorization = new AuthorizationRepository(db);
+  }
 
   acceptInbox(input: HostedInboxInput, now = Date.now()): HostedInboxReceipt {
     allowedIngress();
@@ -164,6 +203,15 @@ export class HostedDeliveryRepository {
   }
 
   leaseInbox(leaseSeconds = 60, now = Date.now()): HostedInboxLease | null {
+    return this.leaseInboxMatching("", leaseSeconds, now);
+  }
+
+  leaseInboxByEventType(eventType: string, leaseSeconds = 60, now = Date.now()): HostedInboxLease | null {
+    const safeEventType = deliveryIdentifier(eventType, "inbox event type").toLocaleLowerCase("en-US");
+    return this.leaseInboxMatching(safeEventType, leaseSeconds, now);
+  }
+
+  private leaseInboxMatching(eventType: string, leaseSeconds: number, now: number): HostedInboxLease | null {
     allowedWorker();
     const scope = currentRequestScope();
     const timestamp = nowIso(now);
@@ -181,6 +229,7 @@ export class HostedDeliveryRepository {
                 payload_json AS payloadJson, delivery_attempts AS deliveryAttempts
          FROM inbox_messages
          WHERE tenant_id = ? AND user_id = ? AND delivery_attempts < ?
+           AND (? = '' OR event_type = ?)
            AND (
              (state IN ('accepted', 'failed') AND (next_attempt_at = '' OR next_attempt_at <= ?)
                AND (lease_capability_hash = '' OR lease_expires_at <= ?))
@@ -190,6 +239,8 @@ export class HostedDeliveryRepository {
         scope.tenantId,
         scope.userId,
         MAX_DELIVERY_ATTEMPTS,
+        eventType,
+        eventType,
         timestamp,
         timestamp,
         timestamp
@@ -480,6 +531,130 @@ export class HostedDeliveryRepository {
       inboxProcessed: Number(inbox?.processed ?? 0),
       outboxPending: Number(outbox?.pending ?? 0),
       outboxDelivered: Number(outbox?.delivered ?? 0)
+    };
+  }
+
+  inboxEventCounts(eventType: string): HostedInboxEventCounts {
+    const scope = currentRequestScope();
+    const safeEventType = deliveryIdentifier(eventType, "inbox event type").toLocaleLowerCase("en-US");
+    const counts = this.db.get<{
+      accepted: number;
+      processing: number;
+      failed: number;
+      processed: number;
+      deadLetter: number;
+      total: number;
+    }>(
+      `SELECT
+         SUM(CASE WHEN state = 'accepted' THEN 1 ELSE 0 END) AS accepted,
+         SUM(CASE WHEN state = 'processing' THEN 1 ELSE 0 END) AS processing,
+         SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) AS failed,
+         SUM(CASE WHEN state = 'processed' THEN 1 ELSE 0 END) AS processed,
+         SUM(CASE WHEN state = 'dead_letter' THEN 1 ELSE 0 END) AS deadLetter,
+         COUNT(*) AS total
+       FROM inbox_messages
+       WHERE tenant_id = ? AND user_id = ? AND event_type = ?`,
+      scope.tenantId,
+      scope.userId,
+      safeEventType
+    );
+    return {
+      eventType: safeEventType,
+      accepted: Number(counts?.accepted ?? 0),
+      processing: Number(counts?.processing ?? 0),
+      failed: Number(counts?.failed ?? 0),
+      processed: Number(counts?.processed ?? 0),
+      deadLetter: Number(counts?.deadLetter ?? 0),
+      total: Number(counts?.total ?? 0)
+    };
+  }
+
+  listInboxDeadLettersByEventType(eventType: string, limit = 50): HostedInboxDeadLetter[] {
+    const scope = currentRequestScope();
+    const safeEventType = deliveryIdentifier(eventType, "inbox event type").toLocaleLowerCase("en-US");
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
+    return this.db.all<{
+      id: string;
+      eventType: string;
+      attempt: number;
+      lastErrorCode: string;
+      receivedAt: string;
+      updatedAt: string;
+    }>(
+      `SELECT id, event_type AS eventType, delivery_attempts AS attempt,
+              last_error_code AS lastErrorCode, received_at AS receivedAt,
+              updated_at AS updatedAt
+       FROM inbox_messages
+       WHERE tenant_id = ? AND user_id = ? AND event_type = ? AND state = 'dead_letter'
+       ORDER BY updated_at DESC, id DESC LIMIT ?`,
+      scope.tenantId,
+      scope.userId,
+      safeEventType,
+      safeLimit
+    ).map((row) => ({
+      ...row,
+      attempt: Number(row.attempt),
+      privacyClassification: "operational_aggregate" as const
+    }));
+  }
+
+  retryDeadLetterInbox(id: string, eventType: string, correlationId: string, now = Date.now()): HostedInboxDeadLetter {
+    this.authorization.require("worker.manage");
+    const scope = currentRequestScope();
+    const cleanId = deliveryIdentifier(id, "inbox message ID");
+    const safeEventType = deliveryIdentifier(eventType, "inbox event type").toLocaleLowerCase("en-US");
+    const existing = this.db.get<{ state: string }>(
+      `SELECT state FROM inbox_messages
+       WHERE id = ? AND tenant_id = ? AND user_id = ? AND event_type = ?`,
+      cleanId,
+      scope.tenantId,
+      scope.userId,
+      safeEventType
+    );
+    if (!existing) {
+      throw new HostedDeliveryError("hosted_inbox_not_found", 404, "The signal inbox message does not exist.");
+    }
+    if (existing.state !== "dead_letter") {
+      throw new HostedDeliveryError("hosted_inbox_state_conflict", 409, "Only a dead-lettered signal inbox message can be retried.");
+    }
+    const timestamp = nowIso(now);
+    this.db.transaction(() => {
+      const updated = this.db.run(
+        `UPDATE inbox_messages
+         SET state = 'accepted', delivery_attempts = 0, lease_capability_hash = '',
+             lease_expires_at = '', next_attempt_at = '', last_error_code = '',
+             processed_at = '', updated_at = ?
+         WHERE id = ? AND tenant_id = ? AND user_id = ? AND event_type = ? AND state = 'dead_letter'`,
+        timestamp,
+        cleanId,
+        scope.tenantId,
+        scope.userId,
+        safeEventType
+      );
+      if (Number(updated.changes) !== 1) {
+        throw new HostedDeliveryError("hosted_inbox_state_conflict", 409, "The signal inbox message changed before it could be retried.");
+      }
+      this.recordReceipt("inbox", cleanId, "retry", 0, "operator_retry", now);
+      this.audit.record({
+        correlationId,
+        aggregateType: "hosted_inbox",
+        eventType: "signal_inbox_retried",
+        reasonCode: "operator_retry",
+        message: "A dead-lettered signal message was reset for bounded worker evaluation.",
+        data: { inboxMessageId: cleanId, eventType: safeEventType }
+      }, now);
+    });
+    return {
+      id: cleanId,
+      eventType: safeEventType,
+      attempt: 0,
+      lastErrorCode: "",
+      receivedAt: this.db.get<{ receivedAt: string }>(
+        "SELECT received_at AS receivedAt FROM inbox_messages WHERE id = ?",
+        cleanId
+      )?.receivedAt ?? "",
+      updatedAt: timestamp,
+      privacyClassification: "operational_aggregate"
     };
   }
 

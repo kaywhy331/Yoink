@@ -838,11 +838,14 @@ function renderBackgroundWork() {
     $("#backgroundWorkerMetricGrid").innerHTML = empty("Background work is loading.");
     $("#backgroundWorkerScheduleList").innerHTML = "";
     $("#backgroundWorkerTaskList").innerHTML = "";
+    $("#signalInboxDeadLetterList").innerHTML = "";
     $("#backgroundWorkerInstanceList").innerHTML = "";
     return;
   }
   const counts = model.counts || {};
-  const activeProblems = Number(counts.deadLetterTasks || 0) + Number(counts.retryingTasks || 0);
+  const signalIngress = model.signalIngress || {};
+  const signalWaiting = Number(signalIngress.accepted || 0) + Number(signalIngress.processing || 0) + Number(signalIngress.failed || 0);
+  const activeProblems = Number(counts.deadLetterTasks || 0) + Number(counts.retryingTasks || 0) + Number(signalIngress.deadLetter || 0);
   const gate = $("#backgroundWorkerGate");
   gate.textContent = Number(counts.onlineWorkers || 0)
     ? activeProblems ? `${activeProblems} NEED ATTENTION` : "RUNNING"
@@ -850,6 +853,7 @@ function renderBackgroundWork() {
   gate.classList.toggle("danger", activeProblems > 0 || Number(counts.onlineWorkers || 0) === 0);
   const metrics = [
     ["Workers online", counts.onlineWorkers, "30-second heartbeat"],
+    ["Signal inbox", signalWaiting, `${Number(signalIngress.processed || 0).toLocaleString()} processed · ${Number(signalIngress.deadLetter || 0).toLocaleString()} dead letter`],
     ["Schedules", counts.enabledSchedules, `${Number(counts.schedules || 0).toLocaleString()} configured`],
     ["Waiting", Number(counts.pendingTasks || 0) + Number(counts.retryingTasks || 0), `${Number(counts.retryingTasks || 0).toLocaleString()} retrying`],
     ["Dead letter", counts.deadLetterTasks, `${Number(counts.succeededTasks || 0).toLocaleString()} completed`]
@@ -866,6 +870,7 @@ function renderBackgroundWork() {
     const results = Object.entries(task.result || {}).slice(0, 8).map(([key, value]) => `<span class="tag">${escapeHtml(operationalLabel(key))}: ${escapeHtml(value)}</span>`).join("");
     return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(backgroundTaskLabel(task.taskKind))}</h3><p>Attempt ${Number(task.attemptCount)} of ${Number(task.maximumAttempts)} · queued ${escapeHtml(relativeTime(task.createdAt))}</p></div><span class="tag ${kind}">${escapeHtml(String(task.state).replaceAll("_", " "))}</span></div><div class="card-meta">${task.lastErrorCode ? `<span class="tag bad">${escapeHtml(operationalLabel(task.lastErrorCode))}</span>` : ""}${results || '<span class="tag">no sensitive payload</span>'}</div>${task.state === "dead_letter" ? `<div class="card-actions"><button class="button primary" data-worker-task-retry="${escapeHtml(task.id)}" type="button" ${model.canManage ? "" : "disabled"}>Retry safely</button></div>` : ""}</article>`;
   }).join("") : empty("No background task has run yet.");
+  $("#signalInboxDeadLetterList").innerHTML = (model.signalDeadLetters || []).length ? model.signalDeadLetters.map((message) => `<article class="card"><div class="card-top"><div><h3>TrackaLacker signal evaluation stopped</h3><p>Attempt ${Number(message.attempt)} · received ${escapeHtml(relativeTime(message.receivedAt))}</p></div><span class="tag bad">dead letter</span></div><div class="card-meta"><span class="tag bad">${escapeHtml(operationalLabel(message.lastErrorCode || "signal_processing_failed"))}</span><span class="tag">${escapeHtml(message.privacyClassification || "operational_aggregate")}</span><span class="tag operational-correlation">${escapeHtml(message.id)}</span><span>updated ${escapeHtml(relativeTime(message.updatedAt))}</span></div><div class="card-actions"><button class="button primary" data-signal-inbox-retry="${escapeHtml(message.id)}" type="button" ${model.canManage ? "" : "disabled"}>Retry corrected signal</button></div></article>`).join("") : empty("No signal message is in dead letter.");
   $("#backgroundWorkerInstanceList").innerHTML = (model.workers || []).length ? model.workers.map((worker) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(worker.runtimeKind.replaceAll("_", " "))}</h3><p>${escapeHtml(worker.workerId)} · version ${escapeHtml(worker.runtimeVersion)}</p></div><span class="tag ${worker.online ? "good" : "warning"}">${worker.online ? "online" : worker.state}</span></div><div class="card-meta"><span class="tag">heartbeat ${escapeHtml(relativeTime(worker.heartbeatAt))}</span>${worker.lastErrorCode ? `<span class="tag warning">${escapeHtml(operationalLabel(worker.lastErrorCode))}</span>` : ""}<span class="tag">operational aggregate</span><span class="tag">bounded principals</span></div></article>`).join("") : empty("No worker heartbeat has been recorded. Start Yoink in embedded mode or start the standalone worker after the API initializes the database.");
 }
 
@@ -1181,6 +1186,15 @@ document.addEventListener("click", async (event) => {
       });
       await loadBackgroundWork(); renderBackgroundWork();
       toast("Dead-lettered maintenance task queued for a bounded retry.");
+    }
+    if (button.dataset.signalInboxRetry) {
+      if (!confirm("Retry this signal message after the parser or evaluation issue has been corrected? Its bounded attempt counter restarts from zero.")) return;
+      await api(`/api/v1/admin/workers/signal-inbox/${encodeURIComponent(button.dataset.signalInboxRetry)}/retry`, {
+        method: "POST",
+        body: "{}"
+      });
+      await loadBackgroundWork(); renderBackgroundWork();
+      toast("Signal message queued for corrected worker evaluation.");
     }
     if (button.dataset.adminChangeApprove) {
       if (!confirm("Approve this exact protected change? Approval does not apply it; the original operation must still be retried unchanged before expiry.")) return;

@@ -8,8 +8,11 @@ import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import type { TrackalackerCatalogItemInput, TrackalackerPushEnvelope } from "../packages/contracts/src/index.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
+import { SqliteBackgroundWorkerStore } from "../packages/database/src/background-worker-store.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
+import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
+import { BackgroundWorkerRuntime } from "../packages/engine/src/background-worker-runtime.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 import {
   parseTrackalackerNotification,
@@ -459,8 +462,25 @@ test("paired Chrome can report sanitized push status, import catalog, and delive
     });
     assert.equal(signalResponse.status, 202);
     const signal = await signalResponse.json() as Record<string, unknown>;
-    assert.equal(signal.resolution, "matched");
-    assert.equal(signal.missionCreated, true);
+    assert.equal(signal.accepted, true);
+    assert.equal(signal.duplicate, false);
+    assert.equal(signal.processingState, "queued");
+    assert.equal(signal.backgroundTaskCreated, true);
+    assert.equal(signal.backgroundWakeState, "created");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM signal_events")?.count, 0);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count, 0);
+
+    const runtime = new BackgroundWorkerRuntime({
+      store: new SqliteBackgroundWorkerStore(db),
+      handler: new BackgroundMaintenanceHandler(db),
+      version: "trackalacker-test",
+      workerId: "background_worker_trackalacker_test"
+    });
+    const cycle = await runtime.runOnce();
+    assert.equal(cycle.failed, 0);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM signal_events")?.count, 1);
+    assert.equal(db.get<{ status: string }>("SELECT resolution_status AS status FROM signal_events")?.status, "matched");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count, 1);
 
     const duplicateResponse = await fetch(`${root}/api/v1/devices/self/sources/trackalacker/signals`, {
       method: "POST",
@@ -468,7 +488,11 @@ test("paired Chrome can report sanitized push status, import catalog, and delive
       body: JSON.stringify(liveEnvelope)
     });
     assert.equal(duplicateResponse.status, 202);
-    assert.equal((await duplicateResponse.json() as Record<string, unknown>).duplicate, true);
+    const duplicate = await duplicateResponse.json() as Record<string, unknown>;
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(duplicate.processingState, "processed");
+    assert.equal(duplicate.backgroundTaskCreated, false);
+    assert.equal(duplicate.backgroundWakeState, "not_required");
 
     const mismatch = await fetch(`${root}/api/v1/devices/self/sources/trackalacker/signals`, {
       method: "POST",

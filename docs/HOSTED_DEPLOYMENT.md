@@ -24,6 +24,15 @@ runnable SQLite worker. Hosted boundary configuration defaults the API to
 `external` worker mode, but that is a staging/integration process boundary—not
 the missing PostgreSQL implementation or production fleet.
 
+Version 0.36 moves authenticated TrackaLacker device-signal evaluation behind
+that worker boundary. The API commits the normalized `signal_event_v1` inbox
+message and its immediate wake before returning `202`; external mode therefore
+requires a healthy standalone worker for evaluation latency. A stopped worker
+does not lose intake, but accepted signals remain queued. Health exposes
+`durableSignalIngress` and `signalEvaluationOutsideDeviceRequest`, while the
+admin worker projection exposes scoped aggregate state and payload-free dead
+letters. This does not make external SQLite a production transport.
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting
@@ -66,7 +75,8 @@ External health is healthy only while fresh standalone heartbeats cover every
 persisted principal without a bounded worker error. A configured external mode
 with no live process reports waiting/stopped and unhealthy. See the
 [background worker runbook](BACKGROUND_WORKER.md) for commands, settings, and
-recovery.
+recovery, and [durable signal ingress](SIGNAL_INGRESS.md) for the device receipt,
+pause, replay, and corrected-message retry contract.
 
 Do not scale this SQLite process layout into a production claim. Multiple
 hosts, PostgreSQL transactions and row-level tenant isolation, fleet-safe

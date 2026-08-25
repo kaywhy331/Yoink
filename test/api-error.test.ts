@@ -3,6 +3,7 @@ import test from "node:test";
 import { ApiError, apiErrorPayload } from "../apps/api/src/api-error.js";
 import { AuthorizationError } from "../packages/database/src/authorization-repository.js";
 import { CatalogIdentityGovernanceError } from "../packages/database/src/catalog-identity-governance-repository.js";
+import { HostedDeliveryError } from "../packages/database/src/hosted-delivery-repository.js";
 
 test("API problems preserve safe status taxonomy and correlation IDs", () => {
   const correlationId = "request_taxonomy_001";
@@ -22,6 +23,17 @@ test("API problems preserve safe status taxonomy and correlation IDs", () => {
     payload: {
       error: "catalog_identity_topology_stale",
       message: "Submit a fresh operation.",
+      correlationId
+    }
+  });
+  assert.deepEqual(apiErrorPayload(
+    new HostedDeliveryError("hosted_inbox_state_conflict", 409, "Retry only a dead letter."),
+    correlationId
+  ), {
+    status: 409,
+    payload: {
+      error: "hosted_inbox_state_conflict",
+      message: "Retry only a dead letter.",
       correlationId
     }
   });

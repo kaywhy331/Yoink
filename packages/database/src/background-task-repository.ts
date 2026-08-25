@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   BACKGROUND_TASK_DEFINITIONS,
   BACKGROUND_TASK_KINDS,
+  isBackgroundTaskKind,
   type BackgroundTaskEventType,
   type BackgroundTaskKind,
   type BackgroundTaskResult,
@@ -72,6 +73,12 @@ export interface BackgroundTaskEvent {
   workerId: string;
   privacyClassification: "operational_aggregate";
   createdAt: string;
+}
+
+export interface BackgroundTaskEnqueueReceipt {
+  taskId: string;
+  created: boolean;
+  state: "created" | "deduplicated" | "schedule_paused";
 }
 
 export interface BackgroundWorkerRecord {
@@ -337,6 +344,21 @@ export class BackgroundTaskRepository {
           scope.actorId,
           timestamp,
           timestamp
+        );
+        this.db.run(
+          `UPDATE background_task_schedules
+           SET display_name = ?, description = ?, updated_by_actor_id = ?, updated_at = ?
+           WHERE tenant_id = ? AND subject_user_id = ? AND task_kind = ?
+             AND (display_name <> ? OR description <> ?)`,
+          definition.label,
+          definition.description,
+          scope.actorId,
+          timestamp,
+          scope.tenantId,
+          scope.userId,
+          taskKind,
+          definition.label,
+          definition.description
         );
       }
     });
@@ -637,6 +659,61 @@ export class BackgroundTaskRepository {
     return taskRecord(this.taskRow(taskId) as TaskRow);
   }
 
+  enqueueServiceTask(
+    taskKind: BackgroundTaskKind,
+    dedupeKey: string,
+    now = Date.now()
+  ): BackgroundTaskEnqueueReceipt {
+    trustedWorker();
+    if (!isBackgroundTaskKind(taskKind)) {
+      throw new BackgroundTaskError("background_task_invalid", 400, "A packaged background task kind is required.");
+    }
+    const safeDedupeKey = cleanText(dedupeKey, 200);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{2,199}$/.test(safeDedupeKey)) {
+      throw new BackgroundTaskError("background_task_invalid", 400, "A valid background task deduplication key is required.");
+    }
+    this.ensureDefaultSchedules(now);
+    const scope = currentRequestScope();
+    const schedule = this.db.get<ScheduleRow>(
+      `${SCHEDULE_SELECT} WHERE tenant_id = ? AND subject_user_id = ? AND task_kind = ?`,
+      scope.tenantId,
+      scope.userId,
+      taskKind
+    );
+    if (!schedule) {
+      throw new BackgroundTaskError("background_task_state_conflict", 409, "The packaged background schedule is unavailable.");
+    }
+    const activeTask = () => this.db.get<{ id: string }>(
+      `SELECT id FROM background_tasks
+       WHERE tenant_id = ? AND subject_user_id = ? AND task_kind = ? AND dedupe_key = ?
+         AND state IN ('pending', 'leased', 'retry_wait')
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      scope.tenantId,
+      scope.userId,
+      taskKind,
+      safeDedupeKey
+    );
+    const alreadyActive = activeTask();
+    if (alreadyActive) return { taskId: alreadyActive.id, created: false, state: "deduplicated" };
+    if (schedule.enabled !== 1) return { taskId: "", created: false, state: "schedule_paused" };
+    const createdTaskId = this.insertTask(
+      taskKind,
+      schedule.id,
+      safeDedupeKey,
+      nowIso(now),
+      BACKGROUND_TASK_DEFINITIONS[taskKind].maximumAttempts,
+      "service_event",
+      now,
+      80
+    );
+    if (createdTaskId) return { taskId: createdTaskId, created: true, state: "created" };
+    const existing = activeTask();
+    if (!existing) {
+      throw new BackgroundTaskError("background_task_state_conflict", 409, "The background task could not be queued safely.");
+    }
+    return { taskId: existing.id, created: false, state: "deduplicated" };
+  }
+
   retryDeadLetter(taskId: string, correlationId: string, now = Date.now()): BackgroundTaskRecord {
     this.authorization.require("worker.manage");
     const scope = currentRequestScope();
@@ -779,7 +856,8 @@ export class BackgroundTaskRepository {
     scheduledFor: string,
     maximumAttempts: number,
     scheduledReason: string,
-    now: number
+    now: number,
+    priority = 50
   ): string {
     const scope = currentRequestScope();
     const id = newId("background_task");
@@ -789,13 +867,14 @@ export class BackgroundTaskRepository {
          id, tenant_id, subject_user_id, schedule_id, task_kind, dedupe_key,
          state, priority, attempt_count, maximum_attempts, scheduled_for,
          privacy_classification, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 50, 0, ?, ?, 'operational_aggregate', ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?, ?, 'operational_aggregate', ?, ?)`,
       id,
       scope.tenantId,
       scope.userId,
       scheduleId,
       taskKind,
       cleanText(dedupeKey, 200),
+      Math.max(0, Math.min(100, Math.floor(Number(priority) || 0))),
       maximumAttempts,
       scheduledFor,
       timestamp,

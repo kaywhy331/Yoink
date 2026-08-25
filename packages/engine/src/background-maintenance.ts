@@ -18,6 +18,7 @@ import { OperationalTelemetryRepository } from "../../database/src/operational-t
 import { OperatorAlertRepository } from "../../database/src/operator-alert-repository.js";
 import { SpendLedgerRepository } from "../../database/src/spend-ledger-repository.js";
 import { runWithRequestScope } from "../../database/src/request-scope.js";
+import { DurableSignalIngressProcessor } from "./signal-ingress.js";
 
 export type BackgroundTaskHandler = BackgroundWorkerTaskHandler;
 
@@ -30,6 +31,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
   private readonly operationalTelemetry: OperationalTelemetryRepository;
   private readonly operatorAlerts: OperatorAlertRepository;
   private readonly spendLedger: SpendLedgerRepository;
+  private readonly signalIngress: DurableSignalIngressProcessor;
 
   constructor(db: YoinkDatabase) {
     this.adapterDiagnostics = new AdapterDiagnosticRepository(db);
@@ -40,6 +42,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
     this.operationalTelemetry = new OperationalTelemetryRepository(db);
     this.operatorAlerts = new OperatorAlertRepository(db);
     this.spendLedger = new SpendLedgerRepository(db);
+    this.signalIngress = new DurableSignalIngressProcessor(db);
   }
 
   async execute(
@@ -66,7 +69,10 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
       case "notification_recovery":
         return this.notifications.recoverExpired(now);
       case "hosted_delivery_recovery":
-        return this.hostedDelivery.recoverExpiredLeases(now);
+        return {
+          ...this.hostedDelivery.recoverExpiredLeases(now),
+          ...this.signalIngress.processBatch(now)
+        };
       case "adapter_alert_reconciliation":
         return this.operatorAlerts.reconcileAdapterRepairs(
           this.adapterDiagnostics.listRepairQueue(2_000),

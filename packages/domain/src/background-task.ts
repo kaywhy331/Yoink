@@ -12,9 +12,9 @@ export const BACKGROUND_TASK_DEFINITIONS = Object.freeze({
     maximumAttempts: 5
   }),
   hosted_delivery_recovery: Object.freeze({
-    label: "Inbox and outbox recovery",
-    description: "Retire expired hosted delivery capabilities and requeue or dead-letter abandoned work.",
-    intervalSeconds: 60,
+    label: "Signal inbox and delivery recovery",
+    description: "Process packaged signal messages, then retire expired inbox and outbox capabilities safely.",
+    intervalSeconds: 15,
     maximumAttempts: 5
   }),
   adapter_alert_reconciliation: Object.freeze({
