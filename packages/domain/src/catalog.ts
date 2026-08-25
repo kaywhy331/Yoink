@@ -1,6 +1,7 @@
 import type { Availability, CatalogListingInput } from "../../contracts/src/index.js";
 import { cleanText, normalizeRetailerId, normalizeRetailerSku, positiveCents, safeHttpsUrl } from "./normalize.js";
 import { nowIso } from "./ids.js";
+import { canonicalRetailerUrl } from "./attribution.js";
 
 const AVAILABILITY = new Set<Availability>(["in_stock", "preorder", "out_of_stock", "unknown"]);
 
@@ -73,6 +74,12 @@ export function normalizeCatalogListing(input: CatalogListingInput, now = Date.n
     : "unknown";
   const currency = cleanText(input.currency || "USD", 3).toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) throw new Error("A three-letter currency code is required.");
+  const retailerId = normalizeRetailerId(input.retailerId);
+  const retailerSku = normalizeRetailerSku(input.retailerSku);
+  const canonicalUrl = canonicalRetailerUrl(input.canonicalUrl, retailerId, retailerSku);
+  if (!canonicalUrl) {
+    throw new Error("The canonical URL must identify the exact selected retailer item.");
+  }
   return {
     sourceConnectionId,
     source,
@@ -84,9 +91,9 @@ export function normalizeCatalogListing(input: CatalogListingInput, now = Date.n
     title,
     brand: cleanText(input.brand, 120),
     variantAttributes: normalizedAttributes(input.variantAttributes),
-    retailerId: normalizeRetailerId(input.retailerId),
-    retailerSku: normalizeRetailerSku(input.retailerSku),
-    canonicalUrl: safeHttpsUrl(input.canonicalUrl),
+    retailerId,
+    retailerSku,
+    canonicalUrl,
     listingStatus,
     requestedExecutionSupport: input.executionSupported === true,
     msrpCents: positiveCents(input.msrpCents, true),

@@ -1,0 +1,243 @@
+export type UserSetupStepState = "complete" | "current" | "waiting" | "attention";
+export type UserSetupAction =
+  | "download_companion"
+  | "pair_companion"
+  | "connect_signal"
+  | "add_product"
+  | "choose_product"
+  | "resume_actions";
+
+export interface UserSetupStep {
+  id: "companion" | "signal" | "product" | "plan" | "action";
+  title: string;
+  state: UserSetupStepState;
+  summary: string;
+  primaryAction: UserSetupAction | null;
+  primaryActionLabel: string;
+  secondaryAction: UserSetupAction | null;
+  secondaryActionLabel: string;
+}
+
+export interface UserSetupInput {
+  version: string;
+  devices: Array<Record<string, unknown>>;
+  sources: Array<Record<string, unknown>>;
+  products: number;
+  pendingProductProposals: number;
+  plans: Array<Record<string, unknown>>;
+  actionsPaused: boolean;
+  executionMode: string;
+}
+
+export interface UserSetupReadiness {
+  level:
+    | "needs_companion"
+    | "needs_signal"
+    | "needs_product"
+    | "product_in_review"
+    | "needs_plan"
+    | "needs_action_enablement"
+    | "temporarily_offline"
+    | "monitoring_ready"
+    | "guarded_cart_ready";
+  headline: string;
+  summary: string;
+  completedSteps: number;
+  totalSteps: 5;
+  readyForMonitoring: boolean;
+  readyForGuardedAdds: boolean;
+  companion: {
+    activeCount: number;
+    currentCount: number;
+    onlineCurrentCount: number;
+    latestVersion: string;
+    downloadUrl: string;
+  };
+  connectedSignalCount: number;
+  activePlanCount: number;
+  guardedCartPlanCount: number;
+  steps: UserSetupStep[];
+}
+
+function step(
+  id: UserSetupStep["id"],
+  title: string,
+  state: UserSetupStepState,
+  summary: string,
+  primaryAction: UserSetupAction | null = null,
+  primaryActionLabel = "",
+  secondaryAction: UserSetupAction | null = null,
+  secondaryActionLabel = ""
+): UserSetupStep {
+  return { id, title, state, summary, primaryAction, primaryActionLabel, secondaryAction, secondaryActionLabel };
+}
+
+export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadiness {
+  const activeDevices = input.devices.filter((device) => device.status === "active");
+  const currentDevices = activeDevices.filter((device) => device.extensionVersion === input.version);
+  const onlineCurrentDevices = currentDevices.filter((device) => device.online === true);
+  const connectedSignals = input.sources.filter((source) => source.source !== "user_link" && source.status === "connected");
+  const activePlans = input.plans.filter((plan) => plan.status === "active");
+  const guardedCartPlans = activePlans.filter((plan) => plan.actionCeiling === "add_to_cart");
+  const notificationPlans = activePlans.filter((plan) => plan.actionCeiling !== "add_to_cart");
+  const productCount = Math.max(0, Number(input.products) || 0);
+  const pendingCount = Math.max(0, Number(input.pendingProductProposals) || 0);
+  const actionsReady = input.executionMode === "live" && input.actionsPaused === false;
+  const readyForMonitoring = currentDevices.length > 0 && connectedSignals.length > 0 && activePlans.length > 0;
+  const readyForGuardedAdds = readyForMonitoring && guardedCartPlans.length > 0
+    && actionsReady && onlineCurrentDevices.length > 0;
+
+  const companionStep = currentDevices.length
+    ? step(
+      "companion",
+      "Install and pair Chrome",
+      onlineCurrentDevices.length ? "complete" : "attention",
+      onlineCurrentDevices.length
+        ? `A current Yoink ${input.version} companion is online.`
+        : `Yoink ${input.version} is paired but not currently online. Open Chrome before expecting live browser actions.`
+    )
+    : activeDevices.length
+      ? step(
+        "companion",
+        "Install and pair Chrome",
+        "current",
+        `Your paired companion is out of date. Install Yoink ${input.version}, then reload it in Chrome.`,
+        "download_companion",
+        "Download update"
+      )
+      : step(
+        "companion",
+        "Install and pair Chrome",
+        "current",
+        "Install the Chrome companion, then pair it with a one-time code. It is the only component allowed to perform a qualified store click.",
+        "download_companion",
+        "Download companion",
+        "pair_companion",
+        "Create pairing code"
+      );
+
+  const signalStep = connectedSignals.length
+    ? step("signal", "Connect a product signal", "complete", `${connectedSignals.length} signal source${connectedSignals.length === 1 ? " is" : "s are"} connected.`)
+    : step(
+      "signal",
+      "Connect a product signal",
+      currentDevices.length ? "current" : "waiting",
+      "Sign in to TrackaLacker from the Chrome companion or use supported browser observations. Signals can discover offers but cannot raise your limits.",
+      "connect_signal",
+      "Show connection help"
+    );
+
+  const productStep = productCount
+    ? step("product", "Choose an exact product", "complete", `${productCount} exact catalog listing${productCount === 1 ? " is" : "s are"} available to review.`)
+    : pendingCount
+      ? step(
+        "product",
+        "Choose an exact product",
+        "waiting",
+        `${pendingCount} exact product link${pendingCount === 1 ? " is" : "s are"} waiting for independent catalog review. No stock claim or purchase plan was created.`,
+        "add_product",
+        "Suggest another product"
+      )
+      : step(
+        "product",
+        "Choose an exact product",
+        currentDevices.length && connectedSignals.length ? "current" : "waiting",
+        "Paste a supported store product page. Yoink extracts the exact store and item ID, then holds it for independent review.",
+        "add_product",
+        "Add product link"
+      );
+
+  const planStep = activePlans.length
+    ? step("plan", "Set your price and action", "complete", `${activePlans.length} active purchase plan${activePlans.length === 1 ? " is" : "s are"} bounded by your saved preferences.`)
+    : step(
+      "plan",
+      "Set your price and action",
+      productCount ? "current" : "waiting",
+      "Choose an approved exact listing, set the most you will pay, and select notifications or a guarded cart action.",
+      "choose_product",
+      "Choose a product"
+    );
+
+  let actionStep: UserSetupStep;
+  if (!activePlans.length) {
+    actionStep = step("action", "Review the safety boundary", "waiting", "Checkout, payment, raffle entry, and order submission always remain manual.");
+  } else if (!guardedCartPlans.length && notificationPlans.length) {
+    actionStep = step("action", "Review the safety boundary", "complete", "Your active plans notify only. No store control is clicked; checkout and ordering remain manual.");
+  } else if (!actionsReady) {
+    actionStep = step(
+      "action",
+      "Review the safety boundary",
+      "current",
+      input.actionsPaused
+        ? "Your guarded cart plan is saved, but global purchase actions are paused. Resuming may require independent approval in hosted mode."
+        : "Your guarded cart plan is saved, but the control plane is not in live execution mode.",
+      input.actionsPaused ? "resume_actions" : null,
+      input.actionsPaused ? "Request resume" : ""
+    );
+  } else if (!onlineCurrentDevices.length) {
+    actionStep = step("action", "Review the safety boundary", "attention", "Guarded actions are enabled, but a current Chrome companion must be online. Checkout and ordering remain manual.");
+  } else {
+    actionStep = step("action", "Review the safety boundary", "complete", "Guarded add-only actions are ready within your exact plan. Checkout, payment, and order submission remain manual.");
+  }
+
+  const steps = [companionStep, signalStep, productStep, planStep, actionStep];
+  let level: UserSetupReadiness["level"];
+  let headline: string;
+  let summary: string;
+  if (!currentDevices.length) {
+    level = "needs_companion";
+    headline = activeDevices.length ? "Update your Chrome companion" : "Start with the Chrome companion";
+    summary = "This keeps store-page observation and every qualified click inside your own browser.";
+  } else if (!connectedSignals.length) {
+    level = "needs_signal";
+    headline = "Connect a product signal";
+    summary = "Yoink needs one connected source to learn when an exact product offer changes.";
+  } else if (!productCount) {
+    level = pendingCount ? "product_in_review" : "needs_product";
+    headline = pendingCount ? "Your product link is in review" : "Add the exact product you want";
+    summary = pendingCount
+      ? "Independent review must bind the store item before it can appear in your catalog."
+      : "Paste a product page and Yoink will verify the store and exact item ID before review.";
+  } else if (!activePlans.length) {
+    level = "needs_plan";
+    headline = "Set your purchase preferences";
+    summary = "Choose one exact listing, a maximum price, quantity, fulfillment, and the highest action Yoink may take.";
+  } else if (guardedCartPlans.length && !actionsReady) {
+    level = "needs_action_enablement";
+    headline = input.actionsPaused ? "Your guarded actions are paused" : "Guarded actions are not live";
+    summary = "Your plan stays saved while all retailer clicks remain closed.";
+  } else if (!onlineCurrentDevices.length) {
+    level = "temporarily_offline";
+    headline = "Your setup is configured; Chrome is offline";
+    summary = "Open the paired browser before expecting current observations or guarded store actions.";
+  } else if (guardedCartPlans.length) {
+    level = "guarded_cart_ready";
+    headline = "Your guarded cart plan is ready";
+    summary = "A click still requires a fresh exact first-party offer inside every saved limit. Checkout remains manual.";
+  } else {
+    level = "monitoring_ready";
+    headline = "Your notification plan is ready";
+    summary = "Yoink can monitor exact offers without clicking store controls.";
+  }
+
+  return {
+    level,
+    headline,
+    summary,
+    completedSteps: steps.filter((item) => item.state === "complete").length,
+    totalSteps: 5,
+    readyForMonitoring,
+    readyForGuardedAdds,
+    companion: {
+      activeCount: activeDevices.length,
+      currentCount: currentDevices.length,
+      onlineCurrentCount: onlineCurrentDevices.length,
+      latestVersion: input.version,
+      downloadUrl: "/api/v1/extension/release/download"
+    },
+    connectedSignalCount: connectedSignals.length,
+    activePlanCount: activePlans.length,
+    guardedCartPlanCount: guardedCartPlans.length,
+    steps
+  };
+}

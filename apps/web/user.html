@@ -26,6 +26,19 @@
       <div class="hero-state" id="heroState" aria-live="polite"></div>
     </section>
 
+    <section class="setup-guide" id="setupGuide" aria-labelledby="setupGuideTitle" hidden>
+      <div class="setup-guide-intro">
+        <p class="eyebrow">Guided setup</p>
+        <h2 id="setupGuideTitle">Your next safe step</h2>
+        <h3 id="setupGuideHeadline">Loading your setup…</h3>
+        <p id="setupGuideCopy">Yoink is checking the pieces needed for your purchase preferences.</p>
+        <div class="setup-progress" id="setupProgress" role="progressbar" aria-label="Setup progress" aria-valuemin="0" aria-valuemax="5" aria-valuenow="0"><i id="setupProgressBar"></i></div>
+        <small id="setupProgressCopy">0 of 5 steps ready</small>
+      </div>
+      <div class="setup-steps" id="setupSteps"></div>
+      <p class="setup-safety"><strong>Always manual:</strong> checkout, payment, raffle entry, and order submission.</p>
+    </section>
+
     <section class="metrics" id="metrics" aria-label="Your Yoink totals"></section>
 
     <nav class="tabs" aria-label="Workspace">
@@ -39,7 +52,7 @@
     <section class="workspace active" data-panel="products">
       <div class="section-heading">
         <div><p class="eyebrow">Exact catalog matches</p><h2>Products</h2><p>Choose a store listing, review every limit, then create one private plan for that exact product.</p></div>
-        <label class="search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label>
+        <div class="section-actions"><button class="button secondary" id="addProductButton" type="button">Add product link</button><label class="search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label></div>
       </div>
       <div class="card-grid" id="productList"></div>
     </section>
@@ -65,12 +78,30 @@
       <div class="preference-grid">
         <article class="preference-card"><span class="icon">Ⅱ</span><div><h3>Action state</h3><p id="actionStateCopy">Loading your action state…</p><button class="button secondary" id="preferencePauseButton" type="button">Change action state</button></div></article>
         <article class="preference-card budget-card"><span class="icon">$</span><div><h3>Spending limits</h3><p id="spendSummary">Loading your private spending limits…</p><form id="spendForm"><input name="revision" type="hidden"><div class="budget-fields"><label><span>Per order</span><input name="perOrder" inputmode="decimal" placeholder="Optional"></label><label><span>Per day</span><input name="daily" inputmode="decimal" placeholder="Optional"></label><label><span>Per month</span><input name="monthly" inputmode="decimal" placeholder="Optional"></label></div><button class="button secondary" type="submit">Save spending limits</button></form></div></article>
-        <article class="preference-card"><span class="icon">⌁</span><div><h3>Chrome companion</h3><p>Pair Chrome with a one-time code. The extension remains the only component allowed to perform a qualified retailer click.</p><button class="button secondary" id="pairButton" type="button">Create pairing code</button><div class="pairing" id="pairing" hidden></div></div></article>
+        <article class="preference-card"><span class="icon">⌁</span><div><h3>Chrome companion</h3><p>Pair Chrome with a one-time code. The extension remains the only component allowed to perform a qualified retailer click.</p><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download">Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><div class="pairing" id="pairing" hidden></div></div></article>
         <article class="preference-card"><span class="icon">✓</span><div><h3>Catalog review</h3><p id="proposalCopy">Checking your pending product suggestions…</p><div class="mini-list" id="proposalList"></div></div></article>
         <article class="preference-card"><span class="icon">◎</span><div><h3>Signal connections</h3><p>Your sources discover opportunities; they never raise your plan limits.</p><div class="mini-list" id="sourceList"></div></div></article>
       </div>
     </section>
   </main>
+
+  <dialog id="productLinkDialog" class="product-link-dialog">
+    <form id="productLinkForm">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Exact item intake</p><h2>Add a product link</h2></div>
+        <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
+      </div>
+      <p class="dialog-copy">Paste the product page itself—not a search, category, raffle hub, or sign-in page. Yoink will extract the store and exact item ID before anything is submitted.</p>
+      <div class="link-fields">
+        <label><span>Store product page</span><input name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://www.example.com/product/..." required></label>
+        <label><span>Product name shown on that page</span><input name="title" type="text" maxlength="300" autocomplete="off" placeholder="Exact product name" required></label>
+      </div>
+      <div class="link-check-actions"><button class="button secondary" id="checkProductLinkButton" type="button">Check exact link</button></div>
+      <section class="link-preview" id="productLinkPreview" aria-live="polite" hidden></section>
+      <label class="review-confirm" id="productLinkConfirm" hidden><input name="confirmed" type="checkbox"><span>I confirmed this is the exact product page I want independently reviewed. This does not report stock, create a purchase plan, or authorize a store action.</span></label>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="submitProductLinkButton" type="submit" disabled>Send for review</button></div>
+    </form>
+  </dialog>
 
   <dialog id="setupDialog" class="setup-dialog">
     <form id="setupForm">

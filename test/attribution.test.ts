@@ -6,6 +6,39 @@ import { CatalogRepository } from "../packages/database/src/catalog-repository.j
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { exactRetailerProductLink } from "../packages/domain/src/attribution.js";
+
+test("exact retailer product links bind all supported stores and reject non-product pages", () => {
+  const fixtures = [
+    ["https://www.target.com/p/example/-/A-95280894?preselect=95280894", "target", "95280894", "https://www.target.com/p/-/A-95280894"],
+    ["https://www.walmart.com/ip/example/20009805270?conditionGroupCode=4", "walmart", "20009805270", "https://www.walmart.com/ip/20009805270"],
+    ["https://www.amazon.com/Card-Game/dp/B0DCGQ6CJD/ref=tracking", "amazon", "B0DCGQ6CJD", "https://www.amazon.com/dp/B0DCGQ6CJD"],
+    ["https://www.bestbuy.com/product/example/J79X4PXVR7/sku/6528565?ref=tracking", "bestbuy", "6528565", "https://www.bestbuy.com/site/-/6528565.p"],
+    ["https://www.disneystore.com/dumbo-jeweled-figurine-409914998395.html?CMP=tracking", "disney", "409914998395", "https://www.disneystore.com/dumbo-jeweled-figurine-409914998395.html"],
+    ["https://www.ravensburger.us/en-US/products/games/family-games/oh-my-pigeons-22893?tracking=1", "ravensburger", "22893", "https://www.ravensburger.us/en-US/products/games/family-games/oh-my-pigeons-22893"],
+    ["https://merch.riotgames.com/en-us/product/riftbound-unleashed-vault/?tracking=1", "riot", "RIFTBOUND-UNLEASHED-VAULT", "https://merch.riotgames.com/en-us/product/riftbound-unleashed-vault/"],
+    ["https://www.booksamillion.com/p/-/F019649505470?tracking=1", "booksamillion", "F019649505470", "https://www.booksamillion.com/p/-/F019649505470"],
+    ["https://www.fanatics.com/marvel/cards/example/o-1+t-2+p-350174258+z-9-3?_ref=tracking", "fanatics", "350174258", "https://www.fanatics.com/marvel/cards/example/o-1+t-2+p-350174258+z-9-3"],
+    ["https://www.kohls.com/product/prd-3384298/mojo-backpack.jsp?tracking=1", "kohls", "3384298", "https://www.kohls.com/product/prd-3384298/mojo-backpack.jsp"],
+    ["https://www.macys.com/shop/product/example?ID=16569610&utm_source=test", "macys", "16569610", "https://www.macys.com/shop/product/example?ID=16569610"],
+    ["https://p-bandai.com/us/item/N2884150001?tracking=1", "pbandai", "N2884150001", "https://p-bandai.com/us/item/N2884150001"],
+    ["https://www.pokemoncenter.com/product/10-10320-101/pokemon-tcg-mewtwo-binder?tracking=1", "pokemoncenter", "10-10320-101", "https://www.pokemoncenter.com/product/10-10320-101/pokemon-tcg-mewtwo-binder"]
+  ] as const;
+  for (const [url, retailerId, retailerSku, canonicalUrl] of fixtures) {
+    assert.deepEqual(exactRetailerProductLink(url), { retailerId, retailerSku, canonicalUrl });
+  }
+  for (const invalid of [
+    "http://www.amazon.com/dp/B0DCGQ6CJD",
+    "https://user:secret@www.amazon.com/dp/B0DCGQ6CJD",
+    "https://www.amazon.com/s?k=cards",
+    "https://www.walmart.com/shop/collectibles/draw",
+    "https://www.pokemoncenter.com/category/trading-card-game",
+    "https://www.disneystore.com/",
+    "https://www.amazon.com.evil.example/dp/B0DCGQ6CJD"
+  ]) {
+    assert.equal(exactRetailerProductLink(invalid), null);
+  }
+});
 
 function configuredPolicies(): AttributionPolicyUpdateInput[] {
   return [

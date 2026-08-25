@@ -43,6 +43,12 @@ const RETAILER_SKU_FROM_URL: Readonly<Record<string, (url: URL) => string>> = Ob
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{1,79}$/;
 const TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$/;
 
+export interface ExactRetailerProductLink {
+  retailerId: string;
+  retailerSku: string;
+  canonicalUrl: string;
+}
+
 function cleanHttpsUrl(value: unknown): URL | null {
   try {
     const url = new URL(cleanText(value, 4_096));
@@ -81,6 +87,25 @@ export function canonicalRetailerUrl(value: unknown, retailerId: string, retaile
   url.search = "";
   if (retailerId === "macys") url.searchParams.set("ID", sku);
   return url.href;
+}
+
+/**
+ * Resolve only an exact product-detail URL for one of Yoink's registered
+ * retailers. Category, search, drawing-hub, and credential-bearing URLs are
+ * deliberately rejected so a user-pasted link cannot manufacture an item
+ * identity from query text or an unrelated page.
+ */
+export function exactRetailerProductLink(value: unknown): ExactRetailerProductLink | null {
+  const url = cleanHttpsUrl(value);
+  if (!url) return null;
+  const matches = Object.entries(RETAILER_DOMAINS).flatMap(([retailerId, domain]) => {
+    if (url.hostname !== domain && !url.hostname.endsWith(`.${domain}`)) return [];
+    const retailerSku = RETAILER_SKU_FROM_URL[retailerId]?.(url) ?? "";
+    if (!retailerSku) return [];
+    const canonicalUrl = canonicalRetailerUrl(url.href, retailerId, retailerSku);
+    return canonicalUrl ? [{ retailerId, retailerSku, canonicalUrl }] : [];
+  });
+  return matches.length === 1 ? matches[0] ?? null : null;
 }
 
 export function normalizedArticleBaseUrl(value: unknown): string {

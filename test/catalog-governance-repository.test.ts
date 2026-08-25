@@ -49,6 +49,11 @@ test("catalog changes are normalized, deduplicated, reviewed, and only then appl
     const duplicate = governance.proposeListing(listing(), NOW);
     assert.equal(duplicate.disposition, "duplicate_pending");
     assert.equal(duplicate.proposal.id, proposed.proposal.id);
+    assert.throws(() => governance.proposeListing(listing({
+      sourceProductId: "mismatched-product",
+      sourceListingId: "mismatched-listing",
+      retailerSku: "9999999999"
+    }), NOW), /exact selected retailer item/);
 
     const approved = governance.decide(proposed.proposal.id, {
       outcome: "approve",

@@ -56,6 +56,10 @@ import {
   CatalogGovernanceRepository,
   type CatalogProposalDecisionInput
 } from "../../../packages/database/src/catalog-governance-repository.js";
+import {
+  CatalogLinkRepository,
+  type ExactProductLinkProposalInput
+} from "../../../packages/database/src/catalog-link-repository.js";
 import { CatalogIdentityGovernanceRepository } from "../../../packages/database/src/catalog-identity-governance-repository.js";
 import { AttributionRepository } from "../../../packages/database/src/attribution-repository.js";
 import { AdapterDiagnosticRepository } from "../../../packages/database/src/adapter-diagnostic-repository.js";
@@ -106,6 +110,7 @@ import { SourceRepository } from "../../../packages/database/src/source-reposito
 import { WalmartDrawRepository } from "../../../packages/database/src/walmart-draw-repository.js";
 import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
 import { newId } from "../../../packages/domain/src/ids.js";
+import { buildUserSetupReadiness } from "../../../packages/domain/src/user-setup.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import {
@@ -254,6 +259,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const mutationOriginValidator = dependencies.mutationOriginValidator ?? sameOriginMutation;
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
+  const catalogLinks = new CatalogLinkRepository(db);
   const catalogIdentityGovernance = new CatalogIdentityGovernanceRepository(db);
   const attribution = new AttributionRepository(db);
   const adapterDiagnostics = new AdapterDiagnosticRepository(db);
@@ -439,20 +445,34 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/overview") {
         const missions = control.listMissions(20, 0, "");
+        const settings = control.settings();
+        const sourceList = control.listSources();
+        const proposalCounts = catalogGovernance.mineCounts();
+        const deviceList = devices.listDevices();
         json(response, 200, {
           version,
-          settings: control.settings(),
+          settings,
           counts: {
             products: catalog.libraryCount(),
             purchaseIntents: control.missionCount(),
             signals: signals.signalCount(),
             actions: signals.jobCount(),
             notifications: notifications.counts().totalNotifications,
-            ...catalogGovernance.mineCounts()
+            ...proposalCounts
           },
           purchaseIntents: missions,
           spend: spendLedger.summary(Date.now(), false),
-          sources: control.listSources(),
+          sources: sourceList,
+          setup: buildUserSetupReadiness({
+            version,
+            devices: deviceList,
+            sources: sourceList,
+            products: catalog.libraryCount(),
+            pendingProductProposals: proposalCounts.pendingCatalogProposals,
+            plans: missions,
+            actionsPaused: settings.actionsPaused === true,
+            executionMode: String(settings.executionMode ?? "shadow")
+          }),
           walmartDraws: {
             readOnly: true,
             entryMutationAuthorized: false,
@@ -986,6 +1006,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           trackalacker: sourceRuntime.trackalackerStatus(),
           capabilities: {
             catalog: true,
+            selfServiceExactProductLinks: true,
+            userSetupReadiness: true,
             signalEngine: true,
             chromeReadiness: true,
             devicePairing: true,
@@ -1240,6 +1262,18 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/catalog/proposals") {
         const body = await readJson(request);
         json(response, 202, catalogGovernance.proposeListing(body as unknown as CatalogListingInput));
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/catalog/link-preview") {
+        const body = await readJson(request);
+        json(response, 200, { preview: catalogLinks.preview(body.url) });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/catalog/link-proposals") {
+        const body = await readJson(request);
+        json(response, 202, catalogLinks.propose(body as unknown as ExactProductLinkProposalInput));
         return;
       }
 

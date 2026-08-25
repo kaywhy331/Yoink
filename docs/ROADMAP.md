@@ -1,6 +1,34 @@
 # Yoink roadmap
 
-## Shipped through 0.31.0
+## Shipped through 0.32.0
+
+### Nontechnical setup and exact product-link intake (0.32.0)
+
+- The user dashboard now projects one five-step setup path over the existing
+  device, source, shared catalog, private plan, and global action state. Current
+  versus outdated and online versus offline Chrome, pending review, notification
+  readiness, guarded-cart readiness, shadow mode, and paused/pending approval
+  are separate states rather than one optimistic ready flag
+- A two-stage **Add product link** flow supports all thirteen registered
+  retailers. The server extracts the exact retailer and SKU, reconstructs a
+  tracking-free canonical URL, and rejects search, category, Walmart Draw hub,
+  insecure, credential-bearing, unsupported, and URL/SKU-mismatched input
+- Product-link submissions use a private, manual, informational `user_link`
+  provenance record and the existing catalog review queue. They always enter as
+  unknown availability with no price and cannot create an offer observation,
+  mission, plan, signal, job, or retailer permission. A forged user-link stock
+  or price claim is rejected even if it targets the lower-level proposal API
+- Catalog normalization now binds every source's canonical URL to the supplied
+  exact retailer SKU. This closes the prior gap where a correct retailer domain
+  alone could accompany a different SKU and preserves query-bound identities
+  such as Macy's during canonicalization
+- Hosted two-person action-resume responses remain visibly pending and paused in
+  the user UI. Local emergency pause stays immediate; approval itself remains
+  inert until the unchanged protected operation is retried
+- Domain, repository, tenant-isolation, API, readiness, and simulated-browser
+  tests cover all retailer formats and prove that preview/submission performs no
+  purchase-plan or stock mutation. No migration or retailer capability changes
+  in this release
 
 ### High-risk administrative change control (0.31.0)
 
@@ -566,9 +594,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.31.0
+## Architecture assessment after 0.32.0
 
-Yoink 0.31.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.32.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -582,7 +610,7 @@ behavior.
 | --- | --- | --- |
 | Primary backend database | Transactional migration-32 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, bounded service-health telemetry, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, secret references, external alert connectors/background escalation worker, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
-| Minimal user application | Separate `/` dashboard with no-write-before-review setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, periodic spend caps, activity, pause, pairing, and source/review status | Some style-level retailers still report `listing_only`; region/store scope is consent-derived rather than verified from each live offer; verified-equivalent substitution is policy-only and non-executable |
+| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, and source/review status | Production onboarding still depends on Phase 2 IdP/hosted deployment; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; the independent witness service, scheduler, and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
@@ -696,7 +724,11 @@ catalog targets stay disabled, and the UI test proves no pre-review write.
 0.29.0 makes that reviewed revision the direct decision source for fresh exact
 signals, removes any hidden strategy dependency, preserves strategies as the
 advanced/default mode for source-created missions, and proves a direct plan can
-reach the existing qualified lease boundary without weakening it. The
+reach the existing qualified lease boundary without weakening it. 0.32.0 adds
+the first-run readiness projection and a safe path from an unknown product URL
+to exact normalized identity and independent catalog review without treating
+the link as stock, price, intent, or purchase evidence. The local nontechnical
+setup and intent workflow now satisfy the Phase 1 usability gate; the
 broader phase exit remains **open**
 until style-level observers supply stable child offers, applicable region/store
 scope is live-offer verified, verified-equivalent selection has independently

@@ -114,6 +114,12 @@ export class CatalogRepository {
     if (!sourceConnection || sourceConnection.source !== normalized.source) {
       throw new Error("The catalog source does not match a configured source connection.");
     }
+    if (sourceConnection.source === "user_link"
+      && (normalized.listingStatus !== "unknown"
+        || normalized.observedPriceCents !== null
+        || normalized.msrpCents !== null)) {
+      throw new Error("A user-pasted product link cannot assert availability or price evidence.");
+    }
     const retailer = this.db.get<RetailerRow>(
       "SELECT id, display_name, execution_supported, domains_json FROM retailers WHERE id = ?",
       normalized.retailerId
@@ -320,26 +326,28 @@ export class CatalogRepository {
           timestamp
         );
       }
-      this.db.run(
-        `INSERT INTO offer_observations(
-           id, listing_id, source_connection_id, availability, unit_price_cents,
-           currency, observed_at, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        newId("offer_observation"),
-        listingId,
-        normalized.sourceConnectionId,
-        normalized.listingStatus,
-        normalized.observedPriceCents,
-        normalized.currency,
-        normalized.observedAt,
-        timestamp
-      );
-      this.db.run(
-        `UPDATE source_connections SET status = 'connected', last_event_at = ?, updated_at = ? WHERE id = ?`,
-        normalized.observedAt,
-        timestamp,
-        normalized.sourceConnectionId
-      );
+      if (normalized.source !== "user_link") {
+        this.db.run(
+          `INSERT INTO offer_observations(
+             id, listing_id, source_connection_id, availability, unit_price_cents,
+             currency, observed_at, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          newId("offer_observation"),
+          listingId,
+          normalized.sourceConnectionId,
+          normalized.listingStatus,
+          normalized.observedPriceCents,
+          normalized.currency,
+          normalized.observedAt,
+          timestamp
+        );
+        this.db.run(
+          `UPDATE source_connections SET status = 'connected', last_event_at = ?, updated_at = ? WHERE id = ?`,
+          normalized.observedAt,
+          timestamp,
+          normalized.sourceConnectionId
+        );
+      }
       return {
         listing: this.requireListing(listingId),
         createdVariant,

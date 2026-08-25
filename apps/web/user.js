@@ -6,6 +6,8 @@ const state = {
   proposals: [],
   editingPlan: null,
   setupProduct: null,
+  productLinkPreview: null,
+  productLinkPreviewInput: "",
   query: ""
 };
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -97,6 +99,38 @@ function variantSummary(attributes) {
     .join(" · ");
 }
 
+function setupActionMarkup(action, label, quiet = false) {
+  if (!action || !label) return "";
+  if (action === "download_companion") {
+    const href = state.overview?.setup?.companion?.downloadUrl || "/api/v1/extension/release/download";
+    return `<a class="button ${quiet ? "quiet" : "secondary"}" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+  }
+  return `<button class="button ${quiet ? "quiet" : "secondary"}" data-setup-action="${escapeHtml(action)}" type="button">${escapeHtml(label)}</button>`;
+}
+
+function renderSetupGuide() {
+  const guide = $("#setupGuide");
+  const setup = state.overview?.setup;
+  if (!setup || !Array.isArray(setup.steps)) {
+    guide.hidden = true;
+    return;
+  }
+  guide.hidden = false;
+  $("#setupGuideHeadline").textContent = setup.headline;
+  $("#setupGuideCopy").textContent = setup.summary;
+  const completed = Math.max(0, Math.min(Number(setup.totalSteps || 5), Number(setup.completedSteps || 0)));
+  const total = Math.max(1, Number(setup.totalSteps || 5));
+  $("#setupProgressBar").style.width = `${Math.round(completed * 100 / total)}%`;
+  $("#setupProgress").setAttribute("aria-valuemax", String(total));
+  $("#setupProgress").setAttribute("aria-valuenow", String(completed));
+  $("#setupProgressCopy").textContent = `${completed} of ${total} steps ready`;
+  $("#setupSteps").innerHTML = setup.steps.map((item, index) => `<article class="setup-step ${escapeHtml(item.state)}">
+    <div class="setup-step-head"><span class="setup-step-number">${item.state === "complete" ? "✓" : index + 1}</span><h4>${escapeHtml(item.title)}</h4><span class="sr-only">${escapeHtml(item.state)}</span></div>
+    <p>${escapeHtml(item.summary)}</p>
+    <div class="setup-step-actions">${setupActionMarkup(item.primaryAction, item.primaryActionLabel)}${setupActionMarkup(item.secondaryAction, item.secondaryActionLabel, true)}</div>
+  </article>`).join("");
+}
+
 function renderOverview() {
   const { settings, counts, sources, permissions, spend } = state.overview;
   const paused = settings.actionsPaused === true;
@@ -122,6 +156,8 @@ function renderOverview() {
   ];
   $("#metrics").innerHTML = metricRows.map(([value, label]) => `<article class="metric"><strong>${Number(value || 0).toLocaleString()}</strong><span>${escapeHtml(label)}</span></article>`).join("");
   $("#sourceList").innerHTML = (sources || []).map((source) => `<div class="mini-row"><span>${escapeHtml(source.name)}</span><strong>${escapeHtml(source.status)}</strong></div>`).join("") || '<div class="mini-row"><span>No sources configured</span></div>';
+  $("#companionDownloadLink").href = state.overview?.setup?.companion?.downloadUrl || "/api/v1/extension/release/download";
+  renderSetupGuide();
   renderSpend(spend);
 }
 
@@ -159,7 +195,7 @@ function renderProducts() {
         <a class="canonical" href="${escapeHtml(product.canonicalUrl)}" target="_blank" rel="noreferrer">View at store ↗</a>
       </div>
     </article>`;
-  }).join("") : '<div class="empty">No exact products match yet. Connect a source in the Chrome companion or ask an administrator to review a product suggestion.</div>';
+  }).join("") : '<div class="empty"><p>No approved exact products match yet. Paste a supported store product page and Yoink will hold the exact item for independent review.</p><button class="button secondary" data-open-product-link type="button">Add product link</button></div>';
 }
 
 function renderWalmartDraws() {
@@ -229,11 +265,15 @@ async function refresh() {
 
 async function toggleActions() {
   const paused = state.overview.settings.actionsPaused !== true;
-  await api("/api/v1/user/settings/actions", {
+  const result = await api("/api/v1/user/settings/actions", {
     method: "PATCH",
     body: JSON.stringify({ paused, reason: paused ? "Paused from the user dashboard." : "Resumed from the user dashboard." })
   });
   await refresh();
+  if (result.disposition === "pending_approval") {
+    toast("Resume request sent for independent approval. Purchase actions remain paused.");
+    return;
+  }
   toast(paused ? "All purchase actions are paused." : "Qualified purchase actions are enabled within your saved limits.");
 }
 
@@ -446,6 +486,60 @@ function syncPlanAction(normalizeTargets = false) {
             : `The reviewed total covers the current ${money(minimum)} tax and store-fee safety bound. Chrome still rechecks the exact live offer before any click.`;
 }
 
+async function createPairingCode(showPreferences = false) {
+  if (showPreferences) setTab("preferences");
+  const result = await api("/api/v1/user/devices/pairing-code", { method: "POST", body: "{}" });
+  $("#pairing").hidden = false;
+  $("#pairing").innerHTML = `<span>One-time code</span><strong>${escapeHtml(result.pairing.code)}</strong><small>Expires ${escapeHtml(relative(result.pairing.expiresAt))}</small>`;
+  toast("Enter this one-time code in the Yoink Chrome companion.");
+}
+
+function clearProductLinkPreview() {
+  state.productLinkPreview = null;
+  state.productLinkPreviewInput = "";
+  $("#productLinkPreview").hidden = true;
+  $("#productLinkPreview").innerHTML = "";
+  $("#productLinkConfirm").hidden = true;
+  $("#productLinkForm").elements.confirmed.checked = false;
+  $("#submitProductLinkButton").disabled = true;
+}
+
+function openProductLinkDialog() {
+  const form = $("#productLinkForm");
+  form.reset();
+  clearProductLinkPreview();
+  $("#productLinkDialog").showModal();
+  requestAnimationFrame(() => form.elements.url.focus());
+}
+
+async function checkProductLink() {
+  const form = $("#productLinkForm");
+  const url = form.elements.url.value.trim();
+  if (!url) throw new Error("Paste the exact store product page first.");
+  const button = $("#checkProductLinkButton");
+  button.disabled = true;
+  button.textContent = "Checking item ID…";
+  try {
+    const { preview } = await api("/api/v1/user/catalog/link-preview", {
+      method: "POST",
+      body: JSON.stringify({ url })
+    });
+    state.productLinkPreview = preview;
+    state.productLinkPreviewInput = url;
+    $("#productLinkPreview").hidden = false;
+    $("#productLinkPreview").innerHTML = `<div class="card-top"><span class="store">${escapeHtml(preview.retailerName)}</span><span class="tag good">Exact item found</span></div>
+      <h3>${escapeHtml(preview.retailerSku)}</h3>
+      <p>${escapeHtml(preview.capabilityLabel)}</p>
+      <p><strong>Not accepted from this link:</strong> stock status, price, seller, fulfillment, or permission to purchase.</p>
+      <a class="canonical" href="${escapeHtml(preview.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(preview.canonicalUrl)} ↗</a>`;
+    $("#productLinkConfirm").hidden = false;
+    $("#productLinkConfirm").querySelector("input").focus();
+  } finally {
+    button.disabled = false;
+    button.textContent = "Check exact link";
+  }
+}
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -453,17 +547,74 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.tab) setTab(button.dataset.tab);
     if (button.hasAttribute("data-close-dialog")) button.closest("dialog")?.close();
     if (button.id === "pauseButton" || button.id === "preferencePauseButton") await toggleActions();
+    if (button.id === "addProductButton" || button.hasAttribute("data-open-product-link")) openProductLinkDialog();
+    if (button.id === "checkProductLinkButton") await checkProductLink();
     if (button.dataset.trackListing) {
       await openSetup(button.dataset.trackListing);
     }
     if (button.dataset.editPlan) await openPlan(button.dataset.editPlan);
     if (button.id === "pairButton") {
-      const result = await api("/api/v1/user/devices/pairing-code", { method: "POST", body: "{}" });
-      $("#pairing").hidden = false;
-      $("#pairing").innerHTML = `<span>One-time code</span><strong>${escapeHtml(result.pairing.code)}</strong><small>Expires ${escapeHtml(relative(result.pairing.expiresAt))}</small>`;
-      toast("Enter this one-time code in the Yoink Chrome companion.");
+      await createPairingCode();
     }
+    if (button.dataset.setupAction === "pair_companion") await createPairingCode(true);
+    if (button.dataset.setupAction === "connect_signal") {
+      setTab("preferences");
+      toast("Open the Yoink Chrome companion, sign in to TrackaLacker, then choose Connect.");
+    }
+    if (button.dataset.setupAction === "add_product") openProductLinkDialog();
+    if (button.dataset.setupAction === "choose_product") {
+      setTab("products");
+      toast("Choose an approved exact product, then select Set up purchase.");
+    }
+    if (button.dataset.setupAction === "resume_actions") await toggleActions();
   } catch (error) { toast(error.message || "The request failed.", true); }
+});
+
+$("#productLinkForm").addEventListener("input", (event) => {
+  const form = event.currentTarget;
+  if (event.target.name === "url" && form.elements.url.value.trim() !== state.productLinkPreviewInput) {
+    clearProductLinkPreview();
+  }
+  $("#submitProductLinkButton").disabled = !state.productLinkPreview
+    || form.elements.url.value.trim() !== state.productLinkPreviewInput
+    || form.elements.confirmed.checked !== true;
+});
+
+$("#productLinkForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = $("#submitProductLinkButton");
+  try {
+    const url = form.elements.url.value.trim();
+    if (!state.productLinkPreview || state.productLinkPreviewInput !== url) {
+      throw new Error("Check the exact product link again before sending it for review.");
+    }
+    if (form.elements.confirmed.checked !== true) {
+      throw new Error("Confirm the exact product-page review boundary first.");
+    }
+    button.disabled = true;
+    button.textContent = "Sending safely…";
+    const result = await api("/api/v1/user/catalog/link-proposals", {
+      method: "POST",
+      body: JSON.stringify({
+        url,
+        title: form.elements.title.value,
+        confirmation: "PROPOSE_EXACT_PRODUCT_LINK"
+      })
+    });
+    $("#productLinkDialog").close();
+    clearProductLinkPreview();
+    await refresh();
+    setTab("preferences");
+    toast(result.disposition === "duplicate_pending"
+      ? "That exact product suggestion is already waiting for review."
+      : "Exact product link sent for independent review. No stock claim, purchase plan, or store action was created.");
+  } catch (error) {
+    toast(error.message || "The product link could not be sent for review.", true);
+  } finally {
+    button.disabled = !state.productLinkPreview || form.elements.confirmed.checked !== true;
+    button.textContent = "Send for review";
+  }
 });
 
 $("#setupForm").addEventListener("input", (event) => {

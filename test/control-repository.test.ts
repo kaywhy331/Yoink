@@ -28,8 +28,8 @@ test("missions edit the complete exact retailer target set atomically", () => {
       sourceListingId: "mission-target-2",
       title: "Editable Mission Fixture",
       retailerId: "amazon",
-      retailerSku: "B0MISSION01",
-      canonicalUrl: "https://www.amazon.com/dp/B0MISSION01",
+      retailerSku: "B0MISSN001",
+      canonicalUrl: "https://www.amazon.com/dp/B0MISSN001",
       listingStatus: "out_of_stock",
       executionSupported: true,
       msrpCents: 4499
@@ -105,8 +105,8 @@ test("guided purchase setup creates one reviewed revision with only the chosen e
       sourceListingId: "guided-amazon",
       title: "Guided Exact Fixture",
       retailerId: "amazon",
-      retailerSku: "B0GUIDED001",
-      canonicalUrl: "https://www.amazon.com/dp/B0GUIDED001",
+      retailerSku: "B0GUIDD001",
+      canonicalUrl: "https://www.amazon.com/dp/B0GUIDD001",
       listingStatus: "in_stock",
       executionSupported: true,
       msrpCents: 4600
@@ -296,8 +296,8 @@ test("a direct plan update cannot authorize an unsafe cart target", () => {
       sourceListingId: "monitor-only-listing",
       title: "Monitor-only Direct Plan Fixture",
       retailerId: "amazon",
-      retailerSku: "B0DIRECT001",
-      canonicalUrl: "https://www.amazon.com/dp/B0DIRECT001",
+      retailerSku: "B0DIRCT001",
+      canonicalUrl: "https://www.amazon.com/dp/B0DIRCT001",
       listingStatus: "in_stock",
       executionSupported: false,
       msrpCents: 4500

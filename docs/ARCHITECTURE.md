@@ -381,6 +381,18 @@ single-user product remains operable. The signed assurance protocol is an
 enforcement seam, not a production IdP, MFA implementation, break-glass system,
 or hosted session service.
 
+Yoink 0.32.0 adds a user-onboarding projection without creating a second source
+of truth. The five displayed setup steps are derived from existing scoped device
+heartbeats, source connections, catalog/proposal counts, mission intent, and
+action settings. The browser never decides readiness. Product-link intake is a
+separate informational boundary: the server accepts only an exact product URL
+for one registered retailer, extracts its URL-bound SKU, canonicalizes away
+tracking, and creates a pending catalog proposal under private `user_link`
+provenance. That source cannot assert availability or price and does not create
+offer observations, missions, signals, or jobs. Catalog approval can establish
+identity only; the later trusted signal, plan, qualification, lease, and live
+Chrome validation gates remain unchanged.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and

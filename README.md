@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.31.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.32.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,30 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.32.0 adds a five-step, plain-language setup guide to the user
+dashboard. It distinguishes a current/online Chrome companion, connected signal
+source, reviewed exact product, active bounded plan, and the current action
+boundary. A paired but outdated or offline companion, a product still in
+review, paused actions, shadow mode, and a hosted approval request each remain
+visibly distinct instead of being presented as ready.
+
+Users can now paste an exact product-page link for any of Yoink's thirteen
+supported retailers. The server—not the browser form—binds the supported
+domain, exact retailer SKU, and tracking-free canonical URL and rejects search,
+category, drawing-hub, insecure, credential-bearing, and mismatched links. The
+two-stage dialog shows the extracted store/SKU before explicit confirmation.
+Submission creates only a private informational `user_link` provenance record
+and a pending catalog proposal. It cannot assert availability or price, record
+an offer observation, create a plan, or authorize an action. Independent catalog
+review remains required; retailer qualification, saved caps, trusted fresh
+evidence, and Chrome revalidation remain separate later gates.
+
+Catalog ingestion now enforces URL-to-SKU binding for every source, including
+query-key identities such as Macy's. Hosted action resume responses that require
+two-person approval remain visibly paused instead of being reported as enabled.
+This release needs no database migration and does not widen any retailer,
+seller, fulfillment, checkout, drawing-entry, payment, or order capability.
 
 Version 0.31.0 adds an enforceable high-risk administrative change boundary.
 Migration 32 stores tenant-scoped, exact-payload change requests, independent
@@ -318,8 +342,12 @@ events continue to arrive through Web Push.
 
 ## Configure behavior
 
-The user dashboard stays focused on exact products, purchase plans, recent
-actions, and preferences. Choose **Set up purchase** on a known exact listing,
+The user dashboard stays focused on guided setup, exact products, purchase
+plans, recent actions, and preferences. If the product is not yet approved,
+choose **Add product link**, paste the store's exact product page and product
+name, verify the extracted store/SKU, and explicitly send it for independent
+review. That suggestion carries no stock or price claim and creates no plan.
+For an approved listing, choose **Set up purchase**,
 then review the item/SKU, store-as-seller, fulfillment, quantity, unit and total
 caps, timing, and allowed action before anything is created. Notifications are
 the default; add-to-cart is offered only for a qualified mapping, requires an
