@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SignalEventInput, StrategyDefinition } from "../packages/contracts/src/index.js";
+import { TARGET_ADD_ADAPTER_VERSION, type SignalEventInput, type StrategyDefinition } from "../packages/contracts/src/index.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
-import { YoinkDatabase } from "../packages/database/src/database.js";
+import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 
@@ -108,6 +108,20 @@ function seededEngine(): { db: YoinkDatabase; engine: SignalEngine } {
   return { db, engine: new SignalEngine(db) };
 }
 
+function qualifyTargetAdd(db: YoinkDatabase): void {
+  db.run(
+    `INSERT INTO retailer_adapter_qualifications(
+       tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
+       evidence_hash, qualified_at, updated_at
+     ) VALUES (?, ?, 'target', ?, 'add_to_cart', 'qualified', 'signal-engine-target-evidence', ?, ?)`,
+    LOCAL_TENANT_ID,
+    LOCAL_USER_ID,
+    TARGET_ADD_ADAPTER_VERSION,
+    new Date(NOW).toISOString(),
+    new Date(NOW).toISOString()
+  );
+}
+
 test("an exact under-MSRP signal creates one mission and a bounded shadow action job", () => {
   const { db, engine } = seededEngine();
   try {
@@ -140,6 +154,46 @@ test("an exact under-MSRP signal creates one mission and a bounded shadow action
     assert.equal(storedSignal.includes("ephemeral-offer-secret"), false);
     assert.equal(storedAudit.includes("ephemeral-offer-secret"), false);
     assert.match(storedSignal, /offerFingerprint/);
+  } finally {
+    db.close();
+  }
+});
+
+test("a live multi-unit strategy match degrades before spend reservation because guarded runners add one", () => {
+  const { db, engine } = seededEngine();
+  try {
+    qualifyTargetAdd(db);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    const result = engine.process(trackalackerSignal({ externalEventId: "live-multi-unit-add" }), NOW);
+    assert.equal(result.decision, "guarded_add_quantity_not_supported");
+    assert.equal(result.actionJobState, "notify_only");
+    const job = db.get<{ action: string; quantity: number; reservationId: string | null }>(
+      `SELECT action, quantity, spend_reservation_id AS reservationId
+       FROM action_jobs WHERE id = ?`,
+      result.actionJobId
+    );
+    assert.deepEqual({ ...job }, { action: "notify", quantity: 2, reservationId: null });
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM spend_reservations")?.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("an unqualified live add lane becomes a notification before spend reservation", () => {
+  const { db, engine } = seededEngine();
+  try {
+    engine.control.replaceStrategies([{ ...purchaseStrategies()[0]!, quantity: 1 }], NOW);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    const result = engine.process(trackalackerSignal({ externalEventId: "unqualified-live-add" }), NOW);
+    assert.equal(result.decision, "guarded_add_lane_not_qualified");
+    assert.equal(result.actionJobState, "notify_only");
+    const job = db.get<{ action: string; quantity: number; reservationId: string | null }>(
+      `SELECT action, quantity, spend_reservation_id AS reservationId
+       FROM action_jobs WHERE id = ?`,
+      result.actionJobId
+    );
+    assert.deepEqual({ ...job }, { action: "notify", quantity: 1, reservationId: null });
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM spend_reservations")?.count, 0);
   } finally {
     db.close();
   }

@@ -99,6 +99,26 @@ input[aria-invalid="true"] { border-color: var(--amber); background: var(--amber
 .canonical:hover { color: var(--green); }
 .stack { display: grid; gap: 12px; }
 .plan-card, .action-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 20px; }
+.automation-readiness { margin-top: 14px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 13px; background: var(--wash); }
+.automation-readiness.ready { border-color: #bfddce; background: var(--green-soft); }
+.automation-readiness.attention { border-color: #e5c98e; background: var(--amber-soft); }
+.automation-readiness.off { opacity: .78; }
+.automation-readiness-head { display: flex; align-items: center; gap: 9px; }
+.automation-readiness-head > strong { font-size: 13px; }
+.automation-readiness > p { margin: 7px 0 !important; font-size: 12px; }
+.automation-next { display: block; color: var(--ink); }
+.automation-readiness details { margin-top: 9px; }
+.automation-readiness summary { cursor: pointer; color: var(--green-dark); font-size: 11px; font-weight: 800; }
+.automation-readiness ul { display: grid; gap: 7px; margin: 10px 0 0; padding: 0; list-style: none; }
+.automation-readiness li { display: grid; grid-template-columns: 18px 1fr; gap: 6px; align-items: start; color: var(--muted); }
+.automation-readiness li > span { width: 17px; height: 17px; display: grid; place-items: center; border-radius: 6px; background: white; font-size: 10px; font-weight: 900; }
+.automation-readiness li.pass > span { color: white; background: var(--green); }
+.automation-readiness li.attention > span { color: white; background: var(--amber); }
+.automation-readiness li.runtime > span { color: var(--green-dark); background: #d7e8df; }
+.automation-readiness li strong, .automation-readiness li small { display: block; }
+.automation-readiness li strong { color: var(--ink); font-size: 11px; }
+.automation-readiness li small { margin-top: 2px; font-size: 10px; line-height: 1.4; }
+.field-help { margin: -12px 0 18px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .preference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .preference-card { display: grid; grid-template-columns: 40px 1fr; gap: 14px; }
 .budget-card { grid-column: 1 / -1; }

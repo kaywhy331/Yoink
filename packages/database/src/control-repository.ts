@@ -727,12 +727,12 @@ export class ControlRepository {
     });
   }
 
-  listMissions(limit = 500, offset = 0, search = ""): Array<Record<string, unknown>> {
+  listMissions(limit = 500, offset = 0, search = "", includeAutomationTargets = false): Array<Record<string, unknown>> {
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 500)));
     const safeOffset = Number.isSafeInteger(Number(offset)) && Number(offset) >= 0 ? Math.floor(Number(offset)) : 0;
-    return this.db.all(
+    const missions = this.db.all<Record<string, unknown>>(
       `SELECT m.id, m.status, m.origin, m.target_quantity AS targetQuantity,
               m.fulfilled_quantity AS fulfilledQuantity, v.id AS variantId,
               v.title, COUNT(mt.id) AS targetCount,
@@ -745,6 +745,8 @@ export class ControlRepository {
                WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS actionCeiling,
               (SELECT ir.decision_mode FROM mission_intent_revisions ir
                WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS decisionMode,
+              (SELECT ir.expires_at FROM mission_intent_revisions ir
+               WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS expiresAt,
               (SELECT r2.display_name FROM mission_targets mt2
                JOIN listings l2 ON l2.id = mt2.listing_id
                JOIN retailers r2 ON r2.id = l2.retailer_id
@@ -788,6 +790,39 @@ export class ControlRepository {
       safeLimit,
       safeOffset
     );
+    if (!includeAutomationTargets || !missions.length) return missions;
+    const missionIds = missions.map((mission) => String(mission.id));
+    const placeholders = missionIds.map(() => "?").join(", ");
+    const targets: Array<Record<string, unknown>> = this.db.all<Record<string, unknown>>(
+      `SELECT mt.mission_id AS missionId, mt.id AS targetId,
+              mt.listing_id AS listingId, mt.enabled = 1 AS enabled,
+              mt.max_unit_price_cents AS maxUnitPriceCents,
+              mt.seller_policy AS sellerPolicy, mt.fulfillment,
+              l.retailer_id AS retailerId, r.display_name AS retailerName,
+              l.retailer_sku AS retailerSku,
+              l.execution_supported = 1 AS executionSupported
+       FROM mission_targets mt
+       JOIN listings l ON l.id = mt.listing_id
+       JOIN retailers r ON r.id = l.retailer_id
+       WHERE mt.mission_id IN (${placeholders}) AND mt.enabled = 1
+       ORDER BY mt.mission_id, mt.created_at, mt.id`,
+      ...missionIds
+    ).map((target) => ({
+      ...target,
+      enabled: Number(target.enabled) === 1,
+      executionSupported: Number(target.executionSupported) === 1
+    }));
+    const targetsByMission = new Map<string, Array<Record<string, unknown>>>();
+    for (const target of targets) {
+      const missionId = String(target.missionId);
+      const grouped = targetsByMission.get(missionId) ?? [];
+      grouped.push(target);
+      targetsByMission.set(missionId, grouped);
+    }
+    return missions.map((mission) => ({
+      ...mission,
+      automationTargets: targetsByMission.get(String(mission.id)) ?? []
+    }));
   }
 
   missionCount(search = ""): number {

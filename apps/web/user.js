@@ -91,6 +91,10 @@ function words(value) {
   return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function guardedLaneReady(retailerId) {
+  return state.overview?.guardedAddLanes?.[retailerId] === true;
+}
+
 function variantSummary(attributes) {
   if (!attributes || typeof attributes !== "object") return "";
   return Object.entries(attributes)
@@ -210,7 +214,7 @@ function renderProducts() {
       <div class="card-top"><span class="store">${escapeHtml(product.retailerName)}</span><span class="tag ${available ? "good" : "warn"}">${escapeHtml(String(product.status).replaceAll("_", " "))}</span></div>
       <h3>${escapeHtml(product.title)}</h3>
       <p>Exact store item ${escapeHtml(product.retailerSku)}${exactVariant ? ` · ${escapeHtml(exactVariant)}` : ""}</p>
-      <div class="tags"><span class="tag">${escapeHtml(priceKind)} ${escapeHtml(money(currentPrice, product.currency))}${hasCurrentPrice && product.priceObservedAt ? ` · ${escapeHtml(relative(product.priceObservedAt))}` : ""}</span><span class="tag">${product.executionSupported ? "Qualified add mapping" : "Monitor only"}</span></div>
+      <div class="tags"><span class="tag">${escapeHtml(priceKind)} ${escapeHtml(money(currentPrice, product.currency))}${hasCurrentPrice && product.priceObservedAt ? ` · ${escapeHtml(relative(product.priceObservedAt))}` : ""}</span><span class="tag ${guardedLaneReady(product.retailerId) ? "good" : ""}">${product.executionSupported ? guardedLaneReady(product.retailerId) ? "Qualified guarded add" : "Packaged mapping · lane pending" : "Monitor only"}</span></div>
       <div class="card-actions">
         ${plan ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit purchase plan</button>` : `<button class="button primary" data-track-listing="${escapeHtml(product.listingId)}" type="button">Set up purchase</button>`}
         <a class="canonical" href="${escapeHtml(product.canonicalUrl)}" target="_blank" rel="noreferrer">View at store ↗</a>
@@ -233,6 +237,22 @@ function renderWalmartDraws() {
   </article>`).join("") : '<div class="empty">No open drawings are currently recorded. Run one explicit inspection from the Walmart Draw hub; expired drawings disappear from this view.</div>';
 }
 
+function automationReadinessMarkup(readiness) {
+  if (!readiness || typeof readiness !== "object") return "";
+  const ready = readiness.level === "ready";
+  const checks = Array.isArray(readiness.checks) ? readiness.checks : [];
+  const checkMarkup = checks.map((item) => {
+    const symbol = item.state === "pass" ? "✓" : item.state === "runtime" ? "↻" : "•";
+    return `<li class="${escapeHtml(item.state)}"><span aria-hidden="true">${symbol}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail)}</small></div></li>`;
+  }).join("");
+  return `<section class="automation-readiness ${escapeHtml(readiness.level || "waiting")}" aria-label="Automation readiness">
+    <div class="automation-readiness-head"><span class="tag ${ready ? "good" : "warn"}">${ready ? "Ready" : readiness.level === "off" ? "Off" : "Needs attention"}</span><strong>${escapeHtml(readiness.headline || "Automation status unavailable")}</strong></div>
+    <p>${escapeHtml(readiness.summary || "")}</p>
+    ${readiness.nextActionLabel ? `<small class="automation-next"><strong>Next:</strong> ${escapeHtml(readiness.nextActionLabel)}</small>` : ""}
+    ${checkMarkup ? `<details><summary>Why this status</summary><ul>${checkMarkup}</ul></details>` : ""}
+  </section>`;
+}
+
 function renderPlans() {
   $("#planList").innerHTML = state.plans.length ? state.plans.map((plan) => {
     const store = plan.primaryRetailerName || "No store enabled";
@@ -245,7 +265,8 @@ function renderPlans() {
       <div><div class="card-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(plan.status)}</span></div>
       <p><strong>${escapeHtml(store)}</strong>${plan.primaryRetailerSku ? ` · exact item ${escapeHtml(plan.primaryRetailerSku)}` : ""} · last seen ${escapeHtml(current)} · maximum ${escapeHtml(maximum)}</p>
       <p>Quantity ${Number(plan.targetQuantity || 1)} · ${escapeHtml(fulfillment)} · ${escapeHtml(action)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p>
-      <p>${escapeHtml(decision)} when a fresh exact offer arrives.</p></div>
+      <p>${escapeHtml(decision)} when a fresh exact offer arrives. Guarded cart attempts always add exactly one item.</p>
+      ${automationReadinessMarkup(plan.automationReadiness)}</div>
       <button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Review or change</button>
     </article>`;
   }).join("") : '<div class="empty">You have no purchase plans. Choose “Set up purchase” from the Products tab and review the exact limits before creating one.</div>';
@@ -331,14 +352,17 @@ function syncSetupAction() {
   const minimum = setupAutomaticMinimum();
   const reviewedTotal = setupAmount("maxAllIn", "Maximum total");
   const totalTooLow = adding && minimum && (reviewedTotal === null || reviewedTotal < minimum.required);
+  const laneReady = guardedLaneReady(state.setupProduct?.retailerId);
   form.elements.maxAllIn.setAttribute("aria-invalid", totalTooLow ? "true" : "false");
-  note.className = `boundary-note ${state.setupProduct?.executionSupported && !totalTooLow ? "good" : "warn"}`;
+  note.className = `boundary-note ${state.setupProduct?.executionSupported && (!adding || laneReady) && !totalTooLow ? "good" : "warn"}`;
   note.textContent = state.setupProduct?.executionSupported
     ? adding
-      ? minimum
+      ? !laneReady
+        ? "This store has a packaged runner, but its separate guarded-add qualification is not active. You may save the plan now; monitoring continues while every retailer click stays closed."
+        : minimum
         ? totalTooLow
           ? `Your current maximum total is below the ${money(minimum.required)} tax and store-fee safety bound. Raise it only if that remains an amount you accept, or choose notifications.`
-          : `Your reviewed total covers the current ${money(minimum.required)} tax and store-fee safety bound. A cart click still requires fresh exact-offer verification in Chrome.`
+          : `Your reviewed total covers the current ${money(minimum.required)} tax and store-fee safety bound. Each guarded attempt adds exactly one item, and Chrome still requires fresh exact-offer verification.`
         : "Enter the item price and quantity to calculate the minimum safe total for a cart action."
       : "This store has a packaged add mapping, but this plan currently authorizes notifications only."
     : "This store is monitor-only. Yoink can notify you, but it cannot click its cart control.";
@@ -506,7 +530,7 @@ function syncPlanAction(normalizeTargets = false) {
           ? "Enter a valid quantity and maximum item price for every enabled store."
           : totalTooLow
             ? `Raise the maximum total to at least ${money(minimum)} only if you accept that bound, or choose notifications.`
-            : `The reviewed total covers the current ${money(minimum)} tax and store-fee safety bound. Chrome still rechecks the exact live offer before any click.`;
+            : `The reviewed total covers the current ${money(minimum)} tax and store-fee safety bound. Each guarded attempt adds exactly one item, and Chrome still rechecks the exact live offer before any click.`;
 }
 
 async function createPairingCode(showPreferences = false) {
@@ -715,7 +739,7 @@ $("#setupForm").addEventListener("submit", async (event) => {
     await refresh();
     setTab("plans");
     toast(actionCeiling === "add_to_cart"
-      ? "Purchase plan created. Only a qualified exact shipping offer may be added to your cart; checkout stays manual."
+      ? "Purchase plan created. Its readiness card shows whether the exact store lane is armed; checkout stays manual."
       : "Purchase plan created in notification-only mode.");
   } catch (error) {
     if (error.code === "purchase_intent_exists") {

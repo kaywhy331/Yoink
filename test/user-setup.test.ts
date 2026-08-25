@@ -66,3 +66,51 @@ test("setup readiness distinguishes configured monitoring, guarded actions, and 
   assert.equal(offline.steps[0]?.state, "attention");
   assert.equal(offline.steps[4]?.state, "attention");
 });
+
+test("setup readiness uses authoritative plan readiness instead of treating every add mapping as armed", () => {
+  const configured = {
+    ...BASE,
+    devices: [{ status: "active", extensionVersion: "0.32.0", online: true }],
+    sources: [{ source: "browser", status: "connected" }],
+    products: 1,
+    actionsPaused: false,
+    executionMode: "live",
+    plans: [{
+      status: "active",
+      actionCeiling: "add_to_cart",
+      automationReadiness: {
+        state: "guarded_add_lane_closed",
+        level: "attention",
+        headline: "Amazon guarded add is not qualified yet",
+        summary: "Monitoring remains available while retailer clicks stay closed.",
+        readyForMonitoring: true,
+        readyForGuardedAdd: false,
+        nextAction: "review_plan"
+      }
+    }]
+  };
+  const closed = buildUserSetupReadiness(configured);
+  assert.equal(closed.level, "needs_action_enablement");
+  assert.equal(closed.readyForMonitoring, true);
+  assert.equal(closed.readyForGuardedAdds, false);
+  assert.match(closed.headline, /Amazon guarded add/);
+  assert.match(closed.steps[4]?.summary ?? "", /retailer clicks stay closed/);
+
+  const armed = buildUserSetupReadiness({
+    ...configured,
+    plans: [{
+      ...configured.plans[0],
+      automationReadiness: {
+        state: "guarded_add_armed",
+        level: "ready",
+        headline: "Guarded add is armed",
+        summary: "Fresh runtime proof is still required.",
+        readyForMonitoring: true,
+        readyForGuardedAdd: true,
+        nextAction: "wait_for_offer"
+      }
+    }]
+  });
+  assert.equal(armed.level, "guarded_cart_ready");
+  assert.equal(armed.readyForGuardedAdds, true);
+});

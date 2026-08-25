@@ -1,11 +1,15 @@
-import type {
-  AttributionPlan,
-  JobState,
-  ListingContext,
-  MissionContext,
-  NormalizedSignal,
-  SignalProcessingResult,
-  StrategyEvaluation
+import {
+  AMAZON_ADD_ADAPTER_VERSION,
+  BESTBUY_ADD_ADAPTER_VERSION,
+  TARGET_ADD_ADAPTER_VERSION,
+  WALMART_ADD_ADAPTER_VERSION,
+  type AttributionPlan,
+  type JobState,
+  type ListingContext,
+  type MissionContext,
+  type NormalizedSignal,
+  type SignalProcessingResult,
+  type StrategyEvaluation
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
@@ -89,6 +93,27 @@ export class SignalRepository {
     this.offerIdentity = new OfferIdentityRepository(db);
     this.purchasePolicies = new PurchasePolicyRepository(db);
     this.spendLedger = new SpendLedgerRepository(db);
+  }
+
+  private addLaneQualified(retailerId: string): boolean {
+    const adapterVersion = {
+      target: TARGET_ADD_ADAPTER_VERSION,
+      walmart: WALMART_ADD_ADAPTER_VERSION,
+      amazon: AMAZON_ADD_ADAPTER_VERSION,
+      bestbuy: BESTBUY_ADD_ADAPTER_VERSION
+    }[retailerId];
+    if (!adapterVersion) return false;
+    const row = this.db.get<{ adapterVersion: string; highestAction: string; status: string }>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction, status
+       FROM retailer_adapter_qualifications
+       WHERE tenant_id = ? AND user_id = ? AND retailer_id = ?`,
+      currentRequestScope().tenantId,
+      currentRequestScope().userId,
+      retailerId
+    );
+    return row?.status === "qualified"
+      && row.adapterVersion === adapterVersion
+      && row.highestAction === "add_to_cart";
   }
 
   sourceConnection(id: string): SourceConnectionContext | null {
@@ -421,6 +446,17 @@ export class SignalRepository {
     let decisionReasonCode = "intent_policy_verified";
     let decisionReason = evaluation.reason;
     let policyBlocked = false;
+    if (settings.executionMode === "live" && effectiveAction === "add_to_cart" && !this.addLaneQualified(listing.retailerId)) {
+      effectiveAction = "notify";
+      policyBlocked = true;
+      decisionReasonCode = "guarded_add_lane_not_qualified";
+      decisionReason = "This exact offer matched the plan, but the retailer's add-only lane is not independently qualified. The match became a notification before any spend was reserved.";
+    } else if (settings.executionMode === "live" && effectiveAction === "add_to_cart" && evaluation.effectiveQuantity !== 1) {
+      effectiveAction = "notify";
+      policyBlocked = true;
+      decisionReasonCode = "guarded_add_quantity_not_supported";
+      decisionReason = "Guarded cart runners add exactly one item per verified opportunity. This multi-unit strategy match was converted to a notification before any spend was reserved.";
+    }
     if (effectiveAction !== "notify") {
       const policyDecision = this.purchasePolicies.evaluateAction(
         signal,

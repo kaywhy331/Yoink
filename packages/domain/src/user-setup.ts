@@ -81,12 +81,25 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
   const activePlans = input.plans.filter((plan) => plan.status === "active");
   const guardedCartPlans = activePlans.filter((plan) => plan.actionCeiling === "add_to_cart");
   const notificationPlans = activePlans.filter((plan) => plan.actionCeiling !== "add_to_cart");
+  const plansWithReadiness = activePlans.filter((plan) => plan.automationReadiness
+    && typeof plan.automationReadiness === "object"
+    && !Array.isArray(plan.automationReadiness));
+  const guardedCartReadyPlans = guardedCartPlans.filter((plan) => {
+    const readiness = plan.automationReadiness as Record<string, unknown> | undefined;
+    return readiness?.readyForGuardedAdd === true;
+  });
+  const blockedGuardedReadiness = guardedCartPlans
+    .map((plan) => plan.automationReadiness)
+    .find((readiness) => readiness && typeof readiness === "object" && !Array.isArray(readiness)) as Record<string, unknown> | undefined;
   const productCount = Math.max(0, Number(input.products) || 0);
   const pendingCount = Math.max(0, Number(input.pendingProductProposals) || 0);
   const actionsReady = input.executionMode === "live" && input.actionsPaused === false;
-  const readyForMonitoring = currentDevices.length > 0 && connectedSignals.length > 0 && activePlans.length > 0;
-  const readyForGuardedAdds = readyForMonitoring && guardedCartPlans.length > 0
-    && actionsReady && onlineCurrentDevices.length > 0;
+  const readyForMonitoring = plansWithReadiness.length
+    ? plansWithReadiness.some((plan) => (plan.automationReadiness as Record<string, unknown>).readyForMonitoring === true)
+    : currentDevices.length > 0 && connectedSignals.length > 0 && activePlans.length > 0;
+  const readyForGuardedAdds = plansWithReadiness.length
+    ? guardedCartReadyPlans.length > 0
+    : readyForMonitoring && guardedCartPlans.length > 0 && actionsReady && onlineCurrentDevices.length > 0;
 
   const companionStep = currentDevices.length
     ? step(
@@ -164,6 +177,15 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
     actionStep = step("action", "Review the safety boundary", "waiting", "Checkout, payment, raffle entry, and order submission always remain manual.");
   } else if (!guardedCartPlans.length && notificationPlans.length) {
     actionStep = step("action", "Review the safety boundary", "complete", "Your active plans notify only. No store control is clicked; checkout and ordering remain manual.");
+  } else if (plansWithReadiness.length && !guardedCartReadyPlans.length && blockedGuardedReadiness) {
+    actionStep = step(
+      "action",
+      "Review the safety boundary",
+      blockedGuardedReadiness.level === "attention" ? "attention" : "current",
+      `${String(blockedGuardedReadiness.headline || "Guarded add is not ready")}. ${String(blockedGuardedReadiness.summary || "No retailer click is currently authorized.")}`,
+      blockedGuardedReadiness.nextAction === "resume_actions" ? "resume_actions" : null,
+      blockedGuardedReadiness.nextAction === "resume_actions" ? "Request resume" : ""
+    );
   } else if (!actionsReady) {
     actionStep = step(
       "action",
@@ -203,6 +225,14 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
     level = "needs_plan";
     headline = "Set your purchase preferences";
     summary = "Choose one exact listing, a maximum price, quantity, fulfillment, and the highest action Yoink may take.";
+  } else if (guardedCartPlans.length && plansWithReadiness.length && !guardedCartReadyPlans.length && blockedGuardedReadiness) {
+    if (blockedGuardedReadiness.state === "companion_offline") {
+      level = "temporarily_offline";
+    } else {
+      level = "needs_action_enablement";
+    }
+    headline = String(blockedGuardedReadiness.headline || "Your guarded plan needs attention");
+    summary = String(blockedGuardedReadiness.summary || "Your plan stays saved while retailer clicks remain closed.");
   } else if (guardedCartPlans.length && !actionsReady) {
     level = "needs_action_enablement";
     headline = input.actionsPaused ? "Your guarded actions are paused" : "Guarded actions are not live";

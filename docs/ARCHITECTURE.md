@@ -707,6 +707,25 @@ the reservation. Current add-only confirmation releases capacity and does not
 increase mission fulfillment. A policy revision cancels unleased stale work;
 already uncertain mutation remains locked for review rather than being retried.
 
+Yoink 0.45 adds a pure, versioned purchase-automation readiness projection at
+the user API boundary. It combines the current direct intent, exact enabled
+targets, packaged mapping, per-user adapter qualification, current paired
+companion contract, connected signals, global execution state, and expiry. The
+projection is explanatory only: it cannot activate a lane or mint an action
+capability. Per-target reasons let one mixed-store plan be armed only where both
+qualification and an online matching runner exist. The setup guide and plan
+cards consume this same server result rather than inferring readiness from the
+catalog's `execution_supported` flag.
+
+Mission quantity is an overall user goal, not permission for a runner to alter
+a store quantity selector. Direct purchase intents create quantity-one add
+attempts. If a legacy advanced strategy asks for a multi-unit add in live mode,
+job creation converts it to notification before reservation; shadow mode keeps
+the requested quantity as non-executable diagnostic evidence. A live add match
+also becomes a notification before reservation when that user's exact retailer
+adapter version is not qualified. Every “armed” projection still requires fresh
+offer and browser proof at lease/action time.
+
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted
 structural diagnostic for explicit inspections, rehearsals, and guarded live

@@ -1,6 +1,41 @@
 # Yoink roadmap
 
-## Shipped through 0.44.0
+## Shipped through 0.45.0
+
+### Explainable purchase automation readiness (0.45.0)
+
+- Every user purchase plan now receives one authoritative, versioned readiness
+  projection derived on the server from its current direct-policy revision,
+  active/expiry state, enabled exact targets, reviewed seller/fulfillment/price
+  bounds, packaged mappings, per-user qualification records, current companion
+  version and adapter capabilities, connected signal sources, execution mode,
+  and global pause
+- The projection uses closed states for inactive, expired, legacy-strategy,
+  targetless, signal-less, outdated/offline/incapable companion,
+  notification-ready, unsafe-policy, unqualified-lane, shadow, paused, and armed
+  outcomes. It includes bounded per-target reasons and a plain-language
+  checklist without offer, session, credential, DOM, or capability material
+- `/` now distinguishes **packaged mapping**, **qualification pending**, and
+  **qualified guarded add** before setup; each plan card shows what can happen,
+  why, and the next safe step. The five-step setup guide consumes the same
+  projection, so an Amazon or Best Buy mapping can no longer make the overall
+  setup appear armed while that independent lane is closed
+- “Armed” is deliberately prospective: a live action still requires fresh
+  Chrome proof of the exact listing, price, first-party seller, explicit
+  shipping offer, quantity one, empty-cart preflight, and usable Add control.
+  Checkout, payment, drawing entry, and order submission remain manual/closed
+- Mission quantity remains the user's overall desired amount. Direct plans
+  already produce quantity-one guarded attempts; live multi-unit add matches
+  from legacy advanced strategies now become notifications before spend
+  reservation. Shadow simulations retain their requested quantity for safe
+  diagnosis
+- A live add match cannot reserve spend for an unqualified retailer lane. It
+  becomes an ordinary notification before reservation, aligning engine state
+  with the readiness projection and preserving qualification as a hard gate
+- Pure state-matrix tests, API projections, setup-guide tests, the real JSDOM
+  user workflow, and a live-engine reservation regression prove the contract.
+  No migration, retailer qualification change, community authority, or action
+  widening is included
 
 ### Current-vote community projections (0.44.0)
 
@@ -981,9 +1016,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.44.0
+## Architecture assessment after 0.45.0
 
-Yoink 0.44.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.45.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -997,11 +1032,11 @@ or more autonomous behavior.
 | --- | --- | --- |
 | Primary backend database | Transactional migration-40 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, observer-witness refresh, signed operator-alert dispatch and governed exact replay, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task/connector receipts, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, signed artifact/workload identity, managed secrets, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
-| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, and an explicit managed-install boundary when hosted ZIP delivery is closed | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
+| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; a narrow stable-attribute landmark can derive a tenant-scoped non-executable maintainer suggestion; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Landmarks cover only unique Add-control selector misses and cannot synthesize a complete recipe; local device/SKU evidence is not a public community quorum or independent oracle; canary is not cohort deployment; recipe evaluation is not a worker handler; the independent witness service and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
-| Automatic purchasing | Reviewed plans can directly request guarded quantity-one work without a strategy; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
+| Automatic purchasing | Reviewed plans can directly request guarded quantity-one attempts without a strategy and now expose an authoritative armed/blocked explanation; live legacy multi-unit strategy adds and all unqualified-lane matches fail over to notification before reservation; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 | Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
 
 ### Target trust-domain layout

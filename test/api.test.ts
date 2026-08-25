@@ -86,6 +86,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
       oneCurrentCommunityVotePerContributor: true,
       robustCommunityPriceProjection: true,
       productionSharedCommunityEvidencePlane: false,
+      explainablePurchaseAutomationReadiness: true,
+      guardedAddAttemptQuantityOne: true,
+      qualifiedAddLaneRequiredBeforeSpendReservation: true,
       operatorAlertConnectorRegistryConfigured: false,
       observerRecipeWitnessRefreshConfigured: false,
       standaloneWitnessRefreshLoadsSigningKeys: false,
@@ -256,6 +259,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.standaloneBackgroundWorkerProcessReady, true);
     assert.equal(snapshot.capabilities.boundedMultiPrincipalWorker, true);
     assert.equal(snapshot.capabilities.productionWorkerFleetReady, false);
+    assert.equal(snapshot.capabilities.explainablePurchaseAutomationReadiness, true);
+    assert.equal(snapshot.capabilities.guardedAddAttemptQuantityOne, true);
+    assert.equal(snapshot.capabilities.qualifiedAddLaneRequiredBeforeSpendReservation, true);
 
     const libraryPage = await fetch(`${baseUrl}/api/v1/library?limit=1&offset=0&q=Yoink%20API`).then((response) => response.json()) as {
       items: Array<Record<string, unknown>>;
@@ -298,6 +304,12 @@ test("the loopback API serves the control center and processes a dry-run signal"
           maxAllInCents: number;
         };
         targets: Array<Record<string, unknown>>;
+        automationReadiness: {
+          contractVersion: number;
+          configuredAction: string;
+          readyForGuardedAdd: boolean;
+          guardedAddAttemptQuantity: number;
+        };
       };
     };
     assert.equal(createdPurchaseIntent.created, true);
@@ -306,6 +318,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.decisionMode, "purchase_intent");
     assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.maxSignalAgeSeconds, 120);
     assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.maxAllInCents, 6999);
+    assert.equal(createdPurchaseIntent.purchaseIntent.automationReadiness.contractVersion, 1);
+    assert.equal(createdPurchaseIntent.purchaseIntent.automationReadiness.configuredAction, "notify");
+    assert.equal(createdPurchaseIntent.purchaseIntent.automationReadiness.readyForGuardedAdd, false);
+    assert.equal(createdPurchaseIntent.purchaseIntent.automationReadiness.guardedAddAttemptQuantity, 1);
     const intentId = createdPurchaseIntent.purchaseIntent.id;
     const target = createdPurchaseIntent.purchaseIntent.targets[0];
     assert.ok(target);
@@ -425,6 +441,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(updatedMissionPage.total, 1);
     assert.equal(updatedMissionPage.items[0]?.title, "Yoink API Test Product");
     assert.equal(updatedMissionPage.items[0]?.intentRevision, 2);
+    assert.equal(
+      (updatedMissionPage.items[0]?.automationReadiness as Record<string, unknown>)?.state,
+      "guarded_add_lane_closed"
+    );
     const activity = await fetch(`${baseUrl}/api/v1/audit?limit=10&q=test_signal`).then((response) => response.json()) as {
       items: Array<Record<string, unknown>>;
       total: number;

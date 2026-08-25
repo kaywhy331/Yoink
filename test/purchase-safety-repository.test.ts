@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SignalEventInput, StrategyDefinition } from "../packages/contracts/src/index.js";
+import { TARGET_ADD_ADAPTER_VERSION, type SignalEventInput, type StrategyDefinition } from "../packages/contracts/src/index.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
-import { YoinkDatabase } from "../packages/database/src/database.js";
+import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { OfferIdentityRepository } from "../packages/database/src/offer-identity-repository.js";
 import { PurchasePolicyRepository } from "../packages/database/src/purchase-policy-repository.js";
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
@@ -79,6 +79,20 @@ function addStrategy(): StrategyDefinition {
     fulfillment: "shipping",
     maxSignalAgeSeconds: 120
   };
+}
+
+function qualifyTargetAdd(db: YoinkDatabase): void {
+  db.run(
+    `INSERT INTO retailer_adapter_qualifications(
+       tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
+       evidence_hash, qualified_at, updated_at
+     ) VALUES (?, ?, 'target', ?, 'add_to_cart', 'qualified', 'purchase-safety-target-evidence', ?, ?)`,
+    LOCAL_TENANT_ID,
+    LOCAL_USER_ID,
+    TARGET_ADD_ADAPTER_VERSION,
+    new Date(NOW).toISOString(),
+    new Date(NOW).toISOString()
+  );
 }
 
 test("purchase intents append revisions and reject stale concurrent edits", () => {
@@ -205,6 +219,7 @@ test("concurrent jobs cannot exceed periodic spend and add-only confirmation nev
       storeAllowancesCents: { target: 0, walmart: 0, amazon: 0, bestbuy: 0 }
     }, NOW);
     control.setActionsPaused(false, "Fixture live actions", NOW);
+    qualifyTargetAdd(db);
     db.run("UPDATE app_settings SET execution_mode = 'live'");
     const spend = new SpendLedgerRepository(db);
     spend.updatePolicy({
@@ -268,6 +283,7 @@ test("revising an intent cancels unleased stale work and releases its reservatio
       storeAllowancesCents: { target: 0, walmart: 0, amazon: 0, bestbuy: 0 }
     }, NOW);
     control.setActionsPaused(false, "Fixture live actions", NOW);
+    qualifyTargetAdd(db);
     db.run("UPDATE app_settings SET execution_mode = 'live'");
     const result = new SignalEngine(db).process(signal("10000005", "stale-intent-job"), NOW);
     assert.equal(result.actionJobState, "awaiting_executor");

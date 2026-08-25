@@ -122,7 +122,7 @@
               <label><span>Maximum price per item</span><span class="money-field"><b>$</b><input name="maxUnitPrice" inputmode="decimal" placeholder="0.00" required></span></label>
               <label><span>Maximum total for all items</span><span class="money-field"><b>$</b><input name="maxAllIn" inputmode="decimal" placeholder="0.00" required></span></label>
             </div>
-            <small>Yoink will reject a price above either limit. Taxes, shipping, and discounts are never guessed.</small>
+            <small>Quantity is your overall target. Every guarded cart attempt adds exactly one item. Yoink rejects a price above either limit; taxes, shipping, and discounts are never guessed.</small>
           </fieldset>
 
           <fieldset class="setup-section">
@@ -173,6 +173,7 @@
         <label><span>Plan state</span><select name="status"><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option><option value="archived">Archived</option></select></label>
         <label><span>Quantity wanted</span><input name="targetQuantity" type="number" min="1" max="99" required></label>
       </div>
+      <p class="field-help">Quantity is the overall amount you want. A qualified guarded cart attempt always adds exactly one item.</p>
       <div class="form-row">
         <label><span>Maximum all-in total</span><input name="maxAllIn" inputmode="decimal" placeholder="Optional"></label>
         <label><span>When it matches</span><select name="actionCeiling"><option value="notify">Notify me only</option><option value="add_to_cart">Add one to cart</option></select></label>

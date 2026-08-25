@@ -121,6 +121,11 @@ import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
 import { DurableSignalIngressService } from "../../../packages/engine/src/signal-ingress.js";
 import { newId } from "../../../packages/domain/src/ids.js";
 import { BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION } from "../../../packages/domain/src/background-worker-deployment.js";
+import {
+  buildPurchaseAutomationReadiness,
+  type PurchaseAutomationPlanInput,
+  type PurchaseAutomationTargetInput
+} from "../../../packages/domain/src/purchase-automation-readiness.js";
 import { buildUserSetupReadiness } from "../../../packages/domain/src/user-setup.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
@@ -246,6 +251,44 @@ function adminChangeRequestId(request: IncomingMessage): { changeRequestId?: str
   return value ? { changeRequestId: value } : {};
 }
 
+function purchaseAutomationPlanInput(plan: Record<string, unknown>): PurchaseAutomationPlanInput {
+  const intentPolicy = plan.intentPolicy && typeof plan.intentPolicy === "object" && !Array.isArray(plan.intentPolicy)
+    ? plan.intentPolicy as Record<string, unknown>
+    : {};
+  const rawTargets = Array.isArray(plan.automationTargets)
+    ? plan.automationTargets
+    : Array.isArray(plan.targets) ? plan.targets : [];
+  const targets: PurchaseAutomationTargetInput[] = rawTargets
+    .filter((target): target is Record<string, unknown> => Boolean(target) && typeof target === "object" && !Array.isArray(target))
+    .map((target) => {
+      const maxUnitPrice = target.maxUnitPriceCents === null || target.maxUnitPriceCents === undefined
+        ? null
+        : Number(target.maxUnitPriceCents);
+      return {
+        targetId: String(target.targetId ?? target.id ?? ""),
+        listingId: String(target.listingId ?? ""),
+        retailerId: String(target.retailerId ?? ""),
+        retailerName: String(target.retailerName ?? ""),
+        retailerSku: String(target.retailerSku ?? ""),
+        enabled: target.enabled === true || Number(target.enabled) === 1,
+        executionSupported: target.executionSupported === true || Number(target.executionSupported) === 1,
+        maxUnitPriceCents: Number.isFinite(maxUnitPrice) ? maxUnitPrice : null,
+        sellerPolicy: String(target.sellerPolicy ?? ""),
+        fulfillment: String(target.fulfillment ?? "")
+      };
+    });
+  return {
+    id: String(plan.id ?? ""),
+    status: String(plan.status ?? ""),
+    title: String(plan.title ?? ""),
+    targetQuantity: Number(plan.targetQuantity ?? 1),
+    actionCeiling: String(plan.actionCeiling ?? intentPolicy.actionCeiling ?? "notify"),
+    decisionMode: String(plan.decisionMode ?? intentPolicy.decisionMode ?? "strategy"),
+    expiresAt: String(plan.expiresAt ?? intentPolicy.expiresAt ?? ""),
+    targets
+  };
+}
+
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLocaleLowerCase("en-US");
   if (contentType !== "application/json") throw new Error("Requests with a body must use application/json.");
@@ -337,6 +380,43 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const sourceRuntime = new SourceRepository(db);
   const walmartDraws = new WalmartDrawRepository(db);
   const userPrivacy = new UserPrivacyRepository(db);
+  const guardedAddLanes = () => ({
+    target: qualifications.targetAddQualified(),
+    walmart: qualifications.walmartAddQualified(),
+    amazon: qualifications.amazonAddQualified(),
+    bestbuy: qualifications.bestBuyAddQualified()
+  });
+  const decoratePurchaseIntents = (
+    plans: Array<Record<string, unknown>>,
+    input: {
+      settings?: ReturnType<ControlRepository["settings"]>;
+      sources?: Array<Record<string, unknown>>;
+      deviceList?: Array<Record<string, unknown>>;
+      laneQualifications?: ReturnType<typeof guardedAddLanes>;
+      now?: number;
+    } = {}
+  ): Array<Record<string, unknown>> => {
+    const now = input.now ?? Date.now();
+    const settings = input.settings ?? control.settings();
+    const sources = input.sources ?? control.listSources();
+    const deviceList = input.deviceList ?? devices.listDevices(now);
+    const context = {
+      version,
+      executionMode: settings.executionMode,
+      actionsPaused: settings.actionsPaused,
+      sources,
+      devices: deviceList,
+      qualifications: input.laneQualifications ?? guardedAddLanes(),
+      now
+    };
+    return plans.map((plan) => {
+      const { automationTargets: _automationTargets, ...publicPlan } = plan;
+      return {
+        ...publicPlan,
+        automationReadiness: buildPurchaseAutomationReadiness(purchaseAutomationPlanInput(plan), context)
+      };
+    });
+  };
 
   // Local startup is an explicit reconciliation boundary so open, sanitized
   // repair groups that predate migration 25 receive their default operator
@@ -492,6 +572,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           oneCurrentCommunityVotePerContributor: true,
           robustCommunityPriceProjection: true,
           productionSharedCommunityEvidencePlane: false,
+          explainablePurchaseAutomationReadiness: true,
+          guardedAddAttemptQuantityOne: true,
+          qualifiedAddLaneRequiredBeforeSpendReservation: true,
           operatorAlertConnectorRegistryConfigured: Object.keys(dependencies.operatorAlertConnectorBindings ?? {}).length > 0,
           observerRecipeWitnessRefreshConfigured: dependencies.observerRecipeWitness !== undefined,
           standaloneWitnessRefreshLoadsSigningKeys: false,
@@ -579,11 +662,20 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/overview") {
-        const missions = control.listMissions(20, 0, "");
+        const now = Date.now();
+        const missions = control.listMissions(20, 0, "", true);
         const settings = control.settings();
         const sourceList = control.listSources();
         const proposalCounts = catalogGovernance.mineCounts();
-        const deviceList = devices.listDevices();
+        const deviceList = devices.listDevices(now);
+        const laneQualifications = guardedAddLanes();
+        const purchaseIntents = decoratePurchaseIntents(missions, {
+          settings,
+          sources: sourceList,
+          deviceList,
+          laneQualifications,
+          now
+        });
         json(response, 200, {
           version,
           settings,
@@ -595,9 +687,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             notifications: notifications.counts().totalNotifications,
             ...proposalCounts
           },
-          purchaseIntents: missions,
-          spend: spendLedger.summary(Date.now(), false),
+          purchaseIntents,
+          spend: spendLedger.summary(now, false),
           sources: sourceList,
+          guardedAddLanes: laneQualifications,
           setup: buildUserSetupReadiness({
             version,
             companionDownloadUrl: localExtensionReleaseEnabled
@@ -607,7 +700,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             sources: sourceList,
             products: catalog.libraryCount(),
             pendingProductProposals: proposalCounts.pendingCatalogProposals,
-            plans: missions,
+            plans: purchaseIntents,
             actionsPaused: settings.actionsPaused === true,
             executionMode: String(settings.executionMode ?? "shadow")
           }),
@@ -642,7 +735,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
         const query = String(requestUrl.searchParams.get("q") ?? "");
-        const items = control.listMissions(limit, offset, query);
+        const items = decoratePurchaseIntents(control.listMissions(limit, offset, query, true));
         json(response, 200, { items, total: control.missionCount(query), offset, limit: items.length });
         return;
       }
@@ -657,7 +750,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "GET" && purchaseIntentDetailMatch) {
         const mission = control.missionDetail(purchaseIntentDetailMatch[1] ?? "");
         if (!mission) throw new ApiError("purchase_intent_not_found", 404, "The purchase intent does not exist.");
-        json(response, 200, { purchaseIntent: mission });
+        json(response, 200, { purchaseIntent: decoratePurchaseIntents([mission])[0] });
         return;
       }
 
@@ -1246,6 +1339,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             catalog: true,
             selfServiceExactProductLinks: true,
             userSetupReadiness: true,
+            explainablePurchaseAutomationReadiness: true,
+            guardedAddAttemptQuantityOne: true,
+            qualifiedAddLaneRequiredBeforeSpendReservation: true,
             selfServiceUserDataExport: true,
             userDataExportFormat: USER_DATA_EXPORT_FORMAT,
             selfServiceAccountDeletion: false,
@@ -1529,8 +1625,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         } else {
           result = control.createConfiguredMission(body as unknown as PurchaseIntentCreateInput);
         }
+        const purchaseIntent = control.missionDetail(result.mission.id);
+        if (!purchaseIntent) throw new Error("The saved purchase intent could not be loaded.");
         json(response, result.created ? 201 : 200, {
-          purchaseIntent: control.missionDetail(result.mission.id),
+          purchaseIntent: decoratePurchaseIntents([purchaseIntent])[0],
           created: result.created
         });
         return;
@@ -1538,11 +1636,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "PATCH" && purchaseIntentDetailMatch) {
         const body = await readJson(request);
+        const purchaseIntent = control.updateMission(
+          purchaseIntentDetailMatch[1] ?? "",
+          body as unknown as MissionUpdateInput
+        );
         json(response, 200, {
-          purchaseIntent: control.updateMission(
-            purchaseIntentDetailMatch[1] ?? "",
-            body as unknown as MissionUpdateInput
-          )
+          purchaseIntent: decoratePurchaseIntents([purchaseIntent])[0]
         });
         return;
       }

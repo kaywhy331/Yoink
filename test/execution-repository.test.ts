@@ -97,6 +97,22 @@ function targetSignal(externalEventId = "target-execution-event-1"): SignalEvent
   };
 }
 
+function qualifyAddLane(db: YoinkDatabase, retailerId: string, adapterVersion: string): void {
+  db.run(
+    `INSERT INTO retailer_adapter_qualifications(
+       tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
+       evidence_hash, qualified_at, updated_at
+     ) VALUES (?, ?, ?, ?, 'add_to_cart', 'qualified', ?, ?, ?)`,
+    LOCAL_TENANT_ID,
+    LOCAL_USER_ID,
+    retailerId,
+    adapterVersion,
+    `${retailerId}-add-test-evidence`,
+    new Date(NOW).toISOString(),
+    new Date(NOW).toISOString()
+  );
+}
+
 function targetExecution(db: YoinkDatabase, directPlan = false): { execution: ExecutionRepository; deviceId: string; token: string } {
   const listing = new CatalogRepository(db).upsertListing({
     sourceConnectionId: "source_trackalacker_local",
@@ -131,6 +147,7 @@ function targetExecution(db: YoinkDatabase, directPlan = false): { execution: Ex
   } else {
     control.replaceStrategies([targetStrategy()]);
   }
+  qualifyAddLane(db, "target", TARGET_ADD_ADAPTER_VERSION);
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
   const processed = new SignalEngine(db).process(targetSignal(directPlan ? "target-direct-execution-event-1" : undefined), NOW);
   assert.equal(processed.actionJobState, "awaiting_executor");
@@ -151,17 +168,6 @@ function targetExecution(db: YoinkDatabase, directPlan = false): { execution: Ex
       targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
     }
   }, NOW + 1_000);
-  db.run(
-    `INSERT INTO retailer_adapter_qualifications(
-       tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
-       evidence_hash, qualified_at, updated_at
-     ) VALUES (?, ?, 'target', ?, 'add_to_cart', 'qualified', 'target-add-test-evidence', ?, ?)`,
-    LOCAL_TENANT_ID,
-    LOCAL_USER_ID,
-    TARGET_ADD_ADAPTER_VERSION,
-    new Date(NOW).toISOString(),
-    new Date(NOW).toISOString()
-  );
   return { execution: new ExecutionRepository(db), deviceId: paired.id, token: paired.token };
 }
 
@@ -187,6 +193,7 @@ function walmartExecution(db: YoinkDatabase): { execution: ExecutionRepository; 
     name: "Walmart add-only contract test",
     retailers: ["walmart"]
   }]);
+  qualifyAddLane(db, "walmart", WALMART_ADD_ADAPTER_VERSION);
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
   const processed = new SignalEngine(db).process({
     ...targetSignal("walmart-execution-event-1"),
@@ -215,17 +222,6 @@ function walmartExecution(db: YoinkDatabase): { execution: ExecutionRepository; 
       walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION
     }
   }, NOW + 1_000);
-  db.run(
-    `INSERT INTO retailer_adapter_qualifications(
-       tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
-       evidence_hash, qualified_at, updated_at
-     ) VALUES (?, ?, 'walmart', ?, 'add_to_cart', 'qualified', 'walmart-add-test-evidence', ?, ?)`,
-    LOCAL_TENANT_ID,
-    LOCAL_USER_ID,
-    WALMART_ADD_ADAPTER_VERSION,
-    new Date(NOW).toISOString(),
-    new Date(NOW).toISOString()
-  );
   return { execution: new ExecutionRepository(db), deviceId: paired.id };
 }
 
@@ -252,6 +248,7 @@ function amazonExecution(db: YoinkDatabase): { execution: ExecutionRepository; d
     name: "Amazon add-only contract test",
     retailers: ["amazon"]
   }]);
+  qualifyAddLane(db, "amazon", AMAZON_ADD_ADAPTER_VERSION);
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
   const processed = new SignalEngine(db).process({
     ...targetSignal("amazon-add-execution-event-1"),
@@ -280,17 +277,6 @@ function amazonExecution(db: YoinkDatabase): { execution: ExecutionRepository; d
       amazonAddAdapterVersion: AMAZON_ADD_ADAPTER_VERSION
     }
   }, NOW + 1_000);
-  db.run(
-    `INSERT INTO retailer_adapter_qualifications(
-       tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
-       evidence_hash, qualified_at, updated_at
-     ) VALUES (?, ?, 'amazon', ?, 'add_to_cart', 'qualified', 'amazon-add-test-evidence', ?, ?)`,
-    LOCAL_TENANT_ID,
-    LOCAL_USER_ID,
-    AMAZON_ADD_ADAPTER_VERSION,
-    new Date(NOW).toISOString(),
-    new Date(NOW).toISOString()
-  );
   return { execution: new ExecutionRepository(db), deviceId: paired.id };
 }
 
@@ -318,6 +304,7 @@ function bestBuyExecution(db: YoinkDatabase): { execution: ExecutionRepository; 
     name: "Best Buy add-only contract test",
     retailers: ["bestbuy"]
   }]);
+  qualifyAddLane(db, "bestbuy", BESTBUY_ADD_ADAPTER_VERSION);
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
   const processed = new SignalEngine(db).process({
     ...targetSignal("bestbuy-add-execution-event-1"),
@@ -347,17 +334,6 @@ function bestBuyExecution(db: YoinkDatabase): { execution: ExecutionRepository; 
       bestBuyAddAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION
     }
   }, NOW + 1_000);
-  db.run(
-    `INSERT INTO retailer_adapter_qualifications(
-       tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
-       evidence_hash, qualified_at, updated_at
-     ) VALUES (?, ?, 'bestbuy', ?, 'add_to_cart', 'qualified', 'bestbuy-add-test-evidence', ?, ?)`,
-    LOCAL_TENANT_ID,
-    LOCAL_USER_ID,
-    BESTBUY_ADD_ADAPTER_VERSION,
-    new Date(NOW).toISOString(),
-    new Date(NOW).toISOString()
-  );
   return { execution: new ExecutionRepository(db), deviceId: paired.id };
 }
 

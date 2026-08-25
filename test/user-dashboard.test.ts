@@ -86,7 +86,23 @@ test("guided dashboard setup does not create a plan before review and submits ex
     primaryRetailerSku: product.retailerSku,
     primaryCurrentPriceCents: 798,
     primaryMaxUnitPriceCents: 1000,
-    primaryFulfillment: "shipping"
+    primaryFulfillment: "shipping",
+    automationReadiness: {
+      contractVersion: 1,
+      state: "guarded_add_lane_closed",
+      level: "attention",
+      readyForMonitoring: true,
+      readyForGuardedAdd: false,
+      headline: "Target guarded add is not qualified yet",
+      summary: "Monitoring remains available, but no retailer click is authorized.",
+      nextActionLabel: "Review plan",
+      checks: [{
+        id: "lane",
+        label: "Qualified store lane",
+        state: "attention",
+        detail: "No enabled exact store target currently has a separately qualified add-only lane."
+      }]
+    }
   };
   const planDetail = {
     ...planSummary,
@@ -201,6 +217,9 @@ test("guided dashboard setup does not create a plan before review and submits ex
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /checkout stays manual/));
 
     await eventually(() => assert.ok(browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]')));
+    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Target guarded add is not qualified yet/);
+    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Guarded cart attempts always add exactly one item/);
+    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Qualified store lane/);
     (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
     const editDialog = browser.document.querySelector("#planDialog") as HTMLDialogElement;
     await eventually(() => assert.equal(editDialog.hasAttribute("open"), true));
