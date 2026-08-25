@@ -199,8 +199,21 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .plan-review .eyebrow { color: #8ed6b6; }
 .review-row { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-top: 1px solid rgba(255,255,255,.12); color: #b9c7c0; font-size: 11px; }
 .review-row strong { max-width: 60%; color: white; text-align: right; }
+.setup-preflight { margin-top: 15px; padding: 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 11px; background: rgba(255,255,255,.07); }
+.setup-preflight > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.setup-preflight span { color: #9fb0a8; font-size: 9px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+.setup-preflight strong { color: white; font-size: 11px; text-align: right; }
+.setup-preflight p { margin: 7px 0 0; color: #c6d3cd; font-size: 10px; line-height: 1.45; }
+.setup-preflight.ready { border-color: rgba(104,211,162,.42); background: rgba(41,145,99,.2); }
+.setup-preflight.ready span { color: #8ed6b6; }
+.setup-preflight.error { border-color: rgba(238,174,104,.45); background: rgba(156,96,26,.22); }
+.setup-preflight.error span { color: #f0bf7c; }
+.preflight-costs { display: grid !important; grid-template-columns: 1fr 1fr; gap: 7px !important; margin-top: 9px; }
+.preflight-costs small { display: block; color: #9fb0a8; font-size: 9px; }
+.preflight-costs b { display: block; margin-top: 2px; color: white; font-size: 11px; }
 .review-boundary { margin: 16px 0 0; padding: 11px; border-radius: 10px; background: rgba(255,255,255,.08); color: #dce7e2; font-size: 11px; line-height: 1.5; }
 .review-confirm { display: flex; align-items: flex-start; gap: 9px; margin-top: 18px; padding: 13px; border-radius: 12px; background: var(--green-soft); color: var(--green-dark); font-size: 12px; font-weight: 700; }
+.review-confirm:has(input:disabled) { opacity: .58; }
 .review-confirm input { width: auto; margin: 2px 0 0; accent-color: var(--green); }
 .review-confirm span { margin: 0; color: inherit; font-size: inherit; }
 .toast { position: fixed; right: 22px; bottom: 22px; max-width: min(420px, calc(100% - 44px)); padding: 13px 16px; background: #14231d; color: white; border-radius: 12px; box-shadow: var(--shadow); transform: translateY(18px); opacity: 0; pointer-events: none; transition: .2s ease; font-size: 13px; }

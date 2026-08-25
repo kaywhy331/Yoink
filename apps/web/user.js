@@ -6,6 +6,9 @@ const state = {
   proposals: [],
   editingPlan: null,
   setupProduct: null,
+  setupPreflight: null,
+  setupPreflightRevision: 0,
+  setupPreflightTimer: null,
   productLinkPreview: null,
   productLinkPreviewInput: "",
   privacy: null,
@@ -343,6 +346,128 @@ function setupAutomaticMinimum() {
   return Number.isSafeInteger(required) ? { required, taxBps, storeReserve } : null;
 }
 
+function setupDraftPayload(confirmation) {
+  const form = $("#setupForm");
+  if (!state.setupProduct) throw new Error("Choose the exact store product again before continuing.");
+  const targetQuantity = Number(form.elements.targetQuantity.value);
+  if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > 99) {
+    throw new Error("Quantity must be 1 through 99.");
+  }
+  const maxUnitPriceCents = centsInput(form.elements.maxUnitPrice.value, "The maximum item price");
+  const maxAllInCents = centsInput(form.elements.maxAllIn.value, "The maximum total");
+  if (maxUnitPriceCents === null || maxAllInCents === null) {
+    throw new Error("Enter both a maximum item price and maximum total.");
+  }
+  if (maxAllInCents < maxUnitPriceCents * targetQuantity) {
+    throw new Error("The maximum total must cover the maximum item price for every requested item.");
+  }
+  const cooldownMinutes = Number(form.elements.cooldownMinutes.value || 0);
+  if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 43_200) {
+    throw new Error("The wait between attempts must be from zero through 43,200 minutes.");
+  }
+  const actionCeiling = form.elements.actionCeiling.value;
+  if (actionCeiling === "add_to_cart" && state.setupProduct.executionSupported !== true) {
+    throw new Error("This store is monitor-only and cannot be authorized for cart actions.");
+  }
+  const expiresValue = form.elements.expiresAt.value;
+  const expiry = expiresValue ? new Date(expiresValue) : null;
+  if (expiry && !Number.isFinite(expiry.getTime())) throw new Error("Choose a valid end time or leave it blank.");
+  return {
+    contractVersion: 2,
+    listingId: form.elements.listingId.value,
+    targetQuantity,
+    maxUnitPriceCents,
+    maxAllInCents,
+    actionCeiling,
+    sellerPolicy: "first_party_only",
+    fulfillment: form.elements.fulfillment.value,
+    substitutionPolicy: "exact_only",
+    expiresAt: expiry ? expiry.toISOString() : "",
+    cooldownSeconds: cooldownMinutes * 60,
+    confirmation
+  };
+}
+
+function renderSetupPreflight(mode, headline, copy, preflight = null) {
+  const element = $("#setupPreflight");
+  element.className = `setup-preflight ${mode}`;
+  const cost = preflight?.cost;
+  const currency = cost?.currency || state.setupProduct?.currency || "USD";
+  const costs = cost ? `<div class="preflight-costs">
+    <div><small>Maximum items</small><b>${escapeHtml(money(cost.itemSubtotalCapCents, currency))}</b></div>
+    <div><small>Server-required total</small><b>${escapeHtml(money(cost.minimumAllInCents, currency))}</b></div>
+    <div><small>Tax + store reserve</small><b>${escapeHtml(money(Number(cost.taxReserveCents || 0) + Number(cost.storeReserveCents || 0), currency))}</b></div>
+    <div><small>Room within your limit</small><b>${escapeHtml(money(cost.headroomCents, currency))}</b></div>
+  </div>` : "";
+  element.innerHTML = `<div><span>${mode === "ready" ? "Server checked" : mode === "error" ? "Needs attention" : "Server check"}</span><strong>${escapeHtml(headline)}</strong></div>
+    <p>${escapeHtml(copy)}</p>${costs}`;
+}
+
+function updateSetupCreateState() {
+  const form = $("#setupForm");
+  const reviewed = form.elements.reviewed;
+  $("#createPlanButton").disabled = !state.setupPreflight || reviewed.checked !== true;
+}
+
+function invalidateSetupPreflight() {
+  clearTimeout(state.setupPreflightTimer);
+  state.setupPreflightTimer = null;
+  state.setupPreflight = null;
+  state.setupPreflightRevision += 1;
+  const reviewed = $("#setupForm").elements.reviewed;
+  reviewed.checked = false;
+  reviewed.disabled = true;
+  renderSetupPreflight("checking", "Checking your current choices", "Yoink will validate this exact plan without saving it.");
+  updateSetupCreateState();
+  return state.setupPreflightRevision;
+}
+
+function scheduleSetupPreflight(delay = 250) {
+  const revision = invalidateSetupPreflight();
+  state.setupPreflightTimer = setTimeout(() => void requestSetupPreflight(revision), delay);
+}
+
+async function requestSetupPreflight(revision) {
+  if (revision !== state.setupPreflightRevision || !state.setupProduct || !$("#setupDialog").hasAttribute("open")) return;
+  let draft;
+  try {
+    draft = setupDraftPayload("PREFLIGHT_EXACT_PURCHASE_PLAN");
+  } catch (error) {
+    if (revision === state.setupPreflightRevision) {
+      renderSetupPreflight("error", "Complete the plan details", error.message || "Review the highlighted values.");
+    }
+    return;
+  }
+  renderSetupPreflight("checking", "Checking price and automation limits", "The server is evaluating this exact draft. No purchase plan has been saved.");
+  try {
+    const result = await api("/api/v1/user/purchase-intents/preflight", {
+      method: "POST",
+      body: JSON.stringify(draft)
+    });
+    if (revision !== state.setupPreflightRevision) return;
+    const preflight = result.preflight;
+    if (!preflight || preflight.noPurchasePlanSaved !== true
+      || !/^[a-f0-9]{64}$/.test(String(preflight.preflightFingerprint || ""))
+      || !preflight.preflightedAt) {
+      throw new Error("The server did not return a complete no-write plan check.");
+    }
+    state.setupPreflight = preflight;
+    const readiness = preflight.automationReadiness || {};
+    renderSetupPreflight(
+      "ready",
+      "Ready for your review",
+      `After saving: ${readiness.headline || "the plan will use these exact limits"}. ${readiness.summary || "Fresh offer checks still apply."} No purchase plan was saved by this check.`,
+      preflight
+    );
+    $("#setupForm").elements.reviewed.disabled = false;
+    updateSetupCreateState();
+  } catch (error) {
+    if (revision !== state.setupPreflightRevision) return;
+    renderSetupPreflight("error", "Fix this before saving", error.message || "The server could not validate this exact plan.");
+    updateSetupCreateState();
+  }
+}
+
 function syncSetupAction() {
   const form = $("#setupForm");
   const adding = form.elements.actionCeiling.value === "add_to_cart";
@@ -403,8 +528,10 @@ function openSetup(listingId) {
   const existing = state.plans.find((plan) => plan.variantId === product.variantId);
   if (existing) return openPlan(existing.id);
   state.setupProduct = product;
+  state.setupPreflight = null;
   const form = $("#setupForm");
   form.reset();
+  form.elements.reviewed.disabled = true;
   form.elements.listingId.value = product.listingId;
   const hasCurrentPrice = product.currentPriceCents !== null
     && product.currentPriceCents !== undefined
@@ -424,6 +551,7 @@ function openSetup(listingId) {
   syncSetupAction();
   renderSetupReview();
   $("#setupDialog").showModal();
+  scheduleSetupPreflight(0);
   requestAnimationFrame(() => form.elements.targetQuantity.focus());
 }
 
@@ -665,8 +793,13 @@ $("#productLinkForm").addEventListener("submit", async (event) => {
 });
 
 $("#setupForm").addEventListener("input", (event) => {
+  if (event.target.name === "reviewed") {
+    updateSetupCreateState();
+    return;
+  }
   syncSetupAction();
   renderSetupReview();
+  scheduleSetupPreflight();
 });
 
 $("#setupForm").addEventListener("change", (event) => {
@@ -682,6 +815,15 @@ $("#setupForm").addEventListener("change", (event) => {
   }
   syncSetupAction();
   renderSetupReview();
+  scheduleSetupPreflight();
+});
+
+$("#setupDialog").addEventListener("close", () => {
+  clearTimeout(state.setupPreflightTimer);
+  state.setupPreflightTimer = null;
+  state.setupPreflight = null;
+  state.setupPreflightRevision += 1;
+  updateSetupCreateState();
 });
 
 $("#setupForm").addEventListener("submit", async (event) => {
@@ -689,56 +831,24 @@ $("#setupForm").addEventListener("submit", async (event) => {
   const form = event.currentTarget;
   const button = $("#createPlanButton");
   try {
-    const targetQuantity = Number(form.elements.targetQuantity.value);
-    if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > 99) {
-      throw new Error("Quantity must be 1 through 99.");
-    }
-    const maxUnitPriceCents = centsInput(form.elements.maxUnitPrice.value, "The maximum item price");
-    const maxAllInCents = centsInput(form.elements.maxAllIn.value, "The maximum total");
-    if (maxUnitPriceCents === null || maxAllInCents === null) {
-      throw new Error("Enter both a maximum item price and maximum total.");
-    }
-    if (maxAllInCents < maxUnitPriceCents * targetQuantity) {
-      throw new Error("The maximum total must cover the maximum item price for every requested item.");
-    }
-    const cooldownMinutes = Number(form.elements.cooldownMinutes.value || 0);
-    if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 43_200) {
-      throw new Error("The wait between attempts must be from zero through 43,200 minutes.");
-    }
-    const actionCeiling = form.elements.actionCeiling.value;
-    if (actionCeiling === "add_to_cart" && state.setupProduct?.executionSupported !== true) {
-      throw new Error("This store is monitor-only and cannot be authorized for cart actions.");
-    }
-    const automaticMinimum = setupAutomaticMinimum();
-    if (actionCeiling === "add_to_cart" && automaticMinimum && maxAllInCents < automaticMinimum.required) {
-      throw new Error(`Automatic cart actions need a maximum total of at least ${money(automaticMinimum.required)} under your current tax and store-fee safety reserve.`);
-    }
-    const expiresValue = form.elements.expiresAt.value;
-    const expiresAt = expiresValue ? new Date(expiresValue).toISOString() : "";
+    if (!state.setupPreflight) throw new Error("Wait for the current server check before creating this purchase plan.");
+    if (form.elements.reviewed.checked !== true) throw new Error("Review and confirm the current server-checked plan first.");
+    const draft = setupDraftPayload("CREATE_EXACT_PURCHASE_PLAN");
     button.disabled = true;
     button.textContent = "Creating safely…";
     await api("/api/v1/user/purchase-intents", {
       method: "POST",
       body: JSON.stringify({
-        contractVersion: 1,
-        listingId: form.elements.listingId.value,
-        targetQuantity,
-        maxUnitPriceCents,
-        maxAllInCents,
-        actionCeiling,
-        sellerPolicy: "first_party_only",
-        fulfillment: form.elements.fulfillment.value,
-        substitutionPolicy: "exact_only",
-        expiresAt,
-        cooldownSeconds: cooldownMinutes * 60,
-        confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+        ...draft,
+        preflightFingerprint: state.setupPreflight.preflightFingerprint,
+        preflightedAt: state.setupPreflight.preflightedAt
       })
     });
     $("#setupDialog").close();
     state.setupProduct = null;
     await refresh();
     setTab("plans");
-    toast(actionCeiling === "add_to_cart"
+    toast(draft.actionCeiling === "add_to_cart"
       ? "Purchase plan created. Its readiness card shows whether the exact store lane is armed; checkout stays manual."
       : "Purchase plan created in notification-only mode.");
   } catch (error) {
@@ -749,11 +859,14 @@ $("#setupForm").addEventListener("submit", async (event) => {
       setTab("plans");
       toast("That exact product already has a purchase plan. Review its current limits before changing it.");
     } else {
+      if (["purchase_intent_preflight_required", "purchase_intent_preflight_stale"].includes(error.code)) {
+        scheduleSetupPreflight(0);
+      }
       toast(error.message || "The purchase plan could not be created.", true);
     }
   } finally {
-    button.disabled = false;
     button.textContent = "Create purchase plan";
+    updateSetupCreateState();
   }
 });
 

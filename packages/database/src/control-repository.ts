@@ -5,6 +5,9 @@ import {
   type AppSettingsUpdateInput,
   type MissionContext,
   type PurchaseIntentCreateInput,
+  type PurchaseIntentDraftInput,
+  type PurchaseIntentPreflightInput,
+  PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS,
   type PurchaseIntentPolicy,
   type PurchaseIntentPolicyUpdateInput,
   type MissionUpdateInput,
@@ -13,6 +16,7 @@ import {
 } from "../../contracts/src/index.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import type { PurchaseAutomationPlanInput } from "../../domain/src/purchase-automation-readiness.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 import { AuditRepository } from "./audit-repository.js";
@@ -51,6 +55,40 @@ interface MissionCreationConfiguration {
   selectedSellerPolicy: SellerPolicy | "inherit";
   selectedFulfillment: Fulfillment | "inherit";
   initialPolicy: PurchaseIntentPolicyUpdateInput;
+}
+
+interface ConfiguredMissionListing {
+  variantId: string;
+  title: string;
+  retailerId: string;
+  retailerName: string;
+  retailerSku: string;
+  executionSupported: boolean;
+  currency: string;
+}
+
+interface ValidatedConfiguredMission {
+  listingId: string;
+  listing: ConfiguredMissionListing;
+  draft: PurchaseIntentDraftInput & { expiresAt: string };
+  cost: {
+    currency: string;
+    itemSubtotalCapCents: number;
+    taxReserveCents: number;
+    storeReserveCents: number;
+    minimumAllInCents: number;
+    reviewedAllInCents: number;
+    headroomCents: number;
+  };
+}
+
+export interface ConfiguredMissionPreflight {
+  contractVersion: 1;
+  noPurchasePlanSaved: true;
+  listing: Omit<ConfiguredMissionListing, "variantId"> & { listingId: string };
+  draft: PurchaseIntentDraftInput & { expiresAt: string };
+  cost: ValidatedConfiguredMission["cost"];
+  readinessPlan: PurchaseAutomationPlanInput;
 }
 
 export interface AppSettings {
@@ -94,6 +132,7 @@ const MISSION_STATUSES = new Set(["active", "paused", "satisfied", "archived"]);
 const MISSION_TARGET_POLICIES = new Set(["inherit", "first_party_only", "allow_third_party"]);
 const MISSION_TARGET_FULFILLMENTS = new Set(["inherit", "shipping", "pickup", "either", "manual", "unknown"]);
 const SETTING_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy"]);
+const MAX_POLICY_LIFETIME_MS = 366 * 24 * 60 * 60 * 1_000;
 
 function stringList(value: unknown, field: string, maximumItems = 100): string[] {
   if (!Array.isArray(value) || value.length > maximumItems || value.some((item) => typeof item !== "string")) {
@@ -350,18 +389,34 @@ export class ControlRepository {
     });
   }
 
-  createConfiguredMission(input: PurchaseIntentCreateInput, now = Date.now()): MissionEnsureResult {
-    if (input?.contractVersion !== 1) {
-      throw new PurchaseSafetyError("purchase_intent_contract_unsupported", 400, "A supported purchase-plan contract version is required.");
-    }
+  private validateConfiguredMissionDraft(input: PurchaseIntentDraftInput, now: number): ValidatedConfiguredMission {
     const listingId = cleanText(input?.listingId, 120);
-    const listing = this.db.get<{ variantId: string; retailerId: string; executionSupported: number }>(
-      `SELECT variant_id AS variantId, retailer_id AS retailerId,
-              execution_supported AS executionSupported
-       FROM listings WHERE id = ?`,
+    const row = this.db.get<{
+      variantId: string;
+      title: string;
+      retailerId: string;
+      retailerName: string;
+      retailerSku: string;
+      executionSupported: number;
+      currency: string;
+    }>(
+      `SELECT l.variant_id AS variantId, v.title, l.retailer_id AS retailerId,
+              r.display_name AS retailerName, l.retailer_sku AS retailerSku,
+              l.execution_supported AS executionSupported, l.currency
+       FROM listings l
+       JOIN variants v ON v.id = l.variant_id
+       JOIN retailers r ON r.id = l.retailer_id
+       WHERE l.id = ?`,
       listingId
     );
-    if (!listing) throw new PurchaseSafetyError("purchase_listing_not_found", 404, "The exact retailer listing no longer exists.");
+    if (!row) throw new PurchaseSafetyError("purchase_listing_not_found", 404, "The exact retailer listing no longer exists.");
+    if (row.currency !== "USD") {
+      throw new PurchaseSafetyError("purchase_intent_currency_unsupported", 409, "Guided purchase plans currently require a USD listing.");
+    }
+    const listing: ConfiguredMissionListing = {
+      ...row,
+      executionSupported: Number(row.executionSupported) === 1
+    };
     const targetQuantity = Number(input?.targetQuantity);
     const maxUnitPriceCents = Number(input?.maxUnitPriceCents);
     const maxAllInCents = Number(input?.maxAllInCents);
@@ -375,8 +430,8 @@ export class ControlRepository {
     if (typeof input?.maxAllInCents !== "number" || !Number.isSafeInteger(maxAllInCents) || maxAllInCents <= 0 || maxAllInCents > 100_000_000) {
       throw new PurchaseSafetyError("purchase_intent_invalid", 400, "The maximum all-in total must be a positive number of cents.");
     }
-    const boundedItemTotal = maxUnitPriceCents * targetQuantity;
-    if (!Number.isSafeInteger(boundedItemTotal) || boundedItemTotal > maxAllInCents) {
+    const itemSubtotalCapCents = maxUnitPriceCents * targetQuantity;
+    if (!Number.isSafeInteger(itemSubtotalCapCents) || itemSubtotalCapCents > maxAllInCents) {
       throw new PurchaseSafetyError(
         "purchase_intent_invalid",
         400,
@@ -398,42 +453,148 @@ export class ControlRepository {
     if (input.actionCeiling === "add_to_cart" && input.fulfillment !== "shipping") {
       throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Automatic cart actions currently require an explicitly selected shipping offer.");
     }
-    if (input.actionCeiling === "add_to_cart" && Number(listing.executionSupported) !== 1) {
+    if (input.actionCeiling === "add_to_cart" && !listing.executionSupported) {
       throw new PurchaseSafetyError("purchase_intent_execution_unavailable", 409, "This store is monitor-only until its add-to-cart mapping is separately qualified.");
     }
-    if (input.actionCeiling === "add_to_cart") {
-      const settings = this.settings();
-      const storeReserveCents = Math.max(0, Number(settings.storeAllowancesCents[listing.retailerId] ?? 0));
-      const requiredAllInCents = Math.ceil(
-        boundedItemTotal * (10_000 + settings.taxBps) / 10_000
-      ) + storeReserveCents;
-      if (!Number.isSafeInteger(requiredAllInCents) || maxAllInCents < requiredAllInCents) {
-        throw new PurchaseSafetyError(
-          "purchase_intent_all_in_bound_too_low",
-          400,
-          `Automatic cart actions need a maximum total of at least $${(requiredAllInCents / 100).toFixed(2)} under the current tax and store-fee safety reserve. Choose notifications only or raise the reviewed total.`
-        );
+    const expiresAtInput = cleanText(input?.expiresAt, 40);
+    let expiresAt = "";
+    if (expiresAtInput) {
+      const expiry = new Date(expiresAtInput).getTime();
+      if (!Number.isFinite(expiry) || expiry <= now || expiry > now + MAX_POLICY_LIFETIME_MS) {
+        throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Intent expiry must be a future timestamp no more than one year away.");
       }
+      expiresAt = new Date(expiry).toISOString();
+    }
+    const settings = this.settings();
+    const taxReserveCents = input.actionCeiling === "add_to_cart"
+      ? Math.ceil(itemSubtotalCapCents * Math.max(0, settings.taxBps) / 10_000)
+      : 0;
+    const storeReserveCents = input.actionCeiling === "add_to_cart"
+      ? Math.max(0, Number(settings.storeAllowancesCents[listing.retailerId] ?? 0))
+      : 0;
+    const minimumAllInCents = itemSubtotalCapCents + taxReserveCents + storeReserveCents;
+    if (!Number.isSafeInteger(minimumAllInCents) || maxAllInCents < minimumAllInCents) {
+      throw new PurchaseSafetyError(
+        "purchase_intent_all_in_bound_too_low",
+        400,
+        `Automatic cart actions need a maximum total of at least $${(minimumAllInCents / 100).toFixed(2)} under the current tax and store-fee safety reserve. Choose notifications only or raise the reviewed total.`
+      );
+    }
+    return {
+      listingId,
+      listing,
+      draft: {
+        listingId,
+        targetQuantity,
+        maxUnitPriceCents,
+        maxAllInCents,
+        actionCeiling: input.actionCeiling,
+        sellerPolicy: "first_party_only",
+        fulfillment: input.fulfillment,
+        substitutionPolicy: "exact_only",
+        expiresAt,
+        cooldownSeconds
+      },
+      cost: {
+        currency: listing.currency,
+        itemSubtotalCapCents,
+        taxReserveCents,
+        storeReserveCents,
+        minimumAllInCents,
+        reviewedAllInCents: maxAllInCents,
+        headroomCents: maxAllInCents - minimumAllInCents
+      }
+    };
+  }
+
+  previewConfiguredMission(input: PurchaseIntentPreflightInput, now = Date.now()): ConfiguredMissionPreflight {
+    if (input?.contractVersion !== 2) {
+      throw new PurchaseSafetyError("purchase_intent_contract_unsupported", 400, "A supported purchase-plan contract version is required.");
+    }
+    if (input?.confirmation !== "PREFLIGHT_EXACT_PURCHASE_PLAN") {
+      throw new PurchaseSafetyError("purchase_intent_preflight_confirmation_required", 400, "Request an explicit no-write purchase-plan preview.");
+    }
+    const validated = this.validateConfiguredMissionDraft(input, now);
+    const existing = this.db.get<{ id: string }>(
+      "SELECT id FROM missions WHERE user_id = ? AND variant_id = ?",
+      currentRequestScope().userId,
+      validated.listing.variantId
+    );
+    if (existing) {
+      throw new PurchaseSafetyError("purchase_intent_exists", 409, "A purchase plan already exists for this exact product. Open it to review the current limits.");
+    }
+    const { variantId: _variantId, ...publicListing } = validated.listing;
+    return {
+      contractVersion: 1,
+      noPurchasePlanSaved: true,
+      listing: { listingId: validated.listingId, ...publicListing },
+      draft: validated.draft,
+      cost: validated.cost,
+      readinessPlan: {
+        id: "purchase_intent_preflight",
+        status: "active",
+        title: validated.listing.title,
+        targetQuantity: validated.draft.targetQuantity,
+        actionCeiling: validated.draft.actionCeiling,
+        decisionMode: "purchase_intent",
+        expiresAt: validated.draft.expiresAt,
+        targets: [{
+          targetId: "",
+          listingId: validated.listingId,
+          retailerId: validated.listing.retailerId,
+          retailerName: validated.listing.retailerName,
+          retailerSku: validated.listing.retailerSku,
+          enabled: true,
+          executionSupported: validated.listing.executionSupported,
+          maxUnitPriceCents: validated.draft.maxUnitPriceCents,
+          sellerPolicy: "first_party_only",
+          fulfillment: validated.draft.fulfillment
+        }]
+      }
+    };
+  }
+
+  createConfiguredMission(
+    input: PurchaseIntentCreateInput,
+    now = Date.now(),
+    expectedPreflightFingerprint = ""
+  ): MissionEnsureResult {
+    if (typeof input?.contractVersion !== "number" || ![1, 2].includes(input.contractVersion)) {
+      throw new PurchaseSafetyError("purchase_intent_contract_unsupported", 400, "A supported purchase-plan contract version is required.");
     }
     if (input?.confirmation !== "CREATE_EXACT_PURCHASE_PLAN") {
       throw new PurchaseSafetyError("purchase_intent_confirmation_required", 400, "Review and confirm the exact purchase plan before creating it.");
     }
+    if (input.contractVersion === 2) {
+      const presentedFingerprint = cleanText(input.preflightFingerprint, 64);
+      const expectedFingerprint = cleanText(expectedPreflightFingerprint, 64);
+      if (!/^[a-f0-9]{64}$/.test(presentedFingerprint) || presentedFingerprint !== expectedFingerprint) {
+        throw new PurchaseSafetyError("purchase_intent_preflight_required", 409, "Your plan preview changed or is missing. Review the current server check before creating this plan.");
+      }
+      const preflightedAt = new Date(cleanText(input.preflightedAt, 40)).getTime();
+      const maximumAgeMs = PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS * 1_000;
+      if (!Number.isFinite(preflightedAt) || preflightedAt > now + 30_000 || preflightedAt < now - maximumAgeMs) {
+        throw new PurchaseSafetyError("purchase_intent_preflight_stale", 409, "Your plan preview expired. Run the server check again before creating this plan.");
+      }
+    }
+    const validated = this.validateConfiguredMissionDraft(input, now);
+    const { listingId, listing, draft } = validated;
 
     return this.db.transaction(() => {
       const result = this.ensureMissionInternal(listing.variantId, listingId, "user_guided", now, {
-        targetQuantity,
+        targetQuantity: draft.targetQuantity,
         selectedOnly: true,
-        selectedMaxUnitPriceCents: maxUnitPriceCents,
+        selectedMaxUnitPriceCents: draft.maxUnitPriceCents,
         selectedSellerPolicy: "first_party_only",
-        selectedFulfillment: input.fulfillment,
+        selectedFulfillment: draft.fulfillment,
         initialPolicy: {
-          maxAllInCents,
-          actionCeiling: input.actionCeiling,
+          maxAllInCents: draft.maxAllInCents,
+          actionCeiling: draft.actionCeiling,
           decisionMode: "purchase_intent",
           maxSignalAgeSeconds: 120,
           substitutionPolicy: "exact_only",
-          expiresAt: input.expiresAt ?? "",
-          cooldownSeconds,
+          expiresAt: draft.expiresAt,
+          cooldownSeconds: draft.cooldownSeconds,
           changeReason: "Exact purchase plan reviewed and created from the guided user setup."
         }
       });

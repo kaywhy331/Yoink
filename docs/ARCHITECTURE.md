@@ -726,6 +726,17 @@ also becomes a notification before reservation when that user's exact retailer
 adapter version is not qualified. Every “armed” projection still requires fresh
 offer and browser proof at lease/action time.
 
+Yoink 0.46 moves guided creation behind a no-purchase-write server preflight.
+The repository normalizes and validates the exact draft once for both preview
+and create, including current tax and store reserves. The API combines that
+result with the 0.45 readiness projection and returns a five-minute fingerprint
+bound to tenant, user, listing, normalized limits, readiness, and issue time.
+Contract-v2 creation recomputes the result and rejects drift or expiry before
+opening the mission transaction. The fingerprint is a consistency receipt, not
+an action capability, and is never persisted in purchase audit/outbox data.
+Contract v1 remains a backward-compatible input; the first-party UI requires
+v2 and clears user acknowledgement after every material edit.
+
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted
 structural diagnostic for explicit inspections, rehearsals, and guarded live

@@ -1014,8 +1014,7 @@ export interface PurchaseIntentPolicyUpdateInput {
   changeReason?: string;
 }
 
-export interface PurchaseIntentCreateInput {
-  contractVersion: 1;
+export interface PurchaseIntentDraftInput {
   listingId: string;
   targetQuantity: number;
   maxUnitPriceCents: number;
@@ -1026,8 +1025,28 @@ export interface PurchaseIntentCreateInput {
   substitutionPolicy: "exact_only";
   expiresAt?: string;
   cooldownSeconds: number;
+}
+
+export interface PurchaseIntentPreflightInput extends PurchaseIntentDraftInput {
+  contractVersion: 2;
+  confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN";
+}
+
+export const PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS = 300;
+
+export interface PurchaseIntentCreateInputV1 extends PurchaseIntentDraftInput {
+  contractVersion: 1;
   confirmation: "CREATE_EXACT_PURCHASE_PLAN";
 }
+
+export interface PurchaseIntentCreateInputV2 extends PurchaseIntentDraftInput {
+  contractVersion: 2;
+  preflightFingerprint: string;
+  preflightedAt: string;
+  confirmation: "CREATE_EXACT_PURCHASE_PLAN";
+}
+
+export type PurchaseIntentCreateInput = PurchaseIntentCreateInputV1 | PurchaseIntentCreateInputV2;
 
 export interface MissionUpdateInput {
   status: MissionStatus;

@@ -36,6 +36,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
   });
   const browser = dom.window;
   const posts: Array<Record<string, unknown>> = [];
+  const preflights: Array<Record<string, unknown>> = [];
   const patches: Array<Record<string, unknown>> = [];
   let created = false;
   const product = {
@@ -149,6 +150,33 @@ test("guided dashboard setup does not create a plan before review and submits ex
   Object.defineProperty(browser, "fetch", {
     configurable: true,
     value: async (path: string, options: { method?: string; body?: string } = {}) => {
+      if (path === "/api/v1/user/purchase-intents/preflight" && options.method === "POST") {
+        const draft = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
+        preflights.push(draft);
+        const itemSubtotalCapCents = Number(draft.targetQuantity) * Number(draft.maxUnitPriceCents);
+        return { ok: true, status: 200, json: async () => ({ preflight: {
+          contractVersion: 1,
+          noPurchasePlanSaved: true,
+          draft,
+          cost: {
+            currency: "USD",
+            itemSubtotalCapCents,
+            taxReserveCents: 0,
+            storeReserveCents: 0,
+            minimumAllInCents: itemSubtotalCapCents,
+            reviewedAllInCents: Number(draft.maxAllInCents),
+            headroomCents: Number(draft.maxAllInCents) - itemSubtotalCapCents
+          },
+          automationReadiness: {
+            headline: "Target guarded add is not qualified yet",
+            summary: "Monitoring continues while every retailer click stays closed."
+          },
+          preflightFingerprint: "a".repeat(64),
+          preflightedAt: "2026-08-25T18:00:00.000Z",
+          validUntil: "2026-08-25T18:05:00.000Z",
+          validForSeconds: 300
+        } }) };
+      }
       if (options.method === "POST") {
         posts.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
         created = true;
@@ -181,6 +209,10 @@ test("guided dashboard setup does not create a plan before review and submits ex
     const dialog = browser.document.querySelector("#setupDialog") as HTMLDialogElement;
     assert.equal(dialog.hasAttribute("open"), true);
     assert.equal(posts.length, 0);
+    await eventually(() => assert.equal(preflights.length, 1));
+    assert.equal(((browser.document.querySelector("#setupForm") as HTMLFormElement).elements.namedItem("reviewed") as HTMLInputElement).disabled, false);
+    assert.match(browser.document.querySelector("#setupPreflight")?.textContent ?? "", /Ready for your review/);
+    assert.match(browser.document.querySelector("#setupPreflight")?.textContent ?? "", /No purchase plan was saved/);
     assert.match(browser.document.querySelector("#setupProductSummary")?.textContent ?? "", /95280900/);
     assert.match(browser.document.querySelector("#setupProductSummary")?.textContent ?? "", /\$7\.98/);
     assert.match(browser.document.querySelector("#setupReviewRows")?.textContent ?? "", /Notify me only/);
@@ -196,11 +228,12 @@ test("guided dashboard setup does not create a plan before review and submits ex
     maxAllIn.value = "20.00";
     add.checked = true;
     add.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    reviewed.checked = true;
-    form.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
-    await eventually(() => assert.equal(posts.length, 1));
-    assert.deepEqual(posts[0], {
-      contractVersion: 1,
+    assert.equal(reviewed.disabled, true);
+    assert.equal(reviewed.checked, false);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await eventually(() => assert.equal(preflights.length, 2));
+    assert.deepEqual(preflights[1], {
+      contractVersion: 2,
       listingId: "listing_dashboard_test",
       targetQuantity: 2,
       maxUnitPriceCents: 1000,
@@ -211,6 +244,28 @@ test("guided dashboard setup does not create a plan before review and submits ex
       substitutionPolicy: "exact_only",
       expiresAt: "",
       cooldownSeconds: 900,
+      confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN"
+    });
+    assert.equal(reviewed.disabled, false);
+    reviewed.checked = true;
+    reviewed.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    assert.equal((browser.document.querySelector("#createPlanButton") as HTMLButtonElement).disabled, false);
+    form.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
+    await eventually(() => assert.equal(posts.length, 1));
+    assert.deepEqual(posts[0], {
+      contractVersion: 2,
+      listingId: "listing_dashboard_test",
+      targetQuantity: 2,
+      maxUnitPriceCents: 1000,
+      maxAllInCents: 2000,
+      actionCeiling: "add_to_cart",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      expiresAt: "",
+      cooldownSeconds: 900,
+      preflightFingerprint: "a".repeat(64),
+      preflightedAt: "2026-08-25T18:00:00.000Z",
       confirmation: "CREATE_EXACT_PURCHASE_PLAN"
     });
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));

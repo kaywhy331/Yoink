@@ -33,6 +33,8 @@ import {
   type JobState,
   type MissionUpdateInput,
   type PurchaseIntentCreateInput,
+  type PurchaseIntentPreflightInput,
+  PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS,
   type OperatorAlertAcknowledgeInput,
   type OperatorAlertConnectorInput,
   type OperatorAlertConnectorReplayInput,
@@ -103,6 +105,7 @@ import {
 import { QualificationRepository } from "../../../packages/database/src/qualification-repository.js";
 import {
   LOCAL_REQUEST_SCOPE,
+  currentRequestScope,
   runWithRequestScope,
   scopedSourceConnectionId,
   type RequestScope
@@ -119,7 +122,7 @@ import {
 } from "../../../packages/database/src/user-privacy-repository.js";
 import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
 import { DurableSignalIngressService } from "../../../packages/engine/src/signal-ingress.js";
-import { newId } from "../../../packages/domain/src/ids.js";
+import { newId, stableHash } from "../../../packages/domain/src/ids.js";
 import { BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION } from "../../../packages/domain/src/background-worker-deployment.js";
 import {
   buildPurchaseAutomationReadiness,
@@ -417,6 +420,44 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       };
     });
   };
+  const configuredPurchaseIntentPreflight = (
+    input: PurchaseIntentPreflightInput,
+    now = Date.now(),
+    issuedAt = new Date(now).toISOString()
+  ) => {
+    const preview = control.previewConfiguredMission(input, now);
+    const settings = control.settings();
+    const readiness = buildPurchaseAutomationReadiness(preview.readinessPlan, {
+      version,
+      executionMode: settings.executionMode,
+      actionsPaused: settings.actionsPaused,
+      sources: control.listSources(),
+      devices: devices.listDevices(now),
+      qualifications: guardedAddLanes(),
+      now
+    });
+    const { readinessPlan: _readinessPlan, ...publicPreview } = preview;
+    const scope = currentRequestScope();
+    const fingerprint = stableHash(
+      "yoink_purchase_intent_preflight_v1",
+      scope.tenantId,
+      scope.userId,
+      issuedAt,
+      JSON.stringify(publicPreview),
+      JSON.stringify(readiness)
+    );
+    const issuedAtTime = new Date(issuedAt).getTime();
+    return {
+      ...publicPreview,
+      automationReadiness: readiness,
+      preflightFingerprint: fingerprint,
+      preflightedAt: issuedAt,
+      validForSeconds: PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS,
+      validUntil: Number.isFinite(issuedAtTime)
+        ? new Date(issuedAtTime + PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS * 1_000).toISOString()
+        : ""
+    };
+  };
 
   // Local startup is an explicit reconciliation boundary so open, sanitized
   // repair groups that predate migration 25 receive their default operator
@@ -575,6 +616,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           explainablePurchaseAutomationReadiness: true,
           guardedAddAttemptQuantityOne: true,
           qualifiedAddLaneRequiredBeforeSpendReservation: true,
+          serverAuthoritativePurchaseIntentPreflight: true,
+          preflightBoundPurchaseIntentCreateV2: true,
           operatorAlertConnectorRegistryConfigured: Object.keys(dependencies.operatorAlertConnectorBindings ?? {}).length > 0,
           observerRecipeWitnessRefreshConfigured: dependencies.observerRecipeWitness !== undefined,
           standaloneWitnessRefreshLoadsSigningKeys: false,
@@ -1342,6 +1385,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             explainablePurchaseAutomationReadiness: true,
             guardedAddAttemptQuantityOne: true,
             qualifiedAddLaneRequiredBeforeSpendReservation: true,
+            serverAuthoritativePurchaseIntentPreflight: true,
+            preflightBoundPurchaseIntentCreateV2: true,
             selfServiceUserDataExport: true,
             userDataExportFormat: USER_DATA_EXPORT_FORMAT,
             selfServiceAccountDeletion: false,
@@ -1616,6 +1661,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/preflight") {
+        const body = await readJson(request);
+        json(response, 200, {
+          preflight: configuredPurchaseIntentPreflight(body as unknown as PurchaseIntentPreflightInput)
+        });
+        return;
+      }
+
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents") {
         const body = await readJson(request);
         let result;
@@ -1623,7 +1676,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const listing = catalog.requireListing(String(body.listingId ?? ""));
           result = control.ensureUserMission(listing.variantId, listing.id);
         } else {
-          result = control.createConfiguredMission(body as unknown as PurchaseIntentCreateInput);
+          const now = Date.now();
+          const expectedPreflightFingerprint = body.contractVersion === 2
+            ? configuredPurchaseIntentPreflight({
+                ...body,
+                contractVersion: 2,
+                confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN"
+              } as unknown as PurchaseIntentPreflightInput, now, String(body.preflightedAt ?? "")).preflightFingerprint
+            : "";
+          result = control.createConfiguredMission(
+            body as unknown as PurchaseIntentCreateInput,
+            now,
+            expectedPreflightFingerprint
+          );
         }
         const purchaseIntent = control.missionDetail(result.mission.id);
         if (!purchaseIntent) throw new Error("The saved purchase intent could not be loaded.");

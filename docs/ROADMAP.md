@@ -1,6 +1,30 @@
 # Yoink roadmap
 
-## Shipped through 0.45.0
+## Shipped through 0.46.0
+
+### Server-authoritative guided plan preflight (0.46.0)
+
+- The nontechnical purchase setup now obtains a server-authoritative preview
+  before any mission, target, intent revision, reservation, or action job is
+  created. One shared validation path covers exact listing, USD currency,
+  quantity, item/all-in caps, seller, fulfillment, substitution, cooldown,
+  expiry, packaged mapping, and current tax/store reserve
+- The response shows the maximum item subtotal, tax reserve, retailer reserve,
+  minimum all-in boundary, remaining headroom, and the same readiness result a
+  saved plan would receive. It is explicitly not stock evidence or purchase
+  authority
+- Contract version 2 binds create to a five-minute tenant/user/draft/listing/
+  cost/readiness/issuance fingerprint. The server recomputes it immediately
+  before writing; changed fields or server state and expired receipts require a
+  new preview. Version 1 stays compatible for existing clients
+- The setup dialog invalidates its acknowledgement on every material edit,
+  debounces the server check, and keeps review and creation disabled until the
+  current result passes. A server or policy error remains in the dialog with a
+  bounded recovery instruction
+- Repository, API, authorization, and real JSDOM workflow tests prove no
+  purchase-domain write during preview, fresh receipt enforcement, state-change
+  invalidation, no receipt persistence in audit/outbox, and exact version-2
+  creation. No schema migration or retailer authority change is included
 
 ### Explainable purchase automation readiness (0.45.0)
 
@@ -1016,9 +1040,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.45.0
+## Architecture assessment after 0.46.0
 
-Yoink 0.45.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.46.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1032,7 +1056,7 @@ or more autonomous behavior.
 | --- | --- | --- |
 | Primary backend database | Transactional migration-40 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, observer-witness refresh, signed operator-alert dispatch and governed exact replay, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task/connector receipts, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, signed artifact/workload identity, managed secrets, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
-| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
+| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; a narrow stable-attribute landmark can derive a tenant-scoped non-executable maintainer suggestion; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Landmarks cover only unique Add-control selector misses and cannot synthesize a complete recipe; local device/SKU evidence is not a public community quorum or independent oracle; canary is not cohort deployment; recipe evaluation is not a worker handler; the independent witness service and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
@@ -1152,8 +1176,9 @@ reach the existing qualified lease boundary without weakening it. 0.32.0 adds
 the first-run readiness projection and a safe path from an unknown product URL
 to exact normalized identity and independent catalog review without treating
 the link as stock, price, intent, or purchase evidence. The local nontechnical
-setup and intent workflow now satisfy the Phase 1 usability gate; the
-broader phase exit remains **open**
+setup and intent workflow now satisfy the Phase 1 usability gate. Version 0.46
+adds server-authoritative cost/readiness preview before creation and binds the
+first-party UI write to that fresh review. The broader phase exit remains **open**
 until style-level observers supply stable child offers, applicable region/store
 scope is live-offer verified, verified-equivalent selection has independently
 governed identity evidence, and a future checkout/order path can prove and

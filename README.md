@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.45.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.46.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,20 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.46.0 makes guided purchase setup server-authoritative before it
+writes. As the user changes an exact item, quantity, price limits, delivery,
+action, or timing, the setup dialog obtains a no-purchase-write preview of the
+normalized plan, worst-case item/tax/store reserve, remaining headroom, and the
+same readiness explanation that will appear after save. Any change clears the
+acknowledgement and disables creation until the new preview passes.
+
+The five-minute contract-v2 receipt binds the private user, normalized draft,
+accepted listing, current reserve calculation, current readiness, and issue
+instant. Creation recalculates all of it and rejects a changed or expired
+preview. The receipt is not an action capability and is not stored in audit or
+outbox payloads. Existing contract-v1 clients remain compatible. See
+[purchase-plan preflight](docs/PURCHASE_PLAN_PREFLIGHT.md).
 
 Version 0.45.0 makes every user purchase plan explain its real automation
 state. A server-derived readiness contract evaluates the current plan revision,
@@ -837,6 +851,6 @@ The suite type-checks the app, rebuilds all browser bundles, and runs database,
 signal, source, attribution, notification, adapter, service-worker recovery,
 and API tests.
 
-See [Architecture](docs/ARCHITECTURE.md), [Purchase automation readiness](docs/PURCHASE_AUTOMATION_READINESS.md), [Hosted deployment
+See [Architecture](docs/ARCHITECTURE.md), [Purchase-plan preflight](docs/PURCHASE_PLAN_PREFLIGHT.md), [Purchase automation readiness](docs/PURCHASE_AUTOMATION_READINESS.md), [Hosted deployment
 contract](docs/HOSTED_DEPLOYMENT.md), [Worker deployment attestation](docs/WORKER_DEPLOYMENT_ATTESTATION.md), [Observer witness refresh](docs/OBSERVER_WITNESS_REFRESH.md), [Hosted Chrome device transport](docs/HOSTED_DEVICE_TRANSPORT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
 migration](docs/CARTCOLLECT_MIGRATION.md), and [Roadmap](docs/ROADMAP.md).

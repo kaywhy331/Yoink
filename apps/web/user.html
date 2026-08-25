@@ -157,11 +157,15 @@
           <p class="eyebrow">Your plan</p>
           <h3 id="setupReviewTitle">Exact product</h3>
           <div id="setupReviewRows"></div>
+          <section class="setup-preflight checking" id="setupPreflight" aria-live="polite">
+            <div><span>Server check</span><strong>Waiting for complete limits</strong></div>
+            <p>Yoink will validate this exact plan without saving it.</p>
+          </section>
           <p class="review-boundary"><strong>Always manual:</strong> checkout, payment, and order submission.</p>
         </aside>
       </div>
-      <label class="review-confirm"><input name="reviewed" type="checkbox" required><span>I reviewed the exact item, store, quantity, price limits, and allowed action above.</span></label>
-      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="createPlanButton" type="submit">Create purchase plan</button></div>
+      <label class="review-confirm"><input name="reviewed" type="checkbox" required disabled><span>I reviewed the server-checked exact item, store, quantity, price limits, and allowed action above.</span></label>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="createPlanButton" type="submit" disabled>Create purchase plan</button></div>
     </form>
   </dialog>
 

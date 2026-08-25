@@ -196,6 +196,87 @@ test("guided purchase setup creates one reviewed revision with only the chosen e
   }
 });
 
+test("purchase-plan preflight returns authoritative cost and readiness inputs without writing purchase state", () => {
+  const db = new YoinkDatabase();
+  const now = new Date("2026-08-25T18:00:00.000Z").getTime();
+  try {
+    const selected = new CatalogRepository(db).upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "preflight-product",
+      sourceListingId: "preflight-target",
+      title: "Preflight Exact Fixture",
+      retailerId: "target",
+      retailerSku: "95280901",
+      canonicalUrl: "https://www.target.com/p/-/A-95280901",
+      listingStatus: "in_stock",
+      executionSupported: true,
+      msrpCents: 5000
+    }, now);
+    const control = new ControlRepository(db);
+    control.updateSettings({
+      dedupeWindowSeconds: 300,
+      affiliateMode: "disabled",
+      taxBps: 825,
+      storeAllowancesCents: { target: 250, walmart: 0, amazon: 0, bestbuy: 0 }
+    }, now);
+    const purchaseWriteCounts = () => db.get<Record<string, number>>(
+      `SELECT (SELECT COUNT(*) FROM missions) AS missions,
+              (SELECT COUNT(*) FROM mission_targets) AS targets,
+              (SELECT COUNT(*) FROM mission_intent_revisions) AS revisions,
+              (SELECT COUNT(*) FROM spend_reservations) AS reservations,
+              (SELECT COUNT(*) FROM action_jobs) AS jobs`
+    );
+    const before = purchaseWriteCounts();
+    const preflight = control.previewConfiguredMission({
+      contractVersion: 2,
+      listingId: selected.listing.id,
+      targetQuantity: 2,
+      maxUnitPriceCents: 5000,
+      maxAllInCents: 12_000,
+      actionCeiling: "add_to_cart",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      expiresAt: new Date(now + 86_400_000).toISOString(),
+      cooldownSeconds: 900,
+      confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN"
+    }, now);
+    assert.equal(preflight.noPurchasePlanSaved, true);
+    assert.equal(preflight.listing.retailerSku, "95280901");
+    assert.equal(preflight.cost.itemSubtotalCapCents, 10_000);
+    assert.equal(preflight.cost.taxReserveCents, 825);
+    assert.equal(preflight.cost.storeReserveCents, 250);
+    assert.equal(preflight.cost.minimumAllInCents, 11_075);
+    assert.equal(preflight.cost.headroomCents, 925);
+    assert.equal(preflight.readinessPlan.targets[0]?.listingId, selected.listing.id);
+    assert.deepEqual(purchaseWriteCounts(), before);
+    assert.throws(() => control.createConfiguredMission({
+      ...preflight.draft,
+      contractVersion: 2,
+      preflightFingerprint: "a".repeat(64),
+      preflightedAt: new Date(now).toISOString(),
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, now), /preview changed or is missing/);
+    assert.throws(() => control.createConfiguredMission({
+      ...preflight.draft,
+      contractVersion: 2,
+      preflightFingerprint: "a".repeat(64),
+      preflightedAt: new Date(now - 301_000).toISOString(),
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, now, "a".repeat(64)), /preview expired/);
+    assert.throws(() => control.previewConfiguredMission({
+      ...preflight.draft,
+      contractVersion: 2,
+      expiresAt: new Date(now - 1).toISOString(),
+      confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN"
+    }, now), /future timestamp/);
+    assert.deepEqual(purchaseWriteCounts(), before);
+  } finally {
+    db.close();
+  }
+});
+
 test("failed guided setup rolls back every mission, target, and policy write", () => {
   const db = new YoinkDatabase();
   const now = new Date("2026-08-24T20:00:00.000Z").getTime();

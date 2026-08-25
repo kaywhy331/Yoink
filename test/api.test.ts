@@ -27,6 +27,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(pageBody, /Products, price, and purchase preferences/);
     assert.match(pageBody, /Spending limits/);
     assert.match(pageBody, /Review before anything is enabled/);
+    assert.match(pageBody, /Server check/);
     assert.match(pageBody, /Create purchase plan/);
     assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
 
@@ -89,6 +90,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       explainablePurchaseAutomationReadiness: true,
       guardedAddAttemptQuantityOne: true,
       qualifiedAddLaneRequiredBeforeSpendReservation: true,
+      serverAuthoritativePurchaseIntentPreflight: true,
+      preflightBoundPurchaseIntentCreateV2: true,
       operatorAlertConnectorRegistryConfigured: false,
       observerRecipeWitnessRefreshConfigured: false,
       standaloneWitnessRefreshLoadsSigningKeys: false,
@@ -262,6 +265,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.explainablePurchaseAutomationReadiness, true);
     assert.equal(snapshot.capabilities.guardedAddAttemptQuantityOne, true);
     assert.equal(snapshot.capabilities.qualifiedAddLaneRequiredBeforeSpendReservation, true);
+    assert.equal(snapshot.capabilities.serverAuthoritativePurchaseIntentPreflight, true);
+    assert.equal(snapshot.capabilities.preflightBoundPurchaseIntentCreateV2, true);
 
     const libraryPage = await fetch(`${baseUrl}/api/v1/library?limit=1&offset=0&q=Yoink%20API`).then((response) => response.json()) as {
       items: Array<Record<string, unknown>>;
@@ -274,20 +279,83 @@ test("the loopback API serves the control center and processes a dry-run signal"
       total: number;
     };
     assert.equal(missionPage.total, 0);
+    const guidedDraft = {
+      contractVersion: 2 as const,
+      listingId: String(libraryPage.items[0]?.listingId ?? ""),
+      targetQuantity: 1,
+      maxUnitPriceCents: 6999,
+      maxAllInCents: 6999,
+      actionCeiling: "notify" as const,
+      sellerPolicy: "first_party_only" as const,
+      fulfillment: "shipping" as const,
+      substitutionPolicy: "exact_only" as const,
+      cooldownSeconds: 900,
+      confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN" as const
+    };
+    const preflightResponse = await fetch(`${baseUrl}/api/v1/user/purchase-intents/preflight`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify(guidedDraft)
+    });
+    assert.equal(preflightResponse.status, 200);
+    const { preflight } = await preflightResponse.json() as { preflight: {
+      contractVersion: number;
+      noPurchasePlanSaved: boolean;
+      preflightFingerprint: string;
+      preflightedAt: string;
+      validUntil: string;
+      cost: { itemSubtotalCapCents: number; minimumAllInCents: number; headroomCents: number };
+      automationReadiness: { configuredAction: string; guardedAddAttemptQuantity: number };
+    } };
+    assert.equal(preflight.contractVersion, 1);
+    assert.equal(preflight.noPurchasePlanSaved, true);
+    assert.match(preflight.preflightFingerprint, /^[a-f0-9]{64}$/);
+    assert.ok(new Date(preflight.validUntil).getTime() > new Date(preflight.preflightedAt).getTime());
+    assert.deepEqual(preflight.cost, {
+      itemSubtotalCapCents: 6999,
+      taxReserveCents: 0,
+      storeReserveCents: 0,
+      minimumAllInCents: 6999,
+      reviewedAllInCents: 6999,
+      headroomCents: 0,
+      currency: "USD"
+    });
+    assert.equal(preflight.automationReadiness.configuredAction, "notify");
+    assert.equal(preflight.automationReadiness.guardedAddAttemptQuantity, 1);
+    assert.equal((await fetch(`${baseUrl}/api/v1/missions?limit=1&offset=0&q=Yoink%20API`).then((response) => response.json()) as { total: number }).total, 0);
+    const mismatchedPreflight = await fetch(`${baseUrl}/api/v1/user/purchase-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        ...guidedDraft,
+        confirmation: "CREATE_EXACT_PURCHASE_PLAN",
+        preflightFingerprint: "0".repeat(64),
+        preflightedAt: preflight.preflightedAt
+      })
+    });
+    assert.equal(mismatchedPreflight.status, 409);
+    assert.equal((await mismatchedPreflight.json() as { error: string }).error, "purchase_intent_preflight_required");
+    db.run("UPDATE source_connections SET status = 'disconnected' WHERE id = 'source_trackalacker_local'");
+    const changedContextPreflight = await fetch(`${baseUrl}/api/v1/user/purchase-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        ...guidedDraft,
+        confirmation: "CREATE_EXACT_PURCHASE_PLAN",
+        preflightFingerprint: preflight.preflightFingerprint,
+        preflightedAt: preflight.preflightedAt
+      })
+    });
+    assert.equal(changedContextPreflight.status, 409);
+    assert.equal((await changedContextPreflight.json() as { error: string }).error, "purchase_intent_preflight_required");
+    db.run("UPDATE source_connections SET status = 'connected' WHERE id = 'source_trackalacker_local'");
     const purchaseIntentResponse = await fetch(`${baseUrl}/api/v1/user/purchase-intents`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        contractVersion: 1,
-        listingId: String(libraryPage.items[0]?.listingId ?? ""),
-        targetQuantity: 1,
-        maxUnitPriceCents: 6999,
-        maxAllInCents: 6999,
-        actionCeiling: "notify",
-        sellerPolicy: "first_party_only",
-        fulfillment: "shipping",
-        substitutionPolicy: "exact_only",
-        cooldownSeconds: 900,
+        ...guidedDraft,
+        preflightFingerprint: preflight.preflightFingerprint,
+        preflightedAt: preflight.preflightedAt,
         confirmation: "CREATE_EXACT_PURCHASE_PLAN"
       })
     });
@@ -322,6 +390,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(createdPurchaseIntent.purchaseIntent.automationReadiness.configuredAction, "notify");
     assert.equal(createdPurchaseIntent.purchaseIntent.automationReadiness.readyForGuardedAdd, false);
     assert.equal(createdPurchaseIntent.purchaseIntent.automationReadiness.guardedAddAttemptQuantity, 1);
+    const durableReceipts = JSON.stringify({
+      audit: db.all("SELECT data_json FROM audit_events"),
+      outbox: db.all("SELECT payload_json FROM outbox_events")
+    });
+    assert.equal(durableReceipts.includes(preflight.preflightFingerprint), false);
     const intentId = createdPurchaseIntent.purchaseIntent.id;
     const target = createdPurchaseIntent.purchaseIntent.targets[0];
     assert.ok(target);
