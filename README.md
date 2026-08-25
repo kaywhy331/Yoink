@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.36.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.37.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,27 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.37.0 adds privacy-bounded repair intelligence to the immediate
+extension diagnostic path. On an unblocked exact product page, a packaged
+observer that misses one otherwise recognizable Add control may report at most
+five locally unique structural landmarks. Each landmark is limited to a fixed
+button-like element kind and one stable `data-*`, button-state, or `name`
+attribute. Page HTML/text, IDs/classes, URLs, SKUs, product/form values, dynamic
+numeric/hash identifiers, credentials, account/contact data, and
+checkout/payment vocabulary remain excluded. The service worker and server
+independently reconstruct and validate the allowlist before anything is
+retained.
+
+The repair queue aggregates matching landmarks by exact layout, distinct
+paired device, and distinct retailer SKU, then derives a non-executable
+read-only selector suggestion for maintainers. Three devices and two exact SKUs
+mean only **maintainer review ready**—never trusted, published, or safe to run.
+Suggestions cannot enter the recipe registry automatically and still require
+reproduction, quarantine, trials, signing, rollback protection, and the hosted
+witness gate. This is a tenant-scoped correction aid, not the future
+cross-account community trust plane, and it widens no retailer action. See
+[adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md).
 
 Version 0.36.0 makes authenticated TrackaLacker signal intake durable before
 evaluation. The Chrome device request validates and normalizes the packaged
@@ -605,15 +626,15 @@ SKU from a current or legacy product URL, explicit visible `Sold by Best Buy`
 evidence in the same bounded offer scope as one Add-to-Cart control and price,
 selected shipping, and quantity one. `Sold & shipped by` marketplace offers,
 pickup-selected offers, high-demand queues, location/account/security blocks,
-and ambiguous or conflicting SKU evidence stop before mutation. Observer v4
+and ambiguous or conflicting SKU evidence stop before mutation. Observer v5
 recognizes current Best Buy test/automation attributes and safely reports when
 a native Add-intent control exists outside the known selector set, allowing the
 sanitized repair queue to distinguish selector drift from a genuinely missing
 control. It also binds a seller name represented by bounded accessibility
 metadata inside the exact seller element. Explicit in-store-only products are
 manual/local evidence with unknown global availability rather than false
-out-of-stock evidence. Migration 19 retires every earlier Best Buy
-qualification, requiring fresh v4 evidence and a v3 rehearsal before explicit
+out-of-stock evidence. Migration 28 retires inherited Best Buy
+qualification, requiring fresh v5 evidence and a v3 rehearsal before explicit
 activation. Its empty-cart, at-most-once receipt, immediate offer revalidation,
 and exact single-line cart proof match the other guarded lanes. A historical
 repair group is superseded only by a strictly newer packaged adapter's later
@@ -660,5 +681,5 @@ signal, source, attribution, notification, adapter, service-worker recovery,
 and API tests.
 
 See [Architecture](docs/ARCHITECTURE.md), [Hosted deployment
-contract](docs/HOSTED_DEPLOYMENT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
+contract](docs/HOSTED_DEPLOYMENT.md), [Durable signal ingress](docs/SIGNAL_INGRESS.md), [Adapter repair intelligence](docs/ADAPTER_REPAIR_INTELLIGENCE.md), [Data portability and recovery](docs/DATA_PORTABILITY.md), [CartCollect browser-safety
 migration](docs/CARTCOLLECT_MIGRATION.md), and [Roadmap](docs/ROADMAP.md).

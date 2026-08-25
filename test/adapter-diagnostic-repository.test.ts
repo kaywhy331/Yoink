@@ -162,6 +162,66 @@ test("adapter diagnostics persist only normalized structural evidence and group 
   }
 });
 
+test("repair landmarks aggregate exact-SKU and distinct-device evidence without becoming executable", () => {
+  const db = new YoinkDatabase();
+  try {
+    const devices = [pairedDevice(db), pairedDevice(db), pairedDevice(db)];
+    const repository = new AdapterDiagnosticRepository(db);
+    const repairLayout = layout({
+      scopeKind: "none",
+      fulfillmentShape: "shipping",
+      addControlCount: 0,
+      genericAddIntentCount: 1,
+      scopedControlCount: 0,
+      explicitSkuInputCount: 0,
+      exactSkuInputCount: 0,
+      variationSkuCount: 0,
+      canonicalOfferInputCount: 0,
+      canonicalOfferDistinctCount: 0,
+      alternateOfferInputCount: 0,
+      alternateOfferDistinctCount: 0,
+      repairLandmarks: [{
+        field: "addControl",
+        elementKind: "role_button",
+        attribute: "data-testid",
+        value: "pdp-add-to-cart-control",
+        selector: "body *",
+        textContent: "Private Fixture"
+      } as never]
+    });
+    for (const [index, retailerSku] of ["6612619", "6669690", "6528565"].entries()) {
+      repository.record(devices[index]?.id ?? "", diagnostic({
+        observedAt: new Date(NOW + 1_000 + index).toISOString(),
+        retailerId: "bestbuy",
+        retailerSku,
+        adapterVersion: BESTBUY_OBSERVER_VERSION,
+        failureStage: "add_control",
+        reasonCode: "add_control_selector_miss",
+        layout: repairLayout
+      }), NOW + 2_000 + index);
+    }
+    const item = repository.listRepairQueue()[0];
+    assert.equal(item?.status, "open");
+    assert.deepEqual(item?.repairSuggestions, [{
+      field: "addControl",
+      selector: "[role='button'][data-testid='pdp-add-to-cart-control']",
+      mode: "disabled_state",
+      occurrenceCount: 3,
+      distinctDeviceCount: 3,
+      distinctSkuCount: 3,
+      minimumDeviceCount: 3,
+      minimumSkuCount: 2,
+      reviewState: "maintainer_ready",
+      executable: false
+    }]);
+    const durable = JSON.stringify(db.all("SELECT layout_json FROM retailer_adapter_diagnostics"));
+    assert.equal(durable.includes("Private Fixture"), false);
+    assert.equal(durable.includes("selector"), false);
+  } finally {
+    db.close();
+  }
+});
+
 test("adapter diagnostics reject malformed, stale, secret-shaped, and inconsistent input", () => {
   const db = new YoinkDatabase();
   try {
@@ -172,6 +232,19 @@ test("adapter diagnostics reject malformed, stale, secret-shaped, and inconsiste
     assert.throws(() => repository.record(device.id, diagnostic({ observedAt: new Date(NOW - 11 * 60_000).toISOString() }), NOW), /stale/);
     assert.throws(() => repository.record(device.id, diagnostic({ outcome: "passed" }), NOW + 2_000), /inconsistent/);
     assert.throws(() => repository.record(device.id, diagnostic({ layout: layout({ canonicalOfferDistinctCount: 3 }) }), NOW + 2_000), /counts/);
+    assert.throws(() => repository.record(device.id, diagnostic({ layout: layout({
+      addControlCount: 0,
+      genericAddIntentCount: 1,
+      repairLandmarks: [{ field: "addControl", elementKind: "button", attribute: "data-testid", value: "account-add-to-cart" }]
+    }) }), NOW + 2_000), /privacy bounded/);
+    assert.throws(() => repository.record(device.id, diagnostic({ layout: layout({
+      addControlCount: 0,
+      genericAddIntentCount: 1,
+      repairLandmarks: [{ field: "addControl", elementKind: "button", attribute: "data-testid", value: "add-to-cart-private-fixture" }]
+    }) }), NOW + 2_000), /privacy bounded/);
+    assert.throws(() => repository.record(device.id, diagnostic({ layout: layout({
+      repairLandmarks: [{ field: "addControl", elementKind: "button", attribute: "data-testid", value: "pdp-add-to-cart" }]
+    }) }), NOW + 2_000), /selector-miss layout/);
     assert.throws(() => repository.record(device.id, diagnostic({ adapterVersion: "amazon-observer-spoofed" }), NOW + 2_000), /version/);
     assert.throws(() => repository.record("missing_device", diagnostic(), NOW + 2_000), /unavailable/);
     assert.equal(repository.counts().adapterDiagnosticEvents, 0);

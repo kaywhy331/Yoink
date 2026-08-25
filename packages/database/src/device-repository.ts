@@ -25,6 +25,7 @@ export interface DeviceCapabilities {
   exactSelectedOfferEvidence: boolean;
   observerRecipeShadow: boolean;
   durableAdapterDiagnostics: boolean;
+  privacyBoundedRepairLandmarks: boolean;
   walmartDrawReadOnly: boolean;
   trackalackerPush: boolean;
   trackalackerCatalogSync: boolean;
@@ -107,6 +108,7 @@ function capabilities(input: Partial<DeviceCapabilities> | undefined): DeviceCap
     exactSelectedOfferEvidence: input?.exactSelectedOfferEvidence === true,
     observerRecipeShadow: input?.observerRecipeShadow === true,
     durableAdapterDiagnostics: input?.durableAdapterDiagnostics === true,
+    privacyBoundedRepairLandmarks: input?.privacyBoundedRepairLandmarks === true,
     walmartDrawReadOnly: input?.walmartDrawReadOnly === true,
     trackalackerPush: input?.trackalackerPush === true,
     trackalackerCatalogSync: input?.trackalackerCatalogSync === true,

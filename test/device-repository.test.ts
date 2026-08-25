@@ -67,6 +67,7 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
         communityReadOnlyEvidence: true,
         exactSelectedOfferEvidence: true,
         durableAdapterDiagnostics: true,
+        privacyBoundedRepairLandmarks: true,
         walmartDrawReadOnly: true,
         trackalackerPush: true,
         trackalackerCatalogSync: true,
@@ -88,6 +89,7 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
     assert.equal(heartbeat.capabilities.communityReadOnlyEvidence, true);
     assert.equal(heartbeat.capabilities.exactSelectedOfferEvidence, true);
     assert.equal(heartbeat.capabilities.durableAdapterDiagnostics, true);
+    assert.equal(heartbeat.capabilities.privacyBoundedRepairLandmarks, true);
     assert.equal(heartbeat.capabilities.walmartDrawReadOnly, true);
     assert.equal(heartbeat.capabilities.trackalackerPush, true);
     assert.equal(heartbeat.capabilities.trackalackerCatalogSync, true);
@@ -110,6 +112,7 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
     assert.equal(downgraded.capabilities.amazonAddAdapterVersion, "");
     assert.equal(downgraded.capabilities.bestBuyAddOnly, false);
     assert.equal(downgraded.capabilities.bestBuyAddAdapterVersion, "");
+    assert.equal(downgraded.capabilities.privacyBoundedRepairLandmarks, false);
     assert.equal(devices.listDevices(NOW + 2_500)[0]?.online, true);
     assert.equal(devices.revoke(paired.id, NOW + 3_000), true);
     assert.equal(devices.authenticate(paired.token), null);

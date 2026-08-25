@@ -160,6 +160,25 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
 ] as const;
 export type RetailerAdapterDiagnosticReasonCode = (typeof RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES)[number];
 
+export const RETAILER_ADAPTER_REPAIR_LANDMARK_ATTRIBUTES = [
+  "data-testid", "data-test-id", "data-automation-id", "data-button-state", "name"
+] as const;
+export type RetailerAdapterRepairLandmarkAttribute =
+  (typeof RETAILER_ADAPTER_REPAIR_LANDMARK_ATTRIBUTES)[number];
+
+/**
+ * A deliberately narrow structural landmark for a missed read-only add
+ * control. It contains no DOM text, class list, ID, URL, product value, or
+ * arbitrary selector. The server independently validates this shape before it
+ * derives a non-executable maintainer suggestion.
+ */
+export interface RetailerAdapterRepairLandmark {
+  field: "addControl";
+  elementKind: "button" | "input" | "role_button";
+  attribute: RetailerAdapterRepairLandmarkAttribute;
+  value: string;
+}
+
 export interface RetailerAdapterLayoutEvidence {
   schemaVersion: 1;
   pageKind: "product" | "other";
@@ -181,6 +200,8 @@ export interface RetailerAdapterLayoutEvidence {
   quantityControlCount: number;
   securityChallenge: boolean;
   interactiveBlock: "" | "auth" | "mfa" | "location" | "membership" | "queue" | "high_demand" | "unknown";
+  /** Optional additive evidence emitted only for locally unique, stable structural attributes. */
+  repairLandmarks?: RetailerAdapterRepairLandmark[];
 }
 
 export interface RetailerAdapterDiagnosticInput {

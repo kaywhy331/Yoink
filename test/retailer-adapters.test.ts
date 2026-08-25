@@ -35,6 +35,39 @@ test("all generic retailer observers are structurally read-only", () => {
   assert.doesNotMatch(SOURCE, /location\s*=/);
 });
 
+test("selector misses expose only a locally unique privacy-bounded structural landmark", () => {
+  const url = "https://www.walmart.com/ip/example/17354421975";
+  const document = new JSDOM(`<main data-us-item-id="17354421975">
+    <meta itemprop="price" content="19.99">
+    <p data-testid="seller-display-name">Sold and shipped by Walmart</p>
+    <p>Shipping available</p>
+    <div role="button" data-testid="pdp-add-to-cart-control" aria-label="Add Private Fixture to cart">Add to cart</div>
+  </main>`, { url }).window.document;
+  const attempt = collectRetailerShadowAttempt(document, url, "walmart", "shipping");
+  assert.equal(attempt.diagnostic.reasonCode, "add_control_selector_miss");
+  assert.equal(attempt.diagnostic.layout.addControlCount, 0);
+  assert.equal(attempt.diagnostic.layout.genericAddIntentCount, 1);
+  assert.deepEqual(attempt.diagnostic.layout.repairLandmarks, [{
+    field: "addControl",
+    elementKind: "role_button",
+    attribute: "data-testid",
+    value: "pdp-add-to-cart-control"
+  }]);
+  const serialized = JSON.stringify(attempt.diagnostic.layout.repairLandmarks);
+  assert.equal(serialized.includes("Private Fixture"), false);
+  assert.equal(serialized.includes("17354421975"), false);
+
+  const unsafe = new JSDOM(`<main>
+    <div role="button" data-testid="add-to-cart-17354421975">Add item to cart</div>
+    <div role="button" name="checkout-add-to-cart">Add item to cart</div>
+    <div role="button" data-test-id="add-to-cart-private-fixture">Add item to cart</div>
+    <div role="button" data-automation-id="pdp-add-to-cart">Add first item to cart</div>
+    <div role="button" data-automation-id="pdp-add-to-cart">Add second item to cart</div>
+  </main>`, { url }).window.document;
+  const layout = retailerAdapterLayoutEvidence(unsafe, url, "walmart", "17354421975");
+  assert.deepEqual(layout.repairLandmarks, undefined);
+});
+
 test("retailer URL identity extraction is exact and rejects foreign origins", () => {
   assert.equal(extractRetailerSku("walmart", "https://www.walmart.com/ip/example/17354421975"), "17354421975");
   assert.equal(extractRetailerSku("amazon", "https://www.amazon.com/dp/B0GYTRYV7P"), "B0GYTRYV7P");

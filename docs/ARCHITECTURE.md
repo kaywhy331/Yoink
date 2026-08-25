@@ -485,6 +485,26 @@ authorized corrected-message retry atomically resets the inbox attempt budget,
 writes audit/outbox evidence, and enqueues or defers a wake. Neither that
 control nor signal evaluation carries Chrome mutation capability.
 
+Yoink 0.37.0 extends the existing authenticated diagnostic path with a narrow
+structural repair landmark. The browser adapter considers it only for an
+unblocked exact product page where no packaged Add selector matched but one
+visible, non-merchandising button-like element still has generic Add intent.
+The landmark contains an element kind plus one allowlisted stable attribute;
+it never contains a selector, HTML/text, ID/class, DOM path, URL, SKU, product
+value, or form value. Attribute values that look dynamic, sensitive, account-
+bound, checkout/payment-related, or order-capable are rejected.
+
+The service worker rebuilds this optional object while normalizing its durable
+diagnostic, and the server independently validates it against layout counts and
+block state. The server alone derives a quoted read-only selector for the admin
+projection. Matching open failures aggregate distinct paired devices and exact
+retailer SKUs; three devices and two SKUs mark a suggestion ready for
+maintainer review, never execution. Suggestions cannot write the observer
+registry or bypass quarantine, trials, signed package-rooted trust, rollback,
+kill switch, or external witness enforcement. Because aggregation remains
+tenant/user scoped, it is not yet a cross-account community quorum or an
+independent correctness oracle.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and

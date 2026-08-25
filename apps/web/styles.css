@@ -178,6 +178,7 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 80
 .adapter-repair-row p { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .adapter-repair-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 9px; color: var(--subtle); font-size: 9px; }
 .adapter-repair-meta time { margin-left: auto; }
+.adapter-repair-row code { max-width: 100%; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 9px; overflow-wrap: anywhere; }
 .qualification-panel { margin-top: 16px; }
 .qualification-panel .panel-heading p { max-width: 760px; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .qualification-summary { padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }

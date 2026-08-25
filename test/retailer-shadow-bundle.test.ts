@@ -117,6 +117,30 @@ test("the production generic observer bundle rejects category and search pages t
   }
 });
 
+test("the production observer bundle emits only a stable structural repair landmark on a selector miss", () => {
+  const url = "https://www.walmart.com/ip/example/17354421975";
+  const context = bundleContext(`<main data-us-item-id="17354421975">
+    <meta itemprop="price" content="19.99">
+    <p data-testid="seller-display-name">Sold and shipped by Walmart</p>
+    <p>Shipping available</p>
+    <div role="button" data-testid="pdp-add-to-cart-control" aria-label="Add Private Fixture to cart">Add to cart</div>
+  </main>`, url);
+  const result = runInContext(
+    `YoinkRetailerShadow.collectRetailerShadowAttempt(document, location.href, "walmart", "shipping")`,
+    context
+  ) as { diagnostic: { reasonCode: string; layout: Record<string, unknown> } };
+  const plain = JSON.parse(JSON.stringify(result)) as typeof result;
+  assert.equal(plain.diagnostic.reasonCode, "add_control_selector_miss");
+  assert.deepEqual(plain.diagnostic.layout.repairLandmarks, [{
+    field: "addControl",
+    elementKind: "role_button",
+    attribute: "data-testid",
+    value: "pdp-add-to-cart-control"
+  }]);
+  assert.equal(JSON.stringify(plain.diagnostic.layout).includes("Private Fixture"), false);
+  assert.equal(JSON.stringify(plain.diagnostic.layout).includes("17354421975"), false);
+});
+
 test("the production observer bundle rejects live edge shells without publishing false stock", () => {
   const cases = [
     ["pbandai", "pbandai-page-unavailable.html", "https://p-bandai.com/us/item/N2884150001", "interactive_unknown"],

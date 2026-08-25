@@ -33,6 +33,13 @@ does not lose intake, but accepted signals remain queued. Health exposes
 admin worker projection exposes scoped aggregate state and payload-free dead
 letters. This does not make external SQLite a production transport.
 
+Version 0.37 adds tenant-scoped, privacy-bounded structural landmarks to the
+existing adapter diagnostic channel. The resulting selector is an admin-only,
+non-executable maintainer suggestion. Its three-device/two-SKU threshold is not
+a cross-account community quorum, and hosted deployments must not aggregate
+private tenant repair ledgers into a public rule without the separate shared
+evidence, reputation, deletion, governance, and independent-validation plane.
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting

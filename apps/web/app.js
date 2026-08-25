@@ -348,9 +348,15 @@ function renderAdapterRepairQueue() {
     const stage = String(item.failureStage || "unknown").replaceAll("_", " ");
     const reason = String(item.reasonCode || "unknown").replaceAll("_", " ");
     const fingerprint = String(item.layoutFingerprint || "").slice(0, 12);
+    const suggestions = Array.isArray(item.repairSuggestions) ? item.repairSuggestions.slice(0, 3) : [];
+    const suggestionRows = suggestions.map((suggestion) => {
+      const ready = suggestion.reviewState === "maintainer_ready";
+      return `<div class="card-meta"><span class="tag ${ready ? "warning" : ""}">${ready ? "Maintainer review ready" : "Collecting evidence"}</span><span class="tag">non-executable</span><code>${escapeHtml(suggestion.selector || "")}</code><span>${Number(suggestion.distinctDeviceCount || 0).toLocaleString()}/${Number(suggestion.minimumDeviceCount || 3).toLocaleString()} devices · ${Number(suggestion.distinctSkuCount || 0).toLocaleString()}/${Number(suggestion.minimumSkuCount || 2).toLocaleString()} exact SKUs</span></div>`;
+    }).join("");
     return `<article class="adapter-repair-row ${isOpen ? "open" : "recovered"}">
       <div>${statusDot(isOpen ? "bad" : "good")}<div><h3>${escapeHtml(retailer)} · ${escapeHtml(operation)} · ${escapeHtml(item.latestRetailerSku || "unknown SKU")}</h3><p>${escapeHtml(stage)} · ${escapeHtml(reason)} · layout ${escapeHtml(fingerprint || "unknown")}</p></div></div>
       <div class="adapter-repair-meta"><span class="tag ${isOpen ? "bad" : "good"}">${isOpen ? "Repair needed" : "Recovered"}</span><span>${Number(item.occurrenceCount || 0).toLocaleString()} occurrences · ${Number(item.affectedSkuCount || 0).toLocaleString()} SKUs${item.domChangedSeen ? " · DOM changed during retry" : ""}</span><time>${escapeHtml(relativeTime(item.lastSeenAt))}</time></div>
+      ${suggestionRows}
     </article>`;
   }).join("") : empty("No adapter repair incidents have been captured. The server is listening for sanitized extension diagnostics.");
 }

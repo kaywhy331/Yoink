@@ -499,6 +499,7 @@ interface HarnessOptions {
   trackalackerPush?: boolean;
   visibleTrackalackerFallback?: boolean;
   amazonHydrationRetry?: boolean;
+  observerRepairLandmark?: boolean;
   retailerObserverFailure?:
     | "bundle_injection"
     | "execution"
@@ -854,6 +855,38 @@ function harness(options: HarnessOptions = {}) {
           }
           if (options.retailerObserverFailure === "invalid_contract") {
             return [{ frameId: 0, result: { ok: true, observation: AMAZON_OBSERVATION, diagnostic: null } }];
+          }
+          if (options.observerRepairLandmark) {
+            const observation = {
+              ...AMAZON_OBSERVATION,
+              availability: "out_of_stock",
+              fulfillment: "unknown",
+              addControlActionable: false,
+              purchaseRouteReady: false,
+              routeReasonCode: "offer_not_actionable"
+            };
+            const diagnostic = {
+              ...diagnosticFor(AMAZON_OBSERVATION),
+              outcome: "failed",
+              failureStage: "add_control",
+              reasonCode: "add_control_selector_miss",
+              rawDom: "DO_NOT_SEND_DOM",
+              layout: {
+                ...diagnosticFor(AMAZON_OBSERVATION).layout,
+                addControlCount: 0,
+                genericAddIntentCount: 1,
+                scopedControlCount: 0,
+                repairLandmarks: [{
+                  field: "addControl",
+                  elementKind: "role_button",
+                  attribute: "data-testid",
+                  value: "pdp-add-to-cart-control",
+                  textContent: "DO_NOT_SEND_TEXT"
+                }],
+                pageText: "DO_NOT_SEND_PAGE"
+              }
+            };
+            return [{ frameId: 0, result: { ok: true, observation, diagnostic } }];
           }
           amazonObservationAttempts += 1;
           if (options.amazonHydrationRetry && amazonObservationAttempts === 1) {
@@ -1430,6 +1463,29 @@ test("the service worker records one sanitized Amazon exact-offer observation", 
   assert.equal(JSON.stringify(diagnosticBody).includes("offerListingID"), false);
 });
 
+test("the service worker transports only the allowlisted structural landmark from a selector miss", async () => {
+  const runtime = harness({ activeUrl: AMAZON_PRODUCT_URL, observerRepairLandmark: true });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  const post = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/amazon"));
+  assert.ok(post);
+  const body = JSON.parse(String(post.options.body)) as { layout: Record<string, unknown>; reasonCode: string };
+  assert.equal(body.reasonCode, "add_control_selector_miss");
+  assert.deepEqual(body.layout.repairLandmarks, [{
+    field: "addControl",
+    elementKind: "role_button",
+    attribute: "data-testid",
+    value: "pdp-add-to-cart-control"
+  }]);
+  const serialized = JSON.stringify(body);
+  assert.equal(serialized.includes("DO_NOT_SEND"), false);
+  assert.equal(serialized.includes("textContent"), false);
+  assert.equal(serialized.includes("pageText"), false);
+  assert.equal(serialized.includes("rawDom"), false);
+  assert.equal((body.layout.repairLandmarks as Array<Record<string, unknown>>)
+    .some((landmark) => "selector" in landmark), false);
+});
+
 for (const [failure, reasonCode] of [
   ["bundle_injection", "observer_bundle_injection_failed"],
   ["execution", "observer_execution_failed"],
@@ -1553,6 +1609,7 @@ test("startup drops stale diagnostics and advertises durable delivery without po
   assert.ok(heartbeat);
   const heartbeatBody = JSON.parse(String(heartbeat.options.body)) as { capabilities: Record<string, unknown> };
   assert.equal(heartbeatBody.capabilities.durableAdapterDiagnostics, true);
+  assert.equal(heartbeatBody.capabilities.privacyBoundedRepairLandmarks, true);
 });
 
 test("startup deduplicates diagnostics and discards entries bound to another device", async () => {

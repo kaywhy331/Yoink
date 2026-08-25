@@ -185,6 +185,7 @@ function targetCapabilities() {
     observerRecipeShadow: true,
     sanitizedAdapterDiagnostics: true,
     durableAdapterDiagnostics: true,
+    privacyBoundedRepairLandmarks: true,
     walmartDrawReadOnly: true,
     trackalackerPush: true,
     trackalackerCatalogSync: true
@@ -593,6 +594,16 @@ const DIAGNOSTIC_SCOPE_KINDS = new Set(["none", "form", "buybox", "qualified_buy
 const DIAGNOSTIC_SELLER_SHAPES = new Set(["none", "legacy", "offer_display_combined", "offer_display_split"]);
 const DIAGNOSTIC_FULFILLMENT_SHAPES = new Set(["none", "shipping", "pickup", "mixed"]);
 const DIAGNOSTIC_BLOCKS = new Set(["", "auth", "mfa", "location", "membership", "queue", "high_demand", "unknown"]);
+const DIAGNOSTIC_REPAIR_LANDMARK_ATTRIBUTES = new Set([
+  "data-testid", "data-test-id", "data-automation-id", "data-button-state", "name"
+]);
+const DIAGNOSTIC_REPAIR_LANDMARK_ELEMENTS = new Set(["button", "input", "role_button"]);
+const DIAGNOSTIC_REPAIR_LANDMARK_TOKENS = new Set([
+  "pdp", "product", "detail", "buy", "box", "fulfillment", "shipping", "delivery",
+  "primary", "main", "add", "to", "cart", "bag", "pre", "preorder", "order",
+  "button", "btn", "control", "atc", "submit", "action", "purchase", "state",
+  "available", "availability", "commerce"
+]);
 const DIAGNOSTIC_COUNT_FIELDS = [
   "addControlCount", "genericAddIntentCount", "scopedControlCount", "explicitSkuInputCount", "exactSkuInputCount",
   "variationSkuCount", "canonicalOfferInputCount", "canonicalOfferDistinctCount",
@@ -639,6 +650,40 @@ function diagnosticCount(value) {
   return count;
 }
 
+function diagnosticRepairLandmarks(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 5) {
+    throw new Error("The retailer diagnostic contains invalid repair landmarks.");
+  }
+  const seen = new Set();
+  return value.map((landmark) => {
+    if (!landmark || typeof landmark !== "object"
+      || landmark.field !== "addControl"
+      || !DIAGNOSTIC_REPAIR_LANDMARK_ELEMENTS.has(landmark.elementKind)
+      || !DIAGNOSTIC_REPAIR_LANDMARK_ATTRIBUTES.has(landmark.attribute)) {
+      throw new Error("The retailer diagnostic contains an invalid repair landmark.");
+    }
+    const normalized = String(landmark.value || "").trim();
+    if (!/^[A-Za-z][A-Za-z0-9_.:-]{1,63}$/.test(normalized)
+      || !/(?:add|cart|bag|pre[_.:-]?order|atc)/i.test(normalized)
+      || /(?:checkout|buy[_.:-]?now|place[_.:-]?order|submit[_.:-]?order|payment|credit|debit|address|email|phone|account|password|cookie|csrf|token)/i.test(normalized)
+      || !normalized.split(/[_.:-]+/).filter(Boolean)
+        .every((token) => DIAGNOSTIC_REPAIR_LANDMARK_TOKENS.has(token.toLocaleLowerCase("en-US")))
+      || /\d{4,}|[a-f0-9]{12,}/i.test(normalized)) {
+      throw new Error("The retailer diagnostic repair landmark is not privacy bounded.");
+    }
+    const key = `${landmark.elementKind}:${landmark.attribute}:${normalized}`;
+    if (seen.has(key)) throw new Error("The retailer diagnostic contains duplicate repair landmarks.");
+    seen.add(key);
+    return {
+      field: "addControl",
+      elementKind: landmark.elementKind,
+      attribute: landmark.attribute,
+      value: normalized
+    };
+  });
+}
+
 function retailerDiagnosticPayload(value, retailerId, overrides = {}) {
   if (!value || typeof value !== "object" || !value.layout || typeof value.layout !== "object") {
     throw new Error("The retailer observer returned no adapter diagnostic.");
@@ -669,6 +714,16 @@ function retailerDiagnosticPayload(value, retailerId, overrides = {}) {
     throw new Error("The retailer observer returned invalid structural diagnostic evidence.");
   }
   const counts = Object.fromEntries(DIAGNOSTIC_COUNT_FIELDS.map((field) => [field, diagnosticCount(layout[field])]));
+  const repairLandmarks = diagnosticRepairLandmarks(layout.repairLandmarks);
+  if (repairLandmarks.length && (
+    layout.pageKind !== "product"
+    || counts.addControlCount !== 0
+    || counts.genericAddIntentCount < 1
+    || layout.securityChallenge !== false
+    || layout.interactiveBlock !== ""
+  )) {
+    throw new Error("The retailer diagnostic repair landmark does not describe an unblocked selector miss.");
+  }
   const attemptCount = Number(overrides.attemptCount ?? value.attemptCount);
   const domChanged = overrides.domChanged === undefined ? value.domChanged === true : overrides.domChanged === true;
   if (!Number.isInteger(attemptCount) || attemptCount < 1 || attemptCount > 3
@@ -695,7 +750,8 @@ function retailerDiagnosticPayload(value, retailerId, overrides = {}) {
       fulfillmentShape: layout.fulfillmentShape,
       ...counts,
       securityChallenge: layout.securityChallenge,
-      interactiveBlock: layout.interactiveBlock
+      interactiveBlock: layout.interactiveBlock,
+      ...(repairLandmarks.length ? { repairLandmarks } : {})
     }
   };
 }

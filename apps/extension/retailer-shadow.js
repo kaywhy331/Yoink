@@ -829,6 +829,86 @@ var YoinkRetailerShadowModule = (() => {
   function genericAddIntentControls(root) {
     return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible2(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
   }
+  var REPAIR_LANDMARK_ATTRIBUTES = [
+    "data-testid",
+    "data-test-id",
+    "data-automation-id",
+    "data-button-state",
+    "name"
+  ];
+  var REPAIR_LANDMARK_VALUE = /^[A-Za-z][A-Za-z0-9_.:-]{1,63}$/;
+  var REPAIR_LANDMARK_INTENT = /(?:add|cart|bag|pre[_.:-]?order|atc)/i;
+  var REPAIR_LANDMARK_FORBIDDEN = /(?:checkout|buy[_.:-]?now|place[_.:-]?order|submit[_.:-]?order|payment|credit|debit|address|email|phone|account|password|cookie|csrf|token)/i;
+  var REPAIR_LANDMARK_TOKENS = /* @__PURE__ */ new Set([
+    "pdp",
+    "product",
+    "detail",
+    "buy",
+    "box",
+    "fulfillment",
+    "shipping",
+    "delivery",
+    "primary",
+    "main",
+    "add",
+    "to",
+    "cart",
+    "bag",
+    "pre",
+    "preorder",
+    "order",
+    "button",
+    "btn",
+    "control",
+    "atc",
+    "submit",
+    "action",
+    "purchase",
+    "state",
+    "available",
+    "availability",
+    "commerce"
+  ]);
+  function repairLandmarkTokensAllowed(value) {
+    return value.split(/[_.:-]+/).filter(Boolean).every((token) => REPAIR_LANDMARK_TOKENS.has(token.toLocaleLowerCase("en-US")));
+  }
+  function repairLandmarkElement(element) {
+    if (element.tagName === "BUTTON") return "button";
+    if (element.tagName === "INPUT") return "input";
+    return element.getAttribute("role") === "button" ? "role_button" : null;
+  }
+  function repairLandmarkSelector(landmark) {
+    const element = landmark.elementKind === "role_button" ? "[role='button']" : landmark.elementKind;
+    return `${element}[${landmark.attribute}='${landmark.value}']`;
+  }
+  function addControlRepairLandmarks(document, retailer, blocked) {
+    if (blocked || candidateControls(document, retailer).length > 0) return [];
+    const landmarks = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const element of genericAddIntentControls(document)) {
+      const elementKind = repairLandmarkElement(element);
+      if (!elementKind) continue;
+      for (const attribute of REPAIR_LANDMARK_ATTRIBUTES) {
+        const value = String(element.getAttribute(attribute) ?? "").trim();
+        if (!REPAIR_LANDMARK_VALUE.test(value) || !REPAIR_LANDMARK_INTENT.test(value) || REPAIR_LANDMARK_FORBIDDEN.test(value) || !repairLandmarkTokensAllowed(value) || /\d{4,}|[a-f0-9]{12,}/i.test(value)) continue;
+        const landmark = { field: "addControl", elementKind, attribute, value };
+        const selector = repairLandmarkSelector(landmark);
+        let exact = false;
+        try {
+          const matches = [...document.querySelectorAll(selector)];
+          exact = matches.length === 1 && matches[0] === element;
+        } catch {
+          exact = false;
+        }
+        if (!exact || seen.has(selector)) continue;
+        seen.add(selector);
+        landmarks.push(landmark);
+        break;
+      }
+      if (landmarks.length >= 5) break;
+    }
+    return landmarks;
+  }
   var WALMART_PRIMARY_SCOPE = [
     "[data-testid*='buy-box' i]",
     "[data-automation-id*='buy-box' i]",
@@ -999,6 +1079,13 @@ var YoinkRetailerShadowModule = (() => {
     const alternateInputs = [...identityRoot.querySelectorAll(AMAZON_ALTERNATE_OFFER_INPUT_SELECTOR)];
     const alternateOffers = new Set(alternateInputs.map((element) => cleanAmazonOfferId(element.value)).filter(Boolean));
     const scopedControlCount = pageSku === expectedSku ? controls.map((candidate) => amazonOfferScope(candidate, retailer, expectedSku)).filter(Boolean).length : 0;
+    const securityChallenge = retailerSecurityChallenge(document);
+    const interactiveBlock = retailerInteractiveBlock(document, urlValue);
+    const repairLandmarks = addControlRepairLandmarks(
+      document,
+      retailer,
+      securityChallenge || Boolean(interactiveBlock)
+    );
     return {
       schemaVersion: 1,
       pageKind: pageSku ? "product" : "other",
@@ -1020,8 +1107,9 @@ var YoinkRetailerShadowModule = (() => {
         evidenceRoot,
         "select#quantity, select[name='quantity'], input[name='quantity'], input[name='items[0.base][quantity]']"
       ),
-      securityChallenge: retailerSecurityChallenge(document),
-      interactiveBlock: retailerInteractiveBlock(document, urlValue)
+      securityChallenge,
+      interactiveBlock,
+      ...repairLandmarks.length ? { repairLandmarks } : {}
     };
   }
   function retailerAdapterLayoutEvidence(document, urlValue, retailerId, expectedSku) {
@@ -1032,6 +1120,13 @@ var YoinkRetailerShadowModule = (() => {
     const control = controls.length === 1 ? controls[0] ?? null : null;
     const selected = pageSku === expectedSku ? selectedControl(document, retailer, "either", expectedSku) : { control: null, fulfillment: "unknown", offerRoot: null };
     const root = selected.offerRoot || control?.closest("form, main") || document;
+    const securityChallenge = retailerSecurityChallenge(document);
+    const interactiveBlock = retailerInteractiveBlock(document, urlValue);
+    const repairLandmarks = addControlRepairLandmarks(
+      document,
+      retailer,
+      securityChallenge || Boolean(interactiveBlock)
+    );
     return {
       schemaVersion: 1,
       pageKind: pageSku ? "product" : "other",
@@ -1050,8 +1145,9 @@ var YoinkRetailerShadowModule = (() => {
       alternateOfferDistinctCount: 0,
       priceCandidateCount: visibleSelectorCount(root, retailer.priceSelectors.join(", ")),
       quantityControlCount: visibleSelectorCount(root, "select[name='quantity'], input[name='quantity']"),
-      securityChallenge: retailerSecurityChallenge(document),
-      interactiveBlock: retailerInteractiveBlock(document, urlValue)
+      securityChallenge,
+      interactiveBlock,
+      ...repairLandmarks.length ? { repairLandmarks } : {}
     };
   }
   function amazonSellerBound(root, retailer) {

@@ -5,6 +5,7 @@ import {
   RETAILER_ADAPTER_DIAGNOSTIC_OUTCOMES,
   RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES,
   RETAILER_ADAPTER_DIAGNOSTIC_STAGES,
+  RETAILER_ADAPTER_REPAIR_LANDMARK_ATTRIBUTES,
   RETAILER_OBSERVER_VERSIONS,
   TARGET_ADD_ADAPTER_VERSION,
   WALMART_ADD_ADAPTER_VERSION,
@@ -13,6 +14,7 @@ import {
   type RetailerAdapterDiagnosticOutcome,
   type RetailerAdapterDiagnosticStage,
   type RetailerAdapterLayoutEvidence,
+  type RetailerAdapterRepairLandmark,
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
@@ -29,6 +31,19 @@ const SCOPE_KINDS = new Set(["none", "form", "buybox", "qualified_buybox", "acco
 const SELLER_SHAPES = new Set(["none", "legacy", "offer_display_combined", "offer_display_split"] as const);
 const FULFILLMENT_SHAPES = new Set(["none", "shipping", "pickup", "mixed"] as const);
 const INTERACTIVE_BLOCKS = new Set(["", "auth", "mfa", "location", "membership", "queue", "high_demand", "unknown"] as const);
+const REPAIR_LANDMARK_ATTRIBUTES = new Set(RETAILER_ADAPTER_REPAIR_LANDMARK_ATTRIBUTES);
+const REPAIR_LANDMARK_ELEMENTS = new Set(["button", "input", "role_button"] as const);
+const REPAIR_LANDMARK_VALUE = /^[A-Za-z][A-Za-z0-9_.:-]{1,63}$/;
+const REPAIR_LANDMARK_INTENT = /(?:add|cart|bag|pre[_.:-]?order|atc)/i;
+const REPAIR_LANDMARK_FORBIDDEN = /(?:checkout|buy[_.:-]?now|place[_.:-]?order|submit[_.:-]?order|payment|credit|debit|address|email|phone|account|password|cookie|csrf|token)/i;
+const REPAIR_LANDMARK_TOKENS = new Set([
+  "pdp", "product", "detail", "buy", "box", "fulfillment", "shipping", "delivery",
+  "primary", "main", "add", "to", "cart", "bag", "pre", "preorder", "order",
+  "button", "btn", "control", "atc", "submit", "action", "purchase", "state",
+  "available", "availability", "commerce"
+]);
+const REPAIR_MINIMUM_DEVICES = 3;
+const REPAIR_MINIMUM_SKUS = 2;
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const MAX_DIAGNOSTIC_AGE_MS = 10 * 60_000;
 const RETENTION_LIMIT = 2_000;
@@ -120,6 +135,20 @@ export interface AdapterRepairQueueItem {
   lastFailureAt: string;
   lastRecoveryAt: string;
   layout: RetailerAdapterLayoutEvidence;
+  repairSuggestions: AdapterRepairSuggestion[];
+}
+
+export interface AdapterRepairSuggestion {
+  field: "addControl";
+  selector: string;
+  mode: "disabled_state";
+  occurrenceCount: number;
+  distinctDeviceCount: number;
+  distinctSkuCount: number;
+  minimumDeviceCount: typeof REPAIR_MINIMUM_DEVICES;
+  minimumSkuCount: typeof REPAIR_MINIMUM_SKUS;
+  reviewState: "collecting_evidence" | "maintainer_ready";
+  executable: false;
 }
 
 function boundedCount(value: unknown, field: string): number {
@@ -131,6 +160,49 @@ function boundedCount(value: unknown, field: string): number {
 function requiredBoolean(value: unknown, field: string): boolean {
   if (typeof value !== "boolean") throw new Error(`Adapter diagnostic ${field} must be boolean.`);
   return value;
+}
+
+function normalizeRepairLandmarks(value: unknown): RetailerAdapterRepairLandmark[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 5) {
+    throw new Error("Adapter diagnostic repair landmarks must be a bounded list.");
+  }
+  const seen = new Set<string>();
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("Adapter diagnostic repair landmarks are invalid.");
+    }
+    const input = item as Record<string, unknown>;
+    const field = input.field;
+    const elementKind = input.elementKind;
+    const attribute = input.attribute;
+    const landmarkValue = String(input.value ?? "").trim();
+    if (field !== "addControl"
+      || !REPAIR_LANDMARK_ELEMENTS.has(elementKind as RetailerAdapterRepairLandmark["elementKind"])
+      || !REPAIR_LANDMARK_ATTRIBUTES.has(attribute as RetailerAdapterRepairLandmark["attribute"])
+      || !REPAIR_LANDMARK_VALUE.test(landmarkValue)
+      || !REPAIR_LANDMARK_INTENT.test(landmarkValue)
+      || REPAIR_LANDMARK_FORBIDDEN.test(landmarkValue)
+      || !landmarkValue.split(/[_.:-]+/).filter(Boolean)
+        .every((token) => REPAIR_LANDMARK_TOKENS.has(token.toLocaleLowerCase("en-US")))
+      || /\d{4,}|[a-f0-9]{12,}/i.test(landmarkValue)) {
+      throw new Error("Adapter diagnostic repair landmarks are not privacy bounded.");
+    }
+    const key = `${elementKind}:${attribute}:${landmarkValue}`;
+    if (seen.has(key)) throw new Error("Adapter diagnostic repair landmarks must be unique.");
+    seen.add(key);
+    return {
+      field: "addControl",
+      elementKind: elementKind as RetailerAdapterRepairLandmark["elementKind"],
+      attribute: attribute as RetailerAdapterRepairLandmark["attribute"],
+      value: landmarkValue
+    };
+  });
+}
+
+function repairSelector(landmark: RetailerAdapterRepairLandmark): string {
+  const element = landmark.elementKind === "role_button" ? "[role='button']" : landmark.elementKind;
+  return `${element}[${landmark.attribute}='${landmark.value}']`;
 }
 
 function normalizeLayout(value: unknown, retailerId: SupportedRetailerId): RetailerAdapterLayoutEvidence {
@@ -146,6 +218,7 @@ function normalizeLayout(value: unknown, retailerId: SupportedRetailerId): Retai
   }
   const counts = Object.fromEntries(COUNT_FIELDS.map((field) => [field, boundedCount(input[field], field)])) as Record<(typeof COUNT_FIELDS)[number], number>;
   const genericAddIntentCount = boundedCount(input.genericAddIntentCount ?? 0, "genericAddIntentCount");
+  const repairLandmarks = normalizeRepairLandmarks(input.repairLandmarks);
   if (counts.exactSkuInputCount > counts.explicitSkuInputCount
     || counts.canonicalOfferDistinctCount > counts.canonicalOfferInputCount
     || counts.alternateOfferDistinctCount > counts.alternateOfferInputCount
@@ -161,6 +234,13 @@ function normalizeLayout(value: unknown, retailerId: SupportedRetailerId): Retai
     || counts.alternateOfferInputCount
     || counts.alternateOfferDistinctCount
   )) throw new Error("Amazon-only layout fields must be empty for other retailers.");
+  if (repairLandmarks.length && (
+    input.pageKind !== "product"
+    || counts.addControlCount !== 0
+    || genericAddIntentCount < 1
+    || input.securityChallenge !== false
+    || input.interactiveBlock !== ""
+  )) throw new Error("Adapter diagnostic repair landmarks require one unblocked selector-miss layout.");
   return {
     schemaVersion: 1,
     pageKind: input.pageKind as RetailerAdapterLayoutEvidence["pageKind"],
@@ -170,8 +250,55 @@ function normalizeLayout(value: unknown, retailerId: SupportedRetailerId): Retai
     ...counts,
     genericAddIntentCount,
     securityChallenge: requiredBoolean(input.securityChallenge, "securityChallenge"),
-    interactiveBlock: input.interactiveBlock as RetailerAdapterLayoutEvidence["interactiveBlock"]
+    interactiveBlock: input.interactiveBlock as RetailerAdapterLayoutEvidence["interactiveBlock"],
+    ...(repairLandmarks.length ? { repairLandmarks } : {})
   };
+}
+
+function repairSuggestions(rows: StoredRetailerAdapterDiagnostic[], open: boolean): AdapterRepairSuggestion[] {
+  if (!open) return [];
+  const evidence = new Map<string, {
+    landmark: RetailerAdapterRepairLandmark;
+    occurrences: number;
+    devices: Set<string>;
+    skus: Set<string>;
+  }>();
+  for (const row of rows) {
+    if (row.operation !== "observe" || row.outcome !== "failed"
+      || row.failureStage !== "add_control" || row.reasonCode !== "add_control_selector_miss") continue;
+    for (const landmark of row.layout.repairLandmarks ?? []) {
+      const selector = repairSelector(landmark);
+      const item = evidence.get(selector) ?? {
+        landmark,
+        occurrences: 0,
+        devices: new Set<string>(),
+        skus: new Set<string>()
+      };
+      item.occurrences += 1;
+      item.devices.add(row.deviceId);
+      item.skus.add(row.retailerSku);
+      evidence.set(selector, item);
+    }
+  }
+  return [...evidence.entries()].map<AdapterRepairSuggestion>(([selector, item]) => {
+    const ready = item.devices.size >= REPAIR_MINIMUM_DEVICES && item.skus.size >= REPAIR_MINIMUM_SKUS;
+    return {
+      field: "addControl" as const,
+      selector,
+      mode: "disabled_state" as const,
+      occurrenceCount: item.occurrences,
+      distinctDeviceCount: item.devices.size,
+      distinctSkuCount: item.skus.size,
+      minimumDeviceCount: REPAIR_MINIMUM_DEVICES,
+      minimumSkuCount: REPAIR_MINIMUM_SKUS,
+      reviewState: ready ? "maintainer_ready" as const : "collecting_evidence" as const,
+      executable: false as const
+    };
+  }).sort((left, right) => Number(right.reviewState === "maintainer_ready") - Number(left.reviewState === "maintainer_ready")
+    || right.distinctDeviceCount - left.distinctDeviceCount
+    || right.distinctSkuCount - left.distinctSkuCount
+    || right.occurrenceCount - left.occurrenceCount
+    || left.selector.localeCompare(right.selector));
 }
 
 function rowToStored(row: DiagnosticRow): StoredRetailerAdapterDiagnostic {
@@ -422,7 +549,8 @@ export class AdapterDiagnosticRepository {
         lastSeenAt: lastRecoveryAt > latest.receivedAt ? lastRecoveryAt : latest.receivedAt,
         lastFailureAt,
         lastRecoveryAt,
-        layout: latestRepair.layout
+        layout: latestRepair.layout,
+        repairSuggestions: repairSuggestions(group.rows, open)
       });
     }
     return queue

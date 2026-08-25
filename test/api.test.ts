@@ -36,6 +36,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /Admin control center/);
     assert.match(adminPageBody, /Target add-only qualification/);
     assert.match(adminPageBody, /Adapter repair queue/);
+    assert.match(adminPageBody, /non-executable stable-attribute suggestion/);
     assert.match(adminPageBody, /Catalog review queue/);
     assert.match(adminPageBody, /Merge, split, and compensation/);
     assert.match(adminPageBody, /Privacy-bounded service health/);
@@ -51,6 +52,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /renderAdminChanges/);
     assert.match(adminScript, /\/api\/v1\/admin\/workers/);
     assert.match(adminScript, /renderBackgroundWork/);
+    assert.match(adminScript, /Maintainer review ready/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
@@ -66,6 +68,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
+      privacyBoundedRepairLandmarks: true,
+      nonExecutableRepairSuggestions: true,
       backgroundWorkerRuntime: "stopped",
       backgroundWorkerHealthy: false,
       backgroundWorkerDeployment: "local_in_process",
@@ -203,6 +207,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.backgroundWorkOutsideRequestHandling, true);
     assert.equal(snapshot.capabilities.durableSignalIngress, true);
     assert.equal(snapshot.capabilities.signalEvaluationOutsideDeviceRequest, true);
+    assert.equal(snapshot.capabilities.privacyBoundedRepairLandmarks, true);
+    assert.equal(snapshot.capabilities.nonExecutableRepairSuggestions, true);
     assert.equal(snapshot.capabilities.asyncBackgroundWorkerContract, true);
     assert.equal(snapshot.capabilities.standaloneBackgroundWorkerProcessReady, true);
     assert.equal(snapshot.capabilities.boundedMultiPrincipalWorker, true);
@@ -509,6 +515,61 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     const heartbeatBody = await heartbeat.json() as { controlPlane: { retailerMutationEnabled: boolean } };
     assert.equal(heartbeatBody.controlPlane.retailerMutationEnabled, false);
 
+    const diagnosticResponse = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/bestbuy`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: extensionOrigin,
+        Authorization: `Bearer ${paired.token}`
+      },
+      body: JSON.stringify({
+        contractVersion: 1,
+        observedAt: new Date().toISOString(),
+        retailerId: "bestbuy",
+        retailerSku: "6612619",
+        adapterVersion: "bestbuy-observer-v5",
+        operation: "observe",
+        outcome: "failed",
+        failureStage: "add_control",
+        reasonCode: "add_control_selector_miss",
+        attemptCount: 1,
+        domChanged: false,
+        rawDom: "DO_NOT_STORE",
+        layout: {
+          schemaVersion: 1,
+          pageKind: "product",
+          scopeKind: "none",
+          sellerShape: "legacy",
+          fulfillmentShape: "shipping",
+          addControlCount: 0,
+          genericAddIntentCount: 1,
+          scopedControlCount: 0,
+          explicitSkuInputCount: 0,
+          exactSkuInputCount: 0,
+          variationSkuCount: 0,
+          canonicalOfferInputCount: 0,
+          canonicalOfferDistinctCount: 0,
+          alternateOfferInputCount: 0,
+          alternateOfferDistinctCount: 0,
+          priceCandidateCount: 1,
+          quantityControlCount: 0,
+          securityChallenge: false,
+          interactiveBlock: "",
+          pageText: "DO_NOT_STORE",
+          repairLandmarks: [{
+            field: "addControl",
+            elementKind: "role_button",
+            attribute: "data-testid",
+            value: "pdp-add-to-cart-control",
+            textContent: "DO_NOT_STORE"
+          }]
+        }
+      })
+    });
+    assert.equal(diagnosticResponse.status, 201);
+    const diagnosticBody = await diagnosticResponse.json() as { diagnostic: { layout: Record<string, unknown> } };
+    assert.equal(JSON.stringify(diagnosticBody).includes("DO_NOT_STORE"), false);
+
     const nextJob = await fetch(`${baseUrl}/api/v1/devices/self/jobs/next`, {
       headers: { Origin: extensionOrigin, Authorization: `Bearer ${paired.token}` }
     });
@@ -627,6 +688,15 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         assertions: Array<Record<string, unknown>>;
         aggregates: Array<Record<string, unknown>>;
       };
+      adapterRepairQueue: Array<{
+        repairSuggestions: Array<{
+          selector: string;
+          distinctDeviceCount: number;
+          distinctSkuCount: number;
+          reviewState: string;
+          executable: boolean;
+        }>;
+      }>;
       targetQualification: {
         liveEvidenceReady: boolean;
         rehearsalReady: boolean;
@@ -645,6 +715,18 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(snapshot.community.advisoryOnly, true);
     assert.equal(snapshot.community.assertions.length, 1);
     assert.equal(snapshot.community.aggregates[0]?.publicationState, "insufficient_quorum");
+    assert.deepEqual(snapshot.adapterRepairQueue[0]?.repairSuggestions, [{
+      field: "addControl",
+      selector: "[role='button'][data-testid='pdp-add-to-cart-control']",
+      mode: "disabled_state",
+      occurrenceCount: 1,
+      distinctDeviceCount: 1,
+      distinctSkuCount: 1,
+      minimumDeviceCount: 3,
+      minimumSkuCount: 2,
+      reviewState: "collecting_evidence",
+      executable: false
+    }]);
     assert.equal(snapshot.shadowObservations[0]?.retailerSku, "1011483414");
     assert.equal(snapshot.targetQualification.liveEvidenceReady, false);
     assert.equal(snapshot.targetQualification.rehearsalReady, true);
