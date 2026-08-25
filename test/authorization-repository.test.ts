@@ -54,6 +54,7 @@ test("authorization is persisted, tenant-scoped, and deny-by-default outside the
       const authorization = new AuthorizationRepository(db);
       assert.equal(authorization.has("user.read"), true);
       assert.equal(authorization.has("user.intent.manage"), true);
+      assert.equal(authorization.has("user.privacy.export"), true);
       assert.equal(authorization.has("admin.read"), false);
       assert.equal(authorization.has("security.manage"), false);
       assert.deepEqual(authorization.memberships().map((membership) => membership.roleId), ["yoink_user"]);

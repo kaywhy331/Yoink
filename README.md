@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.32.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.33.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,28 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.33.0 adds a self-service **My data** inventory and a versioned,
+privacy-scoped JSON download. Migration 33 grants the baseline user role a
+dedicated `user.privacy.export` permission without changing any retailer
+capability. The archive is assembled inside one read transaction from eight
+plain-language categories covering the authenticated user's account,
+preferences, plans, sources, actions, device evidence, community work, and
+activity. Every query binds both the current tenant and user where the schema
+supports them; shared catalog material appears only as an exact public
+reference attached to that user's own record.
+
+The export never selects device-token hashes, pairing-code hashes, hosted or
+community request nonces, action capabilities, notification capabilities, or
+inbox lease capabilities. A schema-coverage test fails if a future table gains
+a user-ownership edge without an explicit export disposition, and cross-tenant
+fixtures prove another user's records cannot enter the file. Downloads are
+`no-store`, carry an exact byte length and SHA-256 header, and remain separate
+from the full-database operator portability archive. Broader account deletion
+stays visibly closed until production identity revocation and durable cleanup
+workers can prove complete cleanup; existing contribution-specific deletion
+controls are unchanged. No seller, fulfillment, checkout, drawing-entry,
+payment, or order capability is widened.
 
 Version 0.32.0 adds a five-step, plain-language setup guide to the user
 dashboard. It distinguishes a current/online Chrome companion, connected signal

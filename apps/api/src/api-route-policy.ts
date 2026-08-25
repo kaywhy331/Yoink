@@ -68,6 +68,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname.startsWith("/api/v1/user/purchase-intents")) return "user.intent.manage";
   if (pathname === "/api/v1/user/spend" || pathname === "/api/v1/user/spend-ledger") return "user.read";
   if (pathname === "/api/v1/user/spend-policy") return "user.settings.manage";
+  if (pathname === "/api/v1/user/privacy" || pathname === "/api/v1/user/privacy/export") return "user.privacy.export";
   if (["/api/v1/library", "/api/v1/missions", "/api/v1/signals", "/api/v1/jobs", "/api/v1/audit", "/api/v1/strategies"].includes(pathname)
     || /^\/api\/v1\/missions\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
     return method === "GET" ? "user.read" : "user.intent.manage";
@@ -85,6 +86,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 
 function canonicalPath(pathname: string): { pathname: string; requestedSurface: ApiSurface | null } {
   if (pathname === "/api/v1/user/overview" || pathname === "/api/v1/user/authorization"
+    || pathname.startsWith("/api/v1/user/privacy")
     || pathname.startsWith("/api/v1/user/catalog/")
     || pathname.startsWith("/api/v1/user/purchase-intents")
     || pathname.startsWith("/api/v1/user/spend")) {
@@ -153,7 +155,8 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     community: "community",
     identity: "identity",
     "attribution-policies": "attribution",
-    settings: "settings"
+    settings: "settings",
+    privacy: "privacy"
   }),
   admin: Object.freeze({
     snapshot: "snapshot",

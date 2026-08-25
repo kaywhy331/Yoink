@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
@@ -108,6 +109,10 @@ import { SpendLedgerRepository } from "../../../packages/database/src/spend-ledg
 import { ShadowObservationRepository } from "../../../packages/database/src/shadow-observation-repository.js";
 import { SourceRepository } from "../../../packages/database/src/source-repository.js";
 import { WalmartDrawRepository } from "../../../packages/database/src/walmart-draw-repository.js";
+import {
+  USER_DATA_EXPORT_FORMAT,
+  UserPrivacyRepository
+} from "../../../packages/database/src/user-privacy-repository.js";
 import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
 import { newId } from "../../../packages/domain/src/ids.js";
 import { buildUserSetupReadiness } from "../../../packages/domain/src/user-setup.js";
@@ -296,6 +301,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const shadowObservations = new ShadowObservationRepository(db);
   const sourceRuntime = new SourceRepository(db);
   const walmartDraws = new WalmartDrawRepository(db);
+  const userPrivacy = new UserPrivacyRepository(db);
 
   // Local startup is an explicit reconciliation boundary so open, sanitized
   // repair groups that predate migration 25 receive their default operator
@@ -405,6 +411,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           database: "ready",
           storageEngine: "sqlite",
           portabilityArchiveFormat: PORTABILITY_FORMAT,
+          userDataExportFormat: USER_DATA_EXPORT_FORMAT,
+          selfServiceUserDataExport: true,
           productionPostgresReady: false,
           executionMode: settings.executionMode,
           actionsPaused: settings.actionsPaused,
@@ -439,6 +447,27 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         response.setHeader("Content-Disposition", `attachment; filename="${release.descriptor.filename}"`);
         response.setHeader("Content-Length", String(body.length));
         response.setHeader("X-Content-SHA256", release.descriptor.sha256);
+        response.end(body);
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/privacy") {
+        json(response, 200, { inventory: userPrivacy.inventory() });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/privacy/export") {
+        const archive = userPrivacy.export();
+        const body = Buffer.from(`${JSON.stringify(archive, null, 2)}\n`, "utf8");
+        const sha256 = createHash("sha256").update(body).digest("hex");
+        const date = archive.generatedAt.slice(0, 10);
+        securityHeaders(response);
+        response.statusCode = 200;
+        response.setHeader("Content-Type", "application/json; charset=utf-8");
+        response.setHeader("Content-Disposition", `attachment; filename="Yoink-My-Data-${date}.json"`);
+        response.setHeader("Content-Length", String(body.length));
+        response.setHeader("X-Content-SHA256", sha256);
+        response.setHeader("X-Yoink-Export-Format", USER_DATA_EXPORT_FORMAT);
         response.end(body);
         return;
       }
@@ -1008,6 +1037,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             catalog: true,
             selfServiceExactProductLinks: true,
             userSetupReadiness: true,
+            selfServiceUserDataExport: true,
+            userDataExportFormat: USER_DATA_EXPORT_FORMAT,
+            selfServiceAccountDeletion: false,
             signalEngine: true,
             chromeReadiness: true,
             devicePairing: true,

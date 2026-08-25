@@ -1,6 +1,32 @@
 # Yoink roadmap
 
-## Shipped through 0.32.0
+## Shipped through 0.33.0
+
+### Self-service user data inventory and export (0.33.0)
+
+- Migration 33 adds the dedicated `user.privacy.export` permission to the
+  baseline user role without changing any retailer or mutation state
+- Preferences now shows a plain-language **My data** inventory across eight
+  categories and downloads one versioned `yoink-user-data-json-v1` archive
+  scoped to the authenticated tenant and user
+- The archive is produced from one read transaction with explicit projections.
+  Device and pairing token hashes, request nonces, job and notification
+  capabilities, and inbox lease capabilities are structurally absent; tenant-
+  wide administrator configuration, telemetry, outbox data, and other users'
+  records are excluded
+- Exact public catalog and offer data appears only when referenced by the
+  user's own plan or action. The download is `no-store` and carries exact byte
+  length, format, content-disposition, and SHA-256 headers
+- Cross-tenant repository/API tests cover denial, exact archive counts, JSON
+  field decoding, hash verification, and credential non-disclosure. A schema
+  ownership guard fails when a new user-related table lacks an explicit export
+  disposition
+- Full account deletion remains infrastructure-gated rather than simulated:
+  production IdP revocation and durable cleanup/reconciliation workers are
+  still required. Existing per-feature consent revocation and physical
+  community/identity-claim deletion remain unchanged
+- No retailer action, seller, fulfillment, checkout, payment, drawing-entry,
+  or order-submission capability is widened
 
 ### Nontechnical setup and exact product-link intake (0.32.0)
 
@@ -594,24 +620,24 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.32.0
+## Architecture assessment after 0.33.0
 
-Yoink 0.32.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.33.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
 diagnostic ledger, and outbox are valuable foundations; the next work should
 finish production catalog authority, externally witnessed recipe transparency,
-privacy operations, and production identity/session integration while propagating stable
+retention/deletion operations, and production identity/session integration while propagating stable
 child-offer/location identity before adding checkout or more autonomous
 behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-32 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
+| Primary backend database | Transactional migration-33 SQLite schema plus deterministic operator portability, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, bounded service-health telemetry, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, secret references, external alert connectors/background escalation worker, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
-| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, and source/review status | Production onboarding still depends on Phase 2 IdP/hosted deployment; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
-| Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
+| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, and source/review status | Production onboarding still depends on Phase 2 IdP/hosted deployment; full account deletion awaits identity revocation/workers; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
+| Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, complete retention/deletion operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; the independent witness service, scheduler, and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
 | Automatic purchasing | Reviewed plans can directly request guarded quantity-one work without a strategy; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
@@ -764,7 +790,7 @@ prove quantity and budget reservations.
   transactional and isolation parity, row-level tenant tests, lease-contention
   tests, idempotent workers, and no dual-write shortcut
 - Add production IdP sessions, lifecycle/provisioning, TLS ingress, CSRF/session
-  protection, secrets management, encryption, retention/deletion/export,
+  protection, secrets management, encryption, production retention/deletion,
   backups/PITR, restore drills, load tests, SLOs, and on-call alerting
 - Run durable inbox/outbox, signal evaluation, projection cleanup, recipe
   evaluation, and notification work outside request latency
@@ -786,7 +812,9 @@ existing local operations views, catalog review queue, and role membership UI.
 thresholds, dedupe, escalation state, dashboard/audit-outbox routing, delivery
 history, acknowledgement, and resolution. 0.31.0 adds the signed step-up
 enforcement seam, independent exact-change approval, immutable receipts, and
-the Approvals workspace. Production IdP/MFA integration, support break-glass,
+the Approvals workspace. 0.33.0 adds self-service user inventory/export with a
+closed credential boundary. Production IdP/MFA integration, account deletion,
+support break-glass,
 connectors, scheduled workers, and broader alert families remain open.
 
 Build `/admin` as a separate permission-gated application, with aggregate and
@@ -1107,7 +1135,9 @@ Shipped local/hosted seams:
 - Inbox/outbox delivery, idempotent device/job queues, signed short-lived
   capabilities, durable wake/reconcile, and bounded source reliability scoring
 - Streaming logical export, exact fresh-SQLite restore, table-level parity, and
-  an operator cutover/recovery drill; signing keys remain separately backed up
+  an operator cutover/recovery drill; plus a separate authenticated user data
+  inventory/export whose credential-bearing columns are structurally excluded;
+  signing keys remain separately backed up
 
 Deployment-dependent work that cannot be truthfully completed in this local
 repository alone:

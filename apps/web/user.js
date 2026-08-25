@@ -8,6 +8,7 @@ const state = {
   setupProduct: null,
   productLinkPreview: null,
   productLinkPreviewInput: "",
+  privacy: null,
   query: ""
 };
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -172,6 +173,18 @@ function renderSpend(spend) {
   form.elements.monthly.value = moneyInput(spend.policy.monthlyCapCents);
 }
 
+function renderPrivacy() {
+  const inventory = state.privacy;
+  if (!inventory) return;
+  const categories = Array.isArray(inventory.categories) ? inventory.categories : [];
+  $("#privacySummary").textContent = `${Number(inventory.totalRecords || 0).toLocaleString()} records across ${categories.length} private categories are ready in one versioned JSON file.`;
+  $("#privacyCategories").innerHTML = categories.map((category) => `<div class="mini-row"><span>${escapeHtml(category.label)}</span><strong>${Number(category.recordCount || 0).toLocaleString()}</strong></div>`).join("");
+  $("#privacyBoundary").textContent = inventory.credentialMaterialsExcluded === true
+    ? "Device tokens, pairing codes, request nonces, and action capabilities are excluded. Other users and tenant-wide administrator data are never included. Account deletion stays closed until hosted identity revocation and durable cleanup are proven."
+    : "The data-export boundary is unavailable; do not download until Yoink can verify credential exclusion.";
+  $("#privacyExportLink").hidden = inventory.credentialMaterialsExcluded !== true;
+}
+
 function renderProducts() {
   const missionByVariant = new Map(state.plans.map((plan) => [plan.variantId, plan]));
   $("#productList").innerHTML = state.products.length ? state.products.map((product) => {
@@ -248,19 +261,21 @@ function renderProposals() {
 
 async function refresh() {
   const query = state.query ? `&q=${encodeURIComponent(state.query)}` : "";
-  const [overview, products, plans, actions, proposals] = await Promise.all([
+  const [overview, products, plans, actions, proposals, privacy] = await Promise.all([
     api("/api/v1/user/overview"),
     api(`/api/v1/user/library?limit=200&offset=0${query}`),
     api("/api/v1/user/purchase-intents?limit=200&offset=0"),
     api("/api/v1/user/jobs?limit=100&offset=0"),
-    api("/api/v1/user/catalog/proposals?limit=100&offset=0")
+    api("/api/v1/user/catalog/proposals?limit=100&offset=0"),
+    state.privacy ? Promise.resolve({ inventory: state.privacy }) : api("/api/v1/user/privacy")
   ]);
   state.overview = overview;
   state.products = products.items || [];
   state.plans = plans.items || [];
   state.actions = actions.items || [];
   state.proposals = proposals.items || [];
-  renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals();
+  state.privacy = privacy.inventory || null;
+  renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals(); renderPrivacy();
 }
 
 async function toggleActions() {

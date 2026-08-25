@@ -2151,5 +2151,19 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
       BEGIN SELECT RAISE(ABORT, 'admin change events are append-only'); END;
     `
+  },
+  {
+    version: 33,
+    name: "self_service_user_data_export",
+    sql: `
+      INSERT INTO authorization_permissions(id, description, created_at)
+      VALUES (
+        'user.privacy.export',
+        'Review and export the authenticated user''s privacy-scoped data archive.',
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      );
+      INSERT INTO authorization_role_permissions(role_id, permission_id, created_at)
+      VALUES ('yoink_user', 'user.privacy.export', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+    `
   }
 ]);

@@ -56,6 +56,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       database: "ready",
       storageEngine: "sqlite",
       portabilityArchiveFormat: "yoink-portability-ndjson-v1",
+      userDataExportFormat: "yoink-user-data-json-v1",
+      selfServiceUserDataExport: true,
       productionPostgresReady: false,
       executionMode: "shadow",
       actionsPaused: true,
@@ -155,6 +157,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);
     assert.equal(snapshot.capabilities.signedAuthenticationAssurance, true);
     assert.equal(snapshot.capabilities.highRiskChangeControl, true);
+    assert.equal(snapshot.capabilities.selfServiceUserDataExport, true);
+    assert.equal(snapshot.capabilities.userDataExportFormat, "yoink-user-data-json-v1");
+    assert.equal(snapshot.capabilities.selfServiceAccountDeletion, false);
     assert.equal(snapshot.capabilities.independentSafetyExpansionApproval, true);
     assert.equal(snapshot.capabilities.productionIdentityProvider, false);
 

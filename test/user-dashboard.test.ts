@@ -118,6 +118,11 @@ test("guided dashboard setup does not create a plan before review and submits ex
   };
   const payloadFor = (path: string) => {
     if (path === "/api/v1/user/overview") return overview;
+    if (path === "/api/v1/user/privacy") return { inventory: {
+      totalRecords: 12,
+      credentialMaterialsExcluded: true,
+      categories: [{ id: "catalog_and_plans", label: "Products and purchase plans", recordCount: 12 }]
+    } };
     if (path.startsWith("/api/v1/user/library")) return { items: [product] };
     if (path === "/api/v1/user/purchase-intents/mission_dashboard_test") return { purchaseIntent: planDetail };
     if (path.startsWith("/api/v1/user/purchase-intents")) return { items: created ? [planSummary] : [] };
@@ -153,6 +158,8 @@ test("guided dashboard setup does not create a plan before review and submits ex
   try {
     browser.eval(`${script}\n//# sourceURL=user-dashboard-test.js`);
     await eventually(() => assert.ok(browser.document.querySelector("[data-track-listing]")));
+    assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /12 records/);
+    assert.equal((browser.document.querySelector("#privacyExportLink") as HTMLAnchorElement).pathname, "/api/v1/user/privacy/export");
     assert.equal(posts.length, 0);
     (browser.document.querySelector("[data-track-listing]") as HTMLButtonElement).click();
     const dialog = browser.document.querySelector("#setupDialog") as HTMLDialogElement;

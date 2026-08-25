@@ -108,6 +108,11 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
         return response({ disposition: "pending_approval", changeRequest: { id: "admin_change_resume" } }, 202);
       }
       if (path === "/api/v1/user/overview") return response(overview);
+      if (path === "/api/v1/user/privacy") return response({ inventory: {
+        totalRecords: 8,
+        credentialMaterialsExcluded: true,
+        categories: [{ id: "account_and_access", label: "Account and access", recordCount: 8 }]
+      } });
       if (path.startsWith("/api/v1/user/library")) return response({ items: [] });
       if (path.startsWith("/api/v1/user/purchase-intents")) return response({ items: [] });
       if (path.startsWith("/api/v1/user/jobs")) return response({ items: [] });
@@ -131,6 +136,8 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
     assert.match(browser.document.querySelector("#setupGuideHeadline")?.textContent ?? "", /Start with the Chrome companion/);
     assert.match(browser.document.querySelector("#setupGuide")?.textContent ?? "", /Always manual.*checkout, payment, raffle entry, and order submission/s);
     assert.equal((browser.document.querySelector("#companionDownloadLink") as HTMLAnchorElement).pathname, "/api/v1/extension/release/download");
+    assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /8 records/);
+    assert.match(browser.document.querySelector("#privacyBoundary")?.textContent ?? "", /Device tokens.*excluded/s);
 
     (browser.document.querySelector('[data-setup-action="pair_companion"]') as HTMLButtonElement).click();
     await eventually(() => assert.match(browser.document.querySelector("#pairing")?.textContent ?? "", /ABCD-EFGH/));

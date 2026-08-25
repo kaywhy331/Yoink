@@ -393,6 +393,26 @@ offer observations, missions, signals, or jobs. Catalog approval can establish
 identity only; the later trusted signal, plan, qualification, lease, and live
 Chrome validation gates remain unchanged.
 
+Yoink 0.33.0 adds a separate user privacy projection rather than exposing the
+operator portability archive. `UserPrivacyRepository` binds every projection
+to the active request scope and builds `yoink-user-data-json-v1` inside one
+SQLite read transaction. Eight stable categories cover account/access,
+preferences, catalog/plans, sources/signals, actions/spending, device/retailer
+evidence, community/maintenance, and activity/delivery. Shared catalog or offer
+rows are included only as exact public references reached from the user's own
+mission or action records.
+
+Credential-bearing columns are never selected: device and pairing hashes,
+hosted/community nonces, job and notification capabilities, and inbox lease
+capabilities stay outside the archive. A schema ownership-disposition contract
+forces every table with a user edge to be classified, so future migrations
+cannot silently create an unreviewed export family. The API uses a dedicated
+baseline permission, returns `no-store` JSON with exact length and SHA-256, and
+the user dashboard exposes only inventory counts and the download. This is a
+self-service data-access seam, not full account erasure: identity-provider
+revocation, durable cleanup workers, reconciliation, retention policy, and
+production privacy operations remain deployment work.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and
@@ -539,7 +559,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 32. Foreign keys are mandatory.
+numbered; the current schema is migration 33. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 

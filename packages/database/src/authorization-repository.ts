@@ -12,6 +12,7 @@ export const AUTHORIZATION_PERMISSIONS = Object.freeze([
   "user.community.manage",
   "user.catalog.propose",
   "user.attribution.manage",
+  "user.privacy.export",
   "admin.read",
   "support.read",
   "catalog.review",
