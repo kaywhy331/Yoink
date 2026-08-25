@@ -596,7 +596,22 @@ The user dashboard and admin registry expose the derived review state, but the
 review repository has no dependency on observation, qualification, planning,
 job, spend, extension, or mutation services. Health contracts explicitly keep
 review application and recipe field fill false. Review history joins the
-self-service data export and cascades only with deletion of its owning user.
+self-service data export.
+
+Yoink 0.53 adds a separate signing-free retention repository to that trust
+domain. Migration 46 fixes policy v1 at 90 days after the later of evidence
+receipt or latest review. The existing six-hour privacy/telemetry worker visits
+one persisted principal at a time and removes at most 500 eligible evidence
+parents per run; their review events cascade in the same transaction. A fresh
+row or review remains database-protected. Every effective cleanup appends one
+owner-scoped aggregate receipt with policy/cutoff/counts and schema-locked
+negative application facts. Receipts contain no normalized value, SKU, recipe,
+layout, or decision and join self-service export. Owning-user deletion remains
+the complete privacy cascade across evidence, reviews, and receipts.
+
+Retention has no signing authority and no dependency on observation,
+qualification, planning, job, spend, extension, or mutation services. Cleanup
+cannot create evidence, promote a recipe, fill a field, or invoke Chrome.
 
 Yoink 0.38.0 makes the paired Chrome credential a generation-bound,
 recoverable lifecycle rather than an indefinitely static hash. Begin is
@@ -839,7 +854,10 @@ append-only, permanently quarantined normalized recovery evidence; it adds no
 field-fill transition and changes no retailer qualification or mutation
 authority. Migration 45 in 0.52 adds only contributor-owned append-only review
 events; confirmation, rejection, and revocation likewise add no field-fill,
-qualification, job, or mutation transition.
+qualification, job, or mutation transition. Migration 46 in 0.53 adds only
+bounded expiry triggers, owner/activity indexes, and immutable aggregate
+retention receipts; it deletes expired quarantine provenance and adds no
+application, promotion, qualification, job, or mutation transition.
 
 A bounded hydration retry handles buy boxes that settle just after the initial
 user inspection. The companion also sends an authenticated, allowlisted

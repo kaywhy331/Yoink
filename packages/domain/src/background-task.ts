@@ -36,8 +36,8 @@ export const BACKGROUND_TASK_DEFINITIONS = Object.freeze({
     maximumAttempts: 5
   }),
   operational_telemetry_retention: Object.freeze({
-    label: "Telemetry retention",
-    description: "Apply the bounded operational telemetry retention policy and preserve deletion receipts.",
+    label: "Privacy and telemetry retention",
+    description: "Apply bounded telemetry, task-history, and quarantined recovery-evidence retention policies with deletion receipts.",
     intervalSeconds: 21_600,
     maximumAttempts: 3
   })

@@ -1,6 +1,32 @@
 # Yoink roadmap
 
-## Shipped through 0.52.0
+## Shipped through 0.53.0
+
+### Bounded recovery-evidence retention (0.53.0)
+
+- Migration 46 fixes recovery retention policy v1 at 90 days after the later
+  of evidence receipt or latest contributor review. New review activity resets
+  expiry; the policy cannot be remotely widened or connected to application
+- The existing six-hour privacy/telemetry worker now processes at most 500
+  eligible evidence rows for one exact tenant/user per run through a separate
+  signing-free repository. Review events cascade with their expired evidence
+  in the same transaction
+- Fresh evidence, recent reviews, direct review deletion, and receipt mutation
+  remain database-blocked. Owning-user deletion intentionally cascades
+  evidence, reviews, and receipts
+- Each effective cleanup appends one owner-scoped aggregate receipt containing
+  only fixed policy, cutoff, counts, actor, and negative application facts—no
+  value, SKU, recipe, layout, or answer
+- The user Preferences card explains automatic expiry and each projected
+  removal time. The admin registry shows policy, eligible/deleted totals, and
+  opaque receipt history; self-service export includes owner receipts
+- Retention cannot fill an observation, influence promotion or qualification,
+  change a purchase plan, create a job, reserve spend, invoke Chrome, or widen
+  any retailer lane. Production identity/device risk, independent account and
+  region quorum, measured conflict SLOs, external monitoring, and governed
+  reversible read-only application remain open
+
+See [observer-recipe recovery retention](OBSERVER_RECIPE_RECOVERY_RETENTION.md).
 
 ### Contributor-owned recovery-evidence review (0.52.0)
 
@@ -15,17 +41,18 @@
   composite tenant/user/evidence foreign key and deterministic evidence hash.
   Evidence never changes; current review state is a projection, retries are
   idempotent, and revocation requires a current confirmation
-- Direct event update/delete is blocked while deletion of the owning user
-  intentionally cascades both evidence and review history. Self-service export
-  includes every review event; audit receipts omit normalized values
+- Direct event updates and premature deletes are blocked. Version 0.53 adds
+  bounded time-qualified evidence/review expiry; deletion of the owning user
+  remains the complete privacy cascade. Self-service export includes current
+  history and aggregate retention receipts; audit receipts omit values
 - The admin registry shows current user-review state and event count. Health
   and snapshot contracts separately report user review/revocation implemented
   and review application/field fill disabled
 - Reviews do not count toward recipe trial/promotion quorum and cannot affect
   observations, catalog identity, qualifications, plans, jobs, spend, Chrome,
   or mutation. Production IdP/device risk, reputable independent-account and
-  region quorum, conflict SLOs, retention policy, and a governed reversible
-  read-only application projection remain open
+  region quorum, conflict SLOs, external monitoring, and a governed reversible
+  read-only application projection remain open; local retention ships in 0.53
 
 See
 [observer-recipe recovery user review](OBSERVER_RECIPE_RECOVERY_USER_REVIEW.md).
@@ -51,9 +78,9 @@ See
 - No approve/apply endpoint or canonical observation write path exists.
   Recovery evidence cannot affect catalog identity, community assertions,
   qualifications, plans, jobs, Chrome behavior, or mutation. Public account
-  reputation, region quorum, retention policy, automatic promotion, and actual
-  read-only field fill remain open. Contributor-owned review arrives in 0.52
-  without widening this boundary
+  reputation, region quorum, automatic promotion, and actual read-only field
+  fill remain open. Contributor review arrives in 0.52 and bounded retention in
+  0.53 without widening this boundary
 
 See [observer-recipe recovery evidence](OBSERVER_RECIPE_RECOVERY_EVIDENCE.md).
 
@@ -1224,25 +1251,25 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.52.0
+## Architecture assessment after 0.53.0
 
-Yoink 0.52.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.53.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
 diagnostic ledger, and outbox are valuable foundations; the next work should
 finish production catalog authority, externally witnessed recipe transparency,
-retention/deletion operations, and production identity/session integration
-while propagating stable child-offer/location identity before adding checkout
-or more autonomous behavior.
+production identity/session integration, independent account/region evidence,
+and measured conflict operations while propagating stable child-offer/location
+identity before adding checkout or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-45 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, observer-witness refresh, signed operator-alert dispatch and governed exact replay, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task/connector/recovery/review receipts, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, signed artifact/workload identity, managed secrets, or hosted cutover |
+| Primary backend database | Transactional migration-46 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, observer-witness refresh, signed operator-alert dispatch and governed exact replay, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task/connector receipts, 90-day recovery-evidence/review expiry with aggregate receipts, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, signed artifact/workload identity, managed secrets, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
-| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
+| Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
-| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; field-specific stable-attribute landmarks cover all five fixed read-only observer fields; a signing-free seventh worker family compiles mature compatible fields per layout into idempotent unsigned quarantine candidates only; a fixed packaged structured-page oracle supplies value-free per-field trial-v2 receipts and may place exact oracle-agreed missing-field values into an append-only `not_applied` provenance quarantine under trial v3; contributors can explicitly confirm/reject/revoke those values in a separate owner-scoped append-only review ledger; generated promotion uses latest-per-contributor/SKU/layout/stage oracle evidence, distinct tenant users/devices, a deterministic 25% canary, a 24-hour burn-in, and a multi-contributor regression auto-kill; known packaged conflicts immediately kill distribution; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Tenant users are not yet production-reputable public accounts; generated candidates are not auto-promoted and reviewed recovery evidence cannot fill stored observations; regional canaries, IdP/device-risk/Sybil controls, governed field-application projections, measured conflict SLOs, and retention remain incomplete; the independent witness service and public consistency monitor are not deployed by this repository |
+| Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; field-specific stable-attribute landmarks cover all five fixed read-only observer fields; a signing-free seventh worker family compiles mature compatible fields per layout into idempotent unsigned quarantine candidates only; a fixed packaged structured-page oracle supplies value-free per-field trial-v2 receipts and may place exact oracle-agreed missing-field values into a `not_applied` provenance quarantine under trial v3; contributors can explicitly confirm/reject/revoke those values in a separate owner-scoped review ledger; evidence/reviews expire after 90 inactive days through bounded signing-free cleanup with aggregate receipts; generated promotion uses latest-per-contributor/SKU/layout/stage oracle evidence, distinct tenant users/devices, a deterministic 25% canary, a 24-hour burn-in, and a multi-contributor regression auto-kill; known packaged conflicts immediately kill distribution; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Tenant users are not yet production-reputable public accounts; generated candidates are not auto-promoted and reviewed recovery evidence cannot fill stored observations; regional canaries, IdP/device-risk/Sybil controls, governed field-application projections, and measured conflict SLOs remain incomplete; the independent witness service and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
 | Automatic purchasing | Reviewed plans can directly request guarded quantity-one attempts without a strategy and now expose an authoritative armed/blocked explanation; live legacy multi-unit strategy adds and all unqualified-lane matches fail over to notification before reservation; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 | Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
@@ -1549,19 +1576,21 @@ that a signed recipe and the fixed packaged oracle agree on while the bundled
 observer is missing that field. It deliberately cannot apply those values.
 Version 0.52 adds contributor-owned, append-only, idempotent confirmation,
 rejection, and revocation without connecting review to application or
-promotion. The system still does not prove public account reputation, collect
-region, fill stored observations, or promote/sign anything automatically. The
-broader phase remains open:
+promotion. Version 0.53 adds 90-day latest-activity expiry, bounded owner-scoped
+durable cleanup, and value-free aggregate deletion receipts without connecting
+retention to application or signing. The system still does not prove public
+account reputation, collect region, fill stored observations, or promote/sign
+anything automatically. The broader phase remains open:
 
 - Extend the shipped packaged/structured reader with maintainer-redacted live
   fixtures, then reputable contributor-deduplicated multi-device/account
   agreement. Contributor review is implemented but is not independent truth
 - Extend the shipped provenance-aware recovery quarantine and review ledger
-  with retention/deletion policy, independent-account and region quorum,
-  measured conflict handling, then a separately governed reversible read-only
-  application projection. Known packaged evidence remains authoritative; no
-  recipe may fill a missing stored field until every one of those gates is
-  visible and tested
+  beyond the shipped local retention/deletion policy with independent-account
+  and region quorum, measured conflict handling, then a separately governed
+  reversible read-only application projection. Known packaged evidence remains
+  authoritative; no recipe may fill a missing stored field until every one of
+  those gates is visible and tested
 - Extend the shipped tenant contributor/device dedupe, SKU/layout coverage,
   minimum canary time, deterministic cohort, and regression auto-kill with
   production IdP/device-risk eligibility, regions, reputation/Sybil defense,
@@ -1798,7 +1827,8 @@ and [optional permission guidance](https://developer.chrome.com/docs/extensions/
    read-only fields from the narrow local threshold. Packaged conflict
    adjudication, tenant-contributor dedupe, deterministic cohort canaries,
    burn-in, regression auto-kill, and append-only `not_applied` recovery
-   evidence plus contributor-owned confirm/reject/revoke review are implemented.
+   evidence plus contributor-owned confirm/reject/revoke review and bounded
+   90-day latest-activity retention with aggregate receipts are implemented.
    Public reputable-account evidence, region canaries, external witness
    operation, governed field-fill application, automatic validation/promotion,
    and automatic correction remain open.

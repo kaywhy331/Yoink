@@ -3109,5 +3109,83 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       )
       BEGIN SELECT RAISE(ABORT, 'observer recipe recovery reviews are append-only'); END;
     `
+  },
+  {
+    version: 46,
+    name: "observer_recipe_recovery_retention",
+    sql: `
+      CREATE TABLE observer_recipe_recovery_retention_receipts (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        policy_version TEXT NOT NULL
+          CHECK (policy_version = 'observer_recipe_recovery_retention_v1'),
+        retention_days INTEGER NOT NULL CHECK (retention_days = 90),
+        cutoff_at TEXT NOT NULL,
+        deleted_evidence_count INTEGER NOT NULL
+          CHECK (deleted_evidence_count BETWEEN 1 AND 500),
+        deleted_review_event_count INTEGER NOT NULL
+          CHECK (deleted_review_event_count BETWEEN 0 AND 1000000),
+        application_affected INTEGER NOT NULL DEFAULT 0 CHECK (application_affected = 0),
+        field_fill_applied INTEGER NOT NULL DEFAULT 0 CHECK (field_fill_applied = 0),
+        created_by_actor_id TEXT NOT NULL CHECK (length(created_by_actor_id) BETWEEN 3 AND 120),
+        privacy_classification TEXT NOT NULL DEFAULT 'restricted_user_aggregate'
+          CHECK (privacy_classification = 'restricted_user_aggregate'),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX observer_recipe_recovery_retention_receipts_owner_idx
+        ON observer_recipe_recovery_retention_receipts(
+          tenant_id, user_id, created_at DESC, id DESC
+        );
+      CREATE INDEX observer_recipe_recovery_evidence_owner_retention_idx
+        ON observer_recipe_recovery_evidence(
+          tenant_id, user_id, received_at, id
+        );
+      CREATE INDEX observer_recipe_recovery_reviews_retention_idx
+        ON observer_recipe_recovery_reviews(
+          tenant_id, user_id, evidence_id, created_at DESC
+        );
+
+      CREATE TRIGGER observer_recipe_recovery_retention_receipts_no_update
+      BEFORE UPDATE ON observer_recipe_recovery_retention_receipts
+      BEGIN SELECT RAISE(ABORT, 'observer recipe recovery retention receipts are append-only'); END;
+
+      CREATE TRIGGER observer_recipe_recovery_retention_receipts_no_delete
+      BEFORE DELETE ON observer_recipe_recovery_retention_receipts
+      WHEN EXISTS (
+        SELECT 1 FROM users WHERE tenant_id = OLD.tenant_id AND id = OLD.user_id
+      )
+      BEGIN SELECT RAISE(ABORT, 'observer recipe recovery retention receipts are append-only'); END;
+
+      DROP TRIGGER observer_recipe_recovery_reviews_no_delete;
+      CREATE TRIGGER observer_recipe_recovery_reviews_no_delete
+      BEFORE DELETE ON observer_recipe_recovery_reviews
+      WHEN EXISTS (
+        SELECT 1 FROM users WHERE tenant_id = OLD.tenant_id AND id = OLD.user_id
+      ) AND EXISTS (
+        SELECT 1 FROM observer_recipe_recovery_evidence
+        WHERE tenant_id = OLD.tenant_id AND user_id = OLD.user_id AND id = OLD.evidence_id
+      )
+      BEGIN SELECT RAISE(ABORT, 'observer recipe recovery reviews are append-only'); END;
+
+      DROP TRIGGER observer_recipe_recovery_evidence_no_delete;
+      CREATE TRIGGER observer_recipe_recovery_evidence_no_delete
+      BEFORE DELETE ON observer_recipe_recovery_evidence
+      WHEN EXISTS (
+        SELECT 1 FROM users WHERE tenant_id = OLD.tenant_id AND id = OLD.user_id
+      ) AND NOT (
+        OLD.received_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-90 days')
+        AND NOT EXISTS (
+          SELECT 1 FROM observer_recipe_recovery_reviews review
+          WHERE review.tenant_id = OLD.tenant_id
+            AND review.user_id = OLD.user_id
+            AND review.evidence_id = OLD.id
+            AND review.created_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-90 days')
+        )
+      )
+      BEGIN SELECT RAISE(ABORT, 'observer recipe recovery evidence is retained until bounded cleanup'); END;
+    `
   }
 ]);

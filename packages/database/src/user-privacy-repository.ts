@@ -36,6 +36,7 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   observer_recipe_candidates: "exported",
   observer_recipe_lifecycle_events: "exported",
   observer_recipe_recovery_evidence: "exported",
+  observer_recipe_recovery_retention_receipts: "exported",
   observer_recipe_recovery_reviews: "exported",
   observer_recipe_trials: "exported",
   offer_snapshots: "exported",
@@ -295,10 +296,12 @@ export class UserPrivacyRepository {
            + (SELECT COUNT(*) FROM observer_recipe_lifecycle_events WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_trials WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM observer_recipe_recovery_evidence WHERE tenant_id = ? AND user_id = ?)
-           + (SELECT COUNT(*) FROM observer_recipe_recovery_reviews WHERE tenant_id = ? AND user_id = ?) AS count`,
+           + (SELECT COUNT(*) FROM observer_recipe_recovery_reviews WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM observer_recipe_recovery_retention_receipts
+               WHERE tenant_id = ? AND user_id = ?) AS count`,
         tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
         tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId, tenantId, userId
+        tenantId, userId, tenantId, userId, tenantId, userId
       ),
       activity_and_delivery: count(
         `SELECT
@@ -781,6 +784,16 @@ export class UserPrivacyRepository {
                 evidence_hash, actor_kind, actor_id, created_at
          FROM observer_recipe_recovery_reviews WHERE tenant_id = ? AND user_id = ?
          ORDER BY evidence_id, sequence`,
+        tenantId, userId
+      ),
+      observer_recipe_recovery_retention_receipts: this.rows(
+        `SELECT id, policy_version, retention_days, cutoff_at,
+                deleted_evidence_count, deleted_review_event_count,
+                application_affected, field_fill_applied,
+                privacy_classification, created_at
+         FROM observer_recipe_recovery_retention_receipts
+         WHERE tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
         tenantId, userId
       )
     };

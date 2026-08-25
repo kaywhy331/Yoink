@@ -15,6 +15,11 @@ confirmation, rejection, or revoked confirmation labels this evidence but
 still cannot apply it. See
 [observer-recipe recovery user review](OBSERVER_RECIPE_RECOVERY_USER_REVIEW.md).
 
+Yoink 0.53 adds a 90-day latest-activity retention policy, bounded durable
+cleanup, and value-free aggregate deletion receipts. Expiry removes evidence
+and reviews; it does not apply them. See
+[observer-recipe recovery retention](OBSERVER_RECIPE_RECOVERY_RETENTION.md).
+
 ## Trial contract v3
 
 Contract v3 retains every value-free v2 field-state receipt and adds an
@@ -79,8 +84,9 @@ current state is derived from the latest event without editing evidence.
 
 The minimal user dashboard presents confirm, reject, and withdraw controls.
 The admin registry shows review state and event count. Review history is part
-of the user's data export. Direct updates/deletes remain blocked while deletion
-of the owning user intentionally cascades both ledgers.
+of the user's data export. Direct updates and premature deletes remain blocked.
+Version 0.53 permits only bounded time-qualified evidence cleanup (with review
+cascade and aggregate receipt) or deletion of the owning user.
 
 ## Closed application boundary
 
@@ -89,14 +95,17 @@ qualification, job, or action endpoint for recovery evidence. Health and
 snapshot contracts separately report:
 
 - recovery-evidence storage implemented: `true`;
+- recovery-evidence retention and receipts implemented: `true`;
+- recovery-evidence retention days: `90`;
 - recovery-evidence application enabled: `false`; and
 - observer-recipe field fill enabled: `false`.
 
 Before a later release may apply even a read-only fill, Yoink still needs
 production-reputable independent accounts and device-risk controls,
-contributor/region quorum, measured conflict handling, retention policy, and a
-separately governed reversible provenance-aware projection. Contributor
-confirmation/rejection/revocation now exists but supplies no application
+contributor/region quorum, measured conflict handling, external consistency
+monitoring, and a separately governed reversible provenance-aware projection.
+The local retention policy and contributor
+confirmation/rejection/revocation now exist but supply no application
 authority. Remote recipes remain permanently isolated from navigation,
 identity decisions, clicks, checkout, and mutation.
 
@@ -112,6 +121,8 @@ Automated coverage proves that:
   quarantined;
 - contributor reviews are owner-scoped, sequenced, idempotent, revocable,
   exportable, and never edit evidence;
+- latest activity controls bounded expiry, and receipts contain counts rather
+  than deleted values or item identifiers;
 - evidence ingestion changes no observation, qualification, mission, or job;
   and
 - the fixed oracle still has no click, navigation, fetch, or mutation path.

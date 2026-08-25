@@ -329,7 +329,8 @@ test("the user dashboard reviews quarantined store details with closed, revocabl
     reviewState: "unreviewed",
     reviewSequence: 0,
     confirmableByCurrentUser: true,
-    applicationState: "not_applied"
+    applicationState: "not_applied",
+    retentionExpiresAt: "2026-11-23T12:00:00.000Z"
   };
   const overview = {
     settings: { actionsPaused: true, executionMode: "shadow", taxBps: 0, storeAllowancesCents: {} },
@@ -363,6 +364,14 @@ test("the user dashboard reviews quarantined store details with closed, revocabl
       if (path === "/api/v1/user/community/recovery-evidence") {
         return { ok: true, status: 200, json: async () => ({
           items: [{ ...evidence }],
+          retention: {
+            policyVersion: "observer_recipe_recovery_retention_v1",
+            retentionDays: 90,
+            activityResetsExpiry: true,
+            receiptCount: 0,
+            applicationAffected: false,
+            fieldFillEnabled: false
+          },
           reviewAffectsApplication: false,
           fieldFillEnabled: false
         }) };
@@ -382,6 +391,8 @@ test("the user dashboard reviews quarantined store details with closed, revocabl
     await eventually(() => assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /\$7\.98/));
     assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /Pokémon Center item 10-10320-101/);
     assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /never applied/i);
+    assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /Automatically removed/i);
+    assert.match(browser.document.querySelector("#recoveryReviewSummary")?.textContent ?? "", /90 inactive days/i);
     (browser.document.querySelector('[data-recovery-decision="rejected"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(reviews.length, 1));
     assert.deepEqual(reviews[0], {

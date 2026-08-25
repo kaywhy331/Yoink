@@ -63,7 +63,12 @@ test("the async runtime executes every due idempotent maintenance handler outsid
       "SELECT result_json AS resultJson FROM background_tasks WHERE task_kind = 'operational_telemetry_retention'"
     )?.resultJson ?? "{}") as Record<string, unknown>;
     assert.equal(retentionResult.deletedTaskRuns, 0);
+    assert.equal(retentionResult.deletedRecoveryEvidence, 0);
+    assert.equal(retentionResult.deletedRecoveryReviewEvents, 0);
+    assert.equal(retentionResult.recoveryEvidenceRetentionDays, 90);
+    assert.equal(retentionResult.recoveryEvidenceRetentionReceiptId, "");
     assert.match(String(retentionResult.taskHistoryCutoffAt), /^\d{4}-\d{2}-\d{2}T/);
+    assert.match(String(retentionResult.recoveryEvidenceCutoffAt), /^\d{4}-\d{2}-\d{2}T/);
     const witnessResult = JSON.parse(db.get<{ resultJson: string }>(
       "SELECT result_json AS resultJson FROM background_tasks WHERE task_kind = 'observer_recipe_witness_refresh'"
     )?.resultJson ?? "{}") as Record<string, unknown>;

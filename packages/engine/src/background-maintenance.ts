@@ -15,6 +15,7 @@ import { ExecutionRepository } from "../../database/src/execution-repository.js"
 import { HostedDeliveryRepository } from "../../database/src/hosted-delivery-repository.js";
 import { NotificationRepository } from "../../database/src/notification-repository.js";
 import { OperationalTelemetryRepository } from "../../database/src/operational-telemetry-repository.js";
+import { ObserverRecipeRecoveryRetentionRepository } from "../../database/src/observer-recipe-recovery-retention-repository.js";
 import { OperatorAlertRepository } from "../../database/src/operator-alert-repository.js";
 import { SpendLedgerRepository } from "../../database/src/spend-ledger-repository.js";
 import { runWithRequestScope } from "../../database/src/request-scope.js";
@@ -37,6 +38,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
   private readonly hostedDelivery: HostedDeliveryRepository;
   private readonly notifications: NotificationRepository;
   private readonly operationalTelemetry: OperationalTelemetryRepository;
+  private readonly observerRecipeRecoveryRetention: ObserverRecipeRecoveryRetentionRepository;
   private readonly operatorAlerts: OperatorAlertRepository;
   private readonly observerRecipeCandidates: ObserverRecipeCandidateEvaluationService;
   private readonly spendLedger: SpendLedgerRepository;
@@ -49,6 +51,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
     this.hostedDelivery = new HostedDeliveryRepository(db);
     this.notifications = new NotificationRepository(db);
     this.operationalTelemetry = new OperationalTelemetryRepository(db);
+    this.observerRecipeRecoveryRetention = new ObserverRecipeRecoveryRetentionRepository(db);
     this.operatorAlerts = new OperatorAlertRepository(db);
     this.observerRecipeCandidates = new ObserverRecipeCandidateEvaluationService(db);
     this.spendLedger = new SpendLedgerRepository(db);
@@ -122,12 +125,14 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
       case "operational_telemetry_retention": {
         const result = this.operationalTelemetry.pruneExpired(now);
         const taskHistory = this.backgroundTasks.pruneCompletedHistory(now);
+        const recoveryEvidence = this.observerRecipeRecoveryRetention.prune(now);
         return {
           deletedRollupRows: result.deletedRollupRows,
           deletedErrorEvents: result.deletedErrorEvents,
           cutoffAt: result.cutoffAt,
           receiptId: result.receiptId,
-          ...taskHistory
+          ...taskHistory,
+          ...recoveryEvidence
         };
       }
     }

@@ -115,6 +115,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
       observerRecipeRecoveryEvidenceStorageImplemented: true,
       observerRecipeRecoveryUserReviewImplemented: true,
       observerRecipeRecoveryReviewRevocationImplemented: true,
+      observerRecipeRecoveryRetentionImplemented: true,
+      observerRecipeRecoveryRetentionDays: 90,
+      observerRecipeRecoveryRetentionReceiptsImplemented: true,
       observerRecipeRecoveryReviewAffectsApplication: false,
       observerRecipeRecoveryEvidenceApplicationEnabled: false,
       observerRecipeFieldFillEnabled: false,
@@ -302,6 +305,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.observerRecipeRecoveryEvidenceStorageImplemented, true);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryUserReviewImplemented, true);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryReviewRevocationImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeRecoveryRetentionImplemented, true);
+    assert.equal(snapshot.capabilities.observerRecipeRecoveryRetentionDays, 90);
+    assert.equal(snapshot.capabilities.observerRecipeRecoveryRetentionReceiptsImplemented, true);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryReviewAffectsApplication, false);
     assert.equal(snapshot.capabilities.observerRecipeRecoveryEvidenceApplicationEnabled, false);
     assert.equal(snapshot.capabilities.observerRecipeFieldFillEnabled, false);

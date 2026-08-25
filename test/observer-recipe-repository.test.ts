@@ -25,6 +25,11 @@ import {
   ObserverRecipeRepository,
   observerRecipeCanaryCohortEligible
 } from "../packages/database/src/observer-recipe-repository.js";
+import {
+  OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
+  OBSERVER_RECIPE_RECOVERY_RETENTION_MAXIMUM_BATCH,
+  OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION
+} from "../packages/database/src/observer-recipe-recovery-retention-repository.js";
 import { ObserverRepairCandidateRepository } from "../packages/database/src/observer-repair-candidate-repository.js";
 import {
   HOSTED_PRINCIPAL_CONFIRMATION,
@@ -678,7 +683,7 @@ test("oracle-agreed missing-field values enter an append-only quarantine without
     );
     assert.throws(
       () => db.run("DELETE FROM observer_recipe_recovery_evidence"),
-      /append-only/
+      /retained until bounded cleanup/
     );
     assert.throws(
       () => db.run("UPDATE observer_recipe_recovery_reviews SET decision = 'confirmed'"),
@@ -695,6 +700,169 @@ test("oracle-agreed missing-field values enter an append-only quarantine without
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM observer_recipe_recovery_evidence"
     )?.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("recovery evidence expires by latest activity through a bounded owner-scoped worker with aggregate receipts", () => {
+  const db = new YoinkDatabase();
+  try {
+    const retentionNow = Date.now();
+    const oldNow = retentionNow - (OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS + 1) * 24 * 60 * 60_000;
+    const paired = device(db, oldNow);
+    const other = contributorDevice(db, "observer_retention_other", oldNow + 100);
+    const trust = ObserverRecipeTrustAuthority.ephemeral(oldNow);
+    const repository = new ObserverRecipeRepository(db, trust);
+    installRootedTrust(repository, trust, oldNow + 1_500);
+    const input = proposal("amazon-recovery-retention");
+    input.expiresAt = new Date(oldNow + 7 * 24 * 60 * 60_000).toISOString();
+    input.fields = { unitPrice: { mode: "text", selectors: [".a-price .a-offscreen"] } };
+    const created = repository.propose(input, oldNow + 2_000);
+    repository.promote(String(created.id), {
+      targetState: "shadow",
+      confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE"
+    }, oldNow + 3_000);
+    repository.recordTrial(paired.id, recoveryTrial(
+      String(created.id), "amazon-recovery-retention", "B002OB49L4", oldNow + 4_000, "unitPrice", 1_368
+    ), oldNow + 4_500);
+    repository.recordTrial(paired.id, recoveryTrial(
+      String(created.id), "amazon-recovery-retention", "B0DCGQ6CJD", oldNow + 6_000, "unitPrice", 1_060,
+      "8".repeat(64)
+    ), oldNow + 6_500);
+    runWithRequestScope(other.scope, () => repository.recordTrial(other.paired.id, recoveryTrial(
+      String(created.id), "amazon-recovery-retention", "B0F2BDXW4J", oldNow + 8_000, "unitPrice", 12_199,
+      "7".repeat(64)
+    ), oldNow + 8_500));
+    const evidence = repository.recoveryEvidence();
+    const expiredReviewed = evidence.find((item) => item.retailerSku === "B002OB49L4");
+    const recentlyReviewed = evidence.find((item) => item.retailerSku === "B0DCGQ6CJD");
+    const otherEvidence = evidence.find((item) => item.retailerSku === "B0F2BDXW4J");
+    assert.ok(expiredReviewed && recentlyReviewed && otherEvidence);
+    repository.reviewRecoveryEvidence(String(expiredReviewed.id), {
+      contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+      decision: "confirmed",
+      confirmation: CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+    }, oldNow + 5_000);
+    repository.reviewRecoveryEvidence(String(recentlyReviewed.id), {
+      contractVersion: OBSERVER_RECIPE_RECOVERY_REVIEW_CONTRACT_VERSION,
+      decision: "confirmed",
+      confirmation: CONFIRM_OBSERVER_RECIPE_RECOVERY_EVIDENCE
+    }, retentionNow - 10 * 24 * 60 * 60_000);
+    const protectedProjection = repository.userRecoveryEvidence().find(
+      (item) => item.id === recentlyReviewed.id
+    );
+    assert.equal(protectedProjection?.retentionDays, OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS);
+    assert.equal(protectedProjection?.retentionPolicyVersion, OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION);
+    assert.equal(
+      new Date(String(protectedProjection?.retentionExpiresAt)).getTime(),
+      retentionNow + 80 * 24 * 60 * 60_000
+    );
+    assert.throws(
+      () => db.run("DELETE FROM observer_recipe_recovery_evidence WHERE id = ?", String(recentlyReviewed.id)),
+      /retained until bounded cleanup/
+    );
+    assert.throws(
+      () => repository.pruneRecoveryEvidence(retentionNow),
+      /trusted background service scope/
+    );
+    const operationalBefore = {
+      observations: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count,
+      qualifications: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_qualifications")?.count,
+      jobs: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count,
+      missions: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count
+    };
+    const localResult = runWithRequestScope({
+      ...SERVICE_SCOPE,
+      actorId: "observer_recovery_retention_worker"
+    }, () => repository.pruneRecoveryEvidence(retentionNow));
+    assert.deepEqual({
+      deletedRecoveryEvidence: localResult.deletedRecoveryEvidence,
+      deletedRecoveryReviewEvents: localResult.deletedRecoveryReviewEvents,
+      recoveryEvidenceRetentionDays: localResult.recoveryEvidenceRetentionDays
+    }, {
+      deletedRecoveryEvidence: 1,
+      deletedRecoveryReviewEvents: 1,
+      recoveryEvidenceRetentionDays: 90
+    });
+    assert.match(localResult.recoveryEvidenceRetentionReceiptId, /^observer_recovery_retention_/);
+    assert.equal(OBSERVER_RECIPE_RECOVERY_RETENTION_MAXIMUM_BATCH, 500);
+    assert.deepEqual(repository.recoveryEvidence().map((item) => item.retailerSku).sort(), [
+      "B0DCGQ6CJD",
+      "B0F2BDXW4J"
+    ]);
+    const localStatus = repository.recoveryRetentionStatus(20, true, retentionNow) as {
+      policyVersion: string;
+      retentionDays: number;
+      activityResetsExpiry: boolean;
+      maximumEvidencePerRun: number;
+      eligibleEvidence: number;
+      receiptCount: number;
+      deletedEvidenceCount: number;
+      deletedReviewEventCount: number;
+      receipts: Array<Record<string, unknown>>;
+      applicationAffected: boolean;
+      fieldFillEnabled: boolean;
+    };
+    assert.equal(localStatus.policyVersion, OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION);
+    assert.equal(localStatus.retentionDays, 90);
+    assert.equal(localStatus.activityResetsExpiry, true);
+    assert.equal(localStatus.maximumEvidencePerRun, 500);
+    assert.equal(localStatus.eligibleEvidence, 0);
+    assert.equal(localStatus.receiptCount, 1);
+    assert.equal(localStatus.deletedEvidenceCount, 1);
+    assert.equal(localStatus.deletedReviewEventCount, 1);
+    assert.equal(localStatus.applicationAffected, false);
+    assert.equal(localStatus.fieldFillEnabled, false);
+    assert.equal(localStatus.receipts[0]?.normalizedValuesRecorded, false);
+    assert.equal("normalizedValue" in (localStatus.receipts[0] ?? {}), false);
+    assert.throws(
+      () => db.run("UPDATE observer_recipe_recovery_retention_receipts SET retention_days = 90"),
+      /append-only/
+    );
+    assert.throws(
+      () => db.run("DELETE FROM observer_recipe_recovery_retention_receipts"),
+      /append-only/
+    );
+    const retentionAudit = db.get<{ dataJson: string }>(
+      "SELECT data_json AS dataJson FROM audit_events WHERE event_type = 'observer_recipe_recovery_retention_applied'"
+    );
+    assert.ok(retentionAudit);
+    assert.equal(retentionAudit.dataJson.includes("1368"), false);
+    assert.equal(retentionAudit.dataJson.includes("B002OB49L4"), false);
+    const exported = new UserPrivacyRepository(db).export(retentionNow);
+    const exportedRetention = (
+      exported.data.community_and_maintenance as Record<string, unknown>
+    ).observer_recipe_recovery_retention_receipts as Array<Record<string, unknown>>;
+    assert.equal(exportedRetention.length, 1);
+    assert.equal(exportedRetention[0]?.deleted_evidence_count, 1);
+    assert.equal("normalized_value" in (exportedRetention[0] ?? {}), false);
+    assert.deepEqual({
+      observations: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count,
+      qualifications: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_qualifications")?.count,
+      jobs: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count,
+      missions: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count
+    }, operationalBefore);
+    const otherResult = runWithRequestScope({
+      tenantId: LOCAL_TENANT_ID,
+      userId: "observer_retention_other",
+      actorKind: "service",
+      actorId: "observer_recovery_retention_worker"
+    }, () => repository.pruneRecoveryEvidence(retentionNow));
+    assert.equal(otherResult.deletedRecoveryEvidence, 1);
+    assert.deepEqual(repository.recoveryEvidence().map((item) => item.retailerSku), ["B0DCGQ6CJD"]);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM observer_recipe_recovery_retention_receipts WHERE user_id = 'observer_retention_other'"
+    )?.count, 1);
+    db.run("DELETE FROM users WHERE tenant_id = ? AND id = 'observer_retention_other'", LOCAL_TENANT_ID);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM observer_recipe_recovery_retention_receipts WHERE user_id = 'observer_retention_other'"
+    )?.count, 0);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM observer_recipe_recovery_retention_receipts WHERE user_id = ?",
+      LOCAL_USER_ID
+    )?.count, 1);
+    db.assertIntegrity();
   } finally {
     db.close();
   }

@@ -13,6 +13,7 @@ const state = {
   productLinkPreviewInput: "",
   privacy: null,
   recoveryEvidence: [],
+  recoveryRetention: null,
   query: ""
 };
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -228,12 +229,13 @@ function recoveryValue(item) {
 
 function renderRecoveryEvidence() {
   const items = Array.isArray(state.recoveryEvidence) ? state.recoveryEvidence : [];
+  const retentionDays = Number(state.recoveryRetention?.retentionDays || 90);
   const waiting = items.filter((item) => !["confirmed", "rejected"].includes(item.reviewState)).length;
   $("#recoveryReviewSummary").textContent = !items.length
-    ? "Nothing needs your review right now. Yoink will ask only when two independent page readers agree on a missing public store detail."
+    ? `Nothing needs your review right now. Quarantined details are automatically removed after ${retentionDays} days without new review activity.`
     : waiting
-      ? `${waiting} of ${items.length} quarantined store detail${items.length === 1 ? "" : "s"} can use your review.`
-      : `You reviewed all ${items.length} quarantined store detail${items.length === 1 ? "" : "s"}. You can still change or withdraw an answer.`;
+      ? `${waiting} of ${items.length} quarantined store detail${items.length === 1 ? "" : "s"} can use your review. Details expire after ${retentionDays} inactive days.`
+      : `You reviewed all ${items.length} quarantined store detail${items.length === 1 ? "" : "s"}. You can still change or withdraw an answer; review activity resets the ${retentionDays}-day expiry.`;
   const fieldNames = {
     availability: "Availability",
     unitPrice: "Price",
@@ -256,7 +258,7 @@ function renderRecoveryEvidence() {
     const revoke = reviewState === "confirmed"
       ? `<button class="button quiet" data-recovery-evidence="${escapeHtml(item.id)}" data-recovery-decision="revoked" type="button">Withdraw confirmation</button>`
       : "";
-    return `<article class="recovery-review-item"><div><h4>${escapeHtml(retailerDisplayName(item.retailerId))} item ${escapeHtml(item.retailerSku)} · ${escapeHtml(fieldNames[item.field] || words(item.field))}</h4><p>Yoink read <strong>${escapeHtml(recoveryValue(item))}</strong>. Does that match what the store page showed?</p><div class="recovery-review-meta"><span class="tag ${stateKind}">${escapeHtml(stateLabel)}</span><span class="tag">Quarantined · never applied</span></div></div><div class="recovery-review-actions">${item.confirmableByCurrentUser === false ? "" : `${confirm}${reject}${revoke}`}</div></article>`;
+    return `<article class="recovery-review-item"><div><h4>${escapeHtml(retailerDisplayName(item.retailerId))} item ${escapeHtml(item.retailerSku)} · ${escapeHtml(fieldNames[item.field] || words(item.field))}</h4><p>Yoink read <strong>${escapeHtml(recoveryValue(item))}</strong>. Does that match what the store page showed?</p><div class="recovery-review-meta"><span class="tag ${stateKind}">${escapeHtml(stateLabel)}</span><span class="tag">Quarantined · never applied</span>${item.retentionExpiresAt ? `<span class="tag">Automatically removed ${escapeHtml(relative(item.retentionExpiresAt))}</span>` : ""}</div></div><div class="recovery-review-actions">${item.confirmableByCurrentUser === false ? "" : `${confirm}${reject}${revoke}`}</div></article>`;
   }).join("");
 }
 
@@ -369,6 +371,7 @@ async function refresh() {
   state.proposals = proposals.items || [];
   state.privacy = privacy.inventory || null;
   state.recoveryEvidence = recoveryEvidence.items || [];
+  state.recoveryRetention = recoveryEvidence.retention || null;
   renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals(); renderPrivacy(); renderRecoveryEvidence();
 }
 

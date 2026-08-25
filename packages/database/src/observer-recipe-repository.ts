@@ -53,6 +53,12 @@ import {
 } from "../../observer-registry/src/witness.js";
 import { AuditRepository } from "./audit-repository.js";
 import { YoinkDatabase } from "./database.js";
+import {
+  OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
+  OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION,
+  ObserverRecipeRecoveryRetentionRepository,
+  type ObserverRecipeRecoveryRetentionResult
+} from "./observer-recipe-recovery-retention-repository.js";
 import { currentRequestScope } from "./request-scope.js";
 
 const FIELD_NAMES = new Set(OBSERVER_RECIPE_FIELDS);
@@ -68,6 +74,7 @@ const RESERVED_PROVENANCE_CODES = new Set(["privacy_bounded_repair_miner"]);
 const MAX_TRIAL_AGE_MS = 10 * 60_000;
 export const OBSERVER_RECIPE_CANARY_COHORT_PERCENT = 25;
 export const OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS = 24 * 60 * 60_000;
+const DAY_MS = 24 * 60 * 60_000;
 const GENERATED_CANARY_MINIMUM_CONTRIBUTORS = 2;
 const GENERATED_TRUSTED_MINIMUM_CONTRIBUTORS = 3;
 const CANARY_MINIMUM_COHORT_TRIALS = 3;
@@ -710,6 +717,7 @@ function recipeProjection(row: RecipeRow, trials: TrialSummary): Record<string, 
 
 export class ObserverRecipeRepository {
   private readonly audit: AuditRepository;
+  private readonly recoveryRetention: ObserverRecipeRecoveryRetentionRepository;
   private readonly witnessVerifier: ObserverRecipeWitnessVerifier | null;
   private readonly witnessRequired: boolean;
   private readonly witnessEndpointOrigin: string;
@@ -720,6 +728,7 @@ export class ObserverRecipeRepository {
     options: ObserverRecipeRepositoryOptions = {}
   ) {
     this.audit = new AuditRepository(db);
+    this.recoveryRetention = new ObserverRecipeRecoveryRetentionRepository(db);
     this.witnessVerifier = options.witnessVerifier ?? null;
     this.witnessRequired = options.witnessRequired === true;
     this.witnessEndpointOrigin = String(options.witnessEndpointOrigin ?? "");
@@ -1738,6 +1747,14 @@ export class ObserverRecipeRepository {
     };
   }
 
+  pruneRecoveryEvidence(now = Date.now()): ObserverRecipeRecoveryRetentionResult {
+    return this.recoveryRetention.prune(now);
+  }
+
+  recoveryRetentionStatus(limit = 20, ownerOnly = false, now = Date.now()): Record<string, unknown> {
+    return this.recoveryRetention.status(limit, ownerOnly, now);
+  }
+
   private recoveryEvidenceRows(
     limit: number,
     ownerOnly: boolean,
@@ -1812,6 +1829,8 @@ export class ObserverRecipeRepository {
   }
 
   private recoveryEvidenceProjection(row: RecoveryEvidenceRow): Record<string, unknown> {
+    const activityAt = row.reviewedAt && row.reviewedAt > row.receivedAt ? row.reviewedAt : row.receivedAt;
+    const activityTime = new Date(activityAt).getTime();
     return {
       id: row.id,
       trialId: row.trialId,
@@ -1835,6 +1854,12 @@ export class ObserverRecipeRepository {
       reviewedAt: row.reviewedAt ?? "",
       confirmableByCurrentUser: row.userId === currentRequestScope().userId,
       reviewAffectsApplication: false,
+      retentionPolicyVersion: OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION,
+      retentionDays: OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
+      retentionActivityAt: activityAt,
+      retentionExpiresAt: Number.isFinite(activityTime)
+        ? nowIso(activityTime + OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS * DAY_MS)
+        : "",
       observedAt: row.observedAt,
       receivedAt: row.receivedAt
     };
@@ -1933,6 +1958,17 @@ export class ObserverRecipeRepository {
       currentRequestScope().tenantId,
       currentRequestScope().tenantId
     );
+    const retention = this.db.get<{
+      receipts: number;
+      deletedEvidence: number;
+      deletedReviewEvents: number;
+    }>(
+      `SELECT COUNT(*) AS receipts,
+              COALESCE(SUM(deleted_evidence_count), 0) AS deletedEvidence,
+              COALESCE(SUM(deleted_review_event_count), 0) AS deletedReviewEvents
+       FROM observer_recipe_recovery_retention_receipts WHERE tenant_id = ?`,
+      currentRequestScope().tenantId
+    );
     return {
       observerRecipeCandidates: Number(row?.candidates ?? 0),
       activeObserverRecipes: Number(row?.active ?? 0),
@@ -1954,6 +1990,9 @@ export class ObserverRecipeRepository {
       rejectedObserverRecipeRecoveryEvidence: Number(reviews?.rejected ?? 0),
       revokedObserverRecipeRecoveryEvidence: Number(reviews?.revoked ?? 0),
       unreviewedObserverRecipeRecoveryEvidence: Number(reviews?.unreviewed ?? 0),
+      observerRecipeRecoveryRetentionReceipts: Number(retention?.receipts ?? 0),
+      retainedObserverRecipeRecoveryEvidenceDeleted: Number(retention?.deletedEvidence ?? 0),
+      retainedObserverRecipeRecoveryReviewEventsDeleted: Number(retention?.deletedReviewEvents ?? 0),
       observerRecipeTrustManifests: Number(row?.trustManifests ?? 0),
       observerRecipeTransparencyEvents: Number(row?.transparencyEvents ?? 0),
       observerRecipeWitnessReceipts: Number(row?.witnessReceipts ?? 0),

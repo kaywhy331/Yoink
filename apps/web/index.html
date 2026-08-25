@@ -273,7 +273,7 @@
           <div class="dialog-actions"><button class="button primary" type="submit">Propose quarantined recipe</button></div>
         </form>
         <div class="observer-recipe-list" id="observerRecipeList"></div>
-        <div class="panel-heading compact-heading"><div><p class="eyebrow">Quarantined recovery evidence</p><h3>Normalized missing-field previews</h3><p>A row appears only when a signed recipe and the packaged structured-page oracle agree while the bundled observer is missing that field. These previews are append-only, review-only, and never applied to observations or actions.</p></div><span class="mode-chip">NOT APPLIED</span></div>
+        <div class="panel-heading compact-heading"><div><p class="eyebrow">Quarantined recovery evidence</p><h3>Normalized missing-field previews</h3><p id="observerRecoveryPolicy">A row appears only when a signed recipe and the packaged structured-page oracle agree while the bundled observer is missing that field. These previews are review-only, expire under a bounded policy, and are never applied to observations or actions.</p></div><span class="mode-chip">NOT APPLIED</span></div>
         <div class="observer-recipe-list" id="observerRecoveryList"></div>
       </section>
       <section class="panel community-panel">

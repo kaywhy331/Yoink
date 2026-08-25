@@ -95,6 +95,11 @@ import {
   ObserverRecipeRepository
 } from "../../../packages/database/src/observer-recipe-repository.js";
 import {
+  OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
+  OBSERVER_RECIPE_RECOVERY_RETENTION_MAXIMUM_BATCH,
+  OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION
+} from "../../../packages/database/src/observer-recipe-recovery-retention-repository.js";
+import {
   OPERATIONAL_TELEMETRY_WINDOWS,
   OperationalTelemetryRepository,
   type OperationalRouteKey,
@@ -631,6 +636,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           observerRecipeRecoveryEvidenceStorageImplemented: true,
           observerRecipeRecoveryUserReviewImplemented: true,
           observerRecipeRecoveryReviewRevocationImplemented: true,
+          observerRecipeRecoveryRetentionImplemented: true,
+          observerRecipeRecoveryRetentionDays: OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
+          observerRecipeRecoveryRetentionReceiptsImplemented: true,
           observerRecipeRecoveryReviewAffectsApplication: false,
           observerRecipeRecoveryEvidenceApplicationEnabled: false,
           observerRecipeFieldFillEnabled: false,
@@ -1382,6 +1390,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             publicIndependentAccountQuorum: false,
             recoveryEvidencePolicy: "oracle_agreed_missing_field_quarantine",
             recoveryEvidenceUserReview: "append_only_owner_confirm_reject_revoke",
+            recoveryEvidenceRetention: {
+              policyVersion: OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION,
+              retentionDays: OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
+              maximumEvidencePerRun: OBSERVER_RECIPE_RECOVERY_RETENTION_MAXIMUM_BATCH,
+              activityResetsExpiry: true,
+              ...observerRecipes.recoveryRetentionStatus(20, false)
+            },
             recoveryEvidenceReviewAffectsApplication: false,
             recoveryEvidenceApplication: false,
             recipeFieldFill: false,
@@ -1475,6 +1490,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             observerRecipeRecoveryEvidenceStorageImplemented: true,
             observerRecipeRecoveryUserReviewImplemented: true,
             observerRecipeRecoveryReviewRevocationImplemented: true,
+            observerRecipeRecoveryRetentionImplemented: true,
+            observerRecipeRecoveryRetentionDays: OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
+            observerRecipeRecoveryRetentionReceiptsImplemented: true,
             observerRecipeRecoveryReviewAffectsApplication: false,
             observerRecipeRecoveryEvidenceApplicationEnabled: false,
             observerRecipeFieldFillEnabled: false,
@@ -1890,6 +1908,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/community/recovery-evidence") {
         json(response, 200, {
           items: observerRecipes.userRecoveryEvidence(100),
+          retention: observerRecipes.recoveryRetentionStatus(20, true),
           reviewAffectsApplication: false,
           fieldFillEnabled: false
         });

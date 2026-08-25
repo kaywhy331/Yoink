@@ -146,10 +146,22 @@ test("the signed observer registry distributes only promoted recipes to capable 
     const userEvidence = await userEvidenceResponse.json() as {
       reviewAffectsApplication: boolean;
       fieldFillEnabled: boolean;
+      retention: {
+        policyVersion: string;
+        retentionDays: number;
+        activityResetsExpiry: boolean;
+        receiptCount: number;
+        applicationAffected: boolean;
+      };
       items: Array<Record<string, unknown>>;
     };
     assert.equal(userEvidence.reviewAffectsApplication, false);
     assert.equal(userEvidence.fieldFillEnabled, false);
+    assert.equal(userEvidence.retention.policyVersion, "observer_recipe_recovery_retention_v1");
+    assert.equal(userEvidence.retention.retentionDays, 90);
+    assert.equal(userEvidence.retention.activityResetsExpiry, true);
+    assert.equal(userEvidence.retention.receiptCount, 0);
+    assert.equal(userEvidence.retention.applicationAffected, false);
     assert.equal(userEvidence.items.length, 1);
     assert.equal(userEvidence.items[0]?.reviewState, "unreviewed");
     assert.equal(userEvidence.items[0]?.confirmableByCurrentUser, true);
@@ -198,6 +210,7 @@ test("the signed observer registry distributes only promoted recipes to capable 
         publicIndependentAccountQuorum: boolean;
         recoveryEvidencePolicy: string;
         recoveryEvidenceUserReview: string;
+        recoveryEvidenceRetention: Record<string, unknown>;
         recoveryEvidenceReviewAffectsApplication: boolean;
         recoveryEvidenceApplication: boolean;
         recipeFieldFill: boolean;
@@ -221,6 +234,10 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(snapshot.observerRegistry.publicIndependentAccountQuorum, false);
     assert.equal(snapshot.observerRegistry.recoveryEvidencePolicy, "oracle_agreed_missing_field_quarantine");
     assert.equal(snapshot.observerRegistry.recoveryEvidenceUserReview, "append_only_owner_confirm_reject_revoke");
+    assert.equal(snapshot.observerRegistry.recoveryEvidenceRetention.policyVersion, "observer_recipe_recovery_retention_v1");
+    assert.equal(snapshot.observerRegistry.recoveryEvidenceRetention.retentionDays, 90);
+    assert.equal(snapshot.observerRegistry.recoveryEvidenceRetention.activityResetsExpiry, true);
+    assert.equal(snapshot.observerRegistry.recoveryEvidenceRetention.applicationAffected, false);
     assert.equal(snapshot.observerRegistry.recoveryEvidenceReviewAffectsApplication, false);
     assert.equal(snapshot.observerRegistry.recoveryEvidenceApplication, false);
     assert.equal(snapshot.observerRegistry.recipeFieldFill, false);
@@ -232,6 +249,9 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(health.observerRecipeRecoveryEvidenceStorageImplemented, true);
     assert.equal(health.observerRecipeRecoveryUserReviewImplemented, true);
     assert.equal(health.observerRecipeRecoveryReviewRevocationImplemented, true);
+    assert.equal(health.observerRecipeRecoveryRetentionImplemented, true);
+    assert.equal(health.observerRecipeRecoveryRetentionDays, 90);
+    assert.equal(health.observerRecipeRecoveryRetentionReceiptsImplemented, true);
     assert.equal(health.observerRecipeRecoveryReviewAffectsApplication, false);
     assert.equal(health.observerRecipeRecoveryEvidenceApplicationEnabled, false);
     assert.equal(health.observerRecipeFieldFillEnabled, false);

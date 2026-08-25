@@ -41,11 +41,13 @@ and stores:
 - the authenticated actor kind and identifier; and
 - the event time.
 
-Updates and ordinary deletes are rejected by triggers. The current state is a
-projection of the highest sequence; the evidence row itself is never updated.
-Deleting the owning user remains an intentional privacy cascade and removes
-both evidence and review events. The self-service data export includes the
-complete review history.
+Updates and premature or direct review deletes are rejected by triggers. The
+current state is a projection of the highest sequence; the evidence row itself
+is never updated. Version 0.53 adds a separate 90-day inactivity policy: once
+eligible, bounded service cleanup removes the evidence and lets its review
+events cascade. Deleting the owning user remains the other intentional privacy
+cascade. Self-service data export includes current history plus aggregate
+retention receipts.
 
 Audit receipts include the evidence ID/hash, retailer, fixed field name,
 previous/current review states, and explicit negative safety facts. They do
@@ -75,7 +77,9 @@ Automated coverage proves:
 - exact closed request shapes and decision-specific confirmation phrases;
 - idempotent retries and sequenced confirm/reject/reconfirm/revoke history;
 - rejection of revocation without a current confirmation;
-- append-only behavior plus the intentional owner-deletion cascade;
+- append-only event behavior plus intentional bounded retention and
+  owner-deletion cascades;
+- latest-review activity resetting the 0.53 retention clock and bounded expiry;
 - user-data export and value-free audit metadata;
 - canonical user/admin API-surface separation; and
 - unchanged observations, qualifications, missions, jobs, application state,
@@ -84,9 +88,11 @@ Automated coverage proves:
 Before a later release can use confirmed evidence in even a read-only
 observation projection, Yoink still needs production IdP and device-risk
 eligibility, reputable independent-account and region quorum, conflict SLOs,
-retention/deletion policy, and a separately governed reversible application
-projection. Mutation runners remain permanently outside the recipe registry.
+external consistency monitoring, and a separately governed reversible
+application projection. The local retention/deletion policy ships in 0.53;
+mutation runners remain permanently outside the recipe registry.
 
 See also [recovery evidence](OBSERVER_RECIPE_RECOVERY_EVIDENCE.md),
+[recovery retention](OBSERVER_RECIPE_RECOVERY_RETENTION.md),
 [packaged oracle](OBSERVER_RECIPE_ORACLE.md), and
 [canary governance](OBSERVER_RECIPE_CANARY_GOVERNANCE.md).

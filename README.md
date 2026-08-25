@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.52.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.53.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,23 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.53.0 adds bounded retention for quarantined observer-recipe recovery
+evidence and its contributor review history. Migration 46 defines a 90-day
+inactivity policy: the latest evidence or review activity starts the clock, and
+the existing six-hour privacy/telemetry maintenance task removes at most 500
+expired evidence rows per user per run. Review events cascade only with the
+eligible evidence; premature direct deletion remains blocked by the database.
+
+Every effective cleanup writes an immutable aggregate receipt containing only
+the policy, cutoff, and deleted row counts. It never copies a normalized value,
+SKU, recipe, layout, or review answer. The user dashboard explains automatic
+expiry in plain language, the admin registry reports policy/aggregate status,
+and self-service export includes a user's receipts. User deletion remains an
+intentional privacy cascade. Retention cannot apply evidence, fill a field,
+promote or qualify a recipe, change a plan, create a job, reserve spend, or
+invoke Chrome. See
+[recovery-evidence retention](docs/OBSERVER_RECIPE_RECOVERY_RETENTION.md).
 
 Version 0.52.0 gives each contributor a simple, owner-scoped way to review the
 quarantined normalized store details introduced in 0.51. The Preferences
@@ -29,8 +46,9 @@ edit, and user deletion remains an intentional privacy cascade. Reviews are
 included in self-service export and projected in the admin registry. They do
 not fill observations, affect promotion or qualification, change plans, create
 jobs, reserve spend, or invoke Chrome. Production account/device reputation,
-region-aware independent quorum, retention policy, and a separately governed
-read-only application projection remain open. See
+region-aware independent quorum, measured conflict SLOs, and a separately
+governed read-only application projection remain open. The bounded retention
+policy arrives in 0.53. See
 [recovery user review](docs/OBSERVER_RECIPE_RECOVERY_USER_REVIEW.md).
 
 Version 0.51.0 adds the first provenance-bearing storage boundary for a field
