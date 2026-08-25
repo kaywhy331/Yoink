@@ -616,6 +616,8 @@ export class UserPrivacyRepository {
     return {
       devices: parseJsonFields(this.rows(
         `SELECT id, name, extension_version, status, capabilities_json,
+                credential_generation, credential_issued_at,
+                CASE WHEN pending_token_hash <> '' THEN 1 ELSE 0 END AS credential_rotation_pending,
                 last_seen_at, created_at, updated_at
          FROM extension_devices WHERE tenant_id = ? AND user_id = ?
          ORDER BY created_at, id`,

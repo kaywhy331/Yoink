@@ -45,6 +45,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /Approval never applies a change by itself/);
     assert.match(adminPageBody, /Durable maintenance/);
     assert.match(adminPageBody, /Durable evaluation with closed browser mutation/);
+    assert.match(adminPageBody, /renews its credential without asking you to pair again/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
     assert.match(adminScript, /renderOperationalTelemetry/);
@@ -53,6 +54,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /\/api\/v1\/admin\/workers/);
     assert.match(adminScript, /renderBackgroundWork/);
     assert.match(adminScript, /Maintainer review ready/);
+    assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
@@ -70,6 +72,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       signalEvaluationOutsideDeviceRequest: true,
       privacyBoundedRepairLandmarks: true,
       nonExecutableRepairSuggestions: true,
+      rotatableDeviceCredentials: true,
+      recoverableTwoPhaseDeviceCredentialRotation: true,
       backgroundWorkerRuntime: "stopped",
       backgroundWorkerHealthy: false,
       backgroundWorkerDeployment: "local_in_process",
@@ -209,6 +213,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.signalEvaluationOutsideDeviceRequest, true);
     assert.equal(snapshot.capabilities.privacyBoundedRepairLandmarks, true);
     assert.equal(snapshot.capabilities.nonExecutableRepairSuggestions, true);
+    assert.equal(snapshot.capabilities.rotatableDeviceCredentials, true);
+    assert.equal(snapshot.capabilities.recoverableTwoPhaseDeviceCredentialRotation, true);
     assert.equal(snapshot.capabilities.asyncBackgroundWorkerContract, true);
     assert.equal(snapshot.capabilities.standaloneBackgroundWorkerProcessReady, true);
     assert.equal(snapshot.capabilities.boundedMultiPrincipalWorker, true);
@@ -1077,6 +1083,111 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       body: "{}"
     });
     assert.equal(rejectedShadow.status, 401);
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});
+
+test("Chrome device credential rotation is origin-bound, two-phase, and idempotently recoverable", async () => {
+  const db = new YoinkDatabase();
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const extensionOrigin = `chrome-extension://${"b".repeat(32)}`;
+  try {
+    const code = (await fetch(`${baseUrl}/api/v1/devices/pairing-code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: "{}"
+    }).then((response) => response.json()) as { pairing: { code: string } }).pairing.code;
+    const paired = (await fetch(`${baseUrl}/api/v1/devices/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: extensionOrigin },
+      body: JSON.stringify({ pairingCode: code })
+    }).then((response) => response.json()) as { device: { id: string; token: string } }).device;
+
+    const foreignBegin = await fetch(`${baseUrl}/api/v1/devices/self/credential-rotation/begin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://attacker.example", Authorization: `Bearer ${paired.token}` },
+      body: "{}"
+    });
+    assert.equal(foreignBegin.status, 403);
+
+    const begin = await fetch(`${baseUrl}/api/v1/devices/self/credential-rotation/begin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: extensionOrigin, Authorization: `Bearer ${paired.token}` },
+      body: "{}"
+    });
+    assert.equal(begin.status, 201);
+    const pending = (await begin.json() as { rotation: { token: string; generation: number; expiresAt: string } }).rotation;
+    assert.match(pending.token, /^[A-Za-z0-9_-]{40,100}$/);
+    assert.equal(pending.generation, 2);
+    assert.ok(new Date(pending.expiresAt).getTime() > Date.now());
+
+    const pendingCannotHeartbeat = await fetch(`${baseUrl}/api/v1/devices/self/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: extensionOrigin, Authorization: `Bearer ${pending.token}` },
+      body: "{}"
+    });
+    assert.equal(pendingCannotHeartbeat.status, 401);
+    const currentStillWorks = await fetch(`${baseUrl}/api/v1/devices/self/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: extensionOrigin, Authorization: `Bearer ${paired.token}` },
+      body: "{}"
+    });
+    assert.equal(currentStillWorks.status, 200);
+    assert.equal((await currentStillWorks.json() as { credential: { pending: boolean } }).credential.pending, true);
+
+    const wrongGeneration = await fetch(`${baseUrl}/api/v1/devices/self/credential-rotation/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: extensionOrigin, Authorization: `Bearer ${pending.token}` },
+      body: JSON.stringify({ generation: 3 })
+    });
+    assert.equal(wrongGeneration.status, 401);
+
+    const commit = await fetch(`${baseUrl}/api/v1/devices/self/credential-rotation/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: extensionOrigin, Authorization: `Bearer ${pending.token}` },
+      body: JSON.stringify({ generation: pending.generation })
+    });
+    assert.equal(commit.status, 200);
+    const committed = (await commit.json() as {
+      rotation: { deviceId: string; credential: { generation: number; pending: boolean } };
+    }).rotation;
+    assert.equal(committed.deviceId, paired.id);
+    assert.equal(committed.credential.generation, 2);
+    assert.equal(committed.credential.pending, false);
+
+    const replay = await fetch(`${baseUrl}/api/v1/devices/self/credential-rotation/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: extensionOrigin, Authorization: `Bearer ${pending.token}` },
+      body: JSON.stringify({ generation: pending.generation })
+    });
+    assert.equal(replay.status, 200);
+    const newHeartbeat = await fetch(`${baseUrl}/api/v1/devices/self/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: extensionOrigin, Authorization: `Bearer ${pending.token}` },
+      body: "{}"
+    });
+    assert.equal(newHeartbeat.status, 200);
+
+    const snapshot = await fetch(`${baseUrl}/api/v1/snapshot`).then((response) => response.json()) as {
+      devices: Array<{ id: string; credential: { generation: number; pending: boolean } }>;
+    };
+    assert.equal(snapshot.devices.find((device) => device.id === paired.id)?.credential.generation, 2);
+    assert.equal(snapshot.devices.find((device) => device.id === paired.id)?.credential.pending, false);
+    assert.equal(JSON.stringify(snapshot).includes(paired.token), false);
+    assert.equal(JSON.stringify(snapshot).includes(pending.token), false);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'extension_device_credential_rotation_committed'"
+    )?.count, 1);
+    assert.ok(Number(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM operational_request_rollups WHERE route_key = 'device.credential_rotation'"
+    )?.count) >= 1);
   } finally {
     server.close();
     await once(server, "close");

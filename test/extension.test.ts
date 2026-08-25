@@ -68,6 +68,10 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /observerRecipeShadow: true/);
   assert.match(background, /durableAdapterDiagnostics: true/);
   assert.match(background, /privacyBoundedRepairLandmarks: true/);
+  assert.match(background, /rotatableDeviceCredentials: true/);
+  assert.match(background, /credential-rotation\/begin/);
+  assert.match(background, /credential-rotation\/commit/);
+  assert.match(background, /pendingCredential/);
   assert.match(background, /walmartDrawReadOnly: true/);
   assert.match(background, /yoink:inspect-walmart-draw/);
   assert.match(background, /devices\/self\/walmart-draw\/scans/);

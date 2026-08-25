@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.37.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.38.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,23 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.38.0 adds recoverable two-phase rotation for paired Chrome device
+credentials. After 30 days, the companion prepares a random next-generation
+credential, persists it locally, and then commits that exact generation. A
+lost begin response leaves the current token untouched; a lost commit response
+is retried from the durable pending token before heartbeat. Commit is
+idempotent, pending tokens cannot call ordinary device APIs, and the previous
+credential has only a two-minute in-flight grace period.
+
+Migration 36 backfills existing devices at generation one without rotating or
+revealing their current token. The database stores only domain-separated
+hashes, rejects partial recovery state with cross-field triggers, clears
+pending/previous hashes on revocation, and records sanitized audit and closed
+telemetry events. Admin sees generation/readiness only. This advances the Phase
+2 hosted-device foundation but is not production identity, TLS, or device-risk
+infrastructure, and it widens no retailer action. See
+[device credential rotation](docs/DEVICE_CREDENTIAL_ROTATION.md).
 
 Version 0.37.0 adds privacy-bounded repair intelligence to the immediate
 extension diagnostic path. On an unblocked exact product page, a packaged

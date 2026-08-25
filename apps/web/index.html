@@ -326,13 +326,13 @@
       <section class="panel companion-panel">
         <p class="eyebrow">Chrome executor</p>
         <h2>Yoink Companion</h2>
-        <p>Pair the browser once with an expiring code. The companion sends an authenticated local heartbeat; retailer page access remains optional and can be revoked in Chrome.</p>
+        <p>Pair the browser once with an expiring code. The companion sends an authenticated local heartbeat and renews its credential without asking you to pair again; retailer page access remains optional and can be revoked in Chrome.</p>
         <div class="inline-status" id="targetExecutorStatus"><span class="status-dot warning"></span><strong>Retailer add-only gates closed</strong></div>
         <ol class="pair-steps"><li>Create a one-time code below.</li><li>Open the Yoink extension popup.</li><li>Enter the code within five minutes.</li></ol>
         <div class="companion-actions"><button class="button primary" id="createPairingButton" type="button">Create pairing code</button><button class="button secondary" id="refreshDevicesButton" type="button">Refresh status</button></div>
         <div class="pairing-code-panel" id="pairingCodePanel" hidden><span>One-time code</span><strong id="pairingCode"></strong><small id="pairingExpiry"></small><button class="text-button" id="copyPairingCodeButton" type="button">Copy code</button></div>
         <div class="device-list" id="deviceList"></div>
-        <p class="fine-print">Credentials are displayed only once and stored as hashes by Yoink. Chrome is the only component allowed to execute a qualified retailer action.</p>
+        <p class="fine-print">Credentials are displayed only once and stored as hashes by Yoink. Renewal is recoverable across a lost response and keeps the prior credential only for a two-minute in-flight grace period. Chrome is the only component allowed to execute a qualified retailer action.</p>
       </section>
       <section class="panel companion-panel qualification-panel">
         <p class="eyebrow">Controlled qualification</p>

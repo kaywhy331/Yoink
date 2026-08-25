@@ -7,6 +7,7 @@ import test from "node:test";
 import { RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES } from "../packages/contracts/src/index.js";
 
 const TOKEN = "T".repeat(43);
+const ROTATED_TOKEN = "R".repeat(43);
 const PRODUCT_URL = "https://www.target.com/p/fixture/-/A-1011483414";
 const WALMART_PRODUCT_URL = "https://www.walmart.com/ip/fixture/17354421975";
 const AMAZON_PRODUCT_URL = "https://www.amazon.com/dp/B0GYTRYV7P";
@@ -500,6 +501,9 @@ interface HarnessOptions {
   visibleTrackalackerFallback?: boolean;
   amazonHydrationRetry?: boolean;
   observerRepairLandmark?: boolean;
+  deviceCredentialRotationDue?: boolean;
+  pendingDeviceCredential?: boolean;
+  deviceCredentialCommitFailures?: number;
   retailerObserverFailure?:
     | "bundle_injection"
     | "execution"
@@ -518,7 +522,19 @@ interface HarnessOptions {
 function harness(options: HarnessOptions = {}) {
   const liveJob = options.liveJob === true || options.walmartJob === true || options.amazonJob === true || options.bestBuyJob === true;
   const storage: Record<string, unknown> = {
-    pairedDevice: { id: "device_fixture", token: TOKEN, name: "Desktop - Windows - Chrome" }
+    pairedDevice: {
+      id: "device_fixture",
+      token: TOKEN,
+      name: "Desktop - Windows - Chrome",
+      credentialGeneration: 1,
+      ...(options.pendingDeviceCredential ? {
+        pendingCredential: {
+          token: ROTATED_TOKEN,
+          generation: 2,
+          expiresAt: new Date(Date.now() + 10 * 60_000).toISOString()
+        }
+      } : {})
+    }
   };
   if (options.observerRecipeTrustState) {
     storage.yoinkObserverRecipeTrustStateV1 = options.observerRecipeTrustState;
@@ -975,9 +991,48 @@ function harness(options: HarnessOptions = {}) {
         installMode: "overwrite-and-reload"
       }), { status: 200 });
     }
+    if (url.endsWith("/devices/self/credential-rotation/begin")) {
+      return new Response(JSON.stringify({
+        rotation: {
+          token: ROTATED_TOKEN,
+          generation: 2,
+          expiresAt: new Date(Date.now() + 10 * 60_000).toISOString()
+        }
+      }), { status: 201 });
+    }
+    if (url.endsWith("/devices/self/credential-rotation/commit")) {
+      const failures = Number(options.deviceCredentialCommitFailures || 0);
+      const priorFailures = fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/credential-rotation/commit")).length - 1;
+      if (priorFailures < failures) {
+        return new Response(JSON.stringify({ message: "temporary credential commit outage" }), { status: 503 });
+      }
+      return new Response(JSON.stringify({
+        rotation: {
+          deviceId: "device_fixture",
+          credential: {
+            generation: 2,
+            issuedAt: new Date().toISOString(),
+            rotateAfter: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+            rotationDue: false,
+            pending: false,
+            pendingExpiresAt: ""
+          }
+        }
+      }), { status: 200 });
+    }
     if (url.endsWith("/devices/self/heartbeat")) {
+      const rotated = (requestOptions.headers as Record<string, string> | undefined)?.Authorization === `Bearer ${ROTATED_TOKEN}`;
       return new Response(JSON.stringify({
         device: { id: "device_fixture", name: "Desktop - Windows - Chrome" },
+        credential: {
+          generation: rotated ? 2 : 1,
+          issuedAt: new Date(Date.now() - (options.deviceCredentialRotationDue ? 31 : 1) * 24 * 60 * 60_000).toISOString(),
+          rotateAfter: new Date(Date.now() + (rotated ? 30 : options.deviceCredentialRotationDue ? -1 : 29) * 24 * 60 * 60_000).toISOString(),
+          rotationDue: !rotated && options.deviceCredentialRotationDue === true,
+          pending: options.pendingDeviceCredential === true && !rotated,
+          pendingExpiresAt: options.pendingDeviceCredential === true && !rotated
+            ? new Date(Date.now() + 10 * 60_000).toISOString() : ""
+        },
         controlPlane: {
           executionMode: liveJob ? "live" : "shadow",
           actionsPaused: !liveJob,
@@ -1610,6 +1665,47 @@ test("startup drops stale diagnostics and advertises durable delivery without po
   const heartbeatBody = JSON.parse(String(heartbeat.options.body)) as { capabilities: Record<string, unknown> };
   assert.equal(heartbeatBody.capabilities.durableAdapterDiagnostics, true);
   assert.equal(heartbeatBody.capabilities.privacyBoundedRepairLandmarks, true);
+  assert.equal(heartbeatBody.capabilities.rotatableDeviceCredentials, true);
+});
+
+test("the service worker rotates an aged device credential in two persisted phases", async () => {
+  const runtime = harness({ deviceCredentialRotationDue: true });
+  const response = await runtime.send({ type: "yoink:check-health" });
+  assert.equal(response.ok, true);
+  assert.equal((response.state as Record<string, unknown>).paired, true);
+  const stored = runtime.storage.pairedDevice as Record<string, unknown>;
+  assert.equal(stored.token, ROTATED_TOKEN);
+  assert.equal(stored.credentialGeneration, 2);
+  assert.equal("pendingCredential" in stored, false);
+
+  const heartbeat = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/heartbeat"));
+  const begin = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/credential-rotation/begin"));
+  const commit = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/credential-rotation/commit"));
+  assert.equal((heartbeat?.options.headers as Record<string, string>).Authorization, `Bearer ${TOKEN}`);
+  assert.equal((begin?.options.headers as Record<string, string>).Authorization, `Bearer ${TOKEN}`);
+  assert.equal((commit?.options.headers as Record<string, string>).Authorization, `Bearer ${ROTATED_TOKEN}`);
+  assert.deepEqual(JSON.parse(String(commit?.options.body)), { generation: 2 });
+});
+
+test("a lost credential commit response resumes from the persisted pending token before heartbeat", async () => {
+  const runtime = harness({ deviceCredentialRotationDue: true, deviceCredentialCommitFailures: 1 });
+  const first = await runtime.send({ type: "yoink:check-health" });
+  assert.equal(first.ok, true);
+  const pending = runtime.storage.pairedDevice as Record<string, unknown>;
+  assert.equal(pending.token, TOKEN);
+  assert.equal((pending.pendingCredential as Record<string, unknown>).token, ROTATED_TOKEN);
+
+  const second = await runtime.send({ type: "yoink:check-health" });
+  assert.equal(second.ok, true);
+  const recovered = runtime.storage.pairedDevice as Record<string, unknown>;
+  assert.equal(recovered.token, ROTATED_TOKEN);
+  assert.equal("pendingCredential" in recovered, false);
+  const commits = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/credential-rotation/commit"));
+  assert.equal(commits.length, 2);
+  const begins = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/credential-rotation/begin"));
+  assert.equal(begins.length, 1);
+  const lastHeartbeat = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/heartbeat")).at(-1);
+  assert.equal((lastHeartbeat?.options.headers as Record<string, string>).Authorization, `Bearer ${ROTATED_TOKEN}`);
 });
 
 test("startup deduplicates diagnostics and discards entries bound to another device", async () => {

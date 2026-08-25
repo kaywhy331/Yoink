@@ -25,6 +25,7 @@ const COMMUNITY_CONTRIBUTION_INTERVAL_MS = 60_000;
 const TRACKALACKER_PUSH_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_MAX_AGE_MS = 9 * 60_000;
+const DEVICE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
 const TRACKALACKER_DEVICE_NICKNAME = "Desktop - Windows - Chrome";
 const TRACKALACKER_SETTINGS_URL = "https://www.trackalacker.com/users/settings/notifications/edit";
 const TRACKALACKER_ORIGINS = ["https://trackalacker.com/*", "https://www.trackalacker.com/*"];
@@ -143,6 +144,7 @@ let trackalackerStateQueue = Promise.resolve();
 let trackalackerQueueQueue = Promise.resolve();
 let adapterDiagnosticDrainPromise = null;
 let adapterDiagnosticQueueLock = Promise.resolve();
+let deviceCredentialRotationPromise = null;
 
 function readiness(connected, details = {}, device = null) {
   return {
@@ -186,6 +188,7 @@ function targetCapabilities() {
     sanitizedAdapterDiagnostics: true,
     durableAdapterDiagnostics: true,
     privacyBoundedRepairLandmarks: true,
+    rotatableDeviceCredentials: true,
     walmartDrawReadOnly: true,
     trackalackerPush: true,
     trackalackerCatalogSync: true
@@ -1519,8 +1522,139 @@ async function runObserverRecipeShadow(tabId, retailerId, observation, diagnosti
   }
 }
 
+function normalizedStoredDevice(value) {
+  if (!value || typeof value !== "object"
+    || !/^[A-Za-z0-9_-]{3,120}$/.test(String(value.id || ""))
+    || !DEVICE_TOKEN_PATTERN.test(String(value.token || ""))) return null;
+  const device = {
+    id: String(value.id),
+    token: String(value.token),
+    name: String(value.name || "Paired Chrome").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 100),
+    credentialGeneration: Number.isSafeInteger(value.credentialGeneration) && value.credentialGeneration >= 1
+      ? value.credentialGeneration : 1
+  };
+  const pending = value.pendingCredential;
+  if (pending && typeof pending === "object"
+    && DEVICE_TOKEN_PATTERN.test(String(pending.token || ""))
+    && Number.isSafeInteger(pending.generation) && pending.generation >= 2 && pending.generation <= 1_000_000
+    && Number.isFinite(new Date(String(pending.expiresAt || "")).getTime())) {
+    device.pendingCredential = {
+      token: String(pending.token),
+      generation: pending.generation,
+      expiresAt: String(pending.expiresAt).slice(0, 40)
+    };
+  }
+  return device;
+}
+
 async function storedDevice() {
-  return (await chrome.storage.local.get(DEVICE_KEY))[DEVICE_KEY] || null;
+  return normalizedStoredDevice((await chrome.storage.local.get(DEVICE_KEY))[DEVICE_KEY]);
+}
+
+function normalizedDeviceCredentialStatus(value) {
+  if (!value || typeof value !== "object"
+    || !Number.isSafeInteger(value.generation) || value.generation < 1
+    || !Number.isFinite(new Date(String(value.issuedAt || "")).getTime())
+    || !Number.isFinite(new Date(String(value.rotateAfter || "")).getTime())
+    || typeof value.rotationDue !== "boolean") return null;
+  return {
+    generation: value.generation,
+    issuedAt: String(value.issuedAt).slice(0, 40),
+    rotateAfter: String(value.rotateAfter).slice(0, 40),
+    rotationDue: value.rotationDue
+  };
+}
+
+function normalizedDeviceCredentialRotation(value, deviceId) {
+  if (!value || typeof value !== "object"
+    || value.deviceId !== deviceId
+    || !normalizedDeviceCredentialStatus(value.credential)) {
+    throw new Error("Yoink returned an invalid credential rotation receipt.");
+  }
+  return value.credential;
+}
+
+async function commitPendingDeviceCredential(device) {
+  const pending = device?.pendingCredential;
+  if (!pending) return device;
+  try {
+    const payload = await request("/devices/self/credential-rotation/commit", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${pending.token}` },
+      body: JSON.stringify({ generation: pending.generation })
+    });
+    const credential = normalizedDeviceCredentialRotation(payload.rotation, device.id);
+    if (credential.generation !== pending.generation) {
+      throw new Error("Yoink returned a mismatched credential generation.");
+    }
+    const rotated = {
+      id: device.id,
+      token: pending.token,
+      name: device.name,
+      credentialGeneration: pending.generation
+    };
+    await chrome.storage.local.set({ [DEVICE_KEY]: rotated });
+    return rotated;
+  } catch (error) {
+    if ([400, 401, 409].includes(Number(error?.status))) {
+      const current = {
+        id: device.id,
+        token: device.token,
+        name: device.name,
+        credentialGeneration: device.credentialGeneration
+      };
+      await chrome.storage.local.set({ [DEVICE_KEY]: current });
+      return current;
+    }
+    return device;
+  }
+}
+
+async function rotateDeviceCredential(device, credential) {
+  if (!device?.token || !credential?.rotationDue) return device;
+  try {
+    const payload = await request("/devices/self/credential-rotation/begin", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${device.token}` },
+      body: "{}"
+    });
+    const rotation = payload.rotation;
+    if (!rotation || typeof rotation !== "object"
+      || !DEVICE_TOKEN_PATTERN.test(String(rotation.token || ""))
+      || !Number.isSafeInteger(rotation.generation)
+      || rotation.generation !== credential.generation + 1
+      || !Number.isFinite(new Date(String(rotation.expiresAt || "")).getTime())) {
+      throw new Error("Yoink returned an invalid pending device credential.");
+    }
+    const pendingDevice = {
+      ...device,
+      pendingCredential: {
+        token: String(rotation.token),
+        generation: rotation.generation,
+        expiresAt: String(rotation.expiresAt).slice(0, 40)
+      }
+    };
+    await chrome.storage.local.set({ [DEVICE_KEY]: pendingDevice });
+    return commitPendingDeviceCredential(pendingDevice);
+  } catch {
+    return device;
+  }
+}
+
+async function maintainDeviceCredential(device, credential = null) {
+  if (!device) return null;
+  if (deviceCredentialRotationPromise) return deviceCredentialRotationPromise;
+  deviceCredentialRotationPromise = (async () => {
+    const resumingPendingRotation = Boolean(device.pendingCredential);
+    const resumed = await commitPendingDeviceCredential(device);
+    if (resumingPendingRotation) return resumed;
+    return rotateDeviceCredential(resumed, credential);
+  })();
+  try {
+    return await deviceCredentialRotationPromise;
+  } finally {
+    deviceCredentialRotationPromise = null;
+  }
 }
 
 function normalizeTrackalackerState(value = {}) {
@@ -2113,6 +2247,7 @@ async function checkHealth() {
     const health = await request("/health");
     if (health?.status !== "ready") throw new Error("not_ready");
     let device = await storedDevice();
+    if (device?.pendingCredential) device = await maintainDeviceCredential(device);
     let controlPlane = null;
     if (device?.token) {
       try {
@@ -2125,13 +2260,24 @@ async function checkHealth() {
             capabilities: targetCapabilities()
           })
         });
-        device = { ...device, id: heartbeat.device.id, name: heartbeat.device.name };
+        const credential = normalizedDeviceCredentialStatus(heartbeat.credential);
+        device = {
+          ...device,
+          id: heartbeat.device.id,
+          name: heartbeat.device.name,
+          credentialGeneration: credential?.generation ?? device.credentialGeneration
+        };
         controlPlane = heartbeat.controlPlane || null;
         await chrome.storage.local.set({ [DEVICE_KEY]: device });
+        if (credential?.rotationDue) device = await maintainDeviceCredential(device, credential);
       } catch (error) {
         if (error?.status === 401) {
-          await chrome.storage.local.remove(DEVICE_KEY);
-          device = null;
+          if (!device?.pendingCredential) {
+            await chrome.storage.local.remove(DEVICE_KEY);
+            device = null;
+          } else {
+            throw error;
+          }
         } else {
           throw error;
         }
@@ -2170,8 +2316,14 @@ async function pairDevice(code) {
     })
   });
   if (!payload.device?.id || !payload.device?.token) throw new Error("Yoink returned an incomplete pairing response.");
+  const credential = normalizedDeviceCredentialStatus(payload.device.credential);
   await chrome.storage.local.set({
-    [DEVICE_KEY]: { id: payload.device.id, token: payload.device.token, name: payload.device.name }
+    [DEVICE_KEY]: {
+      id: payload.device.id,
+      token: payload.device.token,
+      name: payload.device.name,
+      credentialGeneration: credential?.generation ?? 1
+    }
   });
   return checkHealth();
 }

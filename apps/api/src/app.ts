@@ -451,6 +451,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           signalEvaluationOutsideDeviceRequest: true,
           privacyBoundedRepairLandmarks: true,
           nonExecutableRepairSuggestions: true,
+          rotatableDeviceCredentials: true,
+          recoverableTwoPhaseDeviceCredentialRotation: true,
           backgroundWorkerRuntime: backgroundWorker.state,
           backgroundWorkerHealthy: backgroundWorker.healthy,
           backgroundWorkerDeployment: backgroundWorker.runtimeKind,
@@ -664,7 +666,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           json(response, 403, { error: "extension_origin_rejected", message: "This route is available only to the Chrome companion." });
           return;
         }
-        const device = devices.authenticate(bearerToken(request));
+        const presentedToken = bearerToken(request);
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/credential-rotation/commit") {
+          const body = await readJson(request);
+          const committed = devices.commitCredentialRotation(presentedToken, body.generation);
+          if (!committed) {
+            response.setHeader("WWW-Authenticate", "Bearer");
+            json(response, 401, { error: "credential_rotation_unauthorized", message: "The pending Chrome credential is invalid or expired." });
+            return;
+          }
+          json(response, 200, { rotation: committed });
+          return;
+        }
+        const device = devices.authenticate(presentedToken);
         if (!device) {
           response.setHeader("WWW-Authenticate", "Bearer");
           json(response, 401, { error: "device_unauthorized", message: "The Chrome companion must be paired again." });
@@ -680,6 +694,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const bestBuyAddQualified = qualifications.bestBuyAddQualified();
           json(response, 200, {
             device: updated,
+            credential: devices.credentialStatus(device.id),
             controlPlane: {
               executionMode: settings.executionMode,
               actionsPaused: settings.actionsPaused,
@@ -690,6 +705,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               bestBuyAddExecutionEnabled: bestBuyAddQualified
             }
           });
+          return;
+        }
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/credential-rotation/begin") {
+          if (device.credentialSlot !== "current") {
+            json(response, 409, { error: "credential_rotation_stale", message: "The current Chrome credential is required to begin rotation." });
+            return;
+          }
+          json(response, 201, { rotation: devices.beginCredentialRotation(device) });
           return;
         }
         const shadowObservationMatch = /^\/api\/v1\/devices\/self\/shadow-observations\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
@@ -1169,6 +1192,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             signalEvaluationOutsideDeviceRequest: true,
             privacyBoundedRepairLandmarks: true,
             nonExecutableRepairSuggestions: true,
+            rotatableDeviceCredentials: true,
+            recoverableTwoPhaseDeviceCredentialRotation: true,
             localInProcessBackgroundWorker: true,
             asyncBackgroundWorkerContract: true,
             standaloneBackgroundWorkerProcessReady: true,

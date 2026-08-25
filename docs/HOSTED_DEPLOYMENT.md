@@ -40,6 +40,15 @@ a cross-account community quorum, and hosted deployments must not aggregate
 private tenant repair ledgers into a public rule without the separate shared
 evidence, reputation, deletion, governance, and independent-validation plane.
 
+Version 0.38 adds hash-only, generation-bound Chrome credential rotation. The
+two-phase protocol and extension recovery prevent ordinary network loss from
+forcing re-pairing, but they do not make an exposed bearer harmless. Hosted
+deployments must still terminate TLS, pin the packaged production extension
+origin, monitor/revoke risky devices, protect proxy and witness secrets, and
+connect device lifecycle to production identity and incident operations.
+Pending and previous credential hashes belong in encrypted backups and must
+remain excluded from logs, telemetry, user exports, and support views.
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting

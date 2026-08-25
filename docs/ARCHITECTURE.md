@@ -505,6 +505,25 @@ kill switch, or external witness enforcement. Because aggregation remains
 tenant/user scoped, it is not yet a cross-account community quorum or an
 independent correctness oracle.
 
+Yoink 0.38.0 makes the paired Chrome credential a generation-bound,
+recoverable lifecycle rather than an indefinitely static hash. Begin is
+authenticated only by the current token and stores a 10-minute next-generation
+hash without displacing the current credential. Chrome persists the raw
+pending token in trusted extension storage before commit. Commit authenticates
+with that pending token and atomically promotes the exact generation; a
+two-minute previous-token grace lets already in-flight device requests finish.
+The pending token is not accepted by ordinary device routes, and a previous
+token cannot begin another rotation.
+
+Commit is idempotent for the exact promoted token/generation, so Chrome can
+retry after an ambiguous response before heartbeat. A lost begin response
+leaves the old token current, while revocation clears both recovery slots.
+SQLite stores hashes only, cross-field triggers reject partial states, and the
+admin/API projections contain generation and readiness—not credential
+material. This is a production-shaped device-authentication seam, not the
+missing TLS ingress, fixed production extension origin, IdP, device-risk
+service, or fleet revocation infrastructure.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and
@@ -655,7 +674,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 35. Foreign keys are mandatory.
+numbered; the current schema is migration 36. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 

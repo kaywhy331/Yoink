@@ -2317,5 +2317,62 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         AND description = 'Retire expired hosted delivery capabilities and requeue or dead-letter abandoned work.'
         AND interval_seconds = 60;
     `
+  },
+  {
+    version: 36,
+    name: "recoverable_device_credential_rotation",
+    sql: `
+      ALTER TABLE extension_devices ADD COLUMN credential_generation INTEGER NOT NULL DEFAULT 1
+        CHECK (credential_generation >= 1);
+      ALTER TABLE extension_devices ADD COLUMN credential_issued_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE extension_devices ADD COLUMN pending_token_hash TEXT NOT NULL DEFAULT '';
+      ALTER TABLE extension_devices ADD COLUMN pending_token_generation INTEGER NOT NULL DEFAULT 0
+        CHECK (pending_token_generation >= 0);
+      ALTER TABLE extension_devices ADD COLUMN pending_token_expires_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE extension_devices ADD COLUMN previous_token_hash TEXT NOT NULL DEFAULT '';
+      ALTER TABLE extension_devices ADD COLUMN previous_token_expires_at TEXT NOT NULL DEFAULT '';
+
+      UPDATE extension_devices SET credential_issued_at = created_at
+      WHERE credential_issued_at = '';
+
+      CREATE UNIQUE INDEX extension_devices_pending_token_hash_idx
+        ON extension_devices(pending_token_hash) WHERE pending_token_hash <> '';
+      CREATE UNIQUE INDEX extension_devices_previous_token_hash_idx
+        ON extension_devices(previous_token_hash) WHERE previous_token_hash <> '';
+
+      CREATE TRIGGER extension_devices_credential_insert_backfill
+      AFTER INSERT ON extension_devices
+      WHEN NEW.credential_issued_at = ''
+      BEGIN
+        UPDATE extension_devices SET credential_issued_at = NEW.created_at WHERE id = NEW.id;
+      END;
+
+      CREATE TRIGGER extension_devices_credential_insert_guard
+      BEFORE INSERT ON extension_devices
+      WHEN NOT (
+          (NEW.pending_token_hash = '' AND NEW.pending_token_generation = 0 AND NEW.pending_token_expires_at = '')
+          OR (NEW.pending_token_hash <> '' AND NEW.pending_token_generation = NEW.credential_generation + 1
+            AND NEW.pending_token_expires_at <> '')
+        )
+        OR NOT (
+          (NEW.previous_token_hash = '' AND NEW.previous_token_expires_at = '')
+          OR (NEW.previous_token_hash <> '' AND NEW.previous_token_expires_at <> '')
+        )
+      BEGIN SELECT RAISE(ABORT, 'extension device credential state is invalid'); END;
+
+      CREATE TRIGGER extension_devices_credential_update_guard
+      BEFORE UPDATE ON extension_devices
+      WHEN NEW.credential_issued_at = ''
+        OR NOT (
+          (NEW.pending_token_hash = '' AND NEW.pending_token_generation = 0 AND NEW.pending_token_expires_at = '')
+          OR (NEW.pending_token_hash <> '' AND NEW.pending_token_generation = NEW.credential_generation + 1
+            AND NEW.pending_token_expires_at <> '')
+        )
+        OR NOT (
+          (NEW.previous_token_hash = '' AND NEW.previous_token_expires_at = '')
+          OR (NEW.previous_token_hash <> '' AND NEW.previous_token_expires_at <> '')
+        )
+      BEGIN SELECT RAISE(ABORT, 'extension device credential state is invalid'); END;
+    `
   }
 ]);

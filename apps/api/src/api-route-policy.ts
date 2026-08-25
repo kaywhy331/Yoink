@@ -177,6 +177,7 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
   }),
   device: Object.freeze({
     heartbeat: "heartbeat",
+    "credential-rotation": "credential_rotation",
     "adapter-diagnostics": "adapter_diagnostics",
     "shadow-observations": "observations",
     "walmart-draw": "drawings",

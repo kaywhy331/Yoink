@@ -68,6 +68,7 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
         exactSelectedOfferEvidence: true,
         durableAdapterDiagnostics: true,
         privacyBoundedRepairLandmarks: true,
+        rotatableDeviceCredentials: true,
         walmartDrawReadOnly: true,
         trackalackerPush: true,
         trackalackerCatalogSync: true,
@@ -90,6 +91,7 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
     assert.equal(heartbeat.capabilities.exactSelectedOfferEvidence, true);
     assert.equal(heartbeat.capabilities.durableAdapterDiagnostics, true);
     assert.equal(heartbeat.capabilities.privacyBoundedRepairLandmarks, true);
+    assert.equal(heartbeat.capabilities.rotatableDeviceCredentials, true);
     assert.equal(heartbeat.capabilities.walmartDrawReadOnly, true);
     assert.equal(heartbeat.capabilities.trackalackerPush, true);
     assert.equal(heartbeat.capabilities.trackalackerCatalogSync, true);
@@ -113,10 +115,86 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
     assert.equal(downgraded.capabilities.bestBuyAddOnly, false);
     assert.equal(downgraded.capabilities.bestBuyAddAdapterVersion, "");
     assert.equal(downgraded.capabilities.privacyBoundedRepairLandmarks, false);
+    assert.equal(downgraded.capabilities.rotatableDeviceCredentials, false);
     assert.equal(devices.listDevices(NOW + 2_500)[0]?.online, true);
     assert.equal(devices.revoke(paired.id, NOW + 3_000), true);
     assert.equal(devices.authenticate(paired.token), null);
     assert.equal(devices.revoke(paired.id, NOW + 4_000), false);
+  } finally {
+    db.close();
+  }
+});
+
+test("device credentials rotate in two recoverable phases with a bounded previous-token grace", () => {
+  const db = new YoinkDatabase();
+  try {
+    const devices = new DeviceRepository(db);
+    const code = devices.createPairingCode(NOW);
+    const paired = devices.pair({ pairingCode: code.code }, NOW + 1_000);
+    const current = devices.authenticate(paired.token, NOW + 2_000);
+    assert.equal(current?.credentialSlot, "current");
+    assert.equal(current?.credentialGeneration, 1);
+    assert.equal(devices.credentialStatus(paired.id, NOW + 2_000).rotationDue, false);
+    assert.equal(devices.credentialStatus(paired.id, NOW + 31 * 24 * 60 * 60_000).rotationDue, true);
+
+    const pending = devices.beginCredentialRotation(current!, NOW + 3_000);
+    assert.equal(pending.generation, 2);
+    assert.match(pending.token, /^[A-Za-z0-9_-]{40,100}$/);
+    assert.equal(devices.authenticate(pending.token, NOW + 4_000), null);
+    assert.equal(devices.authenticate(paired.token, NOW + 4_000)?.credentialSlot, "current");
+    assert.equal(devices.credentialStatus(paired.id, NOW + 4_000).pending, true);
+
+    const committed = devices.commitCredentialRotation(pending.token, pending.generation, NOW + 5_000);
+    assert.equal(committed?.credential.generation, 2);
+    assert.equal(committed?.credential.pending, false);
+    assert.equal(devices.authenticate(pending.token, NOW + 6_000)?.credentialSlot, "current");
+    const previous = devices.authenticate(paired.token, NOW + 6_000);
+    assert.equal(previous?.credentialSlot, "previous");
+    assert.throws(
+      () => devices.beginCredentialRotation(previous!, NOW + 6_500),
+      /current device credential/
+    );
+
+    const idempotent = devices.commitCredentialRotation(pending.token, 2, NOW + 7_000);
+    assert.equal(idempotent?.credential.generation, 2);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'extension_device_credential_rotation_committed'"
+    )?.count, 1);
+    assert.equal(devices.authenticate(paired.token, NOW + 5_000 + 2 * 60_000)?.credentialSlot, "previous");
+    assert.equal(devices.authenticate(paired.token, NOW + 5_000 + 2 * 60_000 + 1), null);
+
+    const durable = JSON.stringify(db.all("SELECT * FROM extension_devices"));
+    assert.equal(durable.includes(paired.token), false);
+    assert.equal(durable.includes(pending.token), false);
+  } finally {
+    db.close();
+  }
+});
+
+test("lost and expired pending credentials never invalidate the current Chrome credential", () => {
+  const db = new YoinkDatabase();
+  try {
+    const devices = new DeviceRepository(db);
+    const code = devices.createPairingCode(NOW);
+    const paired = devices.pair({ pairingCode: code.code }, NOW + 1_000);
+    const current = devices.authenticate(paired.token, NOW + 2_000)!;
+    const lost = devices.beginCredentialRotation(current, NOW + 3_000);
+    const replacement = devices.beginCredentialRotation(current, NOW + 4_000);
+
+    assert.equal(devices.commitCredentialRotation(lost.token, lost.generation, NOW + 5_000), null);
+    assert.equal(devices.authenticate(paired.token, NOW + 5_000)?.credentialSlot, "current");
+    assert.equal(devices.commitCredentialRotation(
+      replacement.token,
+      replacement.generation,
+      NOW + 4_000 + 10 * 60_000 + 1
+    ), null);
+    assert.equal(devices.authenticate(paired.token, NOW + 4_000 + 10 * 60_000 + 2)?.credentialSlot, "current");
+
+    const final = devices.beginCredentialRotation(current, NOW + 4_000 + 10 * 60_000 + 3);
+    assert.ok(devices.commitCredentialRotation(final.token, final.generation, NOW + 4_000 + 10 * 60_000 + 4));
+    assert.equal(devices.revoke(paired.id, NOW + 4_000 + 10 * 60_000 + 5), true);
+    assert.equal(devices.authenticate(final.token, NOW + 4_000 + 10 * 60_000 + 6), null);
+    assert.equal(devices.authenticate(paired.token, NOW + 4_000 + 10 * 60_000 + 6), null);
   } finally {
     db.close();
   }

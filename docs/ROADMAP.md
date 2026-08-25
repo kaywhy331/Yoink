@@ -1,6 +1,39 @@
 # Yoink roadmap
 
-## Shipped through 0.37.0
+## Shipped through 0.38.0
+
+### Recoverable Chrome device credential rotation (0.38.0)
+
+- Migration 36 adds credential generation/issued time, a 10-minute pending
+  hash slot, and a two-minute previous-hash grace slot to paired Chrome
+  devices. Existing devices are backfilled at generation one using their
+  original creation time; migration never rotates or reveals an existing token
+- Rotation is a recoverable two-phase protocol. Begin requires the exact
+  current bearer but leaves it valid. Chrome validates and persists the random
+  pending token before commit; commit authenticates with that pending token and
+  atomically promotes only the exact next generation
+- Commit is idempotent for the promoted token/generation. A lost begin response
+  leaves the old token untouched, while a lost commit response resumes from the
+  pending token before the next heartbeat. Pending credentials cannot call any
+  ordinary device API, and previous-grace credentials cannot start rotation
+- The extension normalizes stored current/pending state, rotates after 30 days,
+  retains pending state through transient outages, and adopts the new token
+  only after a bound commit receipt. Revocation clears pending and previous
+  hashes atomically
+- Cross-field database triggers reject partial recovery slots; partial unique
+  indexes prevent slot-local hash reuse. Server persistence, audit, telemetry,
+  snapshots, and UI never expose a raw current, pending, or previous token
+- Rotation routes remain Chrome-origin restricted, tenant/user scoped,
+  `no-store`, and represented by the closed
+  `device.credential_rotation` telemetry key. Admin sees only generation,
+  readiness, and pending recovery status
+- Repository, HTTP, migration, and production service-worker tests cover
+  current/pending separation, lost begin, expired pending, lost commit response,
+  idempotent commit, grace expiry, stale-token denial, revocation, migration
+  backfill, origin rejection, and secret non-disclosure
+- This advances the Phase 2 hosted-device security seam, but it is not a
+  production IdP, TLS ingress, fixed production extension origin, device-risk
+  service, or revocation fleet. No retailer action or qualification is widened
 
 ### Privacy-bounded adapter repair intelligence (0.37.0)
 
@@ -34,7 +67,8 @@
   is still tenant-scoped evidence, not the future cross-account community
   plane; reputation, Sybil defense, retention/deletion, global curation,
   independent validation, candidate synthesis, and autonomous promotion remain
-  open. Schema migration 35 remains current and no retailer lane is widened
+  open. The feature itself required no migration; 0.38 later advances the
+  schema to migration 36. No retailer lane is widened
 
 ### Durable TrackaLacker signal evaluation boundary (0.36.0)
 
@@ -755,9 +789,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.37.0
+## Architecture assessment after 0.38.0
 
-Yoink 0.37.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.38.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -769,7 +803,7 @@ or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-35 SQLite schema plus deterministic operator portability, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, or hosted cutover |
+| Primary backend database | Transactional migration-36 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, bounded service-health telemetry, durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, secret references, external alert connectors or connector dispatch workers, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, and source/review status | Production onboarding still depends on Phase 2 IdP/hosted deployment; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, complete retention/deletion operations, or meaningful live quorum |
@@ -930,7 +964,11 @@ because the persistence adapter remains synchronous SQLite and the standalone
 process is not a multi-tenant PostgreSQL fleet. Version 0.36 moves authenticated
 TrackaLacker signal evaluation behind that boundary with atomic inbox/wake
 acceptance, bounded processing, and operable dead letters; other asynchronous
-families and the production persistence/deployment gate remain open.
+families and the production persistence/deployment gate remain open. Version
+0.38 adds recoverable two-phase Chrome credential rotation with generation
+binding, hash-only server state, idempotent commit, and extension-side
+crash/outage recovery. It improves the device-authentication seam but does not
+replace a production IdP, fixed hosted origin, TLS, or device-risk operations.
 
 - Implement the async PostgreSQL repository family and migrations/importer with
   transactional and isolation parity, row-level tenant tests, fleet lease-

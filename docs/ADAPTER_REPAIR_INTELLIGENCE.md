@@ -95,6 +95,7 @@ Health advertises `privacyBoundedRepairLandmarks=true` and
 admin capabilities only; they do not indicate automatic correction or
 production community readiness.
 
-No schema migration is required for 0.37 because the normalized optional
-landmarks use the existing bounded diagnostic JSON column. Migration 35 remains
-the current database schema.
+No schema migration was required for 0.37 because the normalized optional
+landmarks use the existing bounded diagnostic JSON column. Migration 35 was
+current for that release; 0.38 later adds migration 36 for device credential
+rotation without changing this evidence format.
