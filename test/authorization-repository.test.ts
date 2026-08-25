@@ -67,6 +67,16 @@ test("authorization is persisted, tenant-scoped, and deny-by-default outside the
     runWithRequestScope(forgedMaintainer, () => {
       assert.equal(new AuthorizationRepository(db).has("security.manage"), false);
     });
+
+    const hostedLocalImpersonation: RequestScope = {
+      tenantId: LOCAL_TENANT_ID,
+      userId: LOCAL_USER_ID,
+      actorKind: "maintainer",
+      actorId: "local_control_center"
+    };
+    runWithRequestScope(hostedLocalImpersonation, () => {
+      assert.equal(new AuthorizationRepository(db).has("security.manage"), false);
+    });
   } finally {
     db.close();
   }

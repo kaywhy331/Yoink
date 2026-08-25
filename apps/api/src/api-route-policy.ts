@@ -26,7 +26,8 @@ const ADMIN_PERMISSIONS = new Set<AuthorizationPermission>([
   "source.manage",
   "security.manage",
   "user.lifecycle.manage",
-  "alert.manage"
+  "alert.manage",
+  "change.approve"
 ]);
 
 function permissionSurface(permission: AuthorizationPermission | null): ApiSurface {
@@ -47,6 +48,9 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 
   if (pathname === "/api/v1/snapshot") return "admin.read";
   if (pathname === "/api/v1/operations/telemetry") return "admin.read";
+  if (/^\/api\/v1\/change-requests\/[A-Za-z0-9_-]{3,120}\/decision$/.test(pathname)) return "change.approve";
+  if (pathname.startsWith("/api/v1/change-requests")) return "admin.read";
+  if (pathname === "/api/v1/admin/attribution-policies") return "affiliate.manage";
   if (pathname.startsWith("/api/v1/admin/authorization")) return "security.manage";
   if (/^\/api\/v1\/identity\/claims\/[A-Za-z0-9_-]{3,120}\/review$/.test(pathname)) return "identity.review";
   if (pathname.startsWith("/api/v1/observer-recipes")) return "recipe.manage";
@@ -89,7 +93,8 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
   if (pathname.startsWith("/api/v1/user/")) {
     return { pathname: `/api/v1/${pathname.slice("/api/v1/user/".length)}`, requestedSurface: "user" };
   }
-  if (pathname.startsWith("/api/v1/admin/authorization") || pathname.startsWith("/api/v1/admin/catalog/")) {
+  if (pathname.startsWith("/api/v1/admin/authorization") || pathname.startsWith("/api/v1/admin/catalog/")
+    || pathname === "/api/v1/admin/attribution-policies") {
     return { pathname, requestedSurface: "admin" };
   }
   if (pathname.startsWith("/api/v1/admin/")) {
@@ -159,7 +164,9 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     "observer-recipes": "observer_recipes",
     qualifications: "qualifications",
     alerts: "alerts",
-    sources: "sources"
+    sources: "sources",
+    "attribution-policies": "attribution",
+    "change-requests": "change_control"
   }),
   device: Object.freeze({
     heartbeat: "heartbeat",

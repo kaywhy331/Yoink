@@ -2,7 +2,15 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
 import {
+  AMAZON_ADD_ACTIVATION_CONFIRMATION,
+  AMAZON_ADD_ADAPTER_VERSION,
+  BESTBUY_ADD_ACTIVATION_CONFIRMATION,
+  BESTBUY_ADD_ADAPTER_VERSION,
   JOB_STATES,
+  TARGET_ADD_ACTIVATION_CONFIRMATION,
+  TARGET_ADD_ADAPTER_VERSION,
+  WALMART_ADD_ACTIVATION_CONFIRMATION,
+  WALMART_ADD_ADAPTER_VERSION,
   type CommunityConsentUpdateInput,
   type CommunityContributionInput,
   type IdentityClaimInput,
@@ -51,6 +59,11 @@ import {
 import { CatalogIdentityGovernanceRepository } from "../../../packages/database/src/catalog-identity-governance-repository.js";
 import { AttributionRepository } from "../../../packages/database/src/attribution-repository.js";
 import { AdapterDiagnosticRepository } from "../../../packages/database/src/adapter-diagnostic-repository.js";
+import {
+  ADMIN_CHANGE_OPERATION_POLICIES,
+  AdminChangeControlRepository,
+  type AdminChangeStatus
+} from "../../../packages/database/src/admin-change-control-repository.js";
 import { AuthorizationRepository } from "../../../packages/database/src/authorization-repository.js";
 import { AuditRepository } from "../../../packages/database/src/audit-repository.js";
 import { ControlRepository } from "../../../packages/database/src/control-repository.js";
@@ -187,6 +200,11 @@ function bearerToken(request: IncomingMessage): string {
   return match?.[1] ?? "";
 }
 
+function adminChangeRequestId(request: IncomingMessage): { changeRequestId?: string } {
+  const value = String(request.headers["x-yoink-change-request-id"] ?? "").trim();
+  return value ? { changeRequestId: value } : {};
+}
+
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLocaleLowerCase("en-US");
   if (contentType !== "application/json") throw new Error("Requests with a body must use application/json.");
@@ -239,6 +257,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const catalogIdentityGovernance = new CatalogIdentityGovernanceRepository(db);
   const attribution = new AttributionRepository(db);
   const adapterDiagnostics = new AdapterDiagnosticRepository(db);
+  const adminChanges = new AdminChangeControlRepository(db);
   const authorization = new AuthorizationRepository(db);
   const audit = new AuditRepository(db);
   const control = new ControlRepository(db);
@@ -359,6 +378,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const catalogIdentityOperationDecisionMatch = /^\/api\/v1\/admin\/catalog\/identity-operations\/([A-Za-z0-9_-]{3,120})\/decision$/.exec(requestUrl.pathname);
       const operatorAlertRuleMatch = /^\/api\/v1\/alerts\/rules\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
       const operatorAlertIncidentActionMatch = /^\/api\/v1\/alerts\/incidents\/([A-Za-z0-9_-]{3,120})\/(acknowledge|resolve)$/.exec(requestUrl.pathname);
+      const adminChangeRequestDetailMatch = /^\/api\/v1\/change-requests\/(admin_change_[a-f0-9]{32})$/.exec(requestUrl.pathname);
+      const adminChangeRequestDecisionMatch = /^\/api\/v1\/change-requests\/(admin_change_[a-f0-9]{32})\/decision$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
         const settings = control.settings();
@@ -823,6 +844,28 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/change-requests") {
+        const status = String(requestUrl.searchParams.get("status") ?? "all") as AdminChangeStatus | "all";
+        const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
+        const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
+        json(response, 200, {
+          items: adminChanges.list(status, limit, offset),
+          counts: adminChanges.counts(),
+          assurance: adminChanges.assuranceStatus(),
+          approvalCapable: authorization.has("change.approve"),
+          operationPolicies: Object.fromEntries(Object.entries(ADMIN_CHANGE_OPERATION_POLICIES).map(([key, policy]) => [key, {
+            label: policy.label,
+            controlLevel: policy.controlLevel
+          }]))
+        });
+        return;
+      }
+
+      if (request.method === "GET" && adminChangeRequestDetailMatch) {
+        json(response, 200, { request: adminChanges.detail(adminChangeRequestDetailMatch[1] ?? "") });
+        return;
+      }
+
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/snapshot") {
         const pairedDevices = devices.listDevices();
         const operatorAlertCounts = operatorAlerts.counts();
@@ -837,6 +880,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const walmartQualification = shadowObservations.walmartQualificationReadiness();
         const amazonQualification = shadowObservations.amazonQualificationReadiness();
         const bestBuyQualification = shadowObservations.bestBuyQualificationReadiness();
+        const adminChangeCounts = adminChanges.counts();
         const qualifiedAddRetailers = [
           targetQualification.addToCartQualified ? "Target" : "",
           walmartQualification.addToCartQualified ? "Walmart" : "",
@@ -866,6 +910,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ...catalogIdentityGovernance.counts(),
             ...hostedDelivery.counts(),
             ...operationalTelemetry.counts(),
+            adminChangeRequests: adminChangeCounts.total,
+            pendingAdminChanges: adminChangeCounts.pending,
+            approvedAdminChanges: adminChangeCounts.approved,
+            consumedAdminChanges: adminChangeCounts.consumed,
+            rejectedAdminChanges: adminChangeCounts.rejected,
+            expiredAdminChanges: adminChangeCounts.expired,
             ...operatorAlertCounts
           },
           sources: control.listSources(),
@@ -922,7 +972,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           authorization: {
             permissions: authorization.permissions(),
             memberships: authorization.memberships(),
-            roleAdministrationEnabled: authorization.has("security.manage")
+            roleAdministrationEnabled: authorization.has("security.manage"),
+            changeApprovalEnabled: authorization.has("change.approve"),
+            assurance: adminChanges.assuranceStatus()
           },
           operatorAlerts: operatorAlertSnapshot,
           retailerEvidence: shadowObservations.retailerEvidenceReadiness(),
@@ -953,6 +1005,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             privacyClassifiedOperatorAlerts: true,
             privacyBoundedOperationalTelemetry: true,
             rawRequestCapture: false,
+            signedAuthenticationAssurance: true,
+            highRiskChangeControl: true,
+            independentSafetyExpansionApproval: true,
+            productionIdentityProvider: false,
             operatorAlertMutationAuthority: false,
             communityReadOnlyEvidence: true,
             exactSelectedOfferCommunityEvidence: true,
@@ -1063,23 +1119,61 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
-      if (authorizationMembershipMatch && request.method === "POST") {
+      if (adminChangeRequestDecisionMatch && request.method === "POST") {
+        const body = await readJson(request);
         json(response, 200, {
-          memberships: authorization.grantRole(
-            authorizationMembershipMatch[1] ?? "",
-            authorizationMembershipMatch[2] ?? ""
+          request: adminChanges.decide(
+            adminChangeRequestDecisionMatch[1] ?? "",
+            body as unknown as { decision: "approve" | "reject"; confirmation: string },
+            correlationId
           )
         });
         return;
       }
 
+      if (authorizationMembershipMatch && request.method === "POST") {
+        const subjectUserId = authorizationMembershipMatch[1] ?? "";
+        const roleId = authorizationMembershipMatch[2] ?? "";
+        if (!authorization.tenantUsers().some((user) => user.id === subjectUserId)
+          || !authorization.roles().some((role) => role.id === roleId)) {
+          throw new ApiError("authorization_subject_not_found", 404, "The authorization user or role does not exist.");
+        }
+        const governed = adminChanges.execute({
+          operationType: "authorization_role_grant",
+          targetKey: `${subjectUserId}:${roleId}`,
+          payload: { subjectUserId, roleId, action: "grant" },
+          summary: { subjectUserId, roleId, action: "Grant role" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => authorization.grantRole(subjectUserId, roleId));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 200, { memberships: governed.result });
+        return;
+      }
+
       if (authorizationMembershipMatch && request.method === "DELETE") {
-        json(response, 200, {
-          memberships: authorization.revokeRole(
-            authorizationMembershipMatch[1] ?? "",
-            authorizationMembershipMatch[2] ?? ""
-          )
-        });
+        const subjectUserId = authorizationMembershipMatch[1] ?? "";
+        const roleId = authorizationMembershipMatch[2] ?? "";
+        if (!authorization.tenantUsers().some((user) => user.id === subjectUserId)
+          || !authorization.roles().some((role) => role.id === roleId)) {
+          throw new ApiError("authorization_subject_not_found", 404, "The authorization user or role does not exist.");
+        }
+        const governed = adminChanges.execute({
+          operationType: "authorization_role_revoke",
+          targetKey: `${subjectUserId}:${roleId}`,
+          payload: { subjectUserId, roleId, action: "revoke" },
+          summary: { subjectUserId, roleId, action: "Revoke role" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => authorization.revokeRole(subjectUserId, roleId));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 200, { memberships: governed.result });
         return;
       }
 
@@ -1158,6 +1252,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "POST" && catalogIdentityOperationDecisionMatch) {
         const body = await readJson(request);
+        adminChanges.requireFreshStepUp();
         json(response, 200, catalogIdentityGovernance.decide(
           catalogIdentityOperationDecisionMatch[1] ?? "",
           body as unknown as CatalogIdentityOperationDecisionInput
@@ -1167,6 +1262,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "POST" && catalogProposalDecisionMatch) {
         const body = await readJson(request);
+        adminChanges.requireFreshStepUp();
         json(response, 200, catalogGovernance.decide(
           catalogProposalDecisionMatch[1] ?? "",
           body as unknown as CatalogProposalDecisionInput
@@ -1277,6 +1373,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (body.confirmation !== "PUBLISH_OBSERVER_RECIPE_CHECKPOINT") {
           throw new Error("Explicit observer recipe witness publication confirmation is required.");
         }
+        adminChanges.requireFreshStepUp();
         const publisher = dependencies.observerRecipeWitness;
         const checkpoint = observerRecipes.witnessCheckpoint();
         if (!publisher || !checkpoint) {
@@ -1302,9 +1399,24 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/observer-recipes/trust-manifests") {
         const body = await readJson(request);
-        json(response, 201, {
-          trust: observerRecipes.installTrustManifest(body as unknown as ObserverRecipeTrustManifestInstallInput)
-        });
+        const generation = Number((body.manifest as { payload?: { generation?: unknown } } | undefined)?.payload?.generation);
+        if (body.confirmation !== "INSTALL_ROOTED_OBSERVER_RECIPE_TRUST_MANIFEST"
+          || !Number.isSafeInteger(generation) || generation < 1) {
+          throw new Error("A valid rooted trust manifest and explicit installation confirmation are required.");
+        }
+        const governed = adminChanges.execute({
+          operationType: "observer_recipe_trust_install",
+          targetKey: `manifest_generation_${generation}`,
+          payload: body,
+          summary: { generation, action: "Install rooted observer trust" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => observerRecipes.installTrustManifest(body as unknown as ObserverRecipeTrustManifestInstallInput));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 201, { trust: governed.result });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/observer-recipes") {
@@ -1318,40 +1430,160 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const action = observerRecipeActionMatch[2];
         const body = await readJson(request);
         if (action === "promote") {
-          json(response, 200, {
-            recipe: observerRecipes.promote(recipeId, body as unknown as ObserverRecipePromotionInput)
-          });
+          if (body.confirmation !== "PROMOTE_SIGNED_OBSERVER_RECIPE"
+            || !["shadow", "canary", "trusted_read_only"].includes(String(body.targetState))) {
+            throw new Error("A valid signed observer recipe promotion is required.");
+          }
+          const governed = adminChanges.execute({
+            operationType: "observer_recipe_promote",
+            targetKey: recipeId,
+            payload: body,
+            summary: { recipeId, targetState: String(body.targetState), action: "Promote signed observer recipe" },
+            correlationId,
+            ...adminChangeRequestId(request)
+          }, () => observerRecipes.promote(recipeId, body as unknown as ObserverRecipePromotionInput));
+          if (governed.disposition === "pending_approval") {
+            json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+            return;
+          }
+          json(response, 200, { recipe: governed.result });
         } else if (action === "resign") {
-          json(response, 200, {
-            recipe: observerRecipes.resign(recipeId, body as unknown as ObserverRecipeResignInput)
-          });
+          if (body.confirmation !== "RESIGN_ROOTED_OBSERVER_RECIPE") {
+            throw new Error("Explicit rooted observer recipe re-signing is required.");
+          }
+          const governed = adminChanges.execute({
+            operationType: "observer_recipe_resign",
+            targetKey: recipeId,
+            payload: body,
+            summary: { recipeId, action: "Re-sign rooted observer recipe" },
+            correlationId,
+            ...adminChangeRequestId(request)
+          }, () => observerRecipes.resign(recipeId, body as unknown as ObserverRecipeResignInput));
+          if (governed.disposition === "pending_approval") {
+            json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+            return;
+          }
+          json(response, 200, { recipe: governed.result });
         } else if (action === "disable") {
           if (body.confirmation !== "DISABLE_OBSERVER_RECIPE") throw new Error("Explicit observer recipe kill-switch confirmation is required.");
-          json(response, 200, { recipe: observerRecipes.disable(recipeId, String(body.reasonCode ?? "maintainer_kill_switch")) });
+          const reasonCode = String(body.reasonCode ?? "maintainer_kill_switch");
+          const governed = adminChanges.execute({
+            operationType: "observer_recipe_disable",
+            targetKey: recipeId,
+            payload: body,
+            summary: { recipeId, reasonCode, action: "Disable observer recipe" },
+            correlationId,
+            ...adminChangeRequestId(request)
+          }, () => observerRecipes.disable(recipeId, reasonCode));
+          if (governed.disposition === "pending_approval") {
+            json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+            return;
+          }
+          json(response, 200, { recipe: governed.result });
         } else {
           if (body.confirmation !== "ROLLBACK_OBSERVER_RECIPE") throw new Error("Explicit observer recipe rollback confirmation is required.");
-          json(response, 200, observerRecipes.rollback(recipeId));
+          const governed = adminChanges.execute({
+            operationType: "observer_recipe_rollback",
+            targetKey: recipeId,
+            payload: body,
+            summary: { recipeId, action: "Roll back observer recipe" },
+            correlationId,
+            ...adminChangeRequestId(request)
+          }, () => observerRecipes.rollback(recipeId));
+          if (governed.disposition === "pending_approval") {
+            json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+            return;
+          }
+          json(response, 200, governed.result);
         }
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/target-add/activate") {
         const body = await readJson(request);
-        json(response, 200, qualifications.activateTargetAdd(body as unknown as TargetAddActivationInput));
+        if (body.adapterVersion !== TARGET_ADD_ADAPTER_VERSION
+          || body.confirmation !== TARGET_ADD_ACTIVATION_CONFIRMATION
+          || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
+          throw new Error("Explicit Target add-only activation confirmation and current evidence are required.");
+        }
+        const governed = adminChanges.execute({
+          operationType: "retailer_lane_activate",
+          targetKey: "target",
+          payload: body,
+          summary: { retailerId: "target", action: "Activate guarded add-only execution" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => qualifications.activateTargetAdd(body as unknown as TargetAddActivationInput));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 200, governed.result);
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/walmart-add/activate") {
         const body = await readJson(request);
-        json(response, 200, qualifications.activateWalmartAdd(body as unknown as WalmartAddActivationInput));
+        if (body.adapterVersion !== WALMART_ADD_ADAPTER_VERSION
+          || body.confirmation !== WALMART_ADD_ACTIVATION_CONFIRMATION
+          || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
+          throw new Error("Explicit Walmart add-only activation confirmation and current evidence are required.");
+        }
+        const governed = adminChanges.execute({
+          operationType: "retailer_lane_activate",
+          targetKey: "walmart",
+          payload: body,
+          summary: { retailerId: "walmart", action: "Activate guarded add-only execution" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => qualifications.activateWalmartAdd(body as unknown as WalmartAddActivationInput));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 200, governed.result);
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/amazon-add/activate") {
         const body = await readJson(request);
-        json(response, 200, qualifications.activateAmazonAdd(body as unknown as AmazonAddActivationInput));
+        if (body.adapterVersion !== AMAZON_ADD_ADAPTER_VERSION
+          || body.confirmation !== AMAZON_ADD_ACTIVATION_CONFIRMATION
+          || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
+          throw new Error("Explicit Amazon add-only activation confirmation and current evidence are required.");
+        }
+        const governed = adminChanges.execute({
+          operationType: "retailer_lane_activate",
+          targetKey: "amazon",
+          payload: body,
+          summary: { retailerId: "amazon", action: "Activate guarded add-only execution" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => qualifications.activateAmazonAdd(body as unknown as AmazonAddActivationInput));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 200, governed.result);
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/bestbuy-add/activate") {
         const body = await readJson(request);
-        json(response, 200, qualifications.activateBestBuyAdd(body as unknown as BestBuyAddActivationInput));
+        if (body.adapterVersion !== BESTBUY_ADD_ADAPTER_VERSION
+          || body.confirmation !== BESTBUY_ADD_ACTIVATION_CONFIRMATION
+          || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
+          throw new Error("Explicit Best Buy add-only activation confirmation and current evidence are required.");
+        }
+        const governed = adminChanges.execute({
+          operationType: "retailer_lane_activate",
+          targetKey: "bestbuy",
+          payload: body,
+          summary: { retailerId: "bestbuy", action: "Activate guarded add-only execution" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => qualifications.activateBestBuyAdd(body as unknown as BestBuyAddActivationInput));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 200, governed.result);
         return;
       }
       const revokeMatch = /^\/api\/v1\/devices\/([A-Za-z0-9_-]{3,120})\/revoke$/.exec(requestUrl.pathname);
@@ -1406,10 +1638,31 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, { settings: control.updateSettings(body as unknown as AppSettingsUpdateInput) });
         return;
       }
-      if (request.method === "PUT" && requestUrl.pathname === "/api/v1/attribution-policies") {
+      if (request.method === "PUT" && [
+        "/api/v1/attribution-policies",
+        "/api/v1/admin/attribution-policies"
+      ].includes(requestUrl.pathname)) {
         const body = await readJson(request);
         if (!Array.isArray(body.policies)) throw new Error("The policies field must be a list.");
-        json(response, 200, { policies: attribution.replacePolicies(body.policies as AttributionPolicyUpdateInput[]) });
+        const enabledCount = body.policies.filter((policy) => policy && typeof policy === "object"
+          && (policy as Record<string, unknown>).enabled === true).length;
+        const governed = adminChanges.execute({
+          operationType: "affiliate_policy_replace",
+          targetKey: "tenant_policies",
+          payload: body,
+          summary: {
+            policyCount: body.policies.length,
+            enabledCount,
+            action: "Replace affiliate policies"
+          },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => attribution.replacePolicies(body.policies as AttributionPolicyUpdateInput[]));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 200, { policies: governed.result });
         return;
       }
       if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/settings/actions") {
@@ -1422,7 +1675,23 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           && !qualifications.bestBuyAddQualified()) {
           throw new Error("At least one add-only retailer lane must be explicitly qualified before actions can be enabled.");
         }
-        json(response, 200, { settings: control.setActionsPaused(body.paused, String(body.reason ?? "User changed the global action state.")) });
+        if (body.paused === true) {
+          json(response, 200, { settings: control.setActionsPaused(true, String(body.reason ?? "User paused global purchase actions.")) });
+          return;
+        }
+        const governed = adminChanges.execute({
+          operationType: "global_actions_resume",
+          targetKey: "global_actions",
+          payload: body,
+          summary: { action: "Resume global purchase actions" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => control.setActionsPaused(false, String(body.reason ?? "User resumed global purchase actions.")));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 200, { settings: governed.result });
         return;
       }
 

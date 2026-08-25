@@ -9,31 +9,60 @@ export interface RequestScope {
   userId: string;
   actorKind: "maintainer" | "user" | "device" | "service";
   actorId: string;
+  /** Internal marker set only by the in-process loopback resolver. Never read from hosted headers. */
+  requestBoundary?: "local_loopback";
+  authenticationAssurance?: "baseline" | "step_up";
+  authenticationTime?: number;
+  sessionId?: string;
 }
 
 export const LOCAL_REQUEST_SCOPE: Readonly<RequestScope> = Object.freeze({
   tenantId: LOCAL_TENANT_ID,
   userId: LOCAL_USER_ID,
   actorKind: "maintainer",
-  actorId: "local_control_center"
+  actorId: "local_control_center",
+  requestBoundary: "local_loopback"
 });
 
 const storage = new AsyncLocalStorage<RequestScope>();
 
 export function normalizedRequestScope(value: RequestScope): RequestScope {
+  const assurance = value?.authenticationAssurance;
+  const hasAuthenticationContext = assurance !== undefined
+    || value?.authenticationTime !== undefined
+    || value?.sessionId !== undefined;
   if (!value || typeof value !== "object"
     || !SCOPE_ID_PATTERN.test(String(value.tenantId || ""))
     || !SCOPE_ID_PATTERN.test(String(value.userId || ""))
     || !["maintainer", "user", "device", "service"].includes(value.actorKind)
-    || !SCOPE_ID_PATTERN.test(String(value.actorId || ""))) {
+    || !SCOPE_ID_PATTERN.test(String(value.actorId || ""))
+    || (value.requestBoundary !== undefined && value.requestBoundary !== "local_loopback")
+    || (hasAuthenticationContext && !["baseline", "step_up"].includes(String(assurance ?? "")))
+    || (hasAuthenticationContext && (!Number.isSafeInteger(value.authenticationTime)
+      || Number(value.authenticationTime) <= 0
+      || !SCOPE_ID_PATTERN.test(String(value.sessionId ?? ""))))) {
     throw new Error("The authenticated tenant/user request scope is invalid.");
   }
   return {
     tenantId: value.tenantId,
     userId: value.userId,
     actorKind: value.actorKind,
-    actorId: value.actorId
+    actorId: value.actorId,
+    ...(value.requestBoundary ? { requestBoundary: value.requestBoundary } : {}),
+    ...(hasAuthenticationContext ? {
+      authenticationAssurance: assurance,
+      authenticationTime: value.authenticationTime,
+      sessionId: value.sessionId
+    } : {})
   };
+}
+
+export function isExactLocalRequestScope(scope: RequestScope = currentRequestScope()): boolean {
+  return scope.requestBoundary === "local_loopback"
+    && scope.tenantId === LOCAL_REQUEST_SCOPE.tenantId
+    && scope.userId === LOCAL_REQUEST_SCOPE.userId
+    && scope.actorKind === LOCAL_REQUEST_SCOPE.actorKind
+    && scope.actorId === LOCAL_REQUEST_SCOPE.actorId;
 }
 
 export function currentRequestScope(): RequestScope {

@@ -2053,5 +2053,103 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
       BEGIN SELECT RAISE(ABORT, 'operational telemetry retention receipts are append-only'); END;
     `
+  },
+  {
+    version: 32,
+    name: "high_risk_change_control",
+    sql: `
+      INSERT INTO authorization_permissions(id, description, created_at)
+      VALUES (
+        'change.approve',
+        'Independently approve or reject a safety-expanding administrative change.',
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      );
+      INSERT INTO authorization_role_permissions(role_id, permission_id, created_at)
+      VALUES ('security_admin', 'change.approve', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+      CREATE TABLE admin_change_requests (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        operation_type TEXT NOT NULL CHECK (operation_type IN (
+          'authorization_role_grant', 'authorization_role_revoke',
+          'observer_recipe_trust_install',
+          'observer_recipe_promote', 'observer_recipe_resign',
+          'observer_recipe_disable', 'observer_recipe_rollback',
+          'retailer_lane_activate', 'affiliate_policy_replace',
+          'global_actions_resume'
+        )),
+        target_key TEXT NOT NULL CHECK (length(target_key) BETWEEN 1 AND 160),
+        payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),
+        summary_json TEXT NOT NULL CHECK (json_valid(summary_json) AND length(summary_json) <= 2000),
+        control_level TEXT NOT NULL CHECK (control_level IN ('step_up', 'two_person')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'consumed', 'rejected', 'expired')),
+        requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        requested_by_actor_kind TEXT NOT NULL CHECK (requested_by_actor_kind IN ('maintainer', 'user')),
+        requested_by_actor_id TEXT NOT NULL,
+        requested_assurance TEXT NOT NULL CHECK (requested_assurance IN ('step_up', 'local_trusted')),
+        correlation_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        approved_at TEXT NOT NULL DEFAULT '',
+        consumed_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE UNIQUE INDEX admin_change_requests_active_payload_idx
+        ON admin_change_requests(tenant_id, operation_type, target_key, payload_hash)
+        WHERE status IN ('pending', 'approved');
+      CREATE INDEX admin_change_requests_queue_idx
+        ON admin_change_requests(tenant_id, status, created_at DESC, id DESC);
+
+      CREATE TABLE admin_change_decisions (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        request_id TEXT NOT NULL REFERENCES admin_change_requests(id) ON DELETE CASCADE,
+        decision TEXT NOT NULL CHECK (decision IN ('approve', 'reject')),
+        reviewer_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        reviewer_actor_kind TEXT NOT NULL CHECK (reviewer_actor_kind IN ('maintainer', 'user')),
+        reviewer_actor_id TEXT NOT NULL,
+        reviewer_assurance TEXT NOT NULL CHECK (reviewer_assurance IN ('step_up', 'local_trusted')),
+        correlation_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(request_id, reviewer_user_id)
+      ) STRICT;
+      CREATE INDEX admin_change_decisions_request_idx
+        ON admin_change_decisions(tenant_id, request_id, created_at, id);
+
+      CREATE TABLE admin_change_events (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        request_id TEXT NOT NULL REFERENCES admin_change_requests(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK (sequence >= 1),
+        event_type TEXT NOT NULL CHECK (event_type IN (
+          'requested', 'approved', 'rejected', 'consumed',
+          'expired', 'local_trusted_consumed'
+        )),
+        actor_kind TEXT NOT NULL CHECK (actor_kind IN ('maintainer', 'user')),
+        actor_id TEXT NOT NULL,
+        correlation_id TEXT NOT NULL,
+        privacy_classification TEXT NOT NULL DEFAULT 'restricted_admin'
+          CHECK (privacy_classification = 'restricted_admin'),
+        created_at TEXT NOT NULL,
+        UNIQUE(request_id, sequence)
+      ) STRICT;
+      CREATE INDEX admin_change_events_request_idx
+        ON admin_change_events(tenant_id, request_id, sequence);
+
+      CREATE TRIGGER admin_change_decisions_no_update
+      BEFORE UPDATE ON admin_change_decisions
+      BEGIN SELECT RAISE(ABORT, 'admin change decisions are append-only'); END;
+      CREATE TRIGGER admin_change_decisions_no_delete
+      BEFORE DELETE ON admin_change_decisions
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'admin change decisions are append-only'); END;
+      CREATE TRIGGER admin_change_events_no_update
+      BEFORE UPDATE ON admin_change_events
+      BEGIN SELECT RAISE(ABORT, 'admin change events are append-only'); END;
+      CREATE TRIGGER admin_change_events_no_delete
+      BEFORE DELETE ON admin_change_events
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'admin change events are append-only'); END;
+    `
   }
 ]);

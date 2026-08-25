@@ -9,6 +9,7 @@ const state = {
   observerRecipeDirty: false,
   editingOperatorAlertRuleId: "",
   operationalTelemetry: null,
+  adminChanges: null,
   pairing: null,
   libraryItems: [],
   libraryTotal: 0,
@@ -67,6 +68,13 @@ function toast(message, error = false) {
   element.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => element.classList.remove("show"), 4200);
+}
+
+function protectedChangePending(result) {
+  if (result?.disposition !== "pending_approval") return false;
+  setView("approvals");
+  toast("Protected change requested. A different authorized person must approve it before you repeat this action.");
+  return true;
 }
 
 function formatMoney(cents, currency = "USD") {
@@ -818,8 +826,64 @@ function renderOperationalTelemetry() {
   }).join("") : empty("No recent errors exist in this window.");
 }
 
+function adminChangeLabel(value) {
+  return String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function renderAdminChanges() {
+  const model = state.adminChanges;
+  if (!model) {
+    $("#adminChangeMetricGrid").innerHTML = empty("Protected changes are loading.");
+    $("#adminChangeRequestList").innerHTML = "";
+    return;
+  }
+  const counts = model.counts || {};
+  const assurance = model.assurance || { level: "baseline", fresh: false, expiresAt: "" };
+  const pending = Number(counts.pending || 0);
+  const approved = Number(counts.approved || 0);
+  $("#adminChangeMetricGrid").innerHTML = [
+    ["Waiting for review", pending, "Needs another authorized person"],
+    ["Ready to retry", approved, "Exact operation approved"],
+    ["Applied", Number(counts.consumed || 0), "Authorization consumed atomically"],
+    ["Closed", Number(counts.rejected || 0) + Number(counts.expired || 0), `${Number(counts.rejected || 0)} rejected · ${Number(counts.expired || 0)} expired`]
+  ].map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value).toLocaleString()}</strong><small>${escapeHtml(note)}</small></article>`).join("");
+  $("#adminChangeGate").textContent = pending ? `${pending} TO REVIEW` : approved ? `${approved} APPROVED` : "QUEUE CLEAR";
+  if (assurance.level === "local_trusted") {
+    $("#changeAssuranceTitle").textContent = "Trusted local control center";
+    $("#changeAssuranceCopy").textContent = "Local/offline setup stays usable and records protected changes as local-trusted receipts. Hosted deployments require identity-provider step-up and independent approval.";
+  } else if (assurance.fresh) {
+    $("#changeAssuranceTitle").textContent = "Fresh sign-in verified";
+    $("#changeAssuranceCopy").textContent = `This session can request or review protected changes until ${new Date(assurance.expiresAt).toLocaleTimeString()}.`;
+  } else {
+    $("#changeAssuranceTitle").textContent = "Sign in again before changing protected settings";
+    $("#changeAssuranceCopy").textContent = "Your normal session can still view this queue. A hosted identity provider must issue a fresh, signed step-up session before Yoink will request, approve, or apply a protected change.";
+  }
+  const currentUserId = state.snapshot.authorization?.memberships?.[0]?.userId || "";
+  $("#adminChangeRequestList").innerHTML = (model.items || []).length ? model.items.map((item) => {
+    const timeExpired = ["pending", "approved"].includes(item.status) && new Date(item.expiresAt).getTime() <= Date.now();
+    const status = timeExpired ? "expired" : item.status;
+    const kind = status === "consumed" ? "good" : ["rejected", "expired"].includes(status) ? "bad" : "warning";
+    const summary = Object.entries(item.summary || {}).map(([key, value]) => `<span class="tag"><strong>${escapeHtml(adminChangeLabel(key))}:</strong>&nbsp;${escapeHtml(value)}</span>`).join("");
+    const canDecide = status === "pending" && model.approvalCapable === true && assurance.fresh === true;
+    const canApprove = canDecide && item.requestedByUserId !== currentUserId;
+    const instruction = status === "pending"
+      ? "Waiting for a different authorized person to review it."
+      : status === "approved"
+        ? "Approved. Retry the exact original action before this request expires."
+        : status === "consumed"
+          ? "Applied once; this authorization cannot be replayed."
+          : status === "rejected" ? "Rejected without applying the protected change." : "Expired without applying the protected change.";
+    return `<article class="card operator-alert-card ${kind}">
+      <div class="card-top"><div><h3>${escapeHtml(item.operationLabel)}</h3><p>${escapeHtml(instruction)}</p></div><span class="tag ${kind}">${escapeHtml(status)}</span></div>
+      <div class="card-meta"><span class="tag ${item.controlLevel === "two_person" ? "warning" : "good"}">${item.controlLevel === "two_person" ? "Two people required" : "Fresh sign-in required"}</span>${summary}</div>
+      <p class="operator-alert-detail">Requested by ${escapeHtml(item.requestedByDisplayName)} ${escapeHtml(relativeTime(item.createdAt))} · expires ${escapeHtml(relativeTime(item.expiresAt))} · ${Number(item.events?.length || 0)} immutable event${Number(item.events?.length || 0) === 1 ? "" : "s"}</p>
+      ${canDecide ? `<div class="card-actions"><button class="button secondary" data-admin-change-reject="${escapeHtml(item.id)}" type="button">Reject</button><button class="button primary" data-admin-change-approve="${escapeHtml(item.id)}" type="button" ${canApprove ? "" : 'disabled title="A different user must approve this request."'}>Approve exact change</button></div>` : ""}
+    </article>`;
+  }).join("") : empty("No protected administrative changes have been requested yet.");
+}
+
 function render() {
-  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts(); renderOperationalTelemetry();
+  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts(); renderOperationalTelemetry(); renderAdminChanges();
 }
 
 async function storeFingerprint(retailerId, localStoreId) {
@@ -895,9 +959,13 @@ async function loadOperationalTelemetry() {
   state.operationalTelemetry = result.telemetry || null;
 }
 
+async function loadAdminChanges() {
+  state.adminChanges = await api("/api/v1/admin/change-requests?status=all&limit=100");
+}
+
 async function refresh(reloadCollections = true) {
   state.snapshot = await api("/api/v1/admin/snapshot");
-  await loadOperationalTelemetry();
+  await Promise.all([loadOperationalTelemetry(), loadAdminChanges()]);
   if (state.snapshot.authorization?.roleAdministrationEnabled === true) {
     const [users, roles] = await Promise.all([
       api("/api/v1/admin/authorization/users"),
@@ -1036,6 +1104,24 @@ document.addEventListener("click", async (event) => {
     if (button.id === "proposeCatalogMergeButton") openCatalogIdentityForm("merge_variants");
     if (button.id === "proposeCatalogSplitButton") openCatalogIdentityForm("split_variant");
     if (button.id === "addOperatorAlertRuleButton") openOperatorAlertRule();
+    if (button.dataset.adminChangeApprove) {
+      if (!confirm("Approve this exact protected change? Approval does not apply it; the original operation must still be retried unchanged before expiry.")) return;
+      await api(`/api/v1/admin/change-requests/${encodeURIComponent(button.dataset.adminChangeApprove)}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ decision: "approve", confirmation: "APPROVE_HIGH_RISK_CHANGE" })
+      });
+      await refresh(false);
+      toast("Exact change approved. The original operation can now be retried once.");
+    }
+    if (button.dataset.adminChangeReject) {
+      if (!confirm("Reject this protected change without applying it?")) return;
+      await api(`/api/v1/admin/change-requests/${encodeURIComponent(button.dataset.adminChangeReject)}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ decision: "reject", confirmation: "REJECT_HIGH_RISK_CHANGE" })
+      });
+      await refresh(false);
+      toast("Protected change rejected without applying it.");
+    }
     if (button.dataset.operatorAlertRuleEdit) {
       const rule = (state.snapshot.operatorAlerts?.rules || []).find((item) => item.id === button.dataset.operatorAlertRuleEdit);
       if (!rule) throw new Error("The operator alert rule is unavailable.");
@@ -1133,18 +1219,21 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.roleGrant) {
       const select = $(`[data-role-selection="${CSS.escape(button.dataset.roleGrant)}"]`);
       if (!select?.value) throw new Error("Choose a role to grant.");
-      await api(`/api/v1/admin/authorization/users/${encodeURIComponent(button.dataset.roleGrant)}/roles/${encodeURIComponent(select.value)}`, { method: "POST", body: "{}" });
-      await refresh(false); toast("Role membership granted and audited.");
+      const result = await api(`/api/v1/admin/authorization/users/${encodeURIComponent(button.dataset.roleGrant)}/roles/${encodeURIComponent(select.value)}`, { method: "POST", body: "{}" });
+      await refresh(false);
+      if (!protectedChangePending(result)) toast("Role membership granted and audited.");
     }
     if (button.dataset.roleRevoke && button.dataset.roleRevokeUser) {
       if (!confirm(`Revoke ${button.dataset.roleRevoke} from this user?`)) return;
-      await api(`/api/v1/admin/authorization/users/${encodeURIComponent(button.dataset.roleRevokeUser)}/roles/${encodeURIComponent(button.dataset.roleRevoke)}`, { method: "DELETE" });
-      await refresh(false); toast("Role membership revoked and audited.");
+      const result = await api(`/api/v1/admin/authorization/users/${encodeURIComponent(button.dataset.roleRevokeUser)}/roles/${encodeURIComponent(button.dataset.roleRevoke)}`, { method: "DELETE" });
+      await refresh(false);
+      if (!protectedChangePending(result)) toast("Role membership revoked and audited.");
     }
     if (button.id === "actionsToggle") {
       const paused = !state.snapshot.settings.actionsPaused;
-      await api("/api/v1/user/settings/actions", { method: "PATCH", body: JSON.stringify({ paused, reason: paused ? "Paused from the control center." : "Enabled from the control center." }) });
-      await refresh(); toast(paused ? "Actions paused. Signals will continue to be recorded." : "Qualified retailer add-only actions resumed.");
+      const result = await api("/api/v1/user/settings/actions", { method: "PATCH", body: JSON.stringify({ paused, reason: paused ? "Paused from the control center." : "Enabled from the control center." }) });
+      await refresh();
+      if (!protectedChangePending(result)) toast(paused ? "Actions paused. Signals will continue to be recorded." : "Qualified retailer add-only actions resumed.");
     }
     if (button.dataset.communityEnable) {
       const card = button.closest("[data-community-retailer]");
@@ -1219,39 +1308,39 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.observerPromote && button.dataset.observerTarget) {
       const approved = confirm(`Promote this signed observer-only recipe to ${button.dataset.observerTarget.replaceAll("_", " ")}?\n\nThe extension still uses only its packaged interpreter. This recipe cannot execute code, decide product identity, navigate, click, fill forms, check out, or submit an order.`);
       if (!approved) return;
-      await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerPromote)}/promote`, {
+      const result = await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerPromote)}/promote`, {
         method: "POST",
         body: JSON.stringify({ targetState: button.dataset.observerTarget, confirmation: "PROMOTE_SIGNED_OBSERVER_RECIPE" })
       });
       await refresh(false);
-      toast(`Observer recipe promoted to ${button.dataset.observerTarget.replaceAll("_", " ")}.`);
+      if (!protectedChangePending(result)) toast(`Observer recipe promoted to ${button.dataset.observerTarget.replaceAll("_", " ")}.`);
     }
     if (button.dataset.observerDisable) {
       if (!confirm("Activate the observer recipe kill switch? Distribution stops immediately and the packaged observer remains available.")) return;
-      await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerDisable)}/disable`, {
+      const result = await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerDisable)}/disable`, {
         method: "POST",
         body: JSON.stringify({ confirmation: "DISABLE_OBSERVER_RECIPE", reasonCode: "maintainer_kill_switch" })
       });
       await refresh(false);
-      toast("Observer recipe disabled immediately.");
+      if (!protectedChangePending(result)) toast("Observer recipe disabled immediately.");
     }
     if (button.dataset.observerResign) {
       if (!confirm("Re-sign this already reviewed observer-only recipe with the current root-authorized intermediate?\n\nIts lifecycle state and selectors do not change. This restores read-only distribution after a trust rotation and cannot grant mutation authority.")) return;
-      await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerResign)}/resign`, {
+      const result = await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerResign)}/resign`, {
         method: "POST",
         body: JSON.stringify({ confirmation: "RESIGN_ROOTED_OBSERVER_RECIPE" })
       });
       await refresh(false);
-      toast("Observer recipe re-signed under the current rooted trust generation.");
+      if (!protectedChangePending(result)) toast("Observer recipe re-signed under the current rooted trust generation.");
     }
     if (button.dataset.observerRollback) {
       if (!confirm("Disable this recipe and restore its pre-reviewed signed rollback target?")) return;
-      await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerRollback)}/rollback`, {
+      const result = await api(`/api/v1/admin/observer-recipes/${encodeURIComponent(button.dataset.observerRollback)}/rollback`, {
         method: "POST",
         body: JSON.stringify({ confirmation: "ROLLBACK_OBSERVER_RECIPE" })
       });
       await refresh(false);
-      toast("Observer recipe rollback completed.");
+      if (!protectedChangePending(result)) toast("Observer recipe rollback completed.");
     }
     if (button.id === "activateTargetAddButton") {
       const readiness = state.snapshot.targetQualification;
@@ -1261,7 +1350,7 @@ document.addEventListener("click", async (event) => {
       const approved = confirm("Enable guarded Target adds?\n\nScope: Target-sold offers, shipping, quantity 1, add-to-cart only. Chrome will require an empty cart and revalidate SKU, seller, price, stock, and fulfillment immediately before clicking. Checkout and order submission remain disabled.");
       if (!approved) return;
       button.disabled = true;
-      await api("/api/v1/admin/qualifications/target-add/activate", {
+      const result = await api("/api/v1/admin/qualifications/target-add/activate", {
         method: "POST",
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
@@ -1270,7 +1359,7 @@ document.addEventListener("click", async (event) => {
         })
       });
       await refresh();
-      toast("Guarded Target add-only execution is active.");
+      if (!protectedChangePending(result)) toast("Guarded Target add-only execution is active.");
     }
     if (button.id === "activateWalmartAddButton") {
       const readiness = state.snapshot.walmartQualification;
@@ -1280,7 +1369,7 @@ document.addEventListener("click", async (event) => {
       const approved = confirm("Enable guarded Walmart adds?\n\nScope: Walmart-sold offers, explicitly verified shipping, quantity 1, add-to-cart only. Chrome will require an empty cart, stop at queues or challenges, and revalidate SKU, seller, price, stock, and fulfillment immediately before clicking. Checkout and order submission remain disabled.");
       if (!approved) return;
       button.disabled = true;
-      await api("/api/v1/admin/qualifications/walmart-add/activate", {
+      const result = await api("/api/v1/admin/qualifications/walmart-add/activate", {
         method: "POST",
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
@@ -1289,7 +1378,7 @@ document.addEventListener("click", async (event) => {
         })
       });
       await refresh();
-      toast("Guarded Walmart add-only execution is active.");
+      if (!protectedChangePending(result)) toast("Guarded Walmart add-only execution is active.");
     }
     if (button.id === "activateAmazonAddButton") {
       const readiness = state.snapshot.amazonQualification;
@@ -1299,7 +1388,7 @@ document.addEventListener("click", async (event) => {
       const approved = confirm("Enable guarded Amazon adds?\n\nScope: Amazon.com-sold offers with an exact ephemeral offer binding, explicitly verified shipping, quantity 1, add-to-cart only. Chrome will require an empty cart, stop at queues or challenges, and revalidate ASIN, seller, offer binding, price, stock, and fulfillment immediately before clicking. Buy Now, checkout, and order submission remain disabled.");
       if (!approved) return;
       button.disabled = true;
-      await api("/api/v1/admin/qualifications/amazon-add/activate", {
+      const result = await api("/api/v1/admin/qualifications/amazon-add/activate", {
         method: "POST",
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
@@ -1308,7 +1397,7 @@ document.addEventListener("click", async (event) => {
         })
       });
       await refresh();
-      toast("Guarded Amazon add-only execution is active.");
+      if (!protectedChangePending(result)) toast("Guarded Amazon add-only execution is active.");
     }
     if (button.id === "activateBestBuyAddButton") {
       const readiness = state.snapshot.bestBuyQualification;
@@ -1318,7 +1407,7 @@ document.addEventListener("click", async (event) => {
       const approved = confirm("Enable guarded Best Buy adds?\n\nScope: offers explicitly labeled Sold by Best Buy, shipping selected, quantity 1, add-to-cart only. Chrome will require an empty cart, stop at high-demand queues or challenges, and revalidate SKU, seller, price, stock, and fulfillment immediately before clicking. Marketplace, pickup, checkout, and order submission remain disabled.");
       if (!approved) return;
       button.disabled = true;
-      await api("/api/v1/admin/qualifications/bestbuy-add/activate", {
+      const result = await api("/api/v1/admin/qualifications/bestbuy-add/activate", {
         method: "POST",
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
@@ -1327,7 +1416,7 @@ document.addEventListener("click", async (event) => {
         })
       });
       await refresh();
-      toast("Guarded Best Buy add-only execution is active.");
+      if (!protectedChangePending(result)) toast("Guarded Best Buy add-only execution is active.");
     }
     if (button.dataset.reviewResolution && button.dataset.jobId) {
       const confirmed = button.dataset.reviewResolution === "confirmed";
@@ -1610,16 +1699,18 @@ $("#observerTrustForm").addEventListener("submit", async (event) => {
     try { manifest = JSON.parse(values.manifestJson); } catch { throw new Error("The trust manifest must be valid JSON."); }
     const approved = confirm("Install this offline-root signed trust manifest?\n\nYoink will verify the packaged root, exact schema, monotonic generation, predecessor hash, active key, lifetimes, and permanent revocation set. This does not grant any retailer mutation authority.");
     if (!approved) return;
-    await api("/api/v1/admin/observer-recipes/trust-manifests", {
+    const result = await api("/api/v1/admin/observer-recipes/trust-manifests", {
       method: "POST",
       body: JSON.stringify({
         manifest,
         confirmation: "INSTALL_ROOTED_OBSERVER_RECIPE_TRUST_MANIFEST"
       })
     });
-    event.currentTarget.reset();
     await refresh(false);
-    toast("Root-signed observer trust manifest installed and transparency-receipted.");
+    if (!protectedChangePending(result)) {
+      event.currentTarget.reset();
+      toast("Root-signed observer trust manifest installed and transparency-receipted.");
+    }
   } catch (error) { toast(error.message || "Observer recipe trust manifest could not be installed.", true); }
 });
 
@@ -1693,13 +1784,13 @@ $("#attributionForm").addEventListener("submit", async (event) => {
       articleBaseUrl: $("[data-attribution-field='articleBaseUrl']", editor).value,
       associateTag: $("[data-attribution-field='associateTag']", editor).value
     }));
-    await api("/api/v1/user/attribution-policies", {
+    const result = await api("/api/v1/admin/attribution-policies", {
       method: "PUT",
       body: JSON.stringify({ policies })
     });
     state.attributionDirty = false;
     await refresh();
-    toast("Affiliate routing policies saved and validated.");
+    if (!protectedChangePending(result)) toast("Affiliate routing policies saved and validated.");
   } catch (error) { toast(error.message || "Affiliate routing could not be saved.", true); }
 });
 

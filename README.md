@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.30.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.31.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,29 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.31.0 adds an enforceable high-risk administrative change boundary.
+Migration 32 stores tenant-scoped, exact-payload change requests, independent
+decisions, and append-only lifecycle events. Hosted requests carry proxy-signed
+authentication assurance, authentication time, and session identity; a fresh
+step-up is valid for at most five minutes. Role grants, rooted observer-trust
+installation, recipe promotion/rollback, retailer mutation-lane activation,
+and resuming purchase actions require approval by a different authenticated
+user and actor. Role revocation, recipe re-sign/disable, affiliate-policy
+replacement, and existing catalog review decisions require a fresh sign-in.
+Emergency pause remains immediate.
+
+Approval never performs the mutation. The exact original operation must be
+retried before its 15-minute request expires; payload drift, cross-tenant
+access, stale assurance, self-approval, expiry, and replay fail closed. The
+authorization is consumed in the same SQLite transaction as the protected
+change. Only an allowlisted operation label, bounded safe summary, and one-way
+payload hash are retained—never arbitrary request bodies or credentials. The
+new **Approvals** workspace explains pending, approved, consumed, rejected, and
+expired changes in plain language. Exact loopback/offline setup remains usable
+and records local-trusted receipts, but its internal marker cannot be supplied
+through hosted headers. This release ships the enforcement contract, not an
+identity provider or MFA service; hosted operators must still integrate one.
 
 Version 0.30.0 adds a privacy-bounded operational health plane. Migration 31
 stores ordinary API traffic only as tenant-scoped minute rollups over fixed,

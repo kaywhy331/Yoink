@@ -21,6 +21,7 @@
       <button class="nav-button" data-view="actions" type="button">Actions</button>
       <button class="nav-button" data-view="activity" type="button">Activity</button>
       <button class="nav-button" data-view="operations" type="button">Operations</button>
+      <button class="nav-button" data-view="approvals" type="button">Approvals</button>
       <button class="nav-button" data-view="alerts" type="button">Alerts</button>
       <button class="nav-button" data-view="community" type="button">Community</button>
       <button class="nav-button" data-view="connections" type="button">Connections</button>
@@ -161,6 +162,17 @@
         <div class="panel-heading"><div><p class="eyebrow">Support correlation</p><h2>Recent errors</h2><p>One-way correlation keys let operators group failures but cannot recover the request ID supplied by a user or device.</p></div></div>
         <div class="card-list" id="operationalErrorList"></div>
       </section>
+    </section>
+
+    <section class="view" id="view-approvals" data-view-panel="approvals">
+      <div class="page-heading"><div><p class="eyebrow">High-risk change control</p><h1>Approvals</h1><p>Important administration changes are bound to the exact values reviewed. Changes that can widen behavior need a fresh sign-in and a second authorized person before anything is applied.</p></div></div>
+      <div class="safety-banner compact" id="changeAssuranceBanner"><span class="safety-icon">✓</span><div><strong id="changeAssuranceTitle">Checking sign-in assurance…</strong><p id="changeAssuranceCopy">Yoink is verifying whether this session can request or review a protected change.</p></div></div>
+      <section class="metric-grid operational-metric-grid" id="adminChangeMetricGrid" aria-label="Protected change totals"></section>
+      <section class="panel operator-alert-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Exact, expiring requests</p><h2>Change queue</h2><p>Approve only what you recognize. Yoink stores a fixed operation name, safe review summary, and one-way payload fingerprint—not arbitrary request bodies, credentials, or secrets.</p></div><span class="mode-chip" id="adminChangeGate">CHECKING</span></div>
+        <div class="card-list" id="adminChangeRequestList"></div>
+      </section>
+      <div class="safety-banner compact"><span class="safety-icon">↻</span><div><strong>Approval never applies a change by itself</strong><p>After approval, the original exact operation must be retried before it expires. Payload drift and replay are rejected, and the authorization is consumed atomically with the protected database change.</p></div></div>
     </section>
 
     <section class="view" id="view-alerts" data-view-panel="alerts">

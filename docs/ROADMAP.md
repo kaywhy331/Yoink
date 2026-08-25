@@ -1,6 +1,33 @@
 # Yoink roadmap
 
-## Shipped through 0.30.0
+## Shipped through 0.31.0
+
+### High-risk administrative change control (0.31.0)
+
+- Migration 32 adds tenant-scoped protected-change requests, immutable review
+  decisions, and append-only lifecycle events. Requests bind a closed operation
+  type, target, canonical payload hash, bounded safe summary, correlation, and
+  expiry; arbitrary bodies, secrets, credentials, and tokens are never stored
+- Hosted request signatures now bind authentication assurance, authentication
+  time, and session identity. Fresh step-up expires after five minutes. The
+  loopback bootstrap uses an internal-only boundary marker that hosted headers
+  cannot impersonate
+- Role grants, observer trust installation, recipe promotion/rollback,
+  retailer-lane activation, and action resume require a different authenticated
+  user and actor. Safety-narrowing or configuration operations use fresh
+  step-up; emergency pause remains immediate
+- Approval is deliberately inert. An unchanged retry within 15 minutes consumes
+  the approval atomically with the protected mutation; self-approval, payload
+  drift, cross-tenant lookup, stale assurance, expiry, failed mutation, and
+  replay are covered by repository and API tests
+- The permission-gated **Approvals** workspace shows safe summaries, assurance,
+  queue state, expiry, and immutable event counts without exposing payload
+  fingerprints or hidden request data
+- Local/offline operation remains compatible through audited local-trusted
+  receipts. This is the application enforcement seam, not the production IdP,
+  MFA, hosted session lifecycle, or break-glass implementation
+- No retailer action, seller, fulfillment, checkout, payment, drawing-entry, or
+  order-submission capability is widened
 
 ### Privacy-bounded operational telemetry (0.30.0)
 
@@ -21,7 +48,8 @@
   families, and recent one-way correlations. `admin.read` is required
 - This completes the local structured metrics/log-retention slice of Phase 0;
   it does not supply PostgreSQL, a production metrics backend, durable workers,
-  IdP/step-up, independent witness operation, or on-call delivery
+  an IdP, independent witness operation, or on-call delivery. Version 0.31 adds
+  the step-up enforcement contract but still does not operate an IdP/MFA service
 - No signal, decision, qualification, job, lease, or retailer capability is
   changed
 
@@ -538,22 +566,22 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.30.0
+## Architecture assessment after 0.31.0
 
-Yoink 0.30.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.31.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
 diagnostic ledger, and outbox are valuable foundations; the next work should
 finish production catalog authority, externally witnessed recipe transparency,
-privacy operations, and step-up authority while propagating stable
+privacy operations, and production identity/session integration while propagating stable
 child-offer/location identity before adding checkout or more autonomous
 behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-31 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
-| Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, role administration, diagnostics, privacy-classified adapter-repair alerts, bounded service-health telemetry, retailer/source/affiliate controls, and audit | No production IdP/step-up, secret references, external alert connectors/background escalation worker, break-glass workflow, cross-tenant global curator, or retailer-configuration rollback |
+| Primary backend database | Transactional migration-32 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
+| Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, bounded service-health telemetry, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, secret references, external alert connectors/background escalation worker, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with no-write-before-review setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, periodic spend caps, activity, pause, pairing, and source/review status | Some style-level retailers still report `listing_only`; region/store scope is consent-derived rather than verified from each live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; the independent witness service, scheduler, and public consistency monitor are not deployed by this repository |
@@ -619,10 +647,13 @@ rotation/revocation, extension rollback protection, and transparency receipts.
 receipts/checks, health alarms, and a hosted fail-closed delivery gate.
 0.30.0 adds tenant-isolated structured request metrics, bounded error records,
 closed route dimensions, and automatic retention with immutable receipts.
+0.31.0 adds signed fresh-auth assurance, exact expiring protected-change
+requests, independent approval, atomic consumption, and a redacted Approvals
+workspace while preserving local-trusted compatibility.
 The phase exit gate remains **open**: the current shared catalog has no
 cross-tenant global curator; an independently operated witness
 deployment/scheduler/public consistency
-monitor, and production IdP step-up are not implemented.
+monitor, and production IdP/MFA integration are not implemented.
 
 - Persist operator memberships and granular permissions; deny every route by
   default and explicitly authorize user, device, support, catalog-curator,
@@ -721,8 +752,10 @@ depends on the local SQLite process or an unpacked-extension ZIP update.
 existing local operations views, catalog review queue, and role membership UI.
 0.23.0 adds the local adapter-repair Alerts workspace with rules, severity,
 thresholds, dedupe, escalation state, dashboard/audit-outbox routing, delivery
-history, acknowledgement, and resolution. Production connectors, scheduled
-workers, broader alert families, and the approval controls below remain open.
+history, acknowledgement, and resolution. 0.31.0 adds the signed step-up
+enforcement seam, independent exact-change approval, immutable receipts, and
+the Approvals workspace. Production IdP/MFA integration, support break-glass,
+connectors, scheduled workers, and broader alert families remain open.
 
 Build `/admin` as a separate permission-gated application, with aggregate and
 redacted views by default:
@@ -746,9 +779,11 @@ redacted views by default:
   support-consent/break-glass access; routine admins never see raw browsing,
   account, address, payment, or private intent data
 
-Recipe signing/promotion, mutation-lane activation, affiliate changes, and
-global kill-switch changes require step-up authentication; safety-expanding
-changes require two-person approval.
+The packaged API now enforces fresh authentication for recipe, catalog, role,
+affiliate, and related protected changes; safety-expanding role grants, trust
+installation, recipe promotion/rollback, mutation-lane activation, and action
+resume require independent approval. Production deployments must connect this
+contract to an actual IdP/MFA service and add governed break-glass recovery.
 
 Exit gate: every requested admin area has an explicit permission, immutable
 audit event, alert path, and redacted support view; ordinary users cannot load

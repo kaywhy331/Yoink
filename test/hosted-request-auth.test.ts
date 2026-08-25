@@ -9,7 +9,12 @@ import {
 } from "../apps/api/src/hosted-request-auth.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
-import { runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
+import {
+  isExactLocalRequestScope,
+  LOCAL_REQUEST_SCOPE,
+  runWithRequestScope,
+  type RequestScope
+} from "../packages/database/src/request-scope.js";
 
 const SECRET = "hosted-test-secret-with-more-than-thirty-two-bytes";
 const SCOPE: RequestScope = {
@@ -43,6 +48,17 @@ test("hosted scope signatures bind method, path, tenant, user, actor, timestamp,
     assert.deepEqual(resolve(signed), SCOPE);
     assert.throws(() => resolve(signed), /nonce was already used/);
 
+    const imitatedLocalHeaders = signHostedRequestScope(SECRET, {
+      method: "GET",
+      path: "/api/v1/admin/snapshot",
+      scope: LOCAL_REQUEST_SCOPE,
+      issuedAt,
+      nonce: "scope_nonce_local_boundary_test"
+    });
+    const imitatedLocal = resolve(request("GET", "/api/v1/admin/snapshot", imitatedLocalHeaders));
+    assert.equal(isExactLocalRequestScope(imitatedLocal), false);
+    assert.equal(imitatedLocal.requestBoundary, undefined);
+
     const changedPathHeaders = signHostedRequestScope(SECRET, {
       method: "GET",
       path: "/api/v1/audit?limit=10",
@@ -55,6 +71,71 @@ test("hosted scope signatures bind method, path, tenant, user, actor, timestamp,
       /signature is invalid/
     );
     assert.throws(() => createHostedRequestScopeResolver(db, { proxySecret: "short" }), /at least 32 bytes/);
+  } finally {
+    db.close();
+  }
+});
+
+test("fresh step-up assurance is proxy-signed, time-bounded, and cannot be forged", () => {
+  const db = new YoinkDatabase();
+  try {
+    const resolve = createHostedRequestScopeResolver(db, {
+      proxySecret: SECRET,
+      maximumStepUpAgeSeconds: 120
+    });
+    const issuedAt = Math.floor(Date.now() / 1_000);
+    const stepUpScope: RequestScope = {
+      ...SCOPE,
+      actorKind: "user",
+      actorId: LOCAL_USER_ID,
+      authenticationAssurance: "step_up",
+      authenticationTime: issuedAt - 10,
+      sessionId: "session_step_up_abcdefghijkl"
+    };
+    const headers = signHostedRequestScope(SECRET, {
+      method: "POST",
+      path: "/api/v1/admin/change-requests/request_123/decision",
+      scope: stepUpScope,
+      issuedAt,
+      nonce: "step_up_nonce_abcdefghijkl"
+    });
+    assert.deepEqual(resolve(request(
+      "POST",
+      "/api/v1/admin/change-requests/request_123/decision",
+      headers
+    )), stepUpScope);
+
+    const forgedHeaders = signHostedRequestScope(SECRET, {
+      method: "GET",
+      path: "/api/v1/admin/snapshot",
+      scope: SCOPE,
+      issuedAt,
+      nonce: "baseline_nonce_abcdefghijkl"
+    });
+    forgedHeaders["X-Yoink-Authentication-Assurance"] = "step_up";
+    forgedHeaders["X-Yoink-Authentication-Time"] = String(issuedAt);
+    forgedHeaders["X-Yoink-Session-Id"] = "session_forged_abcdefghijkl";
+    assert.throws(
+      () => resolve(request("GET", "/api/v1/admin/snapshot", forgedHeaders)),
+      /signature is invalid/
+    );
+
+    const staleScope: RequestScope = {
+      ...stepUpScope,
+      authenticationTime: issuedAt - 121,
+      sessionId: "session_stale_abcdefghijkl"
+    };
+    const staleHeaders = signHostedRequestScope(SECRET, {
+      method: "GET",
+      path: "/api/v1/admin/snapshot",
+      scope: staleScope,
+      issuedAt,
+      nonce: "stale_step_nonce_abcdefghijkl"
+    });
+    assert.throws(
+      () => resolve(request("GET", "/api/v1/admin/snapshot", staleHeaders)),
+      /step-up context is expired/
+    );
   } finally {
     db.close();
   }

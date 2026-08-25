@@ -358,6 +358,29 @@ aggregate receipt whenever detail is deleted. This is a local implementation
 of structured metrics/log retention, not the Phase 2 production worker,
 external metrics backend, SLO/on-call system, or PostgreSQL deployment.
 
+Yoink 0.31.0 adds a separate high-risk administrative change boundary. Hosted
+identity context now carries proxy-signed assurance level, authentication time,
+and session ID, all bound to the request method, complete path, tenant, user,
+actor, timestamp, and one-use nonce. The API accepts a step-up context for at
+most five minutes. The internal loopback bootstrap has an in-process boundary
+marker that is never accepted from hosted headers, so matching its visible IDs
+cannot turn a hosted request into a local-trusted request.
+
+Migration 32 adds tenant-scoped `admin_change_requests`, immutable
+`admin_change_decisions`, and immutable `admin_change_events`. A closed policy
+map divides protected operations into fresh-step-up and two-person controls.
+Two-person requests bind the operation type, target, and canonical payload hash,
+expire after 15 minutes, and require a different user and actor to approve.
+Approval is inert: an exact retry atomically claims the authorization and runs
+the protected repository mutation in one SQLite transaction. Rollback restores
+the approval, while a successful claim cannot be replayed. Only bounded review
+summaries are projected to `/admin`; raw bodies and secrets are not stored.
+
+Local/offline mode records an immediate local-trusted consumed receipt so the
+single-user product remains operable. The signed assurance protocol is an
+enforcement seam, not a production IdP, MFA implementation, break-glass system,
+or hosted session service.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and
@@ -504,7 +527,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 23. Foreign keys are mandatory.
+numbered; the current schema is migration 32. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 
@@ -514,9 +537,11 @@ first schema so their IDs can migrate to PostgreSQL later.
 
 The database repository is the only application module allowed to issue SQL.
 The two web bundles and extension communicate through versioned HTTP contracts.
-Local requests resolve to the exact seeded bootstrap scope; hosted boundary mode
-resolves an authenticated tenant/user/actor scope before persisted permission
-checks. Identity context does not substitute for a role membership.
+Local requests resolve to the exact seeded bootstrap scope with an internal
+loopback-only boundary marker; hosted boundary mode resolves an authenticated
+tenant/user/actor scope before persisted permission checks. Hosted assurance is
+proxy signed and time bounded. Identity context does not substitute for a role
+membership, and matching local IDs does not inherit local trust.
 
 The streaming `yoink-portability-ndjson-v1` operator format exports every
 application table from one read transaction, preserves exact integers/blobs,

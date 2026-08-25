@@ -40,9 +40,14 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /Merge, split, and compensation/);
     assert.match(adminPageBody, /Privacy-bounded service health/);
     assert.match(adminPageBody, /raw URLs, request bodies, product identifiers/);
+    assert.match(adminPageBody, /High-risk change control/);
+    assert.match(adminPageBody, /Approval never applies a change by itself/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
     assert.match(adminScript, /renderOperationalTelemetry/);
+    assert.match(adminScript, /\/api\/v1\/admin\/change-requests/);
+    assert.match(adminScript, /renderAdminChanges/);
+    assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.deepEqual(health, {
@@ -139,6 +144,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.counts.actionJobs, 0);
     assert.equal(snapshot.counts.catalogIdentityOperations, 0);
     assert.equal(snapshot.counts.pendingCatalogIdentityOperations, 0);
+    assert.equal(snapshot.counts.adminChangeRequests, 0);
+    assert.equal(snapshot.counts.consumedAdminChanges, 0);
     assert.equal(snapshot.capabilities.retailerMutation, false);
     assert.equal(snapshot.capabilities.communityReadOnlyEvidence, true);
     assert.equal(snapshot.capabilities.storageEngine, "sqlite");
@@ -146,6 +153,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(snapshot.capabilities.productionPostgresReady, false);
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);
+    assert.equal(snapshot.capabilities.signedAuthenticationAssurance, true);
+    assert.equal(snapshot.capabilities.highRiskChangeControl, true);
+    assert.equal(snapshot.capabilities.independentSafetyExpansionApproval, true);
+    assert.equal(snapshot.capabilities.productionIdentityProvider, false);
 
     const libraryPage = await fetch(`${baseUrl}/api/v1/library?limit=1&offset=0&q=Yoink%20API`).then((response) => response.json()) as {
       items: Array<Record<string, unknown>>;

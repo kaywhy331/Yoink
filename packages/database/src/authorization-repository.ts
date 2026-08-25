@@ -2,7 +2,7 @@ import { nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { AuditRepository } from "./audit-repository.js";
 import type { YoinkDatabase } from "./database.js";
-import { LOCAL_REQUEST_SCOPE, currentRequestScope, type RequestScope } from "./request-scope.js";
+import { currentRequestScope, isExactLocalRequestScope } from "./request-scope.js";
 
 export const AUTHORIZATION_PERMISSIONS = Object.freeze([
   "user.read",
@@ -26,6 +26,7 @@ export const AUTHORIZATION_PERMISSIONS = Object.freeze([
   "security.manage",
   "user.lifecycle.manage",
   "alert.manage",
+  "change.approve",
   "internal.delivery",
   "internal.principal",
   "device.self"
@@ -75,13 +76,6 @@ export interface AuthorizationRole {
   permissions: AuthorizationPermission[];
 }
 
-function isExactLocalControlCenter(scope: RequestScope): boolean {
-  return scope.tenantId === LOCAL_REQUEST_SCOPE.tenantId
-    && scope.userId === LOCAL_REQUEST_SCOPE.userId
-    && scope.actorKind === LOCAL_REQUEST_SCOPE.actorKind
-    && scope.actorId === LOCAL_REQUEST_SCOPE.actorId;
-}
-
 function validId(value: unknown, label: string): string {
   const cleaned = cleanText(value, 120);
   if (!ID_PATTERN.test(cleaned)) {
@@ -99,7 +93,7 @@ export class AuthorizationRepository {
 
   permissions(): AuthorizationPermission[] {
     const scope = currentRequestScope();
-    if (isExactLocalControlCenter(scope)) return [...AUTHORIZATION_PERMISSIONS];
+    if (isExactLocalRequestScope(scope)) return [...AUTHORIZATION_PERMISSIONS];
     if (scope.actorKind === "device" || scope.actorKind === "service") {
       return [...FIXED_ACTOR_PERMISSIONS[scope.actorKind]];
     }

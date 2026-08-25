@@ -16,6 +16,7 @@ export interface HostedRequestAuthOptions {
   proxySecret: string;
   maximumClockSkewSeconds?: number;
   nonceTtlSeconds?: number;
+  maximumStepUpAgeSeconds?: number;
 }
 
 export interface HostedScopeSignatureInput {
@@ -39,6 +40,9 @@ function signaturePayload(input: HostedScopeSignatureInput): string {
     input.scope.userId,
     input.scope.actorKind,
     input.scope.actorId,
+    input.scope.authenticationAssurance ?? "baseline",
+    String(input.scope.authenticationTime ?? 0),
+    input.scope.sessionId ?? "",
     String(input.issuedAt),
     input.nonce
   ].join("\n");
@@ -57,6 +61,11 @@ export function signHostedRequestScope(secret: string, input: HostedScopeSignatu
     "X-Yoink-User-Id": scope.userId,
     "X-Yoink-Actor-Kind": scope.actorKind,
     "X-Yoink-Actor-Id": scope.actorId,
+    ...(scope.authenticationAssurance ? {
+      "X-Yoink-Authentication-Assurance": scope.authenticationAssurance,
+      "X-Yoink-Authentication-Time": String(scope.authenticationTime),
+      "X-Yoink-Session-Id": String(scope.sessionId)
+    } : {}),
     "X-Yoink-Scope-Issued-At": String(input.issuedAt),
     "X-Yoink-Scope-Nonce": input.nonce,
     "X-Yoink-Scope-Signature": signature
@@ -96,6 +105,11 @@ export function createHostedRequestScopeResolver(
     && Number(options.nonceTtlSeconds) <= 600
     ? Number(options.nonceTtlSeconds)
     : 120;
+  const maximumStepUpAgeSeconds = Number.isSafeInteger(options.maximumStepUpAgeSeconds)
+    && Number(options.maximumStepUpAgeSeconds) >= 60
+    && Number(options.maximumStepUpAgeSeconds) <= 900
+    ? Number(options.maximumStepUpAgeSeconds)
+    : 300;
 
   return (request) => {
     const deviceToken = suppliedBearer(request);
@@ -115,11 +129,19 @@ export function createHostedRequestScopeResolver(
       }
     }
 
+    const authenticationAssurance = header(request, "x-yoink-authentication-assurance");
+    const authenticationTimeHeader = header(request, "x-yoink-authentication-time");
+    const sessionId = header(request, "x-yoink-session-id");
     const scope = normalizedRequestScope({
       tenantId: header(request, "x-yoink-tenant-id"),
       userId: header(request, "x-yoink-user-id"),
       actorKind: header(request, "x-yoink-actor-kind") as RequestScope["actorKind"],
-      actorId: header(request, "x-yoink-actor-id")
+      actorId: header(request, "x-yoink-actor-id"),
+      ...(authenticationAssurance ? {
+        authenticationAssurance: authenticationAssurance as NonNullable<RequestScope["authenticationAssurance"]>,
+        authenticationTime: Number(authenticationTimeHeader),
+        sessionId
+      } : {})
     });
     const issuedAt = Number(header(request, "x-yoink-scope-issued-at"));
     const nonce = header(request, "x-yoink-scope-nonce");
@@ -128,6 +150,11 @@ export function createHostedRequestScopeResolver(
     if (!Number.isSafeInteger(issuedAt) || !NONCE_PATTERN.test(nonce)
       || Math.abs(now - issuedAt * 1_000) > maximumClockSkewSeconds * 1_000) {
       throw new Error("The authenticated request scope is expired or malformed.");
+    }
+    if (scope.authenticationAssurance === "step_up"
+      && (Number(scope.authenticationTime) * 1_000 > now + maximumClockSkewSeconds * 1_000
+        || now - Number(scope.authenticationTime) * 1_000 > maximumStepUpAgeSeconds * 1_000)) {
+      throw new Error("The authenticated step-up context is expired or malformed.");
     }
     const expectedSignature = createHmac("sha256", secret).update(signaturePayload({
       method: request.method ?? "GET",
