@@ -8,6 +8,7 @@ const state = {
   identityDirty: false,
   observerRecipeDirty: false,
   editingOperatorAlertRuleId: "",
+  operationalTelemetry: null,
   pairing: null,
   libraryItems: [],
   libraryTotal: 0,
@@ -771,8 +772,54 @@ function renderOperatorAlerts() {
   }).join("") : empty("No operator alert delivery receipts exist yet.");
 }
 
+function operationalLabel(value) {
+  return String(value || "unknown").replaceAll(".", " / ").replaceAll("_", " ");
+}
+
+function renderOperationalTelemetry() {
+  const telemetry = state.operationalTelemetry;
+  if (!telemetry) {
+    $("#operationalMetricGrid").innerHTML = empty("Operational telemetry is loading.");
+    $("#operationalRouteList").innerHTML = "";
+    $("#operationalErrorCodeList").innerHTML = "";
+    $("#operationalErrorList").innerHTML = "";
+    return;
+  }
+  const totals = telemetry.totals || {};
+  const errors = Number(totals.clientErrors || 0) + Number(totals.serverErrors || 0);
+  const gate = $("#operationalGate");
+  gate.textContent = Number(totals.serverErrors || 0) ? `${Number(totals.serverErrors).toLocaleString()} SERVER ERRORS` : errors ? `${errors.toLocaleString()} ERRORS` : "HEALTHY";
+  gate.classList.toggle("danger", Number(totals.serverErrors || 0) > 0);
+  $("#operationalRetention").textContent = `${Number(telemetry.retentionDays || 0)}-day automatic retention · ${String(telemetry.privacyClassification || "operational aggregate").replaceAll("_", " ")}`;
+  const latencyLabels = {
+    no_data: "No sample",
+    lt_100: "Under 100 ms",
+    lt_500: "Under 500 ms",
+    lt_2000: "Under 2 s",
+    gte_2000: "2 s or more"
+  };
+  const metrics = [
+    ["Requests", totals.requests, `${Number(totals.successes || 0).toLocaleString()} successful`],
+    ["Error rate", `${Number(totals.errorRatePercent || 0).toFixed(2)}%`, `${Number(totals.serverErrors || 0).toLocaleString()} server · ${Number(totals.clientErrors || 0).toLocaleString()} client`],
+    ["Average latency", `${Number(totals.averageDurationMs || 0).toLocaleString()} ms`, `maximum ${Number(totals.maximumDurationMs || 0).toLocaleString()} ms`],
+    ["Approximate p95", latencyLabels[totals.latencyP95Bucket] || operationalLabel(totals.latencyP95Bucket), "Bounded latency histogram"]
+  ];
+  $("#operationalMetricGrid").innerHTML = metrics.map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${typeof value === "number" ? value.toLocaleString() : escapeHtml(value)}</strong><small>${escapeHtml(note)}</small></article>`).join("");
+  $("#operationalRouteList").innerHTML = (telemetry.routes || []).length ? telemetry.routes.map((route) => {
+    const kind = Number(route.errors || 0) ? "warning" : "good";
+    const requestCount = Number(route.requests || 0);
+    const errorCount = Number(route.errors || 0);
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(operationalLabel(route.routeKey))}</h3><p>${requestCount.toLocaleString()} request${requestCount === 1 ? "" : "s"} · ${Number(route.averageDurationMs || 0).toLocaleString()} ms average · ${Number(route.maximumDurationMs || 0).toLocaleString()} ms maximum</p></div><span class="tag ${kind}">${Number(route.errorRatePercent || 0).toFixed(2)}% errors</span></div><div class="card-meta"><span class="tag">${errorCount.toLocaleString()} error${errorCount === 1 ? "" : "s"}</span><span class="tag">last seen ${escapeHtml(relativeTime(route.lastSeenAt))}</span></div></article>`;
+  }).join("") : empty("No API traffic exists in this window yet.");
+  $("#operationalErrorCodeList").innerHTML = (telemetry.errorCodes || []).length ? telemetry.errorCodes.map((item) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(operationalLabel(item.errorCode))}</h3><p>Last seen ${escapeHtml(relativeTime(item.lastSeenAt))}</p></div><span class="tag warning">${Number(item.occurrences || 0).toLocaleString()} occurrence${Number(item.occurrences || 0) === 1 ? "" : "s"}</span></div></article>`).join("") : empty("No errors exist in this window.");
+  $("#operationalErrorList").innerHTML = (telemetry.recentErrors || []).length ? telemetry.recentErrors.map((item) => {
+    const kind = Number(item.statusCode || 0) >= 500 ? "bad" : "warning";
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(operationalLabel(item.errorCode))}</h3><p>${escapeHtml(item.method)} · ${escapeHtml(operationalLabel(item.routeKey))} · HTTP ${Number(item.statusCode || 0)}</p></div><span class="tag ${kind}">${Number(item.durationMs || 0).toLocaleString()} ms</span></div><div class="card-meta"><span class="tag">${escapeHtml(item.actorKind)}</span><span class="tag">${escapeHtml(item.privacyClassification)}</span><span class="tag operational-correlation">${escapeHtml(item.correlationKey)}</span><span>${escapeHtml(relativeTime(item.occurredAt))}</span></div></article>`;
+  }).join("") : empty("No recent errors exist in this window.");
+}
+
 function render() {
-  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts();
+  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts(); renderOperationalTelemetry();
 }
 
 async function storeFingerprint(retailerId, localStoreId) {
@@ -842,8 +889,15 @@ async function loadJobs(reset = true) {
   state.jobQuery = query;
 }
 
+async function loadOperationalTelemetry() {
+  const window = $("#operationalWindow").value;
+  const result = await api(`/api/v1/admin/operations/telemetry?window=${encodeURIComponent(window)}`);
+  state.operationalTelemetry = result.telemetry || null;
+}
+
 async function refresh(reloadCollections = true) {
   state.snapshot = await api("/api/v1/admin/snapshot");
+  await loadOperationalTelemetry();
   if (state.snapshot.authorization?.roleAdministrationEnabled === true) {
     const [users, roles] = await Promise.all([
       api("/api/v1/admin/authorization/users"),
@@ -1307,6 +1361,14 @@ document.addEventListener("click", async (event) => {
 });
 
 let librarySearchTimer;
+$("#operationalWindow").addEventListener("change", async () => {
+  try {
+    await loadOperationalTelemetry();
+    renderOperationalTelemetry();
+  } catch (error) {
+    toast(error.message || "Operational health could not be loaded.", true);
+  }
+});
 $("#librarySearch").addEventListener("input", () => {
   clearTimeout(librarySearchTimer);
   librarySearchTimer = setTimeout(() => loadLibrary(true).then(renderLibrary).catch((error) => toast(error.message || "Library search failed.", true)), 250);

@@ -1,4 +1,5 @@
 import type { AuthorizationPermission } from "../../../packages/database/src/authorization-repository.js";
+import type { OperationalRouteKey } from "../../../packages/database/src/operational-telemetry-repository.js";
 
 export type ApiSurface = "public" | "user" | "admin" | "device" | "internal";
 
@@ -45,6 +46,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname.startsWith("/api/v1/hosted-delivery/")) return "internal.delivery";
 
   if (pathname === "/api/v1/snapshot") return "admin.read";
+  if (pathname === "/api/v1/operations/telemetry") return "admin.read";
   if (pathname.startsWith("/api/v1/admin/authorization")) return "security.manage";
   if (/^\/api\/v1\/identity\/claims\/[A-Za-z0-9_-]{3,120}\/review$/.test(pathname)) return "identity.review";
   if (pathname.startsWith("/api/v1/observer-recipes")) return "recipe.manage";
@@ -122,4 +124,79 @@ export function resolveApiRoutePolicy(method: string, pathname: string): ApiRout
     classified,
     surfaceMismatch: canonical.requestedSurface !== null && canonical.requestedSurface !== surface
   };
+}
+
+const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string, string>>>> = Object.freeze({
+  public: Object.freeze({
+    health: "health",
+    extension: "extension_release",
+    devices: "device_pair"
+  }),
+  user: Object.freeze({
+    overview: "overview",
+    authorization: "authorization",
+    catalog: "catalog",
+    "purchase-intents": "purchase_intents",
+    spend: "spend",
+    library: "library",
+    missions: "missions",
+    signals: "signals",
+    jobs: "jobs",
+    audit: "audit",
+    strategies: "strategies",
+    devices: "devices",
+    community: "community",
+    identity: "identity",
+    "attribution-policies": "attribution",
+    settings: "settings"
+  }),
+  admin: Object.freeze({
+    snapshot: "snapshot",
+    operations: "operations",
+    authorization: "authorization",
+    catalog: "catalog",
+    identity: "identity",
+    "observer-recipes": "observer_recipes",
+    qualifications: "qualifications",
+    alerts: "alerts",
+    sources: "sources"
+  }),
+  device: Object.freeze({
+    heartbeat: "heartbeat",
+    "adapter-diagnostics": "adapter_diagnostics",
+    "shadow-observations": "observations",
+    "walmart-draw": "drawings",
+    "qualification-trials": "qualification_trials",
+    jobs: "jobs",
+    notifications: "notifications",
+    sources: "sources",
+    community: "community",
+    "observer-recipes": "recipes",
+    "observer-recipe-trials": "recipes"
+  }),
+  internal: Object.freeze({
+    hosted: "principals",
+    "hosted-delivery": "delivery"
+  })
+});
+
+function requestedOperationalSurface(pathname: string): ApiSurface | null {
+  if (pathname.startsWith("/api/v1/admin/")) return "admin";
+  if (pathname.startsWith("/api/v1/user/")) return "user";
+  if (pathname.startsWith("/api/v1/internal/")) return "internal";
+  if (pathname.startsWith("/api/v1/devices/self/")) return "device";
+  return null;
+}
+
+export function operationalRouteKey(pathname: string, policy: ApiRoutePolicy | null): OperationalRouteKey {
+  const surface = policy?.classified
+    ? policy.surface
+    : requestedOperationalSurface(pathname) ?? policy?.surface ?? "public";
+  const canonicalPath = policy?.pathname ?? pathname;
+  const segments = canonicalPath.split("/").filter(Boolean).slice(2);
+  if (segments[0] === "user" || segments[0] === "admin" || segments[0] === "internal") segments.shift();
+  if (segments[0] === "devices" && segments[1] === "self") segments.splice(0, 2);
+  const resource = segments[0] ?? "";
+  const group = OPERATIONAL_RESOURCES[surface][resource] ?? "other";
+  return `${surface}.${group}` as OperationalRouteKey;
 }

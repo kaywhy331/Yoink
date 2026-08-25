@@ -1,6 +1,29 @@
 # Yoink roadmap
 
-## Shipped through 0.29.0
+## Shipped through 0.30.0
+
+### Privacy-bounded operational telemetry (0.30.0)
+
+- Migration 31 adds tenant-scoped minute request rollups, bounded error events,
+  and immutable retention receipts. Successful traffic is aggregated; only
+  4xx/5xx failures receive an individual row
+- Route dimensions come from a closed package allowlist and never include
+  dynamic path segments or query strings. Error rows retain only a one-way
+  correlation key, method, actor kind, status, duration, and safe server-owned
+  error code; bodies, messages, product IDs, user values, DOM, credentials, and
+  offer tokens are structurally absent
+- API instrumentation runs after response completion and fails open for request
+  delivery. Tenant isolation, fixed latency bands, 30-day automatic pruning,
+  and append-only aggregate deletion receipts are covered by repository and API
+  tests
+- The permission-gated **Operations** workspace exposes closed 1-hour, 24-hour,
+  7-day, and 30-day windows, route health, bounded latency, safe failure
+  families, and recent one-way correlations. `admin.read` is required
+- This completes the local structured metrics/log-retention slice of Phase 0;
+  it does not supply PostgreSQL, a production metrics backend, durable workers,
+  IdP/step-up, independent witness operation, or on-call delivery
+- No signal, decision, qualification, job, lease, or retailer capability is
+  changed
 
 ### Mission-owned purchase decisions (0.29.0)
 
@@ -515,9 +538,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.29.0
+## Architecture assessment after 0.30.0
 
-Yoink 0.29.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.30.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -529,8 +552,8 @@ behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-30 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
-| Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, role administration, diagnostics, privacy-classified adapter-repair alerts, retailer/source/affiliate controls, and audit | No production IdP/step-up, secret references, external alert connectors/background escalation worker, break-glass workflow, cross-tenant global curator, or retailer-configuration rollback |
+| Primary backend database | Transactional migration-31 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
+| Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, role administration, diagnostics, privacy-classified adapter-repair alerts, bounded service-health telemetry, retailer/source/affiliate controls, and audit | No production IdP/step-up, secret references, external alert connectors/background escalation worker, break-glass workflow, cross-tenant global curator, or retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with no-write-before-review setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, periodic spend caps, activity, pause, pairing, and source/review status | Some style-level retailers still report `listing_only`; region/store scope is consent-derived rather than verified from each live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; the independent witness service, scheduler, and public consistency monitor are not deployed by this repository |
@@ -594,9 +617,11 @@ completes the local package-rooted observer-recipe trust slice with monotonic
 rotation/revocation, extension rollback protection, and transparency receipts.
 0.27.0 adds the deployment-pinned external-witness protocol, immutable signed
 receipts/checks, health alarms, and a hosted fail-closed delivery gate.
+0.30.0 adds tenant-isolated structured request metrics, bounded error records,
+closed route dimensions, and automatic retention with immutable receipts.
 The phase exit gate remains **open**: the current shared catalog has no
-cross-tenant global curator; general structured metrics/log retention,
-an independently operated witness deployment/scheduler/public consistency
+cross-tenant global curator; an independently operated witness
+deployment/scheduler/public consistency
 monitor, and production IdP step-up are not implemented.
 
 - Persist operator memberships and granular permissions; deny every route by

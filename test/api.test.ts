@@ -38,6 +38,11 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /Adapter repair queue/);
     assert.match(adminPageBody, /Catalog review queue/);
     assert.match(adminPageBody, /Merge, split, and compensation/);
+    assert.match(adminPageBody, /Privacy-bounded service health/);
+    assert.match(adminPageBody, /raw URLs, request bodies, product identifiers/);
+    const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
+    assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
+    assert.match(adminScript, /renderOperationalTelemetry/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.deepEqual(health, {

@@ -341,6 +341,23 @@ audit operations. The bundles call explicit `/api/v1/user` and
 `/api/v1/admin` contracts. Legacy unprefixed application paths remain only as a
 deprecated compatibility facade during migration.
 
+Yoink 0.30.0 adds the local operational-observability boundary without turning
+HTTP traffic into a browsing log. Migration 31 creates minute rollups keyed only
+by tenant, fixed package-owned route group, method, actor kind, outcome class,
+and bounded latency band. Successful and redirect traffic never receives an
+individual event. A 4xx/5xx event retains only its one-way correlation key,
+route group, status, safe server-owned error code, duration, and timestamp.
+Dynamic path segments, query strings, bodies, messages, exact product IDs,
+browser content, and user-entered values are structurally absent.
+
+The API records after response completion and fails open if telemetry itself is
+unavailable, so observability cannot block or authorize commerce work. Reads
+use `admin.read`, remain tenant scoped, and expose four closed time windows.
+Thirty-day pruning is opportunistic per tenant and records an immutable
+aggregate receipt whenever detail is deleted. This is a local implementation
+of structured metrics/log retention, not the Phase 2 production worker,
+external metrics backend, SLO/on-call system, or PostgreSQL deployment.
+
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds
 `decision_mode` and `max_signal_age_seconds` to immutable intent revisions and

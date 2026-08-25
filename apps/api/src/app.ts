@@ -65,6 +65,12 @@ import {
 import { IdentityClaimRepository } from "../../../packages/database/src/identity-claim-repository.js";
 import { NotificationRepository } from "../../../packages/database/src/notification-repository.js";
 import { ObserverRecipeRepository } from "../../../packages/database/src/observer-recipe-repository.js";
+import {
+  OPERATIONAL_TELEMETRY_WINDOWS,
+  OperationalTelemetryRepository,
+  type OperationalRouteKey,
+  type OperationalTelemetryWindow
+} from "../../../packages/database/src/operational-telemetry-repository.js";
 import { OperatorAlertRepository } from "../../../packages/database/src/operator-alert-repository.js";
 import { MutationLaneRepository } from "../../../packages/database/src/mutation-lane-repository.js";
 import { PORTABILITY_FORMAT } from "../../../packages/database/src/portability.js";
@@ -95,7 +101,7 @@ import {
 } from "../../../packages/observer-registry/src/witness.js";
 import { resolveExtensionRelease } from "./extension-release.js";
 import { ApiError, apiErrorPayload } from "./api-error.js";
-import { resolveApiRoutePolicy } from "./api-route-policy.js";
+import { operationalRouteKey, resolveApiRoutePolicy } from "./api-route-policy.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 const STATIC_FILES = new Map([
@@ -258,6 +264,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       witnessRequired: dependencies.observerRecipeWitnessRequired === true
     }
   );
+  const operationalTelemetry = new OperationalTelemetryRepository(db);
   const operatorAlerts = new OperatorAlertRepository(db);
   const principals = new PrincipalRepository(db);
   const qualifications = new QualificationRepository(db);
@@ -277,13 +284,45 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   }
 
   return createServer(async (request, response) => {
+    const requestStartedAt = Date.now();
     const suppliedCorrelationId = String(request.headers["x-request-id"] ?? "").trim();
     const correlationId = /^[A-Za-z0-9_-]{8,120}$/.test(suppliedCorrelationId)
       ? suppliedCorrelationId
       : newId("request");
+    let telemetryScope: RequestScope | null = null;
+    let telemetryActorKind: RequestScope["actorKind"] = "service";
+    let telemetryErrorCode = "";
+    let telemetryPathname = "/";
+    try {
+      telemetryPathname = new URL(request.url ?? "/", "http://yoink.invalid").pathname;
+    } catch {
+      telemetryPathname = "/api/v1/invalid";
+    }
+    const telemetryApplicable = telemetryPathname.startsWith("/api/v1/");
+    let telemetryRoute: OperationalRouteKey = operationalRouteKey(telemetryPathname, null);
+    response.once("finish", () => {
+      const completedScope = telemetryScope;
+      if (!telemetryApplicable || !completedScope) return;
+      try {
+        runWithRequestScope(completedScope, () => operationalTelemetry.record({
+          correlationId,
+          routeKey: telemetryRoute,
+          method: request.method ?? "GET",
+          actorKind: telemetryActorKind,
+          statusCode: response.statusCode,
+          errorCode: telemetryErrorCode || (response.statusCode >= 400 ? `http_${response.statusCode}` : ""),
+          durationMs: Date.now() - requestStartedAt
+        }));
+      } catch {
+        // Operational telemetry is deliberately fail-open for request delivery.
+        // Its schema and tests keep the captured projection bounded and private.
+      }
+    });
     response.setHeader("X-Request-ID", correlationId);
     try {
       const requestScope = await requestScopeResolver(request);
+      telemetryScope = requestScope;
+      telemetryActorKind = requestScope.actorKind;
       await runWithRequestScope(requestScope, async () => {
       if (!hostValidator(request)) {
         json(response, 403, { error: "invalid_host", message: "The request Host header is not allowed." });
@@ -296,6 +335,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       const routePolicy = resolveApiRoutePolicy(request.method ?? "GET", requestUrl.pathname);
+      telemetryRoute = operationalRouteKey(telemetryPathname, routePolicy);
+      if (routePolicy?.surface === "device") telemetryActorKind = "device";
+      if (routePolicy?.surface === "internal") telemetryActorKind = "service";
       if (routePolicy && !routePolicy.classified) {
         throw new ApiError("api_route_unclassified", 404, "The requested API route is not registered.");
       }
@@ -770,6 +812,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/operations/telemetry") {
+        const requestedWindow = String(requestUrl.searchParams.get("window") ?? "24h");
+        if (!Object.prototype.hasOwnProperty.call(OPERATIONAL_TELEMETRY_WINDOWS, requestedWindow)) {
+          throw new ApiError("telemetry_window_invalid", 400, "Choose a telemetry window of 1h, 24h, 7d, or 30d.");
+        }
+        json(response, 200, {
+          telemetry: operationalTelemetry.summary(requestedWindow as OperationalTelemetryWindow)
+        });
+        return;
+      }
+
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/snapshot") {
         const pairedDevices = devices.listDevices();
         const operatorAlertCounts = operatorAlerts.counts();
@@ -812,6 +865,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ...catalogGovernance.counts(),
             ...catalogIdentityGovernance.counts(),
             ...hostedDelivery.counts(),
+            ...operationalTelemetry.counts(),
             ...operatorAlertCounts
           },
           sources: control.listSources(),
@@ -897,6 +951,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             sanitizedAdapterDiagnostics: true,
             durableAdapterDiagnosticDelivery: true,
             privacyClassifiedOperatorAlerts: true,
+            privacyBoundedOperationalTelemetry: true,
+            rawRequestCapture: false,
             operatorAlertMutationAuthority: false,
             communityReadOnlyEvidence: true,
             exactSelectedOfferCommunityEvidence: true,
@@ -1374,6 +1430,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       });
     } catch (error) {
       const problem = apiErrorPayload(error, correlationId);
+      telemetryErrorCode = problem.payload.error;
       json(response, problem.status, problem.payload);
     }
   });

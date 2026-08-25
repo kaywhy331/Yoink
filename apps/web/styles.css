@@ -61,6 +61,7 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 80
 .safety-banner p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
 .safety-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 9px; color: var(--mint); background: rgba(85,230,177,.09); font-weight: 900; }
 .metric-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+.operational-metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .metric { min-height: 112px; padding: 17px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
 .metric span { color: var(--subtle); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .metric strong { display: block; margin-top: 14px; font-size: 31px; letter-spacing: -.04em; }
@@ -118,6 +119,7 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 80
 .tag.good { color: var(--mint); background: rgba(85,230,177,.08); }
 .tag.warning { color: var(--amber); background: rgba(255,202,107,.08); }
 .tag.bad { color: var(--red); background: rgba(255,117,136,.08); }
+.operational-correlation { max-width: 100%; border-radius: 8px; overflow-wrap: anywhere; word-break: break-all; }
 .canonical-link { display: block; margin-top: 13px; color: var(--violet); font-size: 10px; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .strategy-list { counter-reset: strategy; }
 .strategy-row { display: grid; grid-template-columns: 40px minmax(0,1fr) auto; gap: 15px; align-items: center; padding: 16px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }

@@ -1987,5 +1987,71 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
           )
         );
     `
+  },
+  {
+    version: 31,
+    name: "privacy_bounded_operational_telemetry",
+    sql: `
+      CREATE TABLE operational_request_rollups (
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        bucket_start TEXT NOT NULL,
+        route_key TEXT NOT NULL,
+        method TEXT NOT NULL CHECK (method IN ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD')),
+        actor_kind TEXT NOT NULL CHECK (actor_kind IN ('maintainer', 'user', 'device', 'service')),
+        status_class TEXT NOT NULL CHECK (status_class IN ('success', 'redirect', 'client_error', 'server_error')),
+        latency_bucket TEXT NOT NULL CHECK (latency_bucket IN ('lt_100', 'lt_500', 'lt_2000', 'gte_2000')),
+        request_count INTEGER NOT NULL CHECK (request_count >= 1),
+        total_duration_ms INTEGER NOT NULL CHECK (total_duration_ms >= 0),
+        max_duration_ms INTEGER NOT NULL CHECK (max_duration_ms >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (
+          tenant_id, bucket_start, route_key, method, actor_kind,
+          status_class, latency_bucket
+        )
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX operational_request_rollups_recent_idx
+        ON operational_request_rollups(tenant_id, bucket_start DESC, route_key);
+
+      CREATE TABLE operational_error_events (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        correlation_key TEXT NOT NULL,
+        route_key TEXT NOT NULL,
+        method TEXT NOT NULL CHECK (method IN ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD')),
+        actor_kind TEXT NOT NULL CHECK (actor_kind IN ('maintainer', 'user', 'device', 'service')),
+        status_code INTEGER NOT NULL CHECK (status_code BETWEEN 400 AND 599),
+        error_code TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        occurred_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX operational_error_events_recent_idx
+        ON operational_error_events(tenant_id, occurred_at DESC, id DESC);
+      CREATE INDEX operational_error_events_route_idx
+        ON operational_error_events(tenant_id, route_key, occurred_at DESC);
+
+      CREATE TABLE operational_telemetry_retention_receipts (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        cutoff_at TEXT NOT NULL,
+        deleted_rollup_rows INTEGER NOT NULL CHECK (deleted_rollup_rows >= 0),
+        deleted_error_events INTEGER NOT NULL CHECK (deleted_error_events >= 0),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX operational_telemetry_retention_recent_idx
+        ON operational_telemetry_retention_receipts(tenant_id, created_at DESC, id DESC);
+
+      CREATE TRIGGER operational_telemetry_retention_receipts_no_update
+      BEFORE UPDATE ON operational_telemetry_retention_receipts
+      BEGIN SELECT RAISE(ABORT, 'operational telemetry retention receipts are append-only'); END;
+      CREATE TRIGGER operational_telemetry_retention_receipts_no_delete
+      BEFORE DELETE ON operational_telemetry_retention_receipts
+      WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
+      BEGIN SELECT RAISE(ABORT, 'operational telemetry retention receipts are append-only'); END;
+    `
   }
 ]);

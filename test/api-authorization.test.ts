@@ -63,6 +63,10 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
       headers: { "X-Test-Principal": "user" }
     });
     assert.equal(deniedAlerts.status, 403);
+    const deniedOperationalTelemetry = await fetch(`${baseUrl}/api/v1/admin/operations/telemetry`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(deniedOperationalTelemetry.status, 403);
     const deniedTrustInstall = await fetch(`${baseUrl}/api/v1/admin/observer-recipes/trust-manifests`, {
       method: "POST",
       headers: {
@@ -129,6 +133,17 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
       headers: { "X-Test-Principal": "user" }
     });
     assert.equal(allowedAlertRead.status, 200);
+    const allowedOperationalTelemetry = await fetch(`${baseUrl}/api/v1/admin/operations/telemetry?window=1h`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(allowedOperationalTelemetry.status, 200);
+    assert.equal(allowedOperationalTelemetry.headers.get("x-yoink-api-surface"), "admin");
+    const operationalTelemetry = (await allowedOperationalTelemetry.json() as {
+      telemetry: { privacyClassification: string; containsRequestBodies: boolean; containsRawUrls: boolean };
+    }).telemetry;
+    assert.equal(operationalTelemetry.privacyClassification, "operational_aggregate");
+    assert.equal(operationalTelemetry.containsRequestBodies, false);
+    assert.equal(operationalTelemetry.containsRawUrls, false);
     const deniedAlertMutation = await fetch(`${baseUrl}/api/v1/admin/alerts/rules`, {
       method: "POST",
       headers: {
