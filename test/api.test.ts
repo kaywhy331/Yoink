@@ -55,6 +55,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /renderBackgroundWork/);
     assert.match(adminScript, /renderOperatorAlerts/);
     assert.match(adminScript, /SAVE_OPERATOR_ALERT_CONNECTOR/);
+    assert.match(adminScript, /RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY/);
+    assert.match(adminScript, /operatorAlertConnectorHealthProjection|deliverySloSeconds/);
     assert.match(adminScript, /Maintainer review ready/);
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
@@ -75,6 +77,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       signalEvaluationOutsideDeviceRequest: true,
       durableObserverRecipeWitnessRefresh: true,
       durableOperatorAlertConnectorDispatch: true,
+      governedOperatorAlertConnectorReplay: true,
+      operatorAlertConnectorHealthProjection: true,
       operatorAlertConnectorRegistryConfigured: false,
       observerRecipeWitnessRefreshConfigured: false,
       standaloneWitnessRefreshLoadsSigningKeys: false,

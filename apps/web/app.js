@@ -764,6 +764,8 @@ function renderOperatorAlerts() {
   const connectorModel = alerts.connectors || {};
   const connectorCounts = connectorModel.counts || {};
   const connectors = connectorModel.connectors || [];
+  const connectorHealth = connectorModel.health || [];
+  const healthByConnector = new Map(connectorHealth.map((health) => [health.connectorId, health]));
   const connectorDeliveries = connectorModel.deliveries || [];
   const incidents = alerts.incidents || [];
   const rules = alerts.rules || [];
@@ -782,7 +784,7 @@ function renderOperatorAlerts() {
     ["Open", counts.openOperatorAlerts, `${Number(counts.acknowledgedOperatorAlerts || 0)} acknowledged`],
     ["Critical", counts.criticalOperatorAlerts, "Active incidents only"],
     ["Rules", counts.enabledOperatorAlertRules, `${Number(counts.operatorAlertRules || 0)} configured`],
-    ["Connectors", connectorCounts.boundOperatorAlertConnectors, `${Number(connectorCounts.enabledOperatorAlertConnectors || 0)} enabled`]
+    ["Connectors", connectorCounts.boundOperatorAlertConnectors, `${Number(connectorCounts.enabledOperatorAlertConnectors || 0)} enabled · ${Number(connectorCounts.criticalOperatorAlertConnectors || 0)} critical`]
   ];
   $("#operatorAlertMetricGrid").innerHTML = metrics.map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong><small>${escapeHtml(note)}</small></article>`).join("");
   $("#operatorAlertIncidentList").innerHTML = incidents.length ? incidents.map((incident) => {
@@ -804,11 +806,15 @@ function renderOperatorAlerts() {
     ${alerts.canManage === true ? `<div class="card-actions"><button class="button secondary" data-operator-alert-rule-edit="${escapeHtml(rule.id)}" type="button">Edit rule</button></div>` : ""}
   </article>`).join("") : empty("No alert rules are configured.");
   $("#operatorAlertConnectorList").innerHTML = connectors.length ? connectors.map((connector) => {
-    const kind = connector.enabled && connector.runtimeBound ? "good" : connector.enabled ? "bad" : "warning";
-    const status = !connector.enabled ? "disabled" : connector.runtimeBound ? "runtime bound" : "reference missing";
+    const health = healthByConnector.get(connector.id) || {};
+    const status = health.status || (!connector.enabled ? "disabled" : connector.runtimeBound ? "idle" : "unbound");
+    const kind = status === "healthy" ? "good" : ["critical", "unbound"].includes(status) ? "bad" : "warning";
+    const successRate = health.deliverySuccessRatePercent === null || health.deliverySuccessRatePercent === undefined
+      ? "no 24h outcomes"
+      : `${Number(health.deliverySuccessRatePercent).toLocaleString()}% accepted / 24h`;
     return `<article class="card operator-alert-card ${kind}">
       <div class="card-top"><div><h3>${escapeHtml(connector.name)}</h3><p>${escapeHtml(String(connector.kind).replaceAll("_", " "))} · reference ${escapeHtml(connector.endpointReference)}</p></div><span class="tag ${kind}">${escapeHtml(status)}</span></div>
-      <div class="card-meta"><span class="tag">${escapeHtml(connector.minimumSeverity)} and above</span><span class="tag">no URL stored</span><span class="tag">no secret stored</span><span>${escapeHtml(relativeTime(connector.updatedAt))}</span></div>
+      <div class="card-meta"><span class="tag">${escapeHtml(connector.minimumSeverity)} and above</span><span class="tag">${Number(health.activeDeliveries || 0)} active</span><span class="tag ${Number(health.unresolvedDeadLetters || 0) ? "bad" : ""}">${Number(health.unresolvedDeadLetters || 0)} dead letters</span><span class="tag">${escapeHtml(successRate)}</span><span class="tag">${Number(health.deliverySloSeconds || 300) / 60}m SLO</span><span class="tag">no URL stored</span><span class="tag">no secret stored</span><span>${escapeHtml(relativeTime(connector.updatedAt))}</span></div>
       ${alerts.canManage === true ? `<div class="card-actions"><button class="button secondary" data-operator-alert-connector-edit="${escapeHtml(connector.id)}" type="button">Edit connector</button></div>` : ""}
     </article>`;
   }).join("") : empty("No external connector is configured. Add one only after its opaque endpoint reference exists in the reviewed deployment registry.");
@@ -819,7 +825,15 @@ function renderOperatorAlerts() {
   }).join("") : empty("No operator alert delivery receipts exist yet.");
   $("#operatorAlertConnectorDeliveryList").innerHTML = connectorDeliveries.length ? connectorDeliveries.slice(0, 100).map((delivery) => {
     const kind = delivery.deliveryState === "delivered" ? "good" : delivery.deliveryState === "dead_letter" ? "bad" : "warning";
-    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(delivery.connectorName)}</h3><p>${escapeHtml(String(delivery.eventType).replaceAll("_", " "))} · reference ${escapeHtml(delivery.endpointReference)}</p></div><span class="tag ${kind}">${escapeHtml(String(delivery.deliveryState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">attempt ${Number(delivery.attemptCount || 0)}</span>${Number(delivery.lastHttpStatus || 0) ? `<span class="tag">HTTP ${Number(delivery.lastHttpStatus)}</span>` : ""}${delivery.lastErrorCode ? `<span class="tag bad">${escapeHtml(operationalLabel(delivery.lastErrorCode))}</span>` : ""}<span class="tag">operational aggregate</span><span>${escapeHtml(relativeTime(delivery.updatedAt))}</span></div></article>`;
+    const replayAction = alerts.canManage === true && delivery.replayEligible === true
+      ? `<div class="card-actions"><button class="button secondary" data-operator-alert-connector-retry="${escapeHtml(delivery.id)}" type="button">Replay once</button></div>`
+      : "";
+    const replayLimit = Number(delivery.maximumManualReplays || 3);
+    const replayCount = Number(delivery.manualReplayCount || 0);
+    const replayStatus = delivery.deliveryState === "dead_letter" && delivery.replayEligible !== true
+      ? `<span class="tag warning">${escapeHtml(operationalLabel(delivery.replayIneligibilityReason || "replay unavailable"))}</span>`
+      : "";
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(delivery.connectorName)}</h3><p>${escapeHtml(String(delivery.eventType).replaceAll("_", " "))} · reference ${escapeHtml(delivery.endpointReference)}</p></div><span class="tag ${kind}">${escapeHtml(String(delivery.deliveryState).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">attempt ${Number(delivery.attemptCount || 0)}</span><span class="tag">replays ${replayCount}/${replayLimit}</span>${Number(delivery.lastHttpStatus || 0) ? `<span class="tag">HTTP ${Number(delivery.lastHttpStatus)}</span>` : ""}${delivery.lastErrorCode ? `<span class="tag bad">${escapeHtml(operationalLabel(delivery.lastErrorCode))}</span>` : ""}${replayStatus}<span class="tag">operational aggregate</span><span>${escapeHtml(relativeTime(delivery.updatedAt))}</span></div>${replayAction}</article>`;
   }).join("") : empty("No external connector delivery has been queued.");
 }
 
@@ -1285,6 +1299,18 @@ document.addEventListener("click", async (event) => {
       const connector = (state.snapshot.operatorAlerts?.connectors?.connectors || []).find((item) => item.id === button.dataset.operatorAlertConnectorEdit);
       if (!connector) throw new Error("The operator alert connector is unavailable.");
       openOperatorAlertConnector(connector);
+    }
+    if (button.dataset.operatorAlertConnectorRetry) {
+      if (!confirm("Replay this exact dead-letter alert once? The original delivery ID, payload, idempotency identity, and endpoint binding will be reused; the message cannot be edited or retargeted.")) return;
+      await api(`/api/v1/admin/alerts/connector-deliveries/${encodeURIComponent(button.dataset.operatorAlertConnectorRetry)}/retry`, {
+        method: "POST",
+        body: JSON.stringify({
+          reasonCode: "operator_verified_retry",
+          confirmation: "RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY"
+        })
+      });
+      await refresh(false);
+      toast("The exact dead-letter alert was scheduled for bounded replay.");
     }
     if (button.dataset.operatorAlertAcknowledge) {
       const note = prompt("Optional non-sensitive acknowledgement note. Do not include page text, account data, product IDs, tokens, or personal information.", "Investigating the sanitized repair group.");

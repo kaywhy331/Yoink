@@ -8,11 +8,14 @@ import {
   ACKNOWLEDGE_OPERATOR_ALERT_CONFIRMATION,
   AMAZON_OBSERVER_VERSION,
   RESOLVE_OPERATOR_ALERT_CONFIRMATION,
+  RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY_CONFIRMATION,
   SAVE_OPERATOR_ALERT_CONNECTOR_CONFIRMATION,
   SAVE_OPERATOR_ALERT_RULE_CONFIRMATION,
   type RetailerAdapterDiagnosticInput
 } from "../packages/contracts/src/index.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { OperatorAlertConnectorDispatchService } from "../packages/engine/src/operator-alert-connector-dispatch.js";
+import type { OperatorAlertWebhookTransport } from "../packages/engine/src/operator-alert-webhook.js";
 
 function diagnostic(): RetailerAdapterDiagnosticInput {
   return {
@@ -122,7 +125,11 @@ test("device diagnostics immediately feed permission-gated operator alert APIs",
       rules: Array<Record<string, unknown>>;
       incidents: Array<Record<string, unknown>>;
       deliveries: Array<Record<string, unknown>>;
-      connectors: { connectors: Array<Record<string, unknown>>; deliveries: Array<Record<string, unknown>> };
+      connectors: {
+        connectors: Array<Record<string, unknown>>;
+        health: Array<Record<string, unknown>>;
+        deliveries: Array<Record<string, unknown>>;
+      };
     };
     assert.equal(alerts.canManage, true);
     assert.equal(alerts.mutationAuthority, false);
@@ -135,6 +142,55 @@ test("device diagnostics immediately feed permission-gated operator alert APIs",
     assert.equal(JSON.stringify(alerts).includes("B0FB21526X"), false);
     assert.equal(JSON.stringify(alerts).includes("DO_NOT_STORE"), false);
     assert.equal(JSON.stringify(db.all("SELECT * FROM operator_alert_incidents")).includes("B0FB21526X"), false);
+
+    const rejectedTransport: OperatorAlertWebhookTransport = {
+      async deliver() {
+        return { disposition: "dead_letter", reasonCode: "webhook_rejected", httpStatus: 400 };
+      }
+    };
+    await new OperatorAlertConnectorDispatchService(db, {
+      definitions: [{
+        reference: "ops_primary",
+        endpoint: "https://alerts.example.com/v1/yoink",
+        signingSecretEnvironment: "YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_OPS_PRIMARY",
+        bindingFingerprint: "a".repeat(64)
+      }],
+      bindings: { ops_primary: "a".repeat(64) },
+      fingerprint: "b".repeat(64)
+    }, rejectedTransport).execute(Date.now());
+    alerts = await fetch(`${baseUrl}/api/v1/admin/alerts`).then((response) => response.json()) as typeof alerts;
+    assert.equal(alerts.connectors.health[0]?.status, "critical");
+    assert.equal(alerts.connectors.deliveries[0]?.replayEligible, true);
+    const connectorDeliveryId = String(alerts.connectors.deliveries[0]?.id);
+    const replayed = await fetch(
+      `${baseUrl}/api/v1/admin/alerts/connector-deliveries/${encodeURIComponent(connectorDeliveryId)}/retry`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: baseUrl, "X-Request-ID": "request_alert_replay_001" },
+        body: JSON.stringify({
+          reasonCode: "operator_verified_retry",
+          confirmation: RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY_CONFIRMATION
+        })
+      }
+    );
+    assert.equal(replayed.status, 202);
+    const replayedBody = await replayed.json() as { delivery: Record<string, unknown> };
+    assert.equal(replayedBody.delivery.id, connectorDeliveryId);
+    assert.equal(replayedBody.delivery.deliveryState, "pending");
+    assert.equal(replayedBody.delivery.manualReplayCount, 1);
+    assert.equal(JSON.stringify(replayedBody).includes("https://"), false);
+    const duplicateReplay = await fetch(
+      `${baseUrl}/api/v1/admin/alerts/connector-deliveries/${encodeURIComponent(connectorDeliveryId)}/retry`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: baseUrl },
+        body: JSON.stringify({
+          reasonCode: "operator_verified_retry",
+          confirmation: RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY_CONFIRMATION
+        })
+      }
+    );
+    assert.equal(duplicateReplay.status, 409);
 
     const rule = alerts.rules[0] as Record<string, unknown>;
     const updatedRule = await fetch(`${baseUrl}/api/v1/admin/alerts/rules/${encodeURIComponent(String(rule.id))}`, {
@@ -188,6 +244,8 @@ test("device diagnostics immediately feed permission-gated operator alert APIs",
     };
     assert.equal(snapshot.counts.resolvedOperatorAlerts, 1);
     assert.equal(snapshot.capabilities.privacyClassifiedOperatorAlerts, true);
+    assert.equal(snapshot.capabilities.governedOperatorAlertConnectorReplay, true);
+    assert.equal(snapshot.capabilities.operatorAlertConnectorHealthProjection, true);
     assert.equal(snapshot.capabilities.operatorAlertMutationAuthority, false);
     assert.ok(snapshot.operatorAlerts);
   } finally {

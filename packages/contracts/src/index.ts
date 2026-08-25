@@ -229,8 +229,15 @@ export const OPERATOR_ALERT_CONNECTOR_KINDS = ["webhook"] as const;
 export type OperatorAlertConnectorKind = (typeof OPERATOR_ALERT_CONNECTOR_KINDS)[number];
 export const SAVE_OPERATOR_ALERT_RULE_CONFIRMATION = "SAVE_OPERATOR_ALERT_RULE";
 export const SAVE_OPERATOR_ALERT_CONNECTOR_CONFIRMATION = "SAVE_OPERATOR_ALERT_CONNECTOR";
+export const RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY_CONFIRMATION = "RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY";
 export const ACKNOWLEDGE_OPERATOR_ALERT_CONFIRMATION = "ACKNOWLEDGE_OPERATOR_ALERT";
 export const RESOLVE_OPERATOR_ALERT_CONFIRMATION = "RESOLVE_OPERATOR_ALERT";
+export const OPERATOR_ALERT_CONNECTOR_REPLAY_REASON_CODES = [
+  "receiver_recovered",
+  "rate_limit_cleared",
+  "operator_verified_retry"
+] as const;
+export type OperatorAlertConnectorReplayReasonCode = (typeof OPERATOR_ALERT_CONNECTOR_REPLAY_REASON_CODES)[number];
 export const OPERATOR_ALERT_ACKNOWLEDGEMENT_REASON_CODES = ["operator_investigating"] as const;
 export type OperatorAlertAcknowledgementReasonCode = (typeof OPERATOR_ALERT_ACKNOWLEDGEMENT_REASON_CODES)[number];
 export const OPERATOR_ALERT_RESOLUTION_REASON_CODES = [
@@ -272,6 +279,15 @@ export interface OperatorAlertConnectorInput {
   endpointReference: string;
   minimumSeverity: OperatorAlertSeverity;
   confirmation: typeof SAVE_OPERATOR_ALERT_CONNECTOR_CONFIRMATION;
+}
+
+/**
+ * A manual replay retains the original delivery identity, payload, and exact
+ * deployment binding. It cannot create or retarget an alert message.
+ */
+export interface OperatorAlertConnectorReplayInput {
+  reasonCode: OperatorAlertConnectorReplayReasonCode;
+  confirmation: typeof RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY_CONFIRMATION;
 }
 
 export interface OperatorAlertAcknowledgeInput {

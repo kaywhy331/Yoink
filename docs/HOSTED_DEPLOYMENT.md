@@ -89,6 +89,14 @@ reference cannot silently retarget historical alerts. This is optional; an
 empty registry is a healthy no-connector state. See
 [operator alert connectors](OPERATOR_ALERT_CONNECTORS.md).
 
+Version 0.43 adds no new destination input. It allows a permission-gated
+operator to replay only an exact dead letter while the same saved connector and
+attested public binding remain current. The stable delivery ID, payload,
+idempotency key, and binding are reused; three manual cycles are the maximum.
+Hosted deployments should still feed the sanitized rolling health projection
+to an independent monitor because the packaged 24-hour/five-minute SLO view is
+not itself paging or external availability evidence.
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting

@@ -10,6 +10,7 @@ import {
   SAVE_OPERATOR_ALERT_RULE_CONFIRMATION,
   type OperatorAlertAcknowledgeInput,
   type OperatorAlertConnectorInput,
+  type OperatorAlertConnectorReplayInput,
   type OperatorAlertEventFamily,
   type OperatorAlertResolveInput,
   type OperatorAlertRoute,
@@ -539,6 +540,15 @@ export class OperatorAlertRepository {
     return this.connectors.save(input, id, now);
   }
 
+  replayConnectorDelivery(
+    id: string,
+    input: OperatorAlertConnectorReplayInput,
+    correlationId: string,
+    now = Date.now()
+  ) {
+    return this.connectors.replayDeadLetter(id, input, correlationId, now);
+  }
+
   reconcileAdapterRepairs(queue: AdapterRepairQueueItem[], correlationId: string, now = Date.now()): {
     opened: number;
     updated: number;
@@ -905,8 +915,8 @@ export class OperatorAlertRepository {
     };
   }
 
-  connectorCounts(): ReturnType<OperatorAlertConnectorRepository["counts"]> {
-    return this.connectors.counts();
+  connectorCounts(now = Date.now()): ReturnType<OperatorAlertConnectorRepository["counts"]> {
+    return this.connectors.counts(now);
   }
 
   snapshot(now = Date.now()): Record<string, unknown> {
@@ -918,7 +928,7 @@ export class OperatorAlertRepository {
       mutationAuthority: false,
       canManage: this.authorization.has("alert.manage"),
       counts: this.counts(),
-      connectors: this.connectors.snapshot(),
+      connectors: this.connectors.snapshot(now),
       rules: this.rules(),
       incidents: this.incidents("all", 200, now),
       events: this.events(200),

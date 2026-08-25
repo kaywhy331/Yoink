@@ -1,10 +1,13 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
+  OPERATOR_ALERT_CONNECTOR_REPLAY_REASON_CODES,
   OPERATOR_ALERT_CONNECTOR_KINDS,
   OPERATOR_ALERT_SEVERITIES,
+  RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY_CONFIRMATION,
   SAVE_OPERATOR_ALERT_CONNECTOR_CONFIRMATION,
   type OperatorAlertConnectorInput,
   type OperatorAlertConnectorKind,
+  type OperatorAlertConnectorReplayInput,
   type OperatorAlertSeverity
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
@@ -15,11 +18,16 @@ import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 
 const CONNECTOR_KINDS = new Set<string>(OPERATOR_ALERT_CONNECTOR_KINDS);
+const REPLAY_REASONS = new Set<string>(OPERATOR_ALERT_CONNECTOR_REPLAY_REASON_CODES);
 const SEVERITIES = new Set<string>(OPERATOR_ALERT_SEVERITIES);
 const ENDPOINT_REFERENCE_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]{2,119}$/;
 const ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 const MAXIMUM_ATTEMPTS = 12;
+const MAXIMUM_MANUAL_REPLAYS = 3;
 const MAXIMUM_PAYLOAD_BYTES = 4_000;
+const HEALTH_WINDOW_SECONDS = 86_400;
+const DELIVERY_SLO_SECONDS = 300;
+const CRITICAL_DELIVERY_AGE_SECONDS = 900;
 
 export type OperatorAlertConnectorDeliveryEventType =
   | "queued"
@@ -83,10 +91,42 @@ export interface OperatorAlertConnectorDispatchReceipt {
   lastErrorCode: string;
   lastHttpStatus: number;
   endpointReference: string;
+  manualReplayCount: number;
+  maximumManualReplays: number;
+  replayEligible: boolean;
+  replayIneligibilityReason:
+    | ""
+    | "delivery_not_dead_lettered"
+    | "connector_disabled"
+    | "connector_configuration_changed"
+    | "connector_unbound"
+    | "manual_replay_limit_reached";
   privacyClassification: "operational_aggregate";
   createdAt: string;
   updatedAt: string;
   deliveredAt: string;
+}
+
+export interface OperatorAlertConnectorHealth {
+  connectorId: string;
+  connectorName: string;
+  enabled: boolean;
+  runtimeBound: boolean;
+  status: "disabled" | "unbound" | "idle" | "healthy" | "degraded" | "critical";
+  activeDeliveries: number;
+  unresolvedDeadLetters: number;
+  deliveredInWindow: number;
+  deadLetteredInWindow: number;
+  retryEventsInWindow: number;
+  deliverySuccessRatePercent: number | null;
+  oldestActiveAt: string;
+  oldestActiveAgeSeconds: number;
+  lastDeliveredAt: string;
+  lastDeadLetterAt: string;
+  windowStartedAt: string;
+  windowSeconds: number;
+  deliverySloSeconds: number;
+  privacyClassification: "operational_aggregate";
 }
 
 interface ConnectorRow {
@@ -114,6 +154,44 @@ interface DeliveryRow {
   attemptCount: number;
   leaseCapabilityHash: string;
   leaseExpiresAt: string;
+}
+
+interface DeliveryReceiptRow {
+  id: string;
+  connectorId: string;
+  connectorName: string;
+  connectorEnabled: number;
+  connectorEndpointReference: string;
+  connectorBindingFingerprint: string;
+  eventId: string;
+  eventType: string;
+  deliveryState: OperatorAlertConnectorDispatchReceipt["deliveryState"];
+  attemptCount: number;
+  lastErrorCode: string;
+  lastHttpStatus: number;
+  endpointReference: string;
+  endpointBindingFingerprint: string;
+  manualReplayCount: number;
+  privacyClassification: "operational_aggregate";
+  createdAt: string;
+  updatedAt: string;
+  deliveredAt: string;
+}
+
+interface ConnectorHealthAggregateRow {
+  connectorId: string;
+  activeDeliveries: number;
+  unresolvedDeadLetters: number;
+  oldestActiveAt: string;
+}
+
+interface ConnectorEventAggregateRow {
+  connectorId: string;
+  deliveredInWindow: number;
+  deadLetteredInWindow: number;
+  retryEventsInWindow: number;
+  lastDeliveredAt: string;
+  lastDeadLetterAt: string;
 }
 
 interface QueueAlertEvent {
@@ -161,6 +239,26 @@ const CONNECTOR_SELECT = `
          created_at AS createdAt, updated_at AS updatedAt
   FROM operator_alert_connectors`;
 
+const DELIVERY_RECEIPT_SELECT = `
+  SELECT d.id, d.connector_id AS connectorId, c.name AS connectorName,
+         c.enabled AS connectorEnabled,
+         c.endpoint_reference AS connectorEndpointReference,
+         c.endpoint_binding_fingerprint AS connectorBindingFingerprint,
+         d.event_id AS eventId, e.event_type AS eventType,
+         d.state AS deliveryState, d.attempt_count AS attemptCount,
+         d.last_error_code AS lastErrorCode, d.last_http_status AS lastHttpStatus,
+         d.endpoint_reference AS endpointReference,
+         d.endpoint_binding_fingerprint AS endpointBindingFingerprint,
+         (SELECT COUNT(*) FROM operator_alert_connector_delivery_events replay_event
+          WHERE replay_event.delivery_id = d.id
+            AND replay_event.reason_code = 'operator_manual_replay') AS manualReplayCount,
+         d.privacy_classification AS privacyClassification,
+         d.created_at AS createdAt, d.updated_at AS updatedAt,
+         d.delivered_at AS deliveredAt
+  FROM operator_alert_connector_deliveries d
+  JOIN operator_alert_connectors c ON c.id = d.connector_id
+  JOIN operator_alert_events e ON e.id = d.event_id`;
+
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
@@ -193,6 +291,51 @@ function connectorFromRow(row: ConnectorRow, availableBindings: Readonly<Record<
     privacyClassification: row.privacyClassification,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
+  };
+}
+
+function replayIneligibilityReason(
+  row: DeliveryReceiptRow,
+  availableBindings: Readonly<Record<string, string>>
+): OperatorAlertConnectorDispatchReceipt["replayIneligibilityReason"] {
+  if (row.deliveryState !== "dead_letter") return "delivery_not_dead_lettered";
+  if (row.connectorEnabled !== 1) return "connector_disabled";
+  if (row.connectorEndpointReference !== row.endpointReference
+    || row.connectorBindingFingerprint !== row.endpointBindingFingerprint) {
+    return "connector_configuration_changed";
+  }
+  if (!row.endpointBindingFingerprint
+    || availableBindings[row.endpointReference] !== row.endpointBindingFingerprint) {
+    return "connector_unbound";
+  }
+  if (Number(row.manualReplayCount) >= MAXIMUM_MANUAL_REPLAYS) return "manual_replay_limit_reached";
+  return "";
+}
+
+function receiptFromRow(
+  row: DeliveryReceiptRow,
+  availableBindings: Readonly<Record<string, string>>
+): OperatorAlertConnectorDispatchReceipt {
+  const ineligibilityReason = replayIneligibilityReason(row, availableBindings);
+  return {
+    id: row.id,
+    connectorId: row.connectorId,
+    connectorName: row.connectorName,
+    eventId: row.eventId,
+    eventType: row.eventType,
+    deliveryState: row.deliveryState,
+    attemptCount: Number(row.attemptCount),
+    lastErrorCode: row.lastErrorCode,
+    lastHttpStatus: Number(row.lastHttpStatus),
+    endpointReference: row.endpointReference,
+    manualReplayCount: Number(row.manualReplayCount),
+    maximumManualReplays: MAXIMUM_MANUAL_REPLAYS,
+    replayEligible: ineligibilityReason === "",
+    replayIneligibilityReason: ineligibilityReason,
+    privacyClassification: row.privacyClassification,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    deliveredAt: row.deliveredAt
   };
 }
 
@@ -398,6 +541,61 @@ export class OperatorAlertConnectorRepository {
     return queued;
   }
 
+  expireExhaustedLeases(
+    availableBindings: Readonly<Record<string, string>>,
+    now = Date.now()
+  ): number {
+    allowedWorker();
+    const bindings = Object.entries(availableBindings)
+      .filter(([reference, fingerprint]) => ENDPOINT_REFERENCE_PATTERN.test(reference) && /^[a-f0-9]{64}$/.test(fingerprint))
+      .slice(0, 20);
+    if (!bindings.length) return 0;
+    const scope = currentRequestScope();
+    const timestamp = nowIso(now);
+    const bindingPredicate = bindings.map(() => "(d.endpoint_reference = ? AND d.endpoint_binding_fingerprint = ?)").join(" OR ");
+    const bindingParameters = bindings.flatMap(([reference, fingerprint]) => [reference, fingerprint]);
+    return this.db.transaction(() => {
+      const exhausted = this.db.all<{ id: string; attemptCount: number }>(
+        `SELECT d.id, d.attempt_count AS attemptCount
+         FROM operator_alert_connector_deliveries d
+         JOIN operator_alert_connectors c ON c.id = d.connector_id
+         WHERE d.tenant_id = ? AND c.enabled = 1 AND (${bindingPredicate})
+           AND d.state = 'leased' AND d.attempt_count >= ? AND d.lease_expires_at <= ?
+         ORDER BY d.created_at, d.id LIMIT 20`,
+        scope.tenantId,
+        ...bindingParameters,
+        MAXIMUM_ATTEMPTS,
+        timestamp
+      );
+      let recovered = 0;
+      for (const delivery of exhausted) {
+        const updated = this.db.run(
+          `UPDATE operator_alert_connector_deliveries SET state = 'dead_letter',
+             lease_capability_hash = '', lease_expires_at = '', next_attempt_at = '',
+             last_error_code = 'lease_attempts_exhausted', last_http_status = 0, updated_at = ?
+           WHERE id = ? AND tenant_id = ? AND state = 'leased'
+             AND attempt_count >= ? AND lease_expires_at <= ?`,
+          timestamp,
+          delivery.id,
+          scope.tenantId,
+          MAXIMUM_ATTEMPTS,
+          timestamp
+        );
+        if (Number(updated.changes) !== 1) continue;
+        this.recordEvent(
+          delivery.id,
+          "dead_lettered",
+          Number(delivery.attemptCount),
+          "lease_attempts_exhausted",
+          0,
+          now
+        );
+        recovered += 1;
+      }
+      return recovered;
+    });
+  }
+
   leaseNext(availableBindings: Readonly<Record<string, string>>, leaseSeconds = 60, now = Date.now()): OperatorAlertConnectorLease | null {
     allowedWorker();
     const bindings = Object.entries(availableBindings)
@@ -476,20 +674,28 @@ export class OperatorAlertConnectorRepository {
     const delivery = this.assertCapability(deliveryId, capabilityToken, now);
     const scope = currentRequestScope();
     const timestamp = nowIso(now);
+    const status = safeHttpStatus(httpStatus);
+    if (status < 200 || status > 299) {
+      throw new OperatorAlertConnectorError(
+        "operator_alert_connector_state_conflict",
+        409,
+        "Only an accepted HTTP response can complete an operator alert connector delivery."
+      );
+    }
     return this.db.transaction(() => {
       const result = this.db.run(
         `UPDATE operator_alert_connector_deliveries SET state = 'delivered',
            lease_capability_hash = '', lease_expires_at = '', next_attempt_at = '',
            last_error_code = '', last_http_status = ?, delivered_at = ?, updated_at = ?
          WHERE id = ? AND tenant_id = ? AND state = 'leased'`,
-        safeHttpStatus(httpStatus),
+        status,
         timestamp,
         timestamp,
         deliveryId,
         scope.tenantId
       );
       if (Number(result.changes) !== 1) return false;
-      this.recordEvent(deliveryId, "delivered", delivery.attemptCount, safeErrorCode(reasonCode, "webhook_accepted"), safeHttpStatus(httpStatus), now);
+      this.recordEvent(deliveryId, "delivered", delivery.attemptCount, safeErrorCode(reasonCode, "webhook_accepted"), status, now);
       return true;
     });
   }
@@ -538,36 +744,208 @@ export class OperatorAlertConnectorRepository {
     return deadLetter ? "dead_letter" : "retry";
   }
 
+  replayDeadLetter(
+    id: string,
+    input: OperatorAlertConnectorReplayInput,
+    correlationId: string,
+    now = Date.now()
+  ): OperatorAlertConnectorDispatchReceipt {
+    this.authorization.require("alert.manage");
+    if (input?.confirmation !== RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY_CONFIRMATION) {
+      throw new OperatorAlertConnectorError(
+        "operator_alert_connector_confirmation_required",
+        400,
+        "Explicit operator alert connector replay confirmation is required."
+      );
+    }
+    const inputKeys = Object.keys(input as unknown as Record<string, unknown>).sort();
+    if (inputKeys.join(",") !== "confirmation,reasonCode" || !REPLAY_REASONS.has(input.reasonCode)) {
+      throw new OperatorAlertConnectorError(
+        "operator_alert_connector_input_invalid",
+        400,
+        "A supported operator alert connector replay reason is required."
+      );
+    }
+    const deliveryId = identifier(id, "operator alert connector delivery ID");
+    const scope = currentRequestScope();
+    const row = this.db.get<DeliveryReceiptRow>(
+      `${DELIVERY_RECEIPT_SELECT} WHERE d.tenant_id = ? AND d.id = ?`,
+      scope.tenantId,
+      deliveryId
+    );
+    if (!row) {
+      throw new OperatorAlertConnectorError(
+        "operator_alert_connector_not_found",
+        404,
+        "The operator alert connector delivery does not exist in this tenant."
+      );
+    }
+    if (replayIneligibilityReason(row, this.availableBindings) !== "") {
+      throw new OperatorAlertConnectorError(
+        "operator_alert_connector_state_conflict",
+        409,
+        "The operator alert connector delivery is not currently eligible for replay."
+      );
+    }
+    const timestamp = nowIso(now);
+    const safeCorrelationId = cleanText(correlationId, 120) || newId("alert_connector_replay");
+    this.db.transaction(() => {
+      const updated = this.db.run(
+        `UPDATE operator_alert_connector_deliveries SET state = 'pending', attempt_count = 0,
+           lease_capability_hash = '', lease_expires_at = '', next_attempt_at = '',
+           last_error_code = '', last_http_status = 0, delivered_at = '', updated_at = ?
+         WHERE id = ? AND tenant_id = ? AND state = 'dead_letter'`,
+        timestamp,
+        deliveryId,
+        scope.tenantId
+      );
+      if (Number(updated.changes) !== 1) {
+        throw new OperatorAlertConnectorError(
+          "operator_alert_connector_state_conflict",
+          409,
+          "The operator alert connector delivery changed before replay could be scheduled."
+        );
+      }
+      this.recordEvent(deliveryId, "retry_scheduled", Number(row.attemptCount), "operator_manual_replay", 0, now);
+      this.audit.record({
+        correlationId: safeCorrelationId,
+        aggregateType: "operator_alert_connector_delivery",
+        eventType: "operator_alert_connector_delivery_replayed",
+        reasonCode: input.reasonCode,
+        message: "A dead-letter operator alert connector delivery was scheduled for bounded replay.",
+        data: {
+          deliveryId,
+          connectorId: row.connectorId,
+          eventId: row.eventId,
+          replayNumber: Number(row.manualReplayCount) + 1,
+          maximumManualReplays: MAXIMUM_MANUAL_REPLAYS,
+          deliveryIdentityReused: true,
+          payloadChanged: false,
+          endpointRetargeted: false,
+          mutationAuthority: false
+        }
+      }, now);
+    });
+    const replayed = this.db.get<DeliveryReceiptRow>(
+      `${DELIVERY_RECEIPT_SELECT} WHERE d.tenant_id = ? AND d.id = ?`,
+      scope.tenantId,
+      deliveryId
+    );
+    if (!replayed) {
+      throw new OperatorAlertConnectorError(
+        "operator_alert_connector_state_conflict",
+        409,
+        "The replayed operator alert connector delivery could not be read."
+      );
+    }
+    return receiptFromRow(replayed, this.availableBindings);
+  }
+
   receipts(limit = 200): OperatorAlertConnectorDispatchReceipt[] {
     this.authorization.require("admin.read");
     const scope = currentRequestScope();
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 200)));
-    return this.db.all<OperatorAlertConnectorDispatchReceipt>(
-      `SELECT d.id, d.connector_id AS connectorId, c.name AS connectorName,
-              d.event_id AS eventId, e.event_type AS eventType,
-              d.state AS deliveryState, d.attempt_count AS attemptCount,
-              d.last_error_code AS lastErrorCode, d.last_http_status AS lastHttpStatus,
-              d.endpoint_reference AS endpointReference,
-              d.privacy_classification AS privacyClassification,
-              d.created_at AS createdAt, d.updated_at AS updatedAt,
-              d.delivered_at AS deliveredAt
-       FROM operator_alert_connector_deliveries d
-       JOIN operator_alert_connectors c ON c.id = d.connector_id
-       JOIN operator_alert_events e ON e.id = d.event_id
+    return this.db.all<DeliveryReceiptRow>(
+      `${DELIVERY_RECEIPT_SELECT}
        WHERE d.tenant_id = ? ORDER BY d.created_at DESC, d.id DESC LIMIT ?`,
       scope.tenantId,
       safeLimit
-    ).map((row) => ({
-      ...row,
-      attemptCount: Number(row.attemptCount),
-      lastHttpStatus: Number(row.lastHttpStatus)
-    }));
+    ).map((row) => receiptFromRow(row, this.availableBindings));
   }
 
-  counts(): {
+  health(now = Date.now()): OperatorAlertConnectorHealth[] {
+    this.authorization.require("admin.read");
+    const scope = currentRequestScope();
+    const windowStartedAt = nowIso(now - HEALTH_WINDOW_SECONDS * 1_000);
+    const connectors = this.db.all<ConnectorRow>(
+      `${CONNECTOR_SELECT} WHERE tenant_id = ? ORDER BY name, id`,
+      scope.tenantId
+    );
+    const deliveryRows = this.db.all<ConnectorHealthAggregateRow>(
+      `SELECT connector_id AS connectorId,
+              COALESCE(SUM(state IN ('pending', 'leased', 'retry_wait')), 0) AS activeDeliveries,
+              COALESCE(SUM(state = 'dead_letter'), 0) AS unresolvedDeadLetters,
+              COALESCE(MIN(CASE WHEN state IN ('pending', 'leased', 'retry_wait') THEN created_at END), '') AS oldestActiveAt
+       FROM operator_alert_connector_deliveries
+       WHERE tenant_id = ? GROUP BY connector_id`,
+      scope.tenantId
+    );
+    const eventRows = this.db.all<ConnectorEventAggregateRow>(
+      `SELECT d.connector_id AS connectorId,
+              COALESCE(SUM(event.event_type = 'delivered'), 0) AS deliveredInWindow,
+              COALESCE(SUM(event.event_type = 'dead_lettered'), 0) AS deadLetteredInWindow,
+              COALESCE(SUM(event.event_type = 'retry_scheduled'
+                AND event.reason_code <> 'operator_manual_replay'), 0) AS retryEventsInWindow,
+              COALESCE(MAX(CASE WHEN event.event_type = 'delivered' THEN event.created_at END), '') AS lastDeliveredAt,
+              COALESCE(MAX(CASE WHEN event.event_type = 'dead_lettered' THEN event.created_at END), '') AS lastDeadLetterAt
+       FROM operator_alert_connector_delivery_events event
+       JOIN operator_alert_connector_deliveries d ON d.id = event.delivery_id
+       WHERE event.tenant_id = ? AND event.created_at >= ?
+       GROUP BY d.connector_id`,
+      scope.tenantId,
+      windowStartedAt
+    );
+    const deliveriesByConnector = new Map(deliveryRows.map((row) => [row.connectorId, row]));
+    const eventsByConnector = new Map(eventRows.map((row) => [row.connectorId, row]));
+    return connectors.map((row) => {
+      const connector = connectorFromRow(row, this.availableBindings);
+      const aggregate = deliveriesByConnector.get(row.id);
+      const eventAggregate = eventsByConnector.get(row.id);
+      const activeDeliveries = Number(aggregate?.activeDeliveries ?? 0);
+      const unresolvedDeadLetters = Number(aggregate?.unresolvedDeadLetters ?? 0);
+      const deliveredInWindow = Number(eventAggregate?.deliveredInWindow ?? 0);
+      const deadLetteredInWindow = Number(eventAggregate?.deadLetteredInWindow ?? 0);
+      const retryEventsInWindow = Number(eventAggregate?.retryEventsInWindow ?? 0);
+      const oldestActiveAt = aggregate?.oldestActiveAt ?? "";
+      const oldestActiveMs = Date.parse(oldestActiveAt);
+      const oldestActiveAgeSeconds = Number.isFinite(oldestActiveMs)
+        ? Math.max(0, Math.floor((now - oldestActiveMs) / 1_000))
+        : 0;
+      const outcomes = deliveredInWindow + deadLetteredInWindow;
+      const deliverySuccessRatePercent = outcomes
+        ? Math.round((deliveredInWindow / outcomes) * 10_000) / 100
+        : null;
+      let status: OperatorAlertConnectorHealth["status"];
+      if (!connector.enabled) status = "disabled";
+      else if (!connector.runtimeBound) status = "unbound";
+      else if (unresolvedDeadLetters > 0 || oldestActiveAgeSeconds > CRITICAL_DELIVERY_AGE_SECONDS) status = "critical";
+      else if (deadLetteredInWindow > 0 || retryEventsInWindow > 0
+        || oldestActiveAgeSeconds > DELIVERY_SLO_SECONDS) status = "degraded";
+      else if (activeDeliveries > 0 || deliveredInWindow > 0) status = "healthy";
+      else status = "idle";
+      return {
+        connectorId: row.id,
+        connectorName: row.name,
+        enabled: connector.enabled,
+        runtimeBound: connector.runtimeBound,
+        status,
+        activeDeliveries,
+        unresolvedDeadLetters,
+        deliveredInWindow,
+        deadLetteredInWindow,
+        retryEventsInWindow,
+        deliverySuccessRatePercent,
+        oldestActiveAt,
+        oldestActiveAgeSeconds,
+        lastDeliveredAt: eventAggregate?.lastDeliveredAt ?? "",
+        lastDeadLetterAt: eventAggregate?.lastDeadLetterAt ?? "",
+        windowStartedAt,
+        windowSeconds: HEALTH_WINDOW_SECONDS,
+        deliverySloSeconds: DELIVERY_SLO_SECONDS,
+        privacyClassification: "operational_aggregate" as const
+      };
+    });
+  }
+
+  counts(now = Date.now()): {
     operatorAlertConnectors: number;
     enabledOperatorAlertConnectors: number;
     boundOperatorAlertConnectors: number;
+    idleOperatorAlertConnectors: number;
+    healthyOperatorAlertConnectors: number;
+    degradedOperatorAlertConnectors: number;
+    criticalOperatorAlertConnectors: number;
+    unboundOperatorAlertConnectors: number;
     pendingOperatorAlertConnectorDeliveries: number;
     deliveredOperatorAlertConnectorDeliveries: number;
     deadLetterOperatorAlertConnectorDeliveries: number;
@@ -587,27 +965,39 @@ export class OperatorAlertConnectorRepository {
        FROM operator_alert_connector_deliveries WHERE tenant_id = ?`,
       scope.tenantId
     );
+    const health = this.health(now);
     return {
       operatorAlertConnectors: connectors.length,
       enabledOperatorAlertConnectors: connectors.filter((item) => item.enabled === 1).length,
       boundOperatorAlertConnectors: connectors.filter((item) => item.enabled === 1
         && Boolean(item.endpointBindingFingerprint)
         && this.availableBindings[item.endpointReference] === item.endpointBindingFingerprint).length,
+      idleOperatorAlertConnectors: health.filter((item) => item.status === "idle").length,
+      healthyOperatorAlertConnectors: health.filter((item) => item.status === "healthy").length,
+      degradedOperatorAlertConnectors: health.filter((item) => item.status === "degraded").length,
+      criticalOperatorAlertConnectors: health.filter((item) => item.status === "critical").length,
+      unboundOperatorAlertConnectors: health.filter((item) => item.status === "unbound").length,
       pendingOperatorAlertConnectorDeliveries: Number(deliveries?.pending ?? 0),
       deliveredOperatorAlertConnectorDeliveries: Number(deliveries?.delivered ?? 0),
       deadLetterOperatorAlertConnectorDeliveries: Number(deliveries?.deadLetter ?? 0)
     };
   }
 
-  snapshot(): Record<string, unknown> {
+  snapshot(now = Date.now()): Record<string, unknown> {
     return {
       destinationsDeploymentOwned: true,
       rawEndpointsStored: false,
       signingSecretsStored: false,
       mutationAuthority: false,
+      governedManualReplay: true,
+      replayRetainsDeliveryIdentity: true,
+      maximumManualReplays: MAXIMUM_MANUAL_REPLAYS,
+      deliverySloSeconds: DELIVERY_SLO_SECONDS,
+      healthWindowSeconds: HEALTH_WINDOW_SECONDS,
       registryReferences: Object.keys(this.availableBindings).sort(),
-      counts: this.counts(),
+      counts: this.counts(now),
       connectors: this.list(),
+      health: this.health(now),
       deliveries: this.receipts(200)
     };
   }

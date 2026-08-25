@@ -183,6 +183,19 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
       body: "{}"
     });
     assert.equal(deniedAlertMutation.status, 403);
+    const deniedAlertReplay = await fetch(`${baseUrl}/api/v1/admin/alerts/connector-deliveries/alert_connector_delivery_missing/retry`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: JSON.stringify({
+        reasonCode: "operator_verified_retry",
+        confirmation: "RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY"
+      })
+    });
+    assert.equal(deniedAlertReplay.status, 403);
     const readonlyIdentityProposal = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
       method: "POST",
       headers: {
@@ -244,6 +257,20 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     });
     assert.equal(permittedAlertMutation.status, 400);
     assert.equal((await permittedAlertMutation.json() as { error: string }).error, "operator_alert_confirmation_required");
+    const permittedAlertReplay = await fetch(`${baseUrl}/api/v1/admin/alerts/connector-deliveries/alert_connector_delivery_missing/retry`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: JSON.stringify({
+        reasonCode: "operator_verified_retry",
+        confirmation: "RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY"
+      })
+    });
+    assert.equal(permittedAlertReplay.status, 404);
+    assert.equal((await permittedAlertReplay.json() as { error: string }).error, "operator_alert_connector_not_found");
     const permittedWorkerMutation = await fetch(`${baseUrl}/api/v1/admin/workers/schedules/background_schedule_missing`, {
       method: "PATCH",
       headers: {

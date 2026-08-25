@@ -2756,5 +2756,68 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       BEFORE DELETE ON background_worker_deployment_events
       BEGIN SELECT RAISE(ABORT, 'background worker deployment events are append-only'); END;
     `
+  },
+  {
+    version: 40,
+    name: "governed_operator_alert_connector_recovery",
+    sql: `
+      DROP TRIGGER operator_alert_connector_deliveries_update_guard;
+      CREATE TRIGGER operator_alert_connector_deliveries_update_guard
+      BEFORE UPDATE ON operator_alert_connector_deliveries
+      WHEN NOT (
+        NEW.id = OLD.id
+        AND NEW.tenant_id = OLD.tenant_id
+        AND NEW.connector_id = OLD.connector_id
+        AND NEW.incident_id = OLD.incident_id
+        AND NEW.event_id = OLD.event_id
+        AND NEW.endpoint_reference = OLD.endpoint_reference
+        AND NEW.endpoint_binding_fingerprint = OLD.endpoint_binding_fingerprint
+        AND NEW.payload_json = OLD.payload_json
+        AND NEW.payload_hash = OLD.payload_hash
+        AND NEW.idempotency_key_hash = OLD.idempotency_key_hash
+        AND NEW.privacy_classification = OLD.privacy_classification
+        AND NEW.created_at = OLD.created_at
+        AND NEW.updated_at >= OLD.updated_at
+        AND (
+          (NEW.state = 'leased'
+            AND OLD.state IN ('pending', 'retry_wait', 'leased')
+            AND NEW.attempt_count = OLD.attempt_count + 1
+            AND NEW.lease_capability_hash <> '' AND NEW.lease_expires_at <> ''
+            AND NEW.next_attempt_at = '' AND NEW.last_error_code = ''
+            AND NEW.last_http_status = 0 AND NEW.delivered_at = '')
+          OR (NEW.state = 'retry_wait'
+            AND OLD.state = 'leased' AND NEW.attempt_count = OLD.attempt_count
+            AND NEW.attempt_count BETWEEN 1 AND 11
+            AND NEW.lease_capability_hash = '' AND NEW.lease_expires_at = ''
+            AND NEW.next_attempt_at <> '' AND NEW.last_error_code <> ''
+            AND NEW.delivered_at = '')
+          OR (NEW.state = 'delivered'
+            AND OLD.state = 'leased' AND NEW.attempt_count = OLD.attempt_count
+            AND NEW.attempt_count BETWEEN 1 AND 12
+            AND NEW.lease_capability_hash = '' AND NEW.lease_expires_at = ''
+            AND NEW.next_attempt_at = '' AND NEW.last_error_code = ''
+            AND NEW.last_http_status BETWEEN 200 AND 299
+            AND NEW.delivered_at <> '')
+          OR (NEW.state = 'dead_letter'
+            AND OLD.state = 'leased' AND NEW.attempt_count = OLD.attempt_count
+            AND NEW.attempt_count BETWEEN 1 AND 12
+            AND NEW.lease_capability_hash = '' AND NEW.lease_expires_at = ''
+            AND NEW.next_attempt_at = '' AND NEW.last_error_code <> ''
+            AND NEW.delivered_at = '')
+          OR (NEW.state = 'cancelled'
+            AND OLD.state IN ('pending', 'leased', 'retry_wait')
+            AND NEW.attempt_count = OLD.attempt_count
+            AND NEW.lease_capability_hash = '' AND NEW.lease_expires_at = ''
+            AND NEW.next_attempt_at = '' AND NEW.last_error_code <> ''
+            AND NEW.delivered_at = '')
+          OR (NEW.state = 'pending'
+            AND OLD.state = 'dead_letter' AND NEW.attempt_count = 0
+            AND NEW.lease_capability_hash = '' AND NEW.lease_expires_at = ''
+            AND NEW.next_attempt_at = '' AND NEW.last_error_code = ''
+            AND NEW.last_http_status = 0 AND NEW.delivered_at = '')
+        )
+      )
+      BEGIN SELECT RAISE(ABORT, 'operator alert connector delivery transition is invalid'); END;
+    `
   }
 ]);

@@ -606,8 +606,25 @@ binding matches the current registry. Reusing a reference for a new destination
 therefore requires an explicit admin re-save that cancels outstanding rows;
 historical alerts cannot silently follow it. This remains a single webhook
 adapter with environment-backed secrets. Managed secret retrieval, DNS/IP
-egress enforcement, email/pager providers, manual replay, PostgreSQL/fleet
-leases, and independent delivery monitoring remain deployment work.
+egress enforcement, email/pager providers, PostgreSQL/fleet leases, and
+independent delivery monitoring remain deployment work.
+
+Yoink 0.43.0 adds a narrow recovery transition rather than a generic resend
+primitive. Migration 40 makes delivery identity, payload, idempotency key,
+binding, privacy class, and creation evidence immutable across every state
+change. An `alert.manage` operator can reset only an exact dead letter, using an
+allowlisted reason and explicit confirmation, while the connector remains
+enabled and bound to the same deployment fingerprint. The same delivery ID is
+reused, three manual cycles are the lifetime maximum, and every replay is
+appended to delivery plus audit/outbox history. The worker also converts an
+expired twelfth-attempt lease to a replayable dead letter.
+
+A separate read projection derives connector state and a five-minute delivery
+SLO from a rolling 24-hour window of sanitized receipt events. Current backlog,
+unresolved dead letters, terminal outcomes, retries, age, and success rate are
+visible; endpoints, bindings, payloads, response bodies, identities, secrets,
+and capabilities are not. This is local operational evidence, not an external
+monitoring or paging service, and it cannot affect retailer execution.
 
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds

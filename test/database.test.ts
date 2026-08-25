@@ -1361,7 +1361,7 @@ test("migration 37 adds the witness-refresh task kind without losing durable wor
   }
 });
 
-test("migrations 38 and 39 preserve heartbeat history while advancing attestation and adding alert connectors", () => {
+test("migrations 38 through 40 preserve heartbeat history and harden governed alert recovery", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-worker-attestation-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -1396,6 +1396,9 @@ test("migrations 38 and 39 preserve heartbeat history while advancing attestatio
       assert.equal(upgraded.get<{ count: number }>(
         "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 39 AND name = 'durable_operator_alert_connectors'"
       )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 40 AND name = 'governed_operator_alert_connector_recovery'"
+      )?.count, 1);
       assert.equal(upgraded.get<{ deploymentFingerprint: string }>(
         `SELECT deployment_fingerprint AS deploymentFingerprint
          FROM background_worker_heartbeats WHERE worker_id = 'background_worker_upgrade_38'`
@@ -1409,6 +1412,9 @@ test("migrations 38 and 39 preserve heartbeat history while advancing attestatio
          AND name IN ('operator_alert_connectors', 'operator_alert_connector_deliveries',
                       'operator_alert_connector_delivery_events')`
       )?.count, 3);
+      assert.match(upgraded.get<{ sql: string }>(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'operator_alert_connector_deliveries_update_guard'"
+      )?.sql ?? "", /OLD\.state = 'dead_letter'.*NEW\.state = 'pending'|NEW\.state = 'pending'[\s\S]*OLD\.state = 'dead_letter'/);
       assert.throws(() => upgraded.run(
         `INSERT INTO background_worker_deployment_expectations(
            id, contract_version, desired_mode, runtime_version, deployment_fingerprint,

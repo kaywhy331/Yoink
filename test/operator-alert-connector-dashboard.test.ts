@@ -6,7 +6,12 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
+import { AMAZON_OBSERVER_VERSION, type RetailerAdapterDiagnosticInput } from "../packages/contracts/src/index.js";
+import { AdapterDiagnosticRepository } from "../packages/database/src/adapter-diagnostic-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { DeviceRepository } from "../packages/database/src/device-repository.js";
+import { OperatorAlertRepository } from "../packages/database/src/operator-alert-repository.js";
+import { OperatorAlertConnectorDispatchService } from "../packages/engine/src/operator-alert-connector-dispatch.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -27,6 +32,43 @@ async function eventually(assertion: () => void, attempts = 100): Promise<void> 
     }
   }
   throw lastError;
+}
+
+function connectorDiagnostic(observedAt: number): RetailerAdapterDiagnosticInput {
+  return {
+    contractVersion: 1,
+    observedAt: new Date(observedAt).toISOString(),
+    retailerId: "amazon",
+    retailerSku: "B0FB21526X",
+    adapterVersion: AMAZON_OBSERVER_VERSION,
+    operation: "observe",
+    outcome: "failed",
+    failureStage: "offer_binding",
+    reasonCode: "offer_binding_ambiguous",
+    attemptCount: 1,
+    domChanged: false,
+    layout: {
+      schemaVersion: 1,
+      pageKind: "product",
+      scopeKind: "accordion",
+      sellerShape: "legacy",
+      fulfillmentShape: "shipping",
+      addControlCount: 1,
+      genericAddIntentCount: 1,
+      scopedControlCount: 0,
+      explicitSkuInputCount: 2,
+      exactSkuInputCount: 2,
+      variationSkuCount: 0,
+      canonicalOfferInputCount: 2,
+      canonicalOfferDistinctCount: 1,
+      alternateOfferInputCount: 1,
+      alternateOfferDistinctCount: 1,
+      priceCandidateCount: 1,
+      quantityControlCount: 0,
+      securityChallenge: false,
+      interactiveBlock: ""
+    }
+  };
 }
 
 test("the Alerts workspace binds only an opaque deployment connector reference", async () => {
@@ -60,6 +102,7 @@ test("the Alerts workspace binds only an opaque deployment connector reference",
   });
   Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
   Object.defineProperty(browser, "scrollTo", { configurable: true, value: () => undefined });
+  Object.defineProperty(browser, "confirm", { configurable: true, value: () => true });
   Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
     configurable: true,
     value() { this.open = true; }
@@ -92,10 +135,56 @@ test("the Alerts workspace binds only an opaque deployment connector reference",
     )?.count, 1));
     await eventually(() => assert.match(
       browser.document.querySelector("#operatorAlertConnectorList")?.textContent ?? "",
-      /runtime bound/
+      /idle/
     ));
+    assert.match(browser.document.querySelector("#operatorAlertConnectorList")?.textContent ?? "", /5m SLO/);
     assert.equal(JSON.stringify(db.all("SELECT * FROM operator_alert_connectors")).includes("https://"), false);
     assert.equal(JSON.stringify(db.all("SELECT * FROM operator_alert_connectors")).toLocaleLowerCase().includes("secret"), false);
+
+    const at = Date.now() - 5_000;
+    const devices = new DeviceRepository(db);
+    const pairing = devices.createPairingCode(at);
+    const device = devices.pair({ pairingCode: pairing.code }, at + 100);
+    const diagnostics = new AdapterDiagnosticRepository(db);
+    diagnostics.record(device.id, connectorDiagnostic(at + 200), at + 250);
+    new OperatorAlertRepository(db, { ops_primary: "a".repeat(64) }).reconcileAdapterRepairs(
+      diagnostics.listRepairQueue(),
+      "request_dashboard_connector_dead_letter_001",
+      at + 300
+    );
+    await new OperatorAlertConnectorDispatchService(db, {
+      definitions: [{
+        reference: "ops_primary",
+        endpoint: "https://alerts.example.com/v1/yoink",
+        signingSecretEnvironment: "YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_OPS_PRIMARY",
+        bindingFingerprint: "a".repeat(64)
+      }],
+      bindings: { ops_primary: "a".repeat(64) },
+      fingerprint: "b".repeat(64)
+    }, {
+      async deliver() {
+        return { disposition: "dead_letter", reasonCode: "webhook_rejected", httpStatus: 400 };
+      }
+    }).execute(at + 400);
+    (browser.document.querySelector("[data-operator-alert-connector-edit]") as HTMLButtonElement).click();
+    form.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
+    await eventually(() => assert.match(
+      browser.document.querySelector("#operatorAlertConnectorDeliveryList")?.textContent ?? "",
+      /Replay once/
+    ));
+    assert.match(browser.document.querySelector("#operatorAlertConnectorList")?.textContent ?? "", /critical/);
+    (browser.document.querySelector("[data-operator-alert-connector-retry]") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(db.get<{ state: string }>(
+      "SELECT state FROM operator_alert_connector_deliveries"
+    )?.state, "pending"));
+    await eventually(() => {
+      const deliveryText = browser.document.querySelector("#operatorAlertConnectorDeliveryList")?.textContent ?? "";
+      assert.match(deliveryText, /pending/);
+      assert.doesNotMatch(deliveryText, /Replay once/);
+    });
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM operator_alert_connector_delivery_events WHERE reason_code = 'operator_manual_replay'"
+    )?.count, 1);
   } finally {
     browser.close();
     server.close();

@@ -201,7 +201,7 @@
         <div class="card-list" id="operatorAlertRuleList"></div>
       </section>
       <section class="panel operator-alert-panel">
-        <div class="panel-heading"><div><p class="eyebrow">Deployment-owned destinations</p><h2>External connectors</h2><p>Admins bind only opaque references. HTTPS endpoints and HMAC signing secrets come from the reviewed worker deployment and are never stored in the database or accepted by this UI.</p></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">Deployment-owned destinations</p><h2>External connectors</h2><p>Admins bind only opaque references. A sanitized 24-hour health projection tracks the five-minute delivery SLO; HTTPS endpoints and HMAC signing secrets remain solely in the reviewed worker deployment.</p></div></div>
         <div class="card-list" id="operatorAlertConnectorList"></div>
       </section>
       <section class="panel operator-alert-panel">
@@ -209,7 +209,7 @@
         <div class="card-list" id="operatorAlertDeliveryList"></div>
       </section>
       <section class="panel operator-alert-panel">
-        <div class="panel-heading"><div><p class="eyebrow">Bounded retries</p><h2>Connector dispatch</h2><p>Every attempt uses an expiring lease capability and records an append-only receipt. Redirects and permanent HTTP failures dead-letter without exposing response bodies.</p></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">Bounded recovery</p><h2>Connector dispatch</h2><p>Every attempt uses an expiring lease capability and records an append-only receipt. An authorized operator may replay an eligible dead letter at most three times using the exact original identity, payload, and binding.</p></div></div>
         <div class="card-list" id="operatorAlertConnectorDeliveryList"></div>
       </section>
     </section>

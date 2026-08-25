@@ -1,6 +1,6 @@
 # Background worker operations
 
-Yoink 0.42 retains two safe SQLite worker layouts. Embedded mode is the
+Yoink 0.43 retains two safe SQLite worker layouts. Embedded mode is the
 zero-configuration local default. External mode runs the same closed handler
 registry in a separately supervised process. The registry contains six closed
 task families, including durable TrackaLacker evaluation and observer-recipe
@@ -101,6 +101,13 @@ explicitly re-saves the connector and cancels outstanding work. See
 [operator alert webhook connectors](OPERATOR_ALERT_CONNECTORS.md) for exact
 configuration, payload, HMAC, retry, dead-letter, and recovery rules.
 
+Before leasing new connector work, the worker converts any matching expired
+twelfth-attempt lease to a dead letter and appends the fixed
+`lease_attempts_exhausted` receipt. This prevents a process loss at the final
+claim from stranding work outside the governed admin replay path. Manual replay
+itself remains an API/admin operation; the worker receives only the unchanged
+exact row afterward.
+
 ## Signal inbox behavior
 
 The authenticated Chrome signal endpoint stores `signal_event_v1` and an
@@ -164,6 +171,9 @@ recovery, and key-separation requirements.
 - `durableOperatorAlertConnectorDispatch` is `true`, while
   `operatorAlertConnectorRegistryConfigured` reports whether a public registry
   is present without exposing its endpoints or bindings;
+- `governedOperatorAlertConnectorReplay` and
+  `operatorAlertConnectorHealthProjection` are `true`; replay still requires
+  `alert.manage`, exact eligibility, and explicit confirmation;
 - `productionWorkerFleetReady` remains `false`.
 
 The admin view considers a heartbeat online for 30 seconds. It shows only

@@ -35,6 +35,7 @@ import {
   type PurchaseIntentCreateInput,
   type OperatorAlertAcknowledgeInput,
   type OperatorAlertConnectorInput,
+  type OperatorAlertConnectorReplayInput,
   type OperatorAlertResolveInput,
   type OperatorAlertRuleInput,
   type SpendPolicyUpdateInput,
@@ -441,6 +442,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const catalogIdentityOperationDecisionMatch = /^\/api\/v1\/admin\/catalog\/identity-operations\/([A-Za-z0-9_-]{3,120})\/decision$/.exec(requestUrl.pathname);
       const operatorAlertRuleMatch = /^\/api\/v1\/alerts\/rules\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
       const operatorAlertConnectorMatch = /^\/api\/v1\/alerts\/connectors\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
+      const operatorAlertConnectorDeliveryRetryMatch = /^\/api\/v1\/alerts\/connector-deliveries\/([A-Za-z0-9_-]{3,120})\/retry$/.exec(requestUrl.pathname);
       const operatorAlertIncidentActionMatch = /^\/api\/v1\/alerts\/incidents\/([A-Za-z0-9_-]{3,120})\/(acknowledge|resolve)$/.exec(requestUrl.pathname);
       const adminChangeRequestDetailMatch = /^\/api\/v1\/change-requests\/(admin_change_[a-f0-9]{32})$/.exec(requestUrl.pathname);
       const adminChangeRequestDecisionMatch = /^\/api\/v1\/change-requests\/(admin_change_[a-f0-9]{32})\/decision$/.exec(requestUrl.pathname);
@@ -485,6 +487,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           signalEvaluationOutsideDeviceRequest: true,
           durableObserverRecipeWitnessRefresh: true,
           durableOperatorAlertConnectorDispatch: true,
+          governedOperatorAlertConnectorReplay: true,
+          operatorAlertConnectorHealthProjection: true,
           operatorAlertConnectorRegistryConfigured: Object.keys(dependencies.operatorAlertConnectorBindings ?? {}).length > 0,
           observerRecipeWitnessRefreshConfigured: dependencies.observerRecipeWitness !== undefined,
           standaloneWitnessRefreshLoadsSigningKeys: false,
@@ -1256,6 +1260,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             durableAdapterDiagnosticDelivery: true,
             privacyClassifiedOperatorAlerts: true,
             durableOperatorAlertConnectors: true,
+            governedOperatorAlertConnectorReplay: true,
+            operatorAlertConnectorHealthProjection: true,
             operatorAlertConnectorRegistryConfigured: Object.keys(dependencies.operatorAlertConnectorBindings ?? {}).length > 0,
             privacyBoundedOperationalTelemetry: true,
             durableBackgroundTasks: true,
@@ -1478,6 +1484,18 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const body = await readJson(request);
         json(response, 200, {
           connector: operatorAlerts.saveConnector(body as unknown as OperatorAlertConnectorInput, operatorAlertConnectorMatch[1] ?? "")
+        });
+        return;
+      }
+
+      if (request.method === "POST" && operatorAlertConnectorDeliveryRetryMatch) {
+        const body = await readJson(request);
+        json(response, 202, {
+          delivery: operatorAlerts.replayConnectorDelivery(
+            operatorAlertConnectorDeliveryRetryMatch[1] ?? "",
+            body as unknown as OperatorAlertConnectorReplayInput,
+            correlationId
+          )
         });
         return;
       }

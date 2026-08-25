@@ -33,6 +33,7 @@ export class OperatorAlertConnectorDispatchService {
       connectorDeliveriesDeadLettered: 0
     };
     if (!this.transport || !this.references.length) return result;
+    result.connectorDeliveriesDeadLettered += this.repository.expireExhaustedLeases(this.bindings, now);
     for (let index = 0; index < MAXIMUM_DELIVERIES_PER_RUN; index += 1) {
       const lease = this.repository.leaseNext(this.bindings, 60, now);
       if (!lease) break;

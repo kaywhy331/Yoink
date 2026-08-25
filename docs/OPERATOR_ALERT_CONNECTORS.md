@@ -1,9 +1,10 @@
 # Operator alert webhook connectors
 
 Yoink 0.42 adds durable external delivery for the existing privacy-classified
-operator alert family. It does not send product notifications, page content,
-exact SKUs, account data, or purchase instructions, and it has no retailer
-mutation authority.
+operator alert family. Version 0.43 adds governed dead-letter replay and a
+sanitized health/SLO projection. Neither release sends product notifications,
+page content, exact SKUs, account data, or purchase instructions, and neither
+has retailer mutation authority.
 
 ## Trust boundary
 
@@ -83,20 +84,63 @@ capability that is stored only as a hash. HTTP 2xx completes delivery; 408,
 backoff. Redirects and other HTTP failures dead-letter immediately. Attempts
 stop after 12 claims.
 
-Queued, leased, retry, delivered, dead-letter, cancelled, and expired-lease
-reclaim transitions have append-only receipts. Response bodies and exception
-text are discarded. Admin Alerts shows binding health and bounded delivery
-metadata without capability material.
+Queued, leased, retry, delivered, dead-letter, cancelled, expired-lease reclaim,
+and operator replay transitions have append-only receipts. Response bodies and
+exception text are discarded. Migration 40 also makes the database reject any
+delivery transition that changes the tenant, connector, incident/event,
+endpoint binding, payload, payload hash, idempotency identity, privacy class, or
+creation evidence. A twelfth claim lost to process failure becomes a dead
+letter after its lease expires instead of remaining stranded.
+
+## Governed manual replay
+
+An `alert.manage` operator may replay only a current dead letter. The request
+contains exactly one allowlisted operational reason and
+`RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY` confirmation. Replay is rejected when
+the connector is disabled, its saved configuration changed, its deployment
+binding is unavailable or drifted, the delivery is not dead-lettered, another
+request already moved it, it belongs to another tenant, or three prior manual
+replays exist.
+
+An accepted replay resets only mutable attempt state. It reuses the original
+delivery ID, event ID, stable payload bytes and hash, receiver idempotency
+identity, endpoint reference, and exact binding fingerprint. The operator
+cannot edit the message or select a new destination. Each replay and reason is
+written to both the append-only delivery event chain and audit/outbox history.
+Receivers must continue to deduplicate on `X-Yoink-Delivery-ID` because a
+successful response may have been lost before the original dead letter.
+
+## Health and delivery SLO
+
+Admin Alerts derives connector state from operational receipts only:
+
+- `disabled` and `unbound` describe configuration gates;
+- `idle` is a bound connector with no current or 24-hour activity;
+- `healthy` has only on-time active work or accepted delivery;
+- `degraded` has a retry, recovered dead letter, or active work older than the
+  five-minute target in the rolling 24-hour window; and
+- `critical` has an unresolved dead letter or active work older than 15
+  minutes.
+
+The projection exposes active/dead-letter counts, accepted and dead-letter
+outcomes, retry count, oldest-active age, last terminal timestamps, and a
+receipt-derived success percentage. It exposes no payload, endpoint, binding
+fingerprint, secret, response body, capability, SKU, URL, or user identity. It
+is an in-application operational projection, not an independent external SLO
+monitor.
 
 To recover:
 
 1. fix the reviewed endpoint, signing secret, receiver, or egress policy;
 2. restart API and worker with the same package and public registry;
 3. require healthy worker deployment attestation;
-4. if the public binding changed, explicitly re-save the admin connector; and
-5. create a new qualifying alert event to verify delivery. A dedicated manual
-   dead-letter replay control is intentionally not yet shipped.
+4. if the public binding changed, explicitly re-save the admin connector; old
+   work cannot be retargeted and must remain cancelled/dead-lettered;
+5. for an unchanged exact binding, use **Replay once** on the eligible dead
+   letter and verify the receiver deduplicates the stable delivery ID; and
+6. confirm the 24-hour projection returns from critical to degraded and then
+   healthy or idle as retained receipt history advances.
 
 Email, pager/on-call providers, a managed secret provider, DNS/IP egress
-enforcement, manual per-delivery replay, production retention jobs, and
-independent delivery SLO monitoring remain open.
+enforcement, production connector-retention jobs, and independent delivery SLO
+monitoring remain open.
