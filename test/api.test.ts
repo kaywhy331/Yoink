@@ -175,13 +175,21 @@ test("the loopback API serves the control center and processes a dry-run signal"
       created: boolean;
       purchaseIntent: {
         id: string;
-        intentPolicy: { revision: number; actionCeiling: string; maxAllInCents: number };
+        intentPolicy: {
+          revision: number;
+          actionCeiling: string;
+          decisionMode: string;
+          maxSignalAgeSeconds: number;
+          maxAllInCents: number;
+        };
         targets: Array<Record<string, unknown>>;
       };
     };
     assert.equal(createdPurchaseIntent.created, true);
     assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.revision, 1);
     assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.actionCeiling, "notify");
+    assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.decisionMode, "purchase_intent");
+    assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.maxSignalAgeSeconds, 120);
     assert.equal(createdPurchaseIntent.purchaseIntent.intentPolicy.maxAllInCents, 6999);
     const intentId = createdPurchaseIntent.purchaseIntent.id;
     const target = createdPurchaseIntent.purchaseIntent.targets[0];
@@ -242,8 +250,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
         }],
         policy: {
           expectedRevision: 1,
-          maxAllInCents: 16_000,
+          maxAllInCents: 19_000,
           actionCeiling: "add_to_cart",
+          decisionMode: "purchase_intent",
+          maxSignalAgeSeconds: 120,
           substitutionPolicy: "exact_only",
           cooldownSeconds: 60,
           expiresAt: new Date(Date.now() + 86_400_000).toISOString()
@@ -251,7 +261,12 @@ test("the loopback API serves the control center and processes a dry-run signal"
       })
     });
     assert.equal(updateIntent.status, 200);
-    assert.equal((await updateIntent.json() as { purchaseIntent: { intentPolicy: { revision: number; maxAllInCents: number } } }).purchaseIntent.intentPolicy.revision, 2);
+    const updatedIntent = await updateIntent.json() as {
+      purchaseIntent: { intentPolicy: { revision: number; maxAllInCents: number; decisionMode: string } };
+    };
+    assert.equal(updatedIntent.purchaseIntent.intentPolicy.revision, 2);
+    assert.equal(updatedIntent.purchaseIntent.intentPolicy.maxAllInCents, 19_000);
+    assert.equal(updatedIntent.purchaseIntent.intentPolicy.decisionMode, "purchase_intent");
     const staleUpdate = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(intentId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Origin: baseUrl },

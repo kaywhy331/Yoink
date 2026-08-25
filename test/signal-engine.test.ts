@@ -145,6 +145,174 @@ test("an exact under-MSRP signal creates one mission and a bounded shadow action
   }
 });
 
+test("a reviewed cart plan creates a bounded job without any signal strategy", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const listingId = db.get<{ id: string }>(
+      "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+    )?.id;
+    assert.ok(listingId);
+    engine.control.replaceStrategies([], NOW);
+    const configured = engine.control.createConfiguredMission({
+      contractVersion: 1,
+      listingId,
+      targetQuantity: 2,
+      maxUnitPriceCents: 7000,
+      maxAllInCents: 18_680,
+      actionCeiling: "add_to_cart",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 900,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, NOW);
+    assert.equal(engine.control.currentPurchaseIntentPolicy(configured.mission.id, NOW).decisionMode, "purchase_intent");
+
+    const result = engine.process(trackalackerSignal({ externalEventId: "direct-plan-cart" }), NOW);
+    assert.equal(result.decision, "qualified");
+    assert.equal(result.strategyId, "");
+    assert.equal(result.actionJobState, "shadow_ready");
+    const storedJob = db.get<{
+      action: string;
+      quantity: number;
+      decision_source: string;
+      strategy_id: string | null;
+      strategy_revision: number | null;
+    }>(`SELECT action, quantity, decision_source, strategy_id, strategy_revision
+        FROM action_jobs WHERE id = ?`, result.actionJobId);
+    assert.deepEqual({ ...storedJob }, {
+      action: "add_to_cart",
+      quantity: 1,
+      decision_source: "purchase_intent",
+      strategy_id: null,
+      strategy_revision: null
+    });
+    assert.equal(db.get<{ decision_source: string }>(
+      "SELECT decision_source FROM mission_decisions WHERE mission_id = ?",
+      configured.mission.id
+    )?.decision_source, "purchase_intent");
+  } finally {
+    db.close();
+  }
+});
+
+test("a reviewed notification plan cannot be widened by an add strategy", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const listingId = db.get<{ id: string }>(
+      "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+    )?.id;
+    assert.ok(listingId);
+    engine.control.createConfiguredMission({
+      contractVersion: 1,
+      listingId,
+      targetQuantity: 1,
+      maxUnitPriceCents: 7000,
+      maxAllInCents: 7000,
+      actionCeiling: "notify",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, NOW);
+
+    const result = engine.process(trackalackerSignal({ externalEventId: "direct-plan-notify" }), NOW);
+    assert.equal(result.decision, "qualified");
+    assert.equal(result.strategyId, "");
+    assert.equal(result.actionJobState, "notify_only");
+    const storedJob = db.get<{ action: string; decision_source: string; strategy_id: string | null }>(
+      "SELECT action, decision_source, strategy_id FROM action_jobs WHERE id = ?",
+      result.actionJobId
+    );
+    assert.deepEqual({ ...storedJob }, { action: "notify", decision_source: "purchase_intent", strategy_id: null });
+  } finally {
+    db.close();
+  }
+});
+
+test("an informational source cannot authorize a direct cart plan", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const listingId = db.get<{ id: string }>(
+      "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+    )?.id;
+    assert.ok(listingId);
+    engine.control.createConfiguredMission({
+      contractVersion: 1,
+      listingId,
+      targetQuantity: 1,
+      maxUnitPriceCents: 7000,
+      maxAllInCents: 10_840,
+      actionCeiling: "add_to_cart",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, NOW);
+    const result = engine.process(trackalackerSignal({
+      sourceConnectionId: "source_discord_local",
+      source: "discord",
+      externalEventId: "direct-plan-informational-source"
+    }), NOW);
+    assert.equal(result.decision, "untrusted_source");
+    assert.equal(result.actionJobState, "notify_only");
+    assert.equal(db.get<{ action: string }>(
+      "SELECT action FROM action_jobs WHERE id = ?",
+      result.actionJobId
+    )?.action, "notify");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM spend_reservations")?.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("a reviewed purchase plan rejects stale or seller-unverified evidence before creating a job", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const listingId = db.get<{ id: string }>(
+      "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+    )?.id;
+    assert.ok(listingId);
+    engine.control.createConfiguredMission({
+      contractVersion: 1,
+      listingId,
+      targetQuantity: 1,
+      maxUnitPriceCents: 7000,
+      maxAllInCents: 7000,
+      actionCeiling: "notify",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, NOW);
+    const stale = engine.process(trackalackerSignal({
+      externalEventId: "direct-plan-stale",
+      observedAt: new Date(NOW - 121_000).toISOString()
+    }), NOW);
+    assert.equal(stale.decision, "stale");
+    assert.equal(stale.actionJobId, "");
+    const sellerUnknown = engine.process(trackalackerSignal({
+      externalEventId: "direct-plan-seller-unknown",
+      offer: {
+        availability: "in_stock",
+        unitPriceCents: 6500,
+        currency: "USD",
+        sellerName: "",
+        sellerType: "unknown",
+        fulfillment: "shipping"
+      }
+    }), NOW + 1);
+    assert.equal(sellerUnknown.decision, "unmatched");
+    assert.equal(sellerUnknown.actionJobId, "");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
 test("transport duplicates do not create another incident or job", () => {
   const { db, engine } = seededEngine();
   try {

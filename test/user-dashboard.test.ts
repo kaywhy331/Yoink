@@ -36,6 +36,8 @@ test("guided dashboard setup does not create a plan before review and submits ex
   });
   const browser = dom.window;
   const posts: Array<Record<string, unknown>> = [];
+  const patches: Array<Record<string, unknown>> = [];
+  let created = false;
   const product = {
     variantId: "variant_dashboard_test",
     title: "Exact Dashboard Fixture",
@@ -69,10 +71,56 @@ test("guided dashboard setup does not create a plan before review and submits ex
     },
     walmartDraws: { latestScan: null, items: [] }
   };
+  const planSummary = {
+    id: "mission_dashboard_test",
+    variantId: product.variantId,
+    title: product.title,
+    status: "active",
+    targetQuantity: 2,
+    targetCount: 1,
+    enabledTargetCount: 1,
+    actionCeiling: "add_to_cart",
+    decisionMode: "purchase_intent",
+    maxAllInCents: 2000,
+    primaryRetailerName: "Target",
+    primaryRetailerSku: product.retailerSku,
+    primaryCurrentPriceCents: 798,
+    primaryMaxUnitPriceCents: 1000,
+    primaryFulfillment: "shipping"
+  };
+  const planDetail = {
+    ...planSummary,
+    intentPolicy: {
+      revision: 1,
+      maxAllInCents: 2000,
+      actionCeiling: "add_to_cart",
+      decisionMode: "purchase_intent",
+      maxSignalAgeSeconds: 120,
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 900,
+      expiresAt: ""
+    },
+    targets: [{
+      id: "mission_target_dashboard_test",
+      listingId: product.listingId,
+      retailerId: product.retailerId,
+      retailerName: product.retailerName,
+      retailerSku: product.retailerSku,
+      canonicalUrl: product.canonicalUrl,
+      executionSupported: true,
+      enabled: true,
+      maxUnitPriceCents: 1000,
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      currency: "USD",
+      lastObservedPriceCents: 798
+    }]
+  };
   const payloadFor = (path: string) => {
     if (path === "/api/v1/user/overview") return overview;
     if (path.startsWith("/api/v1/user/library")) return { items: [product] };
-    if (path.startsWith("/api/v1/user/purchase-intents")) return { items: [] };
+    if (path === "/api/v1/user/purchase-intents/mission_dashboard_test") return { purchaseIntent: planDetail };
+    if (path.startsWith("/api/v1/user/purchase-intents")) return { items: created ? [planSummary] : [] };
     if (path.startsWith("/api/v1/user/jobs")) return { items: [] };
     if (path.startsWith("/api/v1/user/catalog/proposals")) return { items: [] };
     return {};
@@ -82,7 +130,12 @@ test("guided dashboard setup does not create a plan before review and submits ex
     value: async (path: string, options: { method?: string; body?: string } = {}) => {
       if (options.method === "POST") {
         posts.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
+        created = true;
         return { ok: true, status: 201, json: async () => ({ created: true, purchaseIntent: {} }) };
+      }
+      if (options.method === "PATCH") {
+        patches.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
+        return { ok: true, status: 200, json: async () => ({ purchaseIntent: planDetail }) };
       }
       return { ok: true, status: 200, json: async () => payloadFor(String(path)) };
     }
@@ -139,6 +192,36 @@ test("guided dashboard setup does not create a plan before review and submits ex
     });
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /checkout stays manual/));
+
+    await eventually(() => assert.ok(browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]')));
+    (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
+    const editDialog = browser.document.querySelector("#planDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal(editDialog.hasAttribute("open"), true));
+    assert.match(browser.document.querySelector("#planExecutionNote")?.textContent ?? "", /safety bound/);
+    const editForm = browser.document.querySelector("#planForm") as HTMLFormElement;
+    editForm.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
+    await eventually(() => assert.equal(patches.length, 1));
+    assert.deepEqual((patches[0]?.policy as Record<string, unknown>), {
+      expectedRevision: 1,
+      maxAllInCents: 2000,
+      actionCeiling: "add_to_cart",
+      decisionMode: "purchase_intent",
+      maxSignalAgeSeconds: 120,
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 900,
+      expiresAt: "",
+      changeReason: "Updated from the user purchase dashboard."
+    });
+    await eventually(() => assert.equal(editDialog.hasAttribute("open"), false));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /preferences saved/i));
+
+    planDetail.intentPolicy.decisionMode = "strategy";
+    planDetail.intentPolicy.actionCeiling = "add_to_cart";
+    (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(editDialog.hasAttribute("open"), true));
+    assert.equal((editForm.elements.namedItem("actionCeiling") as HTMLSelectElement).value, "notify");
+    assert.match(browser.document.querySelector("#planModeCopy")?.textContent ?? "", /converts it to a reviewed direct plan/i);
+    editDialog.close();
   } finally {
     browser.close();
   }

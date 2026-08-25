@@ -10,7 +10,7 @@ import { MIGRATIONS } from "../packages/database/src/migrations.js";
 test("initial migration creates the normalized graph and safe local defaults", () => {
   const db = new YoinkDatabase();
   try {
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 29);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 30);
     assert.equal(db.get<{ name: string }>("SELECT name FROM tenants WHERE id = ?", LOCAL_TENANT_ID)?.name, "Local");
     assert.equal(db.get<{ display_name: string }>("SELECT display_name FROM users WHERE id = ?", LOCAL_USER_ID)?.display_name, "Local user");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailers")?.count, 13);
@@ -86,7 +86,7 @@ test("a file database reopens idempotently", () => {
     const second = new YoinkDatabase(filePath);
     try {
       assert.equal(second.get<{ pause_reason: string }>("SELECT pause_reason FROM app_settings WHERE user_id = ?", LOCAL_USER_ID)?.pause_reason, "Preserved");
-      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 29);
+      assert.equal(second.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 30);
       second.assertIntegrity();
     } finally {
       second.close();
@@ -114,7 +114,7 @@ test("an existing 0.2 database upgrades transactionally to shadow observations a
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 29);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 30);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_shadow_observations")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_trials")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics")?.count, 0);
@@ -167,7 +167,7 @@ test("migration 11 closes any inherited Best Buy execution and qualification sta
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 29);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 30);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>("SELECT status FROM retailer_adapter_qualifications WHERE retailer_id = 'bestbuy'")?.status, "retired");
       assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name IN (
@@ -211,7 +211,7 @@ test("migration 19 retires Best Buy v2 qualification before the v4/v3 boundary",
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 29);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, 30);
       assert.equal(upgraded.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>(
         "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'bestbuy'"
@@ -675,6 +675,117 @@ test("migration 29 adds immutable external witness receipts without widening ret
       assert.equal(upgraded.get<{ execution_supported: number }>(
         "SELECT execution_supported FROM retailers WHERE id = 'bestbuy'"
       )?.execution_supported, 0);
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("migration 30 preserves strategy history and appends direct mode for reviewed user plans", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-mission-decision-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 29)) {
+      legacy.exec(migration.sql);
+      legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        "2026-08-24T00:00:00.000Z"
+      );
+    }
+    legacy.exec(`
+      INSERT INTO tenants(id, name, created_at)
+        VALUES ('tenant_upgrade_30', 'Upgrade 30', '2026-08-24T00:00:00.000Z');
+      INSERT INTO users(id, tenant_id, display_name, created_at)
+        VALUES ('user_upgrade_30', 'tenant_upgrade_30', 'Upgrade user', '2026-08-24T00:00:00.000Z');
+      INSERT INTO app_settings(user_id, actions_paused, pause_reason, execution_mode,
+        dedupe_window_seconds, affiliate_mode, tax_bps, store_allowances_json, updated_at)
+        VALUES ('user_upgrade_30', 1, 'Upgrade fixture', 'shadow', 300,
+          'prefer_fallback', 1200, '{"target":3000}', '2026-08-24T00:00:00.000Z');
+      INSERT INTO retailers(id, display_name, execution_supported, domains_json, created_at, updated_at)
+        VALUES ('target', 'Target', 1, '["target.com"]', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO product_families(id, title, brand, created_at, updated_at)
+        VALUES ('family_upgrade_30', 'Upgrade fixture', '', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+        VALUES ('variant_upgrade_30', 'family_upgrade_30', 'Upgrade fixture', '{}', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO listings(id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+        execution_supported, msrp_cents, currency, created_at, updated_at)
+        VALUES ('listing_upgrade_30', 'variant_upgrade_30', 'target', '93000030',
+          'https://www.target.com/p/-/A-93000030', 'in_stock', 1, 5000, 'USD',
+          '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO missions(id, tenant_id, user_id, variant_id, status, origin, target_quantity,
+        fulfilled_quantity, created_at, updated_at)
+        VALUES ('mission_upgrade_30', 'tenant_upgrade_30', 'user_upgrade_30', 'variant_upgrade_30',
+          'active', 'user_guided', 1, 0, '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO mission_targets(id, mission_id, listing_id, enabled, max_unit_price_cents,
+        currency, seller_policy, fulfillment, created_at, updated_at)
+        VALUES ('target_upgrade_30', 'mission_upgrade_30', 'listing_upgrade_30', 1, 5000,
+          'USD', 'first_party_only', 'shipping', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO mission_intent_revisions(id, tenant_id, user_id, mission_id, revision, quantity,
+        currency, max_all_in_cents, action_ceiling, substitution_policy, expires_at,
+        cooldown_seconds, target_policy_json, policy_hash, change_reason, created_by_actor_id, created_at)
+        VALUES ('intent_upgrade_30', 'tenant_upgrade_30', 'user_upgrade_30', 'mission_upgrade_30', 1, 1,
+          'USD', 9000, 'add_to_cart', 'exact_only', '', 0,
+          '[{"targetId":"target_upgrade_30","listingId":"listing_upgrade_30","retailerId":"target","enabled":true,"maxUnitPriceCents":5000,"sellerPolicy":"first_party_only","fulfillment":"shipping"}]',
+          'policy-upgrade-30', 'Reviewed in 0.28', 'user_upgrade_30', '2026-08-24T00:00:00.000Z');
+      INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+        VALUES ('variant_upgrade_30_unsafe', 'family_upgrade_30', 'Unsafe upgrade fixture', '{}',
+          '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO listings(id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+        execution_supported, msrp_cents, currency, created_at, updated_at)
+        VALUES ('listing_upgrade_30_unsafe', 'variant_upgrade_30_unsafe', 'target', '93000031',
+          'https://www.target.com/p/-/A-93000031', 'in_stock', 1, 5000, 'USD',
+          '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO missions(id, tenant_id, user_id, variant_id, status, origin, target_quantity,
+        fulfilled_quantity, created_at, updated_at)
+        VALUES ('mission_upgrade_30_unsafe', 'tenant_upgrade_30', 'user_upgrade_30', 'variant_upgrade_30_unsafe',
+          'active', 'user_guided', 1, 0, '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO mission_targets(id, mission_id, listing_id, enabled, max_unit_price_cents,
+        currency, seller_policy, fulfillment, created_at, updated_at)
+        VALUES ('target_upgrade_30_unsafe', 'mission_upgrade_30_unsafe', 'listing_upgrade_30_unsafe', 1, 5000,
+          'USD', 'allow_third_party', 'shipping', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+      INSERT INTO mission_intent_revisions(id, tenant_id, user_id, mission_id, revision, quantity,
+        currency, max_all_in_cents, action_ceiling, substitution_policy, expires_at,
+        cooldown_seconds, target_policy_json, policy_hash, change_reason, created_by_actor_id, created_at)
+        VALUES ('intent_upgrade_30_unsafe', 'tenant_upgrade_30', 'user_upgrade_30', 'mission_upgrade_30_unsafe', 1, 1,
+          'USD', 9000, 'add_to_cart', 'exact_only', '', 0,
+          '[{"targetId":"target_upgrade_30_unsafe","listingId":"listing_upgrade_30_unsafe","retailerId":"target","enabled":true,"maxUnitPriceCents":5000,"sellerPolicy":"allow_third_party","fulfillment":"shipping"}]',
+          'policy-upgrade-30-unsafe', 'Unsafe legacy edit', 'user_upgrade_30', '2026-08-24T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 30 AND name = 'mission_owned_purchase_decisions'"
+      )?.count, 1);
+      const revisions = upgraded.all<{ revision: number; decision_mode: string; max_signal_age_seconds: number }>(
+        `SELECT revision, decision_mode, max_signal_age_seconds
+         FROM mission_intent_revisions WHERE mission_id = 'mission_upgrade_30' ORDER BY revision`
+      ).map((row) => ({ ...row }));
+      assert.deepEqual(revisions, [
+        { revision: 1, decision_mode: "strategy", max_signal_age_seconds: 120 },
+        { revision: 2, decision_mode: "purchase_intent", max_signal_age_seconds: 120 }
+      ]);
+      assert.deepEqual(upgraded.all<{ revision: number; decision_mode: string }>(
+        `SELECT revision, decision_mode FROM mission_intent_revisions
+         WHERE mission_id = 'mission_upgrade_30_unsafe' ORDER BY revision`
+      ).map((row) => ({ ...row })), [
+        { revision: 1, decision_mode: "strategy" }
+      ]);
+      const missionDecisionColumns = upgraded.all<{ name: string }>("PRAGMA table_info(mission_decisions)").map((row) => row.name);
+      const actionJobColumns = upgraded.all<{ name: string }>("PRAGMA table_info(action_jobs)").map((row) => row.name);
+      assert.equal(missionDecisionColumns.includes("decision_source"), true);
+      assert.equal(actionJobColumns.includes("decision_source"), true);
+      assert.throws(
+        () => upgraded.run("UPDATE mission_intent_revisions SET decision_mode = 'strategy' WHERE id LIKE 'intent_revision_m30_%'"),
+        /append-only/
+      );
       upgraded.assertIntegrity();
     } finally {
       upgraded.close();

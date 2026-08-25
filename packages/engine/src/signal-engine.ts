@@ -10,7 +10,7 @@ import { ControlRepository } from "../../database/src/control-repository.js";
 import { YoinkDatabase } from "../../database/src/database.js";
 import { SignalRepository } from "../../database/src/signal-repository.js";
 import { normalizeSignal } from "../../domain/src/normalize.js";
-import { evaluateStrategies } from "../../domain/src/strategies.js";
+import { evaluatePurchaseIntent, evaluateStrategies } from "../../domain/src/strategies.js";
 
 function emptyResult(signalId: string, resolution: ResolutionResult): SignalProcessingResult {
   return {
@@ -145,7 +145,20 @@ export class SignalEngine {
       }
 
       const evaluationMission = missionCreated ? { ...mission, targetQuantity: 5 } : mission;
-      let evaluation = evaluateStrategies(this.control.listStrategies(), signal, listing, evaluationMission, now);
+      const intentPolicy = this.control.currentPurchaseIntentPolicy(mission.id, now);
+      let evaluation = intentPolicy.decisionMode === "purchase_intent"
+        ? evaluatePurchaseIntent(intentPolicy, signal, listing, evaluationMission, now)
+        : evaluateStrategies(this.control.listStrategies(), signal, listing, evaluationMission, now);
+      const directSourceRestricted = evaluation.decisionSource === "purchase_intent"
+        && evaluation.effectiveAction !== "notify"
+        && sourceConnection.trustLevel !== "trusted_exact";
+      if (directSourceRestricted) {
+        evaluation = {
+          ...evaluation,
+          effectiveAction: "notify",
+          reason: "The exact offer matched the reviewed plan, but this source is informational and cannot authorize a retailer action."
+        };
+      }
       if (missionCreated && evaluation.strategy) {
         this.control.setMissionTargetQuantity(mission.id, evaluation.effectiveQuantity, now);
         mission = { ...mission, targetQuantity: evaluation.effectiveQuantity };
@@ -181,7 +194,9 @@ export class SignalEngine {
         };
       }
 
-      let outcome = evaluation.state === "needs_price" ? "needs_price" : "qualified";
+      let outcome = directSourceRestricted
+        ? "untrusted_source"
+        : evaluation.state === "needs_price" ? "needs_price" : "qualified";
       let reason = evaluation.reason;
       if (evaluation.effectiveAction !== "notify" && !listing.executionSupported) {
         evaluation = {

@@ -341,6 +341,34 @@ audit operations. The bundles call explicit `/api/v1/user` and
 `/api/v1/admin` contracts. Legacy unprefixed application paths remain only as a
 deprecated compatibility facade during migration.
 
+Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
+strategy—the decision source for user-created plans. Migration 30 adds
+`decision_mode` and `max_signal_age_seconds` to immutable intent revisions and
+records `decision_source` on both the signal decision and action job. Guided
+and legacy user plans use `purchase_intent`; source/internal missions retain
+`strategy`. Existing reviewed plans are upgraded by appending a new direct-mode
+revision, leaving their prior history unchanged.
+
+For a direct plan, a fresh resolved signal is evaluated only against the frozen
+enabled listing, trusted-exact source, mission state, expiry, explicitly
+verified first-party seller, selected fulfillment, numeric unit price, and
+reviewed target cap. An informational source is downgraded to notification and
+cannot reserve spend or reach a lease. The action
+is the plan's saved notification or add ceiling, quantity one per opportunity;
+an ordered strategy cannot widen or suppress it. A direct action job therefore
+has a null strategy foreign key and an explicit `purchase_intent` decision
+source. Its intent revision, exact-offer snapshot, idempotency key, spend
+reservation, retailer qualification, device lease, and Chrome final checks are
+otherwise identical to strategy-driven jobs.
+
+Changing a direct plan to cart mode is revalidated transactionally after the
+complete target set is staged. Every enabled target must be executable,
+first-party-only, shipping, and capped, and the intent all-in maximum must cover
+the worst enabled target at requested quantity plus the configured tax and
+retailer allowance. Any failure rolls back mission, target, and revision
+changes. This mode remains limited to notify/add-to-cart; it cannot request
+checkout or order submission.
+
 Yoink 0.28.0 makes the user creation boundary explicit without adding a second
 intent model. `PurchaseIntentCreateInput` version 1 names one existing exact
 listing and carries quantity, unit/all-in caps, first-party seller policy,

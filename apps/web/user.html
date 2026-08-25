@@ -104,7 +104,7 @@
           </fieldset>
 
           <fieldset class="setup-section">
-            <legend><span>3</span> What may Yoink do?</legend>
+            <legend><span>3</span> When this exact offer matches</legend>
             <div class="action-choices">
               <label class="action-choice"><input name="actionCeiling" type="radio" value="notify" checked><span><strong>Tell me when it matches</strong><small>No store button is clicked.</small></span></label>
               <label class="action-choice" id="addChoice"><input name="actionCeiling" type="radio" value="add_to_cart"><span><strong>Add one to my cart</strong><small>Only a qualified first-party shipping offer. Checkout stays manual.</small></span></label>
@@ -143,15 +143,16 @@
       </div>
       <div class="form-row">
         <label><span>Maximum all-in total</span><input name="maxAllIn" inputmode="decimal" placeholder="Optional"></label>
-        <label><span>Yoink may</span><select name="actionCeiling"><option value="notify">Notify me only</option><option value="add_to_cart">Add one to cart</option></select></label>
+        <label><span>When it matches</span><select name="actionCeiling"><option value="notify">Notify me only</option><option value="add_to_cart">Add one to cart</option></select></label>
       </div>
+      <p class="boundary-note good" id="planExecutionNote">Fresh exact matches create notifications. No retailer control is clicked.</p>
       <div class="form-row">
         <label><span>Substitutions</span><select name="substitutionPolicy"><option value="exact_only">Exact item only</option><option value="verified_equivalent" disabled>Verified equivalents (not available yet)</option></select></label>
         <label><span>Cooldown between attempts (minutes)</span><input name="cooldownMinutes" type="number" min="0" max="43200" step="1" value="0"></label>
       </div>
       <div class="form-row">
         <label><span>Plan expires</span><input name="expiresAt" type="datetime-local"></label>
-        <div class="field-note"><strong>Checkout stays manual.</strong><span>These limits reserve capacity for qualified add-only actions. They never authorize checkout or order submission.</span></div>
+        <div class="field-note"><strong id="planModeTitle">This plan decides directly; advanced strategies are optional.</strong><span id="planModeCopy">Checkout stays manual. These limits can authorize only qualified add-only actions and never authorize checkout or order submission.</span></div>
       </div>
       <div class="target-list" id="targetEditors"></div>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save preferences</button></div>

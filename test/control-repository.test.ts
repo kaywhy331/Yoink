@@ -135,6 +135,8 @@ test("guided purchase setup creates one reviewed revision with only the chosen e
     assert.equal(detail.targetQuantity, 2);
     assert.equal(detail.intentPolicy.revision, 1);
     assert.equal(detail.intentPolicy.actionCeiling, "add_to_cart");
+    assert.equal(detail.intentPolicy.decisionMode, "purchase_intent");
+    assert.equal(detail.intentPolicy.maxSignalAgeSeconds, 120);
     assert.equal(detail.intentPolicy.maxAllInCents, 15_000);
     assert.equal(detail.intentPolicy.cooldownSeconds, 900);
     const selectedTarget = detail.targets.find((target) => target.listingId === selected.listing.id);
@@ -275,9 +277,75 @@ test("legacy user plan creation is notification-only until limits are explicitly
     };
     assert.equal(detail.intentPolicy.revision, 1);
     assert.equal(detail.intentPolicy.actionCeiling, "notify");
+    assert.equal(detail.intentPolicy.decisionMode, "purchase_intent");
     assert.equal(detail.targets[0]?.enabled, true);
     assert.equal(detail.targets[0]?.maxUnitPriceCents, null);
     assert.equal(detail.targets[0]?.sellerPolicy, "first_party_only");
+  } finally {
+    db.close();
+  }
+});
+
+test("a direct plan update cannot authorize an unsafe cart target", () => {
+  const db = new YoinkDatabase();
+  try {
+    const created = new CatalogRepository(db).upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "monitor-only-product",
+      sourceListingId: "monitor-only-listing",
+      title: "Monitor-only Direct Plan Fixture",
+      retailerId: "amazon",
+      retailerSku: "B0DIRECT001",
+      canonicalUrl: "https://www.amazon.com/dp/B0DIRECT001",
+      listingStatus: "in_stock",
+      executionSupported: false,
+      msrpCents: 4500
+    });
+    const control = new ControlRepository(db);
+    const configured = control.createConfiguredMission({
+      contractVersion: 1,
+      listingId: created.listing.id,
+      targetQuantity: 1,
+      maxUnitPriceCents: 5000,
+      maxAllInCents: 5000,
+      actionCeiling: "notify",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    });
+    const before = control.missionDetail(configured.mission.id) as {
+      intentPolicy: { revision: number; actionCeiling: string };
+      targets: Array<{ id: string }>;
+    };
+    assert.throws(() => control.updateMission(configured.mission.id, {
+      status: "active",
+      targetQuantity: 1,
+      targets: [{
+        id: before.targets[0]!.id,
+        enabled: true,
+        maxUnitPriceCents: 5000,
+        sellerPolicy: "first_party_only",
+        fulfillment: "shipping"
+      }],
+      policy: {
+        expectedRevision: 1,
+        maxAllInCents: 8600,
+        actionCeiling: "add_to_cart",
+        decisionMode: "purchase_intent"
+      }
+    }), /packaged mapping/);
+    const after = control.missionDetail(configured.mission.id) as {
+      intentPolicy: { revision: number; actionCeiling: string };
+    };
+    assert.equal(after.intentPolicy.revision, 1);
+    assert.equal(after.intentPolicy.actionCeiling, "notify");
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM mission_intent_revisions WHERE mission_id = ?",
+      configured.mission.id
+    )?.count, 1);
   } finally {
     db.close();
   }

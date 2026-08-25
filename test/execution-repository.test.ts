@@ -97,8 +97,8 @@ function targetSignal(externalEventId = "target-execution-event-1"): SignalEvent
   };
 }
 
-function targetExecution(db: YoinkDatabase): { execution: ExecutionRepository; deviceId: string; token: string } {
-  new CatalogRepository(db).upsertListing({
+function targetExecution(db: YoinkDatabase, directPlan = false): { execution: ExecutionRepository; deviceId: string; token: string } {
+  const listing = new CatalogRepository(db).upsertListing({
     sourceConnectionId: "source_trackalacker_local",
     source: "trackalacker",
     sourceProductId: "target-execution-product-1",
@@ -112,9 +112,34 @@ function targetExecution(db: YoinkDatabase): { execution: ExecutionRepository; d
     msrpCents: 5999,
     currency: "USD"
   }, NOW);
-  new ControlRepository(db).replaceStrategies([targetStrategy()]);
+  const control = new ControlRepository(db);
+  if (directPlan) {
+    control.createConfiguredMission({
+      contractVersion: 1,
+      listingId: listing.listing.id,
+      targetQuantity: 1,
+      maxUnitPriceCents: 5999,
+      maxAllInCents: 10_000,
+      actionCeiling: "add_to_cart",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, NOW);
+    control.replaceStrategies([], NOW);
+  } else {
+    control.replaceStrategies([targetStrategy()]);
+  }
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
-  assert.equal(new SignalEngine(db).process(targetSignal(), NOW).actionJobState, "awaiting_executor");
+  const processed = new SignalEngine(db).process(targetSignal(directPlan ? "target-direct-execution-event-1" : undefined), NOW);
+  assert.equal(processed.actionJobState, "awaiting_executor");
+  if (directPlan) {
+    assert.equal(db.get<{ decision_source: string }>(
+      "SELECT decision_source FROM action_jobs WHERE id = ?",
+      processed.actionJobId
+    )?.decision_source, "purchase_intent");
+  }
   const devices = new DeviceRepository(db);
   const code = devices.createPairingCode(NOW);
   const paired = devices.pair({
@@ -465,6 +490,23 @@ test("Best Buy add-only leasing requires the exact independently qualified capab
     assert.equal(lease.job.adapterVersion, BESTBUY_ADD_ADAPTER_VERSION);
     assert.equal(lease.job.retailerId, "bestbuy");
     assert.equal(lease.job.retailerSku, "6588149");
+    assert.equal(lease.job.quantity, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("a reviewed direct Target plan leases through the same guarded execution contract", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db, true);
+    const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
+    assert.equal(lease.reason, "leased");
+    assert.ok(lease.job);
+    assert.equal(lease.job.adapterVersion, TARGET_ADD_ADAPTER_VERSION);
+    assert.equal(lease.job.retailerId, "target");
+    assert.equal(lease.job.retailerSku, "1011483414");
+    assert.equal(lease.job.action, "add_to_cart");
     assert.equal(lease.job.quantity, 1);
   } finally {
     db.close();

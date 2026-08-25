@@ -1,6 +1,36 @@
 # Yoink roadmap
 
-## Shipped through 0.28.0
+## Shipped through 0.29.0
+
+### Mission-owned purchase decisions (0.29.0)
+
+- Migration 30 adds append-only `strategy` versus `purchase_intent` decision
+  mode and a bounded signal-freshness window to intent revisions. Existing
+  0.28 reviewed user plans receive a new direct-mode revision while their prior
+  immutable revision remains intact; source/internal missions stay strategy
+  driven
+- A reviewed plan now evaluates the enabled exact listing, trusted-exact source,
+  explicit seller and fulfillment, numeric price and unit cap, expiry, and
+  120-second freshness directly. It works with an empty strategy set, a
+  notification-only plan cannot be widened by an add strategy, and an
+  informational source cannot authorize retailer mutation
+- Direct mission decisions and jobs are explicitly attributed to
+  `purchase_intent`; no synthetic strategy row or fake foreign key is created.
+  Qualified direct cart jobs enter the same intent/snapshot, spend reservation,
+  adapter qualification, authenticated device lease, and Chrome revalidation
+  pipeline as strategy-driven jobs
+- The plan editor explains which decision layer owns the plan and preflights
+  every enabled cart store. Repository validation independently requires a
+  packaged mapping, reviewed unit cap, first-party seller, shipping, and an
+  all-in cap covering requested quantity plus current tax/store allowance; an
+  invalid update rolls back the staged mission and targets
+- Migration, repository, signal-engine, API, dashboard, and execution tests
+  cover historical backfill, strategy-free notification/cart jobs, stale and
+  seller-unverified rejection, no strategy widening, unsafe update rollback,
+  and a real qualified lease boundary
+- Retailer capabilities do not change. Direct plans remain limited to notify or
+  guarded add-to-cart; marketplace sellers, pickup mutation, checkout, payment,
+  drawing entry, and order submission remain closed
 
 ### Guided exact purchase-plan creation (0.28.0)
 
@@ -485,9 +515,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.28.0
+## Architecture assessment after 0.29.0
 
-Yoink 0.28.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.29.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -499,13 +529,13 @@ behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-29 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
+| Primary backend database | Transactional migration-30 SQLite schema plus deterministic portability, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness events, and tenant-scoped alert history | No async PostgreSQL implementation, production identity provider, backup/PITR service, worker deployment, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, role administration, diagnostics, privacy-classified adapter-repair alerts, retailer/source/affiliate controls, and audit | No production IdP/step-up, secret references, external alert connectors/background escalation worker, break-glass workflow, cross-tenant global curator, or retailer-configuration rollback |
-| Minimal user application | Separate `/` dashboard with a no-write-before-review guided setup, atomic exact intent revision 1, notification-default compatibility path, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action ceiling, expiry/cooldown, periodic spend caps, activity, pause, pairing, and source/review status | Some style-level retailers still report `listing_only`; region/store scope is consent-derived rather than verified from each live offer; verified-equivalent substitution is policy-only and non-executable |
+| Minimal user application | Separate `/` dashboard with no-write-before-review setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, periodic spend caps, activity, pause, pairing, and source/review status | Some style-level retailers still report `listing_only`; region/store scope is consent-derived rather than verified from each live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, and deletion exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, privacy operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, and a fail-closed signed external-witness integration | Count-only diagnostics cannot synthesize a selector; bundled-parser agreement is not an independent oracle; canary is not cohort deployment; the independent witness service, scheduler, and public consistency monitor are not deployed by this repository |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
-| Automatic purchasing | Target and Walmart can perform guarded first-party shipping add-to-cart behind current intent/snapshot/reservation checks; Amazon and Best Buy are implemented but separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
+| Automatic purchasing | Reviewed plans can directly request guarded quantity-one work without a strategy; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 | Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
 
 ### Target trust-domain layout
@@ -606,7 +636,11 @@ policy leases fail closed, and cart-only confirmation cannot record a purchase.
 listing-only or ambiguous variants. 0.28.0 completes the local non-technical
 creation path: one reviewed request atomically creates the exact plan and
 configured revision, legacy user creation defaults to notifications, later
-catalog targets stay disabled, and the UI test proves no pre-review write. The
+catalog targets stay disabled, and the UI test proves no pre-review write.
+0.29.0 makes that reviewed revision the direct decision source for fresh exact
+signals, removes any hidden strategy dependency, preserves strategies as the
+advanced/default mode for source-created missions, and proves a direct plan can
+reach the existing qualified lease boundary without weakening it. The
 broader phase exit remains **open**
 until style-level observers supply stable child offers, applicable region/store
 scope is live-offer verified, verified-equivalent selection has independently

@@ -318,15 +318,16 @@ export class SignalRepository {
     this.db.run(
       `INSERT INTO mission_decisions(
          id, event_id, incident_id, mission_id, strategy_id, strategy_revision,
-         outcome, reason, effective_action, effective_quantity,
+         decision_source, outcome, reason, effective_action, effective_quantity,
          effective_unit_cap_cents, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       newId("mission_decision"),
       eventId,
       incidentId,
       missionId,
       evaluation?.strategy?.id ?? null,
       evaluation?.strategy?.revision ?? null,
+      evaluation?.decisionSource ?? "strategy",
       outcome,
       reason,
       evaluation?.effectiveAction ?? "notify",
@@ -402,7 +403,6 @@ export class SignalRepository {
     attribution: AttributionPlan,
     now = Date.now()
   ): JobRecord {
-    if (!evaluation.strategy) throw new Error("An action job requires the winning strategy revision.");
     const existing = this.jobForIncident(incident.id);
     if (existing) return existing;
     const unitCap = evaluation.effectiveUnitCapCents;
@@ -412,8 +412,8 @@ export class SignalRepository {
       ? null
       : Math.ceil(subtotal * (10_000 + settings.taxBps) / 10_000) + Math.max(0, allowance);
     const expiresAtMs = Math.min(
-      new Date(signal.observedAt).getTime() + evaluation.strategy.maxSignalAgeSeconds * 1_000,
-      now + evaluation.strategy.maxSignalAgeSeconds * 1_000
+      new Date(signal.observedAt).getTime() + evaluation.maxSignalAgeSeconds * 1_000,
+      now + evaluation.maxSignalAgeSeconds * 1_000
     );
     const expiresAt = nowIso(expiresAtMs);
     const policy = this.purchasePolicies.ensureCurrent(mission.id, now);
@@ -465,8 +465,8 @@ export class SignalRepository {
       mission.id,
       policy.id,
       incident.id,
-      evaluation.strategy.id,
-      evaluation.strategy.revision,
+      evaluation.strategy?.id ?? "purchase_intent",
+      evaluation.strategy?.revision ?? policy.revision,
       effectiveAction
     );
     const jobId = newId("action_job");
@@ -485,7 +485,7 @@ export class SignalRepository {
     this.db.run(
       `INSERT OR IGNORE INTO action_jobs(
          id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
-         strategy_id, strategy_revision, state, action, quantity,
+         strategy_id, strategy_revision, decision_source, state, action, quantity,
          max_unit_price_cents, max_order_total_cents, currency, seller_policy,
          fulfillment, expected_seller, listing_id, canonical_url, attribution_url,
          attribution_provider, attribution_metadata_json, affiliate_mode,
@@ -494,7 +494,7 @@ export class SignalRepository {
          intent_revision_id, exact_offer_key_id, offer_snapshot_id
        ) VALUES (
          ?, ?, ?, ?, ?, ?,
-         ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?,
          ?, ?, ?, ?,
          ?, ?, ?,
@@ -508,8 +508,9 @@ export class SignalRepository {
       mission.id,
       mission.targetId,
       incident.id,
-      evaluation.strategy.id,
-      evaluation.strategy.revision,
+      evaluation.strategy?.id ?? null,
+      evaluation.strategy?.revision ?? null,
+      evaluation.decisionSource,
       state,
       effectiveAction,
       evaluation.effectiveQuantity,
@@ -564,11 +565,13 @@ export class SignalRepository {
         newId("action_event"),
         jobId,
         state,
-        policyBlocked ? decisionReasonCode : "strategy_qualified",
+        policyBlocked
+          ? decisionReasonCode
+          : evaluation.decisionSource === "purchase_intent" ? "purchase_intent_qualified" : "strategy_qualified",
         state === "shadow_ready"
           ? packagedMutationLane
-            ? "Strategy qualified; Yoink is in shadow mode and no retailer mutation is available."
-            : "Strategy qualified, but this mutation lane has no packaged, independently qualified runner and remains rehearsal-only."
+            ? `${evaluation.decisionSource === "purchase_intent" ? "Purchase plan" : "Strategy"} qualified; Yoink is in shadow mode and no retailer mutation is available.`
+            : `${evaluation.decisionSource === "purchase_intent" ? "Purchase plan" : "Strategy"} qualified, but this mutation lane has no packaged, independently qualified runner and remains rehearsal-only.`
           : policyBlocked ? decisionReason : evaluation.reason,
         timestamp
       );
@@ -751,6 +754,7 @@ export class SignalRepository {
               rd.method AS resolutionMethod, rd.reason AS resolutionReason,
               md.outcome AS missionDecision, md.reason AS missionReason,
               md.effective_action AS effectiveAction,
+              md.decision_source AS decisionSource,
               si.id AS incidentId, si.occurrence_count AS occurrenceCount,
               COALESCE(v.title, NULLIF(json_extract(se.identity_json, '$.title'), ''),
                 NULLIF(json_extract(se.evidence_json, '$.headline'), '')) AS title,
@@ -832,6 +836,7 @@ export class SignalRepository {
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
     return this.db.all(
       `SELECT aj.id, aj.state, aj.action, aj.quantity,
+              aj.decision_source AS decisionSource,
               aj.max_unit_price_cents AS maxUnitPriceCents,
               aj.max_order_total_cents AS maxOrderTotalCents,
               aj.currency, aj.seller_policy AS sellerPolicy,

@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.28.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.29.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,31 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.29.0 removes the hidden advanced-strategy dependency from reviewed
+user purchase plans. Migration 30 adds an append-only decision mode and signal
+freshness bound to each intent revision, plus an explicit decision source on
+mission decisions and action jobs. A guided plan now evaluates its enabled
+exact listing, trusted-exact source, verified seller and fulfillment, current
+numeric price, caps, expiry, and 120-second freshness window directly—even when
+no strategy exists. Informational sources can notify but cannot authorize a
+retailer action.
+Its notification choice cannot be widened by an add strategy. Source-created
+missions retain ordered-strategy behavior, so existing integrations remain
+compatible without generated or hidden per-product strategies. Existing 0.28
+reviewed plans receive a new immutable direct-mode revision during migration;
+their prior revision remains unchanged.
+
+The plan editor now preflights every enabled cart target and the same
+quantity/tax/store-fee all-in bound enforced by the repository. The server
+independently rejects any cart revision containing a monitor-only mapping,
+missing item cap, non-first-party seller policy, non-shipping fulfillment, or
+insufficient all-in cap, and the surrounding mission/target update rolls back.
+Direct jobs carry no fake strategy foreign key, are audited as
+`purchase_intent`, and lease through the existing qualified Chrome, immutable
+offer, spend-reservation, and recovery contracts. No retailer capability is
+widened; checkout, payment, pickup mutation, marketplace sellers, and order
+submission remain closed.
 
 Version 0.28.0 replaces the dashboard's create-then-edit shortcut with one
 guided exact-purchase review. Choosing a catalog listing does not write a
@@ -260,7 +285,9 @@ caps, timing, and allowed action before anything is created. Notifications are
 the default; add-to-cart is offered only for a qualified mapping, requires an
 explicit shipping choice and a total that covers the current conservative tax
 and store-fee safety bound, and still leaves checkout manual. Later changes use
-the same revisioned plan editor. Catalog
+the same revisioned plan editor. Reviewed plans decide exact matches directly;
+advanced ordered strategies remain available as defaults for source-created
+missions and specialist routing. Catalog
 suggestions remain pending until reviewed in the admin control center. Detailed
 source health, diagnostics, privacy-classified operator alerts, retailer
 qualification, recipes, affiliate setup, catalog review, reversible
@@ -270,13 +297,17 @@ isolated under `/admin`.
 There is no separate Signals start switch:
 
 - Connected sources continuously ingest signals.
-- The default catchall strategy produces notifications.
+- A reviewed user plan directly produces its saved notification or qualified
+  cart decision for a fresh exact offer; it does not require a hidden strategy.
+- The default catchall strategy produces notifications for strategy-owned
+  source/import missions.
 - An exact trusted signal can create a new mission and attach all known retailer
   listings without overwriting user settings.
 - A retailer listing discovered after a mission exists is attached disabled
   until the user explicitly includes it in a new intent revision.
-- Higher strategy rows win. Empty keywords mean catchall; quoted phrases, `+`
-  terms, alternatives, and exclusions are supported.
+- For strategy-owned missions, higher strategy rows win. Empty keywords mean
+  catchall; quoted phrases, `+` terms, alternatives, and exclusions are
+  supported.
 - MSRP policies are maximums and include every lower price.
 - Seller policy, allowed seller names, fulfillment, quantity, signal age, price
   cap, and exact source/store selections are evaluated before a job is created.

@@ -916,6 +916,7 @@ export interface MissionTargetUpdateInput {
 }
 
 export type SubstitutionPolicy = "exact_only" | "verified_equivalent";
+export type PurchaseIntentDecisionMode = "strategy" | "purchase_intent";
 
 export interface PurchaseIntentPolicyTarget {
   targetId: string;
@@ -935,6 +936,8 @@ export interface PurchaseIntentPolicy {
   currency: string;
   maxAllInCents: number | null;
   actionCeiling: Action;
+  decisionMode: PurchaseIntentDecisionMode;
+  maxSignalAgeSeconds: number;
   substitutionPolicy: SubstitutionPolicy;
   expiresAt: string;
   cooldownSeconds: number;
@@ -949,6 +952,8 @@ export interface PurchaseIntentPolicyUpdateInput {
   expectedRevision?: number;
   maxAllInCents?: number | null;
   actionCeiling?: Action;
+  decisionMode?: PurchaseIntentDecisionMode;
+  maxSignalAgeSeconds?: number;
   substitutionPolicy?: SubstitutionPolicy;
   expiresAt?: string;
   cooldownSeconds?: number;
@@ -1048,6 +1053,8 @@ export interface StrategyEvaluation {
   state: StrategyEvaluationState;
   reason: string;
   strategy: StrategyDefinition | null;
+  decisionSource: "strategy" | "purchase_intent";
+  maxSignalAgeSeconds: number;
   effectiveUnitCapCents: number | null;
   effectiveQuantity: number;
   effectiveAction: Action;

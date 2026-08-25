@@ -183,10 +183,12 @@ function renderPlans() {
     const maximum = plan.primaryMaxUnitPriceCents ? money(plan.primaryMaxUnitPriceCents) : "not set";
     const fulfillment = words(plan.primaryFulfillment || "not selected");
     const action = plan.actionCeiling === "add_to_cart" ? "May add one to cart" : "Notifications only";
+    const decision = plan.decisionMode === "purchase_intent" ? "This reviewed plan decides" : "Advanced defaults decide";
     return `<article class="plan-card">
       <div><div class="card-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(plan.status)}</span></div>
       <p><strong>${escapeHtml(store)}</strong>${plan.primaryRetailerSku ? ` · exact item ${escapeHtml(plan.primaryRetailerSku)}` : ""} · last seen ${escapeHtml(current)} · maximum ${escapeHtml(maximum)}</p>
-      <p>Quantity ${Number(plan.targetQuantity || 1)} · ${escapeHtml(fulfillment)} · ${escapeHtml(action)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p></div>
+      <p>Quantity ${Number(plan.targetQuantity || 1)} · ${escapeHtml(fulfillment)} · ${escapeHtml(action)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p>
+      <p>${escapeHtml(decision)} when a fresh exact offer arrives.</p></div>
       <button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Review or change</button>
     </article>`;
   }).join("") : '<div class="empty">You have no purchase plans. Choose “Set up purchase” from the Products tab and review the exact limits before creating one.</div>';
@@ -195,7 +197,7 @@ function renderPlans() {
 function renderActions() {
   $("#actionList").innerHTML = state.actions.length ? state.actions.map((action) => `<article class="action-card">
     <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${action.state === "confirmed" ? "good" : "warn"}">${escapeHtml(String(action.state).replaceAll("_", " "))}</span></div>
-    <p>${escapeHtml(action.retailerId)} · ${escapeHtml(action.retailerSku)} · ${escapeHtml(String(action.action).replaceAll("_", " "))} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}${action.spendReservationStatus ? ` · reservation ${escapeHtml(action.spendReservationStatus)}` : ""}</p></div>
+    <p>${escapeHtml(action.retailerId)} · ${escapeHtml(action.retailerSku)} · ${escapeHtml(String(action.action).replaceAll("_", " "))} · ${action.decisionSource === "purchase_intent" ? "reviewed plan" : "advanced default"} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}${action.spendReservationStatus ? ` · reservation ${escapeHtml(action.spendReservationStatus)}` : ""}</p></div>
     <a class="canonical" href="${escapeHtml(action.canonicalUrl)}" target="_blank" rel="noreferrer">Store page ↗</a>
   </article>`).join("") : '<div class="empty">No purchase or notification actions have been recorded yet.</div>';
 }
@@ -347,12 +349,21 @@ async function openPlan(id) {
   form.elements.targetQuantity.value = mission.targetQuantity;
   const policy = mission.intentPolicy || {};
   form.elements.maxAllIn.value = moneyInput(policy.maxAllInCents);
-  form.elements.actionCeiling.value = ["notify", "add_to_cart"].includes(policy.actionCeiling) ? policy.actionCeiling : "notify";
+  const directPlan = policy.decisionMode === "purchase_intent";
+  form.elements.actionCeiling.value = directPlan && ["notify", "add_to_cart"].includes(policy.actionCeiling)
+    ? policy.actionCeiling
+    : "notify";
   form.elements.substitutionPolicy.value = policy.substitutionPolicy || "exact_only";
   form.elements.cooldownMinutes.value = Math.round(Number(policy.cooldownSeconds || 0) / 60);
   form.elements.expiresAt.value = localDateTime(policy.expiresAt);
+  $("#planModeTitle").textContent = directPlan
+    ? "This reviewed plan decides directly; advanced strategies are optional."
+    : "This source-created plan currently uses advanced defaults.";
+  $("#planModeCopy").textContent = directPlan
+    ? "Checkout stays manual. These limits can authorize only qualified add-only actions and never authorize checkout or order submission."
+    : "Saving here converts it to a reviewed direct plan in notification mode unless you explicitly choose and satisfy guarded cart requirements. Checkout stays manual.";
   $("#planDialogTitle").textContent = mission.title;
-  $("#targetEditors").innerHTML = mission.targets.map((target) => `<article class="target-editor" data-target-id="${escapeHtml(target.id)}">
+  $("#targetEditors").innerHTML = mission.targets.map((target) => `<article class="target-editor" data-target-id="${escapeHtml(target.id)}" data-retailer-id="${escapeHtml(target.retailerId)}" data-execution-supported="${target.executionSupported === true}">
     <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div><a class="canonical" href="${escapeHtml(target.canonicalUrl)}" target="_blank" rel="noreferrer">View ↗</a></div>
     <div class="target-fields">
       <label class="check"><input data-field="enabled" type="checkbox" ${target.enabled ? "checked" : ""}><span>Use store</span></label>
@@ -361,7 +372,78 @@ async function openPlan(id) {
       <label><span>Fulfillment</span><select data-field="fulfillment"><option value="inherit" ${target.fulfillment === "inherit" ? "selected" : ""}>Use default</option><option value="shipping" ${target.fulfillment === "shipping" ? "selected" : ""}>Shipping</option><option value="pickup" ${target.fulfillment === "pickup" ? "selected" : ""}>Pickup</option><option value="either" ${target.fulfillment === "either" ? "selected" : ""}>Either</option><option value="manual" ${target.fulfillment === "manual" ? "selected" : ""}>Manual only</option></select></label>
     </div>
   </article>`).join("");
+  syncPlanAction();
   $("#planDialog").showModal();
+}
+
+function planTargetDrafts(form, strict = false) {
+  return $$("[data-target-id]", form).map((card) => {
+    const rawPrice = $("[data-field=maxPrice]", card).value.trim();
+    const dollars = rawPrice ? Number(rawPrice) : null;
+    if (strict && dollars !== null && (!Number.isFinite(dollars) || dollars <= 0)) {
+      throw new Error("Every enabled store needs a positive maximum item price for cart actions.");
+    }
+    return {
+      id: card.dataset.targetId,
+      retailerId: card.dataset.retailerId,
+      executionSupported: card.dataset.executionSupported === "true",
+      enabled: $("[data-field=enabled]", card).checked,
+      maxUnitPriceCents: dollars !== null && Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : null,
+      sellerPolicy: $("[data-field=sellerPolicy]", card).value,
+      fulfillment: $("[data-field=fulfillment]", card).value
+    };
+  });
+}
+
+function planAutomaticMinimum(form, targets = planTargetDrafts(form)) {
+  const quantity = Number(form.elements.targetQuantity.value);
+  const enabled = targets.filter((target) => target.enabled);
+  if (!Number.isInteger(quantity) || quantity < 1 || !enabled.length
+    || enabled.some((target) => target.maxUnitPriceCents === null)) return null;
+  const taxBps = Math.max(0, Number(state.overview?.settings?.taxBps || 0));
+  const required = Math.max(...enabled.map((target) => {
+    const storeReserve = Math.max(0, Number(state.overview?.settings?.storeAllowancesCents?.[target.retailerId] || 0));
+    return Math.ceil(target.maxUnitPriceCents * quantity * (10_000 + taxBps) / 10_000) + storeReserve;
+  }));
+  return Number.isSafeInteger(required) ? required : null;
+}
+
+function syncPlanAction(normalizeTargets = false) {
+  const form = $("#planForm");
+  const adding = form.elements.actionCeiling.value === "add_to_cart";
+  if (adding && normalizeTargets) {
+    $$("[data-target-id]", form).forEach((card) => {
+      if ($("[data-field=enabled]", card).checked) {
+        $("[data-field=sellerPolicy]", card).value = "first_party_only";
+        $("[data-field=fulfillment]", card).value = "shipping";
+      }
+    });
+  }
+  const targets = planTargetDrafts(form);
+  const enabled = targets.filter((target) => target.enabled);
+  const unsafe = enabled.find((target) => !target.executionSupported
+    || target.maxUnitPriceCents === null
+    || target.sellerPolicy !== "first_party_only"
+    || target.fulfillment !== "shipping");
+  const minimum = planAutomaticMinimum(form, targets);
+  const reviewedTotal = (() => {
+    try { return centsInput(form.elements.maxAllIn.value, "The all-in cap"); } catch { return null; }
+  })();
+  const totalTooLow = adding && minimum !== null && (reviewedTotal === null || reviewedTotal < minimum);
+  form.elements.maxAllIn.setAttribute("aria-invalid", totalTooLow ? "true" : "false");
+  const note = $("#planExecutionNote");
+  note.className = `boundary-note ${!adding || (enabled.length && !unsafe && !totalTooLow) ? "good" : "warn"}`;
+  note.textContent = !adding
+    ? "Fresh exact matches create notifications. No retailer control is clicked."
+    : !enabled.length
+      ? "Enable one exact store before choosing a cart action."
+      : unsafe
+        ? "Every enabled cart store needs a qualified add mapping, a maximum item price, Store only seller, and Shipping."
+        : minimum === null
+          ? "Enter a valid quantity and maximum item price for every enabled store."
+          : totalTooLow
+            ? `Raise the maximum total to at least ${money(minimum)} only if you accept that bound, or choose notifications.`
+            : `The reviewed total covers the current ${money(minimum)} tax and store-fee safety bound. Chrome still rechecks the exact live offer before any click.`;
 }
 
 document.addEventListener("click", async (event) => {
@@ -477,21 +559,33 @@ $("#setupForm").addEventListener("submit", async (event) => {
   }
 });
 
+$("#planForm").addEventListener("input", () => syncPlanAction());
+$("#planForm").addEventListener("change", (event) => {
+  syncPlanAction(event.target.name === "actionCeiling" && event.target.value === "add_to_cart");
+});
+
 $("#planForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    const targets = $$("[data-target-id]", event.currentTarget).map((card) => {
-      const rawPrice = $("[data-field=maxPrice]", card).value.trim();
-      const dollars = rawPrice ? Number(rawPrice) : null;
-      if (dollars !== null && (!Number.isFinite(dollars) || dollars <= 0)) throw new Error("Every price cap must be a positive amount or blank.");
-      return {
-        id: card.dataset.targetId,
-        enabled: $("[data-field=enabled]", card).checked,
-        maxUnitPriceCents: dollars === null ? null : Math.round(dollars * 100),
-        sellerPolicy: $("[data-field=sellerPolicy]", card).value,
-        fulfillment: $("[data-field=fulfillment]", card).value
-      };
-    });
+    const form = event.currentTarget;
+    const drafts = planTargetDrafts(form, true);
+    const targets = drafts.map(({ retailerId: _retailerId, executionSupported: _executionSupported, ...target }) => target);
+    const actionCeiling = form.elements.actionCeiling.value;
+    const maxAllInCents = centsInput(form.elements.maxAllIn.value, "The all-in cap");
+    if (actionCeiling === "add_to_cart") {
+      const enabled = drafts.filter((target) => target.enabled);
+      if (!enabled.length) throw new Error("Enable one exact store before choosing a cart action.");
+      if (enabled.some((target) => !target.executionSupported
+        || target.maxUnitPriceCents === null
+        || target.sellerPolicy !== "first_party_only"
+        || target.fulfillment !== "shipping")) {
+        throw new Error("Every enabled cart store needs a qualified add mapping, a maximum item price, Store only seller, and Shipping.");
+      }
+      const minimum = planAutomaticMinimum(form, drafts);
+      if (minimum === null || maxAllInCents === null || maxAllInCents < minimum) {
+        throw new Error(`Guarded cart actions need a maximum total of at least ${minimum === null ? "the calculated safety bound" : money(minimum)}.`);
+      }
+    }
     const expiresValue = event.currentTarget.elements.expiresAt.value;
     await api(`/api/v1/user/purchase-intents/${encodeURIComponent(event.currentTarget.elements.id.value)}`, {
       method: "PATCH",
@@ -501,8 +595,10 @@ $("#planForm").addEventListener("submit", async (event) => {
         targets,
         policy: {
           expectedRevision: Number(state.editingPlan.intentPolicy?.revision || 1),
-          maxAllInCents: centsInput(event.currentTarget.elements.maxAllIn.value, "The all-in cap"),
-          actionCeiling: event.currentTarget.elements.actionCeiling.value,
+          maxAllInCents,
+          actionCeiling,
+          decisionMode: "purchase_intent",
+          maxSignalAgeSeconds: Number(state.editingPlan.intentPolicy?.maxSignalAgeSeconds || 120),
           substitutionPolicy: event.currentTarget.elements.substitutionPolicy.value,
           cooldownSeconds: Number(event.currentTarget.elements.cooldownMinutes.value || 0) * 60,
           expiresAt: expiresValue ? new Date(expiresValue).toISOString() : "",

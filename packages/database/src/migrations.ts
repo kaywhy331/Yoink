@@ -1907,5 +1907,85 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       WHEN EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id)
       BEGIN SELECT RAISE(ABORT, 'observer recipe witness checks are append-only'); END;
     `
+  },
+  {
+    version: 30,
+    name: "mission_owned_purchase_decisions",
+    sql: `
+      ALTER TABLE mission_intent_revisions
+        ADD COLUMN decision_mode TEXT NOT NULL DEFAULT 'strategy'
+          CHECK (decision_mode IN ('strategy', 'purchase_intent'));
+      ALTER TABLE mission_intent_revisions
+        ADD COLUMN max_signal_age_seconds INTEGER NOT NULL DEFAULT 120
+          CHECK (max_signal_age_seconds BETWEEN 10 AND 3600);
+
+      ALTER TABLE mission_decisions
+        ADD COLUMN decision_source TEXT NOT NULL DEFAULT 'strategy'
+          CHECK (decision_source IN ('strategy', 'purchase_intent'));
+      ALTER TABLE action_jobs
+        ADD COLUMN decision_source TEXT NOT NULL DEFAULT 'strategy'
+          CHECK (decision_source IN ('strategy', 'purchase_intent'));
+
+      INSERT INTO mission_intent_revisions(
+        id, tenant_id, user_id, mission_id, revision, quantity, currency,
+        max_all_in_cents, action_ceiling, decision_mode,
+        max_signal_age_seconds, substitution_policy, expires_at,
+        cooldown_seconds, target_policy_json, policy_hash, change_reason,
+        created_by_actor_id, created_at
+      )
+      SELECT 'intent_revision_m30_' || lower(hex(randomblob(16))),
+             ir.tenant_id, ir.user_id, ir.mission_id, ir.revision + 1,
+             ir.quantity, ir.currency, ir.max_all_in_cents, ir.action_ceiling,
+             'purchase_intent', 120, ir.substitution_policy, ir.expires_at,
+             ir.cooldown_seconds, ir.target_policy_json,
+             'migration30:user-intent:' || ir.policy_hash,
+             'Upgraded the reviewed user plan to direct purchase-intent decisions.',
+             'migration_30', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      FROM mission_intent_revisions ir
+      JOIN missions m ON m.id = ir.mission_id
+      WHERE m.origin IN ('user_guided', 'user_selected_legacy')
+        AND ir.revision = (
+          SELECT MAX(current_ir.revision)
+          FROM mission_intent_revisions current_ir
+          WHERE current_ir.mission_id = ir.mission_id
+        )
+        AND (
+          ir.action_ceiling = 'notify'
+          OR (
+            ir.action_ceiling = 'add_to_cart'
+            AND ir.max_all_in_cents IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM mission_targets enabled_mt
+              WHERE enabled_mt.mission_id = m.id AND enabled_mt.enabled = 1
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mission_targets unsafe_mt
+              JOIN listings unsafe_l ON unsafe_l.id = unsafe_mt.listing_id
+              WHERE unsafe_mt.mission_id = m.id AND unsafe_mt.enabled = 1
+                AND (
+                  unsafe_l.execution_supported <> 1
+                  OR unsafe_mt.max_unit_price_cents IS NULL
+                  OR unsafe_mt.seller_policy <> 'first_party_only'
+                  OR unsafe_mt.fulfillment <> 'shipping'
+                )
+            )
+            AND ir.max_all_in_cents >= COALESCE((
+              SELECT MAX(
+                CAST((safe_mt.max_unit_price_cents * m.target_quantity * (10000 + settings.tax_bps) + 9999) / 10000 AS INTEGER)
+                + CASE
+                    WHEN COALESCE(json_extract(settings.store_allowances_json, '$.' || safe_l.retailer_id), 0) > 0
+                    THEN json_extract(settings.store_allowances_json, '$.' || safe_l.retailer_id)
+                    ELSE 0
+                  END
+              )
+              FROM mission_targets safe_mt
+              JOIN listings safe_l ON safe_l.id = safe_mt.listing_id
+              JOIN app_settings settings ON settings.user_id = ir.user_id
+              WHERE safe_mt.mission_id = m.id AND safe_mt.enabled = 1
+            ), 100000001)
+          )
+        );
+    `
   }
 ]);

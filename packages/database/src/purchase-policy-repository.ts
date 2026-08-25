@@ -5,6 +5,7 @@ import {
   type MissionContext,
   type NormalizedSignal,
   type PurchaseIntentPolicy,
+  type PurchaseIntentDecisionMode,
   type PurchaseIntentPolicyTarget,
   type PurchaseIntentPolicyUpdateInput,
   type StrategyEvaluation,
@@ -25,6 +26,11 @@ const ACTION_RANK: Record<Action, number> = {
 const SUBSTITUTION_POLICIES = new Set<SubstitutionPolicy>(["exact_only", "verified_equivalent"]);
 const MAX_POLICY_LIFETIME_MS = 366 * 24 * 60 * 60 * 1_000;
 
+interface MissionPolicyTarget extends PurchaseIntentPolicyTarget {
+  currency: string;
+  executionSupported: boolean;
+}
+
 export class PurchaseSafetyError extends Error {
   constructor(
     readonly code: string,
@@ -44,6 +50,8 @@ interface IntentRevisionRow {
   currency: string;
   maxAllInCents: number | null;
   actionCeiling: Action;
+  decisionMode: PurchaseIntentDecisionMode;
+  maxSignalAgeSeconds: number;
   substitutionPolicy: SubstitutionPolicy;
   expiresAt: string;
   cooldownSeconds: number;
@@ -101,6 +109,8 @@ function intentPolicy(row: IntentRevisionRow): PurchaseIntentPolicy {
     currency: row.currency,
     maxAllInCents: row.maxAllInCents === null ? null : Number(row.maxAllInCents),
     actionCeiling: row.actionCeiling,
+    decisionMode: row.decisionMode,
+    maxSignalAgeSeconds: Number(row.maxSignalAgeSeconds),
     substitutionPolicy: row.substitutionPolicy,
     expiresAt: row.expiresAt,
     cooldownSeconds: Number(row.cooldownSeconds),
@@ -124,6 +134,8 @@ export class PurchasePolicyRepository {
       `SELECT ir.id, ir.mission_id AS missionId, ir.revision, ir.quantity,
               ir.currency, ir.max_all_in_cents AS maxAllInCents,
               ir.action_ceiling AS actionCeiling,
+              ir.decision_mode AS decisionMode,
+              ir.max_signal_age_seconds AS maxSignalAgeSeconds,
               ir.substitution_policy AS substitutionPolicy,
               ir.expires_at AS expiresAt, ir.cooldown_seconds AS cooldownSeconds,
               ir.target_policy_json AS targetPolicyJson, ir.policy_hash AS policyHash,
@@ -192,6 +204,23 @@ export class PurchasePolicyRepository {
       if (!ACTIONS.includes(actionCeiling)) {
         throw new PurchaseSafetyError("intent_policy_invalid", 400, "A supported action ceiling is required.");
       }
+      const decisionMode = (input.decisionMode ?? current?.decisionMode ?? "strategy") as PurchaseIntentDecisionMode;
+      if (!new Set<PurchaseIntentDecisionMode>(["strategy", "purchase_intent"]).has(decisionMode)) {
+        throw new PurchaseSafetyError("intent_policy_invalid", 400, "A supported purchase-plan decision mode is required.");
+      }
+      if (decisionMode === "purchase_intent" && !["notify", "add_to_cart"].includes(actionCeiling)) {
+        throw new PurchaseSafetyError(
+          "intent_policy_invalid",
+          400,
+          "Direct purchase plans currently support notifications or guarded add-to-cart only."
+        );
+      }
+      const maxSignalAgeSeconds = input.maxSignalAgeSeconds === undefined
+        ? current?.maxSignalAgeSeconds ?? 120
+        : Number(input.maxSignalAgeSeconds);
+      if (!Number.isInteger(maxSignalAgeSeconds) || maxSignalAgeSeconds < 10 || maxSignalAgeSeconds > 3_600) {
+        throw new PurchaseSafetyError("intent_policy_invalid", 400, "Signal freshness must be 10 through 3,600 seconds.");
+      }
       const substitutionPolicy = (input.substitutionPolicy ?? current?.substitutionPolicy ?? "exact_only") as SubstitutionPolicy;
       if (!SUBSTITUTION_POLICIES.has(substitutionPolicy)) {
         throw new PurchaseSafetyError("intent_policy_invalid", 400, "A supported substitution policy is required.");
@@ -221,14 +250,53 @@ export class PurchasePolicyRepository {
         sellerPolicy: target.sellerPolicy,
         fulfillment: target.fulfillment
       }));
+      if (decisionMode === "purchase_intent" && actionCeiling === "add_to_cart") {
+        const enabledTargets = targets.filter((target) => target.enabled);
+        if (!enabledTargets.length) {
+          throw new PurchaseSafetyError("intent_targets_missing", 409, "A guarded cart plan needs one enabled exact retailer offer.");
+        }
+        const unsafeTarget = enabledTargets.find((target) => !target.executionSupported
+          || target.maxUnitPriceCents === null
+          || target.sellerPolicy !== "first_party_only"
+          || target.fulfillment !== "shipping");
+        if (unsafeTarget) {
+          throw new PurchaseSafetyError(
+            "intent_purchase_target_unsafe",
+            409,
+            "Every enabled cart target must have a packaged mapping, a reviewed item cap, the retailer itself as seller, and shipping selected."
+          );
+        }
+        const settings = this.db.get<{ taxBps: number; allowances: string }>(
+          `SELECT tax_bps AS taxBps, store_allowances_json AS allowances
+           FROM app_settings WHERE user_id = ?`,
+          currentRequestScope().userId
+        );
+        let allowances: Record<string, unknown> = {};
+        try { allowances = JSON.parse(settings?.allowances ?? "{}"); } catch { allowances = {}; }
+        const taxBps = Math.max(0, Number(settings?.taxBps ?? 0));
+        const requiredAllInCents = Math.max(...enabledTargets.map((target) => {
+          const itemTotal = Number(target.maxUnitPriceCents) * mission.quantity;
+          const storeAllowance = Math.max(0, Number(allowances[target.retailerId] ?? 0));
+          return Math.ceil(itemTotal * (10_000 + taxBps) / 10_000) + storeAllowance;
+        }));
+        if (!Number.isSafeInteger(requiredAllInCents) || maxAllInCents === null || maxAllInCents < requiredAllInCents) {
+          throw new PurchaseSafetyError(
+            "intent_all_in_bound_too_low",
+            400,
+            `Guarded cart actions need a maximum total of at least $${(requiredAllInCents / 100).toFixed(2)} under the current quantity, tax, and store-fee safety reserve.`
+          );
+        }
+      }
       const targetPolicyJson = JSON.stringify(targetPolicy);
       const policyHash = stableHash(
-        "intent-policy-v1",
+        "intent-policy-v2",
         id,
         mission.quantity,
         "USD",
         maxAllInCents,
         actionCeiling,
+        decisionMode,
+        maxSignalAgeSeconds,
         substitutionPolicy,
         expiresAt,
         cooldownSeconds,
@@ -244,8 +312,9 @@ export class PurchasePolicyRepository {
            id, tenant_id, user_id, mission_id, revision, quantity, currency,
            max_all_in_cents, action_ceiling, substitution_policy, expires_at,
            cooldown_seconds, target_policy_json, policy_hash, change_reason,
+           decision_mode, max_signal_age_seconds,
            created_by_actor_id, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         revisionId,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
@@ -260,6 +329,8 @@ export class PurchasePolicyRepository {
         targetPolicyJson,
         policyHash,
         reason,
+        decisionMode,
+        maxSignalAgeSeconds,
         currentRequestScope().actorId,
         timestamp
       );
@@ -269,7 +340,15 @@ export class PurchasePolicyRepository {
         eventType: "purchase_intent_policy_revised",
         reasonCode: current ? "preferences_updated" : "initial_policy",
         message: `Purchase intent policy revision ${revision} was recorded append-only.`,
-        data: { missionId: id, revision, actionCeiling, substitutionPolicy, targetCount: targetPolicy.length }
+        data: {
+          missionId: id,
+          revision,
+          actionCeiling,
+          decisionMode,
+          maxSignalAgeSeconds,
+          substitutionPolicy,
+          targetCount: targetPolicy.length
+        }
       }, now);
       const saved = this.current(id);
       if (!saved) throw new Error("The purchase-intent policy revision could not be loaded.");
@@ -338,10 +417,11 @@ export class PurchasePolicyRepository {
     return { allowed: true, reasonCode: "intent_policy_verified", message: "The exact offer is within the current purchase intent revision.", policy, target };
   }
 
-  private targetsForMission(missionId: string): Array<PurchaseIntentPolicyTarget & { currency: string }> {
-    return this.db.all<PurchaseIntentPolicyTarget & { currency: string }>(
+  private targetsForMission(missionId: string): MissionPolicyTarget[] {
+    return this.db.all<PurchaseIntentPolicyTarget & { currency: string; executionSupported: number }>(
       `SELECT mt.id AS targetId, mt.listing_id AS listingId,
               l.retailer_id AS retailerId, mt.enabled = 1 AS enabled,
+              l.execution_supported AS executionSupported,
               mt.max_unit_price_cents AS maxUnitPriceCents,
               mt.seller_policy AS sellerPolicy, mt.fulfillment,
               mt.currency
@@ -352,6 +432,10 @@ export class PurchasePolicyRepository {
       missionId,
       currentRequestScope().tenantId,
       currentRequestScope().userId
-    ).map((target) => ({ ...target, enabled: Boolean(target.enabled) }));
+    ).map((target) => ({
+      ...target,
+      enabled: Boolean(target.enabled),
+      executionSupported: Number(target.executionSupported) === 1
+    }));
   }
 }

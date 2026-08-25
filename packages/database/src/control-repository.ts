@@ -5,6 +5,7 @@ import {
   type AppSettingsUpdateInput,
   type MissionContext,
   type PurchaseIntentCreateInput,
+  type PurchaseIntentPolicy,
   type PurchaseIntentPolicyUpdateInput,
   type MissionUpdateInput,
   type SellerPolicy,
@@ -340,6 +341,8 @@ export class ControlRepository {
       selectedFulfillment: "inherit",
       initialPolicy: {
         actionCeiling: "notify",
+        decisionMode: "purchase_intent",
+        maxSignalAgeSeconds: 120,
         substitutionPolicy: "exact_only",
         cooldownSeconds: 0,
         changeReason: "Safe user draft created; explicit limits are still required before automated cart actions."
@@ -426,6 +429,8 @@ export class ControlRepository {
         initialPolicy: {
           maxAllInCents,
           actionCeiling: input.actionCeiling,
+          decisionMode: "purchase_intent",
+          maxSignalAgeSeconds: 120,
           substitutionPolicy: "exact_only",
           expiresAt: input.expiresAt ?? "",
           cooldownSeconds,
@@ -540,6 +545,10 @@ export class ControlRepository {
     );
     if (!row) throw new Error("The mission target no longer exists.");
     return missionContext(row);
+  }
+
+  currentPurchaseIntentPolicy(missionId: string, now = Date.now()): PurchaseIntentPolicy {
+    return this.purchasePolicies.ensureCurrent(missionId, now);
   }
 
   findMissionForListing(listingId: string): MissionContext | null {
@@ -734,6 +743,8 @@ export class ControlRepository {
                WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS maxAllInCents,
               (SELECT ir.action_ceiling FROM mission_intent_revisions ir
                WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS actionCeiling,
+              (SELECT ir.decision_mode FROM mission_intent_revisions ir
+               WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS decisionMode,
               (SELECT r2.display_name FROM mission_targets mt2
                JOIN listings l2 ON l2.id = mt2.listing_id
                JOIN retailers r2 ON r2.id = l2.retailer_id

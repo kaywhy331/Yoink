@@ -4,6 +4,7 @@ import type {
   MissionContext,
   NormalizedSignal,
   PricePolicy,
+  PurchaseIntentPolicy,
   SellerPolicy,
   StrategyDefinition,
   StrategyEvaluation
@@ -58,6 +59,8 @@ function unmatched(reason: string): StrategyEvaluation {
     state: "unmatched",
     reason,
     strategy: null,
+    decisionSource: "strategy",
+    maxSignalAgeSeconds: 120,
     effectiveUnitCapCents: null,
     effectiveQuantity: 1,
     effectiveAction: "notify",
@@ -125,6 +128,8 @@ export function evaluateStrategies(
         state: "needs_price",
         reason: "The winning strategy requires a trusted numeric cap and a readable signal price.",
         strategy,
+        decisionSource: "strategy",
+        maxSignalAgeSeconds: strategy.maxSignalAgeSeconds,
         effectiveUnitCapCents: trustedCaps.length ? Math.min(...trustedCaps) : null,
         effectiveQuantity,
         effectiveAction: "notify",
@@ -141,6 +146,8 @@ export function evaluateStrategies(
         ? `Signal strategy “${strategy.name}” matched for notification.`
         : `Signal strategy “${strategy.name}” matched with live verification required.`,
       strategy,
+      decisionSource: "strategy",
+      maxSignalAgeSeconds: strategy.maxSignalAgeSeconds,
       effectiveUnitCapCents,
       effectiveQuantity,
       effectiveAction,
@@ -154,4 +161,87 @@ export function evaluateStrategies(
   }
   if (sawStaleCandidate) return { ...unmatched("The signal is older than the matching strategy allows."), state: "stale" };
   return unmatched("No enabled signal strategy matched the source, retailer, price, seller, and keyword criteria.");
+}
+
+export function evaluatePurchaseIntent(
+  policy: PurchaseIntentPolicy,
+  signal: NormalizedSignal,
+  listing: ListingContext,
+  mission: MissionContext,
+  now = Date.now()
+): StrategyEvaluation {
+  const rejected = (reason: string, state: StrategyEvaluation["state"] = "unmatched"): StrategyEvaluation => ({
+    state,
+    reason,
+    strategy: null,
+    decisionSource: "purchase_intent",
+    maxSignalAgeSeconds: policy.maxSignalAgeSeconds,
+    effectiveUnitCapCents: null,
+    effectiveQuantity: 1,
+    effectiveAction: "notify",
+    sellerPolicy: "first_party_only",
+    fulfillment: "unknown"
+  });
+  if (policy.decisionMode !== "purchase_intent") {
+    return rejected("This purchase intent delegates signal decisions to the ordered strategy layer.");
+  }
+  const target = policy.targets.find((candidate) => candidate.listingId === listing.id);
+  if (!target || !target.enabled || !mission.targetEnabled || mission.status !== "active") {
+    return rejected("The exact retailer offer is not enabled in the current purchase plan.");
+  }
+  if (policy.expiresAt && new Date(policy.expiresAt).getTime() <= now) {
+    return rejected("The reviewed purchase plan has expired.");
+  }
+  const observedAt = new Date(signal.observedAt).getTime();
+  if (!Number.isFinite(observedAt)
+    || now - observedAt > policy.maxSignalAgeSeconds * 1_000
+    || observedAt > now + 30_000) {
+    return rejected("The exact offer signal is older than this purchase plan allows.", "stale");
+  }
+  const sellerPolicy: SellerPolicy = target.sellerPolicy === "allow_third_party"
+    ? "allow_third_party"
+    : "first_party_only";
+  if (sellerPolicy === "first_party_only" && signal.offer.sellerType !== "first_party") {
+    return rejected("The exact purchase plan requires the retailer itself to be explicitly verified as seller.");
+  }
+  const fulfillment = target.fulfillment === "inherit" ? "unknown" : target.fulfillment;
+  if (["shipping", "pickup"].includes(fulfillment) && signal.offer.fulfillment !== fulfillment) {
+    return rejected("The observed fulfillment does not match the exact purchase plan.");
+  }
+  const unitCap = target.maxUnitPriceCents;
+  const signalPrice = signal.offer.unitPriceCents;
+  if (unitCap !== null && signalPrice !== null && signalPrice > unitCap) {
+    return rejected("The observed item price is above the reviewed maximum.");
+  }
+  const effectiveUnitCapCents = unitCap === null
+    ? signalPrice
+    : signalPrice === null ? unitCap : Math.min(unitCap, signalPrice);
+  if (signalPrice === null || (policy.actionCeiling !== "notify" && unitCap === null)) {
+    return {
+      state: "needs_price",
+      reason: "The exact purchase plan matched, but the source did not provide a numeric price that can be verified against the reviewed maximum.",
+      strategy: null,
+      decisionSource: "purchase_intent",
+      maxSignalAgeSeconds: policy.maxSignalAgeSeconds,
+      effectiveUnitCapCents,
+      effectiveQuantity: 1,
+      effectiveAction: "notify",
+      sellerPolicy,
+      fulfillment
+    };
+  }
+  return {
+    state: "matched",
+    reason: policy.actionCeiling === "notify"
+      ? "The fresh exact offer matched the reviewed notification plan."
+      : "The fresh exact offer matched the reviewed cart plan; live Chrome verification is still required.",
+    strategy: null,
+    decisionSource: "purchase_intent",
+    maxSignalAgeSeconds: policy.maxSignalAgeSeconds,
+    effectiveUnitCapCents,
+    effectiveQuantity: 1,
+    effectiveAction: policy.actionCeiling,
+    sellerPolicy,
+    fulfillment
+  };
 }
