@@ -1,5 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import {
+  INTERNAL_SERVICE_CAPABILITIES,
+  type InternalServiceCapability
+} from "../../../packages/contracts/src/index.js";
 import { nowIso, stableHash } from "../../../packages/domain/src/ids.js";
 import type { YoinkDatabase } from "../../../packages/database/src/database.js";
 import { DeviceRepository } from "../../../packages/database/src/device-repository.js";
@@ -15,6 +19,7 @@ const SIGNATURE_PATTERN = /^[a-f0-9]{64}$/;
 
 export interface HostedRequestAuthOptions {
   proxySecret: string;
+  serviceCapabilities?: Readonly<Record<string, InternalServiceCapability>>;
   maximumClockSkewSeconds?: number;
   nonceTtlSeconds?: number;
   maximumStepUpAgeSeconds?: number;
@@ -55,6 +60,9 @@ function signaturePayload(input: HostedScopeSignatureInput): string {
 
 export function signHostedRequestScope(secret: string, input: HostedScopeSignatureInput): Record<string, string> {
   if (Buffer.byteLength(secret, "utf8") < 32) throw new Error("The hosted request proxy secret must contain at least 32 bytes.");
+  if (input.scope.internalServiceCapability !== undefined) {
+    throw new Error("Internal service capabilities are server-derived and cannot be supplied by a hosted request signer.");
+  }
   const scope = normalizedRequestScope(input.scope);
   if (!Number.isSafeInteger(input.issuedAt) || input.issuedAt <= 0 || !NONCE_PATTERN.test(input.nonce)) {
     throw new Error("A valid hosted request timestamp and nonce are required.");
@@ -108,6 +116,16 @@ export function createHostedRequestScopeResolver(
 ): (request: IncomingMessage, context?: HostedRequestAuthContext) => RequestScope {
   const secret = String(options.proxySecret ?? "");
   if (Buffer.byteLength(secret, "utf8") < 32) throw new Error("The hosted request proxy secret must contain at least 32 bytes.");
+  const serviceCapabilities = Object.freeze(Object.assign(
+    Object.create(null) as Record<string, InternalServiceCapability>,
+    options.serviceCapabilities ?? {}
+  ));
+  for (const [actorId, capability] of Object.entries(serviceCapabilities)) {
+    if (!/^[A-Za-z0-9_-]{3,120}$/.test(actorId)
+      || !INTERNAL_SERVICE_CAPABILITIES.includes(capability)) {
+      throw new Error("Hosted service capability assignments are invalid.");
+    }
+  }
   const maximumClockSkewSeconds = Number.isSafeInteger(options.maximumClockSkewSeconds)
     && Number(options.maximumClockSkewSeconds) >= 10
     && Number(options.maximumClockSkewSeconds) <= 300
@@ -126,6 +144,10 @@ export function createHostedRequestScopeResolver(
 
   const devices = new DeviceRepository(db);
   return (request: IncomingMessage, context: HostedRequestAuthContext = {}) => {
+    if (Object.prototype.hasOwnProperty.call(request.headers, "x-yoink-service-capability")
+      || Object.prototype.hasOwnProperty.call(request.headers, "x-yoink-internal-service-capability")) {
+      throw new Error("Internal service capability headers are not accepted.");
+    }
     const deviceToken = suppliedBearer(request);
     if (DEVICE_TOKEN_PATTERN.test(deviceToken)) {
       const tokenHash = deviceTokenHash(deviceToken);
@@ -237,7 +259,14 @@ export function createHostedRequestScopeResolver(
     } catch {
       throw new Error("The authenticated request scope nonce was already used.");
     }
-    return scope;
+    if (scope.actorKind !== "service") return scope;
+    const internalServiceCapability = Object.prototype.hasOwnProperty.call(serviceCapabilities, scope.actorId)
+      ? serviceCapabilities[scope.actorId]
+      : undefined;
+    return normalizedRequestScope({
+      ...scope,
+      ...(internalServiceCapability ? { internalServiceCapability } : {})
+    });
   };
 }
 

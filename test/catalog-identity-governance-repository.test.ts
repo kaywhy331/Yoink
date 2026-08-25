@@ -417,7 +417,8 @@ test("catalog identity application stays closed when shared catalog has multiple
       tenantId: LOCAL_TENANT_ID,
       userId: LOCAL_USER_ID,
       actorKind: "service",
-      actorId: "identity_sync"
+      actorId: "identity_sync",
+      internalServiceCapability: "internal.principal"
     }, () => new PrincipalRepository(db).provision({
       tenantId: "tenant_catalog_other",
       userId: "user_catalog_other",

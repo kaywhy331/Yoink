@@ -1,6 +1,32 @@
 # Yoink roadmap
 
-## Shipped through 0.54.0
+## Shipped through 0.55.0
+
+### Workload-scoped internal service identities (0.55.0)
+
+- Every hosted service actor is now denied by default and may receive exactly
+  one deployment-owned capability: delivery, contributor eligibility, or
+  principal provisioning. The prior blanket three-capability service bundle is
+  removed
+- Hosted mode requires an exact actor-to-capability JSON registry, with `{}` as
+  the explicit deny-all configuration. Unknown capabilities, malformed actor
+  IDs, arrays, and multi-capability values fail startup
+- Capability assignment happens only after signed scope, principal, expiry,
+  and nonce verification. Capability headers are rejected and the signing
+  helper cannot embed one in a client-provided scope
+- Route policy and the delivery, eligibility, and principal repositories each
+  enforce the same exact capability. The background worker carries delivery
+  authority only for its delivery-recovery task
+- Public health and the admin Access workspace project count, coverage,
+  fingerprint, and opaque actor references only. Raw actor IDs and secrets are
+  not serialized
+- This is least-privilege authorization, not cryptographic workload identity.
+  Production mTLS/OIDC workload proof, managed secrets, signed artifacts, and
+  independent deployment monitoring remain Phase 2 work
+- No migration is required, and retailer qualification/evidence/action state is
+  unchanged
+
+See [internal service capability isolation](INTERNAL_SERVICE_CAPABILITIES.md).
 
 ### External contributor eligibility and regional conflict SLO (0.54.0)
 
@@ -1282,9 +1308,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.54.0
+## Architecture assessment after 0.55.0
 
-Yoink 0.54.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.55.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1297,7 +1323,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-47 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, observer-witness refresh, signed operator-alert dispatch and governed exact replay, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task/connector receipts, 90-day recovery-evidence/review expiry with aggregate receipts, bounded expiring observer-trial eligibility state, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, deployed production identity/risk provider, backup/PITR service, fleet-safe scheduler, signed artifact/workload identity, managed secrets, or hosted cutover |
+| Primary backend database | Transactional migration-47 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, deny-by-default singular internal service capabilities, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, observer-witness refresh, signed operator-alert dispatch and governed exact replay, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task/connector receipts, 90-day recovery-evidence/review expiry with aggregate receipts, bounded expiring observer-trial eligibility state, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, deployed production identity/risk provider, backup/PITR service, fleet-safe scheduler, cryptographic workload identity, signed artifacts, managed secrets, or hosted cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -1478,8 +1504,14 @@ history and fail-closed health. Version 0.47 adds the seventh closed task for
 signing-free observer-repair candidate quarantine; signing, promotion, trials,
 and distribution deliberately stay outside that worker. Version 0.48 expands
 only its bounded input compiler to all five fixed read-only fields; it adds no
-worker authority. None of these releases turns the SQLite process into a
-production fleet or proves signed artifact/workload identity.
+worker authority. Version 0.55 removes the blanket internal-service permission
+bundle, assigns at most one deployment-owned capability after authentication,
+denies unconfigured workloads, and repeats enforcement inside the sensitive
+repositories. It materially narrows compromise blast radius but does not prove
+the workload cryptographically: the shared HMAC proxy remains a deployment
+trust root until mTLS/OIDC workload identity and managed keys are deployed.
+None of these releases turns the SQLite process into a production fleet or
+proves signed artifact/workload identity.
 
 - Implement the async PostgreSQL repository family and migrations/importer with
   transactional and isolation parity, row-level tenant tests, fleet lease-
@@ -1884,7 +1916,9 @@ Shipped local/hosted seams:
 
 - Authenticated tenant/user resolver seam plus a deployable signed-proxy mode;
   all local repositories now consume request scope instead of hard-coded local
-  ownership
+  ownership. Internal services are denied unless the deployment maps their
+  authenticated actor ID to one singular delivery, eligibility, or principal
+  capability; safe admin/health projections expose no raw actor ID
 - Per-user private follows/sources, strategies, missions, settings/order-total
   guardrails, notifications, attribution policy, and mutation qualification.
   Periodic spending policy, transactional reservations, and an append-only

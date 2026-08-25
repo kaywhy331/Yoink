@@ -12,6 +12,7 @@ import {
 } from "../packages/database/src/principal-repository.js";
 import {
   LOCAL_REQUEST_SCOPE,
+  normalizedRequestScope,
   runWithRequestScope,
   type RequestScope
 } from "../packages/database/src/request-scope.js";
@@ -21,7 +22,8 @@ const SERVICE_SCOPE: RequestScope = {
   tenantId: LOCAL_TENANT_ID,
   userId: LOCAL_USER_ID,
   actorKind: "service",
-  actorId: "identity_sync"
+  actorId: "identity_sync",
+  internalServiceCapability: "internal.principal"
 };
 const SECOND_SCOPE: RequestScope = {
   tenantId: "tenant_second",
@@ -104,7 +106,7 @@ test("role grants and revocations take effect while cross-tenant identifiers rem
   }
 });
 
-test("device and service actors receive only their fixed capabilities", () => {
+test("device and service actors receive only their fixed or singular deployment capabilities", () => {
   const db = new YoinkDatabase();
   try {
     const deviceScope: RequestScope = {
@@ -118,11 +120,34 @@ test("device and service actors receive only their fixed capabilities", () => {
       assert.deepEqual(authorization.permissions(), ["device.self"]);
       assert.equal(authorization.has("user.read"), false);
     });
-    runWithRequestScope(SERVICE_SCOPE, () => {
+    runWithRequestScope({
+      tenantId: SERVICE_SCOPE.tenantId,
+      userId: SERVICE_SCOPE.userId,
+      actorKind: "service",
+      actorId: "unconfigured_service"
+    }, () => {
       const authorization = new AuthorizationRepository(db);
-      assert.deepEqual(authorization.permissions(), ["internal.delivery", "internal.eligibility", "internal.principal"]);
+      assert.deepEqual(authorization.permissions(), []);
       assert.equal(authorization.has("admin.read"), false);
     });
+    runWithRequestScope({
+      ...SERVICE_SCOPE,
+      actorId: "delivery_worker",
+      internalServiceCapability: "internal.delivery"
+    }, () => {
+      const authorization = new AuthorizationRepository(db);
+      assert.deepEqual(authorization.permissions(), ["internal.delivery"]);
+      assert.equal(authorization.has("internal.principal"), false);
+      assert.equal(authorization.has("internal.eligibility"), false);
+    });
+    assert.throws(() => normalizedRequestScope({
+      ...SECOND_SCOPE,
+      internalServiceCapability: "internal.delivery"
+    } as RequestScope), /request scope is invalid/);
+    assert.throws(() => normalizedRequestScope({
+      ...SERVICE_SCOPE,
+      internalServiceCapability: ["internal.delivery", "internal.principal"]
+    } as unknown as RequestScope), /request scope is invalid/);
   } finally {
     db.close();
   }

@@ -704,7 +704,15 @@ and failure transitions remain available for an already-issued capability so a
 configuration change does not manufacture a contradictory outcome. Operators
 still stop worker before API during a deployment.
 
-This is drift detection within reviewed packaged code, not proof that the
+Yoink 0.55 separates internal workload authorization into singular,
+server-derived delivery, eligibility, and principal capabilities. A hosted
+service that is absent from the deployment registry receives no permission;
+capability headers are rejected, and the sensitive repositories repeat the
+route-layer check. The admin projection contains only opaque actor references.
+See [internal service capability isolation](INTERNAL_SERVICE_CAPABILITIES.md).
+
+This is drift detection and least-privilege authorization within reviewed
+packaged code, not proof that the
 binary is trustworthy. It does not provide hardware remote attestation,
 artifact-signature verification, workload identity, a secrets manager,
 PostgreSQL roles, or a fleet scheduler.
@@ -964,7 +972,7 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 38. Foreign keys are mandatory.
+numbered; the current schema is migration 47. Foreign keys are mandatory.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 
@@ -978,7 +986,10 @@ Local requests resolve to the exact seeded bootstrap scope with an internal
 loopback-only boundary marker; hosted boundary mode resolves an authenticated
 tenant/user/actor scope before persisted permission checks. Hosted assurance is
 proxy signed and time bounded. Identity context does not substitute for a role
-membership, and matching local IDs does not inherit local trust.
+membership, and matching local IDs does not inherit local trust. For service
+actors, the API derives at most one internal capability from deployment-owned
+configuration only after request authentication; unconfigured actors receive
+none.
 
 The streaming `yoink-portability-ndjson-v1` operator format exports every
 application table from one read transaction, preserves exact integers/blobs,

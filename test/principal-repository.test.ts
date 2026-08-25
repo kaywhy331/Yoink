@@ -21,7 +21,8 @@ const SERVICE_SCOPE: RequestScope = {
   tenantId: LOCAL_TENANT_ID,
   userId: LOCAL_USER_ID,
   actorKind: "service",
-  actorId: "identity_sync"
+  actorId: "identity_sync",
+  internalServiceCapability: "internal.principal"
 };
 const SECOND_SCOPE: RequestScope = {
   tenantId: "tenant_second",
@@ -41,6 +42,11 @@ test("trusted identity sync provisions idempotent per-user settings, sources, st
       displayName: "Second user",
       confirmation: HOSTED_PRINCIPAL_CONFIRMATION
     } satisfies HostedPrincipalInput;
+    assert.throws(() => runWithRequestScope({
+      ...SERVICE_SCOPE,
+      actorId: "delivery_worker",
+      internalServiceCapability: "internal.delivery"
+    }, () => principals.provision(input, NOW)), /internal\.principal/);
     const first = runWithRequestScope(SERVICE_SCOPE, () => principals.provision(input, NOW));
     const replay = runWithRequestScope(SERVICE_SCOPE, () => principals.provision(input, NOW + 1));
     assert.equal(first.created, true);
@@ -90,7 +96,12 @@ test("trusted identity sync provisions idempotent per-user settings, sources, st
       new Date(NOW).toISOString()
     );
     assert.equal(runWithRequestScope(SECOND_SCOPE, () => new QualificationRepository(db).targetAddQualified()), false);
-    assert.throws(() => runWithRequestScope({ ...SERVICE_SCOPE, actorKind: "maintainer" }, () => principals.provision({
+    assert.throws(() => runWithRequestScope({
+      tenantId: SERVICE_SCOPE.tenantId,
+      userId: SERVICE_SCOPE.userId,
+      actorKind: "maintainer",
+      actorId: "not_an_identity_service"
+    }, () => principals.provision({
       ...input,
       userId: "user_third"
     }, NOW)), /identity service scope/);

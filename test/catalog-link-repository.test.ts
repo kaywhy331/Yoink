@@ -121,7 +121,8 @@ test("link intake fails closed before creating provenance and preserves tenant o
       tenantId: LOCAL_TENANT_ID,
       userId: LOCAL_USER_ID,
       actorKind: "service",
-      actorId: "identity_sync"
+      actorId: "identity_sync",
+      internalServiceCapability: "internal.principal"
     };
     const secondScope: RequestScope = {
       tenantId: "tenant_link_second",

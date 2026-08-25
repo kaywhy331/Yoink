@@ -67,7 +67,10 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
       tenantId: context.principal.tenantId,
       userId: context.principal.userId,
       actorKind: "service",
-      actorId: context.workerId
+      actorId: context.workerId,
+      ...(taskKind === "hosted_delivery_recovery"
+        ? { internalServiceCapability: "internal.delivery" as const }
+        : {})
     }, () => this.executeScoped(taskKind, context.runtimeVersion, now));
   }
 

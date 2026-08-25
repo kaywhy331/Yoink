@@ -34,7 +34,8 @@ const SERVICE_SCOPE: RequestScope = {
   tenantId: LOCAL_TENANT_ID,
   userId: LOCAL_USER_ID,
   actorKind: "service",
-  actorId: "community_identity_sync"
+  actorId: "community_identity_sync",
+  internalServiceCapability: "internal.principal"
 };
 
 function communityUserScope(userId: string): RequestScope {

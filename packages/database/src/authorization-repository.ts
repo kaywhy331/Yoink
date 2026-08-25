@@ -39,9 +39,8 @@ export type AuthorizationPermission = typeof AUTHORIZATION_PERMISSIONS[number];
 
 const PERMISSION_SET = new Set<string>(AUTHORIZATION_PERMISSIONS);
 const FIXED_ACTOR_PERMISSIONS = {
-  device: ["device.self"],
-  service: ["internal.delivery", "internal.eligibility", "internal.principal"]
-} as const satisfies Readonly<Record<"device" | "service", readonly AuthorizationPermission[]>>;
+  device: ["device.self"]
+} as const satisfies Readonly<Record<"device", readonly AuthorizationPermission[]>>;
 const ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 
 export class AuthorizationError extends Error {
@@ -97,8 +96,9 @@ export class AuthorizationRepository {
   permissions(): AuthorizationPermission[] {
     const scope = currentRequestScope();
     if (isExactLocalRequestScope(scope)) return [...AUTHORIZATION_PERMISSIONS];
-    if (scope.actorKind === "device" || scope.actorKind === "service") {
-      return [...FIXED_ACTOR_PERMISSIONS[scope.actorKind]];
+    if (scope.actorKind === "device") return [...FIXED_ACTOR_PERMISSIONS.device];
+    if (scope.actorKind === "service") {
+      return scope.internalServiceCapability ? [scope.internalServiceCapability] : [];
     }
     return this.db.all<{ permissionId: string }>(
       `SELECT DISTINCT rp.permission_id AS permissionId

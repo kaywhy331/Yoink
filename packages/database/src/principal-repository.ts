@@ -2,6 +2,7 @@ import { nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import type { YoinkDatabase } from "./database.js";
 import { AuditRepository } from "./audit-repository.js";
+import { AuthorizationRepository } from "./authorization-repository.js";
 import {
   currentRequestScope,
   normalizedRequestScope,
@@ -42,14 +43,17 @@ const SOURCE_DEFAULTS = [
 
 export class PrincipalRepository {
   private readonly audit: AuditRepository;
+  private readonly authorization: AuthorizationRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.audit = new AuditRepository(db);
+    this.authorization = new AuthorizationRepository(db);
   }
 
   provision(input: HostedPrincipalInput, now = Date.now()): Record<string, unknown> {
     const actor = currentRequestScope();
     if (actor.actorKind !== "service") throw new Error("A trusted hosted identity service scope is required.");
+    this.authorization.require("internal.principal");
     if (input?.confirmation !== HOSTED_PRINCIPAL_CONFIRMATION) throw new Error("Explicit hosted principal provisioning confirmation is required.");
     const principal = normalizedRequestScope({
       tenantId: input.tenantId,

@@ -133,6 +133,7 @@ YOINK_HOSTED_PROXY_SECRET=<at least 32 random bytes>
 YOINK_HOSTED_HOSTS=yoink.example.com
 YOINK_HOSTED_ORIGINS=https://yoink.example.com
 YOINK_HOSTED_EXTENSION_ORIGINS=chrome-extension://<exact-production-extension-id>
+YOINK_HOSTED_SERVICE_CAPABILITIES_JSON={"delivery_worker":"internal.delivery","identity_risk_worker":"internal.eligibility","principal_sync":"internal.principal"}
 YOINK_OBSERVER_RECIPE_WITNESS_URL=https://witness.example.net/v1/checkpoints
 YOINK_OBSERVER_RECIPE_WITNESS_LOG_ID=yoink-production
 YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID=<sha256 of witness Ed25519 SPKI>
@@ -260,8 +261,14 @@ canonical signing format.
 The signed actor kind is identity context, not authorization. Persisted role
 memberships authorize `/api/v1/user/*` and `/api/v1/admin/*`; an actor claiming
 `maintainer` receives no implicit permission. `/api/v1/devices/self/*` and
-`/api/v1/internal/*` use fixed package/service capabilities. The exact seeded
-loopback control-center identity is the only local bootstrap exception.
+`/api/v1/internal/*` use fixed package or singular deployment-owned service
+capabilities. Hosted mode requires `YOINK_HOSTED_SERVICE_CAPABILITIES_JSON`,
+which maps each signed service actor ID to exactly one internal capability.
+Use `{}` to deny every internal service. Capability headers are rejected; the
+server performs this mapping only after authenticating the signed scope. See
+[internal service capability isolation](INTERNAL_SERVICE_CAPABILITIES.md). The
+exact seeded loopback control-center identity is the only local bootstrap
+exception.
 
 Paired Chrome devices do not use proxy scope headers. Their existing Bearer
 token is resolved across the device table and produces a scope bound to that

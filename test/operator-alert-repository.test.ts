@@ -208,7 +208,8 @@ test("operator alert rules and redacted incidents remain tenant isolated", () =>
     tenantId: "tenant_local",
     userId: "user_local",
     actorKind: "service",
-    actorId: "principal_service"
+    actorId: "principal_service",
+    internalServiceCapability: "internal.principal"
   };
   const secondScope: RequestScope = {
     tenantId: "tenant_alert_second",

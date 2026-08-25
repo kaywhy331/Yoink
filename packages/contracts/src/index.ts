@@ -1,6 +1,19 @@
 export const ACTIONS = ["notify", "add_to_cart", "prepare_checkout", "submit_order"] as const;
 export type Action = (typeof ACTIONS)[number];
 
+/**
+ * Deployment-owned capabilities for internal workload identities. A hosted
+ * service is assigned exactly one of these values after its signed actor
+ * identity has been verified; callers never select a capability themselves.
+ */
+export const INTERNAL_SERVICE_CAPABILITY_POLICY_VERSION = 1;
+export const INTERNAL_SERVICE_CAPABILITIES = [
+  "internal.delivery",
+  "internal.eligibility",
+  "internal.principal"
+] as const;
+export type InternalServiceCapability = (typeof INTERNAL_SERVICE_CAPABILITIES)[number];
+
 export const PRICE_POLICY_KINDS = [
   "below_msrp",
   "at_or_below_msrp",

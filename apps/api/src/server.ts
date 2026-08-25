@@ -10,6 +10,7 @@ import {
   allowHostedMutationOrigins,
   createHostedRequestScopeResolver
 } from "./hosted-request-auth.js";
+import { safeInternalServiceCapabilityProjection } from "./internal-service-capabilities.js";
 import { SqliteBackgroundWorkerStore } from "../../../packages/database/src/background-worker-store.js";
 import { BackgroundMaintenanceHandler } from "../../../packages/engine/src/background-maintenance.js";
 import { BackgroundWorkerRuntime } from "../../../packages/engine/src/background-worker-runtime.js";
@@ -73,7 +74,13 @@ const backgroundWorker = new BackgroundWorkerRuntime({
   workerId: "background_worker_embedded"
 });
 const hostedDependencies = config.hosted ? {
-  requestScopeResolver: createHostedRequestScopeResolver(db, { proxySecret: config.hosted.proxySecret }),
+  requestScopeResolver: createHostedRequestScopeResolver(db, {
+    proxySecret: config.hosted.proxySecret,
+    serviceCapabilities: config.hosted.internalServiceCapabilities.assignments
+  }),
+  internalServiceCapabilityRegistry: safeInternalServiceCapabilityProjection(
+    config.hosted.internalServiceCapabilities
+  ),
   hostValidator: allowHostedHosts(config.hosted.allowedHosts),
   mutationOriginValidator: allowHostedMutationOrigins(config.hosted.allowedOrigins),
   extensionOriginValidator: allowHostedExtensionOrigins(config.hosted.allowedExtensionOrigins),

@@ -8,6 +8,10 @@ import {
   loadOperatorAlertWebhookRegistry,
   type OperatorAlertWebhookRegistry
 } from "../../../packages/engine/src/operator-alert-webhook.js";
+import {
+  loadInternalServiceCapabilityRegistry,
+  type InternalServiceCapabilityRegistry
+} from "./internal-service-capabilities.js";
 
 export interface YoinkConfig {
   host: "127.0.0.1";
@@ -23,6 +27,7 @@ export interface YoinkConfig {
     allowedHosts: string[];
     allowedOrigins: string[];
     allowedExtensionOrigins: string[];
+    internalServiceCapabilities: InternalServiceCapabilityRegistry;
   } | null;
   observerRecipeWitness: ObserverRecipeWitnessRuntimeConfig | null;
   operatorAlertWebhookRegistry: OperatorAlertWebhookRegistry;
@@ -96,6 +101,10 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     || !allowedHosts.length || !allowedOrigins.length || !allowedExtensionOrigins.length)) {
     throw new Error("Hosted mode requires a 32-byte YOINK_HOSTED_PROXY_SECRET plus explicit YOINK_HOSTED_HOSTS, YOINK_HOSTED_ORIGINS, and YOINK_HOSTED_EXTENSION_ORIGINS.");
   }
+  const internalServiceCapabilities = loadInternalServiceCapabilityRegistry(
+    env.YOINK_HOSTED_SERVICE_CAPABILITIES_JSON,
+    hostedRequested
+  );
   const observerRecipeWitness = loadObserverRecipeWitnessConfig(env);
   const operatorAlertWebhookRegistry = loadOperatorAlertWebhookRegistry(env);
   if (hostedRequested && !observerRecipeWitness) {
@@ -110,7 +119,13 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     releaseRoot: join(projectRoot, "release"),
     version: projectVersion(projectRoot),
     backgroundWorkerMode,
-    hosted: hostedRequested ? { proxySecret, allowedHosts, allowedOrigins, allowedExtensionOrigins } : null,
+    hosted: hostedRequested ? {
+      proxySecret,
+      allowedHosts,
+      allowedOrigins,
+      allowedExtensionOrigins,
+      internalServiceCapabilities
+    } : null,
     observerRecipeWitness,
     operatorAlertWebhookRegistry
   };

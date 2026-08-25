@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { loadConfig } from "../apps/api/src/config.js";
+import {
+  loadInternalServiceCapabilityRegistry,
+  safeInternalServiceCapabilityProjection
+} from "../apps/api/src/internal-service-capabilities.js";
 import { ObserverRecipeSigner } from "../packages/observer-registry/src/signer.js";
 
 test("configuration keeps hosted authentication disabled by default", () => {
@@ -51,8 +55,19 @@ test("hosted configuration requires authentication allowlists and an independent
     YOINK_HOSTED_PROXY_SECRET: "a-secret-value-that-is-at-least-thirty-two-bytes",
     YOINK_HOSTED_HOSTS: "yoink.example.com,internal.example.com:443",
     YOINK_HOSTED_ORIGINS: "https://yoink.example.com",
-    YOINK_HOSTED_EXTENSION_ORIGINS: `chrome-extension://${"b".repeat(32)}`
+    YOINK_HOSTED_EXTENSION_ORIGINS: `chrome-extension://${"b".repeat(32)}`,
+    YOINK_HOSTED_SERVICE_CAPABILITIES_JSON: JSON.stringify({
+      delivery_worker: "internal.delivery",
+      identity_risk_worker: "internal.eligibility",
+      principal_sync: "internal.principal"
+    })
   };
+  const hostedWithoutServiceRegistry = { ...hosted } as Record<string, string>;
+  delete hostedWithoutServiceRegistry.YOINK_HOSTED_SERVICE_CAPABILITIES_JSON;
+  assert.throws(
+    () => loadConfig(process.cwd(), hostedWithoutServiceRegistry),
+    /requires an explicit YOINK_HOSTED_SERVICE_CAPABILITIES_JSON/
+  );
   assert.throws(() => loadConfig(process.cwd(), hosted), /independently operated observer recipe witness/);
   const config = loadConfig(process.cwd(), {
     ...hosted,
@@ -62,11 +77,15 @@ test("hosted configuration requires authentication allowlists and an independent
     YOINK_OBSERVER_RECIPE_WITNESS_PUBLIC_KEY_SPKI: witness.publicKeySpki,
     YOINK_OBSERVER_RECIPE_WITNESS_MAX_AGE_SECONDS: "600"
   });
-  assert.deepEqual(config.hosted, {
-    proxySecret: "a-secret-value-that-is-at-least-thirty-two-bytes",
-    allowedHosts: ["yoink.example.com", "internal.example.com:443"],
-    allowedOrigins: ["https://yoink.example.com"],
-    allowedExtensionOrigins: [`chrome-extension://${"b".repeat(32)}`]
+  assert.equal(config.hosted?.proxySecret, "a-secret-value-that-is-at-least-thirty-two-bytes");
+  assert.deepEqual(config.hosted?.allowedHosts, ["yoink.example.com", "internal.example.com:443"]);
+  assert.deepEqual(config.hosted?.allowedOrigins, ["https://yoink.example.com"]);
+  assert.deepEqual(config.hosted?.allowedExtensionOrigins, [`chrome-extension://${"b".repeat(32)}`]);
+  assert.equal(config.hosted?.internalServiceCapabilities.configuredServiceCount, 3);
+  assert.deepEqual(config.hosted?.internalServiceCapabilities.coverage, {
+    delivery: 1,
+    eligibility: 1,
+    principal: 1
   });
   assert.deepEqual(config.observerRecipeWitness, {
     endpoint: "https://witness.example.net/v1/checkpoints",
@@ -75,6 +94,41 @@ test("hosted configuration requires authentication allowlists and an independent
     maxAgeSeconds: 600
   });
   assert.equal(config.backgroundWorkerMode, "external");
+});
+
+test("internal service capability configuration is exact, singular, and safely projected", () => {
+  assert.throws(
+    () => loadInternalServiceCapabilityRegistry(undefined, true),
+    /requires an explicit YOINK_HOSTED_SERVICE_CAPABILITIES_JSON/
+  );
+  assert.throws(() => loadInternalServiceCapabilityRegistry("[]"), /exact JSON object/);
+  assert.throws(() => loadInternalServiceCapabilityRegistry("not-json"), /exact JSON object/);
+  assert.throws(() => loadInternalServiceCapabilityRegistry(JSON.stringify({ ab: "internal.delivery" })), /actor ID/);
+  assert.throws(() => loadInternalServiceCapabilityRegistry(JSON.stringify({ worker_one: ["internal.delivery"] })), /exactly one/);
+  assert.throws(() => loadInternalServiceCapabilityRegistry(JSON.stringify({ worker_one: "internal.unknown" })), /exactly one/);
+  assert.throws(() => loadInternalServiceCapabilityRegistry(JSON.stringify(Object.fromEntries(
+    Array.from({ length: 65 }, (_, index) => [`worker_${index}`, "internal.delivery"])
+  ))), /at most 64/);
+
+  const registry = loadInternalServiceCapabilityRegistry(JSON.stringify({
+    principal_worker: "internal.principal",
+    delivery_worker: "internal.delivery"
+  }));
+  const safe = safeInternalServiceCapabilityProjection(registry);
+  assert.equal(safe.configured, true);
+  assert.equal(safe.configuredServiceCount, 2);
+  assert.deepEqual(safe.coverage, { delivery: 1, eligibility: 0, principal: 1 });
+  assert.equal(safe.oneCapabilityPerService, true);
+  assert.equal(safe.unconfiguredServicesDenied, true);
+  assert.equal(safe.clientCapabilityHeadersAccepted, false);
+  assert.match(safe.fingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(safe).includes("delivery_worker"), false);
+  assert.equal(JSON.stringify(safe).includes("principal_worker"), false);
+  assert.deepEqual(safe.definitions.map((item) => item.capability), ["internal.delivery", "internal.principal"]);
+  assert.equal(registry.assignments.delivery_worker, "internal.delivery");
+  const explicitDenyAll = loadInternalServiceCapabilityRegistry("{}");
+  assert.equal(explicitDenyAll.configured, true);
+  assert.equal(explicitDenyAll.configuredServiceCount, 0);
 });
 
 test("hosted configuration requires an exact package-pinned Chrome extension origin", () => {

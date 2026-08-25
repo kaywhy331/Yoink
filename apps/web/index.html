@@ -312,8 +312,13 @@
     </section>
 
     <section class="view" id="view-access" data-view-panel="access">
-      <div class="page-heading"><div><p class="eyebrow">Persisted deny-by-default authorization</p><h1>Users and roles</h1><p>Actor labels do not grant privileges. Tenant permissions come from explicit role memberships; device and service capabilities remain independently fixed.</p></div></div>
+      <div class="page-heading"><div><p class="eyebrow">Persisted deny-by-default authorization</p><h1>Users, roles, and workloads</h1><p>Actor labels do not grant privileges. Tenant permissions come from explicit role memberships, each device receives only its own fixed capability, and every internal service identity is limited to one deployment-assigned workload.</p></div></div>
       <div class="safety-banner compact"><span class="safety-icon">⌾</span><div><strong>Tenant-scoped administration</strong><p>Cross-tenant user identifiers are treated as not found. Every role grant and revocation is written to the audit and outbox ledgers.</p></div></div>
+      <section class="panel">
+        <div class="panel-heading"><div><p class="eyebrow">Workload isolation</p><h2>Internal service identities</h2><p>Delivery, contributor eligibility, and principal provisioning are separate capabilities assigned by the deployment. Unconfigured services are denied, and request headers cannot select a capability.</p></div><span class="mode-chip" id="internalServiceGate">CHECKING</span></div>
+        <div class="card-list" id="internalServiceList"></div>
+        <p class="fine-print">Only opaque service references are shown here. Raw workload IDs and authentication secrets never enter this dashboard projection.</p>
+      </section>
       <section class="panel">
         <div class="panel-heading"><div><p class="eyebrow">Memberships</p><h2>Tenant users</h2></div><span class="mode-chip" id="authorizationGate">CHECKING</span></div>
         <div class="card-list" id="authorizationUserList"></div>

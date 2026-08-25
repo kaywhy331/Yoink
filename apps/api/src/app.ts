@@ -159,6 +159,10 @@ import {
 import { resolveExtensionRelease } from "./extension-release.js";
 import { ApiError, apiErrorPayload } from "./api-error.js";
 import { operationalRouteKey, resolveApiRoutePolicy } from "./api-route-policy.js";
+import {
+  emptyInternalServiceCapabilityProjection,
+  type InternalServiceCapabilityProjection
+} from "./internal-service-capabilities.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 const STATIC_FILES = new Map([
@@ -181,6 +185,7 @@ export interface AppDependencies {
   observerRecipeWitness?: ObserverRecipeWitnessPublisher;
   observerRecipeWitnessRequired?: boolean;
   operatorAlertConnectorBindings?: Readonly<Record<string, string>>;
+  internalServiceCapabilityRegistry?: InternalServiceCapabilityProjection;
   requestScopeResolver?: (
     request: IncomingMessage,
     context?: { body?: Record<string, unknown> }
@@ -361,6 +366,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const mutationOriginValidator = dependencies.mutationOriginValidator ?? sameOriginMutation;
   const extensionOriginValidator = dependencies.extensionOriginValidator ?? chromeExtensionOrigin;
   const localExtensionReleaseEnabled = dependencies.localExtensionReleaseEnabled !== false;
+  const internalServiceCapabilities = dependencies.internalServiceCapabilityRegistry
+    ?? emptyInternalServiceCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -683,6 +690,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           rotatableDeviceCredentials: true,
           recoverableTwoPhaseDeviceCredentialRotation: true,
           hostedDeviceTransportContract: true,
+          internalServiceCapabilityPolicyVersion: internalServiceCapabilities.policyVersion,
+          workloadScopedInternalServiceAuthorization: true,
+          unconfiguredInternalServicesDenied: internalServiceCapabilities.unconfiguredServicesDenied,
+          internalServiceCapabilityHeaderAccepted: internalServiceCapabilities.clientCapabilityHeadersAccepted,
+          internalServiceCapabilityRegistryConfigured: internalServiceCapabilities.configured,
+          internalServiceCapabilityRegistryCount: internalServiceCapabilities.configuredServiceCount,
+          internalServiceCapabilityRegistryFingerprint: internalServiceCapabilities.fingerprint,
+          internalServiceCapabilityCoverage: internalServiceCapabilities.coverage,
           separateExtensionRuntimeProfiles: true,
           explicitExtensionOriginPolicy: dependencies.extensionOriginValidator !== undefined,
           localExtensionUpdates: localExtensionReleaseEnabled,
@@ -1439,7 +1454,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             memberships: authorization.memberships(),
             roleAdministrationEnabled: authorization.has("security.manage"),
             changeApprovalEnabled: authorization.has("change.approve"),
-            assurance: adminChanges.assuranceStatus()
+            assurance: adminChanges.assuranceStatus(),
+            internalServices: internalServiceCapabilities
           },
           operatorAlerts: operatorAlertSnapshot,
           backgroundWork,
@@ -1538,6 +1554,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             rotatableDeviceCredentials: true,
             recoverableTwoPhaseDeviceCredentialRotation: true,
             hostedDeviceTransportContract: true,
+            internalServiceCapabilityPolicyVersion: internalServiceCapabilities.policyVersion,
+            workloadScopedInternalServiceAuthorization: true,
+            unconfiguredInternalServicesDenied: internalServiceCapabilities.unconfiguredServicesDenied,
+            internalServiceCapabilityHeaderAccepted: internalServiceCapabilities.clientCapabilityHeadersAccepted,
+            internalServiceCapabilityRegistryConfigured: internalServiceCapabilities.configured,
+            internalServiceCapabilityRegistryCount: internalServiceCapabilities.configuredServiceCount,
             separateExtensionRuntimeProfiles: true,
             explicitExtensionOriginPolicy: dependencies.extensionOriginValidator !== undefined,
             hostedDevicePairingScope: dependencies.requestScopeResolver !== undefined,

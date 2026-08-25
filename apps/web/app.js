@@ -813,6 +813,16 @@ function renderCatalogGovernance() {
 }
 
 function renderAuthorization() {
+  const internalServices = state.snapshot.authorization?.internalServices || {};
+  const serviceDefinitions = internalServices.definitions || [];
+  const serviceGate = $("#internalServiceGate");
+  serviceGate.textContent = Number(internalServices.configuredServiceCount || 0) > 0
+    ? `${Number(internalServices.configuredServiceCount || 0)} SCOPED`
+    : "DENY ALL";
+  serviceGate.className = "mode-chip";
+  $("#internalServiceList").innerHTML = serviceDefinitions.length
+    ? serviceDefinitions.map((definition) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(definition.actorRef)}</h3><p>Deployment-owned workload reference</p></div><span class="tag good">${escapeHtml(definition.capability)}</span></div><p>Exactly one internal capability. This identity cannot provision users, attest eligibility, or process delivery unless that exact capability is shown.</p></article>`).join("")
+    : empty("No internal workload identities are configured. Every hosted service actor is denied by default.");
   const enabled = state.snapshot.authorization?.roleAdministrationEnabled === true;
   $("#authorizationGate").textContent = enabled ? "ADMIN ENABLED" : "READ ONLY";
   if (!enabled) {

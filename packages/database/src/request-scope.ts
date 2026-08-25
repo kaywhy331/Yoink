@@ -1,4 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  INTERNAL_SERVICE_CAPABILITIES,
+  type InternalServiceCapability
+} from "../../contracts/src/index.js";
 import { stableHash } from "../../domain/src/ids.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID } from "./database.js";
 
@@ -9,6 +13,8 @@ export interface RequestScope {
   userId: string;
   actorKind: "maintainer" | "user" | "device" | "service";
   actorId: string;
+  /** Singular deployment-owned workload capability. Never accepted from hosted request headers. */
+  internalServiceCapability?: InternalServiceCapability;
   /** Internal marker set only by the in-process loopback resolver. Never read from hosted headers. */
   requestBoundary?: "local_loopback";
   authenticationAssurance?: "baseline" | "step_up";
@@ -36,6 +42,9 @@ export function normalizedRequestScope(value: RequestScope): RequestScope {
     || !SCOPE_ID_PATTERN.test(String(value.userId || ""))
     || !["maintainer", "user", "device", "service"].includes(value.actorKind)
     || !SCOPE_ID_PATTERN.test(String(value.actorId || ""))
+    || (value.internalServiceCapability !== undefined
+      && (value.actorKind !== "service"
+        || !INTERNAL_SERVICE_CAPABILITIES.includes(value.internalServiceCapability)))
     || (value.requestBoundary !== undefined && value.requestBoundary !== "local_loopback")
     || (hasAuthenticationContext && !["baseline", "step_up"].includes(String(assurance ?? "")))
     || (hasAuthenticationContext && (!Number.isSafeInteger(value.authenticationTime)
@@ -48,6 +57,9 @@ export function normalizedRequestScope(value: RequestScope): RequestScope {
     userId: value.userId,
     actorKind: value.actorKind,
     actorId: value.actorId,
+    ...(value.internalServiceCapability ? {
+      internalServiceCapability: value.internalServiceCapability
+    } : {}),
     ...(value.requestBoundary ? { requestBoundary: value.requestBoundary } : {}),
     ...(hasAuthenticationContext ? {
       authenticationAssurance: assurance,

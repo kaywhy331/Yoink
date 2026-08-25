@@ -26,7 +26,8 @@ const WORKER_SCOPE: RequestScope = {
   tenantId: "tenant_local",
   userId: "user_local",
   actorKind: "service",
-  actorId: "background_worker_signal_test"
+  actorId: "background_worker_signal_test",
+  internalServiceCapability: "internal.delivery"
 };
 
 function signal(sequence = 1): SignalEventInput {

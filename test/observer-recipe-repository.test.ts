@@ -60,7 +60,8 @@ const SERVICE_SCOPE: RequestScope = {
   tenantId: LOCAL_TENANT_ID,
   userId: LOCAL_USER_ID,
   actorKind: "service",
-  actorId: "observer_recipe_test_identity"
+  actorId: "observer_recipe_test_identity",
+  internalServiceCapability: "internal.principal"
 };
 
 function contributorScope(userId: string): RequestScope {
@@ -222,7 +223,8 @@ function attestEligibility(
     tenantId: contributor.scope.tenantId,
     userId: contributor.scope.userId,
     actorKind: "service",
-    actorId: "external_identity_risk_test"
+    actorId: "external_identity_risk_test",
+    internalServiceCapability: "internal.eligibility"
   }, () => new ObserverRecipeContributorEligibilityRepository(db).attest(input, now));
 }
 
@@ -847,7 +849,9 @@ test("recovery evidence expires by latest activity through a bounded owner-scope
       missions: db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count
     };
     const localResult = runWithRequestScope({
-      ...SERVICE_SCOPE,
+      tenantId: SERVICE_SCOPE.tenantId,
+      userId: SERVICE_SCOPE.userId,
+      actorKind: "service",
       actorId: "observer_recovery_retention_worker"
     }, () => repository.pruneRecoveryEvidence(retentionNow));
     assert.deepEqual({

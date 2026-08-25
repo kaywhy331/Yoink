@@ -77,6 +77,66 @@ test("hosted scope signatures bind method, path, tenant, user, actor, timestamp,
   }
 });
 
+test("hosted service capabilities are singular, server-derived, and deny unconfigured actors", () => {
+  const db = new YoinkDatabase();
+  try {
+    const resolve = createHostedRequestScopeResolver(db, {
+      proxySecret: SECRET,
+      serviceCapabilities: { trusted_proxy: "internal.delivery" }
+    });
+    const issuedAt = Math.floor(Date.now() / 1_000);
+    const scopedHeaders = signHostedRequestScope(SECRET, {
+      method: "POST",
+      path: "/api/v1/internal/delivery/inbox",
+      scope: SCOPE,
+      issuedAt,
+      nonce: "service_scope_nonce_abcdefghijkl"
+    });
+    assert.deepEqual(resolve(request("POST", "/api/v1/internal/delivery/inbox", scopedHeaders)), {
+      ...SCOPE,
+      internalServiceCapability: "internal.delivery"
+    });
+
+    const unconfiguredScope: RequestScope = { ...SCOPE, actorId: "constructor" };
+    const unconfiguredHeaders = signHostedRequestScope(SECRET, {
+      method: "POST",
+      path: "/api/v1/internal/delivery/inbox",
+      scope: unconfiguredScope,
+      issuedAt,
+      nonce: "unconfigured_nonce_abcdefghijkl"
+    });
+    assert.deepEqual(
+      resolve(request("POST", "/api/v1/internal/delivery/inbox", unconfiguredHeaders)),
+      unconfiguredScope
+    );
+
+    const forgedHeaders = signHostedRequestScope(SECRET, {
+      method: "POST",
+      path: "/api/v1/internal/delivery/inbox",
+      scope: unconfiguredScope,
+      issuedAt,
+      nonce: "forged_capability_nonce_abcdef"
+    });
+    assert.throws(() => resolve(request("POST", "/api/v1/internal/delivery/inbox", {
+      ...forgedHeaders,
+      "X-Yoink-Service-Capability": "internal.principal"
+    })), /capability headers are not accepted/);
+    assert.throws(() => signHostedRequestScope(SECRET, {
+      method: "POST",
+      path: "/api/v1/internal/delivery/inbox",
+      scope: { ...SCOPE, internalServiceCapability: "internal.principal" },
+      issuedAt,
+      nonce: "signer_capability_nonce_abcdef"
+    }), /server-derived/);
+    assert.throws(() => createHostedRequestScopeResolver(db, {
+      proxySecret: SECRET,
+      serviceCapabilities: { invalid: "internal.invalid" }
+    } as never), /assignments are invalid/);
+  } finally {
+    db.close();
+  }
+});
+
 test("fresh step-up assurance is proxy-signed, time-bounded, and cannot be forged", () => {
   const db = new YoinkDatabase();
   try {

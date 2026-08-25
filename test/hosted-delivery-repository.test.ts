@@ -54,6 +54,32 @@ test("request scope survives async work and keeps tenant audit data isolated", a
   }
 });
 
+test("hosted delivery rejects unconfigured and cross-capability service actors", () => {
+  const db = new YoinkDatabase();
+  try {
+    const delivery = new HostedDeliveryRepository(db);
+    const input = {
+      source: "service_boundary",
+      messageKey: "service:boundary:1",
+      eventType: "boundary_test",
+      payload: { safe: true }
+    };
+    assert.throws(() => runWithRequestScope(scope(LOCAL_TENANT_ID, LOCAL_USER_ID, "service"), () =>
+      delivery.acceptInbox(input, NOW)), /internal\.delivery/);
+    assert.throws(() => runWithRequestScope({
+      ...scope(LOCAL_TENANT_ID, LOCAL_USER_ID, "service"),
+      internalServiceCapability: "internal.eligibility"
+    }, () => delivery.acceptInbox(input, NOW)), /internal\.delivery/);
+    const accepted = runWithRequestScope({
+      ...scope(LOCAL_TENANT_ID, LOCAL_USER_ID, "service"),
+      internalServiceCapability: "internal.delivery"
+    }, () => delivery.acceptInbox(input, NOW));
+    assert.equal(accepted.disposition, "accepted");
+  } finally {
+    db.close();
+  }
+});
+
 test("hosted inbox is idempotent, sanitized, retryable, and protected by one-use lease capabilities", () => {
   const db = new YoinkDatabase();
   try {

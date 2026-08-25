@@ -114,14 +114,24 @@ function capabilityHash(messageId: string, token: string): string {
   return stableHash("hosted_delivery_capability_v1", messageId, token);
 }
 
-function allowedWorker(): void {
-  if (!["service", "maintainer"].includes(currentRequestScope().actorKind)) {
+function allowedWorker(authorization: AuthorizationRepository): void {
+  const scope = currentRequestScope();
+  if (scope.actorKind === "service") {
+    authorization.require("internal.delivery");
+    return;
+  }
+  if (scope.actorKind !== "maintainer") {
     throw new Error("A trusted delivery worker scope is required.");
   }
 }
 
-function allowedIngress(): void {
-  if (!["service", "device", "maintainer"].includes(currentRequestScope().actorKind)) {
+function allowedIngress(authorization: AuthorizationRepository): void {
+  const scope = currentRequestScope();
+  if (scope.actorKind === "service") {
+    authorization.require("internal.delivery");
+    return;
+  }
+  if (!["device", "maintainer"].includes(scope.actorKind)) {
     throw new Error("A trusted delivery ingress scope is required.");
   }
 }
@@ -141,7 +151,7 @@ export class HostedDeliveryRepository {
   }
 
   acceptInbox(input: HostedInboxInput, now = Date.now()): HostedInboxReceipt {
-    allowedIngress();
+    allowedIngress(this.authorization);
     const scope = currentRequestScope();
     const source = deliveryIdentifier(input.source, "inbox source").toLocaleLowerCase("en-US");
     const messageKey = deliveryIdentifier(input.messageKey, "idempotency message key");
@@ -212,7 +222,7 @@ export class HostedDeliveryRepository {
   }
 
   private leaseInboxMatching(eventType: string, leaseSeconds: number, now: number): HostedInboxLease | null {
-    allowedWorker();
+    allowedWorker(this.authorization);
     const scope = currentRequestScope();
     const timestamp = nowIso(now);
     const leaseExpiresAt = nowIso(now + safeSeconds(leaseSeconds, 60, 15, 300) * 1_000);
@@ -279,7 +289,7 @@ export class HostedDeliveryRepository {
   }
 
   completeInbox(id: string, capabilityToken: string, now = Date.now()): boolean {
-    allowedWorker();
+    allowedWorker(this.authorization);
     const cleanId = deliveryIdentifier(id, "inbox message ID");
     this.assertInboxCapability(cleanId, capabilityToken, now);
     const scope = currentRequestScope();
@@ -304,7 +314,7 @@ export class HostedDeliveryRepository {
   }
 
   retryInbox(id: string, capabilityToken: string, reasonCode: string, retryAfterSeconds = 30, now = Date.now()): "retry" | "dead_letter" {
-    allowedWorker();
+    allowedWorker(this.authorization);
     const cleanId = deliveryIdentifier(id, "inbox message ID");
     this.assertInboxCapability(cleanId, capabilityToken, now);
     const scope = currentRequestScope();
@@ -334,7 +344,7 @@ export class HostedDeliveryRepository {
   }
 
   leaseOutbox(leaseSeconds = 60, now = Date.now()): HostedOutboxLease | null {
-    allowedWorker();
+    allowedWorker(this.authorization);
     const scope = currentRequestScope();
     const timestamp = nowIso(now);
     const leaseExpiresAt = nowIso(now + safeSeconds(leaseSeconds, 60, 15, 300) * 1_000);
@@ -395,7 +405,7 @@ export class HostedDeliveryRepository {
   }
 
   completeOutbox(id: string, capabilityToken: string, now = Date.now()): boolean {
-    allowedWorker();
+    allowedWorker(this.authorization);
     const cleanId = deliveryIdentifier(id, "outbox event ID");
     this.assertOutboxCapability(cleanId, capabilityToken, now);
     const scope = currentRequestScope();
@@ -419,7 +429,7 @@ export class HostedDeliveryRepository {
   }
 
   retryOutbox(id: string, capabilityToken: string, reasonCode: string, retryAfterSeconds = 30, now = Date.now()): "retry" | "dead_letter" {
-    allowedWorker();
+    allowedWorker(this.authorization);
     const cleanId = deliveryIdentifier(id, "outbox event ID");
     this.assertOutboxCapability(cleanId, capabilityToken, now);
     const scope = currentRequestScope();
@@ -452,7 +462,7 @@ export class HostedDeliveryRepository {
     outboxRequeued: number;
     outboxDeadLettered: number;
   } {
-    allowedWorker();
+    allowedWorker(this.authorization);
     const scope = currentRequestScope();
     const timestamp = nowIso(now);
     return this.db.transaction(() => {

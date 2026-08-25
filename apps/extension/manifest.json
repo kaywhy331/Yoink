@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Yoink Companion",
-  "version": "0.54.0",
-  "description": "Connects TrackaLacker push to local Yoink, observes thirteen exact retailers plus Walmart Draw, reports privacy-classified adapter alerts, and runs four independently qualified add-only lanes.",
+  "version": "0.55.0",
+  "description": "Connects TrackaLacker push to local Yoink, observes thirteen exact retailers plus Walmart Draw, reports privacy-classified adapter alerts, and packages four independently qualification-gated add-only lanes.",
   "minimum_chrome_version": "120",
   "permissions": [
     "activeTab",

@@ -22,7 +22,8 @@ const SERVICE_SCOPE: RequestScope = {
   tenantId: LOCAL_TENANT_ID,
   userId: LOCAL_USER_ID,
   actorKind: "service",
-  actorId: "external_identity_risk_test"
+  actorId: "external_identity_risk_test",
+  internalServiceCapability: "internal.eligibility"
 };
 
 function device(db: YoinkDatabase): { id: string; token: string } {
@@ -59,6 +60,11 @@ test("only a trusted service can replace bounded current contributor eligibility
     const repository = new ObserverRecipeContributorEligibilityRepository(db);
     const input = eligibility(paired.id);
     assert.throws(() => repository.attest(input, NOW), /identity-risk service scope/);
+    assert.throws(() => runWithRequestScope({
+      ...SERVICE_SCOPE,
+      actorId: "delivery_worker",
+      internalServiceCapability: "internal.delivery"
+    }, () => repository.attest(input, NOW)), /internal\.eligibility/);
     assert.throws(() => runWithRequestScope(SERVICE_SCOPE, () => repository.attest({
       ...input,
       rawAccountEmail: "must-not-enter-the-contract@example.test"

@@ -26,15 +26,29 @@ const SECOND_USER_SCOPE: RequestScope = {
   actorKind: "user",
   actorId: "user_second"
 };
-const LOCAL_SERVICE_SCOPE: RequestScope = {
+const LOCAL_DELIVERY_SCOPE: RequestScope = {
   ...LOCAL_USER_SCOPE,
   actorKind: "service",
-  actorId: "hosted_delivery_local"
+  actorId: "hosted_delivery_local",
+  internalServiceCapability: "internal.delivery"
 };
-const SECOND_SERVICE_SCOPE: RequestScope = {
+const SECOND_DELIVERY_SCOPE: RequestScope = {
   ...SECOND_USER_SCOPE,
   actorKind: "service",
-  actorId: "hosted_delivery_second"
+  actorId: "hosted_delivery_second",
+  internalServiceCapability: "internal.delivery"
+};
+const LOCAL_ELIGIBILITY_SCOPE: RequestScope = {
+  ...LOCAL_USER_SCOPE,
+  actorKind: "service",
+  actorId: "eligibility_local",
+  internalServiceCapability: "internal.eligibility"
+};
+const SECOND_ELIGIBILITY_SCOPE: RequestScope = {
+  ...SECOND_USER_SCOPE,
+  actorKind: "service",
+  actorId: "eligibility_second",
+  internalServiceCapability: "internal.eligibility"
 };
 
 test("the API applies an authenticated request scope resolver before repository access", async () => {
@@ -92,8 +106,10 @@ test("the API applies an authenticated request scope resolver before repository 
       const principal = String(request.headers["x-test-principal"] ?? "");
       if (principal === "local-user") return LOCAL_USER_SCOPE;
       if (principal === "second-user") return SECOND_USER_SCOPE;
-      if (principal === "local-service") return LOCAL_SERVICE_SCOPE;
-      if (principal === "second-service") return SECOND_SERVICE_SCOPE;
+      if (principal === "local-delivery") return LOCAL_DELIVERY_SCOPE;
+      if (principal === "second-delivery") return SECOND_DELIVERY_SCOPE;
+      if (principal === "local-eligibility") return LOCAL_ELIGIBILITY_SCOPE;
+      if (principal === "second-eligibility") return SECOND_ELIGIBILITY_SCOPE;
       throw new Error("Authenticated request scope is required.");
     }
   });
@@ -125,6 +141,22 @@ test("the API applies an authenticated request scope resolver before repository 
     assert.equal(deniedUserDelivery.status, 403);
     assert.equal((await deniedUserDelivery.json() as { error: string }).error, "permission_denied");
 
+    const deniedEligibilityDelivery = await fetch(`${baseUrl}/api/v1/internal/delivery/inbox`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Test-Principal": "second-eligibility" },
+      body: "{}"
+    });
+    assert.equal(deniedEligibilityDelivery.status, 403);
+    assert.equal((await deniedEligibilityDelivery.json() as { error: string }).error, "permission_denied");
+
+    const deniedDeliveryPrincipal = await fetch(`${baseUrl}/api/v1/internal/hosted/principals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Test-Principal": "second-delivery" },
+      body: "{}"
+    });
+    assert.equal(deniedDeliveryPrincipal.status, 403);
+    assert.equal((await deniedDeliveryPrincipal.json() as { error: string }).error, "permission_denied");
+
     const eligibilityNow = Date.now();
     const eligibilityBody = {
       contractVersion: OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_CONTRACT_VERSION,
@@ -149,11 +181,21 @@ test("the API applies an authenticated request scope resolver before repository 
     );
     assert.equal(deniedUserEligibility.status, 403);
     assert.equal((await deniedUserEligibility.json() as { error: string }).error, "permission_denied");
+    const deniedDeliveryEligibility = await fetch(
+      `${baseUrl}/api/v1/internal/observer-recipes/contributor-eligibility`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Test-Principal": "second-delivery" },
+        body: JSON.stringify(eligibilityBody)
+      }
+    );
+    assert.equal(deniedDeliveryEligibility.status, 403);
+    assert.equal((await deniedDeliveryEligibility.json() as { error: string }).error, "permission_denied");
     const wrongPrincipalEligibility = await fetch(
       `${baseUrl}/api/v1/internal/observer-recipes/contributor-eligibility`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Test-Principal": "local-service" },
+        headers: { "Content-Type": "application/json", "X-Test-Principal": "local-eligibility" },
         body: JSON.stringify(eligibilityBody)
       }
     );
@@ -162,7 +204,7 @@ test("the API applies an authenticated request scope resolver before repository 
       `${baseUrl}/api/v1/internal/observer-recipes/contributor-eligibility`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Test-Principal": "second-service" },
+        headers: { "Content-Type": "application/json", "X-Test-Principal": "second-eligibility" },
         body: JSON.stringify(eligibilityBody)
       }
     );
@@ -189,7 +231,7 @@ test("the API applies an authenticated request scope resolver before repository 
 
     const accepted = await fetch(`${baseUrl}/api/v1/internal/delivery/inbox`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Test-Principal": "second-service" },
+      headers: { "Content-Type": "application/json", "X-Test-Principal": "second-delivery" },
       body: JSON.stringify({
         source: "hosted_source",
         messageKey: "remote:001",
@@ -202,13 +244,13 @@ test("the API applies an authenticated request scope resolver before repository 
 
     const wrongTenantLease = await fetch(`${baseUrl}/api/v1/internal/delivery/inbox/lease`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Test-Principal": "local-service" },
+      headers: { "Content-Type": "application/json", "X-Test-Principal": "local-delivery" },
       body: "{}"
     }).then((response) => response.json()) as { lease: unknown };
     assert.equal(wrongTenantLease.lease, null);
     const rightTenantLease = await fetch(`${baseUrl}/api/v1/internal/delivery/inbox/lease`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Test-Principal": "second-service" },
+      headers: { "Content-Type": "application/json", "X-Test-Principal": "second-delivery" },
       body: "{}"
     }).then((response) => response.json()) as { lease: { messageKey: string; capabilityToken: string } };
     assert.equal(rightTenantLease.lease.messageKey, "remote:001");

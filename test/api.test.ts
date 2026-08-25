@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
+import { emptyInternalServiceCapabilityProjection } from "../apps/api/src/internal-service-capabilities.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
@@ -50,6 +51,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /Durable evaluation with closed browser mutation/);
     assert.match(adminPageBody, /latest eligible assertion counts/);
     assert.match(adminPageBody, /renews its credential without asking you to pair again/);
+    assert.match(adminPageBody, /Internal service identities/);
+    assert.match(adminPageBody, /Unconfigured services are denied/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
     assert.match(adminScript, /renderOperationalTelemetry/);
@@ -88,6 +91,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const emptyInternalServices = emptyInternalServiceCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -154,6 +158,14 @@ test("the loopback API serves the control center and processes a dry-run signal"
       rotatableDeviceCredentials: true,
       recoverableTwoPhaseDeviceCredentialRotation: true,
       hostedDeviceTransportContract: true,
+      internalServiceCapabilityPolicyVersion: 1,
+      workloadScopedInternalServiceAuthorization: true,
+      unconfiguredInternalServicesDenied: true,
+      internalServiceCapabilityHeaderAccepted: false,
+      internalServiceCapabilityRegistryConfigured: false,
+      internalServiceCapabilityRegistryCount: 0,
+      internalServiceCapabilityRegistryFingerprint: emptyInternalServices.fingerprint,
+      internalServiceCapabilityCoverage: { delivery: 0, eligibility: 0, principal: 0 },
       separateExtensionRuntimeProfiles: true,
       explicitExtensionOriginPolicy: false,
       localExtensionUpdates: true,

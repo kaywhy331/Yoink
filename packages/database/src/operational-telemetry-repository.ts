@@ -62,6 +62,7 @@ export const OPERATIONAL_ROUTE_KEYS = Object.freeze([
   "device.other",
   "internal.principals",
   "internal.delivery",
+  "internal.eligibility",
   "internal.other"
 ] as const);
 export type OperationalRouteKey = typeof OPERATIONAL_ROUTE_KEYS[number];

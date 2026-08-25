@@ -6,6 +6,7 @@ import {
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { AuditRepository } from "./audit-repository.js";
+import { AuthorizationRepository } from "./authorization-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 
@@ -88,9 +89,11 @@ function rowProjection(row: EligibilityRow, owner = false, now = Date.now()): Re
 
 export class ObserverRecipeContributorEligibilityRepository {
   private readonly audit: AuditRepository;
+  private readonly authorization: AuthorizationRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.audit = new AuditRepository(db);
+    this.authorization = new AuthorizationRepository(db);
   }
 
   attest(input: ObserverRecipeContributorEligibilityInput, now = Date.now()): Record<string, unknown> {
@@ -98,6 +101,7 @@ export class ObserverRecipeContributorEligibilityRepository {
     if (scope.actorKind !== "service") {
       throw new Error("A trusted identity-risk service scope is required for contributor eligibility.");
     }
+    this.authorization.require("internal.eligibility");
     if (!input || typeof input !== "object" || Array.isArray(input)
       || JSON.stringify(Object.keys(input).sort()) !== JSON.stringify([
         "accountEligible", "attestedAt", "contractVersion", "contributorRefHash",
