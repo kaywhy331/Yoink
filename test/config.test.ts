@@ -8,6 +8,8 @@ test("configuration keeps hosted authentication disabled by default", () => {
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.hosted, null);
   assert.equal(config.observerRecipeWitness, null);
+  assert.deepEqual(config.operatorAlertWebhookRegistry.definitions, []);
+  assert.match(config.operatorAlertWebhookRegistry.fingerprint, /^[a-f0-9]{64}$/);
   assert.equal(config.backgroundWorkerMode, "embedded");
   assert.equal(loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER: "0" }).backgroundWorkerMode, "disabled");
   assert.equal(loadConfig(process.cwd(), { YOINK_BACKGROUND_WORKER: "1" }).backgroundWorkerMode, "embedded");
@@ -19,6 +21,26 @@ test("configuration keeps hosted authentication disabled by default", () => {
     YOINK_BACKGROUND_WORKER_MODE: "embedded"
   }), /not both/);
   assert.throws(() => loadConfig(process.cwd(), { YOINK_DATA_DIR: "" }), /non-empty directory/);
+});
+
+test("operator alert webhook configuration exposes only deployment-owned public references", () => {
+  const config = loadConfig(process.cwd(), {
+    YOINK_OPERATOR_ALERT_WEBHOOKS_JSON: JSON.stringify([{
+      reference: "ops_primary",
+      endpoint: "https://alerts.example.com/v1/yoink",
+      signingSecretEnvironment: "YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_OPS_PRIMARY"
+    }]),
+    YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_OPS_PRIMARY: "this-secret-is-not-read-by-the-api-config-loader"
+  });
+  assert.equal(config.operatorAlertWebhookRegistry.definitions[0]?.reference, "ops_primary");
+  assert.equal(config.operatorAlertWebhookRegistry.definitions[0]?.endpoint, "https://alerts.example.com/v1/yoink");
+  assert.equal(config.operatorAlertWebhookRegistry.definitions[0]?.signingSecretEnvironment, "YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_OPS_PRIMARY");
+  assert.match(config.operatorAlertWebhookRegistry.definitions[0]?.bindingFingerprint ?? "", /^[a-f0-9]{64}$/);
+  assert.equal(config.operatorAlertWebhookRegistry.bindings.ops_primary, config.operatorAlertWebhookRegistry.definitions[0]?.bindingFingerprint);
+  assert.equal(JSON.stringify(config.operatorAlertWebhookRegistry).includes("this-secret"), false);
+  assert.throws(() => loadConfig(process.cwd(), {
+    YOINK_OPERATOR_ALERT_WEBHOOKS_JSON: "not-json"
+  }), /JSON array/);
 });
 
 test("hosted configuration requires authentication allowlists and an independently pinned recipe witness", () => {

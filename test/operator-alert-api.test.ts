@@ -8,6 +8,7 @@ import {
   ACKNOWLEDGE_OPERATOR_ALERT_CONFIRMATION,
   AMAZON_OBSERVER_VERSION,
   RESOLVE_OPERATOR_ALERT_CONFIRMATION,
+  SAVE_OPERATOR_ALERT_CONNECTOR_CONFIRMATION,
   SAVE_OPERATOR_ALERT_RULE_CONFIRMATION,
   type RetailerAdapterDiagnosticInput
 } from "../packages/contracts/src/index.js";
@@ -52,13 +53,35 @@ function diagnostic(): RetailerAdapterDiagnosticInput {
 
 test("device diagnostics immediately feed permission-gated operator alert APIs", async () => {
   const db = new YoinkDatabase();
-  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "alert-api-test" });
+  const server = createYoinkServer({
+    db,
+    webRoot: join(process.cwd(), "apps", "web"),
+    version: "alert-api-test",
+    operatorAlertConnectorBindings: { ops_primary: "a".repeat(64) }
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address() as AddressInfo;
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const extensionOrigin = `chrome-extension://${"e".repeat(32)}`;
   try {
+    const createdConnector = await fetch(`${baseUrl}/api/v1/admin/alerts/connectors`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        name: "Primary operations webhook",
+        enabled: true,
+        kind: "webhook",
+        endpointReference: "ops_primary",
+        minimumSeverity: "warning",
+        confirmation: SAVE_OPERATOR_ALERT_CONNECTOR_CONFIRMATION
+      })
+    });
+    assert.equal(createdConnector.status, 201);
+    const createdConnectorBody = await createdConnector.json() as { connector: Record<string, unknown> };
+    assert.equal(createdConnectorBody.connector.runtimeBound, true);
+    assert.equal(JSON.stringify(createdConnectorBody).includes("https://"), false);
+
     const pairing = await fetch(`${baseUrl}/api/v1/user/devices/pairing-code`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
@@ -99,12 +122,16 @@ test("device diagnostics immediately feed permission-gated operator alert APIs",
       rules: Array<Record<string, unknown>>;
       incidents: Array<Record<string, unknown>>;
       deliveries: Array<Record<string, unknown>>;
+      connectors: { connectors: Array<Record<string, unknown>>; deliveries: Array<Record<string, unknown>> };
     };
     assert.equal(alerts.canManage, true);
     assert.equal(alerts.mutationAuthority, false);
     assert.equal(alerts.counts.openOperatorAlerts, 1);
     assert.equal(alerts.incidents[0]?.privacyClassification, "operational_aggregate");
     assert.equal(alerts.deliveries.length, 2);
+    assert.equal(alerts.connectors.connectors.length, 1);
+    assert.equal(alerts.connectors.deliveries.length, 1);
+    assert.equal(alerts.connectors.deliveries[0]?.deliveryState, "pending");
     assert.equal(JSON.stringify(alerts).includes("B0FB21526X"), false);
     assert.equal(JSON.stringify(alerts).includes("DO_NOT_STORE"), false);
     assert.equal(JSON.stringify(db.all("SELECT * FROM operator_alert_incidents")).includes("B0FB21526X"), false);

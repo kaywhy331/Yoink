@@ -2566,5 +2566,195 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       BEFORE DELETE ON background_worker_deployment_events
       BEGIN SELECT RAISE(ABORT, 'background worker deployment events are append-only'); END;
     `
+  },
+  {
+    version: 39,
+    name: "durable_operator_alert_connectors",
+    sql: `
+      CREATE TABLE operator_alert_connectors (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 3 AND 120),
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        kind TEXT NOT NULL CHECK (kind = 'webhook'),
+        endpoint_reference TEXT NOT NULL CHECK (
+          length(endpoint_reference) BETWEEN 3 AND 120
+          AND endpoint_reference GLOB '[A-Za-z]*'
+          AND endpoint_reference NOT GLOB '*[^A-Za-z0-9_.:-]*'
+        ),
+        endpoint_binding_fingerprint TEXT NOT NULL DEFAULT '' CHECK (
+          endpoint_binding_fingerprint = '' OR (
+            length(endpoint_binding_fingerprint) = 64
+            AND endpoint_binding_fingerprint NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        minimum_severity TEXT NOT NULL CHECK (minimum_severity IN ('info', 'warning', 'error', 'critical')),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_configuration'
+          CHECK (privacy_classification = 'operational_configuration'),
+        created_by_actor_id TEXT NOT NULL,
+        updated_by_actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(tenant_id, name)
+      ) STRICT;
+      CREATE INDEX operator_alert_connectors_enabled_idx
+        ON operator_alert_connectors(tenant_id, enabled, minimum_severity, updated_at DESC);
+
+      CREATE TABLE operator_alert_connector_deliveries (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        connector_id TEXT NOT NULL REFERENCES operator_alert_connectors(id) ON DELETE RESTRICT,
+        incident_id TEXT NOT NULL REFERENCES operator_alert_incidents(id) ON DELETE RESTRICT,
+        event_id TEXT NOT NULL REFERENCES operator_alert_events(id) ON DELETE RESTRICT,
+        endpoint_reference TEXT NOT NULL CHECK (length(endpoint_reference) BETWEEN 3 AND 120),
+        endpoint_binding_fingerprint TEXT NOT NULL CHECK (
+          endpoint_binding_fingerprint = '' OR (
+            length(endpoint_binding_fingerprint) = 64
+            AND endpoint_binding_fingerprint NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND length(payload_json) <= 4000),
+        payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64 AND payload_hash NOT GLOB '*[^a-f0-9]*'),
+        idempotency_key_hash TEXT NOT NULL UNIQUE
+          CHECK (length(idempotency_key_hash) = 64 AND idempotency_key_hash NOT GLOB '*[^a-f0-9]*'),
+        state TEXT NOT NULL CHECK (state IN (
+          'pending', 'leased', 'retry_wait', 'delivered', 'dead_letter', 'cancelled'
+        )),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 12),
+        lease_capability_hash TEXT NOT NULL DEFAULT '' CHECK (
+          lease_capability_hash = '' OR (
+            length(lease_capability_hash) = 64 AND lease_capability_hash NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        lease_expires_at TEXT NOT NULL DEFAULT '',
+        next_attempt_at TEXT NOT NULL DEFAULT '',
+        last_error_code TEXT NOT NULL DEFAULT '' CHECK (length(last_error_code) <= 80),
+        last_http_status INTEGER NOT NULL DEFAULT 0 CHECK (
+          last_http_status = 0 OR last_http_status BETWEEN 100 AND 599
+        ),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        delivered_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(connector_id, event_id)
+      ) STRICT;
+      CREATE INDEX operator_alert_connector_deliveries_queue_idx
+        ON operator_alert_connector_deliveries(tenant_id, state, next_attempt_at, created_at, id);
+      CREATE INDEX operator_alert_connector_deliveries_connector_idx
+        ON operator_alert_connector_deliveries(connector_id, created_at DESC, id DESC);
+      CREATE TRIGGER operator_alert_connector_deliveries_insert_guard
+      BEFORE INSERT ON operator_alert_connector_deliveries
+      WHEN NOT (
+        (NEW.state = 'pending' AND NEW.attempt_count = 0
+          AND NEW.lease_capability_hash = '' AND NEW.lease_expires_at = ''
+          AND NEW.next_attempt_at = '' AND NEW.delivered_at = '')
+      )
+      BEGIN SELECT RAISE(ABORT, 'operator alert connector delivery state is invalid'); END;
+      CREATE TRIGGER operator_alert_connector_deliveries_update_guard
+      BEFORE UPDATE ON operator_alert_connector_deliveries
+      WHEN NOT (
+        (NEW.state = 'leased' AND NEW.attempt_count BETWEEN 1 AND 12
+          AND NEW.lease_capability_hash <> '' AND NEW.lease_expires_at <> ''
+          AND NEW.next_attempt_at = '' AND NEW.delivered_at = '')
+        OR (NEW.state = 'retry_wait' AND NEW.attempt_count BETWEEN 1 AND 11
+          AND NEW.lease_capability_hash = '' AND NEW.lease_expires_at = ''
+          AND NEW.next_attempt_at <> '' AND NEW.delivered_at = '')
+        OR (NEW.state = 'delivered' AND NEW.attempt_count BETWEEN 1 AND 12
+          AND NEW.lease_capability_hash = '' AND NEW.lease_expires_at = ''
+          AND NEW.next_attempt_at = '' AND NEW.delivered_at <> '')
+        OR (NEW.state IN ('dead_letter', 'cancelled')
+          AND NEW.lease_capability_hash = '' AND NEW.lease_expires_at = ''
+          AND NEW.next_attempt_at = '' AND NEW.delivered_at = '')
+      )
+      BEGIN SELECT RAISE(ABORT, 'operator alert connector delivery state is invalid'); END;
+
+      CREATE TABLE operator_alert_connector_delivery_events (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        delivery_id TEXT NOT NULL REFERENCES operator_alert_connector_deliveries(id) ON DELETE RESTRICT,
+        sequence INTEGER NOT NULL CHECK (sequence >= 1),
+        event_type TEXT NOT NULL CHECK (event_type IN (
+          'queued', 'leased', 'delivered', 'retry_scheduled', 'dead_lettered', 'cancelled'
+        )),
+        attempt INTEGER NOT NULL CHECK (attempt BETWEEN 0 AND 12),
+        reason_code TEXT NOT NULL CHECK (length(reason_code) BETWEEN 1 AND 80),
+        http_status INTEGER NOT NULL DEFAULT 0 CHECK (http_status = 0 OR http_status BETWEEN 100 AND 599),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        created_at TEXT NOT NULL,
+        UNIQUE(delivery_id, sequence)
+      ) STRICT;
+      CREATE INDEX operator_alert_connector_delivery_events_recent_idx
+        ON operator_alert_connector_delivery_events(tenant_id, created_at DESC, id DESC);
+      CREATE TRIGGER operator_alert_connector_delivery_events_no_update
+      BEFORE UPDATE ON operator_alert_connector_delivery_events
+      BEGIN SELECT RAISE(ABORT, 'operator alert connector delivery events are append-only'); END;
+      CREATE TRIGGER operator_alert_connector_delivery_events_no_delete
+      BEFORE DELETE ON operator_alert_connector_delivery_events
+      WHEN EXISTS (SELECT 1 FROM operator_alert_connector_deliveries WHERE id = OLD.delivery_id)
+      BEGIN SELECT RAISE(ABORT, 'operator alert connector delivery events are append-only'); END;
+
+      CREATE TABLE background_worker_deployment_expectations_v39 (
+        id TEXT PRIMARY KEY CHECK (id = 'active'),
+        contract_version INTEGER NOT NULL CHECK (contract_version = 2),
+        desired_mode TEXT NOT NULL CHECK (desired_mode IN ('embedded', 'external', 'disabled')),
+        runtime_version TEXT NOT NULL CHECK (length(runtime_version) BETWEEN 1 AND 40),
+        deployment_fingerprint TEXT NOT NULL CHECK (
+          length(deployment_fingerprint) = 64
+          AND deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+        ),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_configuration'
+          CHECK (privacy_classification = 'operational_configuration'),
+        updated_at TEXT NOT NULL
+      ) STRICT, WITHOUT ROWID;
+
+      CREATE TABLE background_worker_deployment_events_v39 (
+        id TEXT PRIMARY KEY,
+        sequence INTEGER NOT NULL UNIQUE CHECK (sequence > 0),
+        contract_version INTEGER NOT NULL CHECK (contract_version IN (1, 2)),
+        from_mode TEXT NOT NULL CHECK (from_mode IN ('', 'embedded', 'external', 'disabled')),
+        to_mode TEXT NOT NULL CHECK (to_mode IN ('embedded', 'external', 'disabled')),
+        from_deployment_fingerprint TEXT NOT NULL CHECK (
+          from_deployment_fingerprint = '' OR (
+            length(from_deployment_fingerprint) = 64
+            AND from_deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        to_deployment_fingerprint TEXT NOT NULL CHECK (
+          length(to_deployment_fingerprint) = 64
+          AND to_deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+        ),
+        runtime_version TEXT NOT NULL CHECK (length(runtime_version) BETWEEN 1 AND 40),
+        previous_event_hash TEXT NOT NULL CHECK (
+          previous_event_hash = '' OR (
+            length(previous_event_hash) = 64
+            AND previous_event_hash NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        event_hash TEXT NOT NULL UNIQUE CHECK (
+          length(event_hash) = 64 AND event_hash NOT GLOB '*[^a-f0-9]*'
+        ),
+        reason_code TEXT NOT NULL CHECK (reason_code = 'api_startup_contract'),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_configuration'
+          CHECK (privacy_classification = 'operational_configuration'),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO background_worker_deployment_events_v39
+        SELECT * FROM background_worker_deployment_events;
+
+      DROP TABLE background_worker_deployment_expectations;
+      DROP TABLE background_worker_deployment_events;
+      ALTER TABLE background_worker_deployment_expectations_v39 RENAME TO background_worker_deployment_expectations;
+      ALTER TABLE background_worker_deployment_events_v39 RENAME TO background_worker_deployment_events;
+      CREATE INDEX background_worker_deployment_events_recent_idx
+        ON background_worker_deployment_events(sequence DESC);
+      CREATE TRIGGER background_worker_deployment_events_no_update
+      BEFORE UPDATE ON background_worker_deployment_events
+      BEGIN SELECT RAISE(ABORT, 'background worker deployment events are append-only'); END;
+      CREATE TRIGGER background_worker_deployment_events_no_delete
+      BEFORE DELETE ON background_worker_deployment_events
+      BEGIN SELECT RAISE(ABORT, 'background worker deployment events are append-only'); END;
+    `
   }
 ]);

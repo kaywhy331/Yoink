@@ -561,7 +561,7 @@ intermediate signer; the independent witness signer is never part of this
 repository. Refresh failures enter the existing bounded retry/dead-letter
 lifecycle with fixed reason codes. This closes the scheduling and key-isolation
 portion of the witness seam, not the independent service, external public-log
-monitor, alert connector, PostgreSQL fleet, or automatic recipe generation and
+monitor, PostgreSQL fleet, or automatic recipe generation and
 promotion.
 
 Yoink 0.41.0 binds that seam to a deterministic deployment contract. The API
@@ -583,6 +583,31 @@ This is drift detection within reviewed packaged code, not proof that the
 binary is trustworthy. It does not provide hardware remote attestation,
 artifact-signature verification, workload identity, a secrets manager,
 PostgreSQL roles, or a fleet scheduler.
+
+Yoink 0.42.0 adds the first external operator-alert delivery adapter without
+turning admin configuration into an arbitrary egress primitive. The database
+stores a tenant-scoped opaque reference and one-way binding fingerprint, never
+the HTTPS endpoint or HMAC secret. A deployment-owned registry maps that
+reference to an exact public HTTPS endpoint and dedicated secret-variable name;
+only the process executing the worker resolves the secret value.
+
+Each sanitized alert lifecycle event fans out to enabled connectors at or below
+its severity. A durable row snapshots the fixed operational-aggregate contract
+and exact public binding, then uses its own one-use capability, retry clock,
+12-attempt ceiling, and append-only transition ledger. HTTP redirects and
+permanent failures dead-letter; transient status/network failures back off.
+Response bodies and exceptions are discarded. Exact SKU, page URL/content,
+account/actor data, notes, tokens, and action capabilities never enter the
+payload.
+
+The worker deployment fingerprint advances to contract 2 and includes the
+public registry fingerprint. In addition, a queued row leases only when its
+binding matches the current registry. Reusing a reference for a new destination
+therefore requires an explicit admin re-save that cancels outstanding rows;
+historical alerts cannot silently follow it. This remains a single webhook
+adapter with environment-backed secrets. Managed secret retrieval, DNS/IP
+egress enforcement, email/pager providers, manual replay, PostgreSQL/fleet
+leases, and independent delivery monitoring remain deployment work.
 
 Yoink 0.29.0 makes the reviewed mission policy—not an implicit generated
 strategy—the decision source for user-created plans. Migration 30 adds

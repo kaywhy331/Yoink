@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.41.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.42.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,22 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.42.0 adds durable, HMAC-signed webhook delivery for privacy-classified
+operator alerts. Admins bind an alert connector only to an opaque
+deployment-owned reference; URLs and signing secrets are never accepted by the
+API or stored in SQLite. The fixed alert worker leases each bounded aggregate
+delivery with a one-use capability, retries transient failures, dead-letters
+redirects/permanent failures, and records append-only attempt receipts.
+
+Reference, endpoint, and secret-variable name are pinned by a public binding
+fingerprint on both connector and queued delivery. A changed deployment binding
+cannot lease old work; an explicit admin re-save cancels it before accepting
+the new destination. Worker attestation advances to contract 2 and covers the
+public connector registry, so API/worker registry drift also closes leasing.
+This is a webhook slice, not email/pager integration, managed secrets, egress
+enforcement, PostgreSQL fleet delivery, or purchase authority. See
+[operator alert connectors](docs/OPERATOR_ALERT_CONNECTORS.md).
 
 Version 0.41.0 adds an API-owned deployment contract for background work.
 Migration 38 records the expected mode and a secret-free SHA-256 fingerprint of
@@ -364,8 +380,9 @@ strictly later failure may open new work. Alert projections expose only stable
 allowlisted reason codes, structural fingerprints, bounded counts, and a
 pseudonymous contributor cohort—never exact product IDs, page content, URLs,
 tokens, account data, or operator notes. Alert rules carry no retailer mutation
-authority, and external paging plus background escalation workers remain
-roadmap work.
+authority. Version 0.42 adds a bounded signed-webhook worker path; email/pager
+providers, managed secrets, and production on-call monitoring remain roadmap
+work.
 
 Version 0.22.0 adds a separate read-only Walmart Collectibles Draw lifecycle.
 An explicit companion action observes only the exact draw hub, extracts bounded

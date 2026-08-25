@@ -1,6 +1,41 @@
 # Yoink roadmap
 
-## Shipped through 0.41.0
+## Shipped through 0.42.0
+
+### Durable operator-alert webhook connectors (0.42.0)
+
+- Migration 39 adds tenant-scoped connector configuration, mutable delivery
+  projections, and append-only per-attempt receipts without changing any
+  retailer execution or qualification state. Admins store only an opaque
+  deployment reference, minimum severity, enabled state, and public binding
+  fingerprint; URLs and signing secrets are rejected by the API and database
+- The fixed alert-maintenance worker now dispatches at most 20 bounded
+  operational-aggregate events per run. Random one-use capabilities protect
+  each lease; retryable network/408/425/429/5xx failures use bounded backoff,
+  redirects and permanent failures dead-letter, and claims stop after 12
+- Deployment-owned public HTTPS registry entries resolve references to exact
+  endpoints and dedicated signing-secret environment variables. Stable JSON
+  requests use HMAC-SHA256; response bodies and exception text are discarded,
+  while exact SKU, URL, DOM/text, account, actor, token, and purchase data never
+  enter the connector payload
+- Each connector and queued delivery pins a one-way binding of reference,
+  endpoint, and secret-variable name. Reusing a reference for a changed
+  destination makes existing work non-leasable until an explicit admin re-save
+  cancels outstanding rows, preventing silent historical retargeting
+- Worker deployment attestation advances to contract 2 and includes the public
+  connector-registry fingerprint. Migration preserves contract-1 transition
+  history but clears the obsolete current projection so API startup must write
+  the new exact expectation before a standalone worker can resume
+- `/admin` Alerts now manages connectors and shows binding health, bounded
+  delivery state, HTTP status class evidence, and retry/dead-letter history.
+  Health exposes durable connector dispatch and registry configuration without
+  endpoints, binding fingerprints, secrets, or lease capabilities
+- Repository, API, HMAC/redirect/error, binding-drift, retry/cancellation,
+  migration, worker-process, and real admin-UI paths are covered by automated
+  tests and an [operator runbook](OPERATOR_ALERT_CONNECTORS.md)
+- This ships signed webhooks, not email/pager provider adapters, managed secret
+  storage, DNS/IP egress enforcement, manual per-delivery replay, PostgreSQL
+  fleet execution, or independent delivery monitoring
 
 ### Attested standalone worker deployment contract (0.41.0)
 
@@ -254,9 +289,10 @@
 - At 0.34 this is a production-shaped local modular-monolith seam with an
   in-process SQLite runtime. Version 0.35 extracts the async worker port and a
   standalone bounded-principal SQLite adapter, and 0.36 adds the first packaged
-  signal-evaluation consumer. PostgreSQL, a production fleet, external
-  connectors, recipe workers, and deletion orchestration remain open Phase 2/3
-  work
+  signal-evaluation consumer. Version 0.42 adds bounded signed-webhook dispatch
+  to the packaged alert task. PostgreSQL, a production fleet, managed connector
+  infrastructure, recipe workers, and deletion orchestration remain open Phase
+  2/3 work
 - Target and Walmart retain their existing independently qualified add-only
   state. Amazon, Best Buy, marketplace, pickup, checkout, drawing entry,
   payment, and order submission are not widened
@@ -555,10 +591,11 @@ quantity limits, queue lifecycle, cancellation, and order reconciliation.
   stable allowlisted reason/stage enums, structural hashes, bounded counts, and
   tenant-scoped pseudonymous source cohorts. Companion/server allowlist parity
   is regression-tested
-- This is a local adapter-repair alert vertical slice, not a production on-call
-  system. External email/webhook/pager delivery, scheduled escalation workers,
-  production retention operations, and broader alert families remain open.
-  Alert configuration has no purchase or retailer-lane mutation authority
+- This began as a local adapter-repair vertical slice. Version 0.42 adds the
+  first durable signed-webhook route and worker dispatch, but email/pager
+  providers, managed secrets, production retention/monitoring, manual delivery
+  replay, and broader alert families remain open. Alert configuration has no
+  purchase or retailer-lane mutation authority
 
 ### Walmart Collectibles Draw read-only lifecycle (0.22.0)
 
@@ -880,9 +917,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.41.0
+## Architecture assessment after 0.42.0
 
-Yoink 0.41.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.42.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -894,8 +931,8 @@ or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-38 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation and observer-witness refresh, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task events, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, signed artifact/workload identity, or hosted cutover |
-| Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, secret references, external alert connectors or connector dispatch workers, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
+| Primary backend database | Transactional migration-39 SQLite schema plus deterministic operator portability, recoverable generation-bound Chrome credential rotation, exact hosted pairing/credential scope, an asynchronous worker port with embedded and standalone SQLite adapters, durable device-signal inbox evaluation, observer-witness refresh, and signed operator-alert dispatch, API-owned worker deployment fingerprints with append-only change history, bounded multi-principal task execution, scoped user export, immutable offer/intent/catalog-topology evidence, selected-offer community scope, append-only spend/catalog/trust/witness/change/task/connector receipts, tenant-scoped alert history, and bounded operational telemetry retention | No async PostgreSQL implementation/importer, production identity provider, backup/PITR service, fleet-safe scheduler, device-risk service, signed artifact/workload identity, managed secrets, or hosted cutover |
+| Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA hookup, managed secret provider, email/pager adapters, manual connector-delivery replay, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, a scoped My data inventory/export, explicit pending-review boundaries, no-write-before-review plan setup, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, and an explicit managed-install boundary when hosted ZIP delivery is closed | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, TTL/conflict projections, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, contributor reputation/Sybil defense, robust aggregation, complete retention/deletion operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; a narrow stable-attribute landmark can derive a tenant-scoped non-executable maintainer suggestion; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | Landmarks cover only unique Add-control selector misses and cannot synthesize a complete recipe; local device/SKU evidence is not a public community quorum or independent oracle; canary is not cohort deployment; recipe evaluation is not a worker handler; the independent witness service and public consistency monitor are not deployed by this repository |
@@ -1108,9 +1145,11 @@ view, permission-gated schedules, dead-letter retry, and runtime heartbeats;
 0.35.0 makes embedded versus standalone runtime state explicit without
 claiming production deployment. Version 0.36 adds payload-free signal-inbox
 counts and a permission-gated, audited retry for one corrected signal dead
-letter without exposing its retained signal payload.
-Production IdP/MFA integration, account deletion, support break-glass,
-connectors, independently deployed connector workers, and broader alert
+letter without exposing its retained signal payload. Version 0.42 adds
+deployment-reference webhook configuration, binding health, HMAC delivery, and
+durable retry/dead-letter receipts to the existing alert worker.
+Production IdP/MFA integration, account deletion, support break-glass, managed
+secrets, email/pager providers, production connector fleets, and broader alert
 families remain open.
 
 Build `/admin` as a separate permission-gated application, with aggregate and
@@ -1125,10 +1164,11 @@ redacted views by default:
   packaged mutation runner
 - operator-owned affiliate program configuration and validation, separated from
   user disclosure/preferences and immutable per-job attribution receipts
-- Extend the shipped adapter-repair alert family with scheduled escalation and
-  external email/webhook/on-call connectors, connector health, retry/dead-letter
-  receipts, and privacy-classified alert families for the remaining material
-  operations; keep all of them distinct from users' product notifications
+- Extend the shipped adapter-repair alert family beyond its durable signed
+  webhook with email/on-call providers, managed secrets, manual dead-letter
+  replay, independent connector health/SLO monitoring, and privacy-classified
+  alert families for the remaining material operations; keep all of them
+  distinct from users' product notifications
 - catalog candidates, exact-identifier conflicts, merge/split history, item and
   offer state, community quarantine, contributor abuse, and repair/recipe queues
 - user/device lifecycle, consent/export/deletion support, and audited

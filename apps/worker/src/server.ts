@@ -8,6 +8,8 @@ import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registr
 import { ObserverRecipeWitnessClient } from "../../../packages/observer-registry/src/witness.js";
 import { ObserverRecipeWitnessRefreshService } from "../../../packages/engine/src/observer-recipe-witness-refresh.js";
 import { loadWorkerConfig } from "./config.js";
+import { HmacOperatorAlertWebhookTransport } from "../../../packages/engine/src/operator-alert-webhook.js";
+import { OperatorAlertConnectorDispatchService } from "../../../packages/engine/src/operator-alert-connector-dispatch.js";
 
 let db: YoinkDatabase | null = null;
 let runtime: BackgroundWorkerRuntime | null = null;
@@ -62,11 +64,16 @@ async function start(): Promise<void> {
           }
         }
       : undefined;
+    const operatorAlertConnectorDispatch = new OperatorAlertConnectorDispatchService(
+      workerDb,
+      config.operatorAlertWebhookRegistry,
+      new HmacOperatorAlertWebhookTransport(config.operatorAlertWebhookRegistry, process.env)
+    );
     runtime = new BackgroundWorkerRuntime({
       store,
       handler: new BackgroundMaintenanceHandler(workerDb, observerRecipeWitnessRefresh
-        ? { observerRecipeWitnessRefresh }
-        : {}),
+        ? { observerRecipeWitnessRefresh, operatorAlertConnectorDispatch }
+        : { operatorAlertConnectorDispatch }),
       version: config.version,
       deploymentFingerprint: config.deploymentFingerprint,
       runtimeKind: "standalone",

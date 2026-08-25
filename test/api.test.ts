@@ -53,6 +53,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /renderAdminChanges/);
     assert.match(adminScript, /\/api\/v1\/admin\/workers/);
     assert.match(adminScript, /renderBackgroundWork/);
+    assert.match(adminScript, /renderOperatorAlerts/);
+    assert.match(adminScript, /SAVE_OPERATOR_ALERT_CONNECTOR/);
     assert.match(adminScript, /Maintainer review ready/);
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
@@ -72,6 +74,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
       durableObserverRecipeWitnessRefresh: true,
+      durableOperatorAlertConnectorDispatch: true,
+      operatorAlertConnectorRegistryConfigured: false,
       observerRecipeWitnessRefreshConfigured: false,
       standaloneWitnessRefreshLoadsSigningKeys: false,
       privacyBoundedRepairLandmarks: true,
@@ -87,7 +91,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       backgroundWorkerDeployment: "local_in_process",
       backgroundWorkerMode: "disabled",
       backgroundWorkerDeploymentAttested: false,
-      backgroundWorkerDeploymentContractVersion: 1,
+      backgroundWorkerDeploymentContractVersion: 2,
       asyncBackgroundWorkerContract: true,
       standaloneBackgroundWorkerProcessReady: true,
       productionWorkerFleetReady: false,

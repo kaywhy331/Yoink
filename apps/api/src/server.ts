@@ -19,6 +19,10 @@ import {
   BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION,
   backgroundWorkerDeploymentFingerprint as deploymentFingerprintForWorker
 } from "../../../packages/domain/src/background-worker-deployment.js";
+import {
+  HmacOperatorAlertWebhookTransport
+} from "../../../packages/engine/src/operator-alert-webhook.js";
+import { OperatorAlertConnectorDispatchService } from "../../../packages/engine/src/operator-alert-connector-dispatch.js";
 
 const config = loadConfig();
 mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
@@ -40,8 +44,16 @@ const observerRecipeWitnessRefresh = observerRecipeWitness
 const workerDeploymentFingerprint = deploymentFingerprintForWorker({
   runtimeVersion: config.version,
   observerRecipeWitness: config.observerRecipeWitness,
-  observerRecipeWitnessRequired: config.hosted !== null
+  observerRecipeWitnessRequired: config.hosted !== null,
+  operatorAlertWebhookRegistryFingerprint: config.operatorAlertWebhookRegistry.fingerprint
 });
+const operatorAlertConnectorDispatch = new OperatorAlertConnectorDispatchService(
+  db,
+  config.operatorAlertWebhookRegistry,
+  config.backgroundWorkerMode === "embedded"
+    ? new HmacOperatorAlertWebhookTransport(config.operatorAlertWebhookRegistry, process.env)
+    : undefined
+);
 const backgroundWorkerStore = new SqliteBackgroundWorkerStore(db, {
   principalMode: config.hosted ? "all" : "fixed"
 });
@@ -53,8 +65,8 @@ backgroundWorkerStore.configureDeploymentExpectation(
 const backgroundWorker = new BackgroundWorkerRuntime({
   store: backgroundWorkerStore,
   handler: new BackgroundMaintenanceHandler(db, observerRecipeWitnessRefresh
-    ? { observerRecipeWitnessRefresh }
-    : {}),
+    ? { observerRecipeWitnessRefresh, operatorAlertConnectorDispatch }
+    : { operatorAlertConnectorDispatch }),
   version: config.version,
   deploymentFingerprint: workerDeploymentFingerprint,
   runtimeKind: "local_in_process",
@@ -79,6 +91,7 @@ const server = createYoinkServer({
   releaseRoot: config.releaseRoot,
   observerRecipeTrust,
   version: config.version,
+  operatorAlertConnectorBindings: config.operatorAlertWebhookRegistry.bindings,
   backgroundWorkerStatus: async () => {
     if (config.backgroundWorkerMode === "embedded") {
       return { ...backgroundWorker.status(), mode: "embedded" as const };

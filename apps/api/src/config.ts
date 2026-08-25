@@ -4,6 +4,10 @@ import {
   loadObserverRecipeWitnessConfig,
   type ObserverRecipeWitnessRuntimeConfig
 } from "../../../packages/observer-registry/src/config.js";
+import {
+  loadOperatorAlertWebhookRegistry,
+  type OperatorAlertWebhookRegistry
+} from "../../../packages/engine/src/operator-alert-webhook.js";
 
 export interface YoinkConfig {
   host: "127.0.0.1";
@@ -21,6 +25,7 @@ export interface YoinkConfig {
     allowedExtensionOrigins: string[];
   } | null;
   observerRecipeWitness: ObserverRecipeWitnessRuntimeConfig | null;
+  operatorAlertWebhookRegistry: OperatorAlertWebhookRegistry;
 }
 
 function port(value: string | undefined): number {
@@ -92,6 +97,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     throw new Error("Hosted mode requires a 32-byte YOINK_HOSTED_PROXY_SECRET plus explicit YOINK_HOSTED_HOSTS, YOINK_HOSTED_ORIGINS, and YOINK_HOSTED_EXTENSION_ORIGINS.");
   }
   const observerRecipeWitness = loadObserverRecipeWitnessConfig(env);
+  const operatorAlertWebhookRegistry = loadOperatorAlertWebhookRegistry(env);
   if (hostedRequested && !observerRecipeWitness) {
     throw new Error("Hosted mode requires an independently operated observer recipe witness configuration.");
   }
@@ -105,6 +111,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     version: projectVersion(projectRoot),
     backgroundWorkerMode,
     hosted: hostedRequested ? { proxySecret, allowedHosts, allowedOrigins, allowedExtensionOrigins } : null,
-    observerRecipeWitness
+    observerRecipeWitness,
+    operatorAlertWebhookRegistry
   };
 }

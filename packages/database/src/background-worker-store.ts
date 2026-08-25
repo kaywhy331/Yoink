@@ -272,7 +272,8 @@ export class SqliteBackgroundWorkerStore implements BackgroundWorkerStore {
       const sequence = Number(previousEvent?.sequence ?? 0) + 1;
       const previousEventHash = previousEvent?.eventHash ?? "";
       const eventHash = stableHash(
-        "yoink_background_worker_deployment_event_v1",
+        "yoink_background_worker_deployment_event_v2",
+        BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION,
         sequence,
         current?.desiredMode ?? "",
         safeMode,

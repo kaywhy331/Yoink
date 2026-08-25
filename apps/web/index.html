@@ -189,7 +189,7 @@
     </section>
 
     <section class="view" id="view-alerts" data-view-panel="alerts">
-      <div class="page-heading"><div><p class="eyebrow">Operational control plane</p><h1>Alerts</h1><p>Sanitized extension failures become deduplicated operator incidents immediately. This queue is separate from product notifications and has no purchase authority.</p></div><button class="button primary" id="addOperatorAlertRuleButton" type="button">Add alert rule</button></div>
+      <div class="page-heading"><div><p class="eyebrow">Operational control plane</p><h1>Alerts</h1><p>Sanitized extension failures become deduplicated operator incidents immediately. This queue is separate from product notifications and has no purchase authority.</p></div><div class="card-actions"><button class="button secondary" id="addOperatorAlertConnectorButton" type="button">Add connector</button><button class="button primary" id="addOperatorAlertRuleButton" type="button">Add alert rule</button></div></div>
       <div class="safety-banner compact"><span class="safety-icon">◈</span><div><strong>Operational aggregates only</strong><p>Alert rows contain bounded enums, counts, pseudonymous cohorts, and structural fingerprints. Page HTML, text, exact product IDs, account data, cookies, offer tokens, forms, and payment data are never copied into this subsystem.</p></div></div>
       <section class="metric-grid" id="operatorAlertMetricGrid" aria-label="Operator alert totals"></section>
       <section class="panel operator-alert-panel">
@@ -201,8 +201,16 @@
         <div class="card-list" id="operatorAlertRuleList"></div>
       </section>
       <section class="panel operator-alert-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Deployment-owned destinations</p><h2>External connectors</h2><p>Admins bind only opaque references. HTTPS endpoints and HMAC signing secrets come from the reviewed worker deployment and are never stored in the database or accepted by this UI.</p></div></div>
+        <div class="card-list" id="operatorAlertConnectorList"></div>
+      </section>
+      <section class="panel operator-alert-panel">
         <div class="panel-heading"><div><p class="eyebrow">Immutable receipts</p><h2>Delivery history</h2><p>Every routed lifecycle event records the route and current durable-outbox state.</p></div></div>
         <div class="card-list" id="operatorAlertDeliveryList"></div>
+      </section>
+      <section class="panel operator-alert-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Bounded retries</p><h2>Connector dispatch</h2><p>Every attempt uses an expiring lease capability and records an append-only receipt. Redirects and permanent HTTP failures dead-letter without exposing response bodies.</p></div></div>
+        <div class="card-list" id="operatorAlertConnectorDeliveryList"></div>
       </section>
     </section>
 
@@ -506,6 +514,22 @@
       </div>
       <p class="fine-print">Escalation may be 0 (disabled) or at least 300 seconds. Remote alert configuration cannot widen an observer or mutation runner.</p>
       <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save alert rule</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="operatorAlertConnectorDialog">
+    <form id="operatorAlertConnectorForm">
+      <input name="id" type="hidden">
+      <div class="dialog-heading"><div><p class="eyebrow">Deployment-owned routing</p><h2 id="operatorAlertConnectorDialogTitle">Add alert connector</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="form-grid">
+        <label class="wide"><span>Connector name</span><input name="name" maxlength="120" required></label>
+        <label><span>Kind</span><select name="kind"><option value="webhook">Signed HTTPS webhook</option></select></label>
+        <label><span>Minimum severity</span><select name="minimumSeverity"><option value="info">Info</option><option value="warning">Warning</option><option value="error">Error</option><option value="critical">Critical</option></select></label>
+        <label class="wide"><span>Deployment endpoint reference</span><input name="endpointReference" maxlength="120" pattern="[A-Za-z][A-Za-z0-9_.:-]{2,119}" required autocomplete="off"></label>
+        <label class="check-label"><input name="enabled" type="checkbox" checked><span>Connector enabled</span></label>
+      </div>
+      <p class="fine-print">This reference must match YOINK_OPERATOR_ALERT_WEBHOOKS_JSON on the API and attested worker. Yoink never accepts a URL or signing secret through this form. Changing the destination reference cancels outstanding deliveries instead of silently retargeting them.</p>
+      <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save connector</button></div>
     </form>
   </dialog>
 

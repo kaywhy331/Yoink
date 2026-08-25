@@ -38,7 +38,7 @@ function capture(child: ChildProcessWithoutNullStreams): { output: () => string 
   return { output: () => value };
 }
 
-test("standalone worker configuration is bounded and credential-free", () => {
+test("standalone worker configuration is bounded and attests public connector references without retaining secrets", () => {
   const workerSource = readFileSync(join(process.cwd(), "apps", "worker", "src", "server.ts"), "utf8");
   assert.match(workerSource, /witnessVerificationOnly\(config\.dataDirectory\)/);
   assert.doesNotMatch(workerSource, /ObserverRecipeTrustAuthority\.persistent/);
@@ -59,6 +59,7 @@ test("standalone worker configuration is bounded and credential-free", () => {
   assert.equal(config.maximumTasksPerPrincipal, 8);
   assert.equal(config.observerRecipeWitness, null);
   assert.equal(config.observerRecipeWitnessRequired, false);
+  assert.deepEqual(config.operatorAlertWebhookRegistry.definitions, []);
   assert.match(config.deploymentFingerprint, /^[a-f0-9]{64}$/);
   assert.equal(Object.keys(config).some((key) => /secret|token|password|credential/i.test(key)), false);
   assert.throws(() => loadWorkerConfig(process.cwd(), { YOINK_WORKER_ID: "bad worker" }), /WORKER_ID/);
@@ -89,6 +90,16 @@ test("standalone worker configuration is bounded and credential-free", () => {
     YOINK_OBSERVER_RECIPE_WITNESS_MAX_AGE_SECONDS: "600"
   });
   assert.notEqual(hostedWithDifferentFreshness.deploymentFingerprint, hosted.deploymentFingerprint);
+
+  const connectorConfigured = loadWorkerConfig(process.cwd(), {
+    YOINK_OPERATOR_ALERT_WEBHOOKS_JSON: JSON.stringify([{
+      reference: "ops_primary",
+      endpoint: "https://alerts.example.com/v1/yoink",
+      signingSecretEnvironment: "YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_OPS_PRIMARY"
+    }])
+  });
+  assert.notEqual(connectorConfigured.deploymentFingerprint, config.deploymentFingerprint);
+  assert.equal(JSON.stringify(connectorConfigured).includes("signing-secret-value"), false);
 });
 
 test("the standalone worker fails closed and redacts startup errors before API initialization", async () => {

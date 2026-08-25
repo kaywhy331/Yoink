@@ -1,7 +1,9 @@
 # Worker deployment attestation
 
-Yoink 0.41 prevents a standalone SQLite worker with a different packaged or
-public trust configuration from receiving new work. This is deterministic
+Yoink 0.42 prevents a standalone SQLite worker with a different packaged,
+public trust, or public alert-connector configuration from receiving new work.
+Contract 2 supersedes contract 1 while preserving its append-only transition
+history. This is deterministic
 drift detection inside reviewed Yoink code. It is not hardware remote
 attestation and cannot prove that a malicious replacement binary is honest.
 
@@ -16,13 +18,18 @@ over:
   attempt count;
 - whether an observer-recipe witness is required and configured;
 - the exact witness HTTPS endpoint and log namespace;
-- witness Ed25519 key ID and a nested hash of its public SPKI; and
-- configured maximum receipt age.
+- witness Ed25519 key ID and a nested hash of its public SPKI;
+- configured maximum receipt age; and
+- a hash of sorted operator-alert webhook bindings, where each binding hashes
+  the exact reference, HTTPS endpoint, and signing-secret variable name.
 
-No private key, device credential, proxy secret, tenant/user identifier,
+No private key, webhook secret value, device credential, proxy secret, tenant/user identifier,
 retailer evidence, product data, URL history, or task capability is an input or
-stored output. The endpoint and public key remain process configuration; SQLite
-receives only the final 64-character fingerprint.
+stored output. Witness/connector endpoints and public keys remain process
+configuration; SQLite receives only the final 64-character deployment
+fingerprint. Connector and queued-delivery rows separately retain only their
+public one-way binding so a changed destination cannot receive historical work
+silently.
 
 ## API-owned expectation
 
@@ -61,7 +68,8 @@ For `worker_deployment_mismatch` or
 1. stop every standalone worker;
 2. confirm the API and worker use the exact same reviewed Yoink package;
 3. compare witness required/configured state, URL, log ID, key ID, public SPKI,
-   and maximum age without copying private key material;
+   maximum age, and the exact public webhook registry without copying private
+   key or webhook-secret material;
 4. start the API and let it own all migrations and the current expectation;
 5. start one matching worker; then
 6. require healthy attested coverage in `/api/v1/health` and Admin Operations
@@ -73,8 +81,8 @@ does not hide an online mismatched worker.
 
 ## Remaining production boundary
 
-The contract catches accidental version, task-registry, and public witness
-configuration drift in this SQLite process layout. Production still needs
-signed artifact provenance, workload identity, secret references and rotation,
+The contract catches accidental version, task-registry, public witness, and
+public alert-registry drift in this SQLite process layout. Production still needs
+signed artifact provenance, workload identity, managed secret retrieval and rotation,
 PostgreSQL roles and row isolation, fleet-safe leases, deployment orchestration,
 independent monitoring, and tested rollback/outage procedures.

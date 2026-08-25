@@ -3,6 +3,7 @@ import { AuthorizationError } from "../../../packages/database/src/authorization
 import { PurchaseSafetyError } from "../../../packages/database/src/purchase-policy-repository.js";
 import { CatalogIdentityGovernanceError } from "../../../packages/database/src/catalog-identity-governance-repository.js";
 import { OperatorAlertError } from "../../../packages/database/src/operator-alert-repository.js";
+import { OperatorAlertConnectorError } from "../../../packages/database/src/operator-alert-connector-repository.js";
 import { AdminChangeControlError } from "../../../packages/database/src/admin-change-control-repository.js";
 import { CatalogLinkError } from "../../../packages/database/src/catalog-link-repository.js";
 import { BackgroundTaskError } from "../../../packages/database/src/background-task-repository.js";
@@ -45,6 +46,12 @@ export function apiErrorPayload(error: unknown, correlationId: string): { status
     };
   }
   if (error instanceof OperatorAlertError) {
+    return {
+      status: error.status,
+      payload: { error: error.code, message: error.message, correlationId }
+    };
+  }
+  if (error instanceof OperatorAlertConnectorError) {
     return {
       status: error.status,
       payload: { error: error.code, message: error.message, correlationId }

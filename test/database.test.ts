@@ -56,8 +56,10 @@ test("initial migration creates the normalized graph and safe local defaults", (
     assert.equal(db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master
       WHERE type = 'table' AND name IN (
         'operator_alert_rules', 'operator_alert_incidents',
-        'operator_alert_events', 'operator_alert_deliveries'
-      )`)?.count, 4);
+        'operator_alert_events', 'operator_alert_deliveries',
+        'operator_alert_connectors', 'operator_alert_connector_deliveries',
+        'operator_alert_connector_delivery_events'
+      )`)?.count, 7);
     assert.equal(db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master
       WHERE type = 'table' AND name IN (
         'observer_recipe_trust_manifests', 'observer_recipe_transparency_events',
@@ -1359,7 +1361,7 @@ test("migration 37 adds the witness-refresh task kind without losing durable wor
   }
 });
 
-test("migration 38 adds worker deployment attestation without losing heartbeat history", () => {
+test("migrations 38 and 39 preserve heartbeat history while advancing attestation and adding alert connectors", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-worker-attestation-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -1391,6 +1393,9 @@ test("migration 38 adds worker deployment attestation without losing heartbeat h
       assert.equal(upgraded.get<{ count: number }>(
         "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 38 AND name = 'attested_background_worker_deployment'"
       )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 39 AND name = 'durable_operator_alert_connectors'"
+      )?.count, 1);
       assert.equal(upgraded.get<{ deploymentFingerprint: string }>(
         `SELECT deployment_fingerprint AS deploymentFingerprint
          FROM background_worker_heartbeats WHERE worker_id = 'background_worker_upgrade_38'`
@@ -1399,6 +1404,19 @@ test("migration 38 adds worker deployment attestation without losing heartbeat h
         `SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table'
          AND name IN ('background_worker_deployment_expectations', 'background_worker_deployment_events')`
       )?.count, 2);
+      assert.equal(upgraded.get<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table'
+         AND name IN ('operator_alert_connectors', 'operator_alert_connector_deliveries',
+                      'operator_alert_connector_delivery_events')`
+      )?.count, 3);
+      assert.throws(() => upgraded.run(
+        `INSERT INTO background_worker_deployment_expectations(
+           id, contract_version, desired_mode, runtime_version, deployment_fingerprint,
+           privacy_classification, updated_at
+         ) VALUES ('active', 1, 'external', '0.42.0', ?, 'operational_configuration', ?)`,
+        "a".repeat(64),
+        "2026-08-25T11:00:00.000Z"
+      ), /constraint failed/);
       upgraded.run(
         "UPDATE background_worker_heartbeats SET deployment_fingerprint = ? WHERE worker_id = 'background_worker_upgrade_38'",
         "a".repeat(64)

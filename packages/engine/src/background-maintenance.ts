@@ -20,11 +20,13 @@ import { SpendLedgerRepository } from "../../database/src/spend-ledger-repositor
 import { runWithRequestScope } from "../../database/src/request-scope.js";
 import { DurableSignalIngressProcessor } from "./signal-ingress.js";
 import type { ObserverRecipeWitnessRefreshService } from "./observer-recipe-witness-refresh.js";
+import type { OperatorAlertConnectorDispatchService } from "./operator-alert-connector-dispatch.js";
 
 export type BackgroundTaskHandler = BackgroundWorkerTaskHandler;
 
 export interface BackgroundMaintenanceHandlerOptions {
   observerRecipeWitnessRefresh?: Pick<ObserverRecipeWitnessRefreshService, "execute">;
+  operatorAlertConnectorDispatch?: Pick<OperatorAlertConnectorDispatchService, "execute">;
 }
 
 export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler {
@@ -79,11 +81,23 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
           ...this.signalIngress.processBatch(now)
         };
       case "adapter_alert_reconciliation":
-        return this.operatorAlerts.reconcileAdapterRepairs(
-          this.adapterDiagnostics.listRepairQueue(2_000),
-          `background_alert_reconciliation_${new Date(now).toISOString().replace(/[^0-9]/g, "").slice(0, 17)}`,
-          now
-        );
+        return {
+          ...this.operatorAlerts.reconcileAdapterRepairs(
+            this.adapterDiagnostics.listRepairQueue(2_000),
+            `background_alert_reconciliation_${new Date(now).toISOString().replace(/[^0-9]/g, "").slice(0, 17)}`,
+            now
+          ),
+          ...(this.options.operatorAlertConnectorDispatch
+            ? await this.options.operatorAlertConnectorDispatch.execute(now)
+            : {
+                connectorRegistryConfigured: false,
+                connectorTransportConfigured: false,
+                connectorDeliveriesAttempted: 0,
+                connectorDeliveriesSucceeded: 0,
+                connectorDeliveriesRetried: 0,
+                connectorDeliveriesDeadLettered: 0
+              })
+        };
       case "observer_recipe_witness_refresh":
         return this.options.observerRecipeWitnessRefresh
           ? this.options.observerRecipeWitnessRefresh.execute(now)

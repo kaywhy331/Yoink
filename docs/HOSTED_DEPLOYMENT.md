@@ -79,6 +79,16 @@ SQLite. This prevents accidental drift in packaged code, not a malicious binary
 from lying, and is not hardware remote attestation or release provenance. See
 [worker deployment attestation](WORKER_DEPLOYMENT_ATTESTATION.md).
 
+Version 0.42 adds deployment-owned, HMAC-signed operator-alert webhooks. The
+admin plane stores only an opaque reference and binding fingerprint; exact
+HTTPS endpoints and secret-variable names come from the public deployment
+registry, and only the process executing delivery resolves each secret value.
+The public registry is now part of worker attestation. Existing queued rows
+also require an exact binding match, so changing a destination under the same
+reference cannot silently retarget historical alerts. This is optional; an
+empty registry is a healthy no-connector state. See
+[operator alert connectors](OPERATOR_ALERT_CONNECTORS.md).
+
 Production catalog curation requires a separately authenticated global-curator
 plane with step-up/two-person approval, cross-tenant policy, privacy operations,
 and durable operator audit. Do not bypass the 0.21 multi-tenant lock by granting
@@ -104,6 +114,14 @@ YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID=<sha256 of witness Ed25519 SPKI>
 YOINK_OBSERVER_RECIPE_WITNESS_PUBLIC_KEY_SPKI=<base64url DER SPKI>
 YOINK_OBSERVER_RECIPE_WITNESS_MAX_AGE_SECONDS=900
 YOINK_BACKGROUND_WORKER_MODE=external
+```
+
+Optional signed-webhook delivery additionally uses the same public registry on
+API and worker plus the named secret only on the external worker:
+
+```text
+YOINK_OPERATOR_ALERT_WEBHOOKS_JSON=[{"reference":"ops_primary","endpoint":"https://alerts.example.com/v1/yoink","signingSecretEnvironment":"YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_OPS_PRIMARY"}]
+YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_OPS_PRIMARY=<32-512 byte random secret; worker only>
 ```
 
 The Node process still binds to loopback. Put an authenticated TLS reverse proxy
@@ -138,6 +156,13 @@ with no live process reports waiting/stopped and unhealthy. See the
 [background worker runbook](BACKGROUND_WORKER.md) for commands, settings, and
 recovery, and [durable signal ingress](SIGNAL_INGRESS.md) for the device receipt,
 pause, replay, and corrected-message retry contract.
+
+If webhook delivery is configured, API and worker must share the exact public
+registry or attestation closes new work. Keep the named secret out of API in
+external mode, out of process arguments and shell history, and out of SQLite,
+backups, logs, telemetry, and support tooling. Enforce destination egress at the
+network boundary; Yoink's configuration validation does not replace production
+DNS/IP policy or a managed secret provider.
 
 Do not scale this SQLite process layout into a production claim. Multiple
 hosts, PostgreSQL transactions and row-level tenant isolation, fleet-safe

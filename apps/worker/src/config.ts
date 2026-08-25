@@ -5,6 +5,10 @@ import {
   type ObserverRecipeWitnessRuntimeConfig
 } from "../../../packages/observer-registry/src/config.js";
 import { backgroundWorkerDeploymentFingerprint } from "../../../packages/domain/src/background-worker-deployment.js";
+import {
+  loadOperatorAlertWebhookRegistry,
+  type OperatorAlertWebhookRegistry
+} from "../../../packages/engine/src/operator-alert-webhook.js";
 
 const WORKER_ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 
@@ -20,6 +24,7 @@ export interface YoinkWorkerConfig {
   maximumTasksPerPrincipal: number;
   observerRecipeWitness: ObserverRecipeWitnessRuntimeConfig | null;
   observerRecipeWitnessRequired: boolean;
+  operatorAlertWebhookRegistry: OperatorAlertWebhookRegistry;
   deploymentFingerprint: string;
 }
 
@@ -63,6 +68,7 @@ export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
     throw new Error("Hosted workers require an independently operated observer recipe witness.");
   }
   const version = projectVersion(projectRoot);
+  const operatorAlertWebhookRegistry = loadOperatorAlertWebhookRegistry(env);
   return {
     dataDirectory,
     databasePath: join(dataDirectory, "yoink.sqlite"),
@@ -93,10 +99,12 @@ export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
     ),
     observerRecipeWitness,
     observerRecipeWitnessRequired,
+    operatorAlertWebhookRegistry,
     deploymentFingerprint: backgroundWorkerDeploymentFingerprint({
       runtimeVersion: version,
       observerRecipeWitness,
-      observerRecipeWitnessRequired
+      observerRecipeWitnessRequired,
+      operatorAlertWebhookRegistryFingerprint: operatorAlertWebhookRegistry.fingerprint
     })
   };
 }

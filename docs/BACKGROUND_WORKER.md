@@ -1,6 +1,6 @@
 # Background worker operations
 
-Yoink 0.41 retains two safe SQLite worker layouts. Embedded mode is the
+Yoink 0.42 retains two safe SQLite worker layouts. Embedded mode is the
 zero-configuration local default. External mode runs the same closed handler
 registry in a separately supervised process. The registry contains six closed
 task families, including durable TrackaLacker evaluation and observer-recipe
@@ -57,10 +57,11 @@ Run `npm run build` before these release commands. For source development use
 `npm run dev` and `npm run dev:worker` with the same environment and ordering.
 Never point independently versioned API and worker packages at one SQLite file.
 
-Migration 38 makes that exact-package rule enforceable for the standalone
+Migrations 38 and 39 make that exact-package rule enforceable for the standalone
 layout. On startup the API records its requested worker mode and a secret-free
 fingerprint over the package version, closed task registry, witness requirement,
-and complete public witness configuration. A standalone worker presents its
+complete public witness configuration, and public operator-alert webhook
+registry. A standalone worker presents its
 independently calculated fingerprint with every heartbeat. It cannot create a
 schedule, enqueue work, or lease a task unless the API-owned expectation is
 `external` and both version and fingerprint match.
@@ -79,7 +80,26 @@ In hosted mode, give the worker the same complete
 configuration is rejected, and `YOINK_HOSTED_MODE=1` refuses worker startup
 when it is absent. The worker has no retailer, account, payment, device-token,
 witness-private-key, or observer-private-signing-key input. Principal iteration
-uses a canonical opaque keyset cursor rather than an unbounded table sweep.
+uses a canonical opaque keyset cursor rather than an unbounded table sweep. A
+configured webhook adds only its outbound HMAC secret described below; that
+secret grants no Yoink, browser, retailer, or purchase authority.
+
+## Operator-alert webhook dispatch
+
+The **Alert reconciliation and dispatch** schedule reconciles sanitized adapter
+repair groups and then processes at most 20 connector rows. Configure the same
+public `YOINK_OPERATOR_ALERT_WEBHOOKS_JSON` registry on API and standalone
+worker. Each entry contains an opaque reference, exact public HTTPS endpoint,
+and a dedicated `YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_*` variable name. In
+external mode only the worker needs the named 32–512 byte secret value; in
+embedded mode the API process is also the worker and needs it.
+
+The public registry is part of deployment attestation, while secret values are
+not. Each connector and delivery also pins a one-way binding fingerprint, so a
+changed endpoint under the same reference becomes non-leasable until an admin
+explicitly re-saves the connector and cancels outstanding work. See
+[operator alert webhook connectors](OPERATOR_ALERT_CONNECTORS.md) for exact
+configuration, payload, HMAC, retry, dead-letter, and recovery rules.
 
 ## Signal inbox behavior
 
@@ -141,6 +161,9 @@ recovery, and key-separation requirements.
   `observerRecipeWitnessRefreshConfigured` reports whether this process has a
   complete public witness configuration;
 - `standaloneWitnessRefreshLoadsSigningKeys` remains `false`;
+- `durableOperatorAlertConnectorDispatch` is `true`, while
+  `operatorAlertConnectorRegistryConfigured` reports whether a public registry
+  is present without exposing its endpoints or bindings;
 - `productionWorkerFleetReady` remains `false`.
 
 The admin view considers a heartbeat online for 30 seconds. It shows only
@@ -176,6 +199,11 @@ log ID, key ID, public SPKI, and maximum age. A witness-refresh dead letter is
 an availability or consistency incident: inspect the independent service and
 public log, correct the deployment, then use the normal authorized task retry.
 Do not copy either observer or witness private signing material onto the worker.
+
+If connectors are configured, also compare the public webhook registry and
+confirm each named signing-secret variable is present only where delivery runs.
+A connector that becomes unbound after a reviewed registry change must be
+explicitly re-saved; do not edit its binding fingerprint in SQLite.
 
 A `worker_deployment_mismatch` means the process fingerprint differs from the
 API expectation. Stop the worker, compare the exact package and public witness

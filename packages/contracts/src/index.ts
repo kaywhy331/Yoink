@@ -225,7 +225,10 @@ export const OPERATOR_ALERT_SEVERITIES = ["info", "warning", "error", "critical"
 export type OperatorAlertSeverity = (typeof OPERATOR_ALERT_SEVERITIES)[number];
 export const OPERATOR_ALERT_ROUTES = ["dashboard", "audit_outbox"] as const;
 export type OperatorAlertRoute = (typeof OPERATOR_ALERT_ROUTES)[number];
+export const OPERATOR_ALERT_CONNECTOR_KINDS = ["webhook"] as const;
+export type OperatorAlertConnectorKind = (typeof OPERATOR_ALERT_CONNECTOR_KINDS)[number];
 export const SAVE_OPERATOR_ALERT_RULE_CONFIRMATION = "SAVE_OPERATOR_ALERT_RULE";
+export const SAVE_OPERATOR_ALERT_CONNECTOR_CONFIRMATION = "SAVE_OPERATOR_ALERT_CONNECTOR";
 export const ACKNOWLEDGE_OPERATOR_ALERT_CONFIRMATION = "ACKNOWLEDGE_OPERATOR_ALERT";
 export const RESOLVE_OPERATOR_ALERT_CONFIRMATION = "RESOLVE_OPERATOR_ALERT";
 export const OPERATOR_ALERT_ACKNOWLEDGEMENT_REASON_CODES = ["operator_investigating"] as const;
@@ -255,6 +258,20 @@ export interface OperatorAlertRuleInput {
   operationScope: RetailerAdapterDiagnosticOperation | "*";
   routes: OperatorAlertRoute[];
   confirmation: typeof SAVE_OPERATOR_ALERT_RULE_CONFIRMATION;
+}
+
+/**
+ * Connector destinations are deployment-owned. Admins may bind an alert
+ * connector to an opaque reference, but URLs and signing secrets are never
+ * accepted through the API or persisted in Yoink's database.
+ */
+export interface OperatorAlertConnectorInput {
+  name: string;
+  enabled: boolean;
+  kind: OperatorAlertConnectorKind;
+  endpointReference: string;
+  minimumSeverity: OperatorAlertSeverity;
+  confirmation: typeof SAVE_OPERATOR_ALERT_CONNECTOR_CONFIRMATION;
 }
 
 export interface OperatorAlertAcknowledgeInput {

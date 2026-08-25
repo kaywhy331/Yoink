@@ -18,8 +18,8 @@ export const BACKGROUND_TASK_DEFINITIONS = Object.freeze({
     maximumAttempts: 5
   }),
   adapter_alert_reconciliation: Object.freeze({
-    label: "Adapter alert reconciliation",
-    description: "Reconcile sanitized adapter repair groups into the governed operator alert lifecycle.",
+    label: "Alert reconciliation and dispatch",
+    description: "Reconcile sanitized adapter repair groups, then dispatch bounded operator alerts through deployment-owned connectors.",
     intervalSeconds: 60,
     maximumAttempts: 5
   }),

@@ -9,6 +9,7 @@ import {
   RETAILER_OBSERVER_VERSIONS,
   SAVE_OPERATOR_ALERT_RULE_CONFIRMATION,
   type OperatorAlertAcknowledgeInput,
+  type OperatorAlertConnectorInput,
   type OperatorAlertEventFamily,
   type OperatorAlertResolveInput,
   type OperatorAlertRoute,
@@ -24,6 +25,10 @@ import type { AdapterRepairQueueItem } from "./adapter-diagnostic-repository.js"
 import { AuditRepository } from "./audit-repository.js";
 import { AuthorizationRepository } from "./authorization-repository.js";
 import type { YoinkDatabase } from "./database.js";
+import {
+  OperatorAlertConnectorRepository,
+  type OperatorAlertConnector
+} from "./operator-alert-connector-repository.js";
 import { currentRequestScope } from "./request-scope.js";
 
 const SEVERITIES = new Set<string>(OPERATOR_ALERT_SEVERITIES);
@@ -282,10 +287,12 @@ function displayRetailer(retailerId: SupportedRetailerId): string {
 export class OperatorAlertRepository {
   private readonly audit: AuditRepository;
   private readonly authorization: AuthorizationRepository;
+  private readonly connectors: OperatorAlertConnectorRepository;
 
-  constructor(private readonly db: YoinkDatabase) {
+  constructor(private readonly db: YoinkDatabase, availableConnectorBindings: Readonly<Record<string, string>> = {}) {
     this.audit = new AuditRepository(db);
     this.authorization = new AuthorizationRepository(db);
+    this.connectors = new OperatorAlertConnectorRepository(db, availableConnectorBindings);
   }
 
   private normalizeRule(input: OperatorAlertRuleInput): NormalizedRule {
@@ -508,6 +515,28 @@ export class OperatorAlertRepository {
         timestamp
       );
     }
+    this.connectors.queue({
+      id: eventId,
+      incidentId: incident.id,
+      eventType,
+      severity: incident.severity,
+      reasonCode,
+      createdAt: timestamp
+    }, {
+      id: incident.id,
+      retailerId: incident.retailerId,
+      operation: incident.operation,
+      failureStage: incident.failureStage,
+      layoutFingerprint: incident.layoutFingerprint,
+      occurrenceCount: incident.occurrenceCount,
+      affectedEntityCount: incident.affectedEntityCount,
+      firstSeenAt: incident.firstSeenAt,
+      lastSeenAt: incident.lastSeenAt
+    }, now);
+  }
+
+  saveConnector(input: OperatorAlertConnectorInput, id = "", now = Date.now()): OperatorAlertConnector {
+    return this.connectors.save(input, id, now);
   }
 
   reconcileAdapterRepairs(queue: AdapterRepairQueueItem[], correlationId: string, now = Date.now()): {
@@ -876,6 +905,10 @@ export class OperatorAlertRepository {
     };
   }
 
+  connectorCounts(): ReturnType<OperatorAlertConnectorRepository["counts"]> {
+    return this.connectors.counts();
+  }
+
   snapshot(now = Date.now()): Record<string, unknown> {
     this.authorization.require("admin.read");
     return {
@@ -885,6 +918,7 @@ export class OperatorAlertRepository {
       mutationAuthority: false,
       canManage: this.authorization.has("alert.manage"),
       counts: this.counts(),
+      connectors: this.connectors.snapshot(),
       rules: this.rules(),
       incidents: this.incidents("all", 200, now),
       events: this.events(200),
