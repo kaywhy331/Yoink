@@ -17,9 +17,11 @@ immutable JSON constraint helper required by task inserts and runs the actual
 tenant queue repository through two restricted native pools. Yoink 0.63 advances
 to contract v3 with one `SELECT`-only grant on the singleton deployment
 expectation and makes new-work schedule/enqueue/lease attestation plus queue SQL
-one transaction.
-Principal enumeration, fleet status/stopping, handlers, the runtime API, and the
-worker remain SQLite or qualification-control only.
+one transaction. Yoink 0.64 adds an inactive, separately receipted
+three-table/19-column-grant control role and routes principal pagination, fleet
+status, and worker stopping through its native qualification adapter.
+Handlers, the runtime API, and the worker remain SQLite-backed, and all
+PostgreSQL roles remain inactive.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -117,13 +119,17 @@ The optional tenant-session qualifier adds an empty server-owned principal
 registry, zero-argument binder, read-only adapter, and 82 restrictive policies.
 Native tests prove that custom setting changes cannot widen a mapped tenant's
 scope. It creates no production login, membership, principal mapping, write
-role, or runtime authority.
+role, or runtime authority. The optional worker-control qualifier adds only
+principal-ID enumeration, deployment-expectation reads, and heartbeat
+read/update through a separate role; native tests prove the exact operations
+and denials, then remove all fixture membership and mappings.
 Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
 A production cutover must still add PostgreSQL task handlers and request
-repositories, production identity-to-login provisioning and write roles,
+repositories, production identity-to-login provisioning and activate the
+qualified roles, add remaining write roles,
 governed mixed/incident access, deployed worker-fleet and handler replay proof,
 production identity, backup/PITR and restore, outage/load testing, and
 controlled authority-switch evidence. It must quiesce SQLite, load

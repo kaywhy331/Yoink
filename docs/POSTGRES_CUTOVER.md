@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.63 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.64 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -135,7 +135,9 @@ contract-v2 role; production identity, principal/deployment control, task
 handlers, request repositories, and runtime activation remain separate gates.
 Version 0.63 adds only read access to the singleton deployment expectation and
 makes that attestation atomic with new-work queue SQL; principal enumeration,
-fleet status, and stopping remain separate control gates.
+fleet status, and stopping remain separate control gates. Version 0.64
+qualifies those gates through their own three-table/19-column-grant role while
+leaving it inactive.
 
 Plan the exact role namespace without a database connection:
 
@@ -292,9 +294,9 @@ Those fixtures and memberships are removed
 before final receipt verification. Changing the JSON helper from immutable to
 volatile or weakening a restrictive policy invalidates the receipt.
 
-Principal enumeration, deployment status, and worker stopping still use the
-qualification/control connection. Those control operations need their own
-least-privilege contract before runtime use.
+At the 0.63 boundary, principal enumeration, deployment status, and worker
+stopping still used the qualification connection. Version 0.64 moves those
+operations to the separately qualified worker-control boundary below.
 
 Plan the exact boundary without a database connection:
 
@@ -327,6 +329,72 @@ membership, or principal mapping. It does not port a task handler, principal/
 deployment-control repository, or API repository and does not configure the API
 or worker to use PostgreSQL. The five-table grant boundary is qualification
 evidence only; SQLite remains authoritative.
+
+## Least-privilege worker-control qualification seam
+
+Version 0.64 derives one additional fleet-control role from the exact current
+cutover, read-role, tenant-session, and queue-write manifests. It is `NOLOGIN`,
+`NOINHERIT`, `NOSUPERUSER`, `NOCREATEROLE`, `NOCREATEDB`, `NOREPLICATION`, and
+`NOBYPASSRLS`. Its complete table surface is:
+
+| Table | Exact operations | Purpose |
+| --- | --- | --- |
+| `users` | `SELECT (tenant_id, id)` | Bounded keyset enumeration without display-name or timestamp access |
+| `background_worker_deployment_expectations` | `SELECT` on its singleton ID and four contract fields | Compare required contract, mode, runtime version, and fingerprint without metadata access |
+| `background_worker_heartbeats` | `SELECT` on eight status fields; `UPDATE` on state, heartbeat/stopped timestamps, and error code | Report coverage and stop an existing worker without changing identity, runtime, or deployment attribution |
+
+The 19 exact catalog column grants are grouped into those four operations.
+Three role-specific permissive RLS policies expose them, and the update policy
+requires the resulting heartbeat state to be `stopped`. The role
+has no queue-task access, insert, delete, truncate, references, trigger,
+sequence, application-function, schema-create, ownership, login, membership,
+principal-mapping, runtime, or retailer authority. It cannot update a user or
+deployment expectation, and the heartbeat update cannot create a worker.
+
+`NodePostgresWorkerControlDatabase` opens a `READ COMMITTED READ WRITE`
+transaction and assumes only this role before exposing the query session. When
+supplied to `PostgresBackgroundWorkerQualificationStore`, principal pagination,
+deployment status, and worker stopping must use that adapter; tenant queue work
+continues through the separately bound tenant writer.
+
+The native PostgreSQL 16 suite temporarily grants one disposable login the
+control role. It proves exact two-page enumeration, raw visibility of exactly
+the fixture users, deployment-coverage reporting, and stopping exactly one
+heartbeat. Direct attempts to update users or expectations, insert a heartbeat,
+or read tasks fail. The membership and mapped principals are removed before
+the receipt is reverified. Weakening the users policy invalidates the sealed
+catalog fingerprint.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:worker-control -- plan \
+  yoink_cutover_qualification_064 yoink_q_064 yoink_session_q_064 \
+  yoink_queue_q_064 yoink_control_q_064
+```
+
+After the exact queue-write v3 receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_WORKER_CONTROL_QUALIFICATION_ACK=bounded-worker-control-qualification \
+  npm run postgres:worker-control -- apply \
+  yoink_cutover_qualification_064 yoink_q_064 yoink_session_q_064 \
+  yoink_queue_q_064 yoink_control_q_064
+```
+
+Then re-inspect the live catalogs and immutable receipt independently:
+
+```bash
+npm run postgres:worker-control -- verify \
+  yoink_cutover_qualification_064 yoink_q_064 yoink_session_q_064 \
+  yoink_queue_q_064 yoink_control_q_064
+```
+
+Apply refuses a reused role, policy, guard, or receipt and cannot create a
+login, membership, or principal mapping. This is qualification evidence only;
+the API and standalone worker do not construct this adapter at runtime, and
+SQLite remains authoritative.
 
 ## Requirements
 
@@ -432,10 +500,10 @@ confirms that the operator intentionally requested an offline, one-shot load.
 The admin Operations projection lists these as required, not complete:
 
 - PostgreSQL implementations for task handlers and every API repository;
-- production identity-to-login provisioning, least-privilege principal/
-  deployment control, atomic attestation plus tenant queue writes, remaining
-  writer families, and governed semantics for mixed source-less offers and the
-  unresolved incident table; all qualified roles remain inactive;
+- production identity-to-login provisioning and activation of the qualified
+  tenant/control roles, remaining writer families, and governed semantics for
+  mixed source-less offers and the unresolved incident table; all qualified
+  roles remain inactive;
 - deployed multi-process worker isolation, task-handler idempotent replay,
   sustained load, connection-failure, failover, and outage drills;
 - encrypted backups, PITR, restore/reconcile drills, and rollback evidence;

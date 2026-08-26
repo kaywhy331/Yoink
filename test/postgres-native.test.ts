@@ -29,6 +29,12 @@ import {
   buildPostgresTenantQueueWriteManifest,
   verifyPostgresTenantQueueWriteBoundary
 } from "../packages/database/src/postgres-tenant-queue-writes.js";
+import {
+  NodePostgresWorkerControlDatabase,
+  applyPostgresWorkerControlBoundary,
+  buildPostgresWorkerControlManifest,
+  verifyPostgresWorkerControlBoundary
+} from "../packages/database/src/postgres-worker-control.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
 import {
   POSTGRES_TEST_WORKER_FINGERPRINT,
@@ -43,9 +49,11 @@ const NATIVE_TENANT = "tenant_cutover_other";
 const NATIVE_USER = "user_cutover_other";
 const NATIVE_SESSION_ROLE_NAMESPACE = "yoink_native_session";
 const NATIVE_QUEUE_WRITE_ROLE_NAMESPACE = "yoink_native_queue_write";
+const NATIVE_WORKER_CONTROL_ROLE_NAMESPACE = "yoink_native_worker_control";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_UNMAPPED = "yoink_native_principal_unmapped";
+const NATIVE_CONTROL_PRINCIPAL = "yoink_native_control_principal";
 const NATIVE_PRINCIPAL_PASSWORD = "yoink_native_principal_only";
 
 async function availableLoopbackPort(): Promise<number> {
@@ -123,6 +131,7 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
   let queueWriterASecond: NodePostgresTenantQueueWriteDatabase | null = null;
   let queueWriterB: NodePostgresTenantQueueWriteDatabase | null = null;
   let queueWriterUnmapped: NodePostgresTenantQueueWriteDatabase | null = null;
+  let workerControl: NodePostgresWorkerControlDatabase | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -207,6 +216,38 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       ),
       queueWriteBoundary
     );
+    const workerControlBoundary = await applyPostgresWorkerControlBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:53:00.000Z").getTime()
+    );
+    assert.equal(workerControlBoundary.tableCount, 3);
+    assert.equal(workerControlBoundary.grantCount, 19);
+    assert.equal(workerControlBoundary.membershipCount, 0);
+    assert.equal(workerControlBoundary.activePrincipalCount, 0);
+    assert.equal(workerControlBoundary.permissivePolicyCount, 3);
+    assert.equal(workerControlBoundary.principalEnumeration, true);
+    assert.equal(workerControlBoundary.deploymentStatus, true);
+    assert.equal(workerControlBoundary.workerStopping, true);
+    assert.equal(workerControlBoundary.insertAccess, false);
+    assert.equal(workerControlBoundary.deleteAccess, false);
+    assert.equal(workerControlBoundary.runtimeAuthority, false);
+    assert.match(workerControlBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresWorkerControlBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE
+      ),
+      workerControlBoundary
+    );
     await importer.close();
     importer = null;
 
@@ -264,6 +305,13 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       NATIVE_SESSION_ROLE_NAMESPACE,
       NATIVE_QUEUE_WRITE_ROLE_NAMESPACE
     );
+    const workerControlManifest = buildPostgresWorkerControlManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE
+    );
     for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
       await first.query(
         `CREATE ROLE "${principalRole}"
@@ -277,6 +325,14 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
         `GRANT "${queueWriteManifest.writeRole.name}" TO "${principalRole}"`
       );
     }
+    await first.query(
+      `CREATE ROLE "${NATIVE_CONTROL_PRINCIPAL}"
+       LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+       PASSWORD '${NATIVE_PRINCIPAL_PASSWORD}'`
+    );
+    await first.query(
+      `GRANT "${workerControlManifest.controlRole.name}" TO "${NATIVE_CONTROL_PRINCIPAL}"`
+    );
     await first.query(
       `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
          principal_role, tenant_id, user_id, active, provisioned_at
@@ -332,6 +388,13 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       certificateAuthorityPem: ""
     }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
     NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, { maxConnections: 1 });
+    workerControl = new NodePostgresWorkerControlDatabase({
+      connectionString: principalConnection(NATIVE_CONTROL_PRINCIPAL),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    { maxConnections: 1 });
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -601,10 +664,12 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
     );
 
     const firstStore = new PostgresBackgroundWorkerQualificationStore(first, NATIVE_SCHEMA, {
-      tenantQueueWriteDatabase: queueWriterA
+      tenantQueueWriteDatabase: queueWriterA,
+      workerControlDatabase: workerControl
     });
     const secondStore = new PostgresBackgroundWorkerQualificationStore(second, NATIVE_SCHEMA, {
-      tenantQueueWriteDatabase: queueWriterASecond
+      tenantQueueWriteDatabase: queueWriterASecond,
+      workerControlDatabase: workerControl
     });
     const [firstQualification, secondQualification] = await Promise.all([
       firstStore.qualify(),
@@ -614,9 +679,90 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
     assert.equal(firstQualification.serverBoundQueueWriteTransactions, true);
     assert.equal(firstQualification.queueStoreWriteRoleParity, true);
     assert.equal(firstQualification.atomicDeploymentAttestationAndQueueWrite, true);
-    assert.equal(firstQualification.controlRepositoryParity, false);
+    assert.equal(firstQualification.serverBoundControlTransactions, true);
+    assert.equal(firstQualification.controlRepositoryParity, true);
     assert.equal(firstQualification.handlerRepositoryParity, false);
     assert.deepEqual(secondQualification, firstQualification);
+
+    const firstPrincipalPage = await firstStore.listPrincipals("", 1);
+    assert.equal(firstPrincipalPage.principals.length, 1);
+    assert.notEqual(firstPrincipalPage.nextCursor, "");
+    const secondPrincipalPage = await firstStore.listPrincipals(firstPrincipalPage.nextCursor, 1);
+    assert.equal(secondPrincipalPage.principals.length, 1);
+    assert.equal(secondPrincipalPage.nextCursor, "");
+    assert.deepEqual(
+      [...firstPrincipalPage.principals, ...secondPrincipalPage.principals]
+        .map((value) => `${value.tenantId}:${value.userId}`).sort(),
+      [`${NATIVE_TENANT}:${NATIVE_USER}`, "tenant_local:user_local"].sort()
+    );
+    assert.deepEqual(
+      await workerControl.controlTransaction(async (session) =>
+        (await session.query<{ tenantId: string; userId: string }>(
+          `SELECT tenant_id AS "tenantId", id AS "userId"
+           FROM "${NATIVE_SCHEMA}"."users" ORDER BY tenant_id, id`
+        )).rows),
+      [
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        { tenantId: "tenant_local", userId: "user_local" }
+      ]
+    );
+    await assert.rejects(
+      workerControl.controlTransaction((session) => session.query(
+        `SELECT display_name FROM "${NATIVE_SCHEMA}"."users"`
+      )),
+      /permission denied/
+    );
+    await assert.rejects(
+      workerControl.controlTransaction((session) => session.query(
+        `SELECT updated_at FROM "${NATIVE_SCHEMA}"."background_worker_deployment_expectations"`
+      )),
+      /permission denied/
+    );
+    await assert.rejects(
+      workerControl.controlTransaction((session) => session.query(
+        `UPDATE "${NATIVE_SCHEMA}"."users" SET display_name = 'forbidden'`
+      )),
+      /permission denied/
+    );
+    await assert.rejects(
+      workerControl.controlTransaction((session) => session.query(
+        `UPDATE "${NATIVE_SCHEMA}"."background_worker_deployment_expectations"
+         SET runtime_version = 'forbidden' WHERE id = 'active'`
+      )),
+      /permission denied/
+    );
+    await assert.rejects(
+      workerControl.controlTransaction((session) => session.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."background_worker_heartbeats"(
+           tenant_id, subject_user_id, worker_id, runtime_kind, runtime_version,
+           state, started_at, heartbeat_at, stopped_at, last_error_code,
+           privacy_classification, deployment_fingerprint
+         ) VALUES ($1, $2, 'forbidden_control_insert', 'standalone', $3,
+                   'running', $4, $4, '', '', 'operational_aggregate', $5)`,
+        [
+          NATIVE_TENANT,
+          NATIVE_USER,
+          POSTGRES_TEST_WORKER_VERSION,
+          new Date(NATIVE_NOW).toISOString(),
+          POSTGRES_TEST_WORKER_FINGERPRINT
+        ]
+      )),
+      /permission denied/
+    );
+    await assert.rejects(
+      workerControl.controlTransaction((session) => session.query(
+        `UPDATE "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+         SET deployment_fingerprint = $1`,
+        [POSTGRES_TEST_WORKER_FINGERPRINT]
+      )),
+      /permission denied/
+    );
+    await assert.rejects(
+      workerControl.controlTransaction((session) => session.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."background_tasks"`
+      )),
+      /permission denied/
+    );
 
     assert.deepEqual(
       await queueWriterA.writeTransaction(
@@ -728,6 +874,43 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
         [NATIVE_TENANT, NATIVE_USER]
       )).rows[0]?.count,
       "1"
+    );
+    assert.deepEqual(
+      await firstStore.deploymentStatus(
+        "standalone",
+        POSTGRES_TEST_WORKER_FINGERPRINT,
+        NATIVE_NOW
+      ),
+      {
+        state: "running",
+        healthy: false,
+        runtimeKind: "standalone",
+        lastHeartbeatAt: new Date(NATIVE_NOW).toISOString(),
+        lastErrorCode: "worker_coverage_incomplete",
+        coveredPrincipals: 1,
+        totalPrincipals: 2,
+        deploymentAttested: false,
+        deploymentContractVersion: 2
+      }
+    );
+    await firstStore.stopWorker("native_repository_probe", "standalone", "native_control_stop", NATIVE_NOW + 1);
+    assert.deepEqual(
+      (await first.query<{ state: string; errorCode: string }>(
+        `SELECT state, last_error_code AS "errorCode"
+         FROM "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+         WHERE tenant_id = $1 AND subject_user_id = $2
+           AND worker_id = 'native_repository_probe'`,
+        [NATIVE_TENANT, NATIVE_USER]
+      )).rows,
+      [{ state: "stopped", errorCode: "native_control_stop" }]
+    );
+    await assert.rejects(
+      workerControl.controlTransaction((session) => session.query(
+        `UPDATE "${NATIVE_SCHEMA}"."background_worker_heartbeats"
+         SET state = 'running'
+         WHERE worker_id = 'native_repository_probe' AND runtime_kind = 'standalone'`
+      )),
+      /row-level security policy/
     );
     const scheduledFor = "2026-08-25T16:59:00.000Z";
     await insertProbeTask(first, "native_repository_retry", 25, scheduledFor);
@@ -869,6 +1052,9 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
         `REVOKE "${queueWriteManifest.writeRole.name}" FROM "${principalRole}"`
       );
     }
+    await first.query(
+      `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
+    );
     const cleanBoundary = await verifyPostgresTenantSessionBoundary(
       first,
       NATIVE_SCHEMA,
@@ -886,6 +1072,48 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
     assert.equal(
       cleanQueueWriteBoundary.boundaryCatalogFingerprint,
       queueWriteBoundary.boundaryCatalogFingerprint
+    );
+    const cleanWorkerControlBoundary = await verifyPostgresWorkerControlBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanWorkerControlBoundary.boundaryCatalogFingerprint,
+      workerControlBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER POLICY "yoink_worker_control_users_select"
+       ON "${NATIVE_SCHEMA}"."users" USING (FALSE)`
+    );
+    await assert.rejects(
+      verifyPostgresWorkerControlBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE
+      ),
+      /no longer matches its verified receipt|policy surface is incomplete/
+    );
+    await first.query(
+      `ALTER POLICY "yoink_worker_control_users_select"
+       ON "${NATIVE_SCHEMA}"."users" USING (TRUE)`
+    );
+    assert.equal(
+      (await verifyPostgresWorkerControlBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      workerControlBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_json_valid"(text) VOLATILE`
@@ -955,7 +1183,8 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       queueWriterA?.close(),
       queueWriterASecond?.close(),
       queueWriterB?.close(),
-      queueWriterUnmapped?.close()
+      queueWriterUnmapped?.close(),
+      workerControl?.close()
     ].filter(Boolean) as Array<Promise<void>>);
     await postgres.stop().catch(() => undefined);
     if (existsSync(parent)) rmSync(parent, { recursive: true, force: true });

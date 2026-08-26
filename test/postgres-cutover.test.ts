@@ -41,6 +41,11 @@ import {
   postgresTenantQueueWriteCapabilityProjection
 } from "../packages/database/src/postgres-tenant-queue-writes.js";
 import {
+  POSTGRES_WORKER_CONTROL_CONTRACT_VERSION,
+  buildPostgresWorkerControlManifest,
+  postgresWorkerControlCapabilityProjection
+} from "../packages/database/src/postgres-worker-control.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -269,6 +274,93 @@ test("the PostgreSQL tenant queue-write template is exact, inert, and delete-fre
   );
 });
 
+test("the PostgreSQL worker-control template is exact, inert, and fleet-bounded", () => {
+  const manifest = buildPostgresWorkerControlManifest(
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test"
+  );
+  assert.deepEqual(
+    buildPostgresWorkerControlManifest(
+      "yoink_cutover_test",
+      "yoink_q_test",
+      "yoink_session_test",
+      "yoink_queue_write_test",
+      "yoink_worker_control_test"
+    ),
+    manifest
+  );
+  assert.equal(manifest.contractVersion, POSTGRES_WORKER_CONTROL_CONTRACT_VERSION);
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(manifest.queueWriteContractVersion, POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION);
+  assert.equal(manifest.tableCount, 3);
+  assert.equal(manifest.grantCount, 19);
+  assert.equal(manifest.permissivePolicyCount, 3);
+  assert.equal(manifest.activePrincipalCount, 0);
+  assert.equal(manifest.controlRole.login, false);
+  assert.equal(manifest.controlRole.inherit, false);
+  assert.equal(manifest.controlRole.bypassRls, false);
+  assert.equal(manifest.controlRole.insertAccess, false);
+  assert.equal(manifest.controlRole.deleteAccess, false);
+  assert.deepEqual(manifest.controlRole.tableGrants, [
+    {
+      tableName: "users",
+      selectColumns: ["tenant_id", "id"],
+      updateColumns: []
+    },
+    {
+      tableName: "background_worker_deployment_expectations",
+      selectColumns: ["id", "contract_version", "desired_mode", "runtime_version", "deployment_fingerprint"],
+      updateColumns: []
+    },
+    {
+      tableName: "background_worker_heartbeats",
+      selectColumns: [
+        "tenant_id",
+        "subject_user_id",
+        "worker_id",
+        "runtime_kind",
+        "state",
+        "heartbeat_at",
+        "last_error_code",
+        "deployment_fingerprint"
+      ],
+      updateColumns: ["state", "heartbeat_at", "stopped_at", "last_error_code"]
+    }
+  ]);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+  const capability = postgresWorkerControlCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_WORKER_CONTROL_CONTRACT_VERSION);
+  assert.equal(capability.queueWriteContractVersion, POSTGRES_TENANT_QUEUE_WRITE_CONTRACT_VERSION);
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.immutableBoundaryCatalogFingerprint, true);
+  assert.equal(capability.controlRepositoryParity, true);
+  assert.equal(capability.principalEnumeration, true);
+  assert.equal(capability.deploymentStatus, true);
+  assert.equal(capability.workerStopping, true);
+  assert.equal(capability.tableCount, 3);
+  assert.equal(capability.grantCount, 19);
+  assert.equal(capability.permissivePolicyCount, 3);
+  assert.equal(capability.insertTableCount, 0);
+  assert.equal(capability.updateTableCount, 1);
+  assert.equal(capability.deleteTableCount, 0);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresWorkerControlManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "same_namespace"
+    ),
+    /must be distinct/
+  );
+});
+
 test("one verified archive imports atomically into real PostgreSQL semantics and reconciles exactly", async () => {
   const paths = createPostgresCutoverFixture();
   const postgres = new PgliteCutoverDatabase();
@@ -339,6 +431,7 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
       serverBoundQueueWriteTransactions: false,
       queueStoreWriteRoleParity: false,
       atomicDeploymentAttestationAndQueueWrite: false,
+      serverBoundControlTransactions: false,
       controlRepositoryParity: false,
       handlerRepositoryParity: false,
       runtimeAuthority: false

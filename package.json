@@ -1,6 +1,6 @@
 {
   "name": "yoink",
-  "version": "0.63.0",
+  "version": "0.64.0",
   "private": true,
   "type": "module",
   "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",
@@ -13,7 +13,7 @@
     "start": "node dist/apps/api/src/server.js",
     "start:worker": "node dist/apps/worker/src/server.js",
     "check": "tsc -p tsconfig.json",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import tsx --test --test-concurrency=2 test/*.test.ts",
     "test:postgres:native": "node --import tsx --test test/postgres-native.test.ts",
     "verify": "npm run check && npm run build && npm test",
     "package:extension": "npm run build:extension && node scripts/package-extension.mjs",
@@ -23,7 +23,8 @@
     "postgres:cutover": "npm run build:types && node scripts/postgres-cutover.mjs",
     "postgres:roles": "npm run build:types && node scripts/postgres-runtime-roles.mjs",
     "postgres:sessions": "npm run build:types && node scripts/postgres-tenant-session.mjs",
-    "postgres:writes": "npm run build:types && node scripts/postgres-tenant-queue-writes.mjs"
+    "postgres:writes": "npm run build:types && node scripts/postgres-tenant-queue-writes.mjs",
+    "postgres:worker-control": "npm run build:types && node scripts/postgres-worker-control.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

@@ -1023,9 +1023,13 @@ moves exact deployment attestation into the same server-bound transaction as
 each new-work schedule, enqueue, and lease mutation. Scheduling, enqueue, append-only events, retry,
 heartbeat, leasing, completion, contention, isolation, attestation mismatch,
 and prohibited operations are proven. Its principal registry remains empty;
-principal enumeration, deployment status, worker stopping, and task handlers
-are still outside this least-privilege transaction boundary. Production login
-provisioning, restricted fleet-control composition, remaining writer families,
+principal enumeration, deployment status, and worker stopping now route
+through a separate inactive role with 19 exact column grants on three tables
+and three explicit policies. Native PostgreSQL proves its repository behavior and
+denies queue access, insert/delete, unrelated updates, routines, ownership,
+membership, and login. Task handlers remain outside these least-privilege
+transaction boundaries. Production login provisioning and activation,
+remaining writer families,
 mixed shared-offer/incident semantics, PostgreSQL task handlers and request
 repositories, deployed fleet/load/outage proof, and backup/cutover drills remain
 gated, so SQLite retains runtime authority. See

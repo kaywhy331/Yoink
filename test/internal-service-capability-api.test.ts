@@ -15,6 +15,7 @@ import { postgresCutoverCapabilityProjection } from "../packages/database/src/po
 import { postgresRuntimeReadRoleCapabilityProjection } from "../packages/database/src/postgres-runtime-roles.js";
 import { postgresTenantSessionCapabilityProjection } from "../packages/database/src/postgres-tenant-session.js";
 import { postgresTenantQueueWriteCapabilityProjection } from "../packages/database/src/postgres-tenant-queue-writes.js";
+import { postgresWorkerControlCapabilityProjection } from "../packages/database/src/postgres-worker-control.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -98,6 +99,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresRuntimeReadRoles: ReturnType<typeof postgresRuntimeReadRoleCapabilityProjection>;
         postgresTenantSessions: ReturnType<typeof postgresTenantSessionCapabilityProjection>;
         postgresTenantQueueWrites: ReturnType<typeof postgresTenantQueueWriteCapabilityProjection>;
+        postgresWorkerControl: ReturnType<typeof postgresWorkerControlCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -111,6 +113,10 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.deepEqual(
       snapshot.dataPlane.postgresTenantQueueWrites,
       postgresTenantQueueWriteCapabilityProjection()
+    );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresWorkerControl,
+      postgresWorkerControlCapabilityProjection()
     );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 

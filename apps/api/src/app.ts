@@ -122,6 +122,7 @@ import { postgresCutoverCapabilityProjection } from "../../../packages/database/
 import { postgresRuntimeReadRoleCapabilityProjection } from "../../../packages/database/src/postgres-runtime-roles.js";
 import { postgresTenantSessionCapabilityProjection } from "../../../packages/database/src/postgres-tenant-session.js";
 import { postgresTenantQueueWriteCapabilityProjection } from "../../../packages/database/src/postgres-tenant-queue-writes.js";
+import { postgresWorkerControlCapabilityProjection } from "../../../packages/database/src/postgres-worker-control.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -376,6 +377,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const postgresRuntimeReadRoles = postgresRuntimeReadRoleCapabilityProjection();
   const postgresTenantSessions = postgresTenantSessionCapabilityProjection();
   const postgresTenantQueueWrites = postgresTenantQueueWriteCapabilityProjection();
+  const postgresWorkerControl = postgresWorkerControlCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -644,6 +646,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresRuntimeReadRoles,
           postgresTenantSessions,
           postgresTenantQueueWrites,
+          postgresWorkerControl,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1489,7 +1492,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresCutover,
             postgresRuntimeReadRoles,
             postgresTenantSessions,
-            postgresTenantQueueWrites
+            postgresTenantQueueWrites,
+            postgresWorkerControl
           },
           capabilities: {
             catalog: true,
@@ -1641,6 +1645,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresRuntimeReadRoles,
             postgresTenantSessions,
             postgresTenantQueueWrites,
+            postgresWorkerControl,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

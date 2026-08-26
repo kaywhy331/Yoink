@@ -27,6 +27,7 @@ import {
 } from "./postgres-cutover.js";
 import { buildPostgresSchemaManifest } from "./postgres-schema-manifest.js";
 import type { NodePostgresTenantQueueWriteDatabase } from "./postgres-tenant-queue-writes.js";
+import type { NodePostgresWorkerControlDatabase } from "./postgres-worker-control.js";
 
 const SCOPE_IDENTIFIER = /^[A-Za-z0-9_-]{3,120}$/;
 const TASK_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{2,159}$/;
@@ -90,7 +91,8 @@ export interface PostgresBackgroundWorkerStoreQualification {
   serverBoundQueueWriteTransactions: boolean;
   queueStoreWriteRoleParity: boolean;
   atomicDeploymentAttestationAndQueueWrite: boolean;
-  controlRepositoryParity: false;
+  serverBoundControlTransactions: boolean;
+  controlRepositoryParity: boolean;
   handlerRepositoryParity: false;
   runtimeAuthority: false;
 }
@@ -99,6 +101,10 @@ export interface PostgresBackgroundWorkerQualificationStoreOptions {
   tenantQueueWriteDatabase?: Pick<
     NodePostgresTenantQueueWriteDatabase,
     "manifest" | "writeTransaction"
+  >;
+  workerControlDatabase?: Pick<
+    NodePostgresWorkerControlDatabase,
+    "manifest" | "controlTransaction"
   >;
 }
 
@@ -300,10 +306,10 @@ function assertCapability(row: TaskRow | undefined, taskId: string, token: strin
  * verified cutover schema. When a tenant queue-write database is supplied,
  * every tenant queue transaction uses that server-bound least-privilege role;
  * deployment attestation executes inside the same server-bound transaction as
- * each new-work schedule, enqueue, or lease mutation. Principal enumeration,
- * deployment status, and worker stopping still use the cutover/control role. It is intentionally not
- * wired into either runtime, and task handlers still depend on SQLite
- * repositories.
+ * each new-work schedule, enqueue, or lease mutation. When a worker-control
+ * database is supplied, principal enumeration, deployment status, and worker
+ * stopping use its separate least-privilege role. It is intentionally not wired
+ * into either runtime, and task handlers still depend on SQLite repositories.
  */
 export class PostgresBackgroundWorkerQualificationStore implements BackgroundWorkerStore {
   private qualified = false;
@@ -360,6 +366,12 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
         "The server-bound tenant queue writer does not match the worker qualification schema."
       );
     }
+    const controlManifest = this.options.workerControlDatabase?.manifest;
+    if (controlManifest && controlManifest.schemaName !== this.schema) {
+      throw new PostgresBackgroundWorkerQualificationError(
+        "The server-bound PostgreSQL worker control role does not match the worker qualification schema."
+      );
+    }
     this.qualified = true;
     return {
       qualificationOnly: true,
@@ -377,7 +389,8 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
       serverBoundQueueWriteTransactions: Boolean(queueWriteManifest),
       queueStoreWriteRoleParity: Boolean(queueWriteManifest),
       atomicDeploymentAttestationAndQueueWrite: Boolean(queueWriteManifest),
-      controlRepositoryParity: false,
+      serverBoundControlTransactions: Boolean(controlManifest),
+      controlRepositoryParity: Boolean(controlManifest),
       handlerRepositoryParity: false,
       runtimeAuthority: false
     };
@@ -387,22 +400,24 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
     this.assertQualified();
     const safeLimit = pageSize(limit);
     const after = decodeCursor(cursor);
-    const rows = await this.database.query<{ tenant_id: string; user_id: string }>(
-      `SELECT tenant_id, id AS user_id FROM ${relation(this.schema, "users")}
-       WHERE ($1 = '' OR tenant_id > $1 OR (tenant_id = $1 AND id > $2))
-       ORDER BY tenant_id, id LIMIT $3`,
-      [after?.tenantId ?? "", after?.userId ?? "", safeLimit + 1]
-    );
-    const principals = rows.rows.slice(0, safeLimit).map((row) => principal({
-      tenantId: row.tenant_id,
-      userId: row.user_id
-    }));
-    return {
-      principals,
-      nextCursor: rows.rows.length > safeLimit && principals.length
-        ? encodeCursor(principals.at(-1) as BackgroundWorkerPrincipal)
-        : ""
-    };
+    return this.controlTransaction(async (session) => {
+      const rows = await session.query<{ tenant_id: string; user_id: string }>(
+        `SELECT tenant_id, id AS user_id FROM ${relation(this.schema, "users")}
+         WHERE ($1 = '' OR tenant_id > $1 OR (tenant_id = $1 AND id > $2))
+         ORDER BY tenant_id, id LIMIT $3`,
+        [after?.tenantId ?? "", after?.userId ?? "", safeLimit + 1]
+      );
+      const principals = rows.rows.slice(0, safeLimit).map((row) => principal({
+        tenantId: row.tenant_id,
+        userId: row.user_id
+      }));
+      return {
+        principals,
+        nextCursor: rows.rows.length > safeLimit && principals.length
+          ? encodeCursor(principals.at(-1) as BackgroundWorkerPrincipal)
+          : ""
+      };
+    });
   }
 
   async ensureSchedules(context: BackgroundWorkerContext, now: number): Promise<void> {
@@ -761,12 +776,14 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
     const safeWorkerId = scopeIdentifier(workerId, "background worker ID");
     const safeRuntimeKind = runtimeKind(expectedRuntimeKind);
     const timestamp = nowIso(now);
-    await this.database.query(
-      `UPDATE ${relation(this.schema, "background_worker_heartbeats")}
-       SET state = 'stopped', heartbeat_at = $1, stopped_at = $1, last_error_code = $2
-       WHERE worker_id = $3 AND runtime_kind = $4`,
-      [timestamp, errorCode(lastErrorCode, ""), safeWorkerId, safeRuntimeKind]
-    );
+    await this.controlTransaction(async (session) => {
+      await session.query(
+        `UPDATE ${relation(this.schema, "background_worker_heartbeats")}
+         SET state = 'stopped', heartbeat_at = $1, stopped_at = $1, last_error_code = $2
+         WHERE worker_id = $3 AND runtime_kind = $4`,
+        [timestamp, errorCode(lastErrorCode, ""), safeWorkerId, safeRuntimeKind]
+      );
+    });
   }
 
   async deploymentStatus(
@@ -778,93 +795,104 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
     const safeRuntimeKind = runtimeKind(expectedRuntimeKind);
     const safeFingerprint = fingerprint(expectedDeploymentFingerprint);
     const cutoff = nowIso(now - ONLINE_HEARTBEAT_MS);
-    const expectationResult = await this.database.query<DeploymentExpectationRow>(
-      `SELECT contract_version, desired_mode, runtime_version, deployment_fingerprint
-       FROM ${relation(this.schema, "background_worker_deployment_expectations")} WHERE id = 'active'`
-    );
-    const expectation = expectationResult.rows[0];
-    const totalResult = await this.database.query<{ count: string | number | bigint }>(
-      `SELECT COUNT(*) AS count FROM ${relation(this.schema, "users")}`
-    );
-    const totalPrincipals = exactCount(totalResult.rows[0]?.count, "principal count");
-    const deployment = await this.database.query<{
-      covered_principals: string | number | bigint;
-      online_errors: string | number | bigint;
-      last_heartbeat_at: string | null;
-    }>(
-      `SELECT COUNT(*) AS covered_principals,
-              COALESCE(SUM(CASE WHEN last_error_code <> '' THEN 1 ELSE 0 END), 0) AS online_errors,
-              MAX(heartbeat_at) AS last_heartbeat_at
-       FROM (
-         SELECT tenant_id, subject_user_id,
-                MAX(heartbeat_at) AS heartbeat_at,
-                MAX(CASE WHEN last_error_code <> '' THEN last_error_code ELSE '' END) AS last_error_code
+    return this.controlTransaction(async (session) => {
+      const expectationResult = await session.query<DeploymentExpectationRow>(
+        `SELECT contract_version, desired_mode, runtime_version, deployment_fingerprint
+         FROM ${relation(this.schema, "background_worker_deployment_expectations")} WHERE id = 'active'`
+      );
+      const expectation = expectationResult.rows[0];
+      const totalResult = await session.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM ${relation(this.schema, "users")}`
+      );
+      const totalPrincipals = exactCount(totalResult.rows[0]?.count, "principal count");
+      const deployment = await session.query<{
+        covered_principals: string | number | bigint;
+        online_errors: string | number | bigint;
+        last_heartbeat_at: string | null;
+      }>(
+        `SELECT COUNT(*) AS covered_principals,
+                COALESCE(SUM(CASE WHEN last_error_code <> '' THEN 1 ELSE 0 END), 0) AS online_errors,
+                MAX(heartbeat_at) AS last_heartbeat_at
+         FROM (
+           SELECT tenant_id, subject_user_id,
+                  MAX(heartbeat_at) AS heartbeat_at,
+                  MAX(CASE WHEN last_error_code <> '' THEN last_error_code ELSE '' END) AS last_error_code
+           FROM ${relation(this.schema, "background_worker_heartbeats")}
+           WHERE runtime_kind = $1 AND state = 'running' AND heartbeat_at >= $2
+             AND deployment_fingerprint = $3
+           GROUP BY tenant_id, subject_user_id
+         ) AS covered`,
+        [safeRuntimeKind, cutoff, safeFingerprint]
+      );
+      const online = await session.query<{
+        total: string | number | bigint;
+        mismatched: string | number | bigint;
+        last_heartbeat_at: string | null;
+      }>(
+        `SELECT COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN deployment_fingerprint <> $1 THEN 1 ELSE 0 END), 0) AS mismatched,
+                MAX(heartbeat_at) AS last_heartbeat_at
          FROM ${relation(this.schema, "background_worker_heartbeats")}
-         WHERE runtime_kind = $1 AND state = 'running' AND heartbeat_at >= $2
-           AND deployment_fingerprint = $3
-         GROUP BY tenant_id, subject_user_id
-       ) AS covered`,
-      [safeRuntimeKind, cutoff, safeFingerprint]
-    );
-    const online = await this.database.query<{
-      total: string | number | bigint;
-      mismatched: string | number | bigint;
-      last_heartbeat_at: string | null;
-    }>(
-      `SELECT COUNT(*) AS total,
-              COALESCE(SUM(CASE WHEN deployment_fingerprint <> $1 THEN 1 ELSE 0 END), 0) AS mismatched,
-              MAX(heartbeat_at) AS last_heartbeat_at
-       FROM ${relation(this.schema, "background_worker_heartbeats")}
-       WHERE runtime_kind = $2 AND state = 'running' AND heartbeat_at >= $3`,
-      [safeFingerprint, safeRuntimeKind, cutoff]
-    );
-    const runtime = await this.database.query<{
-      total: string | number | bigint;
-      last_heartbeat_at: string | null;
-    }>(
-      `SELECT COUNT(*) AS total, MAX(heartbeat_at) AS last_heartbeat_at
-       FROM ${relation(this.schema, "background_worker_heartbeats")} WHERE runtime_kind = $1`,
-      [safeRuntimeKind]
-    );
-    const coveredPrincipals = exactCount(deployment.rows[0]?.covered_principals, "covered principal count");
-    const onlineErrors = exactCount(deployment.rows[0]?.online_errors, "online error count");
-    const onlineTotal = exactCount(online.rows[0]?.total, "online worker count");
-    const mismatchedOnline = exactCount(online.rows[0]?.mismatched, "mismatched worker count");
-    const totalRows = exactCount(runtime.rows[0]?.total, "runtime worker count");
-    const expectedMode = safeRuntimeKind === "standalone" ? "external" : "embedded";
-    const expectationMatches = expectation?.desired_mode === expectedMode
-      && expectation.deployment_fingerprint === safeFingerprint;
-    const state = onlineTotal > 0 ? "running" : totalRows > 0 ? "stopped" : "waiting";
-    const deploymentAttested = expectationMatches && mismatchedOnline === 0
-      && totalPrincipals > 0 && coveredPrincipals === totalPrincipals;
-    return {
-      state,
-      healthy: deploymentAttested && onlineErrors === 0,
-      runtimeKind: safeRuntimeKind,
-      lastHeartbeatAt: online.rows[0]?.last_heartbeat_at
-        ?? deployment.rows[0]?.last_heartbeat_at
-        ?? runtime.rows[0]?.last_heartbeat_at
-        ?? "",
-      lastErrorCode: !expectation
-        ? "worker_deployment_expectation_missing"
-        : !expectationMatches
-          ? "worker_deployment_expectation_mismatch"
-          : mismatchedOnline > 0
-            ? "worker_deployment_mismatch"
-            : onlineErrors > 0
-              ? "worker_scope_errors"
-              : coveredPrincipals > 0 && coveredPrincipals < totalPrincipals
-                ? "worker_coverage_incomplete"
-                : state === "waiting"
-                  ? "worker_waiting"
-                  : state === "stopped"
-                    ? "worker_stopped"
-                    : "",
-      coveredPrincipals,
-      totalPrincipals,
-      deploymentAttested,
-      deploymentContractVersion: BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION
-    };
+         WHERE runtime_kind = $2 AND state = 'running' AND heartbeat_at >= $3`,
+        [safeFingerprint, safeRuntimeKind, cutoff]
+      );
+      const runtime = await session.query<{
+        total: string | number | bigint;
+        last_heartbeat_at: string | null;
+      }>(
+        `SELECT COUNT(*) AS total, MAX(heartbeat_at) AS last_heartbeat_at
+         FROM ${relation(this.schema, "background_worker_heartbeats")} WHERE runtime_kind = $1`,
+        [safeRuntimeKind]
+      );
+      const coveredPrincipals = exactCount(deployment.rows[0]?.covered_principals, "covered principal count");
+      const onlineErrors = exactCount(deployment.rows[0]?.online_errors, "online error count");
+      const onlineTotal = exactCount(online.rows[0]?.total, "online worker count");
+      const mismatchedOnline = exactCount(online.rows[0]?.mismatched, "mismatched worker count");
+      const totalRows = exactCount(runtime.rows[0]?.total, "runtime worker count");
+      const expectedMode = safeRuntimeKind === "standalone" ? "external" : "embedded";
+      const expectationMatches = expectation?.desired_mode === expectedMode
+        && expectation.deployment_fingerprint === safeFingerprint;
+      const state = onlineTotal > 0 ? "running" : totalRows > 0 ? "stopped" : "waiting";
+      const deploymentAttested = expectationMatches && mismatchedOnline === 0
+        && totalPrincipals > 0 && coveredPrincipals === totalPrincipals;
+      return {
+        state,
+        healthy: deploymentAttested && onlineErrors === 0,
+        runtimeKind: safeRuntimeKind,
+        lastHeartbeatAt: online.rows[0]?.last_heartbeat_at
+          ?? deployment.rows[0]?.last_heartbeat_at
+          ?? runtime.rows[0]?.last_heartbeat_at
+          ?? "",
+        lastErrorCode: !expectation
+          ? "worker_deployment_expectation_missing"
+          : !expectationMatches
+            ? "worker_deployment_expectation_mismatch"
+            : mismatchedOnline > 0
+              ? "worker_deployment_mismatch"
+              : onlineErrors > 0
+                ? "worker_scope_errors"
+                : coveredPrincipals > 0 && coveredPrincipals < totalPrincipals
+                  ? "worker_coverage_incomplete"
+                  : state === "waiting"
+                    ? "worker_waiting"
+                    : state === "stopped"
+                      ? "worker_stopped"
+                      : "",
+        coveredPrincipals,
+        totalPrincipals,
+        deploymentAttested,
+        deploymentContractVersion: BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION
+      };
+    });
+  }
+
+  private controlTransaction<T>(
+    operation: (session: PostgresQuerySession) => Promise<T>
+  ): Promise<T> {
+    const workerControl = this.options.workerControlDatabase;
+    return workerControl
+      ? workerControl.controlTransaction(operation)
+      : this.database.transaction(operation);
   }
 
   private async scoped<T>(

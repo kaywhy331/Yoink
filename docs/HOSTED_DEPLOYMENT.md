@@ -362,8 +362,9 @@ immutable JSON helper required by the task constraint. Version 0.63 adds one
 `SELECT`-only deployment-expectation grant and validates the exact expectation
 inside the same tenant queue transaction before schedule, enqueue, or lease SQL.
 Already-leased completion/failure recovery remains available. Principal
-enumeration, fleet status/stopping, and their restricted control role remain on
-the qualification side. No production login, mapping, membership, handler, or
+enumeration, fleet status, and stopping run through a separate inactive
+three-table/19-column-grant role in the 0.64 native qualification path. No production
+login, mapping, membership, handler, or
 API repository is provisioned. None of these releases deploys that runtime. Until
 it is provisioned and verified, SQLite is the source of truth and hosted
 boundary mode is suitable for integration/staging—not a claim of completed

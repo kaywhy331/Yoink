@@ -267,9 +267,11 @@ retry, heartbeat, completion, and contention. Version 0.63 advances to contract
 v3 with one `SELECT`-only deployment-expectation grant and validates attestation
 inside the same tenant queue transaction before schedule, enqueue, or lease SQL.
 Already-leased completion/failure recovery remains available. Principal
-enumeration, deployment status, and stopping still use the qualification
-connection. Production still requires PostgreSQL task-handler repositories,
-production login provisioning, restricted control and remaining writer
+enumeration, deployment status, and stopping use a separate inactive
+three-table/19-column-grant control role as of 0.64. Native PostgreSQL proves exact
+pagination, coverage, stopping, and prohibited operations through its dedicated
+transaction adapter. Production still requires PostgreSQL task-handler repositories,
+production login provisioning and activation, remaining writer
 families, a deployed multi-process worker fleet with handler replay and failure testing, production
 identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode

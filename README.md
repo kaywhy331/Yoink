@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.63.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.64.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,29 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.64.0 separates the last global background-worker control operations
+from the all-powerful qualification connection. A new, inactive
+`NOLOGIN`/`NOINHERIT`/`NOBYPASSRLS` fleet-control role has 19 exact column
+privileges across three tables, grouped into four operations: it can paginate
+user IDs, read the singleton deployment expectation, read the bounded heartbeat
+fields needed for status, and update only four stop-related heartbeat columns.
+Three explicit RLS policies bound those operations, and the update policy
+requires the resulting state to be `stopped`. It cannot read
+queue tasks, insert or delete rows, update user or deployment records, execute
+application functions, use sequences, own objects, create schema objects, log
+in, acquire membership, or authorize a retailer action.
+
+The complete PostgreSQL worker-store qualification now routes principal
+pagination, deployment status, and worker stopping through a dedicated
+`READ COMMITTED` control adapter while tenant queue work continues through the
+server-bound queue writer. Native PostgreSQL 16 proves both repository paths
+together, including two-page principal enumeration, exact deployment coverage,
+one-worker stopping, prohibited operations, and receipt rejection after policy
+tamper. The role and principal registry remain inactive after verification;
+the API and worker remain SQLite-backed. Use `npm run postgres:worker-control
+-- plan ...` and the [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md)
+runbook.
 
 Version 0.63.0 closes the time-of-check/time-of-use gap between standalone
 worker deployment attestation and a tenant queue mutation. Queue-write contract
@@ -28,9 +51,11 @@ The role now has 12 exact operations across five tables, while its write surface
 is unchanged: four tenant queue tables, four restrictive tenant policies, no
 deployment update, and no delete. Native PostgreSQL proves the role can read the
 expectation but cannot change it, and a deliberate attestation mismatch leaves
-the schedule count unchanged. Principal enumeration, fleet status, and worker
-stopping remain on the qualification/control connection; no runtime principal,
-handler, authority switch, dual write, or retailer capability is activated.
+the schedule count unchanged. At the 0.63 boundary, principal enumeration,
+fleet status, and worker stopping still used the qualification connection;
+0.64 moves them to their separately qualified control role. No runtime
+principal, handler, authority switch, dual write, or retailer capability is
+activated.
 
 Version 0.62.0 connects the complete PostgreSQL tenant queue repository to the
 server-bound writer qualified in 0.61. Schedule creation, due enqueue, event

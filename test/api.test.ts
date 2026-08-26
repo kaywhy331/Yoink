@@ -10,6 +10,7 @@ import { postgresCutoverCapabilityProjection } from "../packages/database/src/po
 import { postgresRuntimeReadRoleCapabilityProjection } from "../packages/database/src/postgres-runtime-roles.js";
 import { postgresTenantSessionCapabilityProjection } from "../packages/database/src/postgres-tenant-session.js";
 import { postgresTenantQueueWriteCapabilityProjection } from "../packages/database/src/postgres-tenant-queue-writes.js";
+import { postgresWorkerControlCapabilityProjection } from "../packages/database/src/postgres-worker-control.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -103,6 +104,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const postgresRuntimeReadRoles = postgresRuntimeReadRoleCapabilityProjection();
     const postgresTenantSessions = postgresTenantSessionCapabilityProjection();
     const postgresTenantQueueWrites = postgresTenantQueueWriteCapabilityProjection();
+    const postgresWorkerControl = postgresWorkerControlCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -116,6 +118,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresRuntimeReadRoles,
       postgresTenantSessions,
       postgresTenantQueueWrites,
+      postgresWorkerControl,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -318,12 +321,14 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.deepEqual(snapshot.capabilities.postgresRuntimeReadRoles, postgresRuntimeReadRoles);
     assert.deepEqual(snapshot.capabilities.postgresTenantSessions, postgresTenantSessions);
     assert.deepEqual(snapshot.capabilities.postgresTenantQueueWrites, postgresTenantQueueWrites);
+    assert.deepEqual(snapshot.capabilities.postgresWorkerControl, postgresWorkerControl);
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
       postgresRuntimeReadRoles,
       postgresTenantSessions,
-      postgresTenantQueueWrites
+      postgresTenantQueueWrites,
+      postgresWorkerControl
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);
