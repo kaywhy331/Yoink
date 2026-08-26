@@ -135,6 +135,7 @@ import { postgresSignalCatalogApplyCapabilityProjection } from "../../../package
 import { postgresSignalResolutionApplyCapabilityProjection } from "../../../packages/database/src/postgres-signal-resolution-apply.js";
 import { postgresSignalSourceReferenceRefreshCapabilityProjection } from "../../../packages/database/src/postgres-signal-source-reference-refresh.js";
 import { postgresSignalTerminalDecisionApplyCapabilityProjection } from "../../../packages/database/src/postgres-signal-terminal-decision-apply.js";
+import { postgresSignalOfferIncidentApplyCapabilityProjection } from "../../../packages/database/src/postgres-signal-offer-incident-apply.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -402,6 +403,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const postgresSignalResolutionApply = postgresSignalResolutionApplyCapabilityProjection();
   const postgresSignalSourceReferenceRefresh = postgresSignalSourceReferenceRefreshCapabilityProjection();
   const postgresSignalTerminalDecisionApply = postgresSignalTerminalDecisionApplyCapabilityProjection();
+  const postgresSignalOfferIncidentApply = postgresSignalOfferIncidentApplyCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -683,6 +685,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresSignalResolutionApply,
           postgresSignalSourceReferenceRefresh,
           postgresSignalTerminalDecisionApply,
+          postgresSignalOfferIncidentApply,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1541,7 +1544,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalCatalogApply,
             postgresSignalResolutionApply,
             postgresSignalSourceReferenceRefresh,
-            postgresSignalTerminalDecisionApply
+            postgresSignalTerminalDecisionApply,
+            postgresSignalOfferIncidentApply
           },
           capabilities: {
             catalog: true,
@@ -1706,6 +1710,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalResolutionApply,
             postgresSignalSourceReferenceRefresh,
             postgresSignalTerminalDecisionApply,
+            postgresSignalOfferIncidentApply,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

@@ -1339,6 +1339,88 @@ composition, actionable signal evaluation, inbox acknowledgement, or retailer-
 session authority is created. SQLite remains authoritative and complete
 handler parity remains six of seven.
 
+## Actionable offer/incident apply qualification seam
+
+Version 0.80 adds a sixth independent hosted-signal role for the actionable
+offer-observation, incident, and occurrence slice after the v0.79 terminal
+step. It does not widen the delivery, catalog-create, event-resolution,
+reference-refresh, or terminal-decision roles. The new `NOLOGIN`, `NOINHERIT`,
+`NOBYPASSRLS` role owns no object, belongs to no role, has zero direct/effective
+table or column privileges, and can execute one strict security-definer
+function across 14 forced-RLS tenant tables.
+
+The Node adapter plans and applies within one `READ COMMITTED` read-write
+transaction. PostgreSQL authenticates `session_user`, validates the exact
+leased TrackaLacker inbox capability, invokes the v0.79 planner, and requires
+its immutable outcome to be `continue_downstream`. It locks the message, exact
+committed event, and tenant/user/semantic-key incident cohort, then seals every
+claim in a principal-bound SHA-256 plan valid for at most 30 seconds.
+
+The server derives the semantic key from listing, event type, normalized price,
+currency, seller type/name, and offer fingerprint. It also derives opaque,
+deterministic observation and occurrence IDs from the committed event and a
+deterministic new-incident ID from the semantic key. The existing user dedupe
+window must be between 30 and 3600 seconds. A new actionable event performs
+exactly three statements: insert one `offer_observations` row, insert or update
+one open `signal_incidents` row, and insert one linked `signal_occurrences` row.
+A complete replay is mutation-free. Partial graphs, ID collisions, changed
+offer evidence, inconsistent occurrence counts, or a changed predecessor abort
+the transaction.
+
+The function has no SQL for shared catalog, source-reference, terminal-
+decision, mission, strategy, notification, spend, action-job, or inbox-
+lifecycle mutation and returns no raw signal payload. Native PostgreSQL 16
+proves exact inserted and corroborated row semantics, invalid capability,
+cross-tenant, same-tenant/different-user, unmapped-principal and direct-SQL
+denial, exactly one mutation under simultaneous calls, mutation-free replay,
+partial-graph and changed-row recovery, clean temporary membership removal,
+and immutable receipt rejection after function-catalog tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-offer-incident-apply -- plan \
+  yoink_cutover_qualification_080 yoink_q_080 yoink_session_q_080 \
+  yoink_queue_q_080 yoink_control_q_080 yoink_notify_q_080 \
+  yoink_execute_q_080 yoink_retain_q_080 yoink_candidate_q_080 \
+  yoink_dispatch_q_080 yoink_reconcile_q_080 yoink_witness_q_080 \
+  yoink_delivery_q_080 yoink_catalog_q_080 yoink_resolution_q_080 \
+  yoink_reference_q_080 yoink_terminal_q_080 yoink_offer_q_080
+```
+
+After the exact v0.79 terminal-decision receipt is verified, apply once with
+the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_OFFER_INCIDENT_APPLY_QUALIFICATION_ACK=bounded-signal-offer-incident-apply-qualification \
+  npm run postgres:signal-offer-incident-apply -- apply \
+  yoink_cutover_qualification_080 yoink_q_080 yoink_session_q_080 \
+  yoink_queue_q_080 yoink_control_q_080 yoink_notify_q_080 \
+  yoink_execute_q_080 yoink_retain_q_080 yoink_candidate_q_080 \
+  yoink_dispatch_q_080 yoink_reconcile_q_080 yoink_witness_q_080 \
+  yoink_delivery_q_080 yoink_catalog_q_080 yoink_resolution_q_080 \
+  yoink_reference_q_080 yoink_terminal_q_080 yoink_offer_q_080
+```
+
+Then independently inspect the role, function, 14 forced-RLS tables, immutable
+receipt, and full prerequisite fingerprint chain:
+
+```bash
+npm run postgres:signal-offer-incident-apply -- verify \
+  yoink_cutover_qualification_080 yoink_q_080 yoink_session_q_080 \
+  yoink_queue_q_080 yoink_control_q_080 yoink_notify_q_080 \
+  yoink_execute_q_080 yoink_retain_q_080 yoink_candidate_q_080 \
+  yoink_dispatch_q_080 yoink_reconcile_q_080 yoink_witness_q_080 \
+  yoink_delivery_q_080 yoink_catalog_q_080 yoink_resolution_q_080 \
+  yoink_reference_q_080 yoink_terminal_q_080 yoink_offer_q_080
+```
+
+The receipt permanently records `runtimeAuthority: false` and
+`productionReady: false`. No login, principal mapping, membership, runtime
+composition, mission/policy/action evaluation, inbox acknowledgement, or
+retailer-session authority is created. SQLite remains authoritative and
+complete handler parity remains six of seven.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -1442,12 +1524,13 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- actionable incident/offer mutation, mission and purchase-policy evaluation,
-  action-job creation, and final inbox composition with the qualified hosted-
+- mission and purchase-policy evaluation, action-job creation, and final inbox
+  composition with the qualified hosted-
   delivery recovery, fixed signal-inbox lifecycle, read-only resolution plan,
   insert-only catalog-create, event/resolution-commit, known-product source-
-  reference-refresh, and terminal-decision boundaries to complete the final
-  task-handler family, plus every API request-repository family;
+  reference-refresh, terminal-decision, and actionable offer/incident
+  boundaries to complete the final task-handler family, plus every API
+  request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers; all qualified

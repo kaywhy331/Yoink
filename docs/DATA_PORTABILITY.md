@@ -130,6 +130,19 @@ incident/offer/mission/policy/action graph, final handler composition, and all
 runtime authority remain closed, so complete-handler parity stays six of seven
 and SQLite remains authoritative.
 
+Yoink 0.80 adds a sixth distinct function-only role for the actionable offer,
+incident, and occurrence slice. It accepts only the exact zero-write
+`continue_downstream` result from the v0.79 terminal predecessor, derives all
+semantic and opaque graph identities in PostgreSQL, and can insert one offer
+observation and one occurrence while creating or corroborating one recent open
+incident under the existing user dedupe window. Message and semantic-key locks
+serialize concurrency; exact replay is mutation-free, while partial or changed
+graphs abort. Native PostgreSQL proves exact insert/update semantics, isolation,
+direct denial, same-message concurrency, semantic corroboration, corruption
+recovery, and catalog-tamper detection. The mission/policy/action graph, final
+handler composition, and all runtime authority remain closed, so complete-
+handler parity stays six of seven and SQLite remains authoritative.
+
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
 

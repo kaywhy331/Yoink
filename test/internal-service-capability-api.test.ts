@@ -28,6 +28,7 @@ import { postgresSignalCatalogApplyCapabilityProjection } from "../packages/data
 import { postgresSignalResolutionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-resolution-apply.js";
 import { postgresSignalSourceReferenceRefreshCapabilityProjection } from "../packages/database/src/postgres-signal-source-reference-refresh.js";
 import { postgresSignalTerminalDecisionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-terminal-decision-apply.js";
+import { postgresSignalOfferIncidentApplyCapabilityProjection } from "../packages/database/src/postgres-signal-offer-incident-apply.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -124,6 +125,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalResolutionApply: ReturnType<typeof postgresSignalResolutionApplyCapabilityProjection>;
         postgresSignalSourceReferenceRefresh: ReturnType<typeof postgresSignalSourceReferenceRefreshCapabilityProjection>;
         postgresSignalTerminalDecisionApply: ReturnType<typeof postgresSignalTerminalDecisionApplyCapabilityProjection>;
+        postgresSignalOfferIncidentApply: ReturnType<typeof postgresSignalOfferIncidentApplyCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -189,6 +191,10 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.deepEqual(
       snapshot.dataPlane.postgresSignalTerminalDecisionApply,
       postgresSignalTerminalDecisionApplyCapabilityProjection()
+    );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalOfferIncidentApply,
+      postgresSignalOfferIncidentApplyCapabilityProjection()
     );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
