@@ -504,6 +504,15 @@ authorized corrected-message retry atomically resets the inbox attempt budget,
 writes audit/outbox evidence, and enqueues or defers a wake. Neither that
 control nor signal evaluation carries Chrome mutation capability.
 
+Version 0.74 gives only this inbox transport lifecycle an inactive PostgreSQL
+repository seam. One exact function recovers expired inbox/outbox leases; a
+second leases, acknowledges, retries, or dead-letters only `signal_event_v1`.
+Both bind `session_user` to the expected tenant/user and use the database clock.
+The application-generated lease token is transient and only its deterministic
+hash is stored. The signal engine itself still uses the SQLite transaction
+graph, so this is lifecycle parity—not complete task-handler or hosted-runtime
+parity—and it adds no signal, catalog, mission, action, or retailer authority.
+
 Yoink 0.37.0 extends the existing authenticated diagnostic path with a narrow
 Add-control structural repair landmark. Version 0.48 applies that same boundary
 to availability, unit price, seller, fulfillment, and add control. The browser

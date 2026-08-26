@@ -952,7 +952,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, and delivery lease recovery", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, and hosted signal lifecycle", {
   timeout: 480_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1027,6 +1027,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let deliveryLeaseRecoveryA: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
   let deliveryLeaseRecoveryASecond: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
   let deliveryLeaseRecoveryB: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
+  let deliveryLeaseRecoveryC: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
   let deliveryLeaseRecoveryUnmapped: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
   let deliveryLeaseRecoveryDirectClient: Client | null = null;
   try {
@@ -1529,7 +1530,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(deliveryLeaseRecoveryBoundary.protectedTableCount, 3);
     assert.equal(deliveryLeaseRecoveryBoundary.forcedRlsTableCount, 3);
     assert.equal(deliveryLeaseRecoveryBoundary.directTableGrantCount, 0);
-    assert.equal(deliveryLeaseRecoveryBoundary.functionGrantCount, 1);
+    assert.equal(deliveryLeaseRecoveryBoundary.functionGrantCount, 2);
     assert.equal(deliveryLeaseRecoveryBoundary.membershipCount, 0);
     assert.equal(deliveryLeaseRecoveryBoundary.activePrincipalCount, 0);
     assert.equal(deliveryLeaseRecoveryBoundary.qualifiedHandlerTaskKindCount, 6);
@@ -1539,6 +1540,8 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(deliveryLeaseRecoveryBoundary.databaseServerClock, true);
     assert.equal(deliveryLeaseRecoveryBoundary.deterministicReceiptHashParity, true);
     assert.equal(deliveryLeaseRecoveryBoundary.leaseRecoverySubBoundaryParity, true);
+    assert.equal(deliveryLeaseRecoveryBoundary.signalInboxLifecycleRepositoryParity, true);
+    assert.equal(deliveryLeaseRecoveryBoundary.signalEvaluationRepositoryParity, false);
     assert.equal(deliveryLeaseRecoveryBoundary.signalIngressRepositoryParity, false);
     assert.equal(deliveryLeaseRecoveryBoundary.hostedDeliveryHandlerRepositoryParity, false);
     assert.equal(deliveryLeaseRecoveryBoundary.allHandlerRepositoryParity, false);
@@ -2142,6 +2145,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     deliveryLeaseRecoveryA = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_A, 2);
     deliveryLeaseRecoveryASecond = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_A);
     deliveryLeaseRecoveryB = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_B);
+    deliveryLeaseRecoveryC = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_C);
     deliveryLeaseRecoveryUnmapped = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_UNMAPPED);
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
@@ -2261,7 +2265,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
          id, tenant_id, user_id, source, message_key, event_type,
          payload_hash, payload_json, state, delivery_attempts,
          lease_capability_hash, lease_expires_at, received_at, updated_at
-       ) VALUES ($1, $2, $3, 'trackalacker', $1, 'signal_event_v1',
+       ) VALUES ($1, $2, $3, 'trackalacker', $1, 'native_delivery_recovery_v1',
                  $4, '{}', 'processing', $5, $6, $7, $8, $8)`,
       [id, tenantId, userId, "f".repeat(64), attempt, `lease:${id}`, leaseExpiresAt, deliveryLeaseCreatedAt]
     );
@@ -2580,6 +2584,358 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       /tenant session principal is not active/
     );
+
+    const signalLifecycleNow = Date.now();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."users"(id, tenant_id, display_name, created_at)
+       VALUES ($1, $2, 'Native same-tenant peer', $3)`,
+      [
+        NATIVE_SAME_TENANT_USER,
+        NATIVE_TENANT,
+        new Date(signalLifecycleNow - 10_000).toISOString()
+      ]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [
+        NATIVE_PRINCIPAL_C,
+        NATIVE_TENANT,
+        NATIVE_SAME_TENANT_USER,
+        new Date(signalLifecycleNow - 5_000).toISOString()
+      ]
+    );
+    const insertSignalLifecycleInbox = async (
+      id: string,
+      tenantId: string,
+      userId: string,
+      deliveryAttempts: number,
+      receivedAt: string
+    ) => {
+      const payloadJson = JSON.stringify({ schemaVersion: 1, signalId: id });
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."inbox_messages"(
+           id, tenant_id, user_id, source, message_key, event_type,
+           payload_hash, payload_json, state, delivery_attempts,
+           lease_capability_hash, lease_expires_at, next_attempt_at,
+           last_error_code, received_at, processed_at, updated_at
+         ) VALUES ($1, $2, $3, 'trackalacker', $1, 'signal_event_v1',
+                   $4, $5, 'accepted', $6, '', '', '', '', $7, '', $7)`,
+        [
+          id,
+          tenantId,
+          userId,
+          stableHash("hosted_delivery_payload_v1", payloadJson),
+          payloadJson,
+          deliveryAttempts,
+          receivedAt
+        ]
+      );
+    };
+    const signalCompleteId = "native_signal_lifecycle_complete";
+    const signalRetryId = "native_signal_lifecycle_retry";
+    const signalPeerId = "native_signal_lifecycle_peer";
+    const signalDeadId = "native_signal_lifecycle_dead";
+    await insertSignalLifecycleInbox(
+      signalCompleteId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(signalLifecycleNow - 4_000).toISOString()
+    );
+    await insertSignalLifecycleInbox(
+      signalRetryId,
+      "tenant_local",
+      "user_local",
+      0,
+      new Date(signalLifecycleNow - 3_000).toISOString()
+    );
+    await insertSignalLifecycleInbox(
+      signalPeerId,
+      NATIVE_TENANT,
+      NATIVE_SAME_TENANT_USER,
+      0,
+      new Date(signalLifecycleNow - 2_000).toISOString()
+    );
+
+    const contendedSignalLeases = await Promise.all([
+      deliveryLeaseRecoveryA.leaseSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        signalLifecycleNow
+      ),
+      deliveryLeaseRecoveryASecond.leaseSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        signalLifecycleNow
+      )
+    ]);
+    const signalCompleteLease = contendedSignalLeases.find((lease) => lease !== null);
+    assert.equal(contendedSignalLeases.filter((lease) => lease !== null).length, 1);
+    assert.ok(signalCompleteLease);
+    assert.equal(signalCompleteLease.id, signalCompleteId);
+    assert.equal(signalCompleteLease.source, "trackalacker");
+    assert.equal(signalCompleteLease.messageKey, signalCompleteId);
+    assert.equal(signalCompleteLease.eventType, "signal_event_v1");
+    assert.deepEqual(signalCompleteLease.payload, {
+      schemaVersion: 1,
+      signalId: signalCompleteId
+    });
+    assert.equal(signalCompleteLease.attempt, 1);
+    assert.match(signalCompleteLease.capabilityToken, /^[A-Za-z0-9_-]{43}$/);
+    assert.ok(Date.parse(signalCompleteLease.leaseExpiresAt) - Date.now() >= 50_000);
+    assert.ok(Date.parse(signalCompleteLease.leaseExpiresAt) - Date.now() <= 70_000);
+    assert.equal(
+      (await first.query<{ capabilityHash: string }>(
+        `SELECT lease_capability_hash AS "capabilityHash"
+         FROM "${NATIVE_SCHEMA}"."inbox_messages" WHERE id = $1`,
+        [signalCompleteId]
+      )).rows[0]?.capabilityHash,
+      stableHash(
+        "hosted_delivery_capability_v1",
+        signalCompleteId,
+        signalCompleteLease.capabilityToken
+      )
+    );
+    const wrongSignalCapability = `${
+      signalCompleteLease.capabilityToken.startsWith("A") ? "B" : "A"
+    }${signalCompleteLease.capabilityToken.slice(1)}`;
+    await assert.rejects(
+      deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        signalCompleteId,
+        wrongSignalCapability,
+        signalLifecycleNow
+      ),
+      /capability is invalid or expired/
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryB.completeSignalInbox(
+        { tenantId: "tenant_local", userId: "user_local" },
+        signalCompleteId,
+        signalCompleteLease.capabilityToken,
+        signalLifecycleNow
+      ),
+      /capability is invalid or expired/
+    );
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        signalCompleteId,
+        signalCompleteLease.capabilityToken,
+        signalLifecycleNow
+      ),
+      true
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        signalCompleteId,
+        signalCompleteLease.capabilityToken,
+        signalLifecycleNow
+      ),
+      /capability is invalid or expired/
+    );
+
+    const signalRetryLease = await deliveryLeaseRecoveryB.leaseSignalInbox(
+      { tenantId: "tenant_local", userId: "user_local" },
+      signalLifecycleNow
+    );
+    assert.ok(signalRetryLease);
+    assert.equal(signalRetryLease.id, signalRetryId);
+    assert.equal(
+      await deliveryLeaseRecoveryB.failSignalInbox(
+        { tenantId: "tenant_local", userId: "user_local" },
+        signalRetryId,
+        signalRetryLease.capabilityToken,
+        signalLifecycleNow
+      ),
+      "retry"
+    );
+    const signalRetryRow = (await first.query<{
+      state: string;
+      attempt: number;
+      capabilityHash: string;
+      leaseExpiresAt: string;
+      nextAttemptAt: string;
+      errorCode: string;
+    }>(
+      `SELECT state, delivery_attempts AS attempt,
+              lease_capability_hash AS "capabilityHash",
+              lease_expires_at AS "leaseExpiresAt",
+              next_attempt_at AS "nextAttemptAt",
+              last_error_code AS "errorCode"
+       FROM "${NATIVE_SCHEMA}"."inbox_messages" WHERE id = $1`,
+      [signalRetryId]
+    )).rows[0]!;
+    assert.deepEqual({
+      state: signalRetryRow.state,
+      attempt: Number(signalRetryRow.attempt),
+      capabilityHash: signalRetryRow.capabilityHash,
+      leaseExpiresAt: signalRetryRow.leaseExpiresAt,
+      errorCode: signalRetryRow.errorCode
+    }, {
+      state: "failed",
+      attempt: 1,
+      capabilityHash: "",
+      leaseExpiresAt: "",
+      errorCode: "signal_processing_failed"
+    });
+    assert.ok(Date.parse(signalRetryRow.nextAttemptAt) - Date.now() >= 20_000);
+    assert.ok(Date.parse(signalRetryRow.nextAttemptAt) - Date.now() <= 40_000);
+    assert.equal(
+      await deliveryLeaseRecoveryB.leaseSignalInbox(
+        { tenantId: "tenant_local", userId: "user_local" },
+        signalLifecycleNow
+      ),
+      null
+    );
+
+    const signalPeerLease = await deliveryLeaseRecoveryC.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+      signalLifecycleNow
+    );
+    assert.ok(signalPeerLease);
+    assert.equal(signalPeerLease.id, signalPeerId);
+    assert.equal(
+      await deliveryLeaseRecoveryC.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+        signalPeerId,
+        signalPeerLease.capabilityToken,
+        signalLifecycleNow
+      ),
+      true
+    );
+
+    await insertSignalLifecycleInbox(
+      signalDeadId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      19,
+      new Date(signalLifecycleNow - 1_000).toISOString()
+    );
+    const signalDeadLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      signalLifecycleNow
+    );
+    assert.ok(signalDeadLease);
+    assert.equal(signalDeadLease.id, signalDeadId);
+    assert.equal(signalDeadLease.attempt, 20);
+    assert.equal(
+      await deliveryLeaseRecoveryA.failSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        signalDeadId,
+        signalDeadLease.capabilityToken,
+        signalLifecycleNow
+      ),
+      "dead_letter"
+    );
+    assert.deepEqual(
+      (await first.query<{
+        state: string;
+        attempt: number;
+        nextAttemptAt: string;
+        errorCode: string;
+      }>(
+        `SELECT state, delivery_attempts AS attempt,
+                next_attempt_at AS "nextAttemptAt",
+                last_error_code AS "errorCode"
+         FROM "${NATIVE_SCHEMA}"."inbox_messages" WHERE id = $1`,
+        [signalDeadId]
+      )).rows.map((row) => ({ ...row, attempt: Number(row.attempt) })),
+      [{
+        state: "dead_letter",
+        attempt: 20,
+        nextAttemptAt: "",
+        errorCode: "signal_processing_failed"
+      }]
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryA.leaseSignalInbox(
+        { tenantId: "tenant_local", userId: "user_local" },
+        signalLifecycleNow
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryUnmapped.leaseSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        signalLifecycleNow
+      ),
+      /tenant session principal is not active/
+    );
+    const signalLifecycleReceipts = (await first.query<{
+      id: string;
+      tenantId: string;
+      userId: string;
+      direction: string;
+      messageId: string;
+      disposition: string;
+      attempt: number;
+      reasonCode: string;
+      receiptHash: string;
+      createdAt: string;
+    }>(
+      `SELECT id, tenant_id AS "tenantId", user_id AS "userId", direction,
+              message_id AS "messageId", disposition, attempt,
+              reason_code AS "reasonCode", receipt_hash AS "receiptHash",
+              created_at AS "createdAt"
+       FROM "${NATIVE_SCHEMA}"."hosted_delivery_receipts"
+       WHERE message_id LIKE 'native_signal_lifecycle_%'
+       ORDER BY message_id, disposition`
+    )).rows;
+    assert.equal(signalLifecycleReceipts.length, 8);
+    assert.deepEqual(
+      signalLifecycleReceipts.map((receipt) => ({
+        messageId: receipt.messageId,
+        disposition: receipt.disposition,
+        attempt: Number(receipt.attempt),
+        reasonCode: receipt.reasonCode
+      })),
+      [
+        { messageId: signalCompleteId, disposition: "leased", attempt: 1, reasonCode: "worker_lease" },
+        { messageId: signalCompleteId, disposition: "processed", attempt: 1, reasonCode: "worker_ack" },
+        { messageId: signalDeadId, disposition: "dead_letter", attempt: 20, reasonCode: "signal_processing_failed" },
+        { messageId: signalDeadId, disposition: "leased", attempt: 20, reasonCode: "worker_lease" },
+        { messageId: signalPeerId, disposition: "leased", attempt: 1, reasonCode: "worker_lease" },
+        { messageId: signalPeerId, disposition: "processed", attempt: 1, reasonCode: "worker_ack" },
+        { messageId: signalRetryId, disposition: "leased", attempt: 1, reasonCode: "worker_lease" },
+        { messageId: signalRetryId, disposition: "retry", attempt: 1, reasonCode: "signal_processing_failed" }
+      ]
+    );
+    for (const receipt of signalLifecycleReceipts) {
+      assert.match(receipt.id, /^delivery_receipt_[a-f0-9]{32}$/);
+      assert.equal(receipt.direction, "inbox");
+      assert.equal(
+        receipt.userId,
+        receipt.messageId === signalPeerId
+          ? NATIVE_SAME_TENANT_USER
+          : receipt.messageId === signalRetryId ? "user_local" : NATIVE_USER
+      );
+      assert.equal(
+        receipt.tenantId,
+        receipt.messageId === signalRetryId ? "tenant_local" : NATIVE_TENANT
+      );
+      assert.equal(
+        receipt.receiptHash,
+        stableHash(
+          "hosted_delivery_receipt_v1",
+          receipt.tenantId,
+          receipt.userId,
+          receipt.direction,
+          receipt.messageId,
+          receipt.disposition,
+          Number(receipt.attempt),
+          receipt.reasonCode,
+          receipt.createdAt
+        )
+      );
+    }
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+       WHERE principal_role = $1`,
+      [NATIVE_PRINCIPAL_C]
+    );
+
     deliveryLeaseRecoveryDirectClient = new Client({
       connectionString: principalConnection(NATIVE_PRINCIPAL_A)
     });
@@ -2598,6 +2954,15 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       deliveryLeaseRecoveryDirectClient.query(
         `SELECT * FROM "${NATIVE_SCHEMA}"."yoink_recover_hosted_delivery_leases"($1, $2)`,
         [NATIVE_TENANT, "user_local"]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."yoink_transition_trackalacker_signal_inbox"(
+           $1, $2, 'lease', '', $3
+         )`,
+        [NATIVE_TENANT, "user_local", "A".repeat(43)]
       ),
       /does not match the expected authenticated principal/
     );
@@ -3488,11 +3853,6 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
 
     const alertNow = Date.now();
-    await first.query(
-      `INSERT INTO "${NATIVE_SCHEMA}"."users"(id, tenant_id, display_name, created_at)
-       VALUES ($1, $2, 'Native same-tenant peer', $3)`,
-      [NATIVE_SAME_TENANT_USER, NATIVE_TENANT, new Date(alertNow - 10_000).toISOString()]
-    );
     await first.query(
       `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
          principal_role, tenant_id, user_id, active, provisioned_at
@@ -5343,7 +5703,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
         NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE
       ),
-      /function boundary is incomplete|no longer matches its receipt/
+      /function boundaries are incomplete|no longer matches its receipt/
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_hosted_delivery_leases"(
@@ -5785,6 +6145,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       deliveryLeaseRecoveryA?.close(),
       deliveryLeaseRecoveryASecond?.close(),
       deliveryLeaseRecoveryB?.close(),
+      deliveryLeaseRecoveryC?.close(),
       deliveryLeaseRecoveryUnmapped?.close(),
       deliveryLeaseRecoveryDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);

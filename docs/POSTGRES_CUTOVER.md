@@ -65,13 +65,13 @@ Automated real-engine tests cover:
 This class is not imported by the API or standalone worker entry points. It
 cannot flip receipt authority, cannot enable dual writes, and does not give the
 PostgreSQL process any retailer-session capability. Three task-handler families
-remain incomplete; notification recovery, execution recovery, operational
-retention, and observer-candidate evaluation have separately qualified but
-inactive PostgreSQL seams, while connector dispatch is a proven sub-boundary of
-the still-incomplete alert-reconciliation handler. The emulated
-real-semantics suite continues to prove the
-complete store state machine; the separate native suite now proves the
-contention-critical path across independent server sessions.
+were still incomplete at the original worker-store milestone. The current
+qualification chain has separate inactive seams for six complete handler
+families plus connector dispatch and the final handler's expired-lease and
+fixed signal-inbox lifecycle sub-boundaries. Only hosted signal evaluation
+prevents complete seventh-handler parity. The emulated real-semantics suite
+continues to prove the complete store state machine; the separate native suite
+proves each contention-critical path across independent server sessions.
 
 ## Native lease-contention qualification
 
@@ -882,21 +882,23 @@ parity. All qualification roles remain inactive, SQLite stays authoritative,
 and hosted-delivery signal evaluation still requires its own independent
 repository boundary.
 
-## Function-only hosted-delivery lease-recovery qualification seam
+## Function-only hosted-delivery transport-lifecycle qualification seam
 
 Version 0.72 decomposes the final `hosted_delivery_recovery` task into its two
-real mutation domains. This boundary completes expired inbox/outbox lease
-recovery only; durable `signal_event_v1` evaluation remains a separate open
-repository port. The honest complete-handler counter therefore remains six of
-seven.
+real mutation domains and qualifies expired inbox/outbox lease recovery.
+Version 0.74 advances that same inactive boundary to contract v2 by adding the
+complete lease/acknowledgement/failure lifecycle for already accepted, fixed
+`signal_event_v1` inbox messages. Inbox acceptance and durable signal
+evaluation remain separate open repository ports. The honest complete-handler
+counter therefore remains six of seven.
 
 The lease-recovery role is `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no
 objects, has schema `USAGE`, zero direct/effective table or column grants, and
-may execute one exact strict security-definer function. Inbox messages, outbox
-events, and hosted-delivery receipts are forced-RLS. The function resolves
-`session_user` through the server-owned principal registry, checks the expected
-tenant/user, uses the database statement clock, and takes a per-principal
-advisory transaction lock.
+may execute exactly two strict security-definer functions. Inbox messages,
+outbox events, and hosted-delivery receipts are forced-RLS. Both functions
+resolve `session_user` through the server-owned principal registry, check the
+expected tenant/user, and use the database statement clock. The expired-lease
+function takes a per-principal advisory transaction lock.
 
 Only rows with a nonempty lease that expired by the server timestamp can move.
 Inbox attempts below 20 become `failed` with an immediate retry time; attempt
@@ -906,21 +908,36 @@ expiry, records `lease_expired`, and appends the existing length-delimited
 SHA-256 receipt with the authenticated user. The function returns four counts
 and never exposes message payloads.
 
+The second function accepts only `lease`, `complete`, or `fail` and only the
+packaged `signal_event_v1` event type. A lease selects one eligible accepted,
+retryable, or expired-processing row with `FOR UPDATE SKIP LOCKED`, increments
+its bounded attempt, and applies a fixed 60-second expiry. The application
+supplies a fresh 43-character, 256-bit capability; only the existing length-
+delimited SHA-256 capability hash is persisted. Completion or failure must
+present the exact unexpired token. Completion records `processed`/`worker_ack`;
+failure records `retry` with a fixed 30-second delay below attempt 20 or
+`dead_letter` at attempt 20. The raw capability is never returned in a receipt
+or stored in a table.
+
 Native PostgreSQL 16 proves all four transitions, preservation of live leases,
 exact receipt-hash parity with SQLite, cross-tenant isolation, idempotent
 replay, a single winner under simultaneous calls, mismatched and unmapped
 principal denial, direct table denial, clean temporary membership removal, and
-immutable receipt rejection after function-catalog tamper.
+immutable receipt rejection after function-catalog tamper. Contract v2 also
+proves one-winner signal leasing, same-tenant/different-user isolation, payload
+parsing, stored capability-hash parity, wrong-token and cross-principal denial,
+completion, delayed retry, attempt-20 dead letter, and immediate-retry
+exclusion.
 
 Plan without a database connection:
 
 ```bash
 npm run postgres:delivery-lease-recovery -- plan \
-  yoink_cutover_qualification_072 yoink_q_072 yoink_session_q_072 \
-  yoink_queue_q_072 yoink_control_q_072 yoink_notify_q_072 \
-  yoink_execute_q_072 yoink_retain_q_072 yoink_candidate_q_072 \
-  yoink_dispatch_q_072 yoink_reconcile_q_072 yoink_witness_q_072 \
-  yoink_delivery_q_072
+  yoink_cutover_qualification_074 yoink_q_074 yoink_session_q_074 \
+  yoink_queue_q_074 yoink_control_q_074 yoink_notify_q_074 \
+  yoink_execute_q_074 yoink_retain_q_074 yoink_candidate_q_074 \
+  yoink_dispatch_q_074 yoink_reconcile_q_074 yoink_witness_q_074 \
+  yoink_delivery_q_074
 ```
 
 After the exact witness-refresh receipt is verified, apply once with the
@@ -929,27 +946,28 @@ qualification connection and explicit acknowledgement:
 ```bash
 YOINK_POSTGRES_DELIVERY_LEASE_RECOVERY_QUALIFICATION_ACK=bounded-delivery-lease-recovery-qualification \
   npm run postgres:delivery-lease-recovery -- apply \
-  yoink_cutover_qualification_072 yoink_q_072 yoink_session_q_072 \
-  yoink_queue_q_072 yoink_control_q_072 yoink_notify_q_072 \
-  yoink_execute_q_072 yoink_retain_q_072 yoink_candidate_q_072 \
-  yoink_dispatch_q_072 yoink_reconcile_q_072 yoink_witness_q_072 \
-  yoink_delivery_q_072
+  yoink_cutover_qualification_074 yoink_q_074 yoink_session_q_074 \
+  yoink_queue_q_074 yoink_control_q_074 yoink_notify_q_074 \
+  yoink_execute_q_074 yoink_retain_q_074 yoink_candidate_q_074 \
+  yoink_dispatch_q_074 yoink_reconcile_q_074 yoink_witness_q_074 \
+  yoink_delivery_q_074
 ```
 
 Then independently re-inspect the catalogs and immutable receipt:
 
 ```bash
 npm run postgres:delivery-lease-recovery -- verify \
-  yoink_cutover_qualification_072 yoink_q_072 yoink_session_q_072 \
-  yoink_queue_q_072 yoink_control_q_072 yoink_notify_q_072 \
-  yoink_execute_q_072 yoink_retain_q_072 yoink_candidate_q_072 \
-  yoink_dispatch_q_072 yoink_reconcile_q_072 yoink_witness_q_072 \
-  yoink_delivery_q_072
+  yoink_cutover_qualification_074 yoink_q_074 yoink_session_q_074 \
+  yoink_queue_q_074 yoink_control_q_074 yoink_notify_q_074 \
+  yoink_execute_q_074 yoink_retain_q_074 yoink_candidate_q_074 \
+  yoink_dispatch_q_074 yoink_reconcile_q_074 yoink_witness_q_074 \
+  yoink_delivery_q_074
 ```
 
 Apply refuses reused objects and cannot create a login, membership, principal
 mapping, runtime composition, message, signal, mission, action job, retailer
-mutation, or production authority. SQLite remains authoritative.
+mutation, or production authority. It does not accept an inbox message or
+evaluate a signal. SQLite remains authoritative.
 
 ## Requirements
 
@@ -1055,8 +1073,8 @@ confirms that the operator intentionally requested an offline, one-shot load.
 The admin Operations projection lists these as required, not complete:
 
 - PostgreSQL hosted signal evaluation, composition with the qualified
-  hosted-delivery lease-recovery half to complete the final task-handler
-  family, and every API request-repository family;
+  hosted-delivery recovery and fixed signal-inbox lifecycle to complete the
+  final task-handler family, and every API request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers; all qualified

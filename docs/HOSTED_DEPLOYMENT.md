@@ -34,6 +34,14 @@ does not lose intake, but accepted signals remain queued. Health exposes
 admin worker projection exposes scoped aggregate state and payload-free dead
 letters. This does not make external SQLite a production transport.
 
+Version 0.74 qualifies an inactive PostgreSQL transport seam for leasing and
+settling those already accepted `signal_event_v1` messages. Its database-
+authenticated principal, server clock, one-use hashed capabilities, exact
+receipts, zero direct table grants, and native contention proof close only the
+inbox lifecycle. The HTTP acceptance transaction, signal-engine mutation
+graph, production login provisioning, runtime composition, outage/load drills,
+and authority switch are still required before PostgreSQL can be authoritative.
+
 Version 0.37 adds tenant-scoped, privacy-bounded structural landmarks to the
 existing adapter diagnostic channel. The resulting selector is an admin-only,
 non-executable maintainer suggestion. Its three-device/two-SKU threshold is not

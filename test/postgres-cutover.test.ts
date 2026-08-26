@@ -93,8 +93,10 @@ import {
 import {
   POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION,
   POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION,
+  POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION,
   buildPostgresHostedDeliveryLeaseRecoveryManifest,
   hostedDeliveryLeaseRecoveryFunctionSource,
+  hostedSignalInboxFunctionSource,
   postgresHostedDeliveryLeaseRecoveryCapabilityProjection
 } from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
 import {
@@ -1192,7 +1194,7 @@ test("the PostgreSQL observer-witness refresh boundary is two-phase, public-only
   );
 });
 
-test("the PostgreSQL hosted-delivery lease-recovery sub-boundary is exact and does not claim handler parity", () => {
+test("the PostgreSQL hosted-delivery and signal-inbox lifecycle boundary is exact without claiming handler parity", () => {
   const args = [
     "yoink_cutover_test",
     "yoink_q_test",
@@ -1224,6 +1226,14 @@ test("the PostgreSQL hosted-delivery lease-recovery sub-boundary is exact and do
     POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION
   );
   assert.deepEqual(manifest.leaseRecoveryRole.functionArgumentTypes, ["text", "text"]);
+  assert.equal(
+    manifest.leaseRecoveryRole.signalInboxFunctionName,
+    POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION
+  );
+  assert.deepEqual(
+    manifest.leaseRecoveryRole.signalInboxFunctionArgumentTypes,
+    ["text", "text", "text", "text", "text"]
+  );
   assert.deepEqual(manifest.leaseRecoveryRole.protectedTableNames, [
     "hosted_delivery_receipts",
     "inbox_messages",
@@ -1237,13 +1247,15 @@ test("the PostgreSQL hosted-delivery lease-recovery sub-boundary is exact and do
   assert.equal(manifest.databaseServerClock, true);
   assert.equal(manifest.deterministicReceiptHashParity, true);
   assert.equal(manifest.leaseRecoverySubBoundaryParity, true);
+  assert.equal(manifest.signalInboxLifecycleRepositoryParity, true);
+  assert.equal(manifest.signalEvaluationRepositoryParity, false);
   assert.equal(manifest.signalIngressRepositoryParity, false);
   assert.equal(manifest.hostedDeliveryHandlerRepositoryParity, false);
   assert.equal(manifest.allHandlerRepositoryParity, false);
   assert.equal(manifest.protectedTableCount, 3);
   assert.equal(manifest.forcedRlsTableCount, 3);
   assert.equal(manifest.directTableGrantCount, 0);
-  assert.equal(manifest.functionGrantCount, 1);
+  assert.equal(manifest.functionGrantCount, 2);
   assert.equal(manifest.mutationAuthority, false);
   assert.equal(manifest.activePrincipalCount, 0);
   assert.equal(manifest.runtimeAuthority, false);
@@ -1262,6 +1274,17 @@ test("the PostgreSQL hosted-delivery lease-recovery sub-boundary is exact and do
   assert.doesNotMatch(source, /payload_json/);
   assert.doesNotMatch(source, /signal_events|action_jobs|retailer_adapter/i);
 
+  const signalSource = hostedSignalInboxFunctionSource(manifest);
+  assert.match(signalSource, /principal\.principal_role = session_user::text/);
+  assert.match(signalSource, /statement_timestamp\(\)/);
+  assert.match(signalSource, /FOR UPDATE SKIP LOCKED/);
+  assert.match(signalSource, /event_type = 'signal_event_v1'/);
+  assert.match(signalSource, /hosted_delivery_capability_v1/);
+  assert.match(signalSource, /hosted_delivery_receipt_v1/);
+  assert.match(signalSource, /operation_name NOT IN \('lease', 'complete', 'fail'\)/);
+  assert.match(signalSource, /signal_processing_failed/);
+  assert.doesNotMatch(signalSource, /signal_events|action_jobs|retailer_adapter/i);
+
   const capability = postgresHostedDeliveryLeaseRecoveryCapabilityProjection();
   assert.equal(
     capability.contractVersion,
@@ -1277,6 +1300,8 @@ test("the PostgreSQL hosted-delivery lease-recovery sub-boundary is exact and do
   assert.equal(capability.readCommittedTransactionAdapter, true);
   assert.equal(capability.nativeContentionQualified, true);
   assert.equal(capability.leaseRecoverySubBoundaryParity, true);
+  assert.equal(capability.signalInboxLifecycleRepositoryParity, true);
+  assert.equal(capability.signalEvaluationRepositoryParity, false);
   assert.equal(capability.signalIngressRepositoryParity, false);
   assert.equal(capability.hostedDeliveryHandlerRepositoryParity, false);
   assert.equal(capability.allHandlerRepositoryParity, false);
@@ -1286,7 +1311,7 @@ test("the PostgreSQL hosted-delivery lease-recovery sub-boundary is exact and do
   assert.equal(capability.protectedTableCount, 3);
   assert.equal(capability.forcedRlsTableCount, 3);
   assert.equal(capability.directTableGrantCount, 0);
-  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.functionGrantCount, 2);
   assert.equal(capability.activeRuntimeRoleApplied, false);
   assert.equal(capability.mutationAuthority, false);
   assert.equal(capability.runtimeAuthority, false);

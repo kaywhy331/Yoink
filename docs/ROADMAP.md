@@ -1,6 +1,41 @@
 # Yoink roadmap
 
-## Shipped through 0.73.0
+## Shipped through 0.74.0
+
+### Server-bound PostgreSQL signal-inbox lifecycle sub-boundary (0.74.0)
+
+- Hosted-delivery qualification contract v2 extends the existing expired-lease
+  boundary to the complete worker transport lifecycle for fixed
+  `signal_event_v1` inbox messages. It deliberately does not accept new inbox
+  messages or evaluate a signal
+- The same inactive `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no objects,
+  retains zero direct/effective table or column grants, and may execute exactly
+  two strict security-definer functions across the same three forced-RLS inbox,
+  outbox, and append-only receipt tables
+- PostgreSQL resolves `session_user` to one exact tenant/user and rejects an
+  expected-principal mismatch before selecting a message. `FOR UPDATE SKIP
+  LOCKED` gives one worker an eligible accepted, retryable, or expired-
+  processing TrackaLacker row while preserving the existing 20-attempt ceiling
+- The application creates a 43-character, 256-bit capability. The raw token is
+  transient; PostgreSQL stores only the existing length-delimited SHA-256
+  capability hash, applies a 60-second server-clock lease, and requires the
+  exact unexpired capability for acknowledgement or failure
+- Acknowledgement marks the message processed. Failure schedules the existing
+  fixed 30-second retry below attempt 20 or dead-letters attempt 20. Lease,
+  processed, retry, and dead-letter winners append the exact existing
+  authenticated delivery-receipt hash
+- Native PostgreSQL 16 proves one-winner contention, exact cross-tenant and
+  same-tenant/different-user isolation, payload parsing, stored capability-hash
+  parity, wrong-token and cross-principal denial, completion, delayed retry,
+  terminal dead letter, immediate-retry exclusion, mismatched/unmapped/direct-
+  table denial, and function-catalog tamper detection
+- Health and Admin → Operations expose lifecycle parity and two exact functions
+  separately from signal evaluation. Inbox acceptance, the catalog/strategy/
+  mission/policy/spend/notification/action mutation graph, request repository
+  composition, production principals, and the authority switch remain closed;
+  honest complete-handler coverage remains 6 of 7
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### Exact tenant ownership for the signal-incident graph (0.73.0)
 
@@ -2213,10 +2248,20 @@ idempotency, simultaneous one-winner execution, direct denial, and catalog
 tamper. The handler counter remains six of seven until durable signal
 evaluation is ported and composed with this boundary.
 
+Version 0.74 advances that seventh role to contract v2 with a second exact
+function for the fixed `signal_event_v1` transport lifecycle. PostgreSQL now
+leases one row with locked-row skipping, stores only a one-use capability hash,
+and applies authenticated completion, delayed retry, or attempt-20 dead letter
+with exact receipts and server time. Native proof covers contention, same-
+tenant user isolation, capability rejection, all terminal states, and catalog
+tamper. Inbox acceptance and signal evaluation remain unported, so the handler
+counter still remains six of seven.
+
 - Complete the PostgreSQL hosted signal-evaluation repository, compose it with
-  the qualified lease-recovery sub-boundary to finish the seventh handler, and
-  port every request-repository family over the qualified schema; activate the already
-  qualified least-privilege control and queue roles through production
+  the qualified delivery-recovery and signal-inbox lifecycle sub-boundaries to
+  finish the seventh handler, and port every request-repository family over the
+  qualified schema; activate the already qualified least-privilege control and
+  queue roles through production
   identity-to-login provisioning, add the remaining restricted writer roles,
   resolve the remaining mixed/shared offer access semantics, and pass
   transactional/isolation parity, deployed multi-process lease/load/outage
@@ -2651,8 +2696,8 @@ repository alone:
   and independent witness refresh, plus a distinct
   function-only connector-dispatch sub-boundary with exact user isolation,
   one-use hashed capabilities, and no endpoint secrets, plus exact
-  reconcile receipts and the final handler's complete hosted-delivery
-  lease-recovery half are implemented, but all PostgreSQL roles remain
+  reconcile receipts and the final handler's hosted-delivery recovery plus
+  fixed signal-inbox lifecycle are implemented, but all PostgreSQL roles remain
   inactive, hosted signal evaluation remains on SQLite, complete-handler parity
   remains six of seven, and every request repository remains on SQLite. The
   PostgreSQL runtime must add production principals, remaining restricted

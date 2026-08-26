@@ -18,14 +18,16 @@ function usage() {
   YOINK_POSTGRES_URL=... npm run postgres:delivery-lease-recovery -- verify \
     [private_schema] [read_role_namespace] [session_role_namespace] [queue_role_namespace] [control_role_namespace] [notification_role_namespace] [execution_role_namespace] [retention_role_namespace] [candidate_role_namespace] [dispatch_role_namespace] [reconciliation_role_namespace] [witness_role_namespace] [delivery_lease_role_namespace]
 
-The command creates one qualification-only hosted-delivery lease-recovery
+The command creates one qualification-only hosted-delivery transport
 sub-boundary. Its NOLOGIN role has zero direct table or column grants and can
-execute one exact, server-principal-bound, server-clocked function across three
-forced-RLS tables. The function can only release expired inbox/outbox leases,
-apply the existing retry/dead-letter limit, and append aggregate-safe receipts.
+execute two exact, server-principal-bound, server-clocked functions across
+three forced-RLS tables. They release expired inbox/outbox leases and perform
+the fixed signal_event_v1 lease, acknowledgement, retry, and dead-letter
+lifecycle while appending exact delivery receipts.
 
 This is deliberately not the full hosted_delivery_recovery handler: signal
-ingress evaluation remains outside this boundary, handler parity stays 6/7,
+ingress acceptance and evaluation remain outside this boundary, handler parity
+stays 6/7,
 and no login, principal, runtime authority, signal action, or retailer mutation
 is activated.
 `);

@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import type { BackgroundWorkerPrincipal } from "../../contracts/src/background-worker.js";
+import { SIGNAL_INGRESS_EVENT_TYPE } from "../../contracts/src/signal-ingress.js";
 import { BACKGROUND_TASK_KINDS } from "../../domain/src/background-task.js";
 import { nowIso } from "../../domain/src/ids.js";
 import {
@@ -20,11 +21,13 @@ import {
 import { canonicalPortabilityJson } from "./portability.js";
 import { POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE } from "./postgres-tenant-session.js";
 
-export const POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION = 1;
+export const POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION = 2;
 export const POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_RECEIPT_TABLE =
   "yoink_hosted_delivery_lease_recovery_receipt";
 export const POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION =
   "yoink_recover_hosted_delivery_leases";
+export const POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION =
+  "yoink_transition_trackalacker_signal_inbox";
 
 const MAXIMUM_DELIVERY_ATTEMPTS = 20;
 const MAXIMUM_CLOCK_SKEW_MS = 300_000;
@@ -32,9 +35,17 @@ const SAFE_SCHEMA = /^[a-z][a-z0-9_]{2,62}$/;
 const SAFE_ROLE_NAMESPACE = /^[a-z][a-z0-9_]{2,31}$/;
 const INTEGER = /^(?:0|[1-9][0-9]*)$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const CAPABILITY_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+const SIGNAL_LEASE_SECONDS = 60;
+const SIGNAL_RETRY_SECONDS = 30;
 const FUNCTION_ARGUMENT_TYPES = Object.freeze(["text", "text"] as const);
 const FUNCTION_RESULT_TYPE =
   "TABLE(inbox_requeued bigint, inbox_dead_lettered bigint, outbox_requeued bigint, outbox_dead_lettered bigint)";
+const SIGNAL_FUNCTION_ARGUMENT_TYPES = Object.freeze([
+  "text", "text", "text", "text", "text"
+] as const);
+const SIGNAL_FUNCTION_RESULT_TYPE =
+  "TABLE(message_id text, source text, message_key text, event_type text, payload_json text, attempt bigint, lease_expires_at text, disposition text, changed boolean)";
 const PROTECTED_TABLES = Object.freeze([
   "hosted_delivery_receipts",
   "inbox_messages",
@@ -72,6 +83,8 @@ export interface PostgresHostedDeliveryLeaseRecoveryManifest {
     name: string;
     functionName: typeof POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION;
     functionArgumentTypes: string[];
+    signalInboxFunctionName: typeof POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION;
+    signalInboxFunctionArgumentTypes: string[];
     protectedTableNames: string[];
     forcedRlsTableNames: string[];
     login: false;
@@ -82,7 +95,7 @@ export interface PostgresHostedDeliveryLeaseRecoveryManifest {
   protectedTableCount: 3;
   forcedRlsTableCount: 3;
   directTableGrantCount: 0;
-  functionGrantCount: 1;
+  functionGrantCount: 2;
   boundaryHandlerTaskKinds: ["hosted_delivery_recovery"];
   qualifiedHandlerTaskKinds: [
     "notification_recovery",
@@ -99,6 +112,8 @@ export interface PostgresHostedDeliveryLeaseRecoveryManifest {
   databaseServerClock: true;
   deterministicReceiptHashParity: true;
   leaseRecoverySubBoundaryParity: true;
+  signalInboxLifecycleRepositoryParity: true;
+  signalEvaluationRepositoryParity: false;
   signalIngressRepositoryParity: false;
   hostedDeliveryHandlerRepositoryParity: false;
   allHandlerRepositoryParity: false;
@@ -109,7 +124,7 @@ export interface PostgresHostedDeliveryLeaseRecoveryManifest {
 }
 
 export interface PostgresHostedDeliveryLeaseRecoveryQualificationReceipt {
-  contractVersion: 1;
+  contractVersion: 2;
   cutoverContractVersion: 3;
   witnessRefreshContractVersion: 1;
   phase: "verified";
@@ -120,7 +135,7 @@ export interface PostgresHostedDeliveryLeaseRecoveryQualificationReceipt {
   protectedTableCount: 3;
   forcedRlsTableCount: 3;
   directTableGrantCount: 0;
-  functionGrantCount: 1;
+  functionGrantCount: 2;
   membershipCount: 0;
   activePrincipalCount: 0;
   qualifiedHandlerTaskKindCount: 6;
@@ -130,6 +145,8 @@ export interface PostgresHostedDeliveryLeaseRecoveryQualificationReceipt {
   databaseServerClock: true;
   deterministicReceiptHashParity: true;
   leaseRecoverySubBoundaryParity: true;
+  signalInboxLifecycleRepositoryParity: true;
+  signalEvaluationRepositoryParity: false;
   signalIngressRepositoryParity: false;
   hostedDeliveryHandlerRepositoryParity: false;
   allHandlerRepositoryParity: false;
@@ -143,7 +160,7 @@ export interface PostgresHostedDeliveryLeaseRecoveryQualificationReceipt {
 }
 
 export interface PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
-  contractVersion: 1;
+  contractVersion: 2;
   cutoverContractVersion: 3;
   witnessRefreshContractVersion: 1;
   deterministicManifestImplemented: true;
@@ -161,6 +178,8 @@ export interface PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
   readCommittedTransactionAdapter: true;
   nativeContentionQualified: true;
   leaseRecoverySubBoundaryParity: true;
+  signalInboxLifecycleRepositoryParity: true;
+  signalEvaluationRepositoryParity: false;
   signalIngressRepositoryParity: false;
   hostedDeliveryHandlerRepositoryParity: false;
   allHandlerRepositoryParity: false;
@@ -170,7 +189,7 @@ export interface PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
   protectedTableCount: 3;
   forcedRlsTableCount: 3;
   directTableGrantCount: 0;
-  functionGrantCount: 1;
+  functionGrantCount: 2;
   activePrincipalCount: 0;
   activeRuntimeRoleApplied: false;
   mutationAuthority: false;
@@ -184,6 +203,17 @@ export interface PostgresHostedDeliveryLeaseRecoveryResult {
   inboxDeadLettered: number;
   outboxRequeued: number;
   outboxDeadLettered: number;
+}
+
+export interface PostgresHostedSignalInboxLease {
+  id: string;
+  source: string;
+  messageKey: string;
+  eventType: typeof SIGNAL_INGRESS_EVENT_TYPE;
+  payload: Record<string, unknown>;
+  attempt: number;
+  leaseExpiresAt: string;
+  capabilityToken: string;
 }
 
 export interface NodePostgresHostedDeliveryLeaseRecoveryDatabaseOptions {
@@ -236,6 +266,8 @@ interface ReceiptRow extends Record<string, unknown> {
   database_server_clock: boolean;
   deterministic_receipt_hash_parity: boolean;
   lease_recovery_sub_boundary_parity: boolean;
+  signal_inbox_lifecycle_repository_parity: boolean;
+  signal_evaluation_repository_parity: boolean;
   signal_ingress_repository_parity: boolean;
   hosted_delivery_handler_repository_parity: boolean;
   all_handler_repository_parity: boolean;
@@ -252,7 +284,7 @@ interface BoundaryInspection {
   protectedTableCount: number;
   forcedRlsTableCount: number;
   directTableGrantCount: 0;
-  functionGrantCount: 1;
+  functionGrantCount: 2;
   membershipCount: 0;
   activePrincipalCount: 0;
   boundaryCatalogFingerprint: string;
@@ -263,6 +295,18 @@ interface RecoveryRow extends Record<string, unknown> {
   inboxDeadLettered: string | number | bigint;
   outboxRequeued: string | number | bigint;
   outboxDeadLettered: string | number | bigint;
+}
+
+interface SignalInboxTransitionRow extends Record<string, unknown> {
+  messageId: string;
+  source: string;
+  messageKey: string;
+  eventType: string;
+  payloadJson: string;
+  attempt: string | number | bigint;
+  leaseExpiresAt: string;
+  disposition: string;
+  changed: boolean;
 }
 
 let cachedCapabilityProjection:
@@ -338,6 +382,44 @@ function timestamp(value: unknown, label: string): string {
     );
   }
   return normalized;
+}
+
+function signalMessageId(value: unknown): string {
+  const normalized = String(value ?? "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{2,159}$/.test(normalized)) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal inbox message ID is invalid."
+    );
+  }
+  return normalized;
+}
+
+function signalCapabilityToken(value: unknown): string {
+  const normalized = String(value ?? "");
+  if (!CAPABILITY_TOKEN.test(normalized)) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal inbox capability is invalid."
+    );
+  }
+  return normalized;
+}
+
+function parsedSignalPayload(value: unknown): Record<string, unknown> {
+  const json = String(value ?? "");
+  if (!json || Buffer.byteLength(json, "utf8") > 64 * 1024) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal inbox payload is invalid."
+    );
+  }
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid");
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal inbox payload is invalid."
+    );
+  }
 }
 
 function exactBoolean<T extends boolean>(value: unknown, expected: T, label: string): T {
@@ -526,6 +608,222 @@ END
 `;
 }
 
+export function hostedSignalInboxFunctionSource(
+  manifest: PostgresHostedDeliveryLeaseRecoveryManifest
+): string {
+  const capabilityParts = stableHashInputSql([
+    "'hosted_delivery_capability_v1'::text",
+    "message_record.id::text",
+    "capability_token"
+  ]);
+  const receiptParts = stableHashInputSql([
+    "'hosted_delivery_receipt_v1'::text",
+    "resolved_tenant_id",
+    "resolved_user_id",
+    "'inbox'::text",
+    "message_record.id::text",
+    "disposition_value",
+    "message_record.attempt::text",
+    "reason_code_value",
+    "transition_timestamp"
+  ]);
+  return `
+DECLARE
+  resolved_tenant_id TEXT;
+  resolved_user_id TEXT;
+  resolved_principal_count BIGINT;
+  transition_timestamp TEXT;
+  new_lease_expires_at TEXT;
+  new_next_attempt_at TEXT;
+  message_record RECORD;
+  capability_input TEXT;
+  expected_capability_hash TEXT;
+  disposition_value TEXT;
+  reason_code_value TEXT;
+  receipt_input TEXT;
+BEGIN
+  IF expected_tenant_id = '' OR expected_user_id = '' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'expected hosted signal principal is invalid';
+  END IF;
+  IF operation_name NOT IN ('lease', 'complete', 'fail') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal inbox operation is invalid';
+  END IF;
+  IF capability_token !~ '^[A-Za-z0-9_-]{43}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal inbox capability is invalid';
+  END IF;
+  IF (operation_name = 'lease' AND target_message_id <> '')
+    OR (operation_name <> 'lease'
+      AND target_message_id !~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{2,159}$') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal inbox message is invalid';
+  END IF;
+
+  SELECT MIN(principal.tenant_id), MIN(principal.user_id), COUNT(*)
+    INTO resolved_tenant_id, resolved_user_id, resolved_principal_count
+  FROM ${relation(manifest.schemaName, POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE)} AS principal
+  WHERE principal.principal_role = session_user::text AND principal.active = TRUE;
+  IF resolved_principal_count <> 1 OR resolved_tenant_id IS NULL OR resolved_user_id IS NULL THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'tenant session principal is not active';
+  END IF;
+  IF resolved_tenant_id <> expected_tenant_id OR resolved_user_id <> expected_user_id THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'tenant session principal does not match the expected authenticated principal';
+  END IF;
+
+  transition_timestamp := pg_catalog.to_char(
+    pg_catalog.statement_timestamp() AT TIME ZONE 'UTC',
+    'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+  );
+
+  IF operation_name = 'lease' THEN
+    SELECT message.id, message.source, message.message_key,
+           message.event_type, message.payload_json,
+           message.delivery_attempts + 1 AS attempt
+      INTO message_record
+    FROM ${relation(manifest.schemaName, "inbox_messages")} AS message
+    WHERE message.tenant_id = resolved_tenant_id
+      AND message.user_id = resolved_user_id
+      AND message.event_type = '${SIGNAL_INGRESS_EVENT_TYPE}'
+      AND message.delivery_attempts < ${MAXIMUM_DELIVERY_ATTEMPTS}
+      AND (
+        (message.state IN ('accepted', 'failed')
+          AND (message.next_attempt_at = '' OR message.next_attempt_at <= transition_timestamp)
+          AND (message.lease_capability_hash = ''
+            OR message.lease_expires_at <= transition_timestamp))
+        OR (message.state = 'processing'
+          AND message.lease_expires_at <> ''
+          AND message.lease_expires_at <= transition_timestamp)
+      )
+    ORDER BY message.received_at, message.id
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1;
+    IF NOT FOUND THEN
+      RETURN;
+    END IF;
+
+    capability_input := ${capabilityParts};
+    expected_capability_hash := pg_catalog.encode(
+      pg_catalog.sha256(pg_catalog.convert_to(capability_input, 'UTF8')),
+      'hex'
+    );
+    new_lease_expires_at := pg_catalog.to_char(
+      (pg_catalog.statement_timestamp() + INTERVAL '${SIGNAL_LEASE_SECONDS} seconds') AT TIME ZONE 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+    );
+    UPDATE ${relation(manifest.schemaName, "inbox_messages")} AS message
+    SET state = 'processing', delivery_attempts = message_record.attempt,
+        lease_capability_hash = expected_capability_hash,
+        lease_expires_at = new_lease_expires_at,
+        next_attempt_at = '', last_error_code = '',
+        updated_at = transition_timestamp
+    WHERE message.id = message_record.id
+      AND message.tenant_id = resolved_tenant_id
+      AND message.user_id = resolved_user_id
+      AND message.event_type = '${SIGNAL_INGRESS_EVENT_TYPE}';
+    IF NOT FOUND THEN
+      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'hosted signal inbox lease changed concurrently';
+    END IF;
+    disposition_value := 'leased';
+    reason_code_value := 'worker_lease';
+    receipt_input := ${receiptParts};
+    INSERT INTO ${relation(manifest.schemaName, "hosted_delivery_receipts")}(
+      id, tenant_id, user_id, direction, message_id, disposition,
+      attempt, reason_code, receipt_hash, created_at
+    ) VALUES (
+      'delivery_receipt_' || pg_catalog.replace(pg_catalog.gen_random_uuid()::text, '-', ''),
+      resolved_tenant_id, resolved_user_id, 'inbox', message_record.id,
+      disposition_value, message_record.attempt, reason_code_value,
+      pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(receipt_input, 'UTF8')), 'hex'),
+      transition_timestamp
+    );
+    RETURN QUERY SELECT message_record.id::text, message_record.source::text,
+      message_record.message_key::text, message_record.event_type::text,
+      message_record.payload_json::text, message_record.attempt::bigint,
+      new_lease_expires_at, disposition_value, TRUE;
+    RETURN;
+  END IF;
+
+  SELECT message.id, message.source, message.message_key,
+         message.event_type, message.payload_json,
+         message.delivery_attempts AS attempt,
+         message.lease_capability_hash, message.lease_expires_at
+    INTO message_record
+  FROM ${relation(manifest.schemaName, "inbox_messages")} AS message
+  WHERE message.id = target_message_id
+    AND message.tenant_id = resolved_tenant_id
+    AND message.user_id = resolved_user_id
+    AND message.event_type = '${SIGNAL_INGRESS_EVENT_TYPE}'
+    AND message.state = 'processing'
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'hosted signal inbox capability is invalid or expired';
+  END IF;
+  capability_input := ${capabilityParts};
+  expected_capability_hash := pg_catalog.encode(
+    pg_catalog.sha256(pg_catalog.convert_to(capability_input, 'UTF8')),
+    'hex'
+  );
+  IF message_record.lease_capability_hash <> expected_capability_hash
+    OR message_record.lease_expires_at = ''
+    OR message_record.lease_expires_at <= transition_timestamp THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'hosted signal inbox capability is invalid or expired';
+  END IF;
+
+  IF operation_name = 'complete' THEN
+    disposition_value := 'processed';
+    reason_code_value := 'worker_ack';
+    new_next_attempt_at := '';
+    UPDATE ${relation(manifest.schemaName, "inbox_messages")} AS message
+    SET state = 'processed', lease_capability_hash = '', lease_expires_at = '',
+        next_attempt_at = '', last_error_code = '',
+        processed_at = transition_timestamp, updated_at = transition_timestamp
+    WHERE message.id = message_record.id
+      AND message.tenant_id = resolved_tenant_id
+      AND message.user_id = resolved_user_id
+      AND message.state = 'processing';
+  ELSE
+    disposition_value := CASE
+      WHEN message_record.attempt >= ${MAXIMUM_DELIVERY_ATTEMPTS} THEN 'dead_letter'
+      ELSE 'retry'
+    END;
+    reason_code_value := 'signal_processing_failed';
+    new_next_attempt_at := CASE
+      WHEN disposition_value = 'dead_letter' THEN ''
+      ELSE pg_catalog.to_char(
+        (pg_catalog.statement_timestamp() + INTERVAL '${SIGNAL_RETRY_SECONDS} seconds') AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+      )
+    END;
+    UPDATE ${relation(manifest.schemaName, "inbox_messages")} AS message
+    SET state = CASE WHEN disposition_value = 'dead_letter' THEN 'dead_letter' ELSE 'failed' END,
+        lease_capability_hash = '', lease_expires_at = '',
+        next_attempt_at = new_next_attempt_at,
+        last_error_code = reason_code_value, updated_at = transition_timestamp
+    WHERE message.id = message_record.id
+      AND message.tenant_id = resolved_tenant_id
+      AND message.user_id = resolved_user_id
+      AND message.state = 'processing';
+  END IF;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'hosted signal inbox transition changed concurrently';
+  END IF;
+  receipt_input := ${receiptParts};
+  INSERT INTO ${relation(manifest.schemaName, "hosted_delivery_receipts")}(
+    id, tenant_id, user_id, direction, message_id, disposition,
+    attempt, reason_code, receipt_hash, created_at
+  ) VALUES (
+    'delivery_receipt_' || pg_catalog.replace(pg_catalog.gen_random_uuid()::text, '-', ''),
+    resolved_tenant_id, resolved_user_id, 'inbox', message_record.id,
+    disposition_value, message_record.attempt, reason_code_value,
+    pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(receipt_input, 'UTF8')), 'hex'),
+    transition_timestamp
+  );
+  RETURN QUERY SELECT message_record.id::text, message_record.source::text,
+    message_record.message_key::text, message_record.event_type::text,
+    message_record.payload_json::text, message_record.attempt::bigint,
+    ''::text, disposition_value, TRUE;
+END
+`;
+}
+
 export function buildPostgresHostedDeliveryLeaseRecoveryManifest(
   requestedSchema = POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   requestedReadRoleNamespace = "yoink_qualification",
@@ -579,7 +877,7 @@ export function buildPostgresHostedDeliveryLeaseRecoveryManifest(
     );
   }
   const withoutFingerprint: Omit<PostgresHostedDeliveryLeaseRecoveryManifest, "fingerprint"> = {
-    contractVersion: 1,
+    contractVersion: POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION,
     cutoverContractVersion: 3,
     witnessRefreshContractVersion: 1,
     schemaName: previous.schemaName,
@@ -601,6 +899,8 @@ export function buildPostgresHostedDeliveryLeaseRecoveryManifest(
       name: roleName(leaseRecoveryRoleNamespace),
       functionName: POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION,
       functionArgumentTypes: [...FUNCTION_ARGUMENT_TYPES],
+      signalInboxFunctionName: POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION,
+      signalInboxFunctionArgumentTypes: [...SIGNAL_FUNCTION_ARGUMENT_TYPES],
       protectedTableNames: [...PROTECTED_TABLES],
       forcedRlsTableNames: [...PROTECTED_TABLES],
       login: false,
@@ -611,7 +911,7 @@ export function buildPostgresHostedDeliveryLeaseRecoveryManifest(
     protectedTableCount: 3,
     forcedRlsTableCount: 3,
     directTableGrantCount: 0,
-    functionGrantCount: 1,
+    functionGrantCount: 2,
     boundaryHandlerTaskKinds: ["hosted_delivery_recovery"],
     qualifiedHandlerTaskKinds: [...QUALIFIED_HANDLER_TASK_KINDS],
     qualifiedHandlerTaskKindCount: 6,
@@ -621,6 +921,8 @@ export function buildPostgresHostedDeliveryLeaseRecoveryManifest(
     databaseServerClock: true,
     deterministicReceiptHashParity: true,
     leaseRecoverySubBoundaryParity: true,
+    signalInboxLifecycleRepositoryParity: true,
+    signalEvaluationRepositoryParity: false,
     signalIngressRepositoryParity: false,
     hostedDeliveryHandlerRepositoryParity: false,
     allHandlerRepositoryParity: false,
@@ -636,7 +938,7 @@ PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
   if (cachedCapabilityProjection) return { ...cachedCapabilityProjection };
   const manifest = buildPostgresHostedDeliveryLeaseRecoveryManifest();
   cachedCapabilityProjection = Object.freeze({
-    contractVersion: 1,
+    contractVersion: POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION,
     cutoverContractVersion: 3,
     witnessRefreshContractVersion: 1,
     deterministicManifestImplemented: true,
@@ -654,6 +956,8 @@ PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
     readCommittedTransactionAdapter: true,
     nativeContentionQualified: true,
     leaseRecoverySubBoundaryParity: true,
+    signalInboxLifecycleRepositoryParity: true,
+    signalEvaluationRepositoryParity: false,
     signalIngressRepositoryParity: false,
     hostedDeliveryHandlerRepositoryParity: false,
     allHandlerRepositoryParity: false,
@@ -663,7 +967,7 @@ PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
     protectedTableCount: 3,
     forcedRlsTableCount: 3,
     directTableGrantCount: 0,
-    functionGrantCount: 1,
+    functionGrantCount: 2,
     activePrincipalCount: 0,
     activeRuntimeRoleApplied: false,
     mutationAuthority: false,
@@ -794,42 +1098,63 @@ async function inspectBoundary(
      ORDER BY routine.proname, pg_catalog.oidvectortypes(routine.proargtypes)`,
     [manifest.schemaName, role]
   );
-  const routine = routines.rows[0];
-  if (routines.rows.length !== 1 || !routine
-    || routine.routineName !== manifest.leaseRecoveryRole.functionName
-    || routine.argumentTypes !== FUNCTION_ARGUMENT_TYPES.join(", ")
-    || routine.resultType !== FUNCTION_RESULT_TYPE || routine.volatility !== "v"
-    || !routine.securityDefiner || !routine.strict || routine.leakproof
-    || JSON.stringify(routine.configuration) !== JSON.stringify(["search_path=pg_catalog"])
-    || routine.ownerName === role
-    || routine.source !== hostedDeliveryLeaseRecoveryFunctionSource(manifest)) {
+  const expectedRoutines = new Map<string, {
+    argumentTypes: string;
+    resultType: string;
+    source: string;
+  }>([
+    [manifest.leaseRecoveryRole.functionName, {
+      argumentTypes: FUNCTION_ARGUMENT_TYPES.join(", "),
+      resultType: FUNCTION_RESULT_TYPE,
+      source: hostedDeliveryLeaseRecoveryFunctionSource(manifest)
+    }],
+    [manifest.leaseRecoveryRole.signalInboxFunctionName, {
+      argumentTypes: SIGNAL_FUNCTION_ARGUMENT_TYPES.join(", "),
+      resultType: SIGNAL_FUNCTION_RESULT_TYPE,
+      source: hostedSignalInboxFunctionSource(manifest)
+    }]
+  ]);
+  if (routines.rows.length !== expectedRoutines.size || routines.rows.some((routine) => {
+    const expected = expectedRoutines.get(routine.routineName);
+    return !expected || routine.argumentTypes !== expected.argumentTypes
+      || routine.resultType !== expected.resultType || routine.volatility !== "v"
+      || !routine.securityDefiner || !routine.strict || routine.leakproof
+      || JSON.stringify(routine.configuration) !== JSON.stringify(["search_path=pg_catalog"])
+      || routine.ownerName === role || routine.source !== expected.source;
+  })) {
     throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
-      "The PostgreSQL hosted-delivery lease-recovery function boundary is incomplete."
+      "The PostgreSQL hosted-delivery lease-recovery function boundaries are incomplete."
     );
   }
   const routineAcl = await session.query<{
+    routineOid: string;
     grantee: string;
     privilegeType: string;
     grantable: boolean;
   }>(
-    `SELECT COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee,
+    `SELECT routine.oid::text AS "routineOid",
+            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee,
             access.privilege_type AS "privilegeType", access.is_grantable AS grantable
      FROM pg_catalog.pg_proc routine
      CROSS JOIN LATERAL pg_catalog.aclexplode(
        COALESCE(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
      ) AS access
      LEFT JOIN pg_catalog.pg_roles grantee_role ON grantee_role.oid = access.grantee
-     WHERE routine.oid = $1::oid ORDER BY grantee`,
-    [routine.oid]
+     WHERE routine.oid = ANY($1::oid[]) ORDER BY routine.oid, grantee`,
+    [routines.rows.map((routine) => routine.oid)]
   );
-  if (routineAcl.rows.length !== 2
-    || !routineAcl.rows.some((row) => row.grantee === role
-      && row.privilegeType === "EXECUTE" && !row.grantable)
-    || !routineAcl.rows.some((row) => row.grantee === routine.ownerName
-      && row.privilegeType === "EXECUTE" && !row.grantable)
-    || routineAcl.rows.some((row) => row.grantee === "PUBLIC")) {
+  if (routineAcl.rows.length !== routines.rows.length * 2
+    || routines.rows.some((routine) => {
+      const rows = routineAcl.rows.filter((row) => row.routineOid === routine.oid);
+      return rows.length !== 2
+        || !rows.some((row) => row.grantee === role
+          && row.privilegeType === "EXECUTE" && !row.grantable)
+        || !rows.some((row) => row.grantee === routine.ownerName
+          && row.privilegeType === "EXECUTE" && !row.grantable)
+        || rows.some((row) => row.grantee === "PUBLIC");
+    })) {
     throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
-      "The PostgreSQL hosted-delivery lease-recovery function grant is not exact."
+      "The PostgreSQL hosted-delivery lease-recovery function grants are not exact."
     );
   }
   const accessibleSequences = await session.query<{ count: string | number | bigint }>(
@@ -910,12 +1235,12 @@ async function inspectBoundary(
     protectedTableCount: rls.rows.length,
     forcedRlsTableCount: rls.rows.length,
     directTableGrantCount: 0,
-    functionGrantCount: 1,
+    functionGrantCount: 2,
     membershipCount: 0,
     activePrincipalCount: 0,
     boundaryCatalogFingerprint: fingerprint({
       role: roleRow,
-      routine,
+      routines: routines.rows,
       routineAcl: routineAcl.rows,
       rls: rls.rows
     })
@@ -927,7 +1252,7 @@ function receiptFromRow(
   manifest: PostgresHostedDeliveryLeaseRecoveryManifest
 ): PostgresHostedDeliveryLeaseRecoveryQualificationReceipt {
   const receipt: PostgresHostedDeliveryLeaseRecoveryQualificationReceipt = {
-    contractVersion: exactInteger(row.contract_version, "receipt contract version") as 1,
+    contractVersion: exactInteger(row.contract_version, "receipt contract version") as 2,
     cutoverContractVersion: exactInteger(row.cutover_contract_version, "cutover contract version") as 3,
     witnessRefreshContractVersion: exactInteger(
       row.witness_refresh_contract_version,
@@ -941,7 +1266,7 @@ function receiptFromRow(
     protectedTableCount: exactInteger(row.protected_table_count, "protected-table count") as 3,
     forcedRlsTableCount: exactInteger(row.forced_rls_table_count, "forced-RLS count") as 3,
     directTableGrantCount: exactInteger(row.direct_table_grant_count, "direct-grant count") as 0,
-    functionGrantCount: exactInteger(row.function_grant_count, "function-grant count") as 1,
+    functionGrantCount: exactInteger(row.function_grant_count, "function-grant count") as 2,
     membershipCount: exactInteger(row.membership_count, "membership count") as 0,
     activePrincipalCount: exactInteger(row.active_principal_count, "active-principal count") as 0,
     qualifiedHandlerTaskKindCount: exactInteger(
@@ -966,6 +1291,16 @@ function receiptFromRow(
       true,
       "lease-recovery parity flag"
     ),
+    signalInboxLifecycleRepositoryParity: exactBoolean(
+      row.signal_inbox_lifecycle_repository_parity,
+      true,
+      "signal-inbox lifecycle parity flag"
+    ),
+    signalEvaluationRepositoryParity: exactBoolean(
+      row.signal_evaluation_repository_parity,
+      false,
+      "signal-evaluation parity flag"
+    ),
     signalIngressRepositoryParity: exactBoolean(
       row.signal_ingress_repository_parity,
       false,
@@ -989,19 +1324,22 @@ function receiptFromRow(
     appliedAt: timestamp(row.applied_at, "applied timestamp"),
     verifiedAt: timestamp(row.verified_at, "verified timestamp")
   };
-  if (receipt.contractVersion !== 1 || receipt.cutoverContractVersion !== 3
+  if (receipt.contractVersion !== POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION
+    || receipt.cutoverContractVersion !== 3
     || receipt.witnessRefreshContractVersion !== 1 || receipt.phase !== "verified"
     || receipt.roleManifestFingerprint !== manifest.fingerprint
     || receipt.witnessRefreshManifestFingerprint !== manifest.witnessRefreshManifestFingerprint
     || receipt.leaseRecoveryRoleName !== manifest.leaseRecoveryRole.name
     || receipt.protectedTableCount !== 3 || receipt.forcedRlsTableCount !== 3
-    || receipt.directTableGrantCount !== 0 || receipt.functionGrantCount !== 1
+    || receipt.directTableGrantCount !== 0 || receipt.functionGrantCount !== 2
     || receipt.membershipCount !== 0 || receipt.activePrincipalCount !== 0
     || receipt.qualifiedHandlerTaskKindCount !== 6
     || receipt.totalHandlerTaskKindCount !== BACKGROUND_TASK_KINDS.length
     || receipt.maximumDeliveryAttempts !== 20
     || !receipt.serverBoundPrincipalLookup || !receipt.databaseServerClock
     || !receipt.deterministicReceiptHashParity || !receipt.leaseRecoverySubBoundaryParity
+    || !receipt.signalInboxLifecycleRepositoryParity
+    || receipt.signalEvaluationRepositoryParity
     || receipt.signalIngressRepositoryParity || receipt.hostedDeliveryHandlerRepositoryParity
     || receipt.allHandlerRepositoryParity || receipt.mutationAuthority
     || receipt.directTableAccess || receipt.runtimeAuthority || receipt.productionReady
@@ -1157,21 +1495,25 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
     roleExists: boolean;
     receiptExists: boolean;
     functionExists: boolean;
+    signalFunctionExists: boolean;
     guardExists: boolean;
   }>(
     `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1) AS "roleExists",
             pg_catalog.to_regclass($2) IS NOT NULL AS "receiptExists",
             pg_catalog.to_regprocedure($3) IS NOT NULL AS "functionExists",
-            pg_catalog.to_regprocedure($4) IS NOT NULL AS "guardExists"`,
+            pg_catalog.to_regprocedure($4) IS NOT NULL AS "signalFunctionExists",
+            pg_catalog.to_regprocedure($5) IS NOT NULL AS "guardExists"`,
     [
       manifest.leaseRecoveryRole.name,
       `${manifest.schemaName}.${POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_RECEIPT_TABLE}`,
       `${manifest.schemaName}.${POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION}(text,text)`,
+      `${manifest.schemaName}.${POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION}(text,text,text,text,text)`,
       `${manifest.schemaName}.yoink_guard_hosted_delivery_lease_recovery_receipt()`
     ]
   );
   if (existing.rows[0]?.roleExists || existing.rows[0]?.receiptExists
-    || existing.rows[0]?.functionExists || existing.rows[0]?.guardExists) {
+    || existing.rows[0]?.functionExists || existing.rows[0]?.signalFunctionExists
+    || existing.rows[0]?.guardExists) {
     throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
       "Hosted-delivery lease-recovery qualification refuses to reuse a role, function, guard, or receipt."
     );
@@ -1211,9 +1553,31 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
        TO ${identifier(manifest.leaseRecoveryRole.name)}`
     );
     await session.query(
+      `CREATE FUNCTION ${relation(
+        manifest.schemaName,
+        manifest.leaseRecoveryRole.signalInboxFunctionName
+      )}(
+         expected_tenant_id text, expected_user_id text, operation_name text,
+         target_message_id text, capability_token text
+       ) RETURNS ${SIGNAL_FUNCTION_RESULT_TYPE}
+       LANGUAGE plpgsql VOLATILE STRICT SECURITY DEFINER SET search_path TO pg_catalog
+       AS $yoink$${hostedSignalInboxFunctionSource(manifest)}$yoink$`
+    );
+    const signalFunctionSignature = `${relation(
+      manifest.schemaName,
+      manifest.leaseRecoveryRole.signalInboxFunctionName
+    )}(text, text, text, text, text)`;
+    await session.query(`REVOKE ALL ON FUNCTION ${signalFunctionSignature} FROM PUBLIC`);
+    await session.query(
+      `GRANT EXECUTE ON FUNCTION ${signalFunctionSignature}
+       TO ${identifier(manifest.leaseRecoveryRole.name)}`
+    );
+    await session.query(
       `CREATE TABLE ${relation(manifest.schemaName, POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_RECEIPT_TABLE)}(
          singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton = TRUE),
-         contract_version BIGINT NOT NULL CHECK (contract_version = 1),
+         contract_version BIGINT NOT NULL CHECK (
+           contract_version = ${POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION}
+         ),
          cutover_contract_version BIGINT NOT NULL CHECK (cutover_contract_version = 3),
          witness_refresh_contract_version BIGINT NOT NULL CHECK (witness_refresh_contract_version = 1),
          phase TEXT NOT NULL CHECK (phase = 'verified'),
@@ -1223,7 +1587,7 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
          protected_table_count BIGINT NOT NULL CHECK (protected_table_count = 3),
          forced_rls_table_count BIGINT NOT NULL CHECK (forced_rls_table_count = 3),
          direct_table_grant_count BIGINT NOT NULL CHECK (direct_table_grant_count = 0),
-         function_grant_count BIGINT NOT NULL CHECK (function_grant_count = 1),
+         function_grant_count BIGINT NOT NULL CHECK (function_grant_count = 2),
          membership_count BIGINT NOT NULL CHECK (membership_count = 0),
          active_principal_count BIGINT NOT NULL CHECK (active_principal_count = 0),
          qualified_handler_task_kind_count BIGINT NOT NULL CHECK (qualified_handler_task_kind_count = 6),
@@ -1233,6 +1597,12 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
          database_server_clock BOOLEAN NOT NULL CHECK (database_server_clock = TRUE),
          deterministic_receipt_hash_parity BOOLEAN NOT NULL CHECK (deterministic_receipt_hash_parity = TRUE),
          lease_recovery_sub_boundary_parity BOOLEAN NOT NULL CHECK (lease_recovery_sub_boundary_parity = TRUE),
+         signal_inbox_lifecycle_repository_parity BOOLEAN NOT NULL CHECK (
+           signal_inbox_lifecycle_repository_parity = TRUE
+         ),
+         signal_evaluation_repository_parity BOOLEAN NOT NULL CHECK (
+           signal_evaluation_repository_parity = FALSE
+         ),
          signal_ingress_repository_parity BOOLEAN NOT NULL CHECK (signal_ingress_repository_parity = FALSE),
          hosted_delivery_handler_repository_parity BOOLEAN NOT NULL CHECK (hosted_delivery_handler_repository_parity = FALSE),
          all_handler_repository_parity BOOLEAN NOT NULL CHECK (all_handler_repository_parity = FALSE),
@@ -1288,14 +1658,17 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
          qualified_handler_task_kind_count, total_handler_task_kind_count,
          maximum_delivery_attempts, server_bound_principal_lookup,
          database_server_clock, deterministic_receipt_hash_parity,
-         lease_recovery_sub_boundary_parity, signal_ingress_repository_parity,
+         lease_recovery_sub_boundary_parity,
+         signal_inbox_lifecycle_repository_parity,
+         signal_evaluation_repository_parity, signal_ingress_repository_parity,
          hosted_delivery_handler_repository_parity, all_handler_repository_parity,
          mutation_authority, direct_table_access, runtime_authority,
          production_ready, boundary_catalog_fingerprint, applied_at, verified_at
        ) VALUES (
-         TRUE, 1, 3, 1, 'verified', $1, $2, $3,
-         3, 3, 0, 1, 0, 0, 6, 7, 20,
-         TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, FALSE,
+         TRUE, ${POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION}, 3, 1,
+         'verified', $1, $2, $3,
+         3, 3, 0, 2, 0, 0, 6, 7, 20,
+         TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE,
          FALSE, FALSE, FALSE, FALSE, $4, $5, $6
        )`,
       [
@@ -1451,6 +1824,134 @@ export class NodePostgresHostedDeliveryLeaseRecoveryDatabase {
     } finally {
       if (!destroyed) client.release();
     }
+  }
+
+  private async transitionSignalInbox(
+    principal: BackgroundWorkerPrincipal,
+    operation: "lease" | "complete" | "fail",
+    messageId: string,
+    capabilityToken: string,
+    now: number
+  ): Promise<SignalInboxTransitionRow[]> {
+    const expectedTenantId = principalId(principal.tenantId, "expected tenant ID");
+    const expectedUserId = principalId(principal.userId, "expected user ID");
+    if (!Number.isSafeInteger(now) || Math.abs(Date.now() - now) > MAXIMUM_CLOCK_SKEW_MS) {
+      throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+        "The PostgreSQL hosted signal inbox timestamp differs from the process clock."
+      );
+    }
+    const client = await this.pool.connect();
+    let destroyed = false;
+    try {
+      await client.query("BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE");
+      await client.query(`SET LOCAL ROLE ${identifier(this.manifest.leaseRecoveryRole.name)}`);
+      const result = await client.query<SignalInboxTransitionRow>(
+        `SELECT message_id AS "messageId", source, message_key AS "messageKey",
+                event_type AS "eventType", payload_json AS "payloadJson",
+                attempt, lease_expires_at AS "leaseExpiresAt", disposition, changed
+         FROM ${relation(
+          this.manifest.schemaName,
+          this.manifest.leaseRecoveryRole.signalInboxFunctionName
+        )}($1, $2, $3, $4, $5)`,
+        [expectedTenantId, expectedUserId, operation, messageId, capabilityToken]
+      );
+      await client.query("COMMIT");
+      return result.rows;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        destroyed = true;
+        client.release(true);
+      }
+      throw error;
+    } finally {
+      if (!destroyed) client.release();
+    }
+  }
+
+  async leaseSignalInbox(
+    principal: BackgroundWorkerPrincipal,
+    now = Date.now()
+  ): Promise<PostgresHostedSignalInboxLease | null> {
+    const capabilityToken = randomBytes(32).toString("base64url");
+    const rows = await this.transitionSignalInbox(
+      principal,
+      "lease",
+      "",
+      capabilityToken,
+      now
+    );
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    if (rows.length !== 1 || !row || row.changed !== true || row.disposition !== "leased"
+      || row.eventType !== SIGNAL_INGRESS_EVENT_TYPE) {
+      throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+        "The PostgreSQL hosted signal inbox lease result is ambiguous."
+      );
+    }
+    const attempt = exactInteger(row.attempt, "signal inbox attempt");
+    if (attempt < 1 || attempt > MAXIMUM_DELIVERY_ATTEMPTS) {
+      throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+        "The PostgreSQL hosted signal inbox attempt is out of range."
+      );
+    }
+    return {
+      id: signalMessageId(row.messageId),
+      source: principalId(row.source, "signal inbox source"),
+      messageKey: principalId(row.messageKey, "signal inbox message key"),
+      eventType: SIGNAL_INGRESS_EVENT_TYPE,
+      payload: parsedSignalPayload(row.payloadJson),
+      attempt,
+      leaseExpiresAt: timestamp(row.leaseExpiresAt, "signal inbox lease expiry"),
+      capabilityToken: signalCapabilityToken(capabilityToken)
+    };
+  }
+
+  async completeSignalInbox(
+    principal: BackgroundWorkerPrincipal,
+    messageId: string,
+    capabilityToken: string,
+    now = Date.now()
+  ): Promise<true> {
+    const rows = await this.transitionSignalInbox(
+      principal,
+      "complete",
+      signalMessageId(messageId),
+      signalCapabilityToken(capabilityToken),
+      now
+    );
+    if (rows.length !== 1 || rows[0]?.changed !== true
+      || rows[0].disposition !== "processed" || rows[0].messageId !== messageId) {
+      throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+        "The PostgreSQL hosted signal inbox completion result is ambiguous."
+      );
+    }
+    return true;
+  }
+
+  async failSignalInbox(
+    principal: BackgroundWorkerPrincipal,
+    messageId: string,
+    capabilityToken: string,
+    now = Date.now()
+  ): Promise<"retry" | "dead_letter"> {
+    const rows = await this.transitionSignalInbox(
+      principal,
+      "fail",
+      signalMessageId(messageId),
+      signalCapabilityToken(capabilityToken),
+      now
+    );
+    const disposition = rows[0]?.disposition;
+    if (rows.length !== 1 || rows[0]?.changed !== true
+      || rows[0].messageId !== messageId
+      || (disposition !== "retry" && disposition !== "dead_letter")) {
+      throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+        "The PostgreSQL hosted signal inbox failure result is ambiguous."
+      );
+    }
+    return disposition;
   }
 
   async close(): Promise<void> {

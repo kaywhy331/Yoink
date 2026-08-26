@@ -64,6 +64,14 @@ tenant/user ownership and refuses missing or multi-principal historical
 evidence. The PostgreSQL manifest now classifies all 95 portable tables, with
 83 tenant-scoped tables and no unresolved grant class. Signal evaluation and
 all production PostgreSQL authority remain closed.
+Yoink 0.74 advances the hosted-delivery qualification contract to v2. The same
+zero-direct-grant role may now execute a second exact function for the fixed
+`signal_event_v1` inbox lease, acknowledgement, retry, and attempt-20 dead-
+letter lifecycle. PostgreSQL binds each transition to the database-
+authenticated tenant/user and statement clock, stores only a one-use
+capability hash, and appends the existing deterministic receipt. Inbox
+acceptance and signal evaluation remain SQLite-only, complete-handler parity
+remains six of seven, and every PostgreSQL runtime role remains inactive.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
