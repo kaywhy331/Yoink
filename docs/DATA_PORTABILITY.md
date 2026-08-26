@@ -81,6 +81,16 @@ Unknown exact identities explicitly require a later, separately qualified
 shared-catalog authority. Resolution-plan apply and downstream signal
 evaluation remain SQLite-only, complete-handler parity remains six of seven,
 and every PostgreSQL runtime role remains inactive.
+Yoink 0.76 adds a distinct, separately receipted function-only role for the
+unknown-product catalog-create step. It re-derives the leased trusted-exact
+signal plan inside one two-phase transaction and can insert only a new family,
+variant, listing, canonical URL, and exact tenant source references across the
+13 packaged canonical retailer formats. It cannot update or delete catalog
+state, refresh an existing reference, mutate or complete signal evaluation, or
+return raw signal payloads. Native PostgreSQL proves exact row deltas, one-
+winner concurrency, isolation/replay/direct denial, and catalog-tamper
+detection. Resolution/evaluation apply and all runtime authority remain closed,
+so complete-handler parity remains six of seven and SQLite stays authoritative.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -200,9 +210,9 @@ Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
-A production cutover must still add the other three PostgreSQL task handlers and
-every request repository, production identity-to-login provisioning and activate the
-qualified roles, add remaining write roles,
+A production cutover must still complete and compose the hosted signal-
+evaluation handler, every request repository, production identity-to-login
+provisioning and activation of the qualified roles, add remaining write roles,
 governed mixed/incident access, deployed worker-fleet and handler replay proof,
 production identity, backup/PITR and restore, outage/load testing, and
 controlled authority-switch evidence. It must quiesce SQLite, load

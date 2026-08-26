@@ -1,6 +1,45 @@
 # Yoink roadmap
 
-## Shipped through 0.75.0
+## Shipped through 0.76.0
+
+### Insert-only PostgreSQL unknown-signal catalog creation (0.76.0)
+
+- A separately receipted qualification role can now apply the catalog-create
+  portion of an unresolved plan for an already leased, normalized
+  `signal_event_v1` from an auto-create-enabled `trusted_exact` TrackaLacker
+  connection. This does not add signal evaluation or runtime composition
+- The role is `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no object, has
+  zero direct/effective table or column grants, belongs to no role, and may
+  execute one strict security-definer routine. It is not the hosted-delivery
+  role and has no runtime principal
+- Plan and apply occur in one application-owned `READ COMMITTED` transaction.
+  PostgreSQL resolves `session_user`, invokes the v0.75 planner against the
+  exact leased message/capability, uses a maximum-30-second plan, acquires an
+  identity-scoped advisory lock plus row locks, and re-derives every condition
+  before insert
+- The only writable graph is insert-only: four shared relations
+  (`product_families`, `variants`, `listings`, `listing_urls`) and three exact
+  tenant source-reference relations. Existing source references and shared
+  catalog rows cannot be refreshed, updated, remapped, or deleted
+- Exact canonical URL/SKU bindings cover the 13 packaged retailers. Unknown
+  retailers, malformed source identity, ambiguous existing product mappings,
+  alias conflicts, duplicate listings, and changed plans fail closed
+- The result exposes generated IDs, hashes, flags, and bounded row counts only.
+  Raw identity/offer/evidence payloads stay inside PostgreSQL. Signal events,
+  decisions, occurrences, incidents, offers, missions, strategies,
+  notifications, spend, actions, and inbox completion are structurally absent
+- Native PostgreSQL 16 proves exact seven-table deltas, subsequent resolution
+  to the inserted listing, unchanged evaluation graphs, an unchanged
+  processing inbox, invalid capability, cross-tenant, same-tenant/different-
+  user, unmapped, replay, and direct-table denial, exactly one concurrent
+  winner, clean membership removal, and function-catalog tamper detection
+- Health and Admin → Operations expose this authority independently with
+  `runtimeAuthority: false` and `productionReady: false`. Source-reference
+  refresh, resolution/evaluation apply, handler composition, production
+  principals, and the PostgreSQL authority switch remain closed; honest
+  complete-handler coverage remains 6 of 7
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### Server-derived PostgreSQL signal-resolution plan (0.75.0)
 
@@ -2307,9 +2346,18 @@ separately qualified catalog authority. Plan application and the downstream
 signal graph remain unported, so the handler counter still remains six of
 seven.
 
-- Add a separately qualified shared-catalog create/apply boundary for unknown
-  exact products, then complete the PostgreSQL hosted signal-evaluation apply
-  repository and compose it with the qualified delivery-recovery,
+Version 0.76 adds that shared-catalog authority as a separate inactive,
+insert-only, zero-direct-grant function role. It re-derives the current leased
+signal plan and can create only an unknown exact product/listing plus its exact
+tenant source references; it cannot refresh, update, delete, evaluate, or
+acknowledge. Native proof covers exact row deltas, subsequent catalog match,
+isolation/replay/direct denial, one-winner concurrency, and catalog tamper. The
+handler counter still remains six of seven because resolution/evaluation apply
+and runtime composition remain unported.
+
+- Complete the PostgreSQL hosted signal-resolution/evaluation apply repository,
+  including separately bounded known-product source-reference refresh, and
+  compose it with the qualified catalog-create, delivery-recovery,
   signal-inbox lifecycle, and resolution-plan sub-boundaries to finish the
   seventh handler. Port every request-repository family over the
   qualified schema; activate the already qualified least-privilege control and
@@ -2749,10 +2797,11 @@ repository alone:
   function-only connector-dispatch sub-boundary with exact user isolation,
   one-use hashed capabilities, and no endpoint secrets, plus exact
   reconcile receipts and the final handler's hosted-delivery recovery plus
-  fixed signal-inbox lifecycle and capability-bound exact resolution plan are
-  implemented, but all PostgreSQL roles remain inactive. Shared-catalog apply,
-  resolution-plan apply, and downstream hosted signal evaluation remain on
-  SQLite, complete-handler parity remains six of seven, and every request
+  fixed signal-inbox lifecycle, capability-bound exact resolution plan, and a
+  distinct insert-only unknown-product catalog-create boundary are implemented,
+  but all PostgreSQL roles remain inactive. Existing source-reference refresh,
+  resolution/evaluation apply, and downstream hosted signal evaluation remain
+  on SQLite, complete-handler parity remains six of seven, and every request
   repository remains on SQLite. The
   PostgreSQL runtime must add production principals, remaining restricted
   roles, and pass multi-connection contention, backup/PITR/restore, outage, and

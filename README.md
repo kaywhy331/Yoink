@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.75.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.76.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,35 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.76.0 adds the next deliberately separate piece of the inactive
+PostgreSQL hosted-signal plane: an insert-only shared-catalog creation boundary
+for an unknown product from an already leased, `trusted_exact` TrackaLacker
+signal. Its dedicated `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no
+objects, has zero direct/effective table or column grants, and may execute one
+strict security-definer function. The application plans and applies inside one
+`READ COMMITTED` transaction; PostgreSQL re-derives the current v0.75
+resolution plan, binds the database-authenticated tenant/user and one-use inbox
+capability, locks the exact identities, and refuses plans older than 30 seconds.
+
+Only missing rows may be inserted: family, variant, listing, canonical URL, and
+the exact tenant source-product, source-listing, and TrackaLacker-slug
+references. Canonical identities are constrained to the 13 packaged retailer
+formats. Existing mappings cannot be refreshed, remapped, updated, or deleted.
+The function cannot create signal events, resolutions, occurrences, offers,
+missions, strategies, incidents, notifications, spend records, or action jobs;
+it does not acknowledge the inbox message and returns no raw signal payload.
+
+Native PostgreSQL 16 proves exact row deltas, subsequent resolution to the new
+listing, no implicit inbox completion, wrong-token, cross-tenant, same-tenant/
+different-user, unmapped-principal, replay, and direct-SQL denial, one winner
+under concurrent application, and immutable catalog-tamper detection. The
+qualification role and its mutation authority remain inactive: SQLite is still
+the runtime source of truth, source-reference refresh and downstream signal-
+evaluation apply remain closed, complete handler coverage remains six of
+seven, and no retailer authority is widened. Use `npm run
+postgres:signal-catalog-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.75.0 advances the inactive hosted-delivery PostgreSQL qualification
 plane to contract v3 with a third exact security-definer function. For a

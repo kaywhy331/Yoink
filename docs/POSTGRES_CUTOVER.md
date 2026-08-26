@@ -999,6 +999,84 @@ mapping, runtime composition, message, signal, mission, action job, retailer
 mutation, or production authority. It does not accept an inbox message or
 evaluate a signal. SQLite remains authoritative.
 
+## Insert-only unknown-signal catalog-create qualification seam
+
+Version 0.76 adds a separate qualification boundary for the one shared write
+that the v0.75 planner deliberately refused: creating the exact catalog rows
+for an unresolved product from an already leased `trusted_exact`
+TrackaLacker signal. This does not modify the hosted-delivery role. A new
+`NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no object, has schema `USAGE`,
+zero direct/effective table or column privileges, and can execute one strict
+security-definer function.
+
+The Node adapter begins one `READ COMMITTED` read-write transaction, sets only
+that role, requests a plan, then applies its SHA-256 fingerprint within 30
+seconds. Both calls bind `session_user` through the server principal registry.
+The database invokes the qualified v0.75 resolution planner against the exact
+message and one-use inbox capability, locks the retailer/SKU identity with a
+transaction advisory lock, locks tenant references as needed, and re-derives
+the current plan before inserting anything. A second contender, changed plan,
+expired lease, forged token, mismatched user, ambiguous mapping, or existing
+listing loses without a partial write.
+
+The routine can insert only four shared catalog relations—`product_families`,
+`variants`, `listings`, and `listing_urls`—plus `source_product_refs`,
+`source_listing_refs`, and `source_product_aliases` for the authenticated
+tenant. Canonical URL/SKU identity must match one of the 13 packaged retailer
+formats. Existing references are never refreshed; there is no `UPDATE` or
+`DELETE`. Signal events, resolution decisions, occurrences, incidents, offer
+observations, missions, strategies, notifications, spend, actions, inbox
+acknowledgement, and raw signal results are outside the routine.
+
+Native PostgreSQL 16 proves exact seven-table deltas, a subsequent read-only
+plan matching the created listing, unchanged evaluation graphs, and an inbox
+that remains `processing` until the separate transport function acknowledges
+it. It also proves wrong-token, cross-tenant, same-tenant/different-user,
+unmapped, replay, and direct-SQL denial; one winner under simultaneous apply;
+clean temporary membership removal; and immutable receipt rejection after
+function-catalog tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-catalog-apply -- plan \
+  yoink_cutover_qualification_076 yoink_q_076 yoink_session_q_076 \
+  yoink_queue_q_076 yoink_control_q_076 yoink_notify_q_076 \
+  yoink_execute_q_076 yoink_retain_q_076 yoink_candidate_q_076 \
+  yoink_dispatch_q_076 yoink_reconcile_q_076 yoink_witness_q_076 \
+  yoink_delivery_q_076 yoink_catalog_q_076
+```
+
+After the exact hosted-delivery v3 receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_CATALOG_APPLY_QUALIFICATION_ACK=bounded-signal-catalog-apply-qualification \
+  npm run postgres:signal-catalog-apply -- apply \
+  yoink_cutover_qualification_076 yoink_q_076 yoink_session_q_076 \
+  yoink_queue_q_076 yoink_control_q_076 yoink_notify_q_076 \
+  yoink_execute_q_076 yoink_retain_q_076 yoink_candidate_q_076 \
+  yoink_dispatch_q_076 yoink_reconcile_q_076 yoink_witness_q_076 \
+  yoink_delivery_q_076 yoink_catalog_q_076
+```
+
+Then independently inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:signal-catalog-apply -- verify \
+  yoink_cutover_qualification_076 yoink_q_076 yoink_session_q_076 \
+  yoink_queue_q_076 yoink_control_q_076 yoink_notify_q_076 \
+  yoink_execute_q_076 yoink_retain_q_076 yoink_candidate_q_076 \
+  yoink_dispatch_q_076 yoink_reconcile_q_076 yoink_witness_q_076 \
+  yoink_delivery_q_076 yoink_catalog_q_076
+```
+
+The receipt permanently records `runtimeAuthority: false` and
+`productionReady: false`. Applying this qualification boundary creates no
+login, principal mapping, runtime composition, source-reference refresh,
+signal-evaluation authority, or retailer-session authority. SQLite remains
+authoritative.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -1102,11 +1180,11 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- a separately qualified shared-catalog apply boundary for unknown exact
-  products, PostgreSQL hosted signal-resolution plan apply and downstream
-  evaluation, composition with the qualified hosted-delivery recovery, fixed
-  signal-inbox lifecycle, and read-only resolution plan to complete the final
-  task-handler family, and every API request-repository family;
+- source-reference refresh for known products, PostgreSQL hosted signal-
+  resolution/evaluation apply, and composition with the qualified hosted-
+  delivery recovery, fixed signal-inbox lifecycle, read-only resolution plan,
+  and insert-only catalog-create boundary to complete the final task-handler
+  family, plus every API request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers; all qualified

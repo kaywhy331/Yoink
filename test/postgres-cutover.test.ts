@@ -102,6 +102,13 @@ import {
   postgresHostedDeliveryLeaseRecoveryCapabilityProjection
 } from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
 import {
+  POSTGRES_SIGNAL_CATALOG_APPLY_CONTRACT_VERSION,
+  POSTGRES_SIGNAL_CATALOG_APPLY_FUNCTION,
+  buildPostgresSignalCatalogApplyManifest,
+  postgresSignalCatalogApplyCapabilityProjection,
+  signalCatalogApplyFunctionSource
+} from "../packages/database/src/postgres-signal-catalog-apply.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -1364,6 +1371,158 @@ test("the PostgreSQL hosted-delivery and signal-inbox lifecycle boundary is exac
       "dispatch_namespace",
       "reconcile_namespace",
       "witness_namespace",
+      "same_namespace"
+    ),
+    /must be independent/
+  );
+});
+
+test("the PostgreSQL unknown-signal catalog boundary is separately privileged, insert-only, and inert", () => {
+  const args = [
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test",
+    "yoink_notify_test",
+    "yoink_execute_test",
+    "yoink_retention_test",
+    "yoink_candidate_test",
+    "yoink_alert_dispatch_test",
+    "yoink_alert_reconcile_test",
+    "yoink_witness_refresh_test",
+    "yoink_delivery_lease_test",
+    "yoink_catalog_apply_test"
+  ] as const;
+  const manifest = buildPostgresSignalCatalogApplyManifest(...args);
+  assert.deepEqual(buildPostgresSignalCatalogApplyManifest(...args), manifest);
+  assert.equal(manifest.contractVersion, POSTGRES_SIGNAL_CATALOG_APPLY_CONTRACT_VERSION);
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(
+    manifest.hostedDeliveryContractVersion,
+    POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION
+  );
+  assert.equal(manifest.catalogApplyRole.functionName, POSTGRES_SIGNAL_CATALOG_APPLY_FUNCTION);
+  assert.deepEqual(
+    manifest.catalogApplyRole.functionArgumentTypes,
+    ["text", "text", "text", "text", "text", "text", "text"]
+  );
+  assert.deepEqual(manifest.catalogApplyRole.protectedTenantTableNames, [
+    "inbox_messages",
+    "source_listing_refs",
+    "source_product_aliases",
+    "source_product_refs"
+  ]);
+  assert.deepEqual(manifest.catalogApplyRole.sharedCatalogWriteTableNames, [
+    "listing_urls",
+    "listings",
+    "product_families",
+    "variants"
+  ]);
+  assert.deepEqual(manifest.catalogApplyRole.tenantReferenceWriteTableNames, [
+    "source_listing_refs",
+    "source_product_aliases",
+    "source_product_refs"
+  ]);
+  assert.equal(manifest.catalogApplyRole.login, false);
+  assert.equal(manifest.catalogApplyRole.inherit, false);
+  assert.equal(manifest.catalogApplyRole.bypassRls, false);
+  assert.equal(manifest.catalogApplyRole.directTableAccess, false);
+  assert.equal(manifest.protectedTenantTableCount, 4);
+  assert.equal(manifest.forcedRlsTableCount, 4);
+  assert.equal(manifest.sharedCatalogWriteTableCount, 4);
+  assert.equal(manifest.tenantReferenceWriteTableCount, 3);
+  assert.equal(manifest.directTableGrantCount, 0);
+  assert.equal(manifest.functionGrantCount, 1);
+  assert.equal(manifest.maximumPlanAgeSeconds, 30);
+  assert.equal(manifest.supportedExactRetailerCount, 13);
+  assert.equal(manifest.serverBoundPrincipalLookup, true);
+  assert.equal(manifest.databasePlanRevalidation, true);
+  assert.equal(manifest.insertOnlyCatalogMutation, true);
+  assert.equal(manifest.sharedCatalogCreateApplyRepositoryParity, true);
+  assert.equal(manifest.sourceReferenceRefreshRepositoryParity, false);
+  assert.equal(manifest.signalEvaluationGraphMutation, false);
+  assert.equal(manifest.rawSignalPayloadReturned, false);
+  assert.equal(manifest.signalEvaluationApplyRepositoryParity, false);
+  assert.equal(manifest.hostedDeliveryHandlerRepositoryParity, false);
+  assert.equal(manifest.mutationAuthority, true);
+  assert.equal(manifest.activePrincipalCount, 0);
+  assert.equal(manifest.runtimeAuthority, false);
+  assert.match(manifest.hostedDeliveryManifestFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+
+  const source = signalCatalogApplyFunctionSource(manifest);
+  assert.match(source, /principal\.principal_role = session_user::text/);
+  assert.match(source, /yoink_plan_trackalacker_signal_resolution/);
+  assert.match(source, /FOR UPDATE/);
+  assert.match(source, /pg_advisory_xact_lock/);
+  assert.match(source, /postgres_signal_catalog_apply_plan_v1/);
+  assert.match(source, /operation_name NOT IN \('plan', 'apply'\)/);
+  assert.match(source, /INSERT INTO .*"product_families"/s);
+  assert.match(source, /INSERT INTO .*"variants"/s);
+  assert.match(source, /INSERT INTO .*"listings"/s);
+  assert.match(source, /INSERT INTO .*"listing_urls"/s);
+  assert.match(source, /INSERT INTO .*"source_product_refs"/s);
+  assert.match(source, /INSERT INTO .*"source_listing_refs"/s);
+  assert.match(source, /INSERT INTO .*"source_product_aliases"/s);
+  for (const retailerId of [
+    "target", "walmart", "amazon", "bestbuy", "riot", "booksamillion",
+    "pbandai", "pokemoncenter", "disney", "ravensburger", "fanatics",
+    "kohls", "macys"
+  ]) {
+    assert.match(source, new RegExp(`WHEN '${retailerId}' THEN`));
+  }
+  assert.doesNotMatch(source, /\b(?:UPDATE\s+"|DELETE\s+FROM|TRUNCATE\s+)\b/i);
+  assert.doesNotMatch(
+    source,
+    /"(?:offer_observations|signal_incidents|signal_occurrences|resolution_decisions|mission_decisions|missions|mission_targets|strategies|action_jobs|notifications)"/i
+  );
+
+  const capability = postgresSignalCatalogApplyCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_SIGNAL_CATALOG_APPLY_CONTRACT_VERSION);
+  assert.equal(capability.hostedDeliveryContractVersion, 3);
+  assert.equal(capability.deterministicManifestImplemented, true);
+  assert.equal(capability.atomicQualificationApplyImplemented, true);
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.securityDefinerRoutineVerified, true);
+  assert.equal(capability.serverBoundPrincipalLookup, true);
+  assert.equal(capability.databasePlanRevalidation, true);
+  assert.equal(capability.twoPhasePlanApply, true);
+  assert.equal(capability.readCommittedTransactionAdapter, true);
+  assert.equal(capability.insertOnlyCatalogMutation, true);
+  assert.equal(capability.sharedCatalogCreateApplyRepositoryParity, true);
+  assert.equal(capability.sourceReferenceRefreshRepositoryParity, false);
+  assert.equal(capability.signalEvaluationGraphMutation, false);
+  assert.equal(capability.rawSignalPayloadReturned, false);
+  assert.equal(capability.signalEvaluationApplyRepositoryParity, false);
+  assert.equal(capability.hostedDeliveryHandlerRepositoryParity, false);
+  assert.equal(capability.maximumPlanAgeSeconds, 30);
+  assert.equal(capability.supportedExactRetailerCount, 13);
+  assert.equal(capability.protectedTenantTableCount, 4);
+  assert.equal(capability.forcedRlsTableCount, 4);
+  assert.equal(capability.sharedCatalogWriteTableCount, 4);
+  assert.equal(capability.tenantReferenceWriteTableCount, 3);
+  assert.equal(capability.directTableGrantCount, 0);
+  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.mutationAuthority, true);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresSignalCatalogApplyManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "control_namespace",
+      "notify_namespace",
+      "execute_namespace",
+      "retention_namespace",
+      "candidate_namespace",
+      "dispatch_namespace",
+      "reconcile_namespace",
+      "witness_namespace",
+      "delivery_namespace",
       "same_namespace"
     ),
     /must be independent/

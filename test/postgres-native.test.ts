@@ -84,6 +84,13 @@ import {
   postgresHostedSignalResolutionPlanFingerprint,
   verifyPostgresHostedDeliveryLeaseRecoveryBoundary
 } from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
+import {
+  NodePostgresSignalCatalogApplyDatabase,
+  POSTGRES_SIGNAL_CATALOG_APPLY_FUNCTION,
+  applyPostgresSignalCatalogApplyBoundary,
+  buildPostgresSignalCatalogApplyManifest,
+  verifyPostgresSignalCatalogApplyBoundary
+} from "../packages/database/src/postgres-signal-catalog-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
@@ -126,6 +133,7 @@ const NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE = "yoink_native_dispatch";
 const NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE = "yoink_native_reconcile";
 const NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE = "yoink_native_witness";
 const NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE = "yoink_native_delivery";
+const NATIVE_CATALOG_APPLY_ROLE_NAMESPACE = "yoink_native_catalog";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -953,7 +961,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, and resolution planning", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, resolution planning, and insert-only catalog creation", {
   timeout: 600_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1031,6 +1039,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let deliveryLeaseRecoveryC: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
   let deliveryLeaseRecoveryUnmapped: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
   let deliveryLeaseRecoveryDirectClient: Client | null = null;
+  let signalCatalogApplyA: NodePostgresSignalCatalogApplyDatabase | null = null;
+  let signalCatalogApplyASecond: NodePostgresSignalCatalogApplyDatabase | null = null;
+  let signalCatalogApplyB: NodePostgresSignalCatalogApplyDatabase | null = null;
+  let signalCatalogApplyC: NodePostgresSignalCatalogApplyDatabase | null = null;
+  let signalCatalogApplyUnmapped: NodePostgresSignalCatalogApplyDatabase | null = null;
+  let signalCatalogApplyDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -1575,6 +1589,68 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       deliveryLeaseRecoveryBoundary
     );
+    const signalCatalogApplyBoundary = await applyPostgresSignalCatalogApplyBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:59.750Z").getTime()
+    );
+    assert.equal(signalCatalogApplyBoundary.protectedTenantTableCount, 4);
+    assert.equal(signalCatalogApplyBoundary.forcedRlsTableCount, 4);
+    assert.equal(signalCatalogApplyBoundary.sharedCatalogWriteTableCount, 4);
+    assert.equal(signalCatalogApplyBoundary.tenantReferenceWriteTableCount, 3);
+    assert.equal(signalCatalogApplyBoundary.directTableGrantCount, 0);
+    assert.equal(signalCatalogApplyBoundary.functionGrantCount, 1);
+    assert.equal(signalCatalogApplyBoundary.membershipCount, 0);
+    assert.equal(signalCatalogApplyBoundary.activePrincipalCount, 0);
+    assert.equal(signalCatalogApplyBoundary.maximumPlanAgeSeconds, 30);
+    assert.equal(signalCatalogApplyBoundary.supportedExactRetailerCount, 13);
+    assert.equal(signalCatalogApplyBoundary.serverBoundPrincipalLookup, true);
+    assert.equal(signalCatalogApplyBoundary.databasePlanRevalidation, true);
+    assert.equal(signalCatalogApplyBoundary.insertOnlyCatalogMutation, true);
+    assert.equal(signalCatalogApplyBoundary.sharedCatalogCreateApplyRepositoryParity, true);
+    assert.equal(signalCatalogApplyBoundary.sourceReferenceRefreshRepositoryParity, false);
+    assert.equal(signalCatalogApplyBoundary.signalEvaluationGraphMutation, false);
+    assert.equal(signalCatalogApplyBoundary.rawSignalPayloadReturned, false);
+    assert.equal(signalCatalogApplyBoundary.signalEvaluationApplyRepositoryParity, false);
+    assert.equal(signalCatalogApplyBoundary.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalCatalogApplyBoundary.mutationAuthority, true);
+    assert.equal(signalCatalogApplyBoundary.directTableAccess, false);
+    assert.equal(signalCatalogApplyBoundary.runtimeAuthority, false);
+    assert.equal(signalCatalogApplyBoundary.productionReady, false);
+    assert.match(signalCatalogApplyBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalCatalogApplyBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE
+      ),
+      signalCatalogApplyBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -1766,6 +1842,22 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
       NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE
     );
+    const signalCatalogApplyManifest = buildPostgresSignalCatalogApplyManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_CATALOG_APPLY_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -1806,6 +1898,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${deliveryLeaseRecoveryManifest.leaseRecoveryRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalCatalogApplyManifest.catalogApplyRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -2153,6 +2248,25 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     deliveryLeaseRecoveryB = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_B);
     deliveryLeaseRecoveryC = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_C);
     deliveryLeaseRecoveryUnmapped = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+    const signalCatalogApplyDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalCatalogApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+    NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE, NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_CATALOG_APPLY_ROLE_NAMESPACE, { maxConnections });
+    signalCatalogApplyA = signalCatalogApplyDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalCatalogApplyASecond = signalCatalogApplyDatabase(NATIVE_PRINCIPAL_A);
+    signalCatalogApplyB = signalCatalogApplyDatabase(NATIVE_PRINCIPAL_B);
+    signalCatalogApplyC = signalCatalogApplyDatabase(NATIVE_PRINCIPAL_C);
+    signalCatalogApplyUnmapped = signalCatalogApplyDatabase(NATIVE_PRINCIPAL_UNMAPPED);
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -3043,6 +3157,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         productFamilies: string | number | bigint;
         variants: string | number | bigint;
         listings: string | number | bigint;
+        listingUrls: string | number | bigint;
         sourceConnections: string | number | bigint;
         sourceProductRefs: string | number | bigint;
         sourceListingRefs: string | number | bigint;
@@ -3062,6 +3177,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
            (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."product_families") AS "productFamilies",
            (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."variants") AS variants,
            (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."listings") AS listings,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."listing_urls") AS "listingUrls",
            (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_connections") AS "sourceConnections",
            (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_product_refs") AS "sourceProductRefs",
            (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_listing_refs") AS "sourceListingRefs",
@@ -3364,6 +3480,291 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     assert.deepEqual(await signalResolutionMutationCounts(), countsBeforeResolutionPlans);
 
+    const catalogSignalId = "inbox_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const catalogSignalBase = resolutionSignalPayload(
+      catalogSignalId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-catalog-product-a",
+        sourceListingId: "native-catalog-listing-a",
+        retailerId: "target",
+        retailerSku: "999999999",
+        canonicalUrl: "https://www.target.com/p/-/A-999999999",
+        title: "Native catalog-created product"
+      }
+    );
+    const catalogSignalPayload = {
+      ...catalogSignalBase,
+      identity: {
+        ...(catalogSignalBase.identity as Record<string, unknown>),
+        globalIdentifiers: { trackalacker_slug: "native-catalog-created-product" }
+      }
+    };
+    await insertSignalLifecycleInbox(
+      catalogSignalId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(resolutionPlanNow + 1_000).toISOString(),
+      catalogSignalPayload
+    );
+    const catalogSignalLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow + 1_000
+    );
+    assert.ok(catalogSignalLease);
+    assert.equal(catalogSignalLease.id, catalogSignalId);
+    const catalogResolutionBeforeApply = await deliveryLeaseRecoveryA.planSignalResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      catalogSignalId,
+      catalogSignalLease.capabilityToken,
+      resolutionPlanNow + 1_000
+    );
+    assert.equal(catalogResolutionBeforeApply.outcome, "unresolved");
+    assert.equal(catalogResolutionBeforeApply.sharedCatalogMutationRequired, true);
+    const wrongCatalogCapability = `${
+      catalogSignalLease.capabilityToken.startsWith("A") ? "B" : "A"
+    }${catalogSignalLease.capabilityToken.slice(1)}`;
+    await assert.rejects(
+      signalCatalogApplyA.applyExactSignalCatalogCreate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        catalogSignalId,
+        wrongCatalogCapability,
+        resolutionPlanNow + 1_000
+      ),
+      /capability is invalid or expired|inbox capability expired/
+    );
+    await assert.rejects(
+      signalCatalogApplyA.applyExactSignalCatalogCreate(
+        { tenantId: "tenant_local", userId: "user_local" },
+        catalogSignalId,
+        catalogSignalLease.capabilityToken,
+        resolutionPlanNow + 1_000
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      signalCatalogApplyB.applyExactSignalCatalogCreate(
+        { tenantId: "tenant_local", userId: "user_local" },
+        catalogSignalId,
+        catalogSignalLease.capabilityToken,
+        resolutionPlanNow + 1_000
+      ),
+      /capability is invalid or expired|inbox binding is unavailable/
+    );
+    await assert.rejects(
+      signalCatalogApplyC.applyExactSignalCatalogCreate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+        catalogSignalId,
+        catalogSignalLease.capabilityToken,
+        resolutionPlanNow + 1_000
+      ),
+      /capability is invalid or expired|inbox binding is unavailable/
+    );
+    await assert.rejects(
+      signalCatalogApplyUnmapped.applyExactSignalCatalogCreate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        catalogSignalId,
+        catalogSignalLease.capabilityToken,
+        resolutionPlanNow + 1_000
+      ),
+      /tenant session principal is not active/
+    );
+    const catalogCountsBeforeApply = await signalResolutionMutationCounts();
+    const catalogApplyResult = await signalCatalogApplyA.applyExactSignalCatalogCreate(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      catalogSignalId,
+      catalogSignalLease.capabilityToken,
+      resolutionPlanNow + 1_000
+    );
+    assert.equal(catalogApplyResult.contractVersion, 1);
+    assert.equal(catalogApplyResult.messageId, catalogSignalId);
+    assert.match(catalogApplyResult.planFingerprint, /^[a-f0-9]{64}$/);
+    assert.match(catalogApplyResult.familyId, /^family_[a-f0-9]{32}$/);
+    assert.match(catalogApplyResult.variantId, /^variant_[a-f0-9]{32}$/);
+    assert.match(catalogApplyResult.listingId, /^listing_[a-f0-9]{32}$/);
+    assert.equal(catalogApplyResult.familyCreated, true);
+    assert.equal(catalogApplyResult.variantCreated, true);
+    assert.equal(catalogApplyResult.listingCreated, true);
+    assert.equal(catalogApplyResult.canonicalUrlCreated, true);
+    assert.equal(catalogApplyResult.sourceProductRefCreated, true);
+    assert.equal(catalogApplyResult.sourceListingRefCreated, true);
+    assert.equal(catalogApplyResult.sourceAliasCreated, true);
+    assert.equal(catalogApplyResult.sharedCatalogRowsCreated, 4);
+    assert.equal(catalogApplyResult.tenantReferenceRowsCreated, 3);
+    assert.equal(catalogApplyResult.mutationApplied, true);
+    assert.equal(catalogApplyResult.mutationAuthority, true);
+    assert.equal(catalogApplyResult.signalEvaluationGraphMutated, false);
+    assert.equal(catalogApplyResult.rawSignalPayloadReturned, false);
+    const serializedCatalogResult = JSON.stringify(catalogApplyResult);
+    assert.equal(serializedCatalogResult.includes("Native catalog-created product"), false);
+    assert.equal(serializedCatalogResult.includes("unitPriceCents"), false);
+    assert.equal(serializedCatalogResult.includes("evidence"), false);
+    assert.deepEqual(await signalResolutionMutationCounts(), {
+      ...catalogCountsBeforeApply,
+      productFamilies: Number(catalogCountsBeforeApply.productFamilies) + 1,
+      variants: Number(catalogCountsBeforeApply.variants) + 1,
+      listings: Number(catalogCountsBeforeApply.listings) + 1,
+      listingUrls: Number(catalogCountsBeforeApply.listingUrls) + 1,
+      sourceProductRefs: Number(catalogCountsBeforeApply.sourceProductRefs) + 1,
+      sourceListingRefs: Number(catalogCountsBeforeApply.sourceListingRefs) + 1,
+      sourceAliases: Number(catalogCountsBeforeApply.sourceAliases) + 1
+    });
+    assert.deepEqual(
+      (await first.query<{
+        retailerId: string;
+        retailerSku: string;
+        canonicalUrl: string;
+        status: string;
+        executionSupported: number;
+        currency: string;
+      }>(
+        `SELECT retailer_id AS "retailerId", retailer_sku AS "retailerSku",
+                canonical_url AS "canonicalUrl", status,
+                execution_supported::integer AS "executionSupported", currency
+         FROM "${NATIVE_SCHEMA}"."listings" WHERE id = $1`,
+        [catalogApplyResult.listingId]
+      )).rows,
+      [{
+        retailerId: "target",
+        retailerSku: "999999999",
+        canonicalUrl: "https://www.target.com/p/-/A-999999999",
+        status: "in_stock",
+        executionSupported: 1,
+        currency: "USD"
+      }]
+    );
+    assert.deepEqual(
+      (await first.query<{ state: string; processedAt: string }>(
+        `SELECT state, processed_at AS "processedAt"
+         FROM "${NATIVE_SCHEMA}"."inbox_messages" WHERE id = $1`,
+        [catalogSignalId]
+      )).rows,
+      [{ state: "processing", processedAt: "" }]
+    );
+    const catalogResolutionAfterApply = await deliveryLeaseRecoveryA.planSignalResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      catalogSignalId,
+      catalogSignalLease.capabilityToken,
+      resolutionPlanNow + 1_000
+    );
+    assert.equal(catalogResolutionAfterApply.outcome, "matched");
+    assert.equal(catalogResolutionAfterApply.resolution?.method, "source_listing_id");
+    assert.equal(catalogResolutionAfterApply.resolution?.listing?.id, catalogApplyResult.listingId);
+    assert.equal(catalogResolutionAfterApply.sharedCatalogMutationRequired, false);
+    await assert.rejects(
+      signalCatalogApplyA.applyExactSignalCatalogCreate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        catalogSignalId,
+        catalogSignalLease.capabilityToken,
+        resolutionPlanNow + 1_000
+      ),
+      /mutation is not required by the current resolution plan/
+    );
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        catalogSignalId,
+        catalogSignalLease.capabilityToken,
+        resolutionPlanNow + 1_000
+      ),
+      true
+    );
+
+    const concurrentCatalogSignalId = "inbox_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const concurrentCatalogSignalBase = resolutionSignalPayload(
+      concurrentCatalogSignalId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-catalog-product-b",
+        sourceListingId: "native-catalog-listing-b",
+        retailerId: "target",
+        retailerSku: "888888888",
+        canonicalUrl: "https://www.target.com/p/-/A-888888888",
+        title: "Native concurrent catalog product"
+      }
+    );
+    const concurrentCatalogSignalPayload = {
+      ...concurrentCatalogSignalBase,
+      identity: {
+        ...(concurrentCatalogSignalBase.identity as Record<string, unknown>),
+        globalIdentifiers: { trackalacker_slug: "native-concurrent-catalog-product" }
+      }
+    };
+    await insertSignalLifecycleInbox(
+      concurrentCatalogSignalId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(resolutionPlanNow + 2_000).toISOString(),
+      concurrentCatalogSignalPayload
+    );
+    const concurrentCatalogLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow + 2_000
+    );
+    assert.ok(concurrentCatalogLease);
+    assert.equal(concurrentCatalogLease.id, concurrentCatalogSignalId);
+    const concurrentCountsBeforeApply = await signalResolutionMutationCounts();
+    const concurrentCatalogApply = await Promise.allSettled([
+      signalCatalogApplyA.applyExactSignalCatalogCreate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        concurrentCatalogSignalId,
+        concurrentCatalogLease.capabilityToken,
+        resolutionPlanNow + 2_000
+      ),
+      signalCatalogApplyASecond.applyExactSignalCatalogCreate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        concurrentCatalogSignalId,
+        concurrentCatalogLease.capabilityToken,
+        resolutionPlanNow + 2_000
+      )
+    ]);
+    const concurrentCatalogWinners = concurrentCatalogApply.filter(
+      (result): result is PromiseFulfilledResult<Awaited<ReturnType<
+        NodePostgresSignalCatalogApplyDatabase["applyExactSignalCatalogCreate"]
+      >>> => result.status === "fulfilled"
+    );
+    const concurrentCatalogLosers = concurrentCatalogApply.filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    assert.equal(concurrentCatalogWinners.length, 1);
+    assert.equal(concurrentCatalogLosers.length, 1);
+    assert.match(
+      String(concurrentCatalogLosers[0]?.reason),
+      /plan changed because the listing now exists|mutation is not required by the current resolution plan/
+    );
+    assert.deepEqual(await signalResolutionMutationCounts(), {
+      ...concurrentCountsBeforeApply,
+      productFamilies: Number(concurrentCountsBeforeApply.productFamilies) + 1,
+      variants: Number(concurrentCountsBeforeApply.variants) + 1,
+      listings: Number(concurrentCountsBeforeApply.listings) + 1,
+      listingUrls: Number(concurrentCountsBeforeApply.listingUrls) + 1,
+      sourceProductRefs: Number(concurrentCountsBeforeApply.sourceProductRefs) + 1,
+      sourceListingRefs: Number(concurrentCountsBeforeApply.sourceListingRefs) + 1,
+      sourceAliases: Number(concurrentCountsBeforeApply.sourceAliases) + 1
+    });
+    const concurrentCatalogResolution = await deliveryLeaseRecoveryA.planSignalResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      concurrentCatalogSignalId,
+      concurrentCatalogLease.capabilityToken,
+      resolutionPlanNow + 2_000
+    );
+    assert.equal(concurrentCatalogResolution.outcome, "matched");
+    assert.equal(
+      concurrentCatalogResolution.resolution?.listing?.id,
+      concurrentCatalogWinners[0]?.value.listingId
+    );
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        concurrentCatalogSignalId,
+        concurrentCatalogLease.capabilityToken,
+        resolutionPlanNow + 2_000
+      ),
+      true
+    );
+
     await assert.rejects(
       deliveryLeaseRecoveryA.leaseSignalInbox(
         { tenantId: "tenant_local", userId: "user_local" },
@@ -3492,6 +3893,47 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     await deliveryLeaseRecoveryDirectClient.end();
     deliveryLeaseRecoveryDirectClient = null;
+
+    signalCatalogApplyDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalCatalogApplyDirectClient.on("error", () => undefined);
+    await signalCatalogApplyDirectClient.connect();
+    await signalCatalogApplyDirectClient.query(
+      `SET ROLE "${signalCatalogApplyManifest.catalogApplyRole.name}"`
+    );
+    await assert.rejects(
+      signalCatalogApplyDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."product_families" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalCatalogApplyDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."source_product_refs" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalCatalogApplyDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."product_families"(
+           id, title, brand, created_at, updated_at
+         ) VALUES ('family_ffffffffffffffffffffffffffffffff', 'forbidden', '', $1, $1)`,
+        [new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalCatalogApplyDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_CATALOG_APPLY_FUNCTION}"(
+           $1, $2, 'plan', $3, $4, '', '{}'
+         )`,
+        [NATIVE_TENANT, "user_local", catalogSignalId, "A".repeat(43)]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await signalCatalogApplyDirectClient.end();
+    signalCatalogApplyDirectClient = null;
 
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
@@ -6039,6 +6481,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       await first.query(
         `REVOKE "${deliveryLeaseRecoveryManifest.leaseRecoveryRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${signalCatalogApplyManifest.catalogApplyRole.name}" FROM "${principalRole}"`
+      );
     }
     await first.query(
       `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
@@ -6204,6 +6649,77 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(
       cleanDeliveryLeaseRecoveryBoundary.boundaryCatalogFingerprint,
       deliveryLeaseRecoveryBoundary.boundaryCatalogFingerprint
+    );
+    const cleanSignalCatalogApplyBoundary = await verifyPostgresSignalCatalogApplyBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_CATALOG_APPLY_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanSignalCatalogApplyBoundary.boundaryCatalogFingerprint,
+      signalCatalogApplyBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_CATALOG_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresSignalCatalogApplyBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_CATALOG_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresSignalCatalogApplyBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      signalCatalogApplyBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_hosted_delivery_leases"(
@@ -6671,7 +7187,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       deliveryLeaseRecoveryB?.close(),
       deliveryLeaseRecoveryC?.close(),
       deliveryLeaseRecoveryUnmapped?.close(),
-      deliveryLeaseRecoveryDirectClient?.end()
+      deliveryLeaseRecoveryDirectClient?.end(),
+      signalCatalogApplyA?.close(),
+      signalCatalogApplyASecond?.close(),
+      signalCatalogApplyB?.close(),
+      signalCatalogApplyC?.close(),
+      signalCatalogApplyUnmapped?.close(),
+      signalCatalogApplyDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

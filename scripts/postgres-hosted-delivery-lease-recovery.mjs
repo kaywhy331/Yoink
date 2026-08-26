@@ -20,10 +20,11 @@ function usage() {
 
 The command creates one qualification-only hosted-delivery transport
 sub-boundary. Its NOLOGIN role has zero direct table or column grants and can
-execute two exact, server-principal-bound, server-clocked functions across
+execute three exact, server-principal-bound, server-clocked functions across
 three forced-RLS tables. They release expired inbox/outbox leases and perform
 the fixed signal_event_v1 lease, acknowledgement, retry, and dead-letter
-lifecycle while appending exact delivery receipts.
+lifecycle while appending exact delivery receipts, then derive a bounded
+read-only exact catalog-resolution plan for the leased signal.
 
 This is deliberately not the full hosted_delivery_recovery handler: signal
 ingress acceptance and evaluation remain outside this boundary, handler parity
