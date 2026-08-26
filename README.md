@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.81.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.82.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,38 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.82.0 adds the eighth independently receipted piece of the inactive
+PostgreSQL hosted-signal plane: exact mission binding after the v0.81
+post-incident decision requests continuation. Its separate `NOLOGIN`,
+`NOINHERIT`, `NOBYPASSRLS` role owns no application object, inherits no role,
+has zero direct/effective table or column grants, and may execute one strict
+security-definer function across 18 forced-RLS tenant tables. PostgreSQL binds
+`session_user`, validates the live leased-inbox capability, revalidates the
+entire predecessor chain, and serializes both the message and exact variant.
+
+The boundary selects an unambiguous user-owned mission or creates one only for
+a trusted exact source authorized to do so. It attaches every known listing for
+the same exact variant, up to 10,000, and creates revision 1 of the existing
+append-only purchase intent only when no policy exists, preserving the current
+mission quantity (one for a newly created mission). Mission and initial-
+policy creation each receive exact audit and outbox receipts. Concurrent calls
+produce one writer and mutation-free replay; stale plans, ambiguous missions,
+non-USD initial policy inputs, partial graphs, changed rows, and cross-principal
+access abort the transaction.
+
+Shared catalog, incidents, terminal decisions, strategies, action jobs, spend,
+notifications, inbox lifecycle, retailer sessions, checkout, and order
+submission remain untouched. Native PostgreSQL 16 proves existing and newly
+created missions, complete variant-target attachment, initial policy semantics,
+byte-identical SQLite policy hashes, principal/direct-SQL denial, concurrency,
+replay, rollback, and immutable catalog tamper detection. The role remains
+inactive: SQLite is authoritative,
+strategy/policy evaluation, action composition, final inbox completion, and
+production principals remain closed; complete handler coverage stays six of
+seven and retailer authority is unchanged. Use `npm run
+postgres:signal-mission-binding-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.81.0 adds the seventh independently receipted piece of the inactive
 PostgreSQL hosted-signal plane: the bounded decision immediately after an exact

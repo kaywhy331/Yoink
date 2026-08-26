@@ -1503,6 +1503,81 @@ and grants no runtime authority. SQLite remains authoritative; mission
 binding/creation, strategy/policy/action composition, final inbox completion,
 and complete seven-of-seven handler parity remain open.
 
+## Signal mission-binding qualification seam
+
+Version 0.82 adds the eighth independent hosted-signal role for exact mission
+binding after the v0.81 post-incident continuation.
+
+The sub-boundary accepts only the exact
+`continue_downstream` result from the settled v0.81 post-incident decision. A
+new independent `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role receives zero direct
+table or column privileges and execute permission on one strict
+security-definer function. Eighteen tenant tables remain protected by forced
+RLS. The function authenticates `session_user`, validates the current leased-
+inbox capability, revalidates the entire predecessor chain, and serializes the
+message and exact variant before producing a maximum-30-second sealed plan.
+
+One unambiguous user-owned mission is reused. If none exists, the routine may
+create a mission only when the source is `trusted_exact` and its policy allows
+mission creation. It attaches all known listings for the exact variant, capped
+at 10,000, and creates revision 1 of the append-only intent only when the
+mission has no policy. The initial policy preserves the SQLite defaults:
+the current mission quantity (one for a newly created mission), USD, no
+implicit price cap, `add_to_cart`, exact-only substitution, strategy mode,
+120-second observation freshness, no expiry or cooldown, and inherited per-
+target policy. Mission and initial-policy creation append exact audit and
+outbox receipts. The target-policy JSON byte sequence and its SHA-256 policy
+hash are verified against the SQLite repository algorithm.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-mission-binding-apply -- plan \
+  yoink_cutover_qualification_082 yoink_q_082 yoink_session_q_082 \
+  yoink_queue_q_082 yoink_control_q_082 yoink_notify_q_082 \
+  yoink_execute_q_082 yoink_retain_q_082 yoink_candidate_q_082 \
+  yoink_dispatch_q_082 yoink_reconcile_q_082 yoink_witness_q_082 \
+  yoink_delivery_q_082 yoink_catalog_q_082 yoink_resolution_q_082 \
+  yoink_reference_q_082 yoink_terminal_q_082 yoink_offer_q_082 \
+  yoink_post_q_082 yoink_mission_q_082
+```
+
+After the exact v0.81 post-incident receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_MISSION_BINDING_APPLY_QUALIFICATION_ACK=bounded-signal-mission-binding-apply-qualification \
+  npm run postgres:signal-mission-binding-apply -- apply \
+  yoink_cutover_qualification_082 yoink_q_082 yoink_session_q_082 \
+  yoink_queue_q_082 yoink_control_q_082 yoink_notify_q_082 \
+  yoink_execute_q_082 yoink_retain_q_082 yoink_candidate_q_082 \
+  yoink_dispatch_q_082 yoink_reconcile_q_082 yoink_witness_q_082 \
+  yoink_delivery_q_082 yoink_catalog_q_082 yoink_resolution_q_082 \
+  yoink_reference_q_082 yoink_terminal_q_082 yoink_offer_q_082 \
+  yoink_post_q_082 yoink_mission_q_082
+```
+
+Then independently inspect the role, function, 18 forced-RLS tables, immutable
+receipt, and complete prerequisite fingerprint chain:
+
+```bash
+npm run postgres:signal-mission-binding-apply -- verify \
+  yoink_cutover_qualification_082 yoink_q_082 yoink_session_q_082 \
+  yoink_queue_q_082 yoink_control_q_082 yoink_notify_q_082 \
+  yoink_execute_q_082 yoink_retain_q_082 yoink_candidate_q_082 \
+  yoink_dispatch_q_082 yoink_reconcile_q_082 yoink_witness_q_082 \
+  yoink_delivery_q_082 yoink_catalog_q_082 yoink_resolution_q_082 \
+  yoink_reference_q_082 yoink_terminal_q_082 yoink_offer_q_082 \
+  yoink_post_q_082 yoink_mission_q_082
+```
+
+The receipt permanently records `runtimeAuthority: false` and
+`productionReady: false`. Exactly five mutation tables are in scope. Shared
+catalog, incident and terminal records, strategy evaluation, action jobs,
+spend, notifications, inbox lifecycle, retailer sessions, checkout, and order
+submission remain closed. Qualification creates no login or principal mapping;
+SQLite remains authoritative and complete handler parity remains six of seven.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -1606,12 +1681,13 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- mission and purchase-policy evaluation, action-job creation, and final inbox
+- strategy and purchase-policy evaluation, action-job creation, and final inbox
   composition with the qualified hosted-
   delivery recovery, fixed signal-inbox lifecycle, read-only resolution plan,
   insert-only catalog-create, event/resolution-commit, known-product source-
-  reference-refresh, terminal-decision, and actionable offer/incident
-  boundaries to complete the final task-handler family, plus every API
+  reference-refresh, terminal-decision, actionable offer/incident,
+  post-incident decision, and signal mission-binding boundaries to complete
+  the final task-handler family, plus every API
   request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for

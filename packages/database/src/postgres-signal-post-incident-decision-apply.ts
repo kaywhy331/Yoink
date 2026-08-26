@@ -1003,10 +1003,11 @@ BEGIN
     ELSE
       mission_binding_required_value := TRUE;
       mission_creation_required_value := variant_mission_count = 0;
-      mission_id_value := CASE
-        WHEN variant_mission_count = 1 THEN variant_mission_record.mission_id
-        ELSE ''
-      END;
+      IF variant_mission_count = 1 THEN
+        mission_id_value := variant_mission_record.mission_id;
+      ELSE
+        mission_id_value := '';
+      END IF;
     END IF;
   END IF;
 

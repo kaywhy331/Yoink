@@ -158,6 +158,20 @@ strategy/policy/action composition, final handler composition, and all runtime
 authority remain closed, so complete-handler parity stays six of seven and
 SQLite remains authoritative.
 
+Yoink 0.82 adds an eighth distinct function-only role for signal mission
+binding. It accepts only the exact continuation from the settled v0.81
+post-incident decision, authenticates the database login principal, and locks
+both the message and exact variant. It reuses one unambiguous user mission or
+creates a mission only for an authorized `trusted_exact` source, attaches all
+known listings for the exact variant, and creates only a missing revision-1
+append-only intent policy with the current mission quantity and existing SQLite
+defaults. Mission and policy
+creation append exact audit/outbox receipts. Concurrent replay is mutation-
+free; partial graphs, ambiguity, changed rows, stale plans, cross-principal
+access, and non-USD initial policy inputs abort. Strategy evaluation, action
+jobs, spend, final inbox composition, and all runtime authority remain closed,
+so complete-handler parity stays six of seven and SQLite remains authoritative.
+
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
 

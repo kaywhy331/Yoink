@@ -110,6 +110,14 @@ test("the PostgreSQL post-incident decision boundary is deterministic and bounde
   assert.match(functionSource, /decision_outcome_value := 'no_mission'/);
   assert.match(functionSource, /mission_binding_required_value := TRUE/);
   assert.match(functionSource, /mission_creation_required_value := variant_mission_count = 0/);
+  assert.match(
+    functionSource,
+    /IF variant_mission_count = 1 THEN\s+mission_id_value := variant_mission_record\.mission_id;\s+ELSE\s+mission_id_value := '';\s+END IF;/s
+  );
+  assert.doesNotMatch(
+    functionSource,
+    /mission_id_value := CASE\s+WHEN variant_mission_count = 1 THEN variant_mission_record\.mission_id/s
+  );
   assert.match(functionSource, /INSERT INTO .*"mission_decisions"/s);
   assert.match(functionSource, /INSERT INTO .*"audit_events"/s);
   assert.match(functionSource, /INSERT INTO .*"outbox_events"/s);

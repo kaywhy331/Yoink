@@ -126,6 +126,13 @@ import {
   buildPostgresSignalPostIncidentDecisionApplyManifest,
   verifyPostgresSignalPostIncidentDecisionApplyBoundary
 } from "../packages/database/src/postgres-signal-post-incident-decision-apply.js";
+import {
+  NodePostgresSignalMissionBindingApplyDatabase,
+  POSTGRES_SIGNAL_MISSION_BINDING_APPLY_FUNCTION,
+  applyPostgresSignalMissionBindingApplyBoundary,
+  buildPostgresSignalMissionBindingApplyManifest,
+  verifyPostgresSignalMissionBindingApplyBoundary
+} from "../packages/database/src/postgres-signal-mission-binding-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
@@ -174,6 +181,7 @@ const NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE = "yoink_native_ref";
 const NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE = "yoink_native_terminal";
 const NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE = "yoink_native_offer";
 const NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE = "yoink_native_post";
+const NATIVE_MISSION_BINDING_APPLY_ROLE_NAMESPACE = "yoink_native_mission";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -316,7 +324,15 @@ async function insertExecutionRecoveryFixtures(
          id, tenant_id, user_id, mission_id, revision, quantity, currency,
          max_all_in_cents, action_ceiling, substitution_policy, expires_at,
          cooldown_seconds, target_policy_json, policy_hash, created_by_actor_id, created_at
-       ) VALUES ($1, $2, $3, $4, 1, 9, 'USD', 2500, 'submit_order',
+       ) VALUES (
+         $1, $2, $3, $4,
+         COALESCE((
+           SELECT MAX(existing.revision)
+           FROM "${NATIVE_SCHEMA}"."mission_intent_revisions" AS existing
+           WHERE existing.tenant_id = $2
+             AND existing.mission_id = $4
+         ), 0) + 1,
+         9, 'USD', 2500, 'submit_order',
                  'exact_only', $5, 0, '{}', $6, 'native_execution_fixture', $7)`,
       [
         `native_exec_intent_${suffix}`,
@@ -1001,7 +1017,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, and post-incident decisions", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, and mission binding", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1115,6 +1131,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalPostIncidentDecisionC: NodePostgresSignalPostIncidentDecisionApplyDatabase | null = null;
   let signalPostIncidentDecisionUnmapped: NodePostgresSignalPostIncidentDecisionApplyDatabase | null = null;
   let signalPostIncidentDecisionDirectClient: Client | null = null;
+  let signalMissionBindingA: NodePostgresSignalMissionBindingApplyDatabase | null = null;
+  let signalMissionBindingASecond: NodePostgresSignalMissionBindingApplyDatabase | null = null;
+  let signalMissionBindingB: NodePostgresSignalMissionBindingApplyDatabase | null = null;
+  let signalMissionBindingC: NodePostgresSignalMissionBindingApplyDatabase | null = null;
+  let signalMissionBindingUnmapped: NodePostgresSignalMissionBindingApplyDatabase | null = null;
+  let signalMissionBindingDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2115,6 +2137,86 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalPostIncidentDecisionBoundary
     );
+    const qualifiedSignalMissionBindingPredecessor =
+      buildPostgresSignalPostIncidentDecisionApplyManifest(
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+        NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
+        NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
+        NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE
+      );
+    const qualifiedSignalMissionBindingManifest =
+      buildPostgresSignalMissionBindingApplyManifest(
+        qualifiedSignalMissionBindingPredecessor,
+        NATIVE_MISSION_BINDING_APPLY_ROLE_NAMESPACE
+      );
+    const signalMissionBindingBoundary =
+      await applyPostgresSignalMissionBindingApplyBoundary(
+        importer,
+        qualifiedSignalMissionBindingManifest,
+        new Date("2026-08-25T16:54:59.990Z").getTime()
+      );
+    assert.equal(signalMissionBindingBoundary.protectedTenantTableCount, 18);
+    assert.equal(signalMissionBindingBoundary.forcedRlsTableCount, 18);
+    assert.equal(signalMissionBindingBoundary.mutationTableCount, 5);
+    assert.equal(signalMissionBindingBoundary.directTableGrantCount, 0);
+    assert.equal(signalMissionBindingBoundary.functionGrantCount, 1);
+    assert.equal(signalMissionBindingBoundary.membershipCount, 0);
+    assert.equal(signalMissionBindingBoundary.activePrincipalCount, 0);
+    assert.equal(signalMissionBindingBoundary.maximumPlanAgeSeconds, 30);
+    assert.equal(signalMissionBindingBoundary.maximumVariantListings, 10_000);
+    assert.equal(signalMissionBindingBoundary.serverBoundPrincipalLookup, true);
+    assert.equal(signalMissionBindingBoundary.databasePlanRevalidation, true);
+    assert.equal(signalMissionBindingBoundary.settledPostIncidentDecisionRequired, true);
+    assert.equal(signalMissionBindingBoundary.messageSerialization, true);
+    assert.equal(signalMissionBindingBoundary.variantMissionSerialization, true);
+    assert.equal(signalMissionBindingBoundary.existingMissionBinding, true);
+    assert.equal(signalMissionBindingBoundary.trustedMissionCreation, true);
+    assert.equal(signalMissionBindingBoundary.exactVariantTargetAttachment, true);
+    assert.equal(signalMissionBindingBoundary.initialIntentPolicyCreation, true);
+    assert.equal(signalMissionBindingBoundary.appendOnlyPolicyRevision, true);
+    assert.equal(signalMissionBindingBoundary.missionQuantityParity, true);
+    assert.equal(signalMissionBindingBoundary.targetPolicyJsonParity, true);
+    assert.equal(signalMissionBindingBoundary.purchasePolicyHashParity, true);
+    assert.equal(signalMissionBindingBoundary.idempotentReplay, true);
+    assert.equal(signalMissionBindingBoundary.missionBindingRepositoryParity, true);
+    assert.equal(signalMissionBindingBoundary.missionAuditOutboxRepositoryParity, true);
+    assert.equal(signalMissionBindingBoundary.initialPolicyAuditOutboxRepositoryParity, true);
+    assert.equal(signalMissionBindingBoundary.sharedCatalogMutation, false);
+    assert.equal(signalMissionBindingBoundary.incidentMutation, false);
+    assert.equal(signalMissionBindingBoundary.terminalDecisionMutation, false);
+    assert.equal(signalMissionBindingBoundary.actionMutation, false);
+    assert.equal(signalMissionBindingBoundary.spendMutation, false);
+    assert.equal(signalMissionBindingBoundary.inboxLifecycleMutation, false);
+    assert.equal(signalMissionBindingBoundary.rawSignalPayloadReturned, false);
+    assert.equal(signalMissionBindingBoundary.signalEvaluationApplyRepositoryParity, false);
+    assert.equal(signalMissionBindingBoundary.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalMissionBindingBoundary.mutationAuthority, true);
+    assert.equal(signalMissionBindingBoundary.directTableAccess, false);
+    assert.equal(signalMissionBindingBoundary.runtimeAuthority, false);
+    assert.equal(signalMissionBindingBoundary.productionReady, false);
+    assert.match(signalMissionBindingBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalMissionBindingApplyBoundary(
+        importer,
+        qualifiedSignalMissionBindingManifest
+      ),
+      signalMissionBindingBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -2418,6 +2520,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
         NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE
       );
+    const signalMissionBindingManifest = buildPostgresSignalMissionBindingApplyManifest(
+      signalPostIncidentDecisionManifest,
+      NATIVE_MISSION_BINDING_APPLY_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -2476,6 +2582,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalPostIncidentDecisionManifest.postIncidentDecisionApplyRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalMissionBindingManifest.missionBindingApplyRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -2950,6 +3060,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalPostIncidentDecisionC = signalPostIncidentDecisionDatabase(NATIVE_PRINCIPAL_C);
     signalPostIncidentDecisionUnmapped =
       signalPostIncidentDecisionDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+    const signalMissionBindingDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalMissionBindingApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalMissionBindingManifest, { maxConnections });
+    signalMissionBindingA = signalMissionBindingDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalMissionBindingASecond = signalMissionBindingDatabase(NATIVE_PRINCIPAL_A);
+    signalMissionBindingB = signalMissionBindingDatabase(NATIVE_PRINCIPAL_B);
+    signalMissionBindingC = signalMissionBindingDatabase(NATIVE_PRINCIPAL_C);
+    signalMissionBindingUnmapped = signalMissionBindingDatabase(NATIVE_PRINCIPAL_UNMAPPED);
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -5555,6 +5678,136 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       await signalResolutionMutationCounts(),
       countsBeforePostIncidentContinuation
     );
+    await assert.rejects(
+      signalMissionBindingA.applySignalMissionBinding(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        wrongReferenceCapability,
+        resolutionPlanNow + 5_000
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalMissionBindingB.applySignalMissionBinding(
+        { tenantId: "tenant_local", userId: "user_local" },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalMissionBindingC.applySignalMissionBinding(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalMissionBindingUnmapped.applySignalMissionBinding(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /tenant session principal is not active/
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."missions"
+       SET target_quantity = 3
+       WHERE id = 'mission_cutover_other'`
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."mission_targets"(
+         id, mission_id, listing_id, created_at, updated_at
+       ) VALUES (
+         'native_mission_binding_existing_target', 'mission_cutover_other',
+         'listing_native_signal', $1, $1
+       )`,
+      [new Date(resolutionPlanNow + 5_000).toISOString()]
+    );
+    const existingTargetIdsBeforeBinding = new Set(
+      (await first.query<{ id: string }>(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."mission_targets"
+         WHERE mission_id = 'mission_cutover_other'`
+      )).rows.map((row) => row.id)
+    );
+    const concurrentExistingMissionBinding = await Promise.all([
+      signalMissionBindingA.applySignalMissionBinding(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      signalMissionBindingASecond.applySignalMissionBinding(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      )
+    ]);
+    const existingBindingWinner = concurrentExistingMissionBinding.find(
+      (result) => result.missionBindingApplyApplied
+    );
+    const existingBindingReplay = concurrentExistingMissionBinding.find(
+      (result) => !result.missionBindingApplyApplied
+    );
+    assert.ok(existingBindingWinner);
+    assert.ok(existingBindingReplay);
+    assert.equal(existingBindingWinner.outcome, "apply_mission_binding");
+    assert.equal(existingBindingWinner.missionId, "mission_cutover_other");
+    assert.equal(existingBindingWinner.missionCreated, false);
+    assert.ok(existingBindingWinner.targetsInserted >= 1);
+    assert.equal(existingBindingWinner.initialPolicyCreated, true);
+    assert.equal(existingBindingWinner.policyQuantity, 3);
+    assert.equal(existingBindingWinner.missionAction, "none");
+    assert.equal(existingBindingWinner.missionTargetAction, "insert");
+    assert.equal(existingBindingWinner.policyRevisionAction, "insert");
+    assert.equal(
+      existingBindingWinner.mutationStatementCount,
+      existingBindingWinner.targetsInserted + 3
+    );
+    assert.equal(
+      existingBindingWinner.mutationRowCount,
+      existingBindingWinner.targetsInserted + 3
+    );
+    assert.equal(existingBindingWinner.continueDownstream, true);
+    assert.equal(existingBindingWinner.missionsMutated, false);
+    assert.equal(existingBindingWinner.missionTargetsMutated, true);
+    assert.equal(existingBindingWinner.purchasePoliciesMutated, true);
+    assert.equal(existingBindingWinner.actionsMutated, false);
+    assert.equal(existingBindingWinner.spendMutated, false);
+    assert.equal(existingBindingWinner.inboxLifecycleMutated, false);
+    assert.equal(existingBindingReplay.outcome, "already_bound");
+    assert.equal(existingBindingReplay.missionId, existingBindingWinner.missionId);
+    assert.equal(existingBindingReplay.missionTargetId, existingBindingWinner.missionTargetId);
+    assert.equal(existingBindingReplay.policyRevisionId, existingBindingWinner.policyRevisionId);
+    assert.equal(existingBindingReplay.policyQuantity, 3);
+    assert.equal(existingBindingReplay.targetsInserted, 0);
+    assert.equal(existingBindingReplay.mutationStatementCount, 0);
+    const insertedExistingMissionTargetIds = (await first.query<{ id: string }>(
+      `SELECT id FROM "${NATIVE_SCHEMA}"."mission_targets"
+       WHERE mission_id = 'mission_cutover_other'`
+    )).rows.map((row) => row.id).filter((id) => !existingTargetIdsBeforeBinding.has(id));
+    assert.equal(insertedExistingMissionTargetIds.length, existingBindingWinner.targetsInserted);
+    assert.deepEqual(
+      (await first.query<{ quantity: number }>(
+        `SELECT quantity FROM "${NATIVE_SCHEMA}"."mission_intent_revisions"
+         WHERE id = $1`,
+        [existingBindingWinner.policyRevisionId]
+      )).rows.map((row) => Number(row.quantity)),
+      [3]
+    );
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."mission_targets" WHERE id = ANY($1::text[])`,
+      [insertedExistingMissionTargetIds]
+    );
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."mission_targets"
+       WHERE id = 'native_mission_binding_existing_target'`
+    );
     await first.query(
       `UPDATE "${NATIVE_SCHEMA}"."source_connections"
        SET auto_create_missions = 0 WHERE id = 'native_signal_source_a'`
@@ -6291,6 +6544,332 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       true
     );
 
+    const missionCreateMessageId = "inbox_fedcba9876543210fedcba9876543210";
+    const missionCreateObservedAt = new Date(signalLifecycleNow + 1_250).toISOString();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."variants"(
+         id, family_id, title, attributes_json, created_at, updated_at
+       ) VALUES (
+         'variant_native_mission_create', 'family_cutover_scope',
+         'Native mission creation product', '{}', $1, $1
+       )`,
+      [missionCreateObservedAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."listings"(
+         id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+         execution_supported, msrp_cents, currency, created_at, updated_at
+       ) VALUES (
+         'listing_native_mission_create', 'variant_native_mission_create', 'target',
+         'NATIVE-MISSION-CREATE',
+         'https://www.target.com/p/native-mission-create/NATIVE-MISSION-CREATE',
+         'in_stock', 1, 1599, 'USD', $1, $1
+       )`,
+      [missionCreateObservedAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_product_refs"(
+         id, source_connection_id, external_product_id, variant_id,
+         source_url, source_title, observed_at
+       ) VALUES (
+         'source_product_native_mission_create', 'native_signal_source_a',
+         'native-mission-create-product', 'variant_native_mission_create',
+         'https://trackalacker.example/native-mission-create-product',
+         'Native mission creation product', $1
+       )`,
+      [missionCreateObservedAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_listing_refs"(
+         id, source_connection_id, external_listing_id, external_product_id,
+         listing_id, source_url, observed_at
+       ) VALUES (
+         'source_listing_native_mission_create', 'native_signal_source_a',
+         'native-mission-create-listing', 'native-mission-create-product',
+         'listing_native_mission_create',
+         'https://trackalacker.example/native-mission-create-listing', $1
+       )`,
+      [missionCreateObservedAt]
+    );
+    const missionCreatePayloadBase = resolutionSignalPayload(
+      missionCreateMessageId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-mission-create-product",
+        sourceListingId: "native-mission-create-listing",
+        retailerId: "target",
+        retailerSku: "NATIVE-MISSION-CREATE",
+        canonicalUrl: "https://www.target.com/p/native-mission-create/NATIVE-MISSION-CREATE",
+        title: "Native mission creation product"
+      }
+    );
+    const missionCreatePayload = {
+      ...missionCreatePayloadBase,
+      observedAt: missionCreateObservedAt,
+      identity: {
+        ...(missionCreatePayloadBase.identity as Record<string, unknown>),
+        globalIdentifiers: { trackalacker_slug: "native-mission-create-product" }
+      }
+    };
+    await insertSignalLifecycleInbox(
+      missionCreateMessageId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(resolutionPlanNow + 6_250).toISOString(),
+      missionCreatePayload
+    );
+    const missionCreateLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow + 6_250
+    );
+    assert.ok(missionCreateLease);
+    assert.equal(missionCreateLease.id, missionCreateMessageId);
+    const missionCreateResolution = await signalResolutionApplyA.applySignalEventResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      missionCreateMessageId,
+      missionCreateLease.capabilityToken,
+      resolutionPlanNow + 6_250
+    );
+    assert.equal(missionCreateResolution.duplicate, false);
+    assert.match(
+      missionCreateResolution.resolutionDecisionId,
+      /^resolution_[a-f0-9]{32}$/
+    );
+    const missionCreateReference = await signalSourceReferenceA.refreshSignalSourceReferences(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      missionCreateMessageId,
+      missionCreateLease.capabilityToken,
+      resolutionPlanNow + 6_250
+    );
+    assert.equal(missionCreateReference.downstreamSignalGraphMutated, false);
+    const missionCreateTerminal = await signalTerminalDecisionA.applySignalTerminalDecision(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      missionCreateMessageId,
+      missionCreateLease.capabilityToken,
+      resolutionPlanNow + 6_250
+    );
+    assert.equal(missionCreateTerminal.outcome, "continue_downstream");
+    const missionCreateOfferIncident = await signalOfferIncidentA.applySignalOfferIncident(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      missionCreateMessageId,
+      missionCreateLease.capabilityToken,
+      resolutionPlanNow + 6_250
+    );
+    assert.equal(missionCreateOfferIncident.continueDownstream, true);
+    const missionCreatePostIncident =
+      await signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        resolutionPlanNow + 6_250
+      );
+    assert.equal(missionCreatePostIncident.outcome, "continue_downstream");
+    assert.equal(missionCreatePostIncident.missionId, "");
+    assert.equal(missionCreatePostIncident.missionBindingRequired, true);
+    assert.equal(missionCreatePostIncident.missionCreationRequired, true);
+    const countsBeforeMissionCreation = await signalResolutionMutationCounts();
+    const concurrentMissionCreation = await Promise.all([
+      signalMissionBindingA.applySignalMissionBinding(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        resolutionPlanNow + 6_250
+      ),
+      signalMissionBindingASecond.applySignalMissionBinding(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        resolutionPlanNow + 6_250
+      )
+    ]);
+    const missionCreateWinner = concurrentMissionCreation.find((result) => result.missionCreated);
+    const missionCreateReplay = concurrentMissionCreation.find((result) => !result.missionCreated);
+    assert.ok(missionCreateWinner);
+    assert.ok(missionCreateReplay);
+    assert.equal(missionCreateWinner.outcome, "apply_mission_binding");
+    assert.match(missionCreateWinner.missionId, /^mission_[a-f0-9]{32}$/);
+    assert.match(missionCreateWinner.missionTargetId, /^mission_target_[a-f0-9]{32}$/);
+    assert.match(missionCreateWinner.policyRevisionId, /^intent_revision_[a-f0-9]{32}$/);
+    assert.equal(missionCreateWinner.targetsInserted, 1);
+    assert.equal(missionCreateWinner.initialPolicyCreated, true);
+    assert.equal(missionCreateWinner.policyQuantity, 1);
+    assert.equal(missionCreateWinner.variantListingCount, 1);
+    assert.equal(missionCreateWinner.missionAction, "insert");
+    assert.equal(missionCreateWinner.missionTargetAction, "insert");
+    assert.equal(missionCreateWinner.policyRevisionAction, "insert");
+    assert.equal(missionCreateWinner.missionAuditAction, "insert");
+    assert.equal(missionCreateWinner.missionOutboxAction, "insert");
+    assert.equal(missionCreateWinner.policyAuditAction, "insert");
+    assert.equal(missionCreateWinner.policyOutboxAction, "insert");
+    assert.equal(missionCreateWinner.mutationStatementCount, 7);
+    assert.equal(missionCreateWinner.mutationRowCount, 7);
+    assert.equal(missionCreateWinner.missionsMutated, true);
+    assert.equal(missionCreateWinner.missionTargetsMutated, true);
+    assert.equal(missionCreateWinner.purchasePoliciesMutated, true);
+    assert.equal(missionCreateWinner.actionsMutated, false);
+    assert.equal(missionCreateWinner.spendMutated, false);
+    assert.equal(missionCreateWinner.inboxLifecycleMutated, false);
+    assert.equal(missionCreateReplay.outcome, "already_bound");
+    assert.equal(missionCreateReplay.missionId, missionCreateWinner.missionId);
+    assert.equal(missionCreateReplay.missionTargetId, missionCreateWinner.missionTargetId);
+    assert.equal(missionCreateReplay.policyRevisionId, missionCreateWinner.policyRevisionId);
+    assert.equal(missionCreateReplay.mutationStatementCount, 0);
+    assert.deepEqual(await signalResolutionMutationCounts(), {
+      ...countsBeforeMissionCreation,
+      missions: Number(countsBeforeMissionCreation.missions) + 1,
+      missionTargets: Number(countsBeforeMissionCreation.missionTargets) + 1,
+      auditEvents: Number(countsBeforeMissionCreation.auditEvents) + 2,
+      outboxEvents: Number(countsBeforeMissionCreation.outboxEvents) + 2
+    });
+    const storedMissionBinding = (await first.query<{
+      missionId: string;
+      status: string;
+      origin: string;
+      targetQuantity: number;
+      fulfilledQuantity: number;
+      targetId: string;
+      enabled: number;
+      maxUnitPriceCents: number | null;
+      currency: string;
+      sellerPolicy: string;
+      fulfillment: string;
+      policyId: string;
+      revision: number;
+      policyQuantity: number;
+      actionCeiling: string;
+      decisionMode: string;
+      maxSignalAgeSeconds: number;
+      substitutionPolicy: string;
+      expiresAt: string;
+      cooldownSeconds: number;
+      targetPolicyJson: string;
+      policyHash: string;
+      createdByActorId: string;
+    }>(
+      `SELECT mission.id AS "missionId", mission.status, mission.origin,
+              mission.target_quantity AS "targetQuantity",
+              mission.fulfilled_quantity AS "fulfilledQuantity",
+              target.id AS "targetId", target.enabled,
+              target.max_unit_price_cents AS "maxUnitPriceCents",
+              target.currency, target.seller_policy AS "sellerPolicy", target.fulfillment,
+              policy.id AS "policyId", policy.revision,
+              policy.quantity AS "policyQuantity",
+              policy.action_ceiling AS "actionCeiling",
+              policy.decision_mode AS "decisionMode",
+              policy.max_signal_age_seconds AS "maxSignalAgeSeconds",
+              policy.substitution_policy AS "substitutionPolicy",
+              policy.expires_at AS "expiresAt",
+              policy.cooldown_seconds AS "cooldownSeconds",
+              policy.target_policy_json AS "targetPolicyJson",
+              policy.policy_hash AS "policyHash",
+              policy.created_by_actor_id AS "createdByActorId"
+       FROM "${NATIVE_SCHEMA}"."missions" AS mission
+       JOIN "${NATIVE_SCHEMA}"."mission_targets" AS target ON target.mission_id = mission.id
+       JOIN "${NATIVE_SCHEMA}"."mission_intent_revisions" AS policy
+         ON policy.mission_id = mission.id
+       WHERE mission.id = $1`,
+      [missionCreateWinner.missionId]
+    )).rows[0]!;
+    assert.deepEqual({
+      missionId: storedMissionBinding.missionId,
+      status: storedMissionBinding.status,
+      origin: storedMissionBinding.origin,
+      targetQuantity: Number(storedMissionBinding.targetQuantity),
+      fulfilledQuantity: Number(storedMissionBinding.fulfilledQuantity),
+      targetId: storedMissionBinding.targetId,
+      enabled: Number(storedMissionBinding.enabled),
+      maxUnitPriceCents: storedMissionBinding.maxUnitPriceCents,
+      currency: storedMissionBinding.currency,
+      sellerPolicy: storedMissionBinding.sellerPolicy,
+      fulfillment: storedMissionBinding.fulfillment,
+      policyId: storedMissionBinding.policyId,
+      revision: Number(storedMissionBinding.revision),
+      policyQuantity: Number(storedMissionBinding.policyQuantity),
+      actionCeiling: storedMissionBinding.actionCeiling,
+      decisionMode: storedMissionBinding.decisionMode,
+      maxSignalAgeSeconds: Number(storedMissionBinding.maxSignalAgeSeconds),
+      substitutionPolicy: storedMissionBinding.substitutionPolicy,
+      expiresAt: storedMissionBinding.expiresAt,
+      cooldownSeconds: Number(storedMissionBinding.cooldownSeconds),
+      createdByActorId: storedMissionBinding.createdByActorId
+    }, {
+      missionId: missionCreateWinner.missionId,
+      status: "active",
+      origin: "signal:trackalacker",
+      targetQuantity: 1,
+      fulfilledQuantity: 0,
+      targetId: missionCreateWinner.missionTargetId,
+      enabled: 1,
+      maxUnitPriceCents: null,
+      currency: "USD",
+      sellerPolicy: "inherit",
+      fulfillment: "inherit",
+      policyId: missionCreateWinner.policyRevisionId,
+      revision: 1,
+      policyQuantity: 1,
+      actionCeiling: "add_to_cart",
+      decisionMode: "strategy",
+      maxSignalAgeSeconds: 120,
+      substitutionPolicy: "exact_only",
+      expiresAt: "",
+      cooldownSeconds: 0,
+      createdByActorId: NATIVE_PRINCIPAL_A
+    });
+    const expectedMissionTargetPolicy = [{
+      targetId: missionCreateWinner.missionTargetId,
+      listingId: "listing_native_mission_create",
+      retailerId: "target",
+      enabled: true,
+      maxUnitPriceCents: null,
+      sellerPolicy: "inherit",
+      fulfillment: "inherit"
+    }];
+    assert.equal(storedMissionBinding.targetPolicyJson, JSON.stringify(expectedMissionTargetPolicy));
+    assert.equal(
+      storedMissionBinding.policyHash,
+      stableHash(
+        "intent-policy-v2",
+        missionCreateWinner.missionId,
+        1,
+        "USD",
+        null,
+        "add_to_cart",
+        "strategy",
+        120,
+        "exact_only",
+        "",
+        0,
+        JSON.stringify(expectedMissionTargetPolicy)
+      )
+    );
+    assert.deepEqual(
+      (await first.query<{ eventType: string; reasonCode: string; aggregateType: string }>(
+        `SELECT audit.event_type AS "eventType", audit.reason_code AS "reasonCode",
+                outbox.aggregate_type AS "aggregateType"
+         FROM "${NATIVE_SCHEMA}"."audit_events" AS audit
+         JOIN "${NATIVE_SCHEMA}"."outbox_events" AS outbox
+           ON (outbox.payload_json::jsonb->>'auditId') = audit.id
+         WHERE audit.correlation_id = $1
+           AND audit.event_type IN ('mission_created', 'purchase_intent_policy_revised')
+         ORDER BY audit.event_type`,
+        [missionCreateWinner.missionId]
+      )).rows,
+      [
+        { eventType: "mission_created", reasonCode: "signal:trackalacker", aggregateType: "mission" },
+        { eventType: "purchase_intent_policy_revised", reasonCode: "initial_policy", aggregateType: "purchase_intent" }
+      ]
+    );
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        resolutionPlanNow + 6_250
+      ),
+      true
+    );
+
     const nonActionableMessageId = "inbox_2468ace02468ace02468ace02468ace0";
     const nonActionablePayloadBase = resolutionSignalPayload(
       nonActionableMessageId,
@@ -6942,6 +7521,58 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     await signalPostIncidentDecisionDirectClient.end();
     signalPostIncidentDecisionDirectClient = null;
+
+    signalMissionBindingDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalMissionBindingDirectClient.on("error", () => undefined);
+    await signalMissionBindingDirectClient.connect();
+    await signalMissionBindingDirectClient.query(
+      `SET ROLE "${signalMissionBindingManifest.missionBindingApplyRole.name}"`
+    );
+    await assert.rejects(
+      signalMissionBindingDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."missions" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalMissionBindingDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."missions"(
+           id, tenant_id, user_id, variant_id, status, origin,
+           target_quantity, fulfilled_quantity, created_at, updated_at
+         ) VALUES (
+           'mission_forbidden', $1, $2, 'variant_native_mission_create',
+           'active', 'forbidden', 1, 0, $3, $3
+         )`,
+        [NATIVE_TENANT, NATIVE_USER, new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalMissionBindingDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."mission_targets"(
+           id, mission_id, listing_id, enabled, max_unit_price_cents,
+           currency, seller_policy, fulfillment, created_at, updated_at
+         ) VALUES (
+           'mission_target_forbidden', $1, 'listing_native_mission_create',
+           1, NULL, 'USD', 'inherit', 'inherit', $2, $2
+         )`,
+        [missionCreateWinner.missionId, new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalMissionBindingDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_MISSION_BINDING_APPLY_FUNCTION}"(
+           $1, $2, 'plan', $3, $4, '', '{}'
+         )`,
+        [NATIVE_TENANT, "user_local", missionCreateMessageId, "A".repeat(43)]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await signalMissionBindingDirectClient.end();
+    signalMissionBindingDirectClient = null;
 
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
@@ -10042,6 +10673,36 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       )).boundaryCatalogFingerprint,
       signalPostIncidentDecisionBoundary.boundaryCatalogFingerprint
     );
+    const cleanSignalMissionBindingBoundary =
+      await verifyPostgresSignalMissionBindingApplyBoundary(
+        first,
+        signalMissionBindingManifest
+      );
+    assert.equal(
+      cleanSignalMissionBindingBoundary.boundaryCatalogFingerprint,
+      signalMissionBindingBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_MISSION_BINDING_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresSignalMissionBindingApplyBoundary(first, signalMissionBindingManifest),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_MISSION_BINDING_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresSignalMissionBindingApplyBoundary(
+        first,
+        signalMissionBindingManifest
+      )).boundaryCatalogFingerprint,
+      signalMissionBindingBoundary.boundaryCatalogFingerprint
+    );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_RESOLUTION_APPLY_FUNCTION}"(
          text, text, text, text, text, text, text
@@ -10646,7 +11307,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalPostIncidentDecisionB?.close(),
       signalPostIncidentDecisionC?.close(),
       signalPostIncidentDecisionUnmapped?.close(),
-      signalPostIncidentDecisionDirectClient?.end()
+      signalPostIncidentDecisionDirectClient?.end(),
+      signalMissionBindingA?.close(),
+      signalMissionBindingASecond?.close(),
+      signalMissionBindingB?.close(),
+      signalMissionBindingC?.close(),
+      signalMissionBindingUnmapped?.close(),
+      signalMissionBindingDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
