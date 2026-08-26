@@ -119,6 +119,13 @@ import {
   buildPostgresSignalOfferIncidentApplyManifest,
   verifyPostgresSignalOfferIncidentApplyBoundary
 } from "../packages/database/src/postgres-signal-offer-incident-apply.js";
+import {
+  NodePostgresSignalPostIncidentDecisionApplyDatabase,
+  POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION,
+  applyPostgresSignalPostIncidentDecisionApplyBoundary,
+  buildPostgresSignalPostIncidentDecisionApplyManifest,
+  verifyPostgresSignalPostIncidentDecisionApplyBoundary
+} from "../packages/database/src/postgres-signal-post-incident-decision-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
@@ -166,6 +173,7 @@ const NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE = "yoink_native_resolution";
 const NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE = "yoink_native_ref";
 const NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE = "yoink_native_terminal";
 const NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE = "yoink_native_offer";
+const NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE = "yoink_native_post";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -993,7 +1001,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, and actionable offer incidents", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, and post-incident decisions", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1101,6 +1109,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalOfferIncidentC: NodePostgresSignalOfferIncidentApplyDatabase | null = null;
   let signalOfferIncidentUnmapped: NodePostgresSignalOfferIncidentApplyDatabase | null = null;
   let signalOfferIncidentDirectClient: Client | null = null;
+  let signalPostIncidentDecisionA: NodePostgresSignalPostIncidentDecisionApplyDatabase | null = null;
+  let signalPostIncidentDecisionASecond: NodePostgresSignalPostIncidentDecisionApplyDatabase | null = null;
+  let signalPostIncidentDecisionB: NodePostgresSignalPostIncidentDecisionApplyDatabase | null = null;
+  let signalPostIncidentDecisionC: NodePostgresSignalPostIncidentDecisionApplyDatabase | null = null;
+  let signalPostIncidentDecisionUnmapped: NodePostgresSignalPostIncidentDecisionApplyDatabase | null = null;
+  let signalPostIncidentDecisionDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2011,6 +2025,96 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalOfferIncidentBoundary
     );
+    const signalPostIncidentDecisionBoundary =
+      await applyPostgresSignalPostIncidentDecisionApplyBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+        NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
+        NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
+        NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE,
+        new Date("2026-08-25T16:54:59.980Z").getTime()
+      );
+    assert.equal(signalPostIncidentDecisionBoundary.protectedTenantTableCount, 17);
+    assert.equal(signalPostIncidentDecisionBoundary.forcedRlsTableCount, 17);
+    assert.equal(signalPostIncidentDecisionBoundary.mutationTableCount, 3);
+    assert.equal(signalPostIncidentDecisionBoundary.directTableGrantCount, 0);
+    assert.equal(signalPostIncidentDecisionBoundary.functionGrantCount, 1);
+    assert.equal(signalPostIncidentDecisionBoundary.membershipCount, 0);
+    assert.equal(signalPostIncidentDecisionBoundary.activePrincipalCount, 0);
+    assert.equal(signalPostIncidentDecisionBoundary.maximumPlanAgeSeconds, 30);
+    assert.equal(signalPostIncidentDecisionBoundary.serverBoundPrincipalLookup, true);
+    assert.equal(signalPostIncidentDecisionBoundary.databasePlanRevalidation, true);
+    assert.equal(signalPostIncidentDecisionBoundary.committedResolutionBinding, true);
+    assert.equal(signalPostIncidentDecisionBoundary.settledOfferIncidentRequired, true);
+    assert.equal(signalPostIncidentDecisionBoundary.incidentGraphBinding, true);
+    assert.equal(signalPostIncidentDecisionBoundary.existingJobCorroboration, true);
+    assert.equal(signalPostIncidentDecisionBoundary.noMissionFailClosed, true);
+    assert.equal(signalPostIncidentDecisionBoundary.trustedMissionContinuation, true);
+    assert.equal(signalPostIncidentDecisionBoundary.missionBindingRequiredProjection, true);
+    assert.equal(signalPostIncidentDecisionBoundary.idempotentReplay, true);
+    assert.equal(signalPostIncidentDecisionBoundary.postIncidentDecisionRepositoryParity, true);
+    assert.equal(signalPostIncidentDecisionBoundary.postIncidentAuditOutboxRepositoryParity, true);
+    assert.equal(signalPostIncidentDecisionBoundary.sharedCatalogMutation, false);
+    assert.equal(signalPostIncidentDecisionBoundary.sourceReferenceMutation, false);
+    assert.equal(signalPostIncidentDecisionBoundary.terminalDecisionMutation, false);
+    assert.equal(signalPostIncidentDecisionBoundary.offerIncidentMutation, false);
+    assert.equal(signalPostIncidentDecisionBoundary.incidentMutation, false);
+    assert.equal(signalPostIncidentDecisionBoundary.missionMutation, false);
+    assert.equal(signalPostIncidentDecisionBoundary.actionMutation, false);
+    assert.equal(signalPostIncidentDecisionBoundary.postIncidentDecisionGraphMutation, true);
+    assert.equal(signalPostIncidentDecisionBoundary.remainingMissionActionGraphMutation, false);
+    assert.equal(signalPostIncidentDecisionBoundary.inboxLifecycleMutation, false);
+    assert.equal(signalPostIncidentDecisionBoundary.rawSignalPayloadReturned, false);
+    assert.equal(signalPostIncidentDecisionBoundary.signalEvaluationApplyRepositoryParity, false);
+    assert.equal(signalPostIncidentDecisionBoundary.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalPostIncidentDecisionBoundary.mutationAuthority, true);
+    assert.equal(signalPostIncidentDecisionBoundary.directTableAccess, false);
+    assert.equal(signalPostIncidentDecisionBoundary.runtimeAuthority, false);
+    assert.equal(signalPostIncidentDecisionBoundary.productionReady, false);
+    assert.match(
+      signalPostIncidentDecisionBoundary.boundaryCatalogFingerprint,
+      /^[a-f0-9]{64}$/
+    );
+    assert.deepEqual(
+      await verifyPostgresSignalPostIncidentDecisionApplyBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+        NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
+        NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
+        NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE
+      ),
+      signalPostIncidentDecisionBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -2292,6 +2396,28 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
       NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE
     );
+    const signalPostIncidentDecisionManifest =
+      buildPostgresSignalPostIncidentDecisionApplyManifest(
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+        NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
+        NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
+        NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -2347,6 +2473,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalOfferIncidentManifest.offerIncidentApplyRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalPostIncidentDecisionManifest.postIncidentDecisionApplyRole.name}"
+         TO "${principalRole}"`
       );
     }
     await first.query(
@@ -2796,6 +2926,30 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalOfferIncidentB = signalOfferIncidentDatabase(NATIVE_PRINCIPAL_B);
     signalOfferIncidentC = signalOfferIncidentDatabase(NATIVE_PRINCIPAL_C);
     signalOfferIncidentUnmapped = signalOfferIncidentDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+    const signalPostIncidentDecisionDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalPostIncidentDecisionApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+    NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE, NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_CATALOG_APPLY_ROLE_NAMESPACE, NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+    NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+    NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
+    NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
+    NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE, { maxConnections });
+    signalPostIncidentDecisionA = signalPostIncidentDecisionDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalPostIncidentDecisionASecond = signalPostIncidentDecisionDatabase(NATIVE_PRINCIPAL_A);
+    signalPostIncidentDecisionB = signalPostIncidentDecisionDatabase(NATIVE_PRINCIPAL_B);
+    signalPostIncidentDecisionC = signalPostIncidentDecisionDatabase(NATIVE_PRINCIPAL_C);
+    signalPostIncidentDecisionUnmapped =
+      signalPostIncidentDecisionDatabase(NATIVE_PRINCIPAL_UNMAPPED);
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -5338,6 +5492,273 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalIncidents: Number(countsBeforeOfferIncident.signalIncidents) + 1,
       offerObservations: Number(countsBeforeOfferIncident.offerObservations) + 1
     });
+    await assert.rejects(
+      signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        wrongReferenceCapability,
+        resolutionPlanNow + 5_000
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionB.applySignalPostIncidentDecision(
+        { tenantId: "tenant_local", userId: "user_local" },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionC.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionUnmapped.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /tenant session principal is not active/
+    );
+    const countsBeforePostIncidentContinuation = await signalResolutionMutationCounts();
+    const postIncidentContinuation =
+      await signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      );
+    assert.equal(postIncidentContinuation.outcome, "continue_downstream");
+    assert.equal(postIncidentContinuation.decisionOutcome, "");
+    assert.equal(postIncidentContinuation.offerIncidentOutcome, "already_applied");
+    assert.equal(postIncidentContinuation.missionId, "mission_cutover_other");
+    assert.equal(postIncidentContinuation.actionJobId, "");
+    assert.equal(postIncidentContinuation.missionBindingRequired, true);
+    assert.equal(postIncidentContinuation.missionCreationRequired, false);
+    assert.equal(postIncidentContinuation.missionDecisionAction, "none");
+    assert.equal(postIncidentContinuation.auditAction, "none");
+    assert.equal(postIncidentContinuation.outboxAction, "none");
+    assert.equal(postIncidentContinuation.mutationStatementCount, 0);
+    assert.equal(postIncidentContinuation.postIncidentDecisionApplyApplied, false);
+    assert.equal(postIncidentContinuation.continueDownstream, true);
+    assert.equal(postIncidentContinuation.postIncidentDecisionGraphMutated, false);
+    assert.equal(postIncidentContinuation.remainingMissionActionGraphMutated, false);
+    assert.deepEqual(
+      await signalResolutionMutationCounts(),
+      countsBeforePostIncidentContinuation
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."source_connections"
+       SET auto_create_missions = 0 WHERE id = 'native_signal_source_a'`
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."audit_events"(
+         id, tenant_id, user_id, correlation_id, event_type,
+         reason_code, message, data_json, created_at
+       ) VALUES (
+         'audit_native_post_partial', $1, $2, $3, 'signal_decided',
+         'partial', 'partial', '{}', $4
+       )`,
+      [
+        NATIVE_TENANT,
+        NATIVE_USER,
+        referenceRefreshPayload.signalId,
+        new Date(resolutionPlanNow + 5_000).toISOString()
+      ]
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /partial post-incident decision fails closed/
+    );
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."audit_events" WHERE id = 'audit_native_post_partial'`
+    );
+    const countsBeforeNoMissionDecision = await signalResolutionMutationCounts();
+    const concurrentNoMissionDecision = await Promise.all([
+      signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      signalPostIncidentDecisionASecond.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      )
+    ]);
+    const noMissionWinner = concurrentNoMissionDecision.find(
+      (result) => result.postIncidentDecisionApplyApplied
+    );
+    const noMissionReplay = concurrentNoMissionDecision.find(
+      (result) => !result.postIncidentDecisionApplyApplied
+    );
+    assert.ok(noMissionWinner);
+    assert.ok(noMissionReplay);
+    assert.equal(noMissionWinner.outcome, "apply_post_incident_decision");
+    assert.equal(noMissionWinner.decisionOutcome, "no_mission");
+    assert.equal(noMissionWinner.missionId, "");
+    assert.equal(noMissionWinner.actionJobId, "");
+    assert.equal(noMissionWinner.missionBindingRequired, false);
+    assert.equal(noMissionWinner.missionCreationRequired, false);
+    assert.equal(noMissionWinner.missionDecisionAction, "insert");
+    assert.equal(noMissionWinner.auditAction, "insert");
+    assert.equal(noMissionWinner.outboxAction, "insert");
+    assert.equal(noMissionWinner.mutationStatementCount, 3);
+    assert.equal(noMissionWinner.postIncidentDecisionGraphMutated, true);
+    assert.equal(noMissionWinner.sharedCatalogMutated, false);
+    assert.equal(noMissionWinner.sourceReferencesMutated, false);
+    assert.equal(noMissionWinner.terminalDecisionsMutated, false);
+    assert.equal(noMissionWinner.offerIncidentGraphMutated, false);
+    assert.equal(noMissionWinner.incidentsMutated, false);
+    assert.equal(noMissionWinner.missionsMutated, false);
+    assert.equal(noMissionWinner.actionsMutated, false);
+    assert.equal(noMissionWinner.inboxLifecycleMutated, false);
+    assert.equal(noMissionWinner.rawSignalPayloadReturned, false);
+    assert.equal(noMissionReplay.outcome, "already_decided");
+    assert.equal(noMissionReplay.decisionOutcome, "no_mission");
+    assert.equal(noMissionReplay.missionDecisionAction, "none");
+    assert.equal(noMissionReplay.auditAction, "none");
+    assert.equal(noMissionReplay.outboxAction, "none");
+    assert.equal(noMissionReplay.mutationStatementCount, 0);
+    assert.equal(noMissionReplay.postIncidentDecisionGraphMutated, false);
+    assert.equal(JSON.stringify(concurrentNoMissionDecision).includes("Target"), false);
+    assert.equal(JSON.stringify(concurrentNoMissionDecision).includes("unitPriceCents"), false);
+    assert.deepEqual(await signalResolutionMutationCounts(), {
+      ...countsBeforeNoMissionDecision,
+      missionDecisions: Number(countsBeforeNoMissionDecision.missionDecisions) + 1,
+      auditEvents: Number(countsBeforeNoMissionDecision.auditEvents) + 1,
+      outboxEvents: Number(countsBeforeNoMissionDecision.outboxEvents) + 1
+    });
+    const storedNoMissionDecision = (await first.query<{
+      decisionId: string;
+      incidentId: string;
+      missionId: string | null;
+      decisionSource: string;
+      outcome: string;
+      reason: string;
+      effectiveAction: string;
+      effectiveQuantity: number;
+      effectiveUnitCapCents: number | null;
+      auditId: string;
+      reasonCode: string;
+      auditMessage: string;
+      auditData: string;
+      outboxPayload: string;
+      decisionCreatedAt: string;
+      auditCreatedAt: string;
+      outboxCreatedAt: string;
+    }>(
+      `SELECT decision.id AS "decisionId", decision.incident_id AS "incidentId",
+              decision.mission_id AS "missionId", decision.decision_source AS "decisionSource",
+              decision.outcome, decision.reason, decision.effective_action AS "effectiveAction",
+              decision.effective_quantity AS "effectiveQuantity",
+              decision.effective_unit_cap_cents AS "effectiveUnitCapCents",
+              audit.id AS "auditId", audit.reason_code AS "reasonCode",
+              audit.message AS "auditMessage", audit.data_json AS "auditData",
+              outbox.payload_json AS "outboxPayload",
+              decision.created_at AS "decisionCreatedAt",
+              audit.created_at AS "auditCreatedAt", outbox.created_at AS "outboxCreatedAt"
+       FROM "${NATIVE_SCHEMA}"."mission_decisions" AS decision
+       JOIN "${NATIVE_SCHEMA}"."signal_events" AS event ON event.id = decision.event_id
+       JOIN "${NATIVE_SCHEMA}"."audit_events" AS audit
+         ON audit.correlation_id = event.signal_id AND audit.event_type = 'signal_decided'
+       JOIN "${NATIVE_SCHEMA}"."outbox_events" AS outbox
+         ON outbox.aggregate_id = event.signal_id AND outbox.event_type = 'signal_decided'
+       WHERE decision.event_id = $1`,
+      [referenceResolutionResult.eventId]
+    )).rows[0]!;
+    assert.match(storedNoMissionDecision.decisionId, /^mission_decision_[a-f0-9]{32}$/);
+    assert.deepEqual({
+      incidentId: storedNoMissionDecision.incidentId,
+      missionId: storedNoMissionDecision.missionId,
+      decisionSource: storedNoMissionDecision.decisionSource,
+      outcome: storedNoMissionDecision.outcome,
+      effectiveAction: storedNoMissionDecision.effectiveAction,
+      effectiveQuantity: Number(storedNoMissionDecision.effectiveQuantity),
+      effectiveUnitCapCents: storedNoMissionDecision.effectiveUnitCapCents,
+      reasonCode: storedNoMissionDecision.reasonCode,
+      auditMessage: storedNoMissionDecision.auditMessage,
+      auditData: JSON.parse(storedNoMissionDecision.auditData)
+    }, {
+      incidentId: offerIncidentWinner.incidentId,
+      missionId: null,
+      decisionSource: "strategy",
+      outcome: "no_mission",
+      effectiveAction: "notify",
+      effectiveQuantity: 1,
+      effectiveUnitCapCents: null,
+      reasonCode: "no_mission",
+      auditMessage: storedNoMissionDecision.reason,
+      auditData: {
+        incidentId: offerIncidentWinner.incidentId,
+        listingId: "listing_native_signal"
+      }
+    });
+    assert.equal(
+      storedNoMissionDecision.decisionCreatedAt,
+      storedNoMissionDecision.auditCreatedAt
+    );
+    assert.equal(
+      storedNoMissionDecision.decisionCreatedAt,
+      storedNoMissionDecision.outboxCreatedAt
+    );
+    assert.deepEqual(JSON.parse(storedNoMissionDecision.outboxPayload), {
+      auditId: storedNoMissionDecision.auditId,
+      correlationId: referenceRefreshPayload.signalId,
+      reasonCode: "no_mission",
+      message: storedNoMissionDecision.reason,
+      data: {
+        incidentId: offerIncidentWinner.incidentId,
+        listingId: "listing_native_signal"
+      }
+    });
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."mission_decisions"
+       SET effective_quantity = 2 WHERE event_id = $1`,
+      [referenceResolutionResult.eventId]
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /existing post-incident decision is inconsistent/
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."mission_decisions"
+       SET effective_quantity = 1 WHERE event_id = $1`,
+      [referenceResolutionResult.eventId]
+    );
+    assert.equal(
+      (await signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      )).outcome,
+      "already_decided"
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."source_connections"
+       SET auto_create_missions = 1 WHERE id = 'native_signal_source_a'`
+    );
     const storedOfferIncident = (await first.query<{
       observationId: string;
       observationListingId: string;
@@ -5711,6 +6132,124 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(corroborationReplay.mutationStatementCount, 0);
     assert.equal(corroborationReplay.incidentId, offerIncidentWinner.incidentId);
     assert.deepEqual(await signalResolutionMutationCounts(), countsBeforeCorroborationReplay);
+    const postIncidentFixtureAt = new Date(resolutionPlanNow + 6_000).toISOString();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."mission_targets"(
+         id, mission_id, listing_id, created_at, updated_at
+       ) VALUES (
+         'native_post_incident_target', 'mission_cutover_other',
+         'listing_native_signal', $1, $1
+       )`,
+      [postIncidentFixtureAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."action_jobs"(
+         id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+         state, action, quantity, seller_policy, fulfillment, listing_id,
+         canonical_url, idempotency_key, capability_nonce_hash, expires_at,
+         created_at, updated_at
+       ) VALUES (
+         'native_post_incident_action', $1, $2, 'mission_cutover_other',
+         'native_post_incident_target', $3, 'awaiting_executor', 'notify', 1,
+         'any', 'shipping', 'listing_native_signal',
+         'https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU',
+         'native-post-incident-action', 'native-post-incident-capability', $4, $5, $5
+       )`,
+      [
+        NATIVE_TENANT,
+        NATIVE_USER,
+        corroborationResult.incidentId,
+        new Date(resolutionPlanNow + 3_606_000).toISOString(),
+        postIncidentFixtureAt
+      ]
+    );
+    const countsBeforeCorroboratedDecision = await signalResolutionMutationCounts();
+    const concurrentCorroboratedDecision = await Promise.all([
+      signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceUpdateMessageId,
+        referenceUpdateLease.capabilityToken,
+        resolutionPlanNow + 6_000
+      ),
+      signalPostIncidentDecisionASecond.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceUpdateMessageId,
+        referenceUpdateLease.capabilityToken,
+        resolutionPlanNow + 6_000
+      )
+    ]);
+    const corroboratedWinner = concurrentCorroboratedDecision.find(
+      (result) => result.postIncidentDecisionApplyApplied
+    );
+    const corroboratedReplay = concurrentCorroboratedDecision.find(
+      (result) => !result.postIncidentDecisionApplyApplied
+    );
+    assert.ok(corroboratedWinner);
+    assert.ok(corroboratedReplay);
+    assert.equal(corroboratedWinner.outcome, "apply_post_incident_decision");
+    assert.equal(corroboratedWinner.decisionOutcome, "corroborated");
+    assert.equal(corroboratedWinner.offerIncidentOutcome, "already_applied");
+    assert.equal(corroboratedWinner.missionId, "mission_cutover_other");
+    assert.equal(corroboratedWinner.actionJobId, "native_post_incident_action");
+    assert.equal(corroboratedWinner.missionBindingRequired, false);
+    assert.equal(corroboratedWinner.missionCreationRequired, false);
+    assert.equal(corroboratedWinner.missionDecisionAction, "insert");
+    assert.equal(corroboratedWinner.auditAction, "insert");
+    assert.equal(corroboratedWinner.outboxAction, "insert");
+    assert.equal(corroboratedWinner.mutationStatementCount, 3);
+    assert.equal(corroboratedWinner.postIncidentDecisionApplyApplied, true);
+    assert.equal(corroboratedWinner.continueDownstream, false);
+    assert.equal(corroboratedWinner.postIncidentDecisionGraphMutated, true);
+    assert.equal(corroboratedWinner.remainingMissionActionGraphMutated, false);
+    assert.equal(corroboratedWinner.missionsMutated, false);
+    assert.equal(corroboratedWinner.actionsMutated, false);
+    assert.equal(corroboratedReplay.outcome, "already_decided");
+    assert.equal(corroboratedReplay.decisionOutcome, "corroborated");
+    assert.equal(corroboratedReplay.actionJobId, "native_post_incident_action");
+    assert.equal(corroboratedReplay.mutationStatementCount, 0);
+    assert.deepEqual(await signalResolutionMutationCounts(), {
+      ...countsBeforeCorroboratedDecision,
+      missionDecisions: Number(countsBeforeCorroboratedDecision.missionDecisions) + 1,
+      auditEvents: Number(countsBeforeCorroboratedDecision.auditEvents) + 1,
+      outboxEvents: Number(countsBeforeCorroboratedDecision.outboxEvents) + 1
+    });
+    assert.deepEqual(
+      (await first.query<{
+        missionId: string;
+        incidentId: string;
+        outcome: string;
+        effectiveAction: string;
+        effectiveQuantity: number;
+        auditData: string;
+      }>(
+        `SELECT decision.mission_id AS "missionId",
+                decision.incident_id AS "incidentId", decision.outcome,
+                decision.effective_action AS "effectiveAction",
+                decision.effective_quantity AS "effectiveQuantity",
+                audit.data_json AS "auditData"
+         FROM "${NATIVE_SCHEMA}"."mission_decisions" AS decision
+         JOIN "${NATIVE_SCHEMA}"."signal_events" AS event ON event.id = decision.event_id
+         JOIN "${NATIVE_SCHEMA}"."audit_events" AS audit
+           ON audit.correlation_id = event.signal_id AND audit.event_type = 'signal_decided'
+         WHERE decision.event_id = $1`,
+        [referenceUpdateResolution.eventId]
+      )).rows.map((row) => ({
+        ...row,
+        effectiveQuantity: Number(row.effectiveQuantity),
+        auditData: JSON.parse(row.auditData)
+      })),
+      [{
+        missionId: "mission_cutover_other",
+        incidentId: corroborationResult.incidentId,
+        outcome: "corroborated",
+        effectiveAction: "notify",
+        effectiveQuantity: 1,
+        auditData: {
+          incidentId: corroborationResult.incidentId,
+          actionJobId: "native_post_incident_action"
+        }
+      }]
+    );
     assert.deepEqual(
       (await first.query<{
         productTitle: string;
@@ -6335,6 +6874,74 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     await signalOfferIncidentDirectClient.end();
     signalOfferIncidentDirectClient = null;
+
+    signalPostIncidentDecisionDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalPostIncidentDecisionDirectClient.on("error", () => undefined);
+    await signalPostIncidentDecisionDirectClient.connect();
+    await signalPostIncidentDecisionDirectClient.query(
+      `SET ROLE "${signalPostIncidentDecisionManifest.postIncidentDecisionApplyRole.name}"`
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."mission_decisions" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."mission_decisions"(
+           id, event_id, incident_id, mission_id, strategy_id, strategy_revision,
+           decision_source, outcome, reason, effective_action, effective_quantity,
+           effective_unit_cap_cents, created_at
+         ) VALUES (
+           'mission_decision_ffffffffffffffffffffffffffffffff',
+           'signal_event_ffffffffffffffffffffffffffffffff', NULL, NULL, NULL, NULL,
+           'strategy', 'forbidden', 'forbidden', 'notify', 1, NULL, $1
+         )`,
+        [new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."audit_events"(
+           id, tenant_id, user_id, correlation_id, event_type,
+           reason_code, message, data_json, created_at
+         ) VALUES (
+           'audit_post_ffffffffffffffffffffffffffffffff', $1, $2,
+           'signal-ffffffffffffffffffffffffffffffff', 'forbidden',
+           'forbidden', 'forbidden', '{}', $3
+         )`,
+        [NATIVE_TENANT, NATIVE_USER, new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."outbox_events"(
+           id, tenant_id, aggregate_type, aggregate_id,
+           event_type, payload_json, created_at, delivered_at
+         ) VALUES (
+           'outbox_post_ffffffffffffffffffffffffffffffff', $1, 'signal',
+           'signal-ffffffffffffffffffffffffffffffff', 'forbidden', '{}', $2, ''
+         )`,
+        [NATIVE_TENANT, new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalPostIncidentDecisionDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION}"(
+           $1, $2, 'plan', $3, $4, '', '{}'
+         )`,
+        [NATIVE_TENANT, "user_local", referenceRefreshMessageId, "A".repeat(43)]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await signalPostIncidentDecisionDirectClient.end();
+    signalPostIncidentDecisionDirectClient = null;
 
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
@@ -9348,6 +9955,93 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       )).boundaryCatalogFingerprint,
       signalOfferIncidentBoundary.boundaryCatalogFingerprint
     );
+    const cleanSignalPostIncidentDecisionBoundary =
+      await verifyPostgresSignalPostIncidentDecisionApplyBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+        NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
+        NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
+        NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE
+      );
+    assert.equal(
+      cleanSignalPostIncidentDecisionBoundary.boundaryCatalogFingerprint,
+      signalPostIncidentDecisionBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresSignalPostIncidentDecisionApplyBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+        NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
+        NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
+        NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresSignalPostIncidentDecisionApplyBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+        NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
+        NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
+        NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      signalPostIncidentDecisionBoundary.boundaryCatalogFingerprint
+    );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_RESOLUTION_APPLY_FUNCTION}"(
          text, text, text, text, text, text, text
@@ -9946,7 +10640,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalOfferIncidentB?.close(),
       signalOfferIncidentC?.close(),
       signalOfferIncidentUnmapped?.close(),
-      signalOfferIncidentDirectClient?.end()
+      signalOfferIncidentDirectClient?.end(),
+      signalPostIncidentDecisionA?.close(),
+      signalPostIncidentDecisionASecond?.close(),
+      signalPostIncidentDecisionB?.close(),
+      signalPostIncidentDecisionC?.close(),
+      signalPostIncidentDecisionUnmapped?.close(),
+      signalPostIncidentDecisionDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

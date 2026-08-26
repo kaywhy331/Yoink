@@ -1421,6 +1421,88 @@ composition, mission/policy/action evaluation, inbox acknowledgement, or
 retailer-session authority is created. SQLite remains authoritative and
 complete handler parity remains six of seven.
 
+## Post-incident decision apply qualification seam
+
+Version 0.81 adds a seventh independent hosted-signal role for the bounded
+decision after the v0.80 actionable offer/incident graph has fully settled. It
+does not widen any earlier role. The new `NOLOGIN`, `NOINHERIT`,
+`NOBYPASSRLS` role owns no application object, inherits no other role, has zero
+direct/effective table or column privileges, and can execute one strict
+security-definer function across 17 forced-RLS tenant tables.
+
+The Node adapter plans and applies within one `READ COMMITTED` read-write
+transaction. PostgreSQL authenticates `session_user`, validates the exact live
+leased-inbox capability, locks the message, invokes the v0.80 planner, and
+requires its immutable result to be `already_applied` with no pending writes.
+It then revalidates the event, matched resolution, exact occurrence, open
+incident, offer observation, source connection, mission context, and any
+incident-bound action job. The resulting principal-bound SHA-256 plan is valid
+for at most 30 seconds.
+
+Only two terminal branches can mutate. `corroborated` requires exactly one
+user-owned action job on the incident and an incident occurrence count of at
+least two. `no_mission` requires no exact mission target and a source that is
+not both `trusted_exact` and configured to create missions. Either branch
+performs exactly three inserts: one notification-only mission decision, one
+matching audit event, and one matching outbox event. Exact replay writes
+nothing. Partial graphs, changed rows, ambiguous mission bindings, cross-user
+jobs, or a changed predecessor abort the transaction.
+
+When a trusted source still needs mission binding or creation, the routine
+returns `continue_downstream` with `missionBindingRequired` and
+`missionCreationRequired` but performs no mutation. The function has no SQL for
+catalog, source-reference, terminal-decision, offer, incident, mission,
+strategy, action-job, notification, spend, or inbox-lifecycle mutation and
+returns no raw signal payload or decision reason.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-post-incident-decision-apply -- plan \
+  yoink_cutover_qualification_081 yoink_q_081 yoink_session_q_081 \
+  yoink_queue_q_081 yoink_control_q_081 yoink_notify_q_081 \
+  yoink_execute_q_081 yoink_retain_q_081 yoink_candidate_q_081 \
+  yoink_dispatch_q_081 yoink_reconcile_q_081 yoink_witness_q_081 \
+  yoink_delivery_q_081 yoink_catalog_q_081 yoink_resolution_q_081 \
+  yoink_reference_q_081 yoink_terminal_q_081 yoink_offer_q_081 \
+  yoink_post_q_081
+```
+
+After the exact v0.80 offer/incident receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_QUALIFICATION_ACK=bounded-signal-post-incident-decision-apply-qualification \
+  npm run postgres:signal-post-incident-decision-apply -- apply \
+  yoink_cutover_qualification_081 yoink_q_081 yoink_session_q_081 \
+  yoink_queue_q_081 yoink_control_q_081 yoink_notify_q_081 \
+  yoink_execute_q_081 yoink_retain_q_081 yoink_candidate_q_081 \
+  yoink_dispatch_q_081 yoink_reconcile_q_081 yoink_witness_q_081 \
+  yoink_delivery_q_081 yoink_catalog_q_081 yoink_resolution_q_081 \
+  yoink_reference_q_081 yoink_terminal_q_081 yoink_offer_q_081 \
+  yoink_post_q_081
+```
+
+Then independently inspect the role, function, 17 forced-RLS tables, immutable
+receipt, and full prerequisite fingerprint chain:
+
+```bash
+npm run postgres:signal-post-incident-decision-apply -- verify \
+  yoink_cutover_qualification_081 yoink_q_081 yoink_session_q_081 \
+  yoink_queue_q_081 yoink_control_q_081 yoink_notify_q_081 \
+  yoink_execute_q_081 yoink_retain_q_081 yoink_candidate_q_081 \
+  yoink_dispatch_q_081 yoink_reconcile_q_081 yoink_witness_q_081 \
+  yoink_delivery_q_081 yoink_catalog_q_081 yoink_resolution_q_081 \
+  yoink_reference_q_081 yoink_terminal_q_081 yoink_offer_q_081 \
+  yoink_post_q_081
+```
+
+The receipt permanently records `runtimeAuthority: false` and
+`productionReady: false`. Qualification creates no login or principal mapping
+and grants no runtime authority. SQLite remains authoritative; mission
+binding/creation, strategy/policy/action composition, final inbox completion,
+and complete seven-of-seven handler parity remain open.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.

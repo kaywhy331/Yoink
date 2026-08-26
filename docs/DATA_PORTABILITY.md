@@ -143,6 +143,21 @@ recovery, and catalog-tamper detection. The mission/policy/action graph, final
 handler composition, and all runtime authority remain closed, so complete-
 handler parity stays six of seven and SQLite remains authoritative.
 
+Yoink 0.81 adds a seventh distinct function-only role for the bounded
+post-incident decision. It accepts only a fully settled v0.80 offer/incident
+graph. An exact incident with at least two observations and one user-owned
+action job records `corroborated`; a source without mission-creation trust and
+without an exact mission target records `no_mission`. Either terminal branch
+atomically appends only a mission decision, audit event, and outbox event.
+Trusted signals still needing mission binding or creation continue with
+explicit zero-write projections. Exact replay is mutation-free and partial,
+ambiguous, cross-user, or changed graphs abort. Native PostgreSQL proves every
+branch, principal/direct denial, concurrent replay, corruption detection,
+post-grant verification, and catalog-tamper detection. Mission creation,
+strategy/policy/action composition, final handler composition, and all runtime
+authority remain closed, so complete-handler parity stays six of seven and
+SQLite remains authoritative.
+
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
 

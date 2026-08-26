@@ -24,6 +24,7 @@ import { postgresSignalResolutionApplyCapabilityProjection } from "../packages/d
 import { postgresSignalSourceReferenceRefreshCapabilityProjection } from "../packages/database/src/postgres-signal-source-reference-refresh.js";
 import { postgresSignalTerminalDecisionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-terminal-decision-apply.js";
 import { postgresSignalOfferIncidentApplyCapabilityProjection } from "../packages/database/src/postgres-signal-offer-incident-apply.js";
+import { postgresSignalPostIncidentDecisionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-post-incident-decision-apply.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -126,6 +127,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /partial graphs and inconsistent replays fail closed/);
     assert.match(adminScript, /Server-bound actionable offer incidents/);
     assert.match(adminScript, /missions, actions, and inbox lifecycle remain untouched/);
+    assert.match(adminScript, /Server-bound post-incident decisions/);
+    assert.match(adminScript, /Trusted exact sources project mission binding or creation requirements with zero writes/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
@@ -148,6 +151,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const postgresSignalSourceReferenceRefresh = postgresSignalSourceReferenceRefreshCapabilityProjection();
     const postgresSignalTerminalDecisionApply = postgresSignalTerminalDecisionApplyCapabilityProjection();
     const postgresSignalOfferIncidentApply = postgresSignalOfferIncidentApplyCapabilityProjection();
+    const postgresSignalPostIncidentDecisionApply =
+      postgresSignalPostIncidentDecisionApplyCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -175,6 +180,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalSourceReferenceRefresh,
       postgresSignalTerminalDecisionApply,
       postgresSignalOfferIncidentApply,
+      postgresSignalPostIncidentDecisionApply,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -424,6 +430,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalOfferIncidentApply,
       postgresSignalOfferIncidentApply
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalPostIncidentDecisionApply,
+      postgresSignalPostIncidentDecisionApply
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -443,7 +453,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalResolutionApply,
       postgresSignalSourceReferenceRefresh,
       postgresSignalTerminalDecisionApply,
-      postgresSignalOfferIncidentApply
+      postgresSignalOfferIncidentApply,
+      postgresSignalPostIncidentDecisionApply
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

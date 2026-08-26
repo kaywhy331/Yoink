@@ -1,6 +1,46 @@
 # Yoink roadmap
 
-## Shipped through 0.80.0
+## Shipped through 0.81.0
+
+### PostgreSQL post-incident decision apply (0.81.0)
+
+- A seventh separately receipted hosted-signal qualification role now applies
+  only the bounded decision immediately after the v0.80 actionable offer/
+  incident graph has fully settled. Mission binding/creation, strategy and
+  action composition, and inbox completion remain later boundaries
+- The role is independently `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no
+  application object, inherits no role, has zero direct/effective table or
+  column grants, and can execute one strict security-definer routine across 17
+  forced-RLS tenant tables. Authorized login principals may assume it without
+  giving the boundary role authority to inherit any other role
+- Plan and apply share one application-owned `READ COMMITTED` transaction.
+  PostgreSQL authenticates `session_user`, validates the live inbox capability,
+  locks the exact message, requires the v0.80 predecessor to return
+  `already_applied` with zero pending mutations, and seals every result in a
+  principal-bound plan valid for at most 30 seconds
+- Two terminal outcomes have repository parity. `corroborated` requires one
+  user-owned action job bound to the exact open incident and at least two
+  incident observations. `no_mission` requires no exact mission target and a
+  source that is not both `trusted_exact` and permitted to create missions
+- A terminal outcome inserts exactly three rows: mission decision, audit event,
+  and matching outbox event. Complete replay is mutation-free; partial graphs,
+  changed stored semantics, cross-user jobs, ambiguous missions, or stale
+  predecessor state abort. Catalog, references, terminal decisions, offers,
+  incidents, missions, strategies, action jobs, and inbox lifecycle are absent
+  from the mutation set
+- Trusted exact signals that still need mission binding or creation return a
+  zero-write `continue_downstream` result with explicit
+  `missionBindingRequired` and `missionCreationRequired` flags. Native
+  PostgreSQL 16 proves all branches, exact rows/deltas, principal and direct-SQL
+  denial, concurrent replay, partial-state and corruption failure, post-grant
+  catalog verification, and function-catalog tamper detection
+- Health and Admin → Operations expose the boundary independently with
+  `runtimeAuthority: false` and `productionReady: false`. Remaining mission/
+  strategy/policy/action composition, final inbox completion, production
+  principals, and the PostgreSQL authority switch remain closed; honest
+  complete-handler coverage stays 6/7
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### PostgreSQL actionable offer/incident apply (0.80.0)
 
@@ -2990,9 +3030,11 @@ repository alone:
   distinct insert-only unknown-product catalog-create boundary, and a distinct
   event/source-heartbeat/resolution commit plus a distinct known-product source-
   reference refresh plus a distinct terminal occurrence/decision/audit/outbox
-  boundary plus a distinct actionable offer/incident/occurrence boundary are
+  boundary, a distinct actionable offer/incident/occurrence boundary, and a
+  distinct post-incident corroboration/no-mission decision boundary are
   implemented, but all PostgreSQL roles remain inactive. The remaining
-  mission/policy/action graph and final inbox composition remain on SQLite,
+  mission binding/creation, strategy/policy/action graph, and final inbox
+  composition remain on SQLite,
   complete-handler parity remains six of seven, and every request
   repository remains on SQLite. The
   PostgreSQL runtime must add production principals, remaining restricted

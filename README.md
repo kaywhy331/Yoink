@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.80.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.81.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,43 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.81.0 adds the seventh independently receipted piece of the inactive
+PostgreSQL hosted-signal plane: the bounded decision immediately after an exact
+actionable offer and incident have settled. Its separate `NOLOGIN`,
+`NOINHERIT`, `NOBYPASSRLS` role owns no application object, inherits no role,
+has zero direct/effective table or column grants, and may execute one strict
+security-definer function across 17 forced-RLS tenant tables. PostgreSQL binds
+`session_user`, validates the live leased-inbox capability, and requires the
+exact v0.80 predecessor to be fully applied and replay-stable before this
+boundary can plan anything.
+
+The boundary terminates only two repository-equivalent cases. A signal that
+corroborates one existing user-owned action job requires at least two exact
+incident observations. A source that is not both `trusted_exact` and permitted
+to create missions records `no_mission` when no exact mission target exists.
+Either case atomically inserts exactly one `mission_decisions`, one
+`audit_events`, and one `outbox_events` row. Complete replay writes nothing;
+partial or changed decision graphs, cross-user action jobs, ambiguous mission
+bindings, and stale predecessor state abort the transaction.
+
+Signals still needing an exact mission target or mission creation return
+`continue_downstream` with explicit `missionBindingRequired` and
+`missionCreationRequired` projections and zero writes. Catalog, source
+references, terminal decisions, offers, incidents, missions, strategies,
+purchase policy, action jobs, notifications, spend, and inbox lifecycle remain
+untouched, and no raw signal payload or decision reason is returned.
+
+Native PostgreSQL 16 proves principal isolation, direct-SQL denial, all three
+outcomes, exact stored decision/audit/outbox semantics, simultaneous plan/apply
+serialization, mutation-free replay, partial-state failure, corruption
+detection, runtime-grantee-safe verification, and immutable function-catalog
+tamper detection. The role remains inactive: SQLite is authoritative, mission
+binding/creation, strategy and action composition, final inbox completion, and
+production principals remain closed; complete handler coverage stays six of
+seven and retailer authority is unchanged. Use `npm run
+postgres:signal-post-incident-decision-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.80.0 adds the sixth independently receipted piece of the inactive
 PostgreSQL hosted-signal plane: the actionable offer-observation, incident, and
