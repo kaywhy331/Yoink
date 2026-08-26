@@ -123,6 +123,7 @@ import { postgresRuntimeReadRoleCapabilityProjection } from "../../../packages/d
 import { postgresTenantSessionCapabilityProjection } from "../../../packages/database/src/postgres-tenant-session.js";
 import { postgresTenantQueueWriteCapabilityProjection } from "../../../packages/database/src/postgres-tenant-queue-writes.js";
 import { postgresWorkerControlCapabilityProjection } from "../../../packages/database/src/postgres-worker-control.js";
+import { postgresNotificationRecoveryCapabilityProjection } from "../../../packages/database/src/postgres-notification-recovery.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -378,6 +379,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const postgresTenantSessions = postgresTenantSessionCapabilityProjection();
   const postgresTenantQueueWrites = postgresTenantQueueWriteCapabilityProjection();
   const postgresWorkerControl = postgresWorkerControlCapabilityProjection();
+  const postgresNotificationRecovery = postgresNotificationRecoveryCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -647,6 +649,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresTenantSessions,
           postgresTenantQueueWrites,
           postgresWorkerControl,
+          postgresNotificationRecovery,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1493,7 +1496,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresRuntimeReadRoles,
             postgresTenantSessions,
             postgresTenantQueueWrites,
-            postgresWorkerControl
+            postgresWorkerControl,
+            postgresNotificationRecovery
           },
           capabilities: {
             catalog: true,
@@ -1646,6 +1650,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresTenantSessions,
             postgresTenantQueueWrites,
             postgresWorkerControl,
+            postgresNotificationRecovery,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

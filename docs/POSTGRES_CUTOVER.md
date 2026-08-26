@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.64 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.65 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -64,8 +64,9 @@ Automated real-engine tests cover:
 
 This class is not imported by the API or standalone worker entry points. It
 cannot flip receipt authority, cannot enable dual writes, and does not give the
-PostgreSQL process any retailer-session capability. The task handlers still use
-SQLite repositories. The emulated real-semantics suite continues to prove the
+PostgreSQL process any retailer-session capability. Six task-handler families
+still use only SQLite repositories; notification recovery now has a separately
+qualified but inactive PostgreSQL seam. The emulated real-semantics suite continues to prove the
 complete store state machine; the separate native suite now proves the
 contention-critical path across independent server sessions.
 
@@ -99,8 +100,9 @@ and deleted after success or failure. Worker qualification pools use
 `FOR UPDATE SKIP LOCKED` consumers; the offline cutover importer remains
 strictly `SERIALIZABLE`. This proves the queue algorithm and production driver
 against native PostgreSQL; it does not deploy independent worker processes,
-execute task handlers, measure production load/outage behavior, or establish
-runtime authority.
+execute a production worker fleet, measure production load/outage behavior, or
+establish runtime authority. Version 0.65 separately executes the
+notification-recovery handler through its own native qualification path.
 
 ## Restricted read-role qualification seam
 
@@ -396,6 +398,71 @@ login, membership, or principal mapping. This is qualification evidence only;
 the API and standalone worker do not construct this adapter at runtime, and
 SQLite remains authoritative.
 
+## Function-only notification-recovery handler qualification seam
+
+Version 0.65 derives one additional role from the exact verified worker-control
+chain. It is the first PostgreSQL task-handler repository, covering only
+`notification_recovery`. The role is `NOLOGIN`, `NOINHERIT`,
+`NOBYPASSRLS`, owns no object, and has no table, column, sequence, schema-create,
+insert, update, or delete privilege. Its complete application authority is:
+
+| Routine | Exact authority | Data returned |
+| --- | --- | --- |
+| `yoink_recover_notification_deliveries(text, text)` | Expire pending/leased notifications whose bound action job has ended; fail an expired lease at the three-attempt ceiling; requeue an expired lease below that ceiling | Three aggregate counts only |
+
+The routine is strict, volatile, security-definer, and pinned to
+`search_path=pg_catalog`. It independently resolves PostgreSQL `session_user`
+against the server-owned principal registry and compares that result with the
+tenant/user expected by the authenticated worker context. A missing, duplicate,
+inactive, or mismatched mapping raises an authorization error before mutation.
+The function always filters both tenant and user, clears any device/capability
+lease when transitioning, uses PostgreSQL's own statement clock so the caller
+cannot advance expiry, and reproduces the current SQLite ordering: window expiry
+first, exhausted leases second, requeue last.
+
+The verifier requires zero active mappings and memberships, zero effective
+table/column privileges, exactly one executable application routine, no public
+execute, the exact owner/ACL/source/signature/result/volatility/strictness/
+security configuration, and forced RLS on the two protected tables. Its
+immutable receipt seals the complete catalog fingerprint. Native PostgreSQL 16
+then uses temporary mapped logins to run the real maintenance handler and prove
+result parity, future-lease preservation, cross-tenant isolation,
+mismatch/unmapped denial, direct-access denial, repeat idempotency, exactly one
+transition under concurrent recovery, clean fixture removal, and tamper
+rejection.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:notification-recovery -- plan \
+  yoink_cutover_qualification_065 yoink_q_065 yoink_session_q_065 \
+  yoink_queue_q_065 yoink_control_q_065 yoink_notify_q_065
+```
+
+After the exact worker-control v1 receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_NOTIFICATION_RECOVERY_QUALIFICATION_ACK=bounded-notification-recovery-qualification \
+  npm run postgres:notification-recovery -- apply \
+  yoink_cutover_qualification_065 yoink_q_065 yoink_session_q_065 \
+  yoink_queue_q_065 yoink_control_q_065 yoink_notify_q_065
+```
+
+Then independently re-inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:notification-recovery -- verify \
+  yoink_cutover_qualification_065 yoink_q_065 yoink_session_q_065 \
+  yoink_queue_q_065 yoink_control_q_065 yoink_notify_q_065
+```
+
+Apply refuses any reused role, routine, guard, or receipt and cannot create a
+login, membership, or principal mapping. The API and standalone worker do not
+construct this adapter in their shipped runtime composition. Exactly one of
+seven task families has repository parity; the role remains inactive and
+SQLite remains authoritative.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -499,7 +566,8 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- PostgreSQL implementations for task handlers and every API repository;
+- PostgreSQL implementations for the remaining six task-handler families and
+  every API repository;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers and the unresolved incident table; all qualified

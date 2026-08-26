@@ -29,6 +29,16 @@ export type BackgroundTaskHandler = BackgroundWorkerTaskHandler;
 export interface BackgroundMaintenanceHandlerOptions {
   observerRecipeWitnessRefresh?: Pick<ObserverRecipeWitnessRefreshService, "execute">;
   operatorAlertConnectorDispatch?: Pick<OperatorAlertConnectorDispatchService, "execute">;
+  notificationRecovery?: {
+    recover(
+      principal: BackgroundWorkerContext["principal"],
+      now: number
+    ): Promise<{
+      expiredNotifications: number;
+      requeuedLeases: number;
+      failedLeases: number;
+    }>;
+  };
 }
 
 export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler {
@@ -71,10 +81,11 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
       ...(taskKind === "hosted_delivery_recovery"
         ? { internalServiceCapability: "internal.delivery" as const }
         : {})
-    }, () => this.executeScoped(taskKind, context.runtimeVersion, now));
+    }, () => this.executeScoped(context, taskKind, context.runtimeVersion, now));
   }
 
   private async executeScoped(
+    context: BackgroundWorkerContext,
     taskKind: BackgroundTaskKind,
     runtimeVersion: string,
     now: number
@@ -87,7 +98,9 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
           releasedSpendReservations: this.spendLedger.releaseExpired(now)
         };
       case "notification_recovery":
-        return this.notifications.recoverExpired(now);
+        return this.options.notificationRecovery
+          ? this.options.notificationRecovery.recover(context.principal, now)
+          : this.notifications.recoverExpired(now);
       case "hosted_delivery_recovery":
         return {
           ...this.hostedDelivery.recoverExpiredLeases(now),

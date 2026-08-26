@@ -35,6 +35,14 @@ import {
   buildPostgresWorkerControlManifest,
   verifyPostgresWorkerControlBoundary
 } from "../packages/database/src/postgres-worker-control.js";
+import {
+  NodePostgresNotificationRecoveryDatabase,
+  applyPostgresNotificationRecoveryBoundary,
+  buildPostgresNotificationRecoveryManifest,
+  verifyPostgresNotificationRecoveryBoundary
+} from "../packages/database/src/postgres-notification-recovery.js";
+import { YoinkDatabase } from "../packages/database/src/database.js";
+import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
 import {
   POSTGRES_TEST_WORKER_FINGERPRINT,
@@ -50,6 +58,7 @@ const NATIVE_USER = "user_cutover_other";
 const NATIVE_SESSION_ROLE_NAMESPACE = "yoink_native_session";
 const NATIVE_QUEUE_WRITE_ROLE_NAMESPACE = "yoink_native_queue_write";
 const NATIVE_WORKER_CONTROL_ROLE_NAMESPACE = "yoink_native_worker_control";
+const NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE = "yoink_native_notify";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_UNMAPPED = "yoink_native_principal_unmapped";
@@ -89,6 +98,70 @@ async function insertProbeTask(
   );
 }
 
+async function insertNotificationRecoveryFixtures(
+  database: PostgresCutoverDatabase,
+  recoveryNow: number
+): Promise<{ expiredLeaseAt: string; currentLeaseAt: string }> {
+  const createdAt = new Date(recoveryNow - 7_200_000).toISOString();
+  const expiredLeaseAt = new Date(recoveryNow - 60_000).toISOString();
+  const currentLeaseAt = new Date(recoveryNow + 60_000).toISOString();
+  const currentJobExpiresAt = new Date(recoveryNow + 3_600_000).toISOString();
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."mission_targets"(
+       id, mission_id, listing_id, created_at, updated_at
+     ) VALUES
+       ('native_notify_target_other', 'mission_cutover_other', 'listing_cutover_scope', $1, $1),
+       ('native_notify_target_local', 'mission_cutover_local', 'listing_cutover_scope', $1, $1)`,
+    [createdAt]
+  );
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."signal_incidents"(
+       id, listing_id, event_type, semantic_key, first_observed_at,
+       last_observed_at, created_at, updated_at
+     ) VALUES ('native_notify_incident', 'listing_cutover_scope', 'restock',
+               'native-notification-recovery', $1, $1, $1, $1)`,
+    [createdAt]
+  );
+  const jobs = [
+    ["native_notify_expired", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", expiredLeaseAt],
+    ["native_notify_failed", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", currentJobExpiresAt],
+    ["native_notify_requeued", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", currentJobExpiresAt],
+    ["native_notify_current", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", currentJobExpiresAt],
+    ["native_notify_cross_tenant", "tenant_local", "user_local", "mission_cutover_local", "native_notify_target_local", expiredLeaseAt]
+  ] as const;
+  for (const [id, tenantId, userId, missionId, missionTargetId, expiresAt] of jobs) {
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."action_jobs"(
+         id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+         state, action, quantity, seller_policy, fulfillment, listing_id,
+         canonical_url, idempotency_key, capability_nonce_hash, expires_at,
+         created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, 'native_notify_incident',
+                 'awaiting_executor', 'notify', 1, 'any', 'shipping',
+                 'listing_cutover_scope', 'https://www.target.com/p/-/A-cutover-scope-sku',
+                 $6, $7, $8, $9, $9)`,
+      [id, tenantId, userId, missionId, missionTargetId, `idempotency:${id}`, `nonce:${id}`, expiresAt, createdAt]
+    );
+  }
+  const deliveries = [
+    ["native_delivery_expired", NATIVE_TENANT, NATIVE_USER, "native_notify_expired", "pending", 0, ""],
+    ["native_delivery_failed", NATIVE_TENANT, NATIVE_USER, "native_notify_failed", "leased", 3, expiredLeaseAt],
+    ["native_delivery_requeued", NATIVE_TENANT, NATIVE_USER, "native_notify_requeued", "leased", 2, expiredLeaseAt],
+    ["native_delivery_current", NATIVE_TENANT, NATIVE_USER, "native_notify_current", "leased", 2, currentLeaseAt],
+    ["native_delivery_cross_tenant", "tenant_local", "user_local", "native_notify_cross_tenant", "pending", 0, ""]
+  ] as const;
+  for (const [id, tenantId, userId, jobId, state, attempts, leaseExpiresAt] of deliveries) {
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."notification_deliveries"(
+         id, tenant_id, user_id, job_id, state, attempts, capability_hash,
+         lease_expires_at, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
+      [id, tenantId, userId, jobId, state, attempts, state === "leased" ? `capability:${id}` : "", leaseExpiresAt, createdAt]
+    );
+  }
+  return { expiredLeaseAt, currentLeaseAt };
+}
+
 function workerContext(workerId: string): BackgroundWorkerContext {
   return {
     principal: { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
@@ -99,7 +172,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound tenant reads, queue writes, and independent SKIP LOCKED leasing", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and notification recovery", {
   timeout: 180_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -132,6 +205,11 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
   let queueWriterB: NodePostgresTenantQueueWriteDatabase | null = null;
   let queueWriterUnmapped: NodePostgresTenantQueueWriteDatabase | null = null;
   let workerControl: NodePostgresWorkerControlDatabase | null = null;
+  let notificationRecoveryA: NodePostgresNotificationRecoveryDatabase | null = null;
+  let notificationRecoveryB: NodePostgresNotificationRecoveryDatabase | null = null;
+  let notificationRecoveryUnmapped: NodePostgresNotificationRecoveryDatabase | null = null;
+  let notificationDirectClient: Client | null = null;
+  let notificationHandlerDb: YoinkDatabase | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -248,6 +326,44 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       ),
       workerControlBoundary
     );
+    const notificationRecoveryBoundary = await applyPostgresNotificationRecoveryBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:00.000Z").getTime()
+    );
+    assert.equal(notificationRecoveryBoundary.protectedTableCount, 2);
+    assert.equal(notificationRecoveryBoundary.directTableGrantCount, 0);
+    assert.equal(notificationRecoveryBoundary.functionGrantCount, 1);
+    assert.equal(notificationRecoveryBoundary.membershipCount, 0);
+    assert.equal(notificationRecoveryBoundary.activePrincipalCount, 0);
+    assert.equal(notificationRecoveryBoundary.handlerTaskKindCount, 1);
+    assert.equal(notificationRecoveryBoundary.totalHandlerTaskKindCount, 7);
+    assert.equal(notificationRecoveryBoundary.serverBoundPrincipalLookup, true);
+    assert.equal(notificationRecoveryBoundary.serverClockBoundRecovery, true);
+    assert.equal(notificationRecoveryBoundary.notificationRecoveryRepositoryParity, true);
+    assert.equal(notificationRecoveryBoundary.fullHandlerRepositoryParity, false);
+    assert.equal(notificationRecoveryBoundary.directTableAccess, false);
+    assert.equal(notificationRecoveryBoundary.insertAccess, false);
+    assert.equal(notificationRecoveryBoundary.deleteAccess, false);
+    assert.equal(notificationRecoveryBoundary.runtimeAuthority, false);
+    assert.match(notificationRecoveryBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresNotificationRecoveryBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE
+      ),
+      notificationRecoveryBoundary
+    );
     await importer.close();
     importer = null;
 
@@ -312,6 +428,14 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
       NATIVE_WORKER_CONTROL_ROLE_NAMESPACE
     );
+    const notificationRecoveryManifest = buildPostgresNotificationRecoveryManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE
+    );
     for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
       await first.query(
         `CREATE ROLE "${principalRole}"
@@ -323,6 +447,9 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       );
       await first.query(
         `GRANT "${queueWriteManifest.writeRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${notificationRecoveryManifest.recoveryRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -395,6 +522,27 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
     }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
     NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
     { maxConnections: 1 });
+    notificationRecoveryA = new NodePostgresNotificationRecoveryDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, { maxConnections: 2 });
+    notificationRecoveryB = new NodePostgresNotificationRecoveryDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_B),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, { maxConnections: 1 });
+    notificationRecoveryUnmapped = new NodePostgresNotificationRecoveryDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_UNMAPPED),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, { maxConnections: 1 });
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -497,6 +645,161 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       ),
       { tenantId: NATIVE_TENANT, userId: NATIVE_USER }
     );
+
+    const notificationNow = Date.now();
+    const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
+    notificationHandlerDb = new YoinkDatabase();
+    const notificationHandler = new BackgroundMaintenanceHandler(notificationHandlerDb, {
+      notificationRecovery: notificationRecoveryA
+    });
+    assert.deepEqual(
+      await notificationHandler.execute(
+        workerContext("native_notification_handler"),
+        "notification_recovery",
+        notificationNow
+      ),
+      {
+        expiredNotifications: 1,
+        requeuedLeases: 1,
+        failedLeases: 1
+      }
+    );
+    assert.deepEqual(
+      (await first.query<{
+        id: string;
+        state: string;
+        assignedDeviceId: string | null;
+        capabilityHash: string;
+        leaseExpiresAt: string;
+        failureCode: string;
+      }>(
+        `SELECT id, state, assigned_device_id AS "assignedDeviceId",
+                capability_hash AS "capabilityHash", lease_expires_at AS "leaseExpiresAt",
+                failure_code AS "failureCode"
+         FROM "${NATIVE_SCHEMA}"."notification_deliveries"
+         WHERE tenant_id = $1 AND user_id = $2 AND id LIKE 'native_delivery_%'
+         ORDER BY id`,
+        [NATIVE_TENANT, NATIVE_USER]
+      )).rows,
+      [
+        {
+          id: "native_delivery_current",
+          state: "leased",
+          assignedDeviceId: null,
+          capabilityHash: "capability:native_delivery_current",
+          leaseExpiresAt: notificationFixture.currentLeaseAt,
+          failureCode: ""
+        },
+        {
+          id: "native_delivery_expired",
+          state: "expired",
+          assignedDeviceId: null,
+          capabilityHash: "",
+          leaseExpiresAt: "",
+          failureCode: "job_window_expired"
+        },
+        {
+          id: "native_delivery_failed",
+          state: "failed",
+          assignedDeviceId: null,
+          capabilityHash: "",
+          leaseExpiresAt: "",
+          failureCode: "delivery_attempts_exhausted"
+        },
+        {
+          id: "native_delivery_requeued",
+          state: "pending",
+          assignedDeviceId: null,
+          capabilityHash: "",
+          leaseExpiresAt: "",
+          failureCode: "lease_expired_requeued"
+        }
+      ]
+    );
+    assert.deepEqual(
+      await notificationRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        notificationNow
+      ),
+      { expiredNotifications: 0, requeuedLeases: 0, failedLeases: 0 }
+    );
+    await assert.rejects(
+      notificationRecoveryA.recover(
+        { tenantId: "tenant_local", userId: "user_local" },
+        notificationNow
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      notificationRecoveryUnmapped.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        notificationNow
+      ),
+      /tenant session principal is not active/
+    );
+    assert.deepEqual(
+      await notificationRecoveryB.recover(
+        { tenantId: "tenant_local", userId: "user_local" },
+        notificationNow
+      ),
+      { expiredNotifications: 1, requeuedLeases: 0, failedLeases: 0 }
+    );
+    await assert.rejects(
+      notificationRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        notificationNow - 600_000
+      ),
+      /cycle timestamp differs from the process clock/
+    );
+    notificationDirectClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
+    notificationDirectClient.on("error", () => undefined);
+    await notificationDirectClient.connect();
+    await notificationDirectClient.query(
+      `SET ROLE "${notificationRecoveryManifest.recoveryRole.name}"`
+    );
+    await assert.rejects(
+      notificationDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."notification_deliveries"`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      notificationDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."notification_deliveries" SET state = 'delivered'`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      notificationDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."yoink_bind_tenant_session"()`
+      ),
+      /permission denied/
+    );
+    await notificationDirectClient.end();
+    notificationDirectClient = null;
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."notification_deliveries"
+       SET state = 'leased', attempts = 2, capability_hash = 'capability:contention',
+           lease_expires_at = $1, failure_code = ''
+       WHERE id = 'native_delivery_requeued'`,
+      [notificationFixture.expiredLeaseAt]
+    );
+    const concurrentRecovery = await Promise.all([
+      notificationRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        notificationNow
+      ),
+      notificationRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        notificationNow
+      )
+    ]);
+    assert.equal(
+      concurrentRecovery.reduce((sum, result) => sum + result.requeuedLeases, 0),
+      1
+    );
+    assert.ok(concurrentRecovery.every((result) => result.expiredNotifications === 0
+      && result.failedLeases === 0));
 
     const heartbeatInsert = (
       writer: NodePostgresTenantQueueWriteDatabase,
@@ -1051,6 +1354,9 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       await first.query(
         `REVOKE "${queueWriteManifest.writeRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${notificationRecoveryManifest.recoveryRole.name}" FROM "${principalRole}"`
+      );
     }
     await first.query(
       `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
@@ -1084,6 +1390,53 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
     assert.equal(
       cleanWorkerControlBoundary.boundaryCatalogFingerprint,
       workerControlBoundary.boundaryCatalogFingerprint
+    );
+    const cleanNotificationRecoveryBoundary = await verifyPostgresNotificationRecoveryBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanNotificationRecoveryBoundary.boundaryCatalogFingerprint,
+      notificationRecoveryBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_notification_deliveries"(
+         text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresNotificationRecoveryBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_notification_deliveries"(
+         text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresNotificationRecoveryBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      notificationRecoveryBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER POLICY "yoink_worker_control_users_select"
@@ -1184,8 +1537,13 @@ test("native PostgreSQL proves server-bound tenant reads, queue writes, and inde
       queueWriterASecond?.close(),
       queueWriterB?.close(),
       queueWriterUnmapped?.close(),
-      workerControl?.close()
+      workerControl?.close(),
+      notificationRecoveryA?.close(),
+      notificationRecoveryB?.close(),
+      notificationRecoveryUnmapped?.close(),
+      notificationDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
+    notificationHandlerDb?.close();
     await postgres.stop().catch(() => undefined);
     if (existsSync(parent)) rmSync(parent, { recursive: true, force: true });
     if (existsSync(fixture.directory)) rmSync(fixture.directory, { recursive: true, force: true });

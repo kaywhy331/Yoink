@@ -19,8 +19,10 @@ to contract v3 with one `SELECT`-only grant on the singleton deployment
 expectation and makes new-work schedule/enqueue/lease attestation plus queue SQL
 one transaction. Yoink 0.64 adds an inactive, separately receipted
 three-table/19-column-grant control role and routes principal pagination, fleet
-status, and worker stopping through its native qualification adapter.
-Handlers, the runtime API, and the worker remain SQLite-backed, and all
+status, and worker stopping through its native qualification adapter. Yoink
+0.65 adds a zero-direct-grant, function-only qualification role for the first
+handler family, notification recovery. The runtime API and worker remain
+SQLite-backed, the other six handlers remain SQLite-only, and all
 PostgreSQL roles remain inactive.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
@@ -122,13 +124,16 @@ scope. It creates no production login, membership, principal mapping, write
 role, or runtime authority. The optional worker-control qualifier adds only
 principal-ID enumeration, deployment-expectation reads, and heartbeat
 read/update through a separate role; native tests prove the exact operations
-and denials, then remove all fixture membership and mappings.
+and denials. The optional notification-recovery qualifier adds one
+server-clocked, principal-bound function grant with zero direct table access and
+proves exact handler transitions, isolation, idempotent/concurrent replay, and
+tamper rejection. Every fixture membership and mapping is removed afterward.
 Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
-A production cutover must still add PostgreSQL task handlers and request
-repositories, production identity-to-login provisioning and activate the
+A production cutover must still add the other six PostgreSQL task handlers and
+every request repository, production identity-to-login provisioning and activate the
 qualified roles, add remaining write roles,
 governed mixed/incident access, deployed worker-fleet and handler replay proof,
 production identity, backup/PITR and restore, outage/load testing, and

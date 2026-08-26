@@ -363,8 +363,10 @@ immutable JSON helper required by the task constraint. Version 0.63 adds one
 inside the same tenant queue transaction before schedule, enqueue, or lease SQL.
 Already-leased completion/failure recovery remains available. Principal
 enumeration, fleet status, and stopping run through a separate inactive
-three-table/19-column-grant role in the 0.64 native qualification path. No production
-login, mapping, membership, handler, or
+three-table/19-column-grant role in the 0.64 native qualification path. Version
+0.65 qualifies the first handler family through a separate function-only role:
+notification recovery has zero direct table grants and server-bound tenant/user
+resolution. No production login, mapping, membership, handler composition, or
 API repository is provisioned. None of these releases deploys that runtime. Until
 it is provisioned and verified, SQLite is the source of truth and hosted
 boundary mode is suitable for integration/staging—not a claim of completed

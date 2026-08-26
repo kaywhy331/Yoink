@@ -59,7 +59,9 @@ deliberate mismatch leaves the queue unchanged. Version 0.64 supplies the
 separate least-privilege control boundary: 19 exact column grants on users,
 expectation, and heartbeat tables route principal pagination, fleet status, and
 stopping through their own adapter without queue, insert, delete, login,
-membership, or runtime authority.
+membership, or runtime authority. Version 0.65 adds one separate function-only
+notification-recovery handler boundary with no direct table privileges; it
+does not weaken or participate in deployment attestation and remains inactive.
 
 A mismatch may write only its normal bounded heartbeat with
 `worker_deployment_mismatch`. This gives the API and Operations workspace

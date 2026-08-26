@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.64.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.65.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,27 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.65.0 ports the first complete background-task handler family to the
+qualified PostgreSQL plane without activating it. `notification_recovery` now
+has a dedicated `NOLOGIN`/`NOINHERIT`/`NOBYPASSRLS` role with zero direct table
+or column grants. It can execute exactly one strict security-definer routine;
+that routine resolves `session_user` through the server-owned principal
+registry, rejects an expected-principal mismatch, and performs only the three
+existing notification expiry, exhausted-lease failure, and expired-lease
+requeue transitions using PostgreSQL's statement clock, so callers cannot move
+the expiry boundary. It returns three aggregate counts and no row content.
+
+The production maintenance handler accepts this asynchronous repository seam,
+while SQLite remains its default and authoritative runtime. Native PostgreSQL
+16 proves handler-level result parity, cross-tenant isolation, unmapped and
+mismatched principal denial, zero direct table access, idempotent replay,
+one-winner concurrent recovery, cleanup of every temporary membership/mapping,
+and receipt rejection after routine tamper. This is one of seven handler
+families; the other six, all request repositories, production login
+provisioning, and the authority switch remain closed. Use `npm run
+postgres:notification-recovery -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.64.0 separates the last global background-worker control operations
 from the all-powerful qualification connection. A new, inactive

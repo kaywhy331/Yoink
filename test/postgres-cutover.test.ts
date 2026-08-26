@@ -46,6 +46,12 @@ import {
   postgresWorkerControlCapabilityProjection
 } from "../packages/database/src/postgres-worker-control.js";
 import {
+  POSTGRES_NOTIFICATION_RECOVERY_CONTRACT_VERSION,
+  POSTGRES_NOTIFICATION_RECOVERY_FUNCTION,
+  buildPostgresNotificationRecoveryManifest,
+  postgresNotificationRecoveryCapabilityProjection
+} from "../packages/database/src/postgres-notification-recovery.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -355,6 +361,84 @@ test("the PostgreSQL worker-control template is exact, inert, and fleet-bounded"
       "same_namespace",
       "session_namespace",
       "queue_namespace",
+      "same_namespace"
+    ),
+    /must be distinct/
+  );
+});
+
+test("the PostgreSQL notification-recovery handler template is deterministic, server bound, and inert", () => {
+  const manifest = buildPostgresNotificationRecoveryManifest(
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test",
+    "yoink_notify_test"
+  );
+  assert.deepEqual(
+    buildPostgresNotificationRecoveryManifest(
+      "yoink_cutover_test",
+      "yoink_q_test",
+      "yoink_session_test",
+      "yoink_queue_write_test",
+      "yoink_worker_control_test",
+      "yoink_notify_test"
+    ),
+    manifest
+  );
+  assert.equal(manifest.contractVersion, POSTGRES_NOTIFICATION_RECOVERY_CONTRACT_VERSION);
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(manifest.workerControlContractVersion, POSTGRES_WORKER_CONTROL_CONTRACT_VERSION);
+  assert.equal(manifest.recoveryRole.functionName, POSTGRES_NOTIFICATION_RECOVERY_FUNCTION);
+  assert.deepEqual(manifest.recoveryRole.functionArgumentTypes, [
+    "text",
+    "text"
+  ]);
+  assert.deepEqual(manifest.recoveryRole.protectedTableNames, [
+    "action_jobs",
+    "notification_deliveries"
+  ]);
+  assert.deepEqual(manifest.handlerTaskKinds, ["notification_recovery"]);
+  assert.equal(manifest.protectedTableCount, 2);
+  assert.equal(manifest.directTableGrantCount, 0);
+  assert.equal(manifest.functionGrantCount, 1);
+  assert.equal(manifest.handlerTaskKindCount, 1);
+  assert.equal(manifest.totalHandlerTaskKindCount, 7);
+  assert.equal(manifest.notificationRecoveryRepositoryParity, true);
+  assert.equal(manifest.serverClockBoundRecovery, true);
+  assert.equal(manifest.fullHandlerRepositoryParity, false);
+  assert.equal(manifest.recoveryRole.login, false);
+  assert.equal(manifest.recoveryRole.inherit, false);
+  assert.equal(manifest.recoveryRole.bypassRls, false);
+  assert.equal(manifest.recoveryRole.directTableAccess, false);
+  assert.equal(manifest.recoveryRole.insertAccess, false);
+  assert.equal(manifest.recoveryRole.deleteAccess, false);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+  const capability = postgresNotificationRecoveryCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_NOTIFICATION_RECOVERY_CONTRACT_VERSION);
+  assert.equal(capability.workerControlContractVersion, POSTGRES_WORKER_CONTROL_CONTRACT_VERSION);
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.securityDefinerRoutineVerified, true);
+  assert.equal(capability.serverBoundPrincipalLookup, true);
+  assert.equal(capability.serverClockBoundRecovery, true);
+  assert.equal(capability.notificationRecoveryRepositoryParity, true);
+  assert.equal(capability.fullHandlerRepositoryParity, false);
+  assert.equal(capability.handlerTaskKindCount, 1);
+  assert.equal(capability.totalHandlerTaskKindCount, 7);
+  assert.equal(capability.protectedTableCount, 2);
+  assert.equal(capability.directTableGrantCount, 0);
+  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresNotificationRecoveryManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "control_namespace",
       "same_namespace"
     ),
     /must be distinct/

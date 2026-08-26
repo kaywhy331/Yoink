@@ -5,7 +5,7 @@ import { type YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 
 const DELIVERY_LEASE_MS = 60_000;
-const MAX_ATTEMPTS = 3;
+export const NOTIFICATION_DELIVERY_MAX_ATTEMPTS = 3;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
 const DELIVERY_ID_PATTERN = /^[A-Za-z0-9_-]{3,160}$/;
 const SAFE_RETAILERS = new Set([
@@ -192,7 +192,7 @@ export class NotificationRepository {
            AND lease_expires_at <> '' AND lease_expires_at <= ?`,
         timestamp,
         currentRequestScope().userId,
-        MAX_ATTEMPTS,
+        NOTIFICATION_DELIVERY_MAX_ATTEMPTS,
         timestamp
       ).changes);
       const requeuedLeases = Number(this.db.run(
@@ -202,7 +202,7 @@ export class NotificationRepository {
            AND lease_expires_at <> '' AND lease_expires_at <= ?`,
         timestamp,
         currentRequestScope().userId,
-        MAX_ATTEMPTS,
+        NOTIFICATION_DELIVERY_MAX_ATTEMPTS,
         timestamp
       ).changes);
       return { expiredNotifications, requeuedLeases, failedLeases };
@@ -238,7 +238,7 @@ export class NotificationRepository {
       }
       const nextState = outcome === "delivered"
         ? "delivered"
-        : Number(delivery.attempts) >= MAX_ATTEMPTS ? "failed" : "pending";
+        : Number(delivery.attempts) >= NOTIFICATION_DELIVERY_MAX_ATTEMPTS ? "failed" : "pending";
       this.db.run(
         `UPDATE notification_deliveries SET state = ?,
            assigned_device_id = CASE WHEN ? = 'pending' THEN NULL ELSE assigned_device_id END,

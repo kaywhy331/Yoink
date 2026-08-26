@@ -270,8 +270,11 @@ Already-leased completion/failure recovery remains available. Principal
 enumeration, deployment status, and stopping use a separate inactive
 three-table/19-column-grant control role as of 0.64. Native PostgreSQL proves exact
 pagination, coverage, stopping, and prohibited operations through its dedicated
-transaction adapter. Production still requires PostgreSQL task-handler repositories,
-production login provisioning and activation, remaining writer
+transaction adapter. Version 0.65 adds the first task-handler repository:
+notification recovery runs through one principal-bound function-only role with
+zero direct table grants in native qualification, including idempotent and
+concurrent replay proof. Production still requires the other six PostgreSQL
+task-handler repositories, production login provisioning and activation, remaining writer
 families, a deployed multi-process worker fleet with handler replay and failure testing, production
 identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode
