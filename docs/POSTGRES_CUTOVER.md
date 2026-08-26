@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.67 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.68 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -64,10 +64,10 @@ Automated real-engine tests cover:
 
 This class is not imported by the API or standalone worker entry points. It
 cannot flip receipt authority, cannot enable dual writes, and does not give the
-PostgreSQL process any retailer-session capability. Four task-handler families
+PostgreSQL process any retailer-session capability. Three task-handler families
 still use only SQLite repositories; notification recovery, execution recovery,
-and operational retention now have separately qualified but inactive
-PostgreSQL seams. The emulated
+operational retention, and observer-candidate evaluation now have separately
+qualified but inactive PostgreSQL seams. The emulated
 real-semantics suite continues to prove the
 complete store state machine; the separate native suite now proves the
 contention-critical path across independent server sessions.
@@ -105,8 +105,9 @@ against native PostgreSQL; it does not deploy independent worker processes,
 execute a production worker fleet, measure production load/outage behavior, or
 establish runtime authority. Version 0.65 separately executes the
 notification-recovery handler through its own native qualification path;
-version 0.66 does the same for action/spend execution recovery, and version
-0.67 does the same for bounded privacy retention.
+version 0.66 does the same for action/spend execution recovery, version 0.67
+does the same for bounded privacy retention, and version 0.68 proves bounded,
+quarantine-only observer-candidate evaluation.
 
 ## Restricted read-role qualification seam
 
@@ -608,6 +609,66 @@ mapping, or runtime composition. Exactly three of seven task families now have
 repository parity; all three roles remain inactive and SQLite stays
 authoritative.
 
+## Function-only observer-candidate handler qualification seam
+
+Version 0.68 derives a fourth handler role from the exact verified
+operational-retention chain. It covers only
+`observer_recipe_candidate_evaluation`. The role is `NOLOGIN`, `NOINHERIT`,
+and `NOBYPASSRLS`, owns no object, receives schema `USAGE` only, has zero
+direct/effective table or column grants, and can execute exactly one strict
+security-definer routine.
+
+The routine is deliberately two-phase. `plan` reads only the newest 2,000
+sanitized repair diagnostics for the database-authenticated tenant/user,
+closes recovered or superseded groups, and returns at most 25 aggregate mature
+candidate descriptions. It never returns device IDs or exact SKU IDs. `apply`
+accepts only a fresh exact plan, re-derives the evidence under the same
+per-principal advisory lock and `READ COMMITTED` transaction, and creates or
+reuses only deterministic unsigned, non-executable, 30-day quarantine rows.
+The five protected tables retain forced RLS. Lifecycle, audit, and outbox
+receipts remain atomic.
+
+The routine has no signing, promotion, distribution, field-fill, recipe
+execution, signal-processing, Chrome, retailer, checkout, or order authority.
+Native PostgreSQL proves result parity, tenant isolation, mismatch/unmapped
+denial, stale-plan and altered-payload rejection, direct SQL/function denial,
+idempotent replay, concurrent deduplication, production-handler routing,
+temporary-authority cleanup, and receipt rejection after catalog tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:observer-candidates -- plan \
+  yoink_cutover_qualification_068 yoink_q_068 yoink_session_q_068 \
+  yoink_queue_q_068 yoink_control_q_068 yoink_notify_q_068 \
+  yoink_execute_q_068 yoink_retain_q_068 yoink_candidate_q_068
+```
+
+After the exact operational-retention receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_OBSERVER_CANDIDATE_QUALIFICATION_ACK=bounded-quarantined-observer-candidate-qualification \
+  npm run postgres:observer-candidates -- apply \
+  yoink_cutover_qualification_068 yoink_q_068 yoink_session_q_068 \
+  yoink_queue_q_068 yoink_control_q_068 yoink_notify_q_068 \
+  yoink_execute_q_068 yoink_retain_q_068 yoink_candidate_q_068
+```
+
+Then independently re-inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:observer-candidates -- verify \
+  yoink_cutover_qualification_068 yoink_q_068 yoink_session_q_068 \
+  yoink_queue_q_068 yoink_control_q_068 yoink_notify_q_068 \
+  yoink_execute_q_068 yoink_retain_q_068 yoink_candidate_q_068
+```
+
+Apply refuses reused objects and cannot create a login, membership, principal
+mapping, signing key, or runtime composition. Exactly four of seven task
+families now have repository parity; all four roles remain inactive and SQLite
+stays authoritative.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -711,7 +772,7 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- PostgreSQL implementations for the remaining four task-handler families and
+- PostgreSQL implementations for the remaining three task-handler families and
   every API repository;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for

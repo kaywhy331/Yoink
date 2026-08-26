@@ -14,6 +14,7 @@ import { postgresWorkerControlCapabilityProjection } from "../packages/database/
 import { postgresNotificationRecoveryCapabilityProjection } from "../packages/database/src/postgres-notification-recovery.js";
 import { postgresExecutionRecoveryCapabilityProjection } from "../packages/database/src/postgres-execution-recovery.js";
 import { postgresOperationalRetentionCapabilityProjection } from "../packages/database/src/postgres-operational-retention.js";
+import { postgresObserverCandidateEvaluationCapabilityProjection } from "../packages/database/src/postgres-observer-repair-candidate-evaluation.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -100,7 +101,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
     assert.match(adminScript, /Server-bound privacy retention/);
-    assert.match(adminScript, /remaining four task-handler families/);
+    assert.match(adminScript, /Server-bound observer candidate evaluation/);
+    assert.match(adminScript, /remaining three task-handler families/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
@@ -113,6 +115,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const postgresNotificationRecovery = postgresNotificationRecoveryCapabilityProjection();
     const postgresExecutionRecovery = postgresExecutionRecoveryCapabilityProjection();
     const postgresOperationalRetention = postgresOperationalRetentionCapabilityProjection();
+    const postgresObserverCandidateEvaluation = postgresObserverCandidateEvaluationCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -130,6 +133,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresNotificationRecovery,
       postgresExecutionRecovery,
       postgresOperationalRetention,
+      postgresObserverCandidateEvaluation,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -339,6 +343,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresOperationalRetention,
       postgresOperationalRetention
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresObserverCandidateEvaluation,
+      postgresObserverCandidateEvaluation
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -348,7 +356,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresWorkerControl,
       postgresNotificationRecovery,
       postgresExecutionRecovery,
-      postgresOperationalRetention
+      postgresOperationalRetention,
+      postgresObserverCandidateEvaluation
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

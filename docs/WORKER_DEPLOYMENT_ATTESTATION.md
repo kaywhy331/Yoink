@@ -68,6 +68,10 @@ inactive and cannot schedule or lease new work.
 Version 0.67 adds an equally inactive function-only boundary for bounded
 operational telemetry, completed-task, and quarantined-evidence retention. It
 cannot schedule, lease, process a signal, or invoke a retailer.
+Version 0.68 adds the fourth inactive function-only boundary for bounded
+observer-candidate evaluation. Its two-phase routine revalidates server-derived
+evidence and can create only unsigned, non-executable quarantine candidates;
+it cannot sign, promote, distribute, fill fields, or invoke a retailer.
 
 A mismatch may write only its normal bounded heartbeat with
 `worker_deployment_mismatch`. This gives the API and Operations workspace

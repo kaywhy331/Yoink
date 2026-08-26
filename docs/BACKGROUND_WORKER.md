@@ -277,13 +277,19 @@ concurrent replay proof. At that boundary, the other six task handlers were
 still SQLite-only. Version 0.66 adds the second: execution recovery
 uses a separate zero-direct-grant, principal-bound, server-clocked function to
 preserve the complete action/spend/event/audit/outbox transition contract and
-fails closed instead of changing a cross-tenant shared incident. Production
-still requires the other four PostgreSQL task-handler repositories. Version
+fails closed instead of changing a cross-tenant shared incident. At that
+boundary, the other four PostgreSQL task-handler repositories remained. Version
 0.67 adds the third bounded handler: operational telemetry retention uses its
 own zero-direct-grant function to enforce the existing 30-day telemetry/task
 history and 90-day quarantined-evidence windows, caps evidence deletion at 500,
 and writes the same retention/audit/outbox receipts under the authenticated
-database principal. Production also requires login provisioning and activation, remaining writer
+database principal. Version 0.68 adds the fourth bounded handler: observer
+candidate evaluation derives at most 25 aggregate proposals from the newest
+2,000 sanitized diagnostics, then revalidates the evidence before it can create
+only unsigned, non-executable quarantine rows and their existing receipts. Its
+function-only role has zero direct table grants and no signing, promotion,
+distribution, field-fill, or retailer authority. The remaining three handlers
+stay SQLite-only. Production also requires login provisioning and activation, remaining writer
 families, a deployed multi-process worker fleet with handler replay and failure testing, production
 identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode

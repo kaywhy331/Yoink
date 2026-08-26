@@ -6,6 +6,8 @@ to all five fixed read-only observer fields: availability, unit price, seller,
 fulfillment, and add control. The worker may compile sufficiently repeated
 structural evidence into an **unsigned, quarantined observer-only candidate**.
 It cannot sign, promote, distribute, trial, or execute that candidate.
+Yoink 0.68 qualifies the same handler contract behind an inactive,
+function-only PostgreSQL role without changing SQLite runtime authority.
 
 This is the first automatic compilation step in the correction ladder. It is
 not automatic repair publication, community truth, an LLM-generated script, or
@@ -84,6 +86,27 @@ A repeated run returns the existing row without another lifecycle or audit
 event. It does not renew an expired candidate, alter a reviewed candidate, or
 replace an operator decision. A changed layout or selector set becomes a
 separate quarantine candidate.
+
+## PostgreSQL qualification boundary
+
+The optional 0.68 PostgreSQL adapter preserves this compiler contract through
+one server-principal-bound security-definer routine and zero direct table or
+column grants. Its `plan` phase reads at most the newest 2,000 sanitized
+diagnostics and returns at most 25 aggregate candidate descriptions. Device and
+SKU identifiers are used only to enforce the existing private thresholds; they
+are never returned or copied into candidates.
+
+The `apply` phase must receive the exact fresh plan and re-derives its evidence
+under the same per-principal lock and `READ COMMITTED` transaction. It may only
+create or reuse the deterministic unsigned, 30-day quarantine candidate plus
+its lifecycle, audit, and outbox receipts. It cannot sign, promote, distribute,
+fill an observed field, execute a recipe, process a signal, or authorize any
+retailer action. The role and principal registry remain inactive outside the
+qualification fixture, so SQLite remains authoritative.
+
+Run `npm run postgres:observer-candidates -- plan ...` and follow the
+[PostgreSQL cutover qualification](POSTGRES_CUTOVER.md) runbook before any
+operator-controlled qualification apply.
 
 ## Review and distribution gates
 

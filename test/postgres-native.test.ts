@@ -53,6 +53,12 @@ import {
   buildPostgresOperationalRetentionManifest,
   verifyPostgresOperationalRetentionBoundary
 } from "../packages/database/src/postgres-operational-retention.js";
+import {
+  NodePostgresObserverCandidateEvaluationDatabase,
+  applyPostgresObserverCandidateEvaluationBoundary,
+  buildPostgresObserverCandidateEvaluationManifest,
+  verifyPostgresObserverCandidateEvaluationBoundary
+} from "../packages/database/src/postgres-observer-repair-candidate-evaluation.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
@@ -73,6 +79,7 @@ const NATIVE_WORKER_CONTROL_ROLE_NAMESPACE = "yoink_native_worker_control";
 const NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE = "yoink_native_notify";
 const NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE = "yoink_native_execute";
 const NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE = "yoink_native_retention";
+const NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE = "yoink_native_candidate";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_UNMAPPED = "yoink_native_principal_unmapped";
@@ -547,6 +554,172 @@ async function insertOperationalRetentionFixtures(
   );
 }
 
+function nativeCandidateLayout(includeUnsupported = false): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    pageKind: "product",
+    scopeKind: "buybox",
+    sellerShape: "legacy",
+    fulfillmentShape: "shipping",
+    addControlCount: 1,
+    scopedControlCount: 0,
+    explicitSkuInputCount: 0,
+    exactSkuInputCount: 0,
+    variationSkuCount: 0,
+    canonicalOfferInputCount: 0,
+    canonicalOfferDistinctCount: 0,
+    alternateOfferInputCount: 0,
+    alternateOfferDistinctCount: 0,
+    priceCandidateCount: 1,
+    quantityControlCount: 0,
+    genericAddIntentCount: 1,
+    genericAvailabilityCandidateCount: 1,
+    genericPriceCandidateCount: 1,
+    securityChallenge: false,
+    interactiveBlock: "",
+    repairLandmarks: [
+      {
+        field: "availability",
+        elementKind: "div",
+        attribute: "data-testid",
+        value: "availability-status"
+      },
+      {
+        field: "unitPrice",
+        elementKind: "span",
+        attribute: "data-testid",
+        value: "customer-price"
+      },
+      ...(includeUnsupported ? [{
+        field: "unitPrice",
+        elementKind: "span",
+        attribute: "data-testid",
+        value: "offer:price"
+      }] : [])
+    ]
+  });
+}
+
+async function insertObserverCandidateGroup(
+  database: PostgresCutoverDatabase,
+  input: {
+    prefix: string;
+    tenantId: string;
+    userId: string;
+    deviceIds: string[];
+    layoutFingerprint: string;
+    now: number;
+    includeUnsupported?: boolean;
+    recovered?: boolean;
+  }
+): Promise<void> {
+  const layoutJson = nativeCandidateLayout(input.includeUnsupported === true);
+  for (let index = 0; index < input.deviceIds.length; index += 1) {
+    const receivedAt = new Date(input.now - (input.deviceIds.length - index + 1) * 1_000).toISOString();
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."retailer_adapter_diagnostics"(
+         id, tenant_id, user_id, device_id, retailer_id, retailer_sku,
+         adapter_version, contract_version, operation, outcome, failure_stage,
+         reason_code, attempt_count, dom_changed, layout_fingerprint,
+         layout_json, observed_at, received_at
+       ) VALUES ($1, $2, $3, $4, 'target', $5, 'target-observer-v1', 1,
+                 'observe', 'failed', 'availability_binding',
+                 'availability_selector_miss', 1, 1, $6, $7, $8, $8)`,
+      [
+        `${input.prefix}_failure_${index + 1}`,
+        input.tenantId,
+        input.userId,
+        input.deviceIds[index],
+        index % 2 === 0 ? "111111" : "222222",
+        input.layoutFingerprint,
+        layoutJson,
+        receivedAt
+      ]
+    );
+  }
+  if (input.recovered) {
+    const recoveredAt = new Date(input.now - 250).toISOString();
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."retailer_adapter_diagnostics"(
+         id, tenant_id, user_id, device_id, retailer_id, retailer_sku,
+         adapter_version, contract_version, operation, outcome, failure_stage,
+         reason_code, attempt_count, dom_changed, layout_fingerprint,
+         layout_json, observed_at, received_at
+       ) VALUES ($1, $2, $3, $4, 'target', '111111', 'target-observer-v1', 1,
+                 'observe', 'recovered', 'availability_binding',
+                 'dom_hydration_recovered', 2, 1, $5, $6, $7, $7)`,
+      [
+        `${input.prefix}_recovered`,
+        input.tenantId,
+        input.userId,
+        input.deviceIds[0],
+        input.layoutFingerprint,
+        layoutJson,
+        recoveredAt
+      ]
+    );
+  }
+}
+
+async function insertObserverCandidateFixtures(
+  database: PostgresCutoverDatabase,
+  now: number
+): Promise<void> {
+  for (const [scope, tenantId, userId, tokenPrefix] of [
+    ["other", NATIVE_TENANT, NATIVE_USER, "c"],
+    ["local", "tenant_local", "user_local", "d"]
+  ] as const) {
+    for (let index = 1; index <= 3; index += 1) {
+      const deviceId = `native_candidate_device_${scope}_${index}`;
+      const createdAt = new Date(now - 60_000 - index).toISOString();
+      await database.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."extension_devices"(
+           id, tenant_id, user_id, name, token_hash, extension_version,
+           status, capabilities_json, last_seen_at, created_at, updated_at,
+           credential_generation, credential_issued_at
+         ) VALUES ($1, $2, $3, 'Native candidate device', $4, '0.68.0',
+                   'active', '{}', $5, $5, $5, 1, $5)`,
+        [deviceId, tenantId, userId, `${tokenPrefix}${index}`.repeat(32), createdAt]
+      );
+    }
+  }
+  const otherDevices = [1, 2, 3].map((index) => `native_candidate_device_other_${index}`);
+  await insertObserverCandidateGroup(database, {
+    prefix: "native_candidate_mature",
+    tenantId: NATIVE_TENANT,
+    userId: NATIVE_USER,
+    deviceIds: otherDevices,
+    layoutFingerprint: "1".repeat(64),
+    now,
+    includeUnsupported: true
+  });
+  await insertObserverCandidateGroup(database, {
+    prefix: "native_candidate_collecting",
+    tenantId: NATIVE_TENANT,
+    userId: NATIVE_USER,
+    deviceIds: otherDevices.slice(0, 2),
+    layoutFingerprint: "2".repeat(64),
+    now: now - 20_000
+  });
+  await insertObserverCandidateGroup(database, {
+    prefix: "native_candidate_recovered",
+    tenantId: NATIVE_TENANT,
+    userId: NATIVE_USER,
+    deviceIds: otherDevices,
+    layoutFingerprint: "3".repeat(64),
+    now: now - 40_000,
+    recovered: true
+  });
+  await insertObserverCandidateGroup(database, {
+    prefix: "native_candidate_local",
+    tenantId: "tenant_local",
+    userId: "user_local",
+    deviceIds: [1, 2, 3].map((index) => `native_candidate_device_local_${index}`),
+    layoutFingerprint: "4".repeat(64),
+    now: now - 10_000
+  });
+}
+
 function workerContext(workerId: string): BackgroundWorkerContext {
   return {
     principal: { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
@@ -557,7 +730,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and three bounded handlers", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and four bounded handlers", {
   timeout: 240_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -605,6 +778,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let operationalRetentionUnmapped: NodePostgresOperationalRetentionDatabase | null = null;
   let operationalRetentionDirectClient: Client | null = null;
   let operationalRetentionHandlerDb: YoinkDatabase | null = null;
+  let observerCandidateA: NodePostgresObserverCandidateEvaluationDatabase | null = null;
+  let observerCandidateB: NodePostgresObserverCandidateEvaluationDatabase | null = null;
+  let observerCandidateUnmapped: NodePostgresObserverCandidateEvaluationDatabase | null = null;
+  let observerCandidateDirectClient: Client | null = null;
+  let observerCandidateHandlerDb: YoinkDatabase | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -852,6 +1030,63 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       operationalRetentionBoundary
     );
+    const observerCandidateBoundary = await applyPostgresObserverCandidateEvaluationBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:50.000Z").getTime()
+    );
+    assert.equal(observerCandidateBoundary.protectedTableCount, 5);
+    assert.equal(observerCandidateBoundary.forcedRlsTableCount, 5);
+    assert.equal(observerCandidateBoundary.directTableGrantCount, 0);
+    assert.equal(observerCandidateBoundary.functionGrantCount, 1);
+    assert.equal(observerCandidateBoundary.membershipCount, 0);
+    assert.equal(observerCandidateBoundary.activePrincipalCount, 0);
+    assert.equal(observerCandidateBoundary.boundaryHandlerTaskKindCount, 1);
+    assert.equal(observerCandidateBoundary.qualifiedHandlerTaskKindCount, 4);
+    assert.equal(observerCandidateBoundary.totalHandlerTaskKindCount, 7);
+    assert.equal(observerCandidateBoundary.maximumDiagnosticRows, 2_000);
+    assert.equal(observerCandidateBoundary.maximumCandidatesPerRun, 25);
+    assert.equal(observerCandidateBoundary.supportedRepairFieldCount, 5);
+    assert.equal(observerCandidateBoundary.generatedCandidateLifetimeDays, 30);
+    assert.equal(observerCandidateBoundary.serverBoundPrincipalLookup, true);
+    assert.equal(observerCandidateBoundary.serverDerivedEvidencePlan, true);
+    assert.equal(observerCandidateBoundary.serverClockBoundEvaluation, true);
+    assert.equal(observerCandidateBoundary.applicationDeterministicFingerprints, true);
+    assert.equal(observerCandidateBoundary.databaseEvidenceRevalidation, true);
+    assert.equal(observerCandidateBoundary.quarantinedOnly, true);
+    assert.equal(observerCandidateBoundary.generatedCandidatesExecutable, false);
+    assert.equal(observerCandidateBoundary.mutationAuthority, false);
+    assert.equal(observerCandidateBoundary.observerCandidateEvaluationRepositoryParity, true);
+    assert.equal(observerCandidateBoundary.fullHandlerRepositoryParity, false);
+    assert.equal(observerCandidateBoundary.directTableAccess, false);
+    assert.equal(observerCandidateBoundary.insertAccess, false);
+    assert.equal(observerCandidateBoundary.updateAccess, false);
+    assert.equal(observerCandidateBoundary.deleteAccess, false);
+    assert.equal(observerCandidateBoundary.runtimeAuthority, false);
+    assert.match(observerCandidateBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresObserverCandidateEvaluationBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE
+      ),
+      observerCandidateBoundary
+    );
     await importer.close();
     importer = null;
 
@@ -943,6 +1178,17 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
       NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE
     );
+    const observerCandidateManifest = buildPostgresObserverCandidateEvaluationManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE
+    );
     for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
       await first.query(
         `CREATE ROLE "${principalRole}"
@@ -963,6 +1209,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${operationalRetentionManifest.operationalRetentionRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${observerCandidateManifest.observerCandidateRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -1104,6 +1353,33 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
     NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
     NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, { maxConnections: 1 });
+    observerCandidateA = new NodePostgresObserverCandidateEvaluationDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    { maxConnections: 2 });
+    observerCandidateB = new NodePostgresObserverCandidateEvaluationDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_B),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    { maxConnections: 1 });
+    observerCandidateUnmapped = new NodePostgresObserverCandidateEvaluationDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_UNMAPPED),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    { maxConnections: 1 });
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -1831,6 +2107,265 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.ok(concurrentRetention.every((result) => result.deletedRollupRows === 0
       && result.deletedTaskRuns === 0 && result.deletedRecoveryEvidence === 0));
 
+    const candidateNow = Date.now();
+    await insertObserverCandidateFixtures(first, candidateNow);
+    observerCandidateHandlerDb = new YoinkDatabase();
+    const observerCandidateHandler = new BackgroundMaintenanceHandler(
+      observerCandidateHandlerDb,
+      { observerRecipeCandidateEvaluation: observerCandidateA }
+    );
+    const observerCandidateContext: BackgroundWorkerContext = {
+      ...workerContext("native_observer_candidate_handler"),
+      runtimeVersion: "0.68.0"
+    };
+    const candidateResult = await observerCandidateHandler.execute(
+      observerCandidateContext,
+      "observer_recipe_candidate_evaluation",
+      candidateNow
+    );
+    assert.deepEqual(candidateResult, {
+      repairGroupsEvaluated: 3,
+      matureRepairGroups: 1,
+      unsupportedMatureSelectors: 1,
+      selectorsEvaluated: 2,
+      candidateFieldsEvaluated: 2,
+      supportedRepairFields: 5,
+      candidatesCreated: 1,
+      candidatesReused: 0,
+      candidatesDeferred: 0,
+      expiredCandidates: 0,
+      reviewedCandidates: 0,
+      generatedCandidateLifetimeDays: 30,
+      mutationAuthority: false,
+      generatedCandidatesExecutable: false
+    });
+    const generatedCandidates = await first.query<{
+      id: string;
+      tenantId: string;
+      userId: string;
+      retailerId: string;
+      recipeVersion: string;
+      minimumExtensionVersion: string;
+      recipeJson: string;
+      recipeFingerprint: string;
+      lifecycleState: string;
+      provenanceCode: string;
+      signatureKeyId: string;
+      signature: string;
+      signedAt: string;
+      expiresAt: string;
+      killSwitch: string | number | bigint;
+      trustManifestGeneration: string | number | bigint;
+    }>(
+      `SELECT id, tenant_id AS "tenantId", user_id AS "userId",
+              retailer_id AS "retailerId", recipe_version AS "recipeVersion",
+              minimum_extension_version AS "minimumExtensionVersion",
+              recipe_json AS "recipeJson", recipe_fingerprint AS "recipeFingerprint",
+              lifecycle_state AS "lifecycleState", provenance_code AS "provenanceCode",
+              signature_key_id AS "signatureKeyId", signature, signed_at AS "signedAt",
+              expires_at AS "expiresAt", kill_switch AS "killSwitch",
+              trust_manifest_generation AS "trustManifestGeneration"
+       FROM "${NATIVE_SCHEMA}"."observer_recipe_candidates"
+       WHERE tenant_id = $1 AND user_id = $2
+         AND minimum_extension_version = '0.68.0'
+         AND provenance_code = 'privacy_bounded_repair_miner'
+       ORDER BY id`,
+      [NATIVE_TENANT, NATIVE_USER]
+    );
+    assert.equal(generatedCandidates.rows.length, 1);
+    const generatedCandidate = generatedCandidates.rows[0];
+    assert.ok(generatedCandidate);
+    assert.equal(generatedCandidate.tenantId, NATIVE_TENANT);
+    assert.equal(generatedCandidate.userId, NATIVE_USER);
+    assert.equal(generatedCandidate.retailerId, "target");
+    assert.match(generatedCandidate.recipeVersion, /^target-repair-[a-f0-9]{12}$/);
+    assert.match(generatedCandidate.recipeFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(JSON.parse(generatedCandidate.recipeJson), {
+      availability: {
+        mode: "text",
+        selectors: ["div[data-testid='availability-status']"]
+      },
+      unitPrice: {
+        mode: "text",
+        selectors: ["span[data-testid='customer-price']"]
+      }
+    });
+    assert.equal(generatedCandidate.lifecycleState, "quarantined");
+    assert.equal(generatedCandidate.provenanceCode, "privacy_bounded_repair_miner");
+    assert.equal(generatedCandidate.signatureKeyId, "");
+    assert.equal(generatedCandidate.signature, "");
+    assert.equal(generatedCandidate.signedAt, "");
+    assert.equal(Number(generatedCandidate.killSwitch), 0);
+    assert.equal(Number(generatedCandidate.trustManifestGeneration), 0);
+    assert.ok(Math.abs(
+      Date.parse(generatedCandidate.expiresAt)
+        - (candidateNow + 30 * 24 * 60 * 60_000)
+    ) < 10_000);
+    assert.deepEqual(
+      (await first.query<{
+        lifecycleCount: string | number | bigint;
+        auditCount: string | number | bigint;
+        outboxCount: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."observer_recipe_lifecycle_events"
+            WHERE recipe_id = $1 AND from_state = '' AND to_state = 'quarantined'
+              AND reason_code = 'privacy_bounded_repair_candidate_generated') AS "lifecycleCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE correlation_id = $1 AND event_type = 'observer_recipe_repair_candidate_generated'
+              AND reason_code = 'quarantined') AS "auditCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE aggregate_id = $1 AND aggregate_type = 'observer_recipe'
+              AND event_type = 'observer_recipe_repair_candidate_generated') AS "outboxCount"`,
+        [generatedCandidate.id]
+      )).rows.map((row) => ({
+        lifecycleCount: Number(row.lifecycleCount),
+        auditCount: Number(row.auditCount),
+        outboxCount: Number(row.outboxCount)
+      })),
+      [{ lifecycleCount: 1, auditCount: 1, outboxCount: 1 }]
+    );
+
+    const candidateReplay = await observerCandidateA.evaluate(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      "0.68.0",
+      candidateNow
+    );
+    assert.equal(candidateReplay.candidatesCreated, 0);
+    assert.equal(candidateReplay.candidatesReused, 1);
+    await assert.rejects(
+      observerCandidateA.evaluate(
+        { tenantId: "tenant_local", userId: "user_local" },
+        "0.68.0",
+        candidateNow
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      observerCandidateUnmapped.evaluate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.68.0",
+        candidateNow
+      ),
+      /tenant session principal is not active/
+    );
+    const localCandidate = await observerCandidateB.evaluate(
+      { tenantId: "tenant_local", userId: "user_local" },
+      "0.68.0",
+      candidateNow
+    );
+    assert.equal(localCandidate.repairGroupsEvaluated, 1);
+    assert.equal(localCandidate.matureRepairGroups, 1);
+    assert.equal(localCandidate.candidatesCreated, 1);
+    assert.equal(localCandidate.candidatesReused, 0);
+    await assert.rejects(
+      observerCandidateA.evaluate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.68.0",
+        candidateNow - 600_000
+      ),
+      /cycle timestamp differs from the process clock/
+    );
+
+    observerCandidateDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    observerCandidateDirectClient.on("error", () => undefined);
+    await observerCandidateDirectClient.connect();
+    await observerCandidateDirectClient.query(
+      `SET ROLE "${observerCandidateManifest.observerCandidateRole.name}"`
+    );
+    await assert.rejects(
+      observerCandidateDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."retailer_adapter_diagnostics"`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      observerCandidateDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."observer_recipe_candidates"(
+           id, tenant_id, user_id, retailer_id, recipe_version,
+           minimum_extension_version, recipe_json, recipe_fingerprint,
+           lifecycle_state, provenance_code, expires_at, created_at, updated_at
+         ) VALUES ('forbidden', $1, $2, 'target', 'forbidden', '0.68.0',
+                   '{}', $3, 'quarantined', 'forbidden', $4, $4, $4)`,
+        [NATIVE_TENANT, NATIVE_USER, "f".repeat(64), new Date(candidateNow).toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      observerCandidateDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."yoink_apply_operational_retention"($1, $2)`,
+        [NATIVE_TENANT, NATIVE_USER]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      observerCandidateDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_evaluate_observer_repair_candidates"(
+           $1, $2, '0.68.0', 'plan', '', '[]'
+         )`,
+        ["tenant_local", "user_local"]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    const directPlan = await observerCandidateDirectClient.query<{ result_json: string }>(
+      `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_evaluate_observer_repair_candidates"(
+         $1, $2, '0.68.0', 'plan', '', '[]'
+       )`,
+      [NATIVE_TENANT, NATIVE_USER]
+    );
+    const directPlanTimestamp = String(
+      (JSON.parse(String(directPlan.rows[0]?.result_json)) as Record<string, unknown>)
+        .evaluationTimestamp
+    );
+    await assert.rejects(
+      observerCandidateDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_evaluate_observer_repair_candidates"(
+           $1, $2, '0.68.0', 'apply', $3, '[]'
+         )`,
+        [NATIVE_TENANT, NATIVE_USER, directPlanTimestamp]
+      ),
+      /apply set does not match its evidence plan/
+    );
+    await observerCandidateDirectClient.end();
+    observerCandidateDirectClient = null;
+
+    await insertObserverCandidateGroup(first, {
+      prefix: "native_candidate_contention",
+      tenantId: NATIVE_TENANT,
+      userId: NATIVE_USER,
+      deviceIds: [1, 2, 3].map((index) => `native_candidate_device_other_${index}`),
+      layoutFingerprint: "5".repeat(64),
+      now: candidateNow + 1_000
+    });
+    const concurrentCandidates = await Promise.all([
+      observerCandidateA.evaluate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.68.0"
+      ),
+      observerCandidateA.evaluate(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.68.0"
+      )
+    ]);
+    assert.equal(
+      concurrentCandidates.reduce((sum, result) => sum + result.candidatesCreated, 0),
+      1
+    );
+    assert.ok(concurrentCandidates.every((result) => result.matureRepairGroups === 2
+      && result.candidatesCreated + result.candidatesReused === 2));
+    assert.equal(
+      Number((await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."observer_recipe_candidates"
+         WHERE tenant_id = $1 AND user_id = $2
+           AND minimum_extension_version = '0.68.0'
+           AND provenance_code = 'privacy_bounded_repair_miner'`,
+        [NATIVE_TENANT, NATIVE_USER]
+      )).rows[0]?.count),
+      2
+    );
+
     const heartbeatInsert = (
       writer: NodePostgresTenantQueueWriteDatabase,
       principal: { tenantId: string; userId: string },
@@ -2402,6 +2937,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       await first.query(
         `REVOKE "${operationalRetentionManifest.operationalRetentionRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${observerCandidateManifest.observerCandidateRole.name}" FROM "${principalRole}"`
+      );
     }
     await first.query(
       `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
@@ -2477,6 +3015,62 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(
       cleanOperationalRetentionBoundary.boundaryCatalogFingerprint,
       operationalRetentionBoundary.boundaryCatalogFingerprint
+    );
+    const cleanObserverCandidateBoundary = await verifyPostgresObserverCandidateEvaluationBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanObserverCandidateBoundary.boundaryCatalogFingerprint,
+      observerCandidateBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_evaluate_observer_repair_candidates"(
+         text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresObserverCandidateEvaluationBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_evaluate_observer_repair_candidates"(
+         text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresObserverCandidateEvaluationBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      observerCandidateBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_apply_operational_retention"(
@@ -2697,11 +3291,16 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       operationalRetentionA?.close(),
       operationalRetentionB?.close(),
       operationalRetentionUnmapped?.close(),
-      operationalRetentionDirectClient?.end()
+      operationalRetentionDirectClient?.end(),
+      observerCandidateA?.close(),
+      observerCandidateB?.close(),
+      observerCandidateUnmapped?.close(),
+      observerCandidateDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
     operationalRetentionHandlerDb?.close();
+    observerCandidateHandlerDb?.close();
     await postgres.stop().catch(() => undefined);
     if (existsSync(parent)) rmSync(parent, { recursive: true, force: true });
     if (existsSync(fixture.directory)) rmSync(fixture.directory, { recursive: true, force: true });

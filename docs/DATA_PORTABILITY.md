@@ -30,6 +30,11 @@ Yoink 0.67 adds a third function-only role for bounded operational retention:
 30-day telemetry/task history, 90-day observer-recovery evidence, a 500-row
 evidence cap, authenticated receipt attribution, and exact retention/audit/
 outbox parity. The other four handlers remain SQLite-only.
+Yoink 0.68 adds the fourth function-only role for bounded observer-candidate
+evaluation. It derives at most 25 aggregate proposals from 2,000 sanitized
+diagnostics, revalidates the evidence before apply, and can create only
+unsigned, non-executable quarantine candidates. The other three handlers
+remain SQLite-only.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -139,12 +144,16 @@ audit, and outbox receipts, and refuses cross-tenant shared-incident mutation.
 The optional operational-retention qualifier adds the third function-only role,
 proves bounded old/current privacy deletion and recent-review preservation, and
 returns only counts, cutoffs, and receipt IDs.
+The optional observer-candidate qualifier adds the fourth function-only role,
+uses a server-derived two-phase evidence plan, and returns only aggregate
+candidate evidence and receipt IDs; identifiers used for device/SKU thresholds
+are neither returned nor copied into the candidate.
 Every fixture membership and mapping is removed afterward.
 Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
-A production cutover must still add the other four PostgreSQL task handlers and
+A production cutover must still add the other three PostgreSQL task handlers and
 every request repository, production identity-to-login provisioning and activate the
 qualified roles, add remaining write roles,
 governed mixed/incident access, deployed worker-fleet and handler replay proof,

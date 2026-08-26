@@ -19,6 +19,7 @@ import { postgresWorkerControlCapabilityProjection } from "../packages/database/
 import { postgresNotificationRecoveryCapabilityProjection } from "../packages/database/src/postgres-notification-recovery.js";
 import { postgresExecutionRecoveryCapabilityProjection } from "../packages/database/src/postgres-execution-recovery.js";
 import { postgresOperationalRetentionCapabilityProjection } from "../packages/database/src/postgres-operational-retention.js";
+import { postgresObserverCandidateEvaluationCapabilityProjection } from "../packages/database/src/postgres-observer-repair-candidate-evaluation.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -106,6 +107,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresNotificationRecovery: ReturnType<typeof postgresNotificationRecoveryCapabilityProjection>;
         postgresExecutionRecovery: ReturnType<typeof postgresExecutionRecoveryCapabilityProjection>;
         postgresOperationalRetention: ReturnType<typeof postgresOperationalRetentionCapabilityProjection>;
+        postgresObserverCandidateEvaluation: ReturnType<typeof postgresObserverCandidateEvaluationCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -135,6 +137,10 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.deepEqual(
       snapshot.dataPlane.postgresOperationalRetention,
       postgresOperationalRetentionCapabilityProjection()
+    );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresObserverCandidateEvaluation,
+      postgresObserverCandidateEvaluationCapabilityProjection()
     );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 

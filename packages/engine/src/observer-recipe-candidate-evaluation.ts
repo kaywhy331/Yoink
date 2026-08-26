@@ -7,8 +7,8 @@ import {
 import type { ObserverRecipeField, ObserverRecipeFieldInput } from "../../contracts/src/index.js";
 import type { BackgroundTaskResult } from "../../domain/src/background-task.js";
 
-const MAX_REPAIR_GROUPS = 2_000;
-const MAX_GENERATED_CANDIDATES_PER_RUN = 25;
+export const OBSERVER_REPAIR_CANDIDATE_EVALUATION_MAXIMUM_DIAGNOSTICS = 2_000;
+export const OBSERVER_REPAIR_CANDIDATE_EVALUATION_MAXIMUM_CANDIDATES = 25;
 const GENERATED_CANDIDATE_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 
 export class ObserverRecipeCandidateEvaluationService {
@@ -21,7 +21,9 @@ export class ObserverRecipeCandidateEvaluationService {
   }
 
   execute(runtimeVersion: string, now = Date.now()): BackgroundTaskResult {
-    const groups = this.diagnostics.listRepairQueue(MAX_REPAIR_GROUPS);
+    const groups = this.diagnostics.listRepairQueue(
+      OBSERVER_REPAIR_CANDIDATE_EVALUATION_MAXIMUM_DIAGNOSTICS
+    );
     let unsupportedMatureSelectors = 0;
     const mature = groups.flatMap((group) => {
       if (group.status !== "open" || group.operation !== "observe") return [];
@@ -39,7 +41,10 @@ export class ObserverRecipeCandidateEvaluationService {
     let reviewedCandidates = 0;
     let selectorsEvaluated = 0;
     let candidateFieldsEvaluated = 0;
-    for (const { group, suggestions } of mature.slice(0, MAX_GENERATED_CANDIDATES_PER_RUN)) {
+    for (const { group, suggestions } of mature.slice(
+      0,
+      OBSERVER_REPAIR_CANDIDATE_EVALUATION_MAXIMUM_CANDIDATES
+    )) {
       const fields: Partial<Record<ObserverRecipeField, ObserverRecipeFieldInput>> = {};
       for (const suggestion of suggestions) {
         const current = fields[suggestion.field];
@@ -74,7 +79,10 @@ export class ObserverRecipeCandidateEvaluationService {
       supportedRepairFields: 5,
       candidatesCreated,
       candidatesReused,
-      candidatesDeferred: Math.max(0, mature.length - MAX_GENERATED_CANDIDATES_PER_RUN),
+      candidatesDeferred: Math.max(
+        0,
+        mature.length - OBSERVER_REPAIR_CANDIDATE_EVALUATION_MAXIMUM_CANDIDATES
+      ),
       expiredCandidates,
       reviewedCandidates,
       generatedCandidateLifetimeDays: GENERATED_CANDIDATE_LIFETIME_MS / (24 * 60 * 60_000),

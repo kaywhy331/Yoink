@@ -40,8 +40,11 @@ const GENERATED_REPAIR_MODES: Record<ObserverRecipeField, ObserverRecipeMode> = 
   fulfillment: "text",
   addControl: "disabled_state"
 };
-const GENERATED_REPAIR_PROVENANCE = "privacy_bounded_repair_miner";
-const GENERATED_CANDIDATE_LIFETIME_MS = 30 * 24 * 60 * 60_000;
+export const GENERATED_REPAIR_PROVENANCE = "privacy_bounded_repair_miner";
+export const GENERATED_CANDIDATE_LIFETIME_DAYS = 30;
+const GENERATED_CANDIDATE_LIFETIME_MS = GENERATED_CANDIDATE_LIFETIME_DAYS * 24 * 60 * 60_000;
+export const GENERATED_REPAIR_CANDIDATE_AUDIT_MESSAGE =
+  "Privacy-bounded repair fields became an unsigned observer-only candidate for independent validation.";
 
 export interface GeneratedObserverRepairCandidateInput {
   retailerId: SupportedRetailerId;
@@ -63,6 +66,16 @@ export interface GeneratedObserverRepairCandidate {
   expiresAt: string;
 }
 
+export interface PreparedGeneratedObserverRepairCandidate {
+  fields: Partial<Record<ObserverRecipeField, ObserverRecipeFieldInput>>;
+  candidateKey: string;
+  recipeVersion: string;
+  recipeJson: string;
+  recipeFingerprint: string;
+  fieldCount: number;
+  selectorCount: number;
+}
+
 export function isGeneratedObserverRepairSelector(field: ObserverRecipeField, value: unknown): value is string {
   const candidate = String(value ?? "").trim();
   const match = GENERATED_REPAIR_SELECTOR.exec(candidate);
@@ -75,6 +88,86 @@ export function isGeneratedObserverRepairSelector(field: ObserverRecipeField, va
     && !GENERATED_REPAIR_FORBIDDEN.test(landmarkValue)
     && landmarkValue.split(/[_.-]+/).filter(Boolean)
       .every((token) => GENERATED_REPAIR_TOKENS.has(token.toLocaleLowerCase("en-US")));
+}
+
+export function prepareGeneratedObserverRepairCandidate(
+  scope: { tenantId: string; userId: string },
+  input: GeneratedObserverRepairCandidateInput
+): PreparedGeneratedObserverRepairCandidate {
+  if (!input || typeof input !== "object" || !Object.hasOwn(RETAILER_OBSERVER_VERSIONS, input.retailerId)) {
+    throw new Error("A supported generated observer repair candidate is required.");
+  }
+  const tenantId = String(scope?.tenantId ?? "").trim();
+  const userId = String(scope?.userId ?? "").trim();
+  const minimumExtensionVersion = String(input.minimumExtensionVersion ?? "").trim();
+  const layoutFingerprint = String(input.layoutFingerprint ?? "").trim();
+  const occurrenceCount = Number(input.occurrenceCount);
+  const minimumDistinctDeviceCount = Number(input.minimumDistinctDeviceCount);
+  const minimumDistinctSkuCount = Number(input.minimumDistinctSkuCount);
+  if (!tenantId || !userId
+    || !SEMVER_PATTERN.test(minimumExtensionVersion) || !FINGERPRINT_PATTERN.test(layoutFingerprint)
+    || !Number.isSafeInteger(occurrenceCount) || occurrenceCount < 1 || occurrenceCount > 10_000
+    || !Number.isSafeInteger(minimumDistinctDeviceCount) || minimumDistinctDeviceCount < 3 || minimumDistinctDeviceCount > 10_000
+    || !Number.isSafeInteger(minimumDistinctSkuCount) || minimumDistinctSkuCount < 2 || minimumDistinctSkuCount > 10_000
+    || occurrenceCount < minimumDistinctDeviceCount || occurrenceCount < minimumDistinctSkuCount) {
+    throw new Error("Generated observer repair candidate evidence is invalid.");
+  }
+  if (!input.fields || typeof input.fields !== "object" || Array.isArray(input.fields)
+    || Object.keys(input.fields).some((field) => !OBSERVER_RECIPE_FIELDS.includes(field as ObserverRecipeField))) {
+    throw new Error("Generated observer repair candidates require bounded read-only fields.");
+  }
+  const fields: Partial<Record<ObserverRecipeField, ObserverRecipeFieldInput>> = {};
+  let selectorCount = 0;
+  for (const field of OBSERVER_RECIPE_FIELDS) {
+    const definition = input.fields[field];
+    if (definition === undefined) continue;
+    if (!definition || typeof definition !== "object" || Array.isArray(definition)
+      || Object.keys(definition).some((key) => !["mode", "selectors"].includes(key))
+      || definition.mode !== GENERATED_REPAIR_MODES[field]
+      || !Array.isArray(definition.selectors)
+      || definition.selectors.length < 1 || definition.selectors.length > 5) {
+      throw new Error("Generated observer repair candidate fields are outside the fixed read-only schema.");
+    }
+    const selectors = [...new Set(definition.selectors.map((value) => String(value ?? "").trim()))]
+      .sort((left, right) => left.localeCompare(right));
+    if (selectors.length !== definition.selectors.length
+      || selectors.some((candidate) => !isGeneratedObserverRepairSelector(field, candidate))) {
+      throw new Error("Generated observer repair candidates may contain only unique field-compatible landmarks.");
+    }
+    selectorCount += selectors.length;
+    fields[field] = { mode: GENERATED_REPAIR_MODES[field], selectors };
+  }
+  const fieldCount = Object.keys(fields).length;
+  if (fieldCount < 1 || fieldCount > OBSERVER_RECIPE_FIELDS.length || selectorCount > 25) {
+    throw new Error("Generated observer repair candidates require one through five bounded read-only fields.");
+  }
+  const candidateKey = stableHash(
+    "yoink_privacy_bounded_repair_candidate_v1",
+    tenantId,
+    userId,
+    input.retailerId,
+    layoutFingerprint,
+    JSON.stringify(fields),
+    minimumExtensionVersion
+  );
+  const recipeVersion = `${input.retailerId}-repair-${candidateKey.slice(0, 12)}`;
+  const recipeJson = JSON.stringify(fields);
+  const recipeFingerprint = stableHash(
+    "declarative-observer-recipe-v1",
+    input.retailerId,
+    recipeVersion,
+    minimumExtensionVersion,
+    recipeJson
+  );
+  return {
+    fields,
+    candidateKey,
+    recipeVersion,
+    recipeJson,
+    recipeFingerprint,
+    fieldCount,
+    selectorCount
+  };
 }
 
 interface CandidateRow {
@@ -97,69 +190,20 @@ export class ObserverRepairCandidateRepository {
   }
 
   ensure(input: GeneratedObserverRepairCandidateInput, now = Date.now()): GeneratedObserverRepairCandidate {
-    if (!input || typeof input !== "object" || !Object.hasOwn(RETAILER_OBSERVER_VERSIONS, input.retailerId)) {
-      throw new Error("A supported generated observer repair candidate is required.");
-    }
-    const minimumExtensionVersion = String(input.minimumExtensionVersion ?? "").trim();
-    const layoutFingerprint = String(input.layoutFingerprint ?? "").trim();
+    const scope = currentRequestScope();
+    const prepared = prepareGeneratedObserverRepairCandidate(scope, input);
+    const minimumExtensionVersion = String(input.minimumExtensionVersion).trim();
+    const layoutFingerprint = String(input.layoutFingerprint).trim();
     const occurrenceCount = Number(input.occurrenceCount);
     const minimumDistinctDeviceCount = Number(input.minimumDistinctDeviceCount);
     const minimumDistinctSkuCount = Number(input.minimumDistinctSkuCount);
-    if (!SEMVER_PATTERN.test(minimumExtensionVersion) || !FINGERPRINT_PATTERN.test(layoutFingerprint)
-      || !Number.isSafeInteger(occurrenceCount) || occurrenceCount < 1 || occurrenceCount > 10_000
-      || !Number.isSafeInteger(minimumDistinctDeviceCount) || minimumDistinctDeviceCount < 3 || minimumDistinctDeviceCount > 10_000
-      || !Number.isSafeInteger(minimumDistinctSkuCount) || minimumDistinctSkuCount < 2 || minimumDistinctSkuCount > 10_000
-      || occurrenceCount < minimumDistinctDeviceCount || occurrenceCount < minimumDistinctSkuCount) {
-      throw new Error("Generated observer repair candidate evidence is invalid.");
-    }
-    if (!input.fields || typeof input.fields !== "object" || Array.isArray(input.fields)
-      || Object.keys(input.fields).some((field) => !OBSERVER_RECIPE_FIELDS.includes(field as ObserverRecipeField))) {
-      throw new Error("Generated observer repair candidates require bounded read-only fields.");
-    }
-    const fields: Partial<Record<ObserverRecipeField, ObserverRecipeFieldInput>> = {};
-    let selectorCount = 0;
-    for (const field of OBSERVER_RECIPE_FIELDS) {
-      const definition = input.fields[field];
-      if (definition === undefined) continue;
-      if (!definition || typeof definition !== "object" || Array.isArray(definition)
-        || Object.keys(definition).some((key) => !["mode", "selectors"].includes(key))
-        || definition.mode !== GENERATED_REPAIR_MODES[field]
-        || !Array.isArray(definition.selectors)
-        || definition.selectors.length < 1 || definition.selectors.length > 5) {
-        throw new Error("Generated observer repair candidate fields are outside the fixed read-only schema.");
-      }
-      const selectors = [...new Set(definition.selectors.map((value) => String(value ?? "").trim()))]
-        .sort((left, right) => left.localeCompare(right));
-      if (selectors.length !== definition.selectors.length
-        || selectors.some((candidate) => !isGeneratedObserverRepairSelector(field, candidate))) {
-        throw new Error("Generated observer repair candidates may contain only unique field-compatible landmarks.");
-      }
-      selectorCount += selectors.length;
-      fields[field] = { mode: GENERATED_REPAIR_MODES[field], selectors };
-    }
-    const fieldCount = Object.keys(fields).length;
-    if (fieldCount < 1 || fieldCount > OBSERVER_RECIPE_FIELDS.length || selectorCount > 25) {
-      throw new Error("Generated observer repair candidates require one through five bounded read-only fields.");
-    }
-    const scope = currentRequestScope();
-    const candidateKey = stableHash(
-      "yoink_privacy_bounded_repair_candidate_v1",
-      scope.tenantId,
-      scope.userId,
-      input.retailerId,
-      layoutFingerprint,
-      JSON.stringify(fields),
-      minimumExtensionVersion
-    );
-    const recipeVersion = `${input.retailerId}-repair-${candidateKey.slice(0, 12)}`;
-    const recipeJson = JSON.stringify(fields);
-    const recipeFingerprint = stableHash(
-      "declarative-observer-recipe-v1",
-      input.retailerId,
+    const {
       recipeVersion,
-      minimumExtensionVersion,
-      recipeJson
-    );
+      recipeJson,
+      recipeFingerprint,
+      fieldCount,
+      selectorCount
+    } = prepared;
     return this.db.transaction(() => {
       const existing = this.db.get<CandidateRow>(
         `SELECT id, retailer_id AS retailerId, recipe_version AS recipeVersion,
@@ -232,7 +276,7 @@ export class ObserverRepairCandidateRepository {
         aggregateType: "observer_recipe",
         eventType: "observer_recipe_repair_candidate_generated",
         reasonCode: "quarantined",
-        message: "Privacy-bounded repair fields became an unsigned observer-only candidate for independent validation.",
+        message: GENERATED_REPAIR_CANDIDATE_AUDIT_MESSAGE,
         data: {
           retailerId: input.retailerId,
           layoutFingerprint,

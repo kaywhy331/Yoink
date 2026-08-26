@@ -64,6 +64,12 @@ import {
   postgresOperationalRetentionCapabilityProjection
 } from "../packages/database/src/postgres-operational-retention.js";
 import {
+  POSTGRES_OBSERVER_CANDIDATE_EVALUATION_CONTRACT_VERSION,
+  POSTGRES_OBSERVER_CANDIDATE_EVALUATION_FUNCTION,
+  buildPostgresObserverCandidateEvaluationManifest,
+  postgresObserverCandidateEvaluationCapabilityProjection
+} from "../packages/database/src/postgres-observer-repair-candidate-evaluation.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -668,6 +674,114 @@ test("the PostgreSQL operational-retention handler template is bounded, cumulati
       "control_namespace",
       "notify_namespace",
       "execute_namespace",
+      "same_namespace"
+    ),
+    /must be distinct/
+  );
+});
+
+test("the PostgreSQL observer-candidate handler template is quarantined, cumulative, and inert", () => {
+  const args = [
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test",
+    "yoink_notify_test",
+    "yoink_execute_test",
+    "yoink_retention_test",
+    "yoink_candidate_test"
+  ] as const;
+  const manifest = buildPostgresObserverCandidateEvaluationManifest(...args);
+  assert.deepEqual(buildPostgresObserverCandidateEvaluationManifest(...args), manifest);
+  assert.equal(
+    manifest.contractVersion,
+    POSTGRES_OBSERVER_CANDIDATE_EVALUATION_CONTRACT_VERSION
+  );
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(
+    manifest.operationalRetentionContractVersion,
+    POSTGRES_OPERATIONAL_RETENTION_CONTRACT_VERSION
+  );
+  assert.equal(
+    manifest.observerCandidateRole.functionName,
+    POSTGRES_OBSERVER_CANDIDATE_EVALUATION_FUNCTION
+  );
+  assert.deepEqual(manifest.observerCandidateRole.functionArgumentTypes, [
+    "text", "text", "text", "text", "text", "text"
+  ]);
+  assert.deepEqual(manifest.observerCandidateRole.protectedTableNames, [
+    "audit_events",
+    "observer_recipe_candidates",
+    "observer_recipe_lifecycle_events",
+    "outbox_events",
+    "retailer_adapter_diagnostics"
+  ]);
+  assert.deepEqual(manifest.boundaryHandlerTaskKinds, [
+    "observer_recipe_candidate_evaluation"
+  ]);
+  assert.deepEqual(manifest.qualifiedHandlerTaskKinds, [
+    "notification_recovery",
+    "execution_recovery",
+    "operational_telemetry_retention",
+    "observer_recipe_candidate_evaluation"
+  ]);
+  assert.equal(manifest.qualifiedHandlerTaskKindCount, 4);
+  assert.equal(manifest.totalHandlerTaskKindCount, 7);
+  assert.equal(manifest.maximumDiagnosticRows, 2_000);
+  assert.equal(manifest.maximumCandidatesPerRun, 25);
+  assert.equal(manifest.supportedRepairFieldCount, 5);
+  assert.equal(manifest.generatedCandidateLifetimeDays, 30);
+  assert.equal(manifest.serverDerivedEvidencePlan, true);
+  assert.equal(manifest.serverClockBoundEvaluation, true);
+  assert.equal(manifest.applicationDeterministicFingerprints, true);
+  assert.equal(manifest.databaseEvidenceRevalidation, true);
+  assert.equal(manifest.quarantinedOnly, true);
+  assert.equal(manifest.generatedCandidatesExecutable, false);
+  assert.equal(manifest.mutationAuthority, false);
+  assert.equal(manifest.observerCandidateEvaluationRepositoryParity, true);
+  assert.equal(manifest.protectedTableCount, 5);
+  assert.equal(manifest.forcedRlsTableCount, 5);
+  assert.equal(manifest.directTableGrantCount, 0);
+  assert.equal(manifest.functionGrantCount, 1);
+  assert.equal(manifest.observerCandidateRole.login, false);
+  assert.equal(manifest.observerCandidateRole.inherit, false);
+  assert.equal(manifest.observerCandidateRole.bypassRls, false);
+  assert.equal(manifest.observerCandidateRole.directTableAccess, false);
+  assert.match(manifest.operationalRetentionManifestFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+  const capability = postgresObserverCandidateEvaluationCapabilityProjection();
+  assert.equal(
+    capability.contractVersion,
+    POSTGRES_OBSERVER_CANDIDATE_EVALUATION_CONTRACT_VERSION
+  );
+  assert.equal(capability.handlerTaskKindCount, 4);
+  assert.equal(capability.totalHandlerTaskKindCount, 7);
+  assert.equal(capability.maximumDiagnosticRows, 2_000);
+  assert.equal(capability.maximumCandidatesPerRun, 25);
+  assert.equal(capability.serverDerivedEvidencePlan, true);
+  assert.equal(capability.databaseEvidenceRevalidation, true);
+  assert.equal(capability.twoPhasePlanApply, true);
+  assert.equal(capability.quarantinedOnly, true);
+  assert.equal(capability.generatedCandidatesExecutable, false);
+  assert.equal(capability.mutationAuthority, false);
+  assert.equal(capability.protectedTableCount, 5);
+  assert.equal(capability.forcedRlsTableCount, 5);
+  assert.equal(capability.directTableGrantCount, 0);
+  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresObserverCandidateEvaluationManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "control_namespace",
+      "notify_namespace",
+      "execute_namespace",
+      "retention_namespace",
       "same_namespace"
     ),
     /must be distinct/

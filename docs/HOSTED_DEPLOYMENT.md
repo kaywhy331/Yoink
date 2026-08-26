@@ -370,7 +370,10 @@ resolution. Version 0.66 qualifies execution recovery through a second
 zero-direct-grant function that preserves action/spend receipts and refuses
 cross-tenant shared-incident mutation. Version 0.67 adds a third function-only
 role for server-clocked 30/90-day privacy retention with a 500-row evidence cap
-and authenticated receipt attribution. No production login, mapping, membership, handler composition, or
+and authenticated receipt attribution. Version 0.68 qualifies a fourth
+function-only role for two-phase, server-revalidated observer-candidate
+evaluation bounded to 2,000 diagnostics and 25 unsigned non-executable
+quarantine candidates. No production login, mapping, membership, handler composition, or
 API repository is provisioned. None of these releases deploys that runtime. Until
 it is provisioned and verified, SQLite is the source of truth and hosted
 boundary mode is suitable for integration/staging—not a claim of completed

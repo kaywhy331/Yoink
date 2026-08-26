@@ -67,6 +67,13 @@ export interface BackgroundMaintenanceHandlerOptions {
       recoveryEvidenceRetentionReceiptId: string;
     }>;
   };
+  observerRecipeCandidateEvaluation?: {
+    execute(
+      principal: BackgroundWorkerContext["principal"],
+      runtimeVersion: string,
+      now: number
+    ): Promise<BackgroundTaskResult>;
+  };
 }
 
 export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler {
@@ -155,7 +162,13 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
               })
         };
       case "observer_recipe_candidate_evaluation":
-        return this.observerRecipeCandidates.execute(runtimeVersion, now);
+        return this.options.observerRecipeCandidateEvaluation
+          ? this.options.observerRecipeCandidateEvaluation.execute(
+              context.principal,
+              runtimeVersion,
+              now
+            )
+          : this.observerRecipeCandidates.execute(runtimeVersion, now);
       case "observer_recipe_witness_refresh":
         return this.options.observerRecipeWitnessRefresh
           ? this.options.observerRecipeWitnessRefresh.execute(now)
