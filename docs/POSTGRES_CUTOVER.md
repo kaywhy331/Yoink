@@ -68,8 +68,9 @@ PostgreSQL process any retailer-session capability. Three task-handler families
 were still incomplete at the original worker-store milestone. The current
 qualification chain has separate inactive seams for six complete handler
 families plus connector dispatch and the final handler's expired-lease and
-fixed signal-inbox lifecycle sub-boundaries. Only hosted signal evaluation
-prevents complete seventh-handler parity. The emulated real-semantics suite
+fixed signal-inbox lifecycle, catalog-create, and event-resolution commit sub-
+boundaries. Only the remaining downstream hosted signal graph and final
+composition prevent complete seventh-handler parity. The emulated real-semantics suite
 continues to prove the complete store state machine; the separate native suite
 proves each contention-critical path across independent server sessions.
 
@@ -1077,6 +1078,93 @@ login, principal mapping, runtime composition, source-reference refresh,
 signal-evaluation authority, or retailer-session authority. SQLite remains
 authoritative.
 
+## Signal-event and resolution-commit qualification seam
+
+Version 0.77 adds a third, independent hosted-signal role for the committed
+state shared by every signal branch before downstream evaluation. It does not
+widen the hosted-delivery or catalog-create roles. The new `NOLOGIN`,
+`NOINHERIT`, `NOBYPASSRLS` role owns no object, belongs to no role, has schema
+`USAGE` plus zero direct/effective table or column privileges, and can execute
+one strict security-definer function.
+
+The Node adapter begins one `READ COMMITTED` read-write transaction, requests
+a plan, verifies its exact shape and principal-bound SHA-256 fingerprint, then
+applies the fingerprint before its 30-second/database-lease deadline. The
+database authenticates `session_user`, validates the current inbox capability
+before acquiring locks, takes the exact processing row `FOR UPDATE`, serializes
+the source/transport identity with a transaction advisory lock, and invokes the
+v0.75 resolver again after serialization. Every claim is re-derived on apply.
+This makes simultaneous callers converge on one event mutation and one
+mutation-free duplicate result without partial state.
+
+For a nonduplicate, the routine performs exactly the current committed-state
+equivalent of `SignalRepository.insertEvent` plus `recordResolution`:
+
+- insert one tenant/user-owned `signal_events` row with the normalized,
+  already-sanitized identity, offer, and evidence fields;
+- update only the exact principal-owned TrackaLacker `source_connections`
+  status, `last_event_at`, and `updated_at`; and
+- insert one `resolution_decisions` row using `resolver-v1`, with listing and
+  variant foreign keys only for a matched resolution.
+
+A transport duplicate returns its existing event ID and writes nothing.
+Matched, ambiguous, unresolved, and duplicate outcomes are qualified. If the
+current plan still says an unknown product needs shared-catalog creation, this
+routine fails closed; the v0.76 boundary must commit that catalog identity in
+a separate transaction before event/resolution apply. The function has no SQL
+for catalog or source-reference refresh, occurrences, offer observations,
+incidents, mission decisions, missions, strategies, notifications, spend,
+action jobs, audit/outbox, or inbox transition. It returns IDs, hashes, flags,
+and bounded counts only, never the raw signal payload.
+
+Native PostgreSQL 16 proves exact row deltas and stored JSON semantics,
+catalog-first composition, all four outcomes, an unchanged downstream graph
+and still-processing inbox, invalid capability, cross-tenant, same-tenant/
+different-user, unmapped-principal, replay, and direct-SQL denial, exactly one
+mutation under concurrent calls, clean temporary membership removal, and
+immutable receipt rejection after function-catalog tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-resolution-apply -- plan \
+  yoink_cutover_qualification_077 yoink_q_077 yoink_session_q_077 \
+  yoink_queue_q_077 yoink_control_q_077 yoink_notify_q_077 \
+  yoink_execute_q_077 yoink_retain_q_077 yoink_candidate_q_077 \
+  yoink_dispatch_q_077 yoink_reconcile_q_077 yoink_witness_q_077 \
+  yoink_delivery_q_077 yoink_catalog_q_077 yoink_resolution_q_077
+```
+
+After the exact v0.76 catalog-apply receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_RESOLUTION_APPLY_QUALIFICATION_ACK=bounded-signal-resolution-apply-qualification \
+  npm run postgres:signal-resolution-apply -- apply \
+  yoink_cutover_qualification_077 yoink_q_077 yoink_session_q_077 \
+  yoink_queue_q_077 yoink_control_q_077 yoink_notify_q_077 \
+  yoink_execute_q_077 yoink_retain_q_077 yoink_candidate_q_077 \
+  yoink_dispatch_q_077 yoink_reconcile_q_077 yoink_witness_q_077 \
+  yoink_delivery_q_077 yoink_catalog_q_077 yoink_resolution_q_077
+```
+
+Then independently inspect the role, routine, forced-RLS tables, immutable
+receipt, and dependency fingerprint:
+
+```bash
+npm run postgres:signal-resolution-apply -- verify \
+  yoink_cutover_qualification_077 yoink_q_077 yoink_session_q_077 \
+  yoink_queue_q_077 yoink_control_q_077 yoink_notify_q_077 \
+  yoink_execute_q_077 yoink_retain_q_077 yoink_candidate_q_077 \
+  yoink_dispatch_q_077 yoink_reconcile_q_077 yoink_witness_q_077 \
+  yoink_delivery_q_077 yoink_catalog_q_077 yoink_resolution_q_077
+```
+
+The receipt permanently records `runtimeAuthority: false` and
+`productionReady: false`. No login, principal mapping, membership, runtime
+composition, inbox acknowledgement, or retailer-session authority is created.
+SQLite remains authoritative and complete handler parity remains six of seven.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -1180,10 +1268,11 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- source-reference refresh for known products, PostgreSQL hosted signal-
-  resolution/evaluation apply, and composition with the qualified hosted-
-  delivery recovery, fixed signal-inbox lifecycle, read-only resolution plan,
-  and insert-only catalog-create boundary to complete the final task-handler
+- source-reference refresh for known products, occurrence/incident/offer
+  mutation, mission and purchase-policy evaluation, action-job creation, and
+  final inbox composition with the qualified hosted-delivery recovery, fixed
+  signal-inbox lifecycle, read-only resolution plan, insert-only catalog-create,
+  and event/resolution-commit boundaries to complete the final task-handler
   family, plus every API request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for

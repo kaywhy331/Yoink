@@ -91,6 +91,18 @@ return raw signal payloads. Native PostgreSQL proves exact row deltas, one-
 winner concurrency, isolation/replay/direct denial, and catalog-tamper
 detection. Resolution/evaluation apply and all runtime authority remain closed,
 so complete-handler parity remains six of seven and SQLite stays authoritative.
+Yoink 0.77 adds another distinct function-only role for the exact event and
+resolution commit. It revalidates and serializes the leased plan in a two-phase
+transaction, treats a transport duplicate as a zero-write result, or inserts
+one signal event, updates the exact source heartbeat, and inserts one resolution
+decision. Unknown products must pass the v0.76 catalog role first. The function
+cannot refresh source references, create downstream occurrence/incident/offer/
+mission/action state, acknowledge the inbox, or return the raw payload. Native
+PostgreSQL proves all four resolution outcomes, exact row deltas, isolation,
+replay, one-mutation concurrency, direct denial, and catalog-tamper detection.
+Downstream signal evaluation, final handler composition, and all runtime
+authority remain closed, so complete-handler parity stays six of seven and
+SQLite remains authoritative.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
