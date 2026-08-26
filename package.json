@@ -1,6 +1,6 @@
 {
   "name": "yoink",
-  "version": "0.78.0",
+  "version": "0.79.0",
   "private": true,
   "type": "module",
   "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",
@@ -12,8 +12,8 @@
     "build:types": "tsc -p tsconfig.build.json",
     "start": "node dist/apps/api/src/server.js",
     "start:worker": "node dist/apps/worker/src/server.js",
-    "check": "tsc -p tsconfig.json",
-    "test": "node --import tsx --test --test-concurrency=2 test/*.test.ts",
+    "check": "node --stack-size=4096 node_modules/typescript/bin/tsc -p tsconfig.json",
+    "test": "node scripts/run-tests.mjs",
     "test:postgres:native": "node --import tsx --test test/postgres-native.test.ts",
     "verify": "npm run check && npm run build && npm test",
     "package:extension": "npm run build:extension && node scripts/package-extension.mjs",
@@ -35,7 +35,8 @@
     "postgres:delivery-lease-recovery": "npm run build:types && node scripts/postgres-hosted-delivery-lease-recovery.mjs",
     "postgres:signal-catalog-apply": "npm run build:types && node scripts/postgres-signal-catalog-apply.mjs",
     "postgres:signal-resolution-apply": "npm run build:types && node scripts/postgres-signal-resolution-apply.mjs",
-    "postgres:signal-source-reference-refresh": "npm run build:types && node scripts/postgres-signal-source-reference-refresh.mjs"
+    "postgres:signal-source-reference-refresh": "npm run build:types && node scripts/postgres-signal-source-reference-refresh.mjs",
+    "postgres:signal-terminal-decision-apply": "npm run build:types && node scripts/postgres-signal-terminal-decision-apply.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

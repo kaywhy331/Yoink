@@ -27,6 +27,7 @@ import { postgresHostedDeliveryLeaseRecoveryCapabilityProjection } from "../pack
 import { postgresSignalCatalogApplyCapabilityProjection } from "../packages/database/src/postgres-signal-catalog-apply.js";
 import { postgresSignalResolutionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-resolution-apply.js";
 import { postgresSignalSourceReferenceRefreshCapabilityProjection } from "../packages/database/src/postgres-signal-source-reference-refresh.js";
+import { postgresSignalTerminalDecisionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-terminal-decision-apply.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -122,6 +123,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalCatalogApply: ReturnType<typeof postgresSignalCatalogApplyCapabilityProjection>;
         postgresSignalResolutionApply: ReturnType<typeof postgresSignalResolutionApplyCapabilityProjection>;
         postgresSignalSourceReferenceRefresh: ReturnType<typeof postgresSignalSourceReferenceRefreshCapabilityProjection>;
+        postgresSignalTerminalDecisionApply: ReturnType<typeof postgresSignalTerminalDecisionApplyCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -184,6 +186,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalSourceReferenceRefresh,
       postgresSignalSourceReferenceRefreshCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalTerminalDecisionApply,
+      postgresSignalTerminalDecisionApplyCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -238,6 +244,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Server-bound known-product source-reference refresh/);
     assert.match(cutoverText, /3 tenant source-reference tables/);
     assert.match(cutoverText, /conflicting remap cases fail closed/);
+    assert.match(cutoverText, /Server-bound terminal signal decisions/);
+    assert.match(cutoverText, /one occurrence, one terminal mission decision/);
+    assert.match(cutoverText, /partial graphs and inconsistent replays fail closed/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);
     assert.match(cutoverText, /3 independent PostgreSQL 16 backend sessions/);

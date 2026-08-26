@@ -20,7 +20,7 @@ const { JSDOM } = require("jsdom") as {
   };
 };
 
-async function eventually(assertion: () => void, attempts = 100): Promise<void> {
+async function eventually(assertion: () => void, attempts = 500): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {

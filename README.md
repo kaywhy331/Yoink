@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.78.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.79.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,37 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.79.0 adds the fifth independently receipted piece of the inactive
+PostgreSQL hosted-signal plane: terminal evaluation for test signals,
+ambiguous or unresolved identities, and matched non-actionable events. Its
+separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role has zero direct/effective
+table or column grants and may execute one strict security-definer function
+across 11 forced-RLS tenant tables. PostgreSQL binds `session_user`, validates
+the current leased TrackaLacker capability, requires the exact committed event
+and resolution plus a settled v0.78 source-reference result, and rejects plans
+older than 30 seconds.
+
+Each terminal branch atomically inserts exactly one `signal_occurrences` row,
+one terminal `mission_decisions` row, one `audit_events` row, and one
+`outbox_events` row. Test signals remain dry-run-only; non-actionable offers
+remain notification-only. A matched actionable signal returns
+`continue_downstream` without writing. Complete replay is mutation-free, while
+a partial or inconsistent terminal graph aborts. Shared catalog, source
+references, incidents, offer observations, missions, strategies, action jobs,
+and inbox lifecycle remain untouched, and no raw signal payload or reason is
+returned to the application.
+
+Native PostgreSQL 16 proves all four terminal outcomes, exact stored audit/
+outbox semantics, actionable zero-write continuation, prerequisite ordering,
+invalid-token and principal isolation, direct-SQL denial, one mutation under
+simultaneous application, replay, partial-graph rollback and recovery,
+membership cleanup, and immutable function-catalog tamper detection. The role
+remains inactive: SQLite is authoritative, the remaining incident/offer/
+mission/policy/action graph and final inbox composition remain closed,
+complete handler coverage remains six of seven, and retailer authority is
+unchanged. Use `npm run postgres:signal-terminal-decision-apply -- plan ...`
+and the [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.78.0 adds the fourth independently receipted piece of the inactive
 PostgreSQL hosted-signal plane: known-product source-reference refresh after an
