@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.69.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.70.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,24 +15,29 @@ new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
 
-Version 0.69.0 qualifies the connector-dispatch half of PostgreSQL
-`adapter_alert_reconciliation` without claiming the fifth handler complete.
-The new inactive `NOLOGIN`/`NOINHERIT`/`NOBYPASSRLS` role has zero direct
+Version 0.70.0 completes the PostgreSQL repository boundary for
+`adapter_alert_reconciliation`, bringing native handler parity to five of
+seven. A new inactive `NOLOGIN`/`NOINHERIT`/`NOBYPASSRLS` role has zero direct
 table or column grants and can execute one strict security-definer routine
-across four forced-RLS tables. It resolves the database-authenticated
-tenant/user, accepts at most 20 deployment-owned endpoint references and
-fingerprints, uses PostgreSQL's statement clock, and leases through a two-phase
-plan/apply transaction. Ephemeral capabilities are generated in the
-application, stored only as one-use hashes, and never returned by PostgreSQL.
+across ten forced-RLS tables. It resolves the database-authenticated
+tenant/user, serializes each principal, derives at most 50 repair groups from
+the newest 2,000 sanitized diagnostics, and revalidates a two-phase plan before
+applying any incident change.
 
-Native PostgreSQL 16 proves exact one-winner leasing, retries, delivery,
-dead-letter exhaustion, stale/incorrect capability rejection, same-tenant user
-and cross-tenant isolation, unmapped denial, engine-port compatibility, direct
-SQL denial, and catalog-tamper rejection. The routine cannot read a raw webhook
-URL or signing secret and cannot reconcile diagnostics into alert incidents.
-That second sub-boundary is still required, so coverage remains exactly four of
-seven handlers and SQLite remains authoritative. Use
-`npm run postgres:alert-dispatch -- plan ...` and the
+The routine preserves the existing open, repeat, update, escalation,
+auto-resolution, audit, outbox, dashboard-delivery, and secretless connector-
+queue semantics. Application-generated opaque IDs and connector payload hashes
+are revalidated in PostgreSQL; only endpoint references cross the boundary.
+Raw webhook URLs, signing secrets, page evidence, product identifiers, retailer
+mutation, and network egress remain inaccessible.
+
+Native PostgreSQL 16 proves exact lifecycle/result parity, replay suppression,
+reopen-after-recovery, same-tenant user and cross-tenant isolation,
+mismatch/unmapped denial, stale and altered plan rejection, one winner under
+concurrent reconciliation, direct SQL denial, production-handler routing, and
+catalog-tamper rejection. The API and worker remain SQLite-authoritative; no
+login, principal mapping, runtime role, or production cutover is activated.
+Use `npm run postgres:alert-reconciliation -- plan ...` and the
 [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.68.0 ports `observer_recipe_candidate_evaluation`, the fourth of

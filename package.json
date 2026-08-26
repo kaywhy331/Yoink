@@ -1,6 +1,6 @@
 {
   "name": "yoink",
-  "version": "0.69.0",
+  "version": "0.70.0",
   "private": true,
   "type": "module",
   "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",
@@ -29,7 +29,8 @@
     "postgres:execution-recovery": "npm run build:types && node scripts/postgres-execution-recovery.mjs",
     "postgres:operational-retention": "npm run build:types && node scripts/postgres-operational-retention.mjs",
     "postgres:observer-candidates": "npm run build:types && node scripts/postgres-observer-candidate-evaluation.mjs",
-    "postgres:alert-dispatch": "npm run build:types && node scripts/postgres-operator-alert-connector-dispatch.mjs"
+    "postgres:alert-dispatch": "npm run build:types && node scripts/postgres-operator-alert-connector-dispatch.mjs",
+    "postgres:alert-reconciliation": "npm run build:types && node scripts/postgres-operator-alert-reconciliation.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

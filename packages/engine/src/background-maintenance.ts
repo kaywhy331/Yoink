@@ -23,12 +23,14 @@ import { DurableSignalIngressProcessor } from "./signal-ingress.js";
 import { ObserverRecipeCandidateEvaluationService } from "./observer-recipe-candidate-evaluation.js";
 import type { ObserverRecipeWitnessRefreshService } from "./observer-recipe-witness-refresh.js";
 import type { OperatorAlertConnectorDispatchService } from "./operator-alert-connector-dispatch.js";
+import type { OperatorAlertReconciliationService } from "./operator-alert-reconciliation.js";
 
 export type BackgroundTaskHandler = BackgroundWorkerTaskHandler;
 
 export interface BackgroundMaintenanceHandlerOptions {
   observerRecipeWitnessRefresh?: Pick<ObserverRecipeWitnessRefreshService, "execute">;
   operatorAlertConnectorDispatch?: Pick<OperatorAlertConnectorDispatchService, "execute">;
+  operatorAlertReconciliation?: Pick<OperatorAlertReconciliationService, "execute">;
   notificationRecovery?: {
     recover(
       principal: BackgroundWorkerContext["principal"],
@@ -145,11 +147,17 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
         };
       case "adapter_alert_reconciliation":
         return {
-          ...this.operatorAlerts.reconcileAdapterRepairs(
-            this.adapterDiagnostics.listRepairQueue(2_000),
-            `background_alert_reconciliation_${new Date(now).toISOString().replace(/[^0-9]/g, "").slice(0, 17)}`,
-            now
-          ),
+          ...(this.options.operatorAlertReconciliation
+            ? await this.options.operatorAlertReconciliation.execute(
+                context.principal,
+                runtimeVersion,
+                now
+              )
+            : this.operatorAlerts.reconcileAdapterRepairs(
+                this.adapterDiagnostics.listRepairQueue(2_000),
+                `background_alert_reconciliation_${new Date(now).toISOString().replace(/[^0-9]/g, "").slice(0, 17)}`,
+                now
+              )),
           ...(this.options.operatorAlertConnectorDispatch
             ? await this.options.operatorAlertConnectorDispatch.execute(now)
             : {

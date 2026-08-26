@@ -133,6 +133,48 @@ test("the maintenance handler awaits the configured witness refresh service", as
   }
 });
 
+test("the maintenance handler awaits the configured alert reconciliation repository", async () => {
+  const db = new YoinkDatabase();
+  try {
+    const calls: Array<Record<string, unknown>> = [];
+    const handler = new BackgroundMaintenanceHandler(db, {
+      operatorAlertReconciliation: {
+        async execute(principal, runtimeVersion, now) {
+          calls.push({ principal, runtimeVersion, now });
+          return { opened: 1, updated: 2, resolved: 3, escalated: 4, routed: 5 };
+        }
+      }
+    });
+    const result = await handler.execute({
+      principal: { tenantId: LOCAL_TENANT_ID, userId: LOCAL_USER_ID },
+      workerId: "background_worker_alert_reconciliation_test",
+      runtimeKind: "standalone",
+      runtimeVersion: "0.70.0",
+      deploymentFingerprint: DEPLOYMENT_FINGERPRINT
+    }, "adapter_alert_reconciliation", NOW);
+    assert.deepEqual(calls, [{
+      principal: { tenantId: LOCAL_TENANT_ID, userId: LOCAL_USER_ID },
+      runtimeVersion: "0.70.0",
+      now: NOW
+    }]);
+    assert.deepEqual(result, {
+      opened: 1,
+      updated: 2,
+      resolved: 3,
+      escalated: 4,
+      routed: 5,
+      connectorRegistryConfigured: false,
+      connectorTransportConfigured: false,
+      connectorDeliveriesAttempted: 0,
+      connectorDeliveriesSucceeded: 0,
+      connectorDeliveriesRetried: 0,
+      connectorDeliveriesDeadLettered: 0
+    });
+  } finally {
+    db.close();
+  }
+});
+
 test("handler failures retry durably without persisting exception text", async () => {
   const db = new YoinkDatabase();
   try {

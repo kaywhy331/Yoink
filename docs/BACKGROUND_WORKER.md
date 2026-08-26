@@ -294,7 +294,12 @@ alert handler through another zero-direct-grant function: server-bound
 tenant/user selection, database-clocked `SKIP LOCKED` leasing, deployment-owned
 endpoint references, and application-hashed one-use capabilities. Raw webhook
 URLs and signing secrets never cross that boundary; diagnostic reconciliation
-remains SQLite-only, so the handler count stays four of seven. Production also requires login provisioning and activation, remaining writer
+remains SQLite-only at that boundary, so the handler count stays four of seven.
+Version 0.70 completes the fifth handler through an independent
+zero-direct-grant reconciliation function that derives and revalidates bounded
+sanitized repair groups while preserving incident, route, audit, outbox, and
+connector-queue lifecycle parity. The remaining two handlers stay incomplete.
+Production also requires login provisioning and activation, remaining writer
 families, a deployed multi-process worker fleet with handler replay and failure testing, production
 identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode

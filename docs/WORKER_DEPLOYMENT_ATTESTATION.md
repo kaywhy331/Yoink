@@ -76,6 +76,10 @@ Version 0.69 adds a fifth inactive function-only sub-boundary for secretless
 operator-alert connector dispatch. Because diagnostic reconciliation remains
 unported, it does not increase complete-handler coverage beyond four of seven
 and cannot schedule work, contact a webhook, or weaken deployment attestation.
+Version 0.70 adds the independent function-only reconciliation boundary and
+therefore completes handler five. It derives and revalidates only sanitized
+aggregate repair groups, cannot schedule work or contact a webhook, and does
+not weaken deployment attestation or activate any PostgreSQL runtime role.
 
 A mismatch may write only its normal bounded heartbeat with
 `worker_deployment_mismatch`. This gives the API and Operations workspace

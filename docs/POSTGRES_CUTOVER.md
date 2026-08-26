@@ -109,8 +109,9 @@ notification-recovery handler through its own native qualification path;
 version 0.66 does the same for action/spend execution recovery, version 0.67
 does the same for bounded privacy retention, and version 0.68 proves bounded,
 quarantine-only observer-candidate evaluation. Version 0.69 separately proves
-secretless operator-alert connector dispatch without claiming alert
-reconciliation complete.
+secretless operator-alert connector dispatch, and version 0.70 adds the
+separate server-derived diagnostic reconciliation boundary that completes the
+fifth handler. All remain qualification-only.
 
 ## Restricted read-role qualification seam
 
@@ -740,6 +741,78 @@ Apply refuses reused objects and cannot create a login, membership, principal
 mapping, connector, endpoint, secret, webhook request, or runtime composition.
 Alert diagnostic reconciliation and its independent proof remain required
 before this task family can count as the fifth complete handler.
+
+## Function-only operator-alert reconciliation qualification seam
+
+Version 0.70 completes the fifth handler with an independent boundary layered
+on the exact verified 0.69 connector-dispatch contract. Its dedicated role is
+`NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no objects, has schema `USAGE`,
+zero direct/effective table or column grants, and can execute one exact strict
+security-definer routine. Ten diagnostic, rule, incident, lifecycle,
+dashboard-delivery, connector-queue, audit, and outbox tables retain forced
+RLS. The routine resolves `session_user` and requires the requested tenant/user
+to match the server-owned principal registry.
+
+One `READ COMMITTED` transaction takes a per-principal advisory lock, derives a
+server-timestamped plan from at most the newest 2,000 sanitized diagnostics,
+and selects at most 50 repair groups/actions against at most 50 current rules
+and 20 connectors. Apply must present that exact plan within 30 seconds.
+PostgreSQL re-derives the evidence and revalidates every incident, rule, route,
+connector binding, payload, and application-generated opaque identifier before
+performing any mutation.
+
+The boundary preserves open, repeat, content-update, immediate and delayed
+escalation, auto-resolution, historical replay suppression, and recovery/reopen
+behavior. Incident lifecycle, dashboard delivery, audit, outbox, and connector
+queue receipts are atomic. Only sanitized aggregate fields and opaque endpoint
+references cross the boundary; raw URLs, signing secrets, page evidence,
+product identifiers, arbitrary payloads, webhook contact, and retailer actions
+remain inaccessible.
+
+Native PostgreSQL 16 proves exact lifecycle/result parity, idempotent replay,
+reopen after recovery, one winner under simultaneous reconciliation,
+same-tenant cross-user and cross-tenant isolation, mismatched/unmapped denial,
+stale, empty, and altered plan rejection, production maintenance-handler
+routing, direct SQL/unrelated-function denial, clean temporary-authority
+removal, and receipt failure after function-catalog tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:alert-reconciliation -- plan \
+  yoink_cutover_qualification_070 yoink_q_070 yoink_session_q_070 \
+  yoink_queue_q_070 yoink_control_q_070 yoink_notify_q_070 \
+  yoink_execute_q_070 yoink_retain_q_070 yoink_candidate_q_070 \
+  yoink_dispatch_q_070 yoink_reconcile_q_070
+```
+
+After the exact connector-dispatch receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_ALERT_RECONCILIATION_QUALIFICATION_ACK=bounded-operator-alert-reconciliation-qualification \
+  npm run postgres:alert-reconciliation -- apply \
+  yoink_cutover_qualification_070 yoink_q_070 yoink_session_q_070 \
+  yoink_queue_q_070 yoink_control_q_070 yoink_notify_q_070 \
+  yoink_execute_q_070 yoink_retain_q_070 yoink_candidate_q_070 \
+  yoink_dispatch_q_070 yoink_reconcile_q_070
+```
+
+Then independently re-inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:alert-reconciliation -- verify \
+  yoink_cutover_qualification_070 yoink_q_070 yoink_session_q_070 \
+  yoink_queue_q_070 yoink_control_q_070 yoink_notify_q_070 \
+  yoink_execute_q_070 yoink_retain_q_070 yoink_candidate_q_070 \
+  yoink_dispatch_q_070 yoink_reconcile_q_070
+```
+
+Apply refuses reused objects and cannot create a login, membership, principal
+mapping, rule, connector, endpoint, secret, webhook request, or runtime
+composition. Exactly five of seven task-handler families now have repository
+parity. All qualification roles remain inactive, SQLite stays authoritative,
+and the remaining two handler families require independent boundaries.
 
 ## Requirements
 

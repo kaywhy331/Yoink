@@ -65,10 +65,17 @@ import {
   buildPostgresOperatorAlertConnectorDispatchManifest,
   verifyPostgresOperatorAlertConnectorDispatchBoundary
 } from "../packages/database/src/postgres-operator-alert-connector-dispatch.js";
+import {
+  NodePostgresOperatorAlertReconciliationDatabase,
+  applyPostgresOperatorAlertReconciliationBoundary,
+  buildPostgresOperatorAlertReconciliationManifest,
+  verifyPostgresOperatorAlertReconciliationBoundary
+} from "../packages/database/src/postgres-operator-alert-reconciliation.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
 import { OperatorAlertConnectorDispatchService } from "../packages/engine/src/operator-alert-connector-dispatch.js";
+import { OperatorAlertReconciliationService } from "../packages/engine/src/operator-alert-reconciliation.js";
 import type { OperatorAlertWebhookRegistry } from "../packages/engine/src/operator-alert-webhook.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
 import {
@@ -90,6 +97,7 @@ const NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE = "yoink_native_execute";
 const NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE = "yoink_native_retention";
 const NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE = "yoink_native_candidate";
 const NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE = "yoink_native_dispatch";
+const NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE = "yoink_native_reconcile";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -869,6 +877,44 @@ async function insertOperatorAlertDispatchFixture(
   return deliveryId;
 }
 
+async function insertOperatorAlertReconciliationDiagnostic(
+  database: PostgresCutoverDatabase,
+  input: {
+    id: string;
+    tenantId: string;
+    userId: string;
+    deviceId: string;
+    retailerSku: string;
+    layoutFingerprint: string;
+    receivedAt: string;
+    outcome?: "failed" | "recovered";
+  }
+): Promise<void> {
+  const outcome = input.outcome ?? "failed";
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."retailer_adapter_diagnostics"(
+       id, tenant_id, user_id, device_id, retailer_id, retailer_sku,
+       adapter_version, contract_version, operation, outcome, failure_stage,
+       reason_code, attempt_count, dom_changed, layout_fingerprint,
+       layout_json, observed_at, received_at
+     ) VALUES ($1, $2, $3, $4, 'amazon', $5, 'amazon-observer-v4', 1,
+               'observe', $6, 'availability_binding', $7,
+               $8, 1, $9, '{}', $10, $10)`,
+    [
+      input.id,
+      input.tenantId,
+      input.userId,
+      input.deviceId,
+      input.retailerSku,
+      outcome,
+      outcome === "failed" ? "availability_selector_miss" : "dom_hydration_recovered",
+      outcome === "failed" ? 1 : 2,
+      input.layoutFingerprint,
+      input.receivedAt
+    ]
+  );
+}
+
 function workerContext(workerId: string): BackgroundWorkerContext {
   return {
     principal: { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
@@ -879,7 +925,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, four handlers, and alert dispatch", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and five handlers", {
   timeout: 300_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -938,6 +984,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let alertDispatchC: NodePostgresOperatorAlertConnectorDispatchDatabase | null = null;
   let alertDispatchUnmapped: NodePostgresOperatorAlertConnectorDispatchDatabase | null = null;
   let alertDispatchDirectClient: Client | null = null;
+  let alertReconciliationA: NodePostgresOperatorAlertReconciliationDatabase | null = null;
+  let alertReconciliationASecond: NodePostgresOperatorAlertReconciliationDatabase | null = null;
+  let alertReconciliationB: NodePostgresOperatorAlertReconciliationDatabase | null = null;
+  let alertReconciliationC: NodePostgresOperatorAlertReconciliationDatabase | null = null;
+  let alertReconciliationUnmapped: NodePostgresOperatorAlertReconciliationDatabase | null = null;
+  let alertReconciliationDirectClient: Client | null = null;
+  let alertReconciliationHandlerDb: YoinkDatabase | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -1297,6 +1350,69 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       alertDispatchBoundary
     );
+    const alertReconciliationBoundary = await applyPostgresOperatorAlertReconciliationBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:57.000Z").getTime()
+    );
+    assert.equal(alertReconciliationBoundary.protectedTableCount, 10);
+    assert.equal(alertReconciliationBoundary.forcedRlsTableCount, 10);
+    assert.equal(alertReconciliationBoundary.directTableGrantCount, 0);
+    assert.equal(alertReconciliationBoundary.functionGrantCount, 1);
+    assert.equal(alertReconciliationBoundary.membershipCount, 0);
+    assert.equal(alertReconciliationBoundary.activePrincipalCount, 0);
+    assert.equal(alertReconciliationBoundary.qualifiedHandlerTaskKindCount, 5);
+    assert.equal(alertReconciliationBoundary.totalHandlerTaskKindCount, 7);
+    assert.equal(alertReconciliationBoundary.maximumDiagnostics, 2_000);
+    assert.equal(alertReconciliationBoundary.maximumGroups, 50);
+    assert.equal(alertReconciliationBoundary.maximumActions, 50);
+    assert.equal(alertReconciliationBoundary.maximumRules, 50);
+    assert.equal(alertReconciliationBoundary.maximumConnectors, 20);
+    assert.equal(alertReconciliationBoundary.maximumConnectorPayloadBytes, 4_000);
+    assert.equal(alertReconciliationBoundary.serverDerivedRepairGroups, true);
+    assert.equal(alertReconciliationBoundary.databaseEvidenceRevalidation, true);
+    assert.equal(alertReconciliationBoundary.twoPhasePlanApply, true);
+    assert.equal(alertReconciliationBoundary.databaseServerClock, true);
+    assert.equal(alertReconciliationBoundary.applicationGeneratedOpaqueIds, true);
+    assert.equal(alertReconciliationBoundary.sanitizedAggregateOnly, true);
+    assert.equal(alertReconciliationBoundary.endpointReferencesOnly, true);
+    assert.equal(alertReconciliationBoundary.rawUrlsAccessible, false);
+    assert.equal(alertReconciliationBoundary.connectorSecretsAccessible, false);
+    assert.equal(alertReconciliationBoundary.alertDispatchRepositoryParity, true);
+    assert.equal(alertReconciliationBoundary.alertReconciliationRepositoryParity, true);
+    assert.equal(alertReconciliationBoundary.fullHandlerRepositoryParity, true);
+    assert.equal(alertReconciliationBoundary.mutationAuthority, false);
+    assert.equal(alertReconciliationBoundary.directTableAccess, false);
+    assert.equal(alertReconciliationBoundary.runtimeAuthority, false);
+    assert.equal(alertReconciliationBoundary.productionReady, false);
+    assert.match(alertReconciliationBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresOperatorAlertReconciliationBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE
+      ),
+      alertReconciliationBoundary
+    );
     await importer.close();
     importer = null;
 
@@ -1411,6 +1527,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
       NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE
     );
+    const alertReconciliationManifest = buildPostgresOperatorAlertReconciliationManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -1442,6 +1571,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${alertDispatchManifest.alertDispatchRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${alertReconciliationManifest.alertReconciliationRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -1638,6 +1770,42 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, { maxConnections: 1 });
     alertDispatchC = alertDispatchDatabase(NATIVE_PRINCIPAL_C, NATIVE_SAME_TENANT_USER);
     alertDispatchUnmapped = alertDispatchDatabase(
+      NATIVE_PRINCIPAL_UNMAPPED,
+      NATIVE_USER
+    );
+    const alertReconciliationDatabase = (
+      principalRole: string,
+      userId: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresOperatorAlertReconciliationDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, { tenantId: NATIVE_TENANT, userId }, "0.70.0", NATIVE_SCHEMA,
+    NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+    { maxConnections });
+    alertReconciliationA = alertReconciliationDatabase(NATIVE_PRINCIPAL_A, NATIVE_USER, 2);
+    alertReconciliationASecond = alertReconciliationDatabase(NATIVE_PRINCIPAL_A, NATIVE_USER);
+    alertReconciliationB = new NodePostgresOperatorAlertReconciliationDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_B),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, { tenantId: "tenant_local", userId: "user_local" }, "0.70.0", NATIVE_SCHEMA,
+    NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+    { maxConnections: 1 });
+    alertReconciliationC = alertReconciliationDatabase(
+      NATIVE_PRINCIPAL_C,
+      NATIVE_SAME_TENANT_USER
+    );
+    alertReconciliationUnmapped = alertReconciliationDatabase(
       NATIVE_PRINCIPAL_UNMAPPED,
       NATIVE_USER
     );
@@ -2845,6 +3013,468 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     await alertDispatchDirectClient.end();
     alertDispatchDirectClient = null;
+
+    const reconciliationNow = Date.now();
+    const reconciliationLayout = "6".repeat(64);
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."operator_alert_rules"
+       SET enabled = 0 WHERE tenant_id = $1`,
+      [NATIVE_TENANT]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."operator_alert_rules"(
+         id, tenant_id, event_family, name, enabled, severity,
+         minimum_occurrences, dedupe_window_seconds, escalation_after_seconds,
+         retailer_scope, operation_scope, routes_json, privacy_classification,
+         created_by_actor_id, updated_by_actor_id, created_at, updated_at
+       ) VALUES ('native_alert_reconciliation_rule', $1, 'adapter_repair',
+                 'Native Amazon reconciliation', 1, 'warning', 2, 60, 300,
+                 'amazon', 'observe', '["dashboard","audit_outbox"]',
+                 'operational_configuration', 'native_fixture', 'native_fixture', $2, $2)`,
+      [NATIVE_TENANT, new Date(reconciliationNow - 500_000).toISOString()]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."extension_devices"(
+         id, tenant_id, user_id, name, token_hash, extension_version,
+         status, capabilities_json, last_seen_at, created_at, updated_at,
+         credential_generation, credential_issued_at
+       ) VALUES ('native_alert_peer_device', $1, $2, 'Native alert peer device',
+                 $3, '0.70.0', 'active', '{}', $4, $4, $4, 1, $4)`,
+      [
+        NATIVE_TENANT,
+        NATIVE_SAME_TENANT_USER,
+        "e".repeat(64),
+        new Date(reconciliationNow - 500_000).toISOString()
+      ]
+    );
+    for (const [index, sku] of ["B0AAAA0001", "B0AAAA0002"].entries()) {
+      await insertOperatorAlertReconciliationDiagnostic(first, {
+        id: `native_alert_reconciliation_failure_${index + 1}`,
+        tenantId: NATIVE_TENANT,
+        userId: NATIVE_USER,
+        deviceId: `native_candidate_device_other_${index + 1}`,
+        retailerSku: sku,
+        layoutFingerprint: reconciliationLayout,
+        receivedAt: new Date(reconciliationNow - 400_000 + index * 1_000).toISOString()
+      });
+    }
+    for (const [index, sku] of ["B0PEER0001", "B0PEER0002"].entries()) {
+      await insertOperatorAlertReconciliationDiagnostic(first, {
+        id: `native_alert_reconciliation_peer_failure_${index + 1}`,
+        tenantId: NATIVE_TENANT,
+        userId: NATIVE_SAME_TENANT_USER,
+        deviceId: "native_alert_peer_device",
+        retailerSku: sku,
+        layoutFingerprint: "7".repeat(64),
+        receivedAt: new Date(reconciliationNow - 400_000 + index * 1_000).toISOString()
+      });
+    }
+
+    alertReconciliationHandlerDb = new YoinkDatabase();
+    const alertReconciliationHandler = new BackgroundMaintenanceHandler(
+      alertReconciliationHandlerDb,
+      {
+        operatorAlertReconciliation: new OperatorAlertReconciliationService(
+          alertReconciliationA
+        )
+      }
+    );
+    const alertReconciliationContext: BackgroundWorkerContext = {
+      ...workerContext("native_alert_reconciliation_handler"),
+      runtimeVersion: "0.70.0"
+    };
+    const openedAlert = await alertReconciliationHandler.execute(
+      alertReconciliationContext,
+      "adapter_alert_reconciliation",
+      reconciliationNow
+    );
+    assert.equal(openedAlert.opened, 1);
+    assert.equal(openedAlert.updated, 0);
+    assert.equal(openedAlert.resolved, 0);
+    assert.equal(openedAlert.escalated, 1);
+    assert.equal(openedAlert.routed, 4);
+    assert.equal(openedAlert.connectorDeliveriesAttempted, 0);
+    assert.deepEqual(
+      (await first.query<{
+        subjectUserId: string;
+        severity: string;
+        status: string;
+        occurrenceCount: string | number | bigint;
+        affectedEntityCount: string | number | bigint;
+      }>(
+        `SELECT subject_user_id AS "subjectUserId", severity, status,
+                occurrence_count AS "occurrenceCount",
+                affected_entity_count AS "affectedEntityCount"
+         FROM "${NATIVE_SCHEMA}"."operator_alert_incidents"
+         WHERE rule_id = 'native_alert_reconciliation_rule'
+         ORDER BY created_at, id`
+      )).rows.map((row) => ({
+        subjectUserId: row.subjectUserId,
+        severity: row.severity,
+        status: row.status,
+        occurrenceCount: Number(row.occurrenceCount),
+        affectedEntityCount: Number(row.affectedEntityCount)
+      })),
+      [{
+        subjectUserId: NATIVE_USER,
+        severity: "error",
+        status: "open",
+        occurrenceCount: 2,
+        affectedEntityCount: 2
+      }]
+    );
+    const firstReconciliationIncident = (await first.query<{ id: string }>(
+      `SELECT id FROM "${NATIVE_SCHEMA}"."operator_alert_incidents"
+       WHERE rule_id = 'native_alert_reconciliation_rule' AND subject_user_id = $1
+       ORDER BY created_at, id LIMIT 1`,
+      [NATIVE_USER]
+    )).rows[0]?.id;
+    assert.ok(firstReconciliationIncident);
+    assert.deepEqual(
+      (await first.query<{ eventType: string; severity: string }>(
+        `SELECT event_type AS "eventType", severity
+         FROM "${NATIVE_SCHEMA}"."operator_alert_events"
+         WHERE incident_id = $1
+         ORDER BY CASE event_type WHEN 'opened' THEN 1 WHEN 'escalated' THEN 2 ELSE 3 END, id`,
+        [firstReconciliationIncident]
+      )).rows,
+      [
+        { eventType: "opened", severity: "warning" },
+        { eventType: "escalated", severity: "error" }
+      ]
+    );
+    assert.deepEqual(
+      (await first.query<{
+        auditCount: string | number | bigint;
+        outboxCount: string | number | bigint;
+        routeCount: string | number | bigint;
+        connectorCount: string | number | bigint;
+        connectorEventCount: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE data_json::jsonb->>'incidentId' = $1) AS "auditCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE payload_json::jsonb->'data'->>'incidentId' = $1) AS "outboxCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."operator_alert_deliveries"
+            WHERE incident_id = $1) AS "routeCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries"
+            WHERE incident_id = $1) AS "connectorCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."operator_alert_connector_delivery_events" AS event
+            JOIN "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries" AS delivery
+              ON delivery.id = event.delivery_id WHERE delivery.incident_id = $1) AS "connectorEventCount"`,
+        [firstReconciliationIncident]
+      )).rows.map((row) => ({
+        auditCount: Number(row.auditCount),
+        outboxCount: Number(row.outboxCount),
+        routeCount: Number(row.routeCount),
+        connectorCount: Number(row.connectorCount),
+        connectorEventCount: Number(row.connectorEventCount)
+      })),
+      [{
+        auditCount: 2,
+        outboxCount: 2,
+        routeCount: 4,
+        connectorCount: 2,
+        connectorEventCount: 2
+      }]
+    );
+    assert.equal(
+      JSON.stringify((await first.query(
+        `SELECT endpoint_reference, payload_json
+         FROM "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries"
+         WHERE incident_id = $1`,
+        [firstReconciliationIncident]
+      )).rows).includes("https://"),
+      false
+    );
+
+    assert.deepEqual(
+      await alertReconciliationA.reconcile(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.70.0",
+        reconciliationNow
+      ),
+      { opened: 0, updated: 0, resolved: 0, escalated: 0, routed: 0 }
+    );
+    const repeatedNow = Date.now();
+    await insertOperatorAlertReconciliationDiagnostic(first, {
+      id: "native_alert_reconciliation_failure_3",
+      tenantId: NATIVE_TENANT,
+      userId: NATIVE_USER,
+      deviceId: "native_candidate_device_other_3",
+      retailerSku: "B0AAAA0003",
+      layoutFingerprint: reconciliationLayout,
+      receivedAt: new Date(repeatedNow - 1_000).toISOString()
+    });
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."operator_alert_incidents"
+       SET last_routed_at = $1 WHERE id = $2`,
+      [new Date(repeatedNow - 120_000).toISOString(), firstReconciliationIncident]
+    );
+    assert.deepEqual(
+      await alertReconciliationA.reconcile(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.70.0",
+        repeatedNow
+      ),
+      { opened: 0, updated: 1, resolved: 0, escalated: 0, routed: 2 }
+    );
+
+    const recoveredNow = Date.now();
+    await insertOperatorAlertReconciliationDiagnostic(first, {
+      id: "native_alert_reconciliation_recovered",
+      tenantId: NATIVE_TENANT,
+      userId: NATIVE_USER,
+      deviceId: "native_candidate_device_other_1",
+      retailerSku: "B0AAAA0001",
+      layoutFingerprint: reconciliationLayout,
+      receivedAt: new Date(recoveredNow - 1).toISOString(),
+      outcome: "recovered"
+    });
+    assert.deepEqual(
+      await alertReconciliationA.reconcile(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.70.0",
+        recoveredNow
+      ),
+      { opened: 0, updated: 0, resolved: 1, escalated: 0, routed: 2 }
+    );
+    assert.deepEqual(
+      (await first.query<{
+        occurrenceCount: string | number | bigint;
+        affectedEntityCount: string | number | bigint;
+      }>(
+        `SELECT delivery.payload_json::jsonb->>'occurrenceCount' AS "occurrenceCount",
+                delivery.payload_json::jsonb->>'affectedEntityCount' AS "affectedEntityCount"
+         FROM "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries" AS delivery
+         JOIN "${NATIVE_SCHEMA}"."operator_alert_events" AS event
+           ON event.id = delivery.event_id
+         WHERE delivery.incident_id = $1 AND event.event_type = 'auto_resolved'`,
+        [firstReconciliationIncident]
+      )).rows.map((row) => ({
+        occurrenceCount: Number(row.occurrenceCount),
+        affectedEntityCount: Number(row.affectedEntityCount)
+      })),
+      [{ occurrenceCount: 3, affectedEntityCount: 3 }]
+    );
+    assert.deepEqual(
+      await alertReconciliationA.reconcile(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.70.0",
+        recoveredNow
+      ),
+      { opened: 0, updated: 0, resolved: 0, escalated: 0, routed: 0 }
+    );
+
+    const reopenedNow = Date.now();
+    await insertOperatorAlertReconciliationDiagnostic(first, {
+      id: "native_alert_reconciliation_failure_reopened",
+      tenantId: NATIVE_TENANT,
+      userId: NATIVE_USER,
+      deviceId: "native_candidate_device_other_2",
+      retailerSku: "B0AAAA0004",
+      layoutFingerprint: reconciliationLayout,
+      receivedAt: new Date(reopenedNow).toISOString()
+    });
+    const reopened = await alertReconciliationA.reconcile(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      "0.70.0",
+      reopenedNow
+    );
+    assert.equal(reopened.opened, 1);
+    assert.equal(reopened.escalated, 1);
+    assert.equal(reopened.routed, 4);
+
+    const contentionNow = Date.now();
+    const contentionLayout = "8".repeat(64);
+    for (const [index, sku] of ["B0RACE0001", "B0RACE0002"].entries()) {
+      await insertOperatorAlertReconciliationDiagnostic(first, {
+        id: `native_alert_reconciliation_contention_${index + 1}`,
+        tenantId: NATIVE_TENANT,
+        userId: NATIVE_USER,
+        deviceId: `native_candidate_device_other_${index + 1}`,
+        retailerSku: sku,
+        layoutFingerprint: contentionLayout,
+        receivedAt: new Date(contentionNow - 2_000 + index).toISOString()
+      });
+    }
+    const concurrentReconciliation = await Promise.all([
+      alertReconciliationA.reconcile(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.70.0",
+        contentionNow
+      ),
+      alertReconciliationASecond.reconcile(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.70.0",
+        contentionNow
+      )
+    ]);
+    assert.equal(
+      concurrentReconciliation.reduce((sum, result) => sum + result.opened, 0),
+      1
+    );
+    assert.equal(
+      concurrentReconciliation.reduce((sum, result) => sum + result.routed, 0),
+      2
+    );
+    assert.equal(
+      Number((await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."operator_alert_incidents"
+         WHERE tenant_id = $1 AND subject_user_id = $2
+           AND rule_id = 'native_alert_reconciliation_rule'
+           AND layout_fingerprint = $3 AND status IN ('open', 'acknowledged')`,
+        [NATIVE_TENANT, NATIVE_USER, contentionLayout]
+      )).rows[0]?.count),
+      1
+    );
+
+    const peerResult = await alertReconciliationC.reconcile(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+      "0.70.0",
+      reconciliationNow
+    );
+    assert.equal(peerResult.opened, 1);
+    assert.equal(peerResult.escalated, 1);
+    assert.equal(
+      Number((await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."operator_alert_incidents"
+         WHERE tenant_id = $1 AND subject_user_id = $2
+           AND rule_id = 'native_alert_reconciliation_rule'`,
+        [NATIVE_TENANT, NATIVE_SAME_TENANT_USER]
+      )).rows[0]?.count),
+      1
+    );
+    await assert.rejects(
+      alertReconciliationA.reconcile(
+        { tenantId: "tenant_local", userId: "user_local" },
+        "0.70.0",
+        reconciliationNow
+      ),
+      /principal changed after construction/
+    );
+    await assert.rejects(
+      alertReconciliationUnmapped.reconcile(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "0.70.0",
+        reconciliationNow
+      ),
+      /tenant session principal is not active/
+    );
+    const otherTenantIncidentCount = Number((await first.query<{ count: string | number | bigint }>(
+      `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."operator_alert_incidents"
+       WHERE tenant_id = 'tenant_local'`
+    )).rows[0]?.count);
+    await alertReconciliationB.reconcile(
+      { tenantId: "tenant_local", userId: "user_local" },
+      "0.70.0",
+      reconciliationNow
+    );
+    assert.ok(Number((await first.query<{ count: string | number | bigint }>(
+      `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."operator_alert_incidents"
+       WHERE tenant_id = 'tenant_local'`
+    )).rows[0]?.count) >= otherTenantIncidentCount);
+
+    alertReconciliationDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    alertReconciliationDirectClient.on("error", () => undefined);
+    await alertReconciliationDirectClient.connect();
+    await alertReconciliationDirectClient.query(
+      `SET ROLE "${alertReconciliationManifest.alertReconciliationRole.name}"`
+    );
+    await assert.rejects(
+      alertReconciliationDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."retailer_adapter_diagnostics"`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      alertReconciliationDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."operator_alert_incidents"(
+           id, tenant_id, subject_user_id, rule_id, event_family, incident_key_hash,
+           severity, status, privacy_classification, title, summary, retailer_id,
+           operation, failure_stage, reason_code, layout_fingerprint,
+           occurrence_count, affected_entity_count, first_seen_at, last_seen_at,
+           last_failure_at, created_at, updated_at
+         ) VALUES ('forbidden', $1, $2, 'native_alert_reconciliation_rule',
+                   'adapter_repair', $3, 'warning', 'open', 'operational_aggregate',
+                   'forbidden', 'forbidden', 'amazon', 'observe', 'runner',
+                   'forbidden', $3, 1, 1, $4, $4, $4, $4, $4)`,
+        [NATIVE_TENANT, NATIVE_USER, "f".repeat(64), new Date(reconciliationNow).toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      alertReconciliationDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_reconcile_operator_alerts"(
+           $1, $2, '0.70.0', 'plan', '', $3, '[]'
+         )`,
+        [NATIVE_TENANT, NATIVE_SAME_TENANT_USER, `alertcorr_${"a".repeat(48)}`]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    const directRevalidationNow = Date.now();
+    const directRevalidationLayout = "9".repeat(64);
+    for (const [index, sku] of ["B0PLAN0001", "B0PLAN0002"].entries()) {
+      await insertOperatorAlertReconciliationDiagnostic(first, {
+        id: `native_alert_reconciliation_direct_plan_${index + 1}`,
+        tenantId: NATIVE_TENANT,
+        userId: NATIVE_USER,
+        deviceId: `native_candidate_device_other_${index + 1}`,
+        retailerSku: sku,
+        layoutFingerprint: directRevalidationLayout,
+        receivedAt: new Date(directRevalidationNow - 2_000 + index).toISOString()
+      });
+    }
+    const directCorrelation = `alertcorr_${"b".repeat(48)}`;
+    const directReconciliationPlan = await alertReconciliationDirectClient.query<{ result_json: string }>(
+      `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_reconcile_operator_alerts"(
+         $1, $2, '0.70.0', 'plan', '', $3, '[]'
+       )`,
+      [NATIVE_TENANT, NATIVE_USER, directCorrelation]
+    );
+    const directPlanPayload = JSON.parse(String(directReconciliationPlan.rows[0]?.result_json)) as {
+      evaluationTimestamp: string;
+      selectedActions: Array<{ layoutFingerprint: string }>;
+    };
+    assert.ok(directPlanPayload.selectedActions.some(
+      (action) => action.layoutFingerprint === directRevalidationLayout
+    ));
+    await assert.rejects(
+      alertReconciliationDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_reconcile_operator_alerts"(
+           $1, $2, '0.70.0', 'apply', $3, $4, '[]'
+         )`,
+        [
+          NATIVE_TENANT,
+          NATIVE_USER,
+          directPlanPayload.evaluationTimestamp,
+          directCorrelation
+        ]
+      ),
+      /apply set does not match its evidence plan/
+    );
+    assert.equal(
+      Number((await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."operator_alert_incidents"
+         WHERE tenant_id = $1 AND subject_user_id = $2 AND layout_fingerprint = $3`,
+        [NATIVE_TENANT, NATIVE_USER, directRevalidationLayout]
+      )).rows[0]?.count),
+      0
+    );
+    await assert.rejects(
+      alertReconciliationDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_dispatch_operator_alert_connector"(
+           $1, $2, '0.70.0', 'expire', '{}', '', '', '', '', '', '', ''
+         )`,
+        [NATIVE_TENANT, NATIVE_USER]
+      ),
+      /permission denied/
+    );
+    await alertReconciliationDirectClient.end();
+    alertReconciliationDirectClient = null;
     await first.query(
       `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
        WHERE principal_role = $1`,
@@ -3445,6 +4075,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       await first.query(
         `REVOKE "${alertDispatchManifest.alertDispatchRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${alertReconciliationManifest.alertReconciliationRole.name}" FROM "${principalRole}"`
+      );
     }
     await first.query(
       `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
@@ -3553,6 +4186,68 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(
       cleanAlertDispatchBoundary.boundaryCatalogFingerprint,
       alertDispatchBoundary.boundaryCatalogFingerprint
+    );
+    const cleanAlertReconciliationBoundary = await verifyPostgresOperatorAlertReconciliationBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanAlertReconciliationBoundary.boundaryCatalogFingerprint,
+      alertReconciliationBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_reconcile_operator_alerts"(
+         text, text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresOperatorAlertReconciliationBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_reconcile_operator_alerts"(
+         text, text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresOperatorAlertReconciliationBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      alertReconciliationBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_dispatch_operator_alert_connector"(
@@ -3865,12 +4560,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       alertDispatchB?.close(),
       alertDispatchC?.close(),
       alertDispatchUnmapped?.close(),
-      alertDispatchDirectClient?.end()
+      alertDispatchDirectClient?.end(),
+      alertReconciliationA?.close(),
+      alertReconciliationASecond?.close(),
+      alertReconciliationB?.close(),
+      alertReconciliationC?.close(),
+      alertReconciliationUnmapped?.close(),
+      alertReconciliationDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
     operationalRetentionHandlerDb?.close();
     observerCandidateHandlerDb?.close();
+    alertReconciliationHandlerDb?.close();
     await postgres.stop().catch(() => undefined);
     if (existsSync(parent)) rmSync(parent, { recursive: true, force: true });
     if (existsSync(fixture.directory)) rmSync(fixture.directory, { recursive: true, force: true });

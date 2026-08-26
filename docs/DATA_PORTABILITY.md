@@ -39,6 +39,13 @@ Yoink 0.69 adds a separate function-only connector-dispatch sub-boundary with
 server-bound user isolation, two-phase leasing, one-use hashed capabilities,
 and endpoint references only. Alert diagnostic reconciliation remains
 SQLite-only, so complete-handler coverage remains four of seven.
+Yoink 0.70 adds the independent function-only diagnostic-reconciliation
+boundary, completing `adapter_alert_reconciliation`. It derives and revalidates
+bounded sanitized repair groups and preserves incident lifecycle, dashboard,
+audit, outbox, and secretless connector-queue receipts. Five of seven handlers
+now have PostgreSQL repository parity; the remaining two handlers and all
+request repositories remain SQLite-only, and every PostgreSQL runtime role
+stays inactive.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.

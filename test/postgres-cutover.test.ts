@@ -77,6 +77,13 @@ import {
   postgresOperatorAlertConnectorDispatchCapabilityProjection
 } from "../packages/database/src/postgres-operator-alert-connector-dispatch.js";
 import {
+  POSTGRES_OPERATOR_ALERT_RECONCILIATION_CONTRACT_VERSION,
+  POSTGRES_OPERATOR_ALERT_RECONCILIATION_FUNCTION,
+  buildPostgresOperatorAlertReconciliationManifest,
+  operatorAlertReconciliationFunctionSource,
+  postgresOperatorAlertReconciliationCapabilityProjection
+} from "../packages/database/src/postgres-operator-alert-reconciliation.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -907,6 +914,141 @@ test("the PostgreSQL operator-alert dispatch sub-boundary is tenant-bound, secre
       "execute_namespace",
       "retention_namespace",
       "candidate_namespace",
+      "same_namespace"
+    ),
+    /must be distinct/
+  );
+});
+
+test("the PostgreSQL operator-alert reconciliation boundary is server-derived, bounded, and inert", () => {
+  const args = [
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test",
+    "yoink_notify_test",
+    "yoink_execute_test",
+    "yoink_retention_test",
+    "yoink_candidate_test",
+    "yoink_alert_dispatch_test",
+    "yoink_alert_reconcile_test"
+  ] as const;
+  const manifest = buildPostgresOperatorAlertReconciliationManifest(...args);
+  assert.deepEqual(buildPostgresOperatorAlertReconciliationManifest(...args), manifest);
+  assert.equal(manifest.contractVersion, POSTGRES_OPERATOR_ALERT_RECONCILIATION_CONTRACT_VERSION);
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(
+    manifest.alertDispatchContractVersion,
+    POSTGRES_OPERATOR_ALERT_CONNECTOR_DISPATCH_CONTRACT_VERSION
+  );
+  assert.equal(
+    manifest.alertReconciliationRole.functionName,
+    POSTGRES_OPERATOR_ALERT_RECONCILIATION_FUNCTION
+  );
+  assert.deepEqual(manifest.alertReconciliationRole.functionArgumentTypes, Array(7).fill("text"));
+  assert.deepEqual(manifest.alertReconciliationRole.protectedTableNames, [
+    "audit_events",
+    "operator_alert_connector_deliveries",
+    "operator_alert_connector_delivery_events",
+    "operator_alert_connectors",
+    "operator_alert_deliveries",
+    "operator_alert_events",
+    "operator_alert_incidents",
+    "operator_alert_rules",
+    "outbox_events",
+    "retailer_adapter_diagnostics"
+  ]);
+  assert.deepEqual(manifest.qualifiedHandlerTaskKinds, [
+    "notification_recovery",
+    "execution_recovery",
+    "operational_telemetry_retention",
+    "observer_recipe_candidate_evaluation",
+    "adapter_alert_reconciliation"
+  ]);
+  assert.equal(manifest.qualifiedHandlerTaskKindCount, 5);
+  assert.equal(manifest.totalHandlerTaskKindCount, 7);
+  assert.equal(manifest.maximumDiagnostics, 2_000);
+  assert.equal(manifest.maximumGroups, 50);
+  assert.equal(manifest.maximumActions, 50);
+  assert.equal(manifest.maximumRules, 50);
+  assert.equal(manifest.maximumConnectors, 20);
+  assert.equal(manifest.maximumConnectorPayloadBytes, 4_000);
+  assert.equal(manifest.serverDerivedRepairGroups, true);
+  assert.equal(manifest.databaseEvidenceRevalidation, true);
+  assert.equal(manifest.twoPhasePlanApply, true);
+  assert.equal(manifest.databaseServerClock, true);
+  assert.equal(manifest.applicationGeneratedOpaqueIds, true);
+  assert.equal(manifest.sanitizedAggregateOnly, true);
+  assert.equal(manifest.endpointReferencesOnly, true);
+  assert.equal(manifest.rawUrlsAccessible, false);
+  assert.equal(manifest.connectorSecretsAccessible, false);
+  assert.equal(manifest.alertDispatchRepositoryParity, true);
+  assert.equal(manifest.alertReconciliationRepositoryParity, true);
+  assert.equal(manifest.fullHandlerRepositoryParity, true);
+  assert.equal(manifest.protectedTableCount, 10);
+  assert.equal(manifest.forcedRlsTableCount, 10);
+  assert.equal(manifest.directTableGrantCount, 0);
+  assert.equal(manifest.functionGrantCount, 1);
+  assert.equal(manifest.mutationAuthority, false);
+  assert.equal(manifest.activePrincipalCount, 0);
+  assert.equal(manifest.runtimeAuthority, false);
+  assert.match(manifest.alertDispatchManifestFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+
+  const source = operatorAlertReconciliationFunctionSource(manifest);
+  assert.match(source, /principal\.principal_role = session_user::text/);
+  assert.match(source, /pg_advisory_xact_lock/);
+  assert.match(source, /LIMIT 2000/);
+  assert.match(source, /operation_name NOT IN \('plan', 'apply'\)/);
+  assert.match(source, /apply set does not match its evidence plan/);
+  assert.match(source, /subject_user_id = resolved_user_id/);
+  assert.match(source, /endpoint_reference/);
+  assert.doesNotMatch(source, /https?:\/\//);
+  assert.doesNotMatch(source, /connector_secret|endpoint_url/i);
+
+  const capability = postgresOperatorAlertReconciliationCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_OPERATOR_ALERT_RECONCILIATION_CONTRACT_VERSION);
+  assert.equal(capability.deterministicManifestImplemented, true);
+  assert.equal(capability.atomicQualificationApplyImplemented, true);
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.securityDefinerRoutineVerified, true);
+  assert.equal(capability.serverBoundPrincipalLookup, true);
+  assert.equal(capability.serverDerivedRepairGroups, true);
+  assert.equal(capability.databaseEvidenceRevalidation, true);
+  assert.equal(capability.twoPhasePlanApply, true);
+  assert.equal(capability.databaseServerClock, true);
+  assert.equal(capability.applicationGeneratedOpaqueIds, true);
+  assert.equal(capability.sanitizedAggregateOnly, true);
+  assert.equal(capability.endpointReferencesOnly, true);
+  assert.equal(capability.rawUrlsAccessible, false);
+  assert.equal(capability.connectorSecretsAccessible, false);
+  assert.equal(capability.readCommittedTransactionAdapter, true);
+  assert.equal(capability.alertDispatchRepositoryParity, true);
+  assert.equal(capability.alertReconciliationRepositoryParity, true);
+  assert.equal(capability.fullHandlerRepositoryParity, true);
+  assert.equal(capability.handlerTaskKindCount, 5);
+  assert.equal(capability.totalHandlerTaskKindCount, 7);
+  assert.equal(capability.protectedTableCount, 10);
+  assert.equal(capability.forcedRlsTableCount, 10);
+  assert.equal(capability.directTableGrantCount, 0);
+  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.mutationAuthority, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresOperatorAlertReconciliationManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "control_namespace",
+      "notify_namespace",
+      "execute_namespace",
+      "retention_namespace",
+      "candidate_namespace",
+      "dispatch_namespace",
       "same_namespace"
     ),
     /must be distinct/
