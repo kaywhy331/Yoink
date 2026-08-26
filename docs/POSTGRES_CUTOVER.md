@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.68 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.69 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -65,9 +65,10 @@ Automated real-engine tests cover:
 This class is not imported by the API or standalone worker entry points. It
 cannot flip receipt authority, cannot enable dual writes, and does not give the
 PostgreSQL process any retailer-session capability. Three task-handler families
-still use only SQLite repositories; notification recovery, execution recovery,
-operational retention, and observer-candidate evaluation now have separately
-qualified but inactive PostgreSQL seams. The emulated
+remain incomplete; notification recovery, execution recovery, operational
+retention, and observer-candidate evaluation have separately qualified but
+inactive PostgreSQL seams, while connector dispatch is a proven sub-boundary of
+the still-incomplete alert-reconciliation handler. The emulated
 real-semantics suite continues to prove the
 complete store state machine; the separate native suite now proves the
 contention-critical path across independent server sessions.
@@ -107,7 +108,9 @@ establish runtime authority. Version 0.65 separately executes the
 notification-recovery handler through its own native qualification path;
 version 0.66 does the same for action/spend execution recovery, version 0.67
 does the same for bounded privacy retention, and version 0.68 proves bounded,
-quarantine-only observer-candidate evaluation.
+quarantine-only observer-candidate evaluation. Version 0.69 separately proves
+secretless operator-alert connector dispatch without claiming alert
+reconciliation complete.
 
 ## Restricted read-role qualification seam
 
@@ -669,6 +672,75 @@ mapping, signing key, or runtime composition. Exactly four of seven task
 families now have repository parity; all four roles remain inactive and SQLite
 stays authoritative.
 
+## Function-only operator-alert connector-dispatch qualification seam
+
+Version 0.69 derives one additional sub-boundary role from the exact verified
+observer-candidate chain. It covers only the connector queue, lease, retry,
+delivery, and dead-letter operations used by `adapter_alert_reconciliation`.
+Diagnostic-to-incident reconciliation is explicitly outside this boundary, so
+the complete-handler count remains four of seven.
+
+The role is `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no objects, has
+schema `USAGE`, zero direct/effective table or column grants, no sequence or
+policy authority, and one exact strict security-definer function grant. Four
+tables remain forced-RLS: connector configuration, incidents, deliveries, and
+append-only delivery events. The function resolves `session_user` through the
+server-owned principal registry and requires every selected incident to match
+the exact mapped `subject_user_id`, not merely its tenant.
+
+Lease selection and application share one `READ COMMITTED` transaction and use
+`FOR UPDATE SKIP LOCKED`. PostgreSQL selects the row and supplies statement
+time; the application generates a random 32-byte capability between the plan
+and apply calls and stores only its one-use hash. The boundary accepts at most
+20 valid deployment-owned endpoint reference/fingerprint bindings, never raw
+webhook URLs or signing secrets, and caps attempts at 12, payloads at 4,000
+bytes, leases at 15–300 seconds, and retries at 1–86,400 seconds.
+
+Native PostgreSQL 16 proves one winner under concurrent claims, exact
+delivery/retry/dead-letter state transitions, expired twelfth-attempt recovery,
+wrong-capability rollback, same-tenant cross-user and cross-tenant isolation,
+unmapped denial, production dispatch-service compatibility, direct SQL and
+unrelated-function denial, clean temporary authority removal, and receipt
+failure after function-catalog tamper. No qualification command contacts a
+webhook.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:alert-dispatch -- plan \
+  yoink_cutover_qualification_069 yoink_q_069 yoink_session_q_069 \
+  yoink_queue_q_069 yoink_control_q_069 yoink_notify_q_069 \
+  yoink_execute_q_069 yoink_retain_q_069 yoink_candidate_q_069 \
+  yoink_dispatch_q_069
+```
+
+After the exact observer-candidate receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_ALERT_DISPATCH_QUALIFICATION_ACK=bounded-operator-alert-dispatch-qualification \
+  npm run postgres:alert-dispatch -- apply \
+  yoink_cutover_qualification_069 yoink_q_069 yoink_session_q_069 \
+  yoink_queue_q_069 yoink_control_q_069 yoink_notify_q_069 \
+  yoink_execute_q_069 yoink_retain_q_069 yoink_candidate_q_069 \
+  yoink_dispatch_q_069
+```
+
+Then independently re-inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:alert-dispatch -- verify \
+  yoink_cutover_qualification_069 yoink_q_069 yoink_session_q_069 \
+  yoink_queue_q_069 yoink_control_q_069 yoink_notify_q_069 \
+  yoink_execute_q_069 yoink_retain_q_069 yoink_candidate_q_069 \
+  yoink_dispatch_q_069
+```
+
+Apply refuses reused objects and cannot create a login, membership, principal
+mapping, connector, endpoint, secret, webhook request, or runtime composition.
+Alert diagnostic reconciliation and its independent proof remain required
+before this task family can count as the fifth complete handler.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -772,8 +844,8 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- PostgreSQL implementations for the remaining three task-handler families and
-  every API repository;
+- PostgreSQL diagnostic reconciliation for the partially ported alert handler,
+  the remaining task-handler families, and every API repository;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers and the unresolved incident table; all qualified

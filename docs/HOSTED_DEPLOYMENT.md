@@ -373,7 +373,10 @@ role for server-clocked 30/90-day privacy retention with a 500-row evidence cap
 and authenticated receipt attribution. Version 0.68 qualifies a fourth
 function-only role for two-phase, server-revalidated observer-candidate
 evaluation bounded to 2,000 diagnostics and 25 unsigned non-executable
-quarantine candidates. No production login, mapping, membership, handler composition, or
+quarantine candidates. Version 0.69 proves a separate secretless connector-
+dispatch sub-boundary with exact user isolation, server-clocked two-phase
+leasing, and one-use hashed capabilities; alert diagnostic reconciliation is
+still unported, so coverage stays four complete handlers. No production login, mapping, membership, handler composition, or
 API repository is provisioned. None of these releases deploys that runtime. Until
 it is provisioned and verified, SQLite is the source of truth and hosted
 boundary mode is suitable for integration/staging—not a claim of completed

@@ -70,6 +70,13 @@ import {
   postgresObserverCandidateEvaluationCapabilityProjection
 } from "../packages/database/src/postgres-observer-repair-candidate-evaluation.js";
 import {
+  POSTGRES_OPERATOR_ALERT_CONNECTOR_DISPATCH_CONTRACT_VERSION,
+  POSTGRES_OPERATOR_ALERT_CONNECTOR_DISPATCH_FUNCTION,
+  buildPostgresOperatorAlertConnectorDispatchManifest,
+  operatorAlertDispatchFunctionSource,
+  postgresOperatorAlertConnectorDispatchCapabilityProjection
+} from "../packages/database/src/postgres-operator-alert-connector-dispatch.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -782,6 +789,124 @@ test("the PostgreSQL observer-candidate handler template is quarantined, cumulat
       "notify_namespace",
       "execute_namespace",
       "retention_namespace",
+      "same_namespace"
+    ),
+    /must be distinct/
+  );
+});
+
+test("the PostgreSQL operator-alert dispatch sub-boundary is tenant-bound, secretless, and inert", () => {
+  const args = [
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test",
+    "yoink_notify_test",
+    "yoink_execute_test",
+    "yoink_retention_test",
+    "yoink_candidate_test",
+    "yoink_alert_dispatch_test"
+  ] as const;
+  const manifest = buildPostgresOperatorAlertConnectorDispatchManifest(...args);
+  assert.deepEqual(buildPostgresOperatorAlertConnectorDispatchManifest(...args), manifest);
+  assert.equal(
+    manifest.contractVersion,
+    POSTGRES_OPERATOR_ALERT_CONNECTOR_DISPATCH_CONTRACT_VERSION
+  );
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(
+    manifest.observerCandidateContractVersion,
+    POSTGRES_OBSERVER_CANDIDATE_EVALUATION_CONTRACT_VERSION
+  );
+  assert.equal(
+    manifest.alertDispatchRole.functionName,
+    POSTGRES_OPERATOR_ALERT_CONNECTOR_DISPATCH_FUNCTION
+  );
+  assert.deepEqual(manifest.alertDispatchRole.functionArgumentTypes, Array(12).fill("text"));
+  assert.deepEqual(manifest.alertDispatchRole.protectedTableNames, [
+    "operator_alert_connector_deliveries",
+    "operator_alert_connector_delivery_events",
+    "operator_alert_connectors",
+    "operator_alert_incidents"
+  ]);
+  assert.deepEqual(manifest.qualifiedHandlerTaskKinds, [
+    "notification_recovery",
+    "execution_recovery",
+    "operational_telemetry_retention",
+    "observer_recipe_candidate_evaluation"
+  ]);
+  assert.equal(manifest.qualifiedHandlerTaskKindCount, 4);
+  assert.equal(manifest.totalHandlerTaskKindCount, 7);
+  assert.equal(manifest.maximumBindings, 20);
+  assert.equal(manifest.maximumAttempts, 12);
+  assert.equal(manifest.maximumPayloadBytes, 4_000);
+  assert.equal(manifest.twoPhaseLease, true);
+  assert.equal(manifest.applicationHashedOneUseCapabilities, true);
+  assert.equal(manifest.databaseServerClock, true);
+  assert.equal(manifest.endpointReferencesOnly, true);
+  assert.equal(manifest.rawUrlsAccessible, false);
+  assert.equal(manifest.connectorSecretsAccessible, false);
+  assert.equal(manifest.alertDispatchRepositoryParity, true);
+  assert.equal(manifest.alertReconciliationRepositoryParity, false);
+  assert.equal(manifest.fullHandlerRepositoryParity, false);
+  assert.equal(manifest.protectedTableCount, 4);
+  assert.equal(manifest.forcedRlsTableCount, 4);
+  assert.equal(manifest.directTableGrantCount, 0);
+  assert.equal(manifest.functionGrantCount, 1);
+  assert.equal(manifest.mutationAuthority, false);
+  assert.equal(manifest.activePrincipalCount, 0);
+  assert.equal(manifest.runtimeAuthority, false);
+  assert.match(manifest.observerCandidateManifestFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+
+  const source = operatorAlertDispatchFunctionSource(manifest);
+  assert.match(source, /principal\.principal_role = session_user::text/);
+  assert.match(source, /incident\.subject_user_id = resolved_user_id/);
+  assert.match(source, /operation_name IN \('lease_plan', 'lease_apply'\)/);
+  assert.match(source, /FOR UPDATE OF d SKIP LOCKED/);
+  assert.match(source, /lease_capability_hash = capability_hash/);
+  assert.doesNotMatch(source, /https?:\/\//);
+  assert.doesNotMatch(source, /connector_secret|endpoint_url/i);
+
+  const capability = postgresOperatorAlertConnectorDispatchCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_OPERATOR_ALERT_CONNECTOR_DISPATCH_CONTRACT_VERSION);
+  assert.equal(capability.deterministicManifestImplemented, true);
+  assert.equal(capability.atomicQualificationApplyImplemented, true);
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.securityDefinerRoutineVerified, true);
+  assert.equal(capability.serverBoundPrincipalLookup, true);
+  assert.equal(capability.twoPhaseLease, true);
+  assert.equal(capability.applicationHashedOneUseCapabilities, true);
+  assert.equal(capability.databaseServerClock, true);
+  assert.equal(capability.endpointReferencesOnly, true);
+  assert.equal(capability.rawUrlsAccessible, false);
+  assert.equal(capability.connectorSecretsAccessible, false);
+  assert.equal(capability.readCommittedTransactionAdapter, true);
+  assert.equal(capability.alertDispatchRepositoryParity, true);
+  assert.equal(capability.alertReconciliationRepositoryParity, false);
+  assert.equal(capability.fullHandlerRepositoryParity, false);
+  assert.equal(capability.handlerTaskKindCount, 4);
+  assert.equal(capability.totalHandlerTaskKindCount, 7);
+  assert.equal(capability.protectedTableCount, 4);
+  assert.equal(capability.forcedRlsTableCount, 4);
+  assert.equal(capability.directTableGrantCount, 0);
+  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.mutationAuthority, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresOperatorAlertConnectorDispatchManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "control_namespace",
+      "notify_namespace",
+      "execute_namespace",
+      "retention_namespace",
+      "candidate_namespace",
       "same_namespace"
     ),
     /must be distinct/

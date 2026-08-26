@@ -35,6 +35,10 @@ evaluation. It derives at most 25 aggregate proposals from 2,000 sanitized
 diagnostics, revalidates the evidence before apply, and can create only
 unsigned, non-executable quarantine candidates. The other three handlers
 remain SQLite-only.
+Yoink 0.69 adds a separate function-only connector-dispatch sub-boundary with
+server-bound user isolation, two-phase leasing, one-use hashed capabilities,
+and endpoint references only. Alert diagnostic reconciliation remains
+SQLite-only, so complete-handler coverage remains four of seven.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.

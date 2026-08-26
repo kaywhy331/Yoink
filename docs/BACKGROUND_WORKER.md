@@ -289,7 +289,12 @@ candidate evaluation derives at most 25 aggregate proposals from the newest
 only unsigned, non-executable quarantine rows and their existing receipts. Its
 function-only role has zero direct table grants and no signing, promotion,
 distribution, field-fill, or retailer authority. The remaining three handlers
-stay SQLite-only. Production also requires login provisioning and activation, remaining writer
+stay incomplete. Version 0.69 proves only the connector-dispatch half of the
+alert handler through another zero-direct-grant function: server-bound
+tenant/user selection, database-clocked `SKIP LOCKED` leasing, deployment-owned
+endpoint references, and application-hashed one-use capabilities. Raw webhook
+URLs and signing secrets never cross that boundary; diagnostic reconciliation
+remains SQLite-only, so the handler count stays four of seven. Production also requires login provisioning and activation, remaining writer
 families, a deployed multi-process worker fleet with handler replay and failure testing, production
 identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode

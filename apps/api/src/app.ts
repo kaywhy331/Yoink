@@ -127,6 +127,7 @@ import { postgresNotificationRecoveryCapabilityProjection } from "../../../packa
 import { postgresExecutionRecoveryCapabilityProjection } from "../../../packages/database/src/postgres-execution-recovery.js";
 import { postgresOperationalRetentionCapabilityProjection } from "../../../packages/database/src/postgres-operational-retention.js";
 import { postgresObserverCandidateEvaluationCapabilityProjection } from "../../../packages/database/src/postgres-observer-repair-candidate-evaluation.js";
+import { postgresOperatorAlertConnectorDispatchCapabilityProjection } from "../../../packages/database/src/postgres-operator-alert-connector-dispatch.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -386,6 +387,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const postgresExecutionRecovery = postgresExecutionRecoveryCapabilityProjection();
   const postgresOperationalRetention = postgresOperationalRetentionCapabilityProjection();
   const postgresObserverCandidateEvaluation = postgresObserverCandidateEvaluationCapabilityProjection();
+  const postgresOperatorAlertConnectorDispatch = postgresOperatorAlertConnectorDispatchCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -659,6 +661,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresExecutionRecovery,
           postgresOperationalRetention,
           postgresObserverCandidateEvaluation,
+          postgresOperatorAlertConnectorDispatch,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1509,7 +1512,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresNotificationRecovery,
             postgresExecutionRecovery,
             postgresOperationalRetention,
-            postgresObserverCandidateEvaluation
+            postgresObserverCandidateEvaluation,
+            postgresOperatorAlertConnectorDispatch
           },
           capabilities: {
             catalog: true,
@@ -1666,6 +1670,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresExecutionRecovery,
             postgresOperationalRetention,
             postgresObserverCandidateEvaluation,
+            postgresOperatorAlertConnectorDispatch,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

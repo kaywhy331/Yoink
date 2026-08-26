@@ -59,8 +59,17 @@ import {
   buildPostgresObserverCandidateEvaluationManifest,
   verifyPostgresObserverCandidateEvaluationBoundary
 } from "../packages/database/src/postgres-observer-repair-candidate-evaluation.js";
+import {
+  NodePostgresOperatorAlertConnectorDispatchDatabase,
+  applyPostgresOperatorAlertConnectorDispatchBoundary,
+  buildPostgresOperatorAlertConnectorDispatchManifest,
+  verifyPostgresOperatorAlertConnectorDispatchBoundary
+} from "../packages/database/src/postgres-operator-alert-connector-dispatch.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { stableHash } from "../packages/domain/src/ids.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
+import { OperatorAlertConnectorDispatchService } from "../packages/engine/src/operator-alert-connector-dispatch.js";
+import type { OperatorAlertWebhookRegistry } from "../packages/engine/src/operator-alert-webhook.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
 import {
   POSTGRES_TEST_WORKER_FINGERPRINT,
@@ -80,11 +89,25 @@ const NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE = "yoink_native_notify";
 const NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE = "yoink_native_execute";
 const NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE = "yoink_native_retention";
 const NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE = "yoink_native_candidate";
+const NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE = "yoink_native_dispatch";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
+const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
 const NATIVE_PRINCIPAL_UNMAPPED = "yoink_native_principal_unmapped";
 const NATIVE_CONTROL_PRINCIPAL = "yoink_native_control_principal";
 const NATIVE_PRINCIPAL_PASSWORD = "yoink_native_principal_only";
+const NATIVE_SAME_TENANT_USER = "user_cutover_other_peer";
+const NATIVE_ALERT_BINDING = "b".repeat(64);
+const NATIVE_ALERT_REGISTRY: OperatorAlertWebhookRegistry = Object.freeze({
+  definitions: Object.freeze([Object.freeze({
+    reference: "ops_primary",
+    endpoint: "https://alerts.example.com/v1/yoink",
+    signingSecretEnvironment: "YOINK_OPERATOR_ALERT_WEBHOOK_SECRET_OPS_PRIMARY",
+    bindingFingerprint: NATIVE_ALERT_BINDING
+  })]),
+  bindings: Object.freeze({ ops_primary: NATIVE_ALERT_BINDING }),
+  fingerprint: "a".repeat(64)
+});
 
 async function availableLoopbackPort(): Promise<number> {
   const server = createServer();
@@ -720,6 +743,132 @@ async function insertObserverCandidateFixtures(
   });
 }
 
+async function insertOperatorAlertDispatchFixture(
+  database: PostgresCutoverDatabase,
+  suffix: string,
+  subjectUserId: string,
+  now: number,
+  exhausted = false
+): Promise<string> {
+  const createdAt = new Date(now - 10_000).toISOString();
+  const expiredAt = new Date(now - 1_000).toISOString();
+  const ruleId = "native_alert_rule_other";
+  const connectorId = "native_alert_connector_other";
+  const incidentId = `native_alert_incident_${suffix}`;
+  const eventId = `native_alert_event_${suffix}`;
+  const deliveryId = `native_alert_delivery_${suffix}`;
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."operator_alert_rules"(
+       id, tenant_id, event_family, name, enabled, severity,
+       minimum_occurrences, dedupe_window_seconds, escalation_after_seconds,
+       retailer_scope, operation_scope, routes_json, privacy_classification,
+       created_by_actor_id, updated_by_actor_id, created_at, updated_at
+     ) VALUES ($1, $2, 'adapter_repair', 'Native dispatch rule', 1, 'warning',
+               1, 900, 3600, '*', '*', '["dashboard"]', 'operational_configuration',
+               'native_fixture', 'native_fixture', $3, $3)
+     ON CONFLICT (id) DO NOTHING`,
+    [ruleId, NATIVE_TENANT, createdAt]
+  );
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."operator_alert_connectors"(
+       id, tenant_id, name, enabled, kind, endpoint_reference,
+       endpoint_binding_fingerprint, minimum_severity, privacy_classification,
+       created_by_actor_id, updated_by_actor_id, created_at, updated_at
+     ) VALUES ($1, $2, 'Native operations webhook', 1, 'webhook', 'ops_primary',
+               $3, 'warning', 'operational_configuration',
+               'native_fixture', 'native_fixture', $4, $4)
+     ON CONFLICT (id) DO NOTHING`,
+    [connectorId, NATIVE_TENANT, NATIVE_ALERT_BINDING, createdAt]
+  );
+  const layoutFingerprint = stableHash("yoink_native_alert_layout_v1", suffix);
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."operator_alert_incidents"(
+       id, tenant_id, subject_user_id, rule_id, event_family, incident_key_hash,
+       severity, status, privacy_classification, title, summary, retailer_id,
+       operation, failure_stage, reason_code, layout_fingerprint,
+       occurrence_count, affected_entity_count, first_seen_at, last_seen_at,
+       last_failure_at, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, 'adapter_repair', $5, 'warning', 'open',
+               'operational_aggregate', 'Native dispatch incident',
+               'Bounded native PostgreSQL dispatch fixture.', 'target', 'observe',
+               'offer_binding', 'offer_binding_ambiguous', $6, 2, 1, $7, $7, $7, $7, $7)`,
+    [incidentId, NATIVE_TENANT, subjectUserId, ruleId,
+      stableHash("yoink_native_alert_incident_v1", suffix), layoutFingerprint, createdAt]
+  );
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."operator_alert_events"(
+       id, tenant_id, incident_id, rule_id, event_type, severity, reason_code,
+       actor_kind, actor_id, correlation_id, privacy_classification, metadata_json, created_at
+     ) VALUES ($1, $2, $3, $4, 'opened', 'warning', 'incident_opened',
+               'service', 'native_fixture', $3, 'operational_aggregate', '{}', $5)`,
+    [eventId, NATIVE_TENANT, incidentId, ruleId, createdAt]
+  );
+  const payloadJson = JSON.stringify({
+    contractVersion: 1,
+    eventId,
+    incidentId,
+    eventType: "opened",
+    severity: "warning",
+    reasonCode: "incident_opened",
+    retailerId: "target",
+    operation: "observe",
+    failureStage: "offer_binding",
+    layoutFingerprint,
+    occurrenceCount: 2,
+    affectedEntityCount: 1,
+    firstSeenAt: createdAt,
+    lastSeenAt: createdAt,
+    emittedAt: createdAt,
+    privacyClassification: "operational_aggregate"
+  });
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries"(
+       id, tenant_id, connector_id, incident_id, event_id, endpoint_reference,
+       endpoint_binding_fingerprint, payload_json, payload_hash,
+       idempotency_key_hash, state, privacy_classification, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, $5, 'ops_primary', $6, $7, $8, $9,
+               'pending', 'operational_aggregate', $10, $10)`,
+    [deliveryId, NATIVE_TENANT, connectorId, incidentId, eventId,
+      NATIVE_ALERT_BINDING, payloadJson,
+      stableHash("yoink_operator_alert_connector_payload_v1", payloadJson),
+      stableHash("yoink_operator_alert_connector_idempotency_v1", NATIVE_TENANT, connectorId, eventId),
+      createdAt]
+  );
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."operator_alert_connector_delivery_events"(
+       id, tenant_id, delivery_id, sequence, event_type, attempt,
+       reason_code, http_status, privacy_classification, created_at
+     ) VALUES ($1, $2, $3, 1, 'queued', 0, 'alert_event_routed', 0,
+               'operational_aggregate', $4)`,
+    [`native_alert_delivery_event_${suffix}_queued`, NATIVE_TENANT, deliveryId, createdAt]
+  );
+  if (exhausted) {
+    for (let attempt = 1; attempt <= 12; attempt += 1) {
+      const leasedAt = new Date(now - 9_000 + (attempt - 1) * 600).toISOString();
+      await database.query(
+        `UPDATE "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries"
+         SET state = 'leased', attempt_count = $1,
+             lease_capability_hash = $2, lease_expires_at = $3,
+             next_attempt_at = '', last_error_code = '', last_http_status = 0,
+             updated_at = $4 WHERE id = $5`,
+        [attempt, stableHash("yoink_native_exhausted_capability_v1", attempt),
+          expiredAt, leasedAt, deliveryId]
+      );
+      if (attempt < 12) {
+        const retryAt = new Date(now - 8_700 + (attempt - 1) * 600).toISOString();
+        await database.query(
+          `UPDATE "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries"
+           SET state = 'retry_wait', lease_capability_hash = '', lease_expires_at = '',
+               next_attempt_at = $1, last_error_code = 'native_retry',
+               last_http_status = 503, updated_at = $1 WHERE id = $2`,
+          [retryAt, deliveryId]
+        );
+      }
+    }
+  }
+  return deliveryId;
+}
+
 function workerContext(workerId: string): BackgroundWorkerContext {
   return {
     principal: { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
@@ -730,8 +879,8 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and four bounded handlers", {
-  timeout: 240_000
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, four handlers, and alert dispatch", {
+  timeout: 300_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
   const databaseDir = join(parent, "cluster");
@@ -783,6 +932,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let observerCandidateUnmapped: NodePostgresObserverCandidateEvaluationDatabase | null = null;
   let observerCandidateDirectClient: Client | null = null;
   let observerCandidateHandlerDb: YoinkDatabase | null = null;
+  let alertDispatchA: NodePostgresOperatorAlertConnectorDispatchDatabase | null = null;
+  let alertDispatchASecond: NodePostgresOperatorAlertConnectorDispatchDatabase | null = null;
+  let alertDispatchB: NodePostgresOperatorAlertConnectorDispatchDatabase | null = null;
+  let alertDispatchC: NodePostgresOperatorAlertConnectorDispatchDatabase | null = null;
+  let alertDispatchUnmapped: NodePostgresOperatorAlertConnectorDispatchDatabase | null = null;
+  let alertDispatchDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -1087,6 +1242,61 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       observerCandidateBoundary
     );
+    const alertDispatchBoundary = await applyPostgresOperatorAlertConnectorDispatchBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:55.000Z").getTime()
+    );
+    assert.equal(alertDispatchBoundary.protectedTableCount, 4);
+    assert.equal(alertDispatchBoundary.forcedRlsTableCount, 4);
+    assert.equal(alertDispatchBoundary.directTableGrantCount, 0);
+    assert.equal(alertDispatchBoundary.functionGrantCount, 1);
+    assert.equal(alertDispatchBoundary.membershipCount, 0);
+    assert.equal(alertDispatchBoundary.activePrincipalCount, 0);
+    assert.equal(alertDispatchBoundary.qualifiedHandlerTaskKindCount, 4);
+    assert.equal(alertDispatchBoundary.totalHandlerTaskKindCount, 7);
+    assert.equal(alertDispatchBoundary.maximumBindings, 20);
+    assert.equal(alertDispatchBoundary.maximumAttempts, 12);
+    assert.equal(alertDispatchBoundary.maximumPayloadBytes, 4_000);
+    assert.equal(alertDispatchBoundary.twoPhaseLease, true);
+    assert.equal(alertDispatchBoundary.applicationHashedOneUseCapabilities, true);
+    assert.equal(alertDispatchBoundary.databaseServerClock, true);
+    assert.equal(alertDispatchBoundary.endpointReferencesOnly, true);
+    assert.equal(alertDispatchBoundary.rawUrlsAccessible, false);
+    assert.equal(alertDispatchBoundary.connectorSecretsAccessible, false);
+    assert.equal(alertDispatchBoundary.alertDispatchRepositoryParity, true);
+    assert.equal(alertDispatchBoundary.alertReconciliationRepositoryParity, false);
+    assert.equal(alertDispatchBoundary.fullHandlerRepositoryParity, false);
+    assert.equal(alertDispatchBoundary.mutationAuthority, false);
+    assert.equal(alertDispatchBoundary.directTableAccess, false);
+    assert.equal(alertDispatchBoundary.runtimeAuthority, false);
+    assert.equal(alertDispatchBoundary.productionReady, false);
+    assert.match(alertDispatchBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresOperatorAlertConnectorDispatchBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE
+      ),
+      alertDispatchBoundary
+    );
     await importer.close();
     importer = null;
 
@@ -1189,7 +1399,24 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
       NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE
     );
-    for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
+    const alertDispatchManifest = buildPostgresOperatorAlertConnectorDispatchManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE
+    );
+    for (const principalRole of [
+      NATIVE_PRINCIPAL_A,
+      NATIVE_PRINCIPAL_B,
+      NATIVE_PRINCIPAL_C,
+      NATIVE_PRINCIPAL_UNMAPPED
+    ]) {
       await first.query(
         `CREATE ROLE "${principalRole}"
          LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
@@ -1212,6 +1439,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${observerCandidateManifest.observerCandidateRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${alertDispatchManifest.alertDispatchRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -1380,6 +1610,37 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
     NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
     { maxConnections: 1 });
+    const alertDispatchDatabase = (
+      principalRole: string,
+      userId: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresOperatorAlertConnectorDispatchDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, { tenantId: NATIVE_TENANT, userId }, "0.69.0", NATIVE_SCHEMA,
+    NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, { maxConnections });
+    alertDispatchA = alertDispatchDatabase(NATIVE_PRINCIPAL_A, NATIVE_USER, 2);
+    alertDispatchASecond = alertDispatchDatabase(NATIVE_PRINCIPAL_A, NATIVE_USER);
+    alertDispatchB = new NodePostgresOperatorAlertConnectorDispatchDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_B),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, { tenantId: "tenant_local", userId: "user_local" }, "0.69.0", NATIVE_SCHEMA,
+    NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, { maxConnections: 1 });
+    alertDispatchC = alertDispatchDatabase(NATIVE_PRINCIPAL_C, NATIVE_SAME_TENANT_USER);
+    alertDispatchUnmapped = alertDispatchDatabase(
+      NATIVE_PRINCIPAL_UNMAPPED,
+      NATIVE_USER
+    );
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -2366,6 +2627,230 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       2
     );
 
+    const alertNow = Date.now();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."users"(id, tenant_id, display_name, created_at)
+       VALUES ($1, $2, 'Native same-tenant peer', $3)`,
+      [NATIVE_SAME_TENANT_USER, NATIVE_TENANT, new Date(alertNow - 10_000).toISOString()]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER,
+        new Date(alertNow - 5_000).toISOString()]
+    );
+    const concurrentDeliveryId = await insertOperatorAlertDispatchFixture(
+      first,
+      "concurrent",
+      NATIVE_USER,
+      alertNow
+    );
+    const peerDeliveryId = await insertOperatorAlertDispatchFixture(
+      first,
+      "peer",
+      NATIVE_SAME_TENANT_USER,
+      alertNow
+    );
+    const exhaustedDeliveryId = await insertOperatorAlertDispatchFixture(
+      first,
+      "exhausted",
+      NATIVE_USER,
+      alertNow,
+      true
+    );
+    assert.equal(
+      await alertDispatchA.expireExhaustedLeases(NATIVE_ALERT_REGISTRY.bindings, alertNow),
+      1
+    );
+    assert.deepEqual(
+      (await first.query<{ id: string; state: string }>(
+        `SELECT id, state FROM "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries"
+         WHERE id IN ($1, $2, $3) ORDER BY id`,
+        [concurrentDeliveryId, peerDeliveryId, exhaustedDeliveryId]
+      )).rows,
+      [
+        { id: concurrentDeliveryId, state: "pending" },
+        { id: exhaustedDeliveryId, state: "dead_letter" },
+        { id: peerDeliveryId, state: "pending" }
+      ]
+    );
+    const competingLeases = await Promise.all([
+      alertDispatchA.leaseNext(NATIVE_ALERT_REGISTRY.bindings, 60, alertNow),
+      alertDispatchASecond.leaseNext(NATIVE_ALERT_REGISTRY.bindings, 60, alertNow)
+    ]);
+    const claimed = competingLeases.filter((lease) => lease !== null);
+    assert.equal(claimed.length, 1);
+    const claimedLease = claimed[0];
+    assert.ok(claimedLease);
+    assert.equal(claimedLease.id, concurrentDeliveryId);
+    assert.equal(claimedLease.attempt, 1);
+    assert.match(claimedLease.capabilityToken, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(claimedLease.payload.incidentId, "native_alert_incident_concurrent");
+    await assert.rejects(
+      alertDispatchA.complete(
+        claimedLease.id,
+        `${claimedLease.capabilityToken}x`,
+        "webhook_accepted",
+        202,
+        alertNow
+      ),
+      /capability is invalid or expired/
+    );
+    assert.equal(await alertDispatchA.complete(
+      claimedLease.id,
+      claimedLease.capabilityToken,
+      "webhook_accepted",
+      202,
+      alertNow
+    ), true);
+    const peerLease = await alertDispatchC.leaseNext(
+      NATIVE_ALERT_REGISTRY.bindings,
+      60,
+      alertNow
+    );
+    assert.ok(peerLease);
+    assert.equal(peerLease.id, peerDeliveryId);
+    assert.equal(await alertDispatchC.complete(
+      peerLease.id,
+      peerLease.capabilityToken,
+      "webhook_accepted",
+      204,
+      alertNow
+    ), true);
+    assert.equal(
+      await alertDispatchB.leaseNext(NATIVE_ALERT_REGISTRY.bindings, 60, alertNow),
+      null
+    );
+    await assert.rejects(
+      alertDispatchUnmapped.leaseNext(NATIVE_ALERT_REGISTRY.bindings, 60, alertNow),
+      /tenant session principal is not active/
+    );
+
+    const serviceDeliveryId = await insertOperatorAlertDispatchFixture(
+      first,
+      "service",
+      NATIVE_USER,
+      alertNow + 1_000
+    );
+    const serviceResult = await new OperatorAlertConnectorDispatchService(
+      alertDispatchA,
+      NATIVE_ALERT_REGISTRY,
+      {
+        async deliver() {
+          return {
+            disposition: "delivered",
+            reasonCode: "webhook_accepted",
+            httpStatus: 202
+          };
+        }
+      }
+    ).execute(alertNow + 1_000);
+    assert.deepEqual(serviceResult, {
+      connectorRegistryConfigured: true,
+      connectorTransportConfigured: true,
+      connectorDeliveriesAttempted: 1,
+      connectorDeliveriesSucceeded: 1,
+      connectorDeliveriesRetried: 0,
+      connectorDeliveriesDeadLettered: 0
+    });
+    assert.equal(
+      (await first.query<{ state: string }>(
+        `SELECT state FROM "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries" WHERE id = $1`,
+        [serviceDeliveryId]
+      )).rows[0]?.state,
+      "delivered"
+    );
+    const retryAt = Date.now();
+    const retryDeliveryId = await insertOperatorAlertDispatchFixture(
+      first,
+      "retry",
+      NATIVE_USER,
+      retryAt
+    );
+    const initialRetryLease = await alertDispatchA.leaseNext(
+      NATIVE_ALERT_REGISTRY.bindings,
+      60,
+      retryAt
+    );
+    assert.ok(initialRetryLease);
+    assert.equal(initialRetryLease.id, retryDeliveryId);
+    assert.equal(await alertDispatchA.fail(
+      initialRetryLease.id,
+      initialRetryLease.capabilityToken,
+      "webhook_retryable_status",
+      503,
+      1,
+      false,
+      retryAt
+    ), "retry");
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
+    const retriedLease = await alertDispatchA.leaseNext(
+      NATIVE_ALERT_REGISTRY.bindings,
+      60,
+      Date.now()
+    );
+    assert.ok(retriedLease);
+    assert.equal(retriedLease.id, retryDeliveryId);
+    assert.equal(retriedLease.attempt, 2);
+    assert.equal(await alertDispatchA.fail(
+      retriedLease.id,
+      retriedLease.capabilityToken,
+      "webhook_rejected",
+      422,
+      30,
+      true,
+      Date.now()
+    ), "dead_letter");
+
+    alertDispatchDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    alertDispatchDirectClient.on("error", () => undefined);
+    await alertDispatchDirectClient.connect();
+    await alertDispatchDirectClient.query(
+      `SET ROLE "${alertDispatchManifest.alertDispatchRole.name}"`
+    );
+    await assert.rejects(
+      alertDispatchDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries"`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      alertDispatchDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."operator_alert_connector_deliveries"
+         SET state = 'dead_letter' WHERE id = $1`,
+        [concurrentDeliveryId]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      alertDispatchDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_dispatch_operator_alert_connector"(
+           $1, $2, '0.69.0', 'expire', '{}', '', '', '', '', '', '', ''
+         )`,
+        [NATIVE_TENANT, NATIVE_SAME_TENANT_USER]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      alertDispatchDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."yoink_evaluate_observer_repair_candidates"(
+           $1, $2, '0.69.0', 'plan', '', '[]'
+         )`,
+        [NATIVE_TENANT, NATIVE_USER]
+      ),
+      /permission denied/
+    );
+    await alertDispatchDirectClient.end();
+    alertDispatchDirectClient = null;
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+       WHERE principal_role = $1`,
+      [NATIVE_PRINCIPAL_C]
+    );
+
     const heartbeatInsert = (
       writer: NodePostgresTenantQueueWriteDatabase,
       principal: { tenantId: string; userId: string },
@@ -2557,11 +3042,22 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.notEqual(firstPrincipalPage.nextCursor, "");
     const secondPrincipalPage = await firstStore.listPrincipals(firstPrincipalPage.nextCursor, 1);
     assert.equal(secondPrincipalPage.principals.length, 1);
-    assert.equal(secondPrincipalPage.nextCursor, "");
+    assert.notEqual(secondPrincipalPage.nextCursor, "");
+    const thirdPrincipalPage = await firstStore.listPrincipals(secondPrincipalPage.nextCursor, 1);
+    assert.equal(thirdPrincipalPage.principals.length, 1);
+    assert.equal(thirdPrincipalPage.nextCursor, "");
     assert.deepEqual(
-      [...firstPrincipalPage.principals, ...secondPrincipalPage.principals]
+      [
+        ...firstPrincipalPage.principals,
+        ...secondPrincipalPage.principals,
+        ...thirdPrincipalPage.principals
+      ]
         .map((value) => `${value.tenantId}:${value.userId}`).sort(),
-      [`${NATIVE_TENANT}:${NATIVE_USER}`, "tenant_local:user_local"].sort()
+      [
+        `${NATIVE_TENANT}:${NATIVE_USER}`,
+        `${NATIVE_TENANT}:${NATIVE_SAME_TENANT_USER}`,
+        "tenant_local:user_local"
+      ].sort()
     );
     assert.deepEqual(
       await workerControl.controlTransaction(async (session) =>
@@ -2571,6 +3067,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         )).rows),
       [
         { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
         { tenantId: "tenant_local", userId: "user_local" }
       ]
     );
@@ -2765,7 +3262,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         lastHeartbeatAt: new Date(NATIVE_NOW).toISOString(),
         lastErrorCode: "worker_coverage_incomplete",
         coveredPrincipals: 1,
-        totalPrincipals: 2,
+        totalPrincipals: 3,
         deploymentAttested: false,
         deploymentContractVersion: 2
       }
@@ -2921,7 +3418,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     await first.query(
       `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"`
     );
-    for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
+    for (const principalRole of [
+      NATIVE_PRINCIPAL_A,
+      NATIVE_PRINCIPAL_B,
+      NATIVE_PRINCIPAL_C,
+      NATIVE_PRINCIPAL_UNMAPPED
+    ]) {
       await first.query(
         `REVOKE "${tenantSessionManifest.sessionRole.name}" FROM "${principalRole}"`
       );
@@ -2939,6 +3441,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `REVOKE "${observerCandidateManifest.observerCandidateRole.name}" FROM "${principalRole}"`
+      );
+      await first.query(
+        `REVOKE "${alertDispatchManifest.alertDispatchRole.name}" FROM "${principalRole}"`
       );
     }
     await first.query(
@@ -3031,6 +3536,65 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(
       cleanObserverCandidateBoundary.boundaryCatalogFingerprint,
       observerCandidateBoundary.boundaryCatalogFingerprint
+    );
+    const cleanAlertDispatchBoundary = await verifyPostgresOperatorAlertConnectorDispatchBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanAlertDispatchBoundary.boundaryCatalogFingerprint,
+      alertDispatchBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_dispatch_operator_alert_connector"(
+         text, text, text, text, text, text, text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresOperatorAlertConnectorDispatchBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_dispatch_operator_alert_connector"(
+         text, text, text, text, text, text, text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresOperatorAlertConnectorDispatchBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      alertDispatchBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_evaluate_observer_repair_candidates"(
@@ -3295,7 +3859,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       observerCandidateA?.close(),
       observerCandidateB?.close(),
       observerCandidateUnmapped?.close(),
-      observerCandidateDirectClient?.end()
+      observerCandidateDirectClient?.end(),
+      alertDispatchA?.close(),
+      alertDispatchASecond?.close(),
+      alertDispatchB?.close(),
+      alertDispatchC?.close(),
+      alertDispatchUnmapped?.close(),
+      alertDispatchDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

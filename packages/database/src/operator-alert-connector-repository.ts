@@ -22,7 +22,8 @@ const REPLAY_REASONS = new Set<string>(OPERATOR_ALERT_CONNECTOR_REPLAY_REASON_CO
 const SEVERITIES = new Set<string>(OPERATOR_ALERT_SEVERITIES);
 const ENDPOINT_REFERENCE_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]{2,119}$/;
 const ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
-const MAXIMUM_ATTEMPTS = 12;
+export const OPERATOR_ALERT_CONNECTOR_MAXIMUM_ATTEMPTS = 12;
+export const OPERATOR_ALERT_CONNECTOR_MAXIMUM_BINDINGS = 20;
 const MAXIMUM_MANUAL_REPLAYS = 3;
 const MAXIMUM_PAYLOAD_BYTES = 4_000;
 const HEALTH_WINDOW_SECONDS = 86_400;
@@ -339,7 +340,7 @@ function receiptFromRow(
   };
 }
 
-function capabilityHash(deliveryId: string, token: string): string {
+export function operatorAlertConnectorCapabilityHash(deliveryId: string, token: string): string {
   return stableHash("yoink_operator_alert_connector_capability_v1", deliveryId, token);
 }
 
@@ -548,7 +549,7 @@ export class OperatorAlertConnectorRepository {
     allowedWorker();
     const bindings = Object.entries(availableBindings)
       .filter(([reference, fingerprint]) => ENDPOINT_REFERENCE_PATTERN.test(reference) && /^[a-f0-9]{64}$/.test(fingerprint))
-      .slice(0, 20);
+      .slice(0, OPERATOR_ALERT_CONNECTOR_MAXIMUM_BINDINGS);
     if (!bindings.length) return 0;
     const scope = currentRequestScope();
     const timestamp = nowIso(now);
@@ -564,7 +565,7 @@ export class OperatorAlertConnectorRepository {
          ORDER BY d.created_at, d.id LIMIT 20`,
         scope.tenantId,
         ...bindingParameters,
-        MAXIMUM_ATTEMPTS,
+        OPERATOR_ALERT_CONNECTOR_MAXIMUM_ATTEMPTS,
         timestamp
       );
       let recovered = 0;
@@ -578,7 +579,7 @@ export class OperatorAlertConnectorRepository {
           timestamp,
           delivery.id,
           scope.tenantId,
-          MAXIMUM_ATTEMPTS,
+          OPERATOR_ALERT_CONNECTOR_MAXIMUM_ATTEMPTS,
           timestamp
         );
         if (Number(updated.changes) !== 1) continue;
@@ -600,7 +601,7 @@ export class OperatorAlertConnectorRepository {
     allowedWorker();
     const bindings = Object.entries(availableBindings)
       .filter(([reference, fingerprint]) => ENDPOINT_REFERENCE_PATTERN.test(reference) && /^[a-f0-9]{64}$/.test(fingerprint))
-      .slice(0, 20);
+      .slice(0, OPERATOR_ALERT_CONNECTOR_MAXIMUM_BINDINGS);
     if (!bindings.length) return null;
     const scope = currentRequestScope();
     const timestamp = nowIso(now);
@@ -624,7 +625,7 @@ export class OperatorAlertConnectorRepository {
          ORDER BY d.created_at, d.id LIMIT 1`,
         scope.tenantId,
         ...bindingParameters,
-        MAXIMUM_ATTEMPTS,
+        OPERATOR_ALERT_CONNECTOR_MAXIMUM_ATTEMPTS,
         timestamp,
         timestamp
       );
@@ -642,7 +643,7 @@ export class OperatorAlertConnectorRepository {
            AND ((state IN ('pending', 'retry_wait') AND (next_attempt_at = '' OR next_attempt_at <= ?))
              OR (state = 'leased' AND lease_expires_at <= ?))`,
         attempt,
-        capabilityHash(candidate.id, capabilityToken),
+        operatorAlertConnectorCapabilityHash(candidate.id, capabilityToken),
         leaseExpiresAt,
         timestamp,
         candidate.id,
@@ -713,7 +714,7 @@ export class OperatorAlertConnectorRepository {
     const deliveryId = identifier(id, "operator alert connector delivery ID");
     const delivery = this.assertCapability(deliveryId, capabilityToken, now);
     const scope = currentRequestScope();
-    const deadLetter = permanent || delivery.attemptCount >= MAXIMUM_ATTEMPTS;
+    const deadLetter = permanent || delivery.attemptCount >= OPERATOR_ALERT_CONNECTOR_MAXIMUM_ATTEMPTS;
     const timestamp = nowIso(now);
     const retrySeconds = Math.max(1, Math.min(86_400, Math.floor(Number(retryAfterSeconds) || 30)));
     const nextAttemptAt = deadLetter ? "" : nowIso(now + retrySeconds * 1_000);
@@ -1038,7 +1039,7 @@ export class OperatorAlertConnectorRepository {
       scope.tenantId
     );
     const actual = row?.leaseCapabilityHash ?? "";
-    const expected = capabilityHash(deliveryId, token);
+    const expected = operatorAlertConnectorCapabilityHash(deliveryId, token);
     const valid = actual.length === expected.length
       && actual.length > 0
       && timingSafeEqual(Buffer.from(actual), Buffer.from(expected))

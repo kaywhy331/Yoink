@@ -72,6 +72,10 @@ Version 0.68 adds the fourth inactive function-only boundary for bounded
 observer-candidate evaluation. Its two-phase routine revalidates server-derived
 evidence and can create only unsigned, non-executable quarantine candidates;
 it cannot sign, promote, distribute, fill fields, or invoke a retailer.
+Version 0.69 adds a fifth inactive function-only sub-boundary for secretless
+operator-alert connector dispatch. Because diagnostic reconciliation remains
+unported, it does not increase complete-handler coverage beyond four of seven
+and cannot schedule work, contact a webhook, or weaken deployment attestation.
 
 A mismatch may write only its normal bounded heartbeat with
 `worker_deployment_mismatch`. This gives the API and Operations workspace
