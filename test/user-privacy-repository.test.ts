@@ -81,6 +81,70 @@ test("user data export is complete by declared category, tenant-isolated, and cr
       NOW
     );
     db.run(
+      `INSERT INTO retailers(
+         id, display_name, execution_supported, domains_json, created_at, updated_at
+       ) VALUES ('privacy-retailer', 'Privacy fixture retailer', 0, '["privacy.invalid"]', ?, ?)`,
+      NOW,
+      NOW
+    );
+    db.run(
+      `INSERT INTO product_families(id, title, brand, created_at, updated_at)
+       VALUES ('family_privacy', 'Privacy fixture family', 'Yoink test', ?, ?)`,
+      NOW,
+      NOW
+    );
+    db.run(
+      `INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+       VALUES ('variant_privacy', 'family_privacy', 'Privacy fixture variant', '{}', ?, ?)`,
+      NOW,
+      NOW
+    );
+    db.run(
+      `INSERT INTO listings(
+         id, variant_id, retailer_id, retailer_sku, canonical_url,
+         status, execution_supported, currency, created_at, updated_at
+       ) VALUES (
+         'listing_privacy', 'variant_privacy', 'privacy-retailer', 'PRIVACY-SKU',
+         'https://privacy.invalid/product/PRIVACY-SKU', 'active', 0, 'USD', ?, ?
+       )`,
+      NOW,
+      NOW
+    );
+    db.run(
+      `INSERT INTO signal_incidents(
+         id, tenant_id, user_id, listing_id, event_type, semantic_key,
+         status, seller_name, first_observed_at, last_observed_at,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'restock', ?, 'open', ?, ?, ?, ?, ?)`,
+      "incident_privacy_local",
+      LOCAL_TENANT_ID,
+      LOCAL_USER_ID,
+      "listing_privacy",
+      "privacy-local-semantic-key",
+      "LOCAL_INCIDENT_DATA_MARKER",
+      NOW,
+      NOW,
+      NOW,
+      NOW
+    );
+    db.run(
+      `INSERT INTO signal_incidents(
+         id, tenant_id, user_id, listing_id, event_type, semantic_key,
+         status, seller_name, first_observed_at, last_observed_at,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'restock', ?, 'open', ?, ?, ?, ?, ?)`,
+      "incident_privacy_other",
+      "tenant_privacy_other",
+      "user_privacy_other",
+      "listing_privacy",
+      "privacy-other-semantic-key",
+      "OTHER_INCIDENT_DATA_MUST_NOT_EXPORT",
+      NOW,
+      NOW,
+      NOW,
+      NOW
+    );
+    db.run(
       `INSERT INTO audit_events(
          id, tenant_id, user_id, correlation_id, event_type,
          reason_code, message, data_json, created_at
@@ -113,6 +177,7 @@ test("user data export is complete by declared category, tenant-isolated, and cr
     );
 
     assert.match(serialized, /LOCAL_USER_DATA_MARKER/);
+    assert.match(serialized, /LOCAL_INCIDENT_DATA_MARKER/);
     assert.match(serialized, /device_privacy_local/);
     const deviceEvidence = archive.data.devices_and_retailer_evidence;
     assert.ok(deviceEvidence);
@@ -141,6 +206,7 @@ test("user data export is complete by declared category, tenant-isolated, and cr
     );
     assert.equal(USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS.observer_recipe_contributor_eligibility_states, "exported");
     assert.doesNotMatch(serialized, /OTHER_USER_DATA_MUST_NOT_EXPORT/);
+    assert.doesNotMatch(serialized, /OTHER_INCIDENT_DATA_MUST_NOT_EXPORT/);
     assert.doesNotMatch(serialized, /DEVICE_TOKEN_SECRET_MUST_NOT_EXPORT/);
     assert.doesNotMatch(serialized, /PAIRING_CODE_SECRET_MUST_NOT_EXPORT/);
     assert.doesNotMatch(serialized, /HOSTED_NONCE_SECRET_MUST_NOT_EXPORT/);
@@ -155,7 +221,11 @@ test("user data export is complete by declared category, tenant-isolated, and cr
     const otherArchive = runWithRequestScope(otherScope, () => privacy.export(Date.parse(NOW)));
     const otherSerialized = JSON.stringify(otherArchive);
     assert.match(otherSerialized, /OTHER_USER_DATA_MUST_NOT_EXPORT/);
-    assert.doesNotMatch(otherSerialized, /LOCAL_USER_DATA_MARKER|device_privacy_local/);
+    assert.match(otherSerialized, /OTHER_INCIDENT_DATA_MUST_NOT_EXPORT/);
+    assert.doesNotMatch(
+      otherSerialized,
+      /LOCAL_USER_DATA_MARKER|LOCAL_INCIDENT_DATA_MARKER|device_privacy_local/
+    );
   } finally {
     db.close();
   }

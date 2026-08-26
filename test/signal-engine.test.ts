@@ -5,7 +5,9 @@ import { CatalogRepository } from "../packages/database/src/catalog-repository.j
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
+import { runWithRequestScope } from "../packages/database/src/request-scope.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { normalizeSignal } from "../packages/domain/src/normalize.js";
 
 const NOW = new Date("2026-08-22T19:00:00.000Z").getTime();
 
@@ -629,6 +631,55 @@ test("a trusted exact new-product signal creates catalog identity but degrades s
     assert.equal(result.actionJobState, "notify_only");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM listings")?.count, 1);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("signal incidents with the same semantic offer remain isolated by exact tenant and user", () => {
+  const { db, engine } = seededEngine();
+  try {
+    db.run(
+      "INSERT INTO tenants(id, name, created_at) VALUES ('tenant_signal_other', 'Other', ?)",
+      new Date(NOW).toISOString()
+    );
+    db.run(
+      `INSERT INTO users(id, tenant_id, display_name, created_at)
+       VALUES ('user_signal_other', 'tenant_signal_other', 'Other user', ?)`,
+      new Date(NOW).toISOString()
+    );
+    const listingId = db.get<{ id: string }>(
+      "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+    )?.id;
+    assert.ok(listingId);
+    const listing = engine.catalog.requireListing(listingId);
+    const signal = normalizeSignal(trackalackerSignal(), NOW);
+    const semanticKey = engine.signals.semanticKey(signal, listing);
+    const localIncident = engine.signals.createIncident(signal, listing, semanticKey, NOW);
+
+    const otherIncident = runWithRequestScope({
+      tenantId: "tenant_signal_other",
+      userId: "user_signal_other",
+      actorKind: "service",
+      actorId: "signal_isolation_test"
+    }, () => {
+      assert.equal(engine.signals.findOpenIncident(semanticKey, "2026-08-22T00:00:00.000Z"), null);
+      assert.throws(
+        () => engine.signals.corroborateIncident(localIncident, signal, NOW + 1),
+        /no longer exists/
+      );
+      return engine.signals.createIncident(signal, listing, semanticKey, NOW + 2);
+    });
+
+    assert.notEqual(otherIncident.id, localIncident.id);
+    assert.deepEqual(db.all(
+      `SELECT tenant_id AS tenantId, user_id AS userId, occurrence_count AS occurrenceCount
+       FROM signal_incidents WHERE semantic_key = ? ORDER BY tenant_id`,
+      semanticKey
+    ).map((row) => ({ ...row })), [
+      { tenantId: "tenant_local", userId: "user_local", occurrenceCount: 1 },
+      { tenantId: "tenant_signal_other", userId: "user_signal_other", occurrenceCount: 1 }
+    ]);
   } finally {
     db.close();
   }

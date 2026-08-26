@@ -353,7 +353,7 @@ handler-replay drills, PostgreSQL backup/PITR and restore drills, and a
 controlled cutover. Version 0.59 proves the lease algorithm across three native
 PostgreSQL 16 backend sessions. Version 0.60 separately qualifies an empty
 server-owned tenant-principal registry, zero-argument binder, read-only adapter,
-and restrictive policies across all 82 tenant tables; native fixture principals
+and restrictive policies across all 83 tenant tables; native fixture principals
 prove isolation. Version 0.61 separately qualifies an inactive four-table queue
 writer with 11 exact operations, no delete access, four restrictive policies,
 and native two-principal write isolation. Version 0.62 runs the tenant queue

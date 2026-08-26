@@ -55,10 +55,8 @@ const PROTECTED_TABLES = Object.freeze([
   "spend_ledger_entries",
   "spend_reservations"
 ] as const);
-const FORCED_RLS_TABLES = Object.freeze(
-  PROTECTED_TABLES.filter((table) => table !== "signal_incidents")
-);
-const INDIRECT_SCOPE_TABLES = Object.freeze(["signal_incidents"] as const);
+const FORCED_RLS_TABLES = PROTECTED_TABLES;
+const INDIRECT_SCOPE_TABLES = Object.freeze([] as const);
 const FUNCTION_ARGUMENT_TYPES = Object.freeze(["text", "text"] as const);
 const FUNCTION_RESULT_TYPE =
   "TABLE(recovered_action_leases bigint, expired_action_jobs bigint, released_spend_reservations bigint)";
@@ -92,8 +90,8 @@ export interface PostgresExecutionRecoveryManifest {
     deleteAccess: false;
   };
   protectedTableCount: 9;
-  forcedRlsTableCount: 8;
-  indirectScopeTableCount: 1;
+  forcedRlsTableCount: 9;
+  indirectScopeTableCount: 0;
   directTableGrantCount: 0;
   functionGrantCount: 1;
   boundaryHandlerTaskKinds: ["execution_recovery"];
@@ -127,8 +125,8 @@ export interface PostgresExecutionRecoveryQualificationReceipt {
   notificationRecoveryManifestFingerprint: string;
   executionRecoveryRoleName: string;
   protectedTableCount: 9;
-  forcedRlsTableCount: 8;
-  indirectScopeTableCount: 1;
+  forcedRlsTableCount: 9;
+  indirectScopeTableCount: 0;
   directTableGrantCount: 0;
   functionGrantCount: 1;
   membershipCount: 0;
@@ -175,8 +173,8 @@ export interface PostgresExecutionRecoveryCapabilityProjection {
   handlerTaskKindCount: 2;
   totalHandlerTaskKindCount: number;
   protectedTableCount: 9;
-  forcedRlsTableCount: 8;
-  indirectScopeTableCount: 1;
+  forcedRlsTableCount: 9;
+  indirectScopeTableCount: 0;
   directTableGrantCount: 0;
   functionGrantCount: 1;
   insertAccess: false;
@@ -488,6 +486,8 @@ function incidentUpdateSource(
     SET status = ${sqlLiteral(status)}, closed_reason = next_state,
         updated_at = recovery_timestamp
     WHERE incident.id = job_record.incident_id
+      AND incident.tenant_id = resolved_tenant_id
+      AND incident.user_id = resolved_user_id
       AND NOT EXISTS (
         SELECT 1 FROM ${relation(manifest.schemaName, "action_jobs")} AS other_job
         WHERE other_job.incident_id = incident.id
@@ -733,8 +733,8 @@ export function buildPostgresExecutionRecoveryManifest(
       deleteAccess: false
     },
     protectedTableCount: 9,
-    forcedRlsTableCount: 8,
-    indirectScopeTableCount: 1,
+    forcedRlsTableCount: 9,
+    indirectScopeTableCount: 0,
     directTableGrantCount: 0,
     functionGrantCount: 1,
     boundaryHandlerTaskKinds: ["execution_recovery"],
@@ -779,8 +779,8 @@ export function postgresExecutionRecoveryCapabilityProjection(): PostgresExecuti
     handlerTaskKindCount: 2,
     totalHandlerTaskKindCount: manifest.totalHandlerTaskKindCount,
     protectedTableCount: 9,
-    forcedRlsTableCount: 8,
-    indirectScopeTableCount: 1,
+    forcedRlsTableCount: 9,
+    indirectScopeTableCount: 0,
     directTableGrantCount: 0,
     functionGrantCount: 1,
     insertAccess: false,
@@ -1137,8 +1137,8 @@ function receiptFromRow(
     notificationRecoveryManifestFingerprint: manifest.notificationRecoveryManifestFingerprint,
     executionRecoveryRoleName: manifest.executionRecoveryRole.name,
     protectedTableCount: 9,
-    forcedRlsTableCount: 8,
-    indirectScopeTableCount: 1,
+    forcedRlsTableCount: 9,
+    indirectScopeTableCount: 0,
     directTableGrantCount: 0,
     functionGrantCount: 1,
     membershipCount: 0,

@@ -1,6 +1,36 @@
 # Yoink roadmap
 
-## Shipped through 0.72.0
+## Shipped through 0.73.0
+
+### Exact tenant ownership for the signal-incident graph (0.73.0)
+
+- Migration 48 removes the final unresolved PostgreSQL table classification by
+  rebuilding `signal_incidents` with non-null tenant/user ownership and a
+  composite user foreign key before any hosted signal writer is introduced
+- Historical ownership is derived only from durable occurrences, signal
+  decisions, and action jobs. Missing ownership prevents a complete copy and
+  multiple distinct principals violate the migration guard; either condition
+  rolls back the entire migration rather than selecting an arbitrary owner
+- The one foreign-key-disabled rebuild is isolated inside a transaction. It
+  compares the preexisting foreign-key baseline, rejects every newly introduced
+  violation, restores enforcement in a `finally` path, and closes the database
+  connection on migration failure
+- Incident lookup, corroboration, creation, and lifecycle updates now require
+  the exact request tenant and user. Equal semantic offer keys in two principal
+  scopes create two independent incidents and cannot mutate each other
+- User privacy inventory and export now give the owned incident and occurrence
+  graph an explicit, tenant-isolated disposition; the execution-recovery
+  boundary independently requires exact ownership and verifies all nine of its
+  protected relations under forced RLS
+- The PostgreSQL manifest now classifies all 95 portable tables with 83 tenant-
+  scoped grants and zero unresolved tables. `signal_incidents` receives the same
+  forced-RLS read qualification as the rest of the private graph
+- This is an ownership prerequisite, not hosted signal authority. Strategy,
+  catalog, policy, spend, notification, audit, and action-job writes remain on
+  SQLite; handler parity remains 6 of 7 and all PostgreSQL runtime roles stay
+  inactive
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### Server-bound PostgreSQL hosted-delivery lease recovery sub-boundary (0.72.0)
 
@@ -222,10 +252,10 @@ See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
   capabilities are retired, spend reservations release, and action, append-only
   ledger, audit, and outbox receipts are recorded atomically. Only three
   aggregate counts are returned
-- A latent shared-state hazard is now fail-closed in SQLite and PostgreSQL.
-  `signal_incidents` may be closed or locked only when every bound action and
-  signal occurrence belongs to the exact tenant/user. A cross-tenant shared
-  incident remains unchanged while each private job and reservation recovers
+- A latent shared-state hazard was made fail-closed in SQLite and PostgreSQL.
+  Version 0.73 subsequently gave `signal_incidents` direct ownership; recovery
+  requires that exact tenant/user and retains the independent action and signal
+  occurrence checks as corruption defenses
 - Native PostgreSQL 16 proves all transition classes, receipt parity, future
   state preservation, mismatch/unmapped denial, zero direct SQL access,
   cross-tenant shared-incident isolation, idempotent replay, one total winner
@@ -382,7 +412,7 @@ See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
   table read, mismatched identity, and unmapped identity. Transaction scope is
   reset, fixture memberships are removed, and the disposable cluster is erased
 - Exact effective privileges, role attributes, functions, restrictive policy
-  expressions, and all 82 forced-RLS tables are inspected. An immutable receipt
+  expressions, and all 83 forced-RLS tables are inspected. An immutable receipt
   seals the catalog fingerprint, and deliberate policy weakening fails
   verification
 - This qualifies only the queue-store write surface. No production principal,
@@ -396,7 +426,7 @@ See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 - A deterministic contract derives one fresh `NOLOGIN`, `NOINHERIT`,
   `NOBYPASSRLS` tenant-session reader from the qualified read-role and schema
-  manifests. It receives exact `SELECT` grants on all 82 tenant-RLS tables and
+  manifests. It receives exact `SELECT` grants on all 83 tenant-RLS tables and
   no write, ownership, routine, sequence, login, membership, or runtime
   authority
 - An empty server-owned principal registry maps PostgreSQL `session_user` to
@@ -454,11 +484,11 @@ See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### PostgreSQL least-privilege read-role qualification (0.58.0)
 
-- A deterministic contract maps 94 of 95 portable tables onto five fresh
-  `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` group roles: 82 tenant-RLS, six shared-
-  catalog, three authorization-catalog, two deployment-control, and one tenant-
-  registry table. `signal_incidents` remains explicitly unresolved and gets no
-  grant
+- The original deterministic contract mapped 94 of 95 portable tables onto
+  five fresh `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` group roles. Version 0.73's
+  ownership migration now maps all 95: 83 tenant-RLS, six shared-catalog, three
+  authorization-catalog, two deployment-control, and one tenant-registry table,
+  with no unresolved grant class
 - Each role receives private-schema `USAGE` and exact table `SELECT` only.
   Application-schema writes, `CREATE`, routines, sequences, ownership, role
   membership, source-less mixed offers, login, and privilege inheritance stay
@@ -1843,9 +1873,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.72.0
+## Architecture assessment after 0.73.0
 
-Yoink 0.72.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.73.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1859,7 +1889,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete table-scope classification, direct/inherited forced-RLS qualification, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; six of seven worker handler families (`notification_recovery`, `execution_recovery`, `operational_telemetry_retention`, `observer_recipe_candidate_evaluation`, `adapter_alert_reconciliation`, and `observer_recipe_witness_refresh`) proven through inactive principal-bound function-only roles with zero direct table grants, plus the final hosted-delivery handler's complete three-table lease-recovery sub-boundary with exact SHA-256 retry/dead-letter receipts; database-owned clocks, fail-closed shared-incident mutation, authenticated bounded retention, a two-phase evidence-revalidated quarantine-only candidate compiler, full diagnostic-to-incident lifecycle reconciliation, secretless connector dispatch, and external-transaction-free Ed25519 witness publication with database-revalidated public receipt evidence; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 82 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt parity, idempotent/concurrent execution, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | Hosted signal evaluation (the remaining half of `hosted_delivery_recovery`) and every request-repository family remain incomplete; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, general governed mixed shared-offer/incident access outside the exact execution-recovery guard, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
+| Primary backend database | Transactional migration-48 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete zero-unresolved table-scope classification, direct/inherited forced-RLS qualification over all 83 private tables, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; six of seven worker handler families (`notification_recovery`, `execution_recovery`, `operational_telemetry_retention`, `observer_recipe_candidate_evaluation`, `adapter_alert_reconciliation`, and `observer_recipe_witness_refresh`) proven through inactive principal-bound function-only roles with zero direct table grants, plus the final hosted-delivery handler's complete three-table lease-recovery sub-boundary with exact SHA-256 retry/dead-letter receipts; database-owned clocks, directly tenant/user-owned signal incidents, fail-closed shared-incident mutation, authenticated bounded retention, a two-phase evidence-revalidated quarantine-only candidate compiler, full diagnostic-to-incident lifecycle reconciliation, secretless connector dispatch, and external-transaction-free Ed25519 witness publication with database-revalidated public receipt evidence; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 83 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt parity, idempotent/concurrent execution, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | Hosted signal evaluation (the remaining half of `hosted_delivery_recovery`) and every request-repository family remain incomplete; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -2057,18 +2087,22 @@ cannot become runtime authority. Version 0.58 derives five isolated read-only
 group-role templates from those classifications and proves their exact grants,
 cross-role denial, and drift detection. It creates no login or membership and
 does not solve authenticated tenant-session binding, write-role parity, mixed
-shared-offer access, or the unresolved incident table. Version 0.59 runs the
+shared-offer access, or the then-unresolved incident table. Version 0.59 runs the
 production driver against a hermetic native PostgreSQL 16 server and proves the
 worker lease algorithm across three distinct backend sessions, including
 locked-row skipping and an exact-one-winner race. It is test qualification, not
 a deployed production fleet or handler/repository port. Version 0.60 adds an
 empty server-owned principal registry, a zero-argument session binder, a
-read-only tenant adapter, and restrictive policies on all 82 tenant tables.
+read-only tenant adapter, and restrictive policies on the then-current 82 tenant tables.
 Native simultaneous principals prove that mutable PostgreSQL custom settings
 cannot widen the server-bound tenant. It deliberately creates no production
 login or mapping and does not qualify writes. None of these releases turns the
 SQLite process into a production fleet or proves signed artifact/workload
 identity.
+
+Version 0.73 subsequently adds the 83rd tenant table by assigning exact
+tenant/user ownership to signal incidents, leaving no unresolved read-role
+class.
 
 Version 0.61 adds the first deliberately narrow write-role contract: a
 server-bound queue writer with 11 exact operations on four queue tables, no
@@ -2184,7 +2218,7 @@ evaluation is ported and composed with this boundary.
   port every request-repository family over the qualified schema; activate the already
   qualified least-privilege control and queue roles through production
   identity-to-login provisioning, add the remaining restricted writer roles,
-  resolve the remaining incident and mixed/shared access semantics, and pass
+  resolve the remaining mixed/shared offer access semantics, and pass
   transactional/isolation parity, deployed multi-process lease/load/outage
   drills, idempotent handler replay, and no-dual-write tests
 - Add production IdP sessions, lifecycle/provisioning, TLS ingress, CSRF/session

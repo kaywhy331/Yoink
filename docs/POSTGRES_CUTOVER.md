@@ -120,7 +120,7 @@ manifest. They are qualification artifacts, not production principals:
 
 | Role class | Exact portable tables | Boundary |
 | --- | ---: | --- |
-| Tenant reader | 82 | 68 direct, 13 inherited, and one mixed table under forced RLS; source-less mixed offers remain hidden |
+| Tenant reader | 83 | 69 direct, 13 inherited, and one mixed table under forced RLS; source-less mixed offers remain hidden |
 | Shared-catalog reader | 6 | Shared catalog only; no tenant or mixed-offer access |
 | Authorization-catalog reader | 3 | Packaged authorization definitions only |
 | Deployment-control reader | 2 | Worker deployment control only |
@@ -131,8 +131,10 @@ All five roles are `NOLOGIN`, `NOINHERIT`, `NOSUPERUSER`, `NOCREATEROLE`,
 and exact table `SELECT` only. The qualifier revokes public access in the
 private schema and verifies exact table grants, rejects extra column grants,
 routine/sequence access, object ownership, memberships, schema `CREATE`, or an
-unsafe role attribute. `signal_incidents` remains unresolved and receives no
-grant. The two cutover-control receipt tables also receive no runtime grant.
+unsafe role attribute. Migration 48 gives `signal_incidents` exact tenant/user
+ownership, so all 95 portable tables are now classified and the unresolved role
+set is empty. The two cutover-control receipt tables still receive no runtime
+grant.
 
 The test suite proves default denial, exact tenant selection, inherited and
 mixed tenant filtering, cross-role denial, write denial, tamper detection, and
@@ -180,7 +182,7 @@ separate reviewed database-operator change.
 Version 0.60 derives one additional tenant-session reader from the exact schema
 and read-role manifests. The role is `NOLOGIN`, `NOINHERIT`,
 `NOSUPERUSER`, `NOCREATEROLE`, `NOCREATEDB`, `NOREPLICATION`, and
-`NOBYPASSRLS`. It receives schema `USAGE` and `SELECT` on the 82 tenant-RLS
+`NOBYPASSRLS`. It receives schema `USAGE` and `SELECT` on the 83 tenant-RLS
 tables only. It owns no object and receives no table write, sequence, routine,
 membership, or runtime privilege.
 
@@ -494,14 +496,13 @@ becomes submission-uncertain. No function path leases new work, clicks a
 retailer, enters checkout, submits an order, commits spend, deletes history, or
 returns row content.
 
-Nine relations are sealed into the function-source/catalog receipt. Eight are
-directly or transitively tenant-owned forced-RLS tables. The ninth,
-`signal_incidents`, remains deliberately unavailable to every runtime role
-because its general shared ownership is unresolved. The routine may close or
-lock one incident only when both independent checks find no action job and no
-signal occurrence belonging to another tenant/user. If either check finds a
-cross-tenant binding, the private action and spend state recover but incident
-mutation is skipped. The same guard now applies to SQLite transitions.
+Nine relations are sealed into the function-source/catalog receipt and all nine
+are tenant-owned forced-RLS tables. Migration 48 gives `signal_incidents` an
+exact tenant/user owner; the routine must match that owner before closing or
+locking it. Two independent checks also retain the earlier corruption defense:
+if any bound action job or signal occurrence belongs to another principal, the
+private action and spend state recover but incident mutation is skipped. The
+same exact-owner and corruption guards apply to SQLite transitions.
 
 The native PostgreSQL 16 suite executes the production maintenance handler and
 proves every transition class, future-state preservation, capability
@@ -1058,7 +1059,7 @@ The admin Operations projection lists these as required, not complete:
   family, and every API request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
-  mixed source-less offers and the unresolved incident table; all qualified
+  mixed source-less offers; all qualified
   roles remain inactive;
 - deployed multi-process worker isolation, task-handler idempotent replay,
   sustained load, connection-failure, failover, and outage drills;

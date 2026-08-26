@@ -72,8 +72,13 @@ export class YoinkDatabase {
       ) STRICT;
     `);
     if (existed) this.assertIntegrity();
-    this.applyMigrations(existed);
-    this.seedLocalDefaults();
+    try {
+      this.applyMigrations(existed);
+      this.seedLocalDefaults();
+    } catch (error) {
+      this.connection.close();
+      throw error;
+    }
   }
 
   close(): void {
@@ -160,8 +165,23 @@ export class YoinkDatabase {
       chmodSync(backupPath, 0o600);
     }
     for (const migration of pending) {
-      this.transaction(() => {
+      const existingForeignKeyFailures = migration.foreignKeysDisabled
+        ? new Set(this.all<Record<string, unknown>>("PRAGMA foreign_key_check").map((failure) => JSON.stringify(failure)))
+        : new Set<string>();
+      const apply = (): void => this.transaction(() => {
         this.connection.exec(migration.sql);
+        const foreignKeyFailures = migration.foreignKeysDisabled
+          ? this.all<Record<string, unknown>>("PRAGMA foreign_key_check")
+          : [];
+        const introducedForeignKeyFailures = foreignKeyFailures.filter(
+          (failure) => !existingForeignKeyFailures.has(JSON.stringify(failure))
+        );
+        if (introducedForeignKeyFailures.length) {
+          throw new Error(
+            `Yoink migration ${migration.version} produced an invalid foreign-key graph: `
+            + JSON.stringify(introducedForeignKeyFailures.slice(0, 3))
+          );
+        }
         this.run(
           "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
           migration.version,
@@ -169,6 +189,20 @@ export class YoinkDatabase {
           nowIso()
         );
       });
+      if (!migration.foreignKeysDisabled) {
+        apply();
+        continue;
+      }
+      this.connection.exec("PRAGMA foreign_keys = OFF");
+      try {
+        apply();
+      } finally {
+        this.connection.exec("PRAGMA foreign_keys = ON");
+      }
+      const foreignKeys = this.get<{ foreign_keys: number }>("PRAGMA foreign_keys");
+      if (Number(foreignKeys?.foreign_keys) !== 1) {
+        throw new Error(`Yoink migration ${migration.version} did not restore foreign-key enforcement.`);
+      }
     }
   }
 

@@ -47,6 +47,7 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   retailer_adapter_trials: "exported",
   retailer_shadow_observations: "exported",
   signal_events: "exported",
+  signal_incidents: "exported",
   source_connections: "exported",
   source_sync_runs: "exported",
   spend_ledger_entries: "exported",
@@ -242,10 +243,14 @@ export class UserPrivacyRepository {
            + (SELECT COUNT(*) FROM source_sync_run_items WHERE run_id IN (
                SELECT id FROM source_sync_runs WHERE tenant_id = ? AND user_id = ?))
            + (SELECT COUNT(*) FROM signal_events WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM signal_incidents WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM signal_occurrences WHERE event_id IN (
+               SELECT id FROM signal_events WHERE tenant_id = ? AND user_id = ?))
            + (SELECT COUNT(*) FROM resolution_decisions WHERE event_id IN (
                SELECT id FROM signal_events WHERE tenant_id = ? AND user_id = ?)) AS count`,
         tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId, tenantId, userId, tenantId, userId
+        tenantId, userId, tenantId, userId, tenantId, userId,
+        tenantId, userId, tenantId, userId
       ),
       actions_and_spending: count(
         `SELECT
@@ -520,6 +525,25 @@ export class UserPrivacyRepository {
          ORDER BY created_at, id`,
         tenantId, userId
       ), ["identity_json", "offer_json", "evidence_json"]),
+      signal_incidents: this.rows(
+        `SELECT id, listing_id, event_type, semantic_key, status,
+                unit_price_cents, currency, seller_name, seller_type,
+                offer_fingerprint, first_observed_at, last_observed_at,
+                occurrence_count, closed_reason, created_at, updated_at
+         FROM signal_incidents WHERE tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
+        tenantId, userId
+      ),
+      signal_occurrences: this.rows(
+        `SELECT occurrence.id, occurrence.event_id, occurrence.incident_id,
+                occurrence.source_connection_id, occurrence.observed_at,
+                occurrence.received_at, occurrence.created_at
+         FROM signal_occurrences occurrence
+         JOIN signal_events event ON event.id = occurrence.event_id
+         WHERE event.tenant_id = ? AND event.user_id = ?
+         ORDER BY occurrence.created_at, occurrence.id`,
+        tenantId, userId
+      ),
       resolution_decisions: this.rows(
         `SELECT rd.id, rd.event_id, rd.status, rd.method, rd.variant_id,
                 rd.listing_id, rd.reason, rd.resolver_version, rd.created_at

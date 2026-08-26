@@ -357,10 +357,11 @@ test("active purchase work blocks identity changes until the job reaches a safe 
     const fixture = seedSplitVariant(db, "_active");
     db.exec(`
       INSERT INTO signal_incidents(
-        id, listing_id, event_type, semantic_key, status, currency,
+        id, tenant_id, user_id, listing_id, event_type, semantic_key, status, currency,
         first_observed_at, last_observed_at, created_at, updated_at
       ) VALUES (
-        'incident_identity_active', '${fixture.selectedListing}', 'restock',
+        'incident_identity_active', '${LOCAL_TENANT_ID}', '${LOCAL_USER_ID}',
+        '${fixture.selectedListing}', 'restock',
         'identity-active-test', 'open', 'USD', '${AT}', '${AT}', '${AT}', '${AT}'
       );
       INSERT INTO action_jobs(

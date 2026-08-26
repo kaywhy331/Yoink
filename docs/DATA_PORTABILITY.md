@@ -9,7 +9,7 @@ worker-store port. Yoink 0.58 adds five inactive exact read-role templates and
 live-catalog drift verification. Yoink 0.59 adds a native PostgreSQL 16
 three-session worker-lease contention proof. Yoink 0.60 adds an inert
 server-bound, read-only tenant-session qualification with an empty principal
-registry and restrictive policies over all 82 tenant tables. Yoink 0.61 adds an
+registry and restrictive policies over the then-current 82 tenant tables. Yoink 0.61 adds an
 inactive server-bound queue writer with 11 exact operations on four tables,
 four restrictive policies, no delete access, and native two-principal write
 isolation. Yoink 0.62 advances that boundary to contract v2 with the one strict
@@ -59,6 +59,11 @@ the exact inbox/outbox expired-lease retry/dead-letter matrix and deterministic
 SHA-256 delivery receipts with server-bound principals and server time. Complete
 handler coverage remains six of seven because durable signal evaluation is
 still SQLite-only; every PostgreSQL role remains inactive.
+Yoink 0.73 adds migration 48, which rebuilds signal incidents with exact
+tenant/user ownership and refuses missing or multi-principal historical
+evidence. The PostgreSQL manifest now classifies all 95 portable tables, with
+83 tenant-scoped tables and no unresolved grant class. Signal evaluation and
+all production PostgreSQL authority remain closed.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -150,10 +155,11 @@ the queue state machine on that inert schema. The native qualification suite
 uses two independent production-driver worker pools plus a third lock-holder
 session to prove `SKIP LOCKED` distribution, an exact-one-winner race, and
 one-use completion capabilities.
-The optional role qualifier then divides 94 portable tables into five exact
-read-only group roles and leaves the unresolved incident table inaccessible.
+The optional role qualifier originally divided 94 portable tables into five
+exact read-only group roles and left the unresolved incident table inaccessible;
+migration 48 now classifies and grants all 95 through the same bounded classes.
 The optional tenant-session qualifier adds an empty server-owned principal
-registry, zero-argument binder, read-only adapter, and 82 restrictive policies.
+registry, zero-argument binder, read-only adapter, and 83 restrictive policies.
 Native tests prove that custom setting changes cannot widen a mapped tenant's
 scope. It creates no production login, membership, principal mapping, write
 role, or runtime authority. The optional worker-control qualifier adds only

@@ -243,11 +243,15 @@ export class SignalRepository {
   }
 
   findOpenIncident(semanticKey: string, cutoffIso: string): IncidentRecord | null {
+    const scope = currentRequestScope();
     const row = this.db.get<IncidentRow>(
       `SELECT id, listing_id, semantic_key, status, occurrence_count, last_observed_at
        FROM signal_incidents
-       WHERE semantic_key = ? AND status = 'open' AND last_observed_at >= ?
+       WHERE tenant_id = ? AND user_id = ?
+         AND semantic_key = ? AND status = 'open' AND last_observed_at >= ?
        ORDER BY last_observed_at DESC LIMIT 1`,
+      scope.tenantId,
+      scope.userId,
       semanticKey,
       cutoffIso
     );
@@ -257,14 +261,17 @@ export class SignalRepository {
   createIncident(signal: NormalizedSignal, listing: ListingContext, semanticKey: string, now = Date.now()): IncidentRecord {
     const id = newId("incident");
     const timestamp = nowIso(now);
+    const scope = currentRequestScope();
     this.db.run(
       `INSERT INTO signal_incidents(
-         id, listing_id, event_type, semantic_key, status, unit_price_cents,
+         id, tenant_id, user_id, listing_id, event_type, semantic_key, status, unit_price_cents,
          currency, seller_name, seller_type, offer_fingerprint,
          first_observed_at, last_observed_at, occurrence_count,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       id,
+      scope.tenantId,
+      scope.userId,
       listing.id,
       signal.eventType,
       semanticKey,
@@ -289,21 +296,26 @@ export class SignalRepository {
   }
 
   corroborateIncident(incident: IncidentRecord, signal: NormalizedSignal, now = Date.now()): IncidentRecord {
+    const scope = currentRequestScope();
     this.db.run(
       `UPDATE signal_incidents
        SET occurrence_count = occurrence_count + 1,
            last_observed_at = CASE WHEN last_observed_at < ? THEN ? ELSE last_observed_at END,
            updated_at = ?
-       WHERE id = ? AND status = 'open'`,
+       WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'open'`,
       signal.observedAt,
       signal.observedAt,
       nowIso(now),
-      incident.id
+      incident.id,
+      scope.tenantId,
+      scope.userId
     );
     const row = this.db.get<IncidentRow>(
       `SELECT id, listing_id, semantic_key, status, occurrence_count, last_observed_at
-       FROM signal_incidents WHERE id = ?`,
-      incident.id
+       FROM signal_incidents WHERE id = ? AND tenant_id = ? AND user_id = ?`,
+      incident.id,
+      scope.tenantId,
+      scope.userId
     );
     if (!row) throw new Error("The signal incident no longer exists.");
     return incidentRecord(row);
@@ -657,7 +669,7 @@ export class SignalRepository {
     this.db.run(
       `UPDATE signal_incidents
        SET status = ?, closed_reason = ?, updated_at = ?
-       WHERE id = ?
+       WHERE id = ? AND tenant_id = ? AND user_id = ?
          AND NOT EXISTS (
            SELECT 1 FROM action_jobs other_job
            WHERE other_job.incident_id = signal_incidents.id
@@ -673,6 +685,8 @@ export class SignalRepository {
       reason,
       nowIso(now),
       incidentId,
+      scope.tenantId,
+      scope.userId,
       scope.tenantId,
       scope.userId,
       scope.tenantId,

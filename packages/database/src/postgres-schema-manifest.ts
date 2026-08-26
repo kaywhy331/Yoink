@@ -156,6 +156,7 @@ const TENANT_SCOPE_RULES: Record<string, TenantScopeRule> = {
     kind: "inherited",
     edges: [
       { targetTable: "signal_events", from: "event_id", requiredForOwnership: true },
+      { targetTable: "signal_incidents", from: "incident_id", requiredForOwnership: false },
       { targetTable: "missions", from: "mission_id", requiredForOwnership: false },
       { targetTable: "strategies", from: "strategy_id", requiredForOwnership: false }
     ]
@@ -167,6 +168,7 @@ const TENANT_SCOPE_RULES: Record<string, TenantScopeRule> = {
     kind: "inherited",
     edges: [
       { targetTable: "signal_events", from: "event_id", requiredForOwnership: true },
+      { targetTable: "signal_incidents", from: "incident_id", requiredForOwnership: false },
       { targetTable: "source_connections", from: "source_connection_id", requiredForOwnership: true }
     ]
   },
@@ -196,7 +198,6 @@ const NON_TENANT_SCOPE_KINDS: Record<string, Exclude<PostgresTenantScopeKind, "d
   listings: "shared_catalog",
   product_families: "shared_catalog",
   retailers: "shared_catalog",
-  signal_incidents: "unresolved",
   tenants: "tenant_registry",
   variants: "shared_catalog"
 };

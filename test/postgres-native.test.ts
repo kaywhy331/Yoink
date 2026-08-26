@@ -195,11 +195,11 @@ async function insertNotificationRecoveryFixtures(
   );
   await database.query(
     `INSERT INTO "${NATIVE_SCHEMA}"."signal_incidents"(
-       id, listing_id, event_type, semantic_key, first_observed_at,
+       id, tenant_id, user_id, listing_id, event_type, semantic_key, first_observed_at,
        last_observed_at, created_at, updated_at
-     ) VALUES ('native_notify_incident', 'listing_cutover_scope', 'restock',
-               'native-notification-recovery', $1, $1, $1, $1)`,
-    [createdAt]
+     ) VALUES ('native_notify_incident', $1, $2, 'listing_cutover_scope', 'restock',
+               'native-notification-recovery', $3, $3, $3, $3)`,
+    [NATIVE_TENANT, NATIVE_USER, createdAt]
   );
   const jobs = [
     ["native_notify_expired", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", expiredLeaseAt],
@@ -317,10 +317,10 @@ async function insertExecutionRecoveryFixtures(
   for (const incidentId of incidentIds) {
     await database.query(
       `INSERT INTO "${NATIVE_SCHEMA}"."signal_incidents"(
-         id, listing_id, event_type, semantic_key, first_observed_at,
+         id, tenant_id, user_id, listing_id, event_type, semantic_key, first_observed_at,
          last_observed_at, created_at, updated_at
-       ) VALUES ($1, 'listing_cutover_scope', 'restock', $2, $3, $3, $3, $3)`,
-      [incidentId, `semantic:${incidentId}`, createdAt]
+       ) VALUES ($1, $2, $3, 'listing_cutover_scope', 'restock', $4, $5, $5, $5, $5)`,
+      [incidentId, NATIVE_TENANT, NATIVE_USER, `semantic:${incidentId}`, createdAt]
     );
   }
 
@@ -1052,7 +1052,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       new Date("2026-08-25T16:45:00.000Z").getTime()
     );
     assert.equal(roles.roleCount, 5);
-    assert.equal(roles.grantedTableCount, 94);
+    assert.equal(roles.grantedTableCount, 95);
     assert.equal((await verifyPostgresRuntimeReadRoles(
       importer,
       NATIVE_SCHEMA,
@@ -1065,11 +1065,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_SESSION_ROLE_NAMESPACE,
       new Date("2026-08-25T16:50:00.000Z").getTime()
     );
-    assert.equal(sessionBoundary.tenantRlsTableCount, 82);
-    assert.equal(sessionBoundary.grantCount, 82);
+    assert.equal(sessionBoundary.tenantRlsTableCount, 83);
+    assert.equal(sessionBoundary.grantCount, 83);
     assert.equal(sessionBoundary.membershipCount, 0);
     assert.equal(sessionBoundary.activePrincipalCount, 0);
-    assert.equal(sessionBoundary.restrictivePolicyCount, 82);
+    assert.equal(sessionBoundary.restrictivePolicyCount, 83);
     assert.match(sessionBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(sessionBoundary.directParameterSetPrevented, false);
     assert.equal(sessionBoundary.directParameterScopeExpansionPrevented, true);
@@ -1195,8 +1195,8 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       new Date("2026-08-25T16:54:30.000Z").getTime()
     );
     assert.equal(executionRecoveryBoundary.protectedTableCount, 9);
-    assert.equal(executionRecoveryBoundary.forcedRlsTableCount, 8);
-    assert.equal(executionRecoveryBoundary.indirectScopeTableCount, 1);
+    assert.equal(executionRecoveryBoundary.forcedRlsTableCount, 9);
+    assert.equal(executionRecoveryBoundary.indirectScopeTableCount, 0);
     assert.equal(executionRecoveryBoundary.directTableGrantCount, 0);
     assert.equal(executionRecoveryBoundary.functionGrantCount, 1);
     assert.equal(executionRecoveryBoundary.membershipCount, 0);

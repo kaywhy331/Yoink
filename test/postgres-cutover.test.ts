@@ -135,23 +135,24 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.deepEqual(second, first);
   assert.equal(first.contractVersion, POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION);
   assert.equal(first.tableCount, 95);
-  assert.equal(first.foreignKeyCount, 243);
-  assert.equal(first.indexCount, 177);
+  assert.equal(first.foreignKeyCount, 244);
+  assert.equal(first.indexCount, 178);
   assert.equal(first.defaultExpressionCount, 282);
   assert.equal(first.checkConstraintCount, 327);
   assert.equal(first.triggerCount, 50);
-  assert.equal(first.directTenantTableCount, 68);
+  assert.equal(first.directTenantTableCount, 69);
   assert.equal(first.inheritedTenantPathTableCount, 14);
-  assert.equal(first.noTenantPathTableCount, 13);
+  assert.equal(first.noTenantPathTableCount, 12);
   assert.equal(first.inheritedTenantTableCount, 13);
   assert.equal(first.mixedTenantTableCount, 1);
   assert.equal(first.sharedCatalogTableCount, 6);
   assert.equal(first.authorizationCatalogTableCount, 3);
   assert.equal(first.deploymentControlTableCount, 2);
   assert.equal(first.tenantRegistryTableCount, 1);
-  assert.equal(first.unresolvedTenantTableCount, 1);
-  assert.equal(first.tables.filter((table) => table.tenantScopeKind === "direct").length, 68);
-  assert.equal(first.tables.reduce((count, table) => count + table.tenantOwnershipEdges.length, 0), 18);
+  assert.equal(first.unresolvedTenantTableCount, 0);
+  assert.equal(first.tables.filter((table) => table.tenantScopeKind === "direct").length, 69);
+  assert.equal(first.tables.reduce((count, table) => count + table.tenantOwnershipEdges.length, 0), 20);
+  assert.equal(first.tables.find((table) => table.name === "signal_incidents")?.tenantScopeKind, "direct");
   assert.match(first.fingerprint, /^[a-f0-9]{64}$/);
   assert.ok(first.tables.every((table) => table.name !== "schema_migrations"));
   assert.ok(first.tables.every((table) => table.indexes.every((index) => Buffer.byteLength(index.name) <= 63)));
@@ -161,10 +162,10 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.equal(readRoles.contractVersion, POSTGRES_RUNTIME_READ_ROLE_CONTRACT_VERSION);
   assert.equal(readRoles.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
   assert.equal(readRoles.roleCount, 5);
-  assert.equal(readRoles.grantedTableCount, 94);
-  assert.equal(readRoles.unresolvedTableCount, 1);
-  assert.deepEqual(readRoles.unresolvedTables, ["signal_incidents"]);
-  assert.equal(readRoles.roles.find((role) => role.kind === "tenant_reader")?.tableNames.length, 82);
+  assert.equal(readRoles.grantedTableCount, 95);
+  assert.equal(readRoles.unresolvedTableCount, 0);
+  assert.deepEqual(readRoles.unresolvedTables, []);
+  assert.equal(readRoles.roles.find((role) => role.kind === "tenant_reader")?.tableNames.length, 83);
   assert.equal(readRoles.roles.find((role) => role.kind === "shared_catalog_reader")?.tableNames.length, 6);
   assert.equal(readRoles.roles.find((role) => role.kind === "authorization_catalog_reader")?.tableNames.length, 3);
   assert.equal(readRoles.roles.find((role) => role.kind === "deployment_control_reader")?.tableNames.length, 2);
@@ -187,14 +188,14 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
     noBypassRls: true,
     readOnly: true,
     roleCount: 5,
-    grantedTableCount: 94,
-    tenantRlsTableCount: 82,
+    grantedTableCount: 95,
+    tenantRlsTableCount: 83,
     sharedCatalogTableCount: 6,
     authorizationCatalogTableCount: 3,
     deploymentControlTableCount: 2,
     tenantRegistryTableCount: 1,
-    unresolvedTableCount: 1,
-    unresolvedTables: ["signal_incidents"],
+    unresolvedTableCount: 0,
+    unresolvedTables: [],
     mixedSharedOfferAccess: false,
     runtimeWriteRoleParity: false,
     activeRuntimeRolesApplied: false,
@@ -220,8 +221,8 @@ test("the PostgreSQL tenant-session template is deterministic, inactive, and res
   );
   assert.equal(manifest.contractVersion, POSTGRES_TENANT_SESSION_CONTRACT_VERSION);
   assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
-  assert.equal(manifest.tenantRlsTableCount, 82);
-  assert.equal(manifest.restrictivePolicyCount, 82);
+  assert.equal(manifest.tenantRlsTableCount, 83);
+  assert.equal(manifest.restrictivePolicyCount, 83);
   assert.equal(manifest.activePrincipalCount, 0);
   assert.equal(manifest.runtimeAuthority, false);
   assert.equal(manifest.sessionRole.login, false);
@@ -237,7 +238,7 @@ test("the PostgreSQL tenant-session template is deterministic, inactive, and res
   assert.equal(capability.directParameterSetPrevented, false);
   assert.equal(capability.directParameterScopeExpansionPrevented, true);
   assert.equal(capability.nativeTwoPrincipalIsolationQualified, true);
-  assert.equal(capability.tenantRlsTableCount, 82);
+  assert.equal(capability.tenantRlsTableCount, 83);
   assert.equal(capability.activePrincipalCount, 0);
   assert.equal(capability.principalProvisioningImplemented, false);
   assert.equal(capability.runtimeWriteRoleParity, false);
@@ -532,10 +533,10 @@ test("the PostgreSQL execution-recovery handler template is cumulative, fail clo
     "spend_ledger_entries",
     "spend_reservations"
   ]);
-  assert.deepEqual(manifest.executionRecoveryRole.indirectScopeTableNames, ["signal_incidents"]);
+  assert.deepEqual(manifest.executionRecoveryRole.indirectScopeTableNames, []);
   assert.equal(manifest.protectedTableCount, 9);
-  assert.equal(manifest.forcedRlsTableCount, 8);
-  assert.equal(manifest.indirectScopeTableCount, 1);
+  assert.equal(manifest.forcedRlsTableCount, 9);
+  assert.equal(manifest.indirectScopeTableCount, 0);
   assert.equal(manifest.directTableGrantCount, 0);
   assert.equal(manifest.functionGrantCount, 1);
   assert.deepEqual(manifest.boundaryHandlerTaskKinds, ["execution_recovery"]);
@@ -576,8 +577,8 @@ test("the PostgreSQL execution-recovery handler template is cumulative, fail clo
   assert.equal(capability.handlerTaskKindCount, 2);
   assert.equal(capability.totalHandlerTaskKindCount, 7);
   assert.equal(capability.protectedTableCount, 9);
-  assert.equal(capability.forcedRlsTableCount, 8);
-  assert.equal(capability.indirectScopeTableCount, 1);
+  assert.equal(capability.forcedRlsTableCount, 9);
+  assert.equal(capability.indirectScopeTableCount, 0);
   assert.equal(capability.directTableGrantCount, 0);
   assert.equal(capability.functionGrantCount, 1);
   assert.equal(capability.activeRuntimeRoleApplied, false);
@@ -1516,6 +1517,7 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
          yoink_cutover_test.offer_observations,
          yoink_cutover_test.source_connections,
          yoink_cutover_test.signal_events,
+         yoink_cutover_test.signal_incidents,
          yoink_cutover_test.missions,
          yoink_cutover_test.strategies
        TO yoink_cutover_reader`
@@ -1590,11 +1592,11 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     assert.equal(runtimeRoles.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
     assert.equal(runtimeRoles.phase, "verified");
     assert.equal(runtimeRoles.roleCount, 5);
-    assert.equal(runtimeRoles.grantedTableCount, 94);
-    assert.equal(runtimeRoles.grantCount, 94);
-    assert.equal(runtimeRoles.tenantPolicyCount, 82);
+    assert.equal(runtimeRoles.grantedTableCount, 95);
+    assert.equal(runtimeRoles.grantCount, 95);
+    assert.equal(runtimeRoles.tenantPolicyCount, 83);
     assert.equal(runtimeRoles.membershipCount, 0);
-    assert.deepEqual(runtimeRoles.unresolvedTables, ["signal_incidents"]);
+    assert.deepEqual(runtimeRoles.unresolvedTables, []);
     assert.equal(runtimeRoles.readOnly, true);
     assert.equal(runtimeRoles.runtimeAuthority, false);
     assert.equal(runtimeRoles.productionReady, false);

@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.72.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.73.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,28 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.73.0 removes the last unresolved PostgreSQL tenant-ownership class
+before signal evaluation receives any hosted write authority. Migration 48
+rebuilds `signal_incidents` with exact tenant/user ownership and a composite
+user foreign key. Existing ownership is derived only from durable event,
+occurrence, decision, and action-job evidence; a missing or multi-principal
+history aborts atomically instead of guessing. The signal repository now scopes
+deduplication, corroboration, and lifecycle changes to the exact tenant/user.
+The existing execution-recovery qualification now verifies all nine protected
+relations under forced RLS and requires the same exact owner inside its
+security-definer incident transition. User privacy exports include the owned
+incident and occurrence history while excluding every other principal.
+
+The deterministic PostgreSQL manifest now classifies all 95 portable tables:
+83 tenant-scoped, six shared catalog, three authorization catalog, two
+deployment control, and one tenant registry, with zero unresolved grants.
+Upgrade tests prove preservation, child-reference integrity, restored foreign-
+key enforcement, and ambiguous-owner rollback; signal-engine tests prove that
+the same semantic offer creates independent incidents for different users.
+Hosted signal evaluation itself remains closed, complete handler coverage stays
+six of seven, SQLite remains authoritative, and no production principal or
+retailer authority is activated.
 
 Version 0.72.0 qualifies the compact lease-recovery half of the final
 `hosted_delivery_recovery` PostgreSQL handler without overstating handler
@@ -128,11 +150,11 @@ decisions. The routine preserves action events, append-only spend-ledger
 entries, audit events, and outbox receipts while returning only three aggregate
 counts.
 
-The port also closes a latent multi-tenant edge in both SQLite and PostgreSQL:
-an action transition can close or lock a shared `signal_incidents` row only
-when every bound action and signal occurrence belongs to the exact tenant/user.
-Otherwise the private action and spend state recover while the shared incident
-remains unchanged. Native PostgreSQL 16 proves every pre/post-mutation state,
+The port also closed a latent multi-tenant edge in both SQLite and PostgreSQL:
+an action transition could close or lock the then-shared `signal_incidents` row
+only when every bound action and signal occurrence belonged to the exact
+tenant/user. Version 0.73 adds direct ownership enforcement while retaining
+those independent corruption guards. Native PostgreSQL 16 proves every pre/post-mutation state,
 receipt parity, direct-SQL denial, mismatched/unmapped principal rejection,
 cross-tenant shared-incident isolation, idempotent replay, concurrent one-winner
 recovery, and catalog-tamper rejection. Exactly two of seven handler families
@@ -252,10 +274,10 @@ postgres:writes -- plan ...` and the [PostgreSQL cutover
 qualification](docs/POSTGRES_CUTOVER.md) runbook for the bounded operator flow.
 
 Version 0.60.0 added a qualification-only PostgreSQL tenant-session boundary.
-One `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` reader receives exact `SELECT` access
-to the 82 tenant-scoped tables. A server-owned principal registry and
+One `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` reader now receives exact `SELECT`
+access to all 83 tenant-scoped tables after migration 48. A server-owned principal registry and
 zero-argument security-definer binder derive tenant and user from PostgreSQL
-`session_user`; callers never pass identity into the binder. Eighty-two
+`session_user`; callers never pass identity into the binder. Eighty-three
 restrictive policies intersect that server-bound identity with the existing
 forced RLS policies. PostgreSQL permits clients to change custom settings, so
 Yoink does not claim otherwise: changing `yoink.tenant_id` or `yoink.user_id`
@@ -290,10 +312,11 @@ runtime source of truth.
 
 Version 0.58.0 added a deterministic, qualification-only PostgreSQL read-role
 boundary over the table classifications completed in 0.57. Five fresh
-`NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` roles receive 94 exact `SELECT` grants:
-82 tenant-RLS tables, six shared-catalog tables, three authorization-catalog
-tables, two deployment-control tables, and the tenant registry. The unresolved
-incident table, source-less mixed offers, every write privilege, role
+`NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` roles originally received 94 exact
+`SELECT` grants. Migration 48 now expands that same contract to all 95 tables:
+83 tenant-RLS tables, six shared-catalog tables, three authorization-catalog
+tables, two deployment-control tables, and the tenant registry. Source-less
+mixed offers, every write privilege, role
 membership, and application-schema routine or sequence access remain closed.
 The verifier detects role-attribute, membership, ownership, schema, table,
 column, routine, and sequence privilege drift, and records an immutable inert

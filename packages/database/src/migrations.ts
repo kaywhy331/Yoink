@@ -2,6 +2,7 @@ export interface Migration {
   version: number;
   name: string;
   sql: string;
+  foreignKeysDisabled?: true;
 }
 
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
@@ -3305,6 +3306,129 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
           tenant_id, recipe_id, eligibility_state, received_at,
           contributor_ref_hash, region_scope
         );
+    `
+  },
+  {
+    version: 48,
+    name: "tenant_owned_signal_incidents",
+    foreignKeysDisabled: true,
+    sql: `
+      CREATE TEMP TABLE yoink_signal_incident_owners_v48 (
+        incident_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        distinct_owner_count INTEGER NOT NULL CHECK (distinct_owner_count = 1)
+      ) STRICT;
+
+      INSERT INTO yoink_signal_incident_owners_v48(
+        incident_id, tenant_id, user_id, distinct_owner_count
+      )
+      SELECT incident_id,
+             MIN(tenant_id),
+             MIN(user_id),
+             COUNT(DISTINCT (
+               length(tenant_id) || ':' || tenant_id || ':' ||
+               length(user_id) || ':' || user_id
+             ))
+      FROM (
+        SELECT occurrence.incident_id,
+               event.tenant_id,
+               event.user_id
+        FROM signal_occurrences occurrence
+        JOIN signal_events event ON event.id = occurrence.event_id
+        WHERE occurrence.incident_id IS NOT NULL
+
+        UNION ALL
+
+        SELECT job.incident_id,
+               job.tenant_id,
+               job.user_id
+        FROM action_jobs job
+
+        UNION ALL
+
+        SELECT decision.incident_id,
+               event.tenant_id,
+               event.user_id
+        FROM mission_decisions decision
+        JOIN signal_events event ON event.id = decision.event_id
+        WHERE decision.incident_id IS NOT NULL
+      ) owner_candidate
+      GROUP BY incident_id;
+
+      CREATE TABLE signal_incidents_v48 (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE RESTRICT,
+        event_type TEXT NOT NULL,
+        semantic_key TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        unit_price_cents INTEGER CHECK (unit_price_cents IS NULL OR unit_price_cents > 0),
+        currency TEXT NOT NULL DEFAULT 'USD',
+        seller_name TEXT NOT NULL DEFAULT '',
+        seller_type TEXT NOT NULL DEFAULT 'unknown',
+        offer_fingerprint TEXT NOT NULL DEFAULT '',
+        first_observed_at TEXT NOT NULL,
+        last_observed_at TEXT NOT NULL,
+        occurrence_count INTEGER NOT NULL DEFAULT 1 CHECK (occurrence_count >= 1),
+        closed_reason TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE
+      ) STRICT;
+
+      INSERT INTO signal_incidents_v48(
+        id, tenant_id, user_id, listing_id, event_type, semantic_key, status,
+        unit_price_cents, currency, seller_name, seller_type, offer_fingerprint,
+        first_observed_at, last_observed_at, occurrence_count, closed_reason,
+        created_at, updated_at
+      )
+      SELECT incident.id,
+             owner.tenant_id,
+             owner.user_id,
+             incident.listing_id,
+             incident.event_type,
+             incident.semantic_key,
+             incident.status,
+             incident.unit_price_cents,
+             incident.currency,
+             incident.seller_name,
+             incident.seller_type,
+             incident.offer_fingerprint,
+             incident.first_observed_at,
+             incident.last_observed_at,
+             incident.occurrence_count,
+             incident.closed_reason,
+             incident.created_at,
+             incident.updated_at
+      FROM signal_incidents incident
+      JOIN yoink_signal_incident_owners_v48 owner ON owner.incident_id = incident.id;
+
+      CREATE TEMP TABLE yoink_signal_incident_copy_check_v48 (
+        source_count INTEGER NOT NULL,
+        copied_count INTEGER NOT NULL,
+        CHECK (source_count = copied_count)
+      ) STRICT;
+
+      INSERT INTO yoink_signal_incident_copy_check_v48(source_count, copied_count)
+      VALUES (
+        (SELECT COUNT(*) FROM signal_incidents),
+        (SELECT COUNT(*) FROM signal_incidents_v48)
+      );
+
+      DROP TABLE signal_incidents;
+      ALTER TABLE signal_incidents_v48 RENAME TO signal_incidents;
+
+      CREATE INDEX signal_incidents_dedupe_idx
+        ON signal_incidents(
+          tenant_id, user_id, semantic_key, status, last_observed_at DESC
+        );
+      CREATE INDEX signal_incidents_listing_owner_idx
+        ON signal_incidents(tenant_id, user_id, listing_id, updated_at DESC);
+
+      DROP TABLE yoink_signal_incident_copy_check_v48;
+      DROP TABLE yoink_signal_incident_owners_v48;
     `
   }
 ]);

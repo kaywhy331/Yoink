@@ -972,7 +972,10 @@ shared, but no private follow or signal becomes global automatically.
 ## Persistence
 
 SQLite is the local source of truth. Schema migrations are transactional and
-numbered; the current schema is migration 47. Foreign keys are mandatory.
+numbered; the current schema is migration 48. Foreign keys are mandatory.
+Migration 48 gives every signal incident a non-null tenant/user owner derived
+from its durable evidence graph and aborts atomically on missing or ambiguous
+historical ownership.
 Current projections and append-only audit events update in the same transaction;
 Yoink does not use full event sourcing.
 
@@ -1002,16 +1005,16 @@ transaction, preserve packaged relational invariants, classify every table,
 force direct and exact inherited-tenant RLS, and reconcile exact logical hashes.
 A qualification-only PostgreSQL store exercises the complete asynchronous
 worker queue port, including tenant-bound `SKIP LOCKED` selection and capability
-transitions. Five inactive least-privilege read group roles divide 94 exact
+transitions. Five inactive least-privilege read group roles divide all 95 exact
 tables into tenant, shared-catalog, authorization, deployment-control, and
-tenant-registry surfaces; the unresolved incident table receives no grant.
+tenant-registry surfaces; migration 48 removed the unresolved incident class.
 Their live-catalog verifier rejects extra table/column grants, memberships,
 ownership, routine/sequence access, and unsafe attributes. That schema remains
 qualification-only. A hermetic native PostgreSQL 16 test now uses two
 independent production-driver worker pools and a third lock-holder connection
 to prove `SKIP LOCKED` distribution, an exact-one-winner lease race, and one-use
 completion capabilities. An empty server-owned principal registry, zero-
-argument binder, read-only tenant adapter, and 82 restrictive policies also
+argument binder, read-only tenant adapter, and 83 restrictive policies also
 prove simultaneous mapped-principal isolation on native PostgreSQL. Custom
 tenant settings remain syntactically mutable but cannot widen scope beyond the
 server mapping. One separately qualified queue-writer role now has exactly 12
@@ -1034,14 +1037,15 @@ membership, and login. Four handler boundaries now route
 server-principal-bound security-definer routines. Each inactive role has one
 function grant and zero direct table grants; native tests prove handler parity,
 isolation, replay, contention, denial, receipt completeness, and tamper
-detection. Execution recovery additionally refuses to mutate a shared incident
-when another tenant/user owns any bound action or occurrence. Privacy retention
+detection. Migration 48 gives each signal incident one exact tenant/user owner;
+execution recovery requires that owner and also refuses mutation if a corrupt
+bound action or occurrence points across principals. Privacy retention
 additionally enforces the existing 30/90-day windows, authenticates receipt
 attribution, and caps quarantined evidence deletion at 500 rows. Candidate
 evaluation derives a bounded aggregate evidence plan, revalidates it before
 apply, and can create only unsigned, non-executable quarantine rows. Production login
 provisioning and activation, remaining writer families, general mixed
-shared-offer/incident semantics, the other three PostgreSQL task handlers and
+shared-offer semantics, the other three PostgreSQL task handlers and
 every request repository, deployed fleet/load/outage proof, and backup/cutover drills remain
 gated, so SQLite retains runtime authority. See
 [Data portability and recovery](DATA_PORTABILITY.md) and

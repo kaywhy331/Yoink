@@ -1847,3 +1847,188 @@ test("the durable schema has no raw offer token column", () => {
     db.close();
   }
 });
+
+function createVersion47SignalIncidentFixture(filePath: string, ambiguousOwner = false): void {
+  const legacy = new DatabaseSync(filePath);
+  legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
+  for (const migration of MIGRATIONS.filter((item) => item.version <= 47)) {
+    legacy.exec(migration.sql);
+    legacy.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+      migration.version,
+      migration.name,
+      "2026-08-26T09:00:00.000Z"
+    );
+  }
+  legacy.exec(`
+    PRAGMA foreign_keys = ON;
+
+    INSERT INTO tenants(id, name, created_at)
+    VALUES ('tenant_incident_a', 'Incident A', '2026-08-26T09:00:00.000Z');
+    INSERT INTO users(id, tenant_id, display_name, created_at)
+    VALUES ('user_incident_a', 'tenant_incident_a', 'Incident A', '2026-08-26T09:00:00.000Z');
+    INSERT INTO retailers(
+      id, display_name, execution_supported, domains_json, created_at, updated_at
+    ) VALUES (
+      'target', 'Target', 0, '["target.com"]',
+      '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z'
+    );
+    INSERT INTO source_connections(
+      id, tenant_id, user_id, source, name, status, trust_level,
+      auto_create_missions, is_private, last_event_at, created_at, updated_at
+    ) VALUES (
+      'source_incident_a', 'tenant_incident_a', 'user_incident_a',
+      'trackalacker', 'TrackaLacker A', 'connected', 'trusted_exact',
+      1, 1, '2026-08-26T09:00:00.000Z',
+      '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z'
+    );
+    INSERT INTO product_families(id, title, brand, created_at, updated_at)
+    VALUES (
+      'family_incident', 'Incident product', '',
+      '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z'
+    );
+    INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+    VALUES (
+      'variant_incident', 'family_incident', 'Incident product', '{}',
+      '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z'
+    );
+    INSERT INTO listings(
+      id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+      execution_supported, msrp_cents, currency, created_at, updated_at
+    ) VALUES (
+      'listing_incident', 'variant_incident', 'target', 'INCIDENT-1',
+      'https://www.target.com/p/-/A-INCIDENT-1', 'active', 0, 1000, 'USD',
+      '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z'
+    );
+    INSERT INTO signal_events(
+      id, tenant_id, user_id, source_connection_id, signal_id,
+      external_event_id, transport_hash, schema_version, source, event_type,
+      test, observed_at, received_at, identity_json, offer_json,
+      evidence_json, parser_version, resolution_status, created_at
+    ) VALUES (
+      'event_incident_a', 'tenant_incident_a', 'user_incident_a', 'source_incident_a',
+      'signal_incident_a', 'external_incident_a', 'transport_incident_a', 1,
+      'trackalacker', 'restock', 0,
+      '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z',
+      '{}', '{}', '{}', 'trackalacker-push-v1', 'matched',
+      '2026-08-26T09:00:00.000Z'
+    );
+    INSERT INTO signal_incidents(
+      id, listing_id, event_type, semantic_key, status, unit_price_cents,
+      currency, seller_name, seller_type, offer_fingerprint,
+      first_observed_at, last_observed_at, occurrence_count,
+      closed_reason, created_at, updated_at
+    ) VALUES (
+      'incident_owned_v48', 'listing_incident', 'restock', 'semantic_incident',
+      'open', 1000, 'USD', 'Target', 'first_party', 'offer_incident',
+      '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z', 1, '',
+      '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z'
+    );
+    INSERT INTO signal_occurrences(
+      id, event_id, incident_id, source_connection_id,
+      observed_at, received_at, created_at
+    ) VALUES (
+      'occurrence_incident_a', 'event_incident_a', 'incident_owned_v48',
+      'source_incident_a', '2026-08-26T09:00:00.000Z',
+      '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z'
+    );
+  `);
+  if (ambiguousOwner) {
+    legacy.exec(`
+      INSERT INTO tenants(id, name, created_at)
+      VALUES ('tenant_incident_b', 'Incident B', '2026-08-26T09:00:00.000Z');
+      INSERT INTO users(id, tenant_id, display_name, created_at)
+      VALUES ('user_incident_b', 'tenant_incident_b', 'Incident B', '2026-08-26T09:00:00.000Z');
+      INSERT INTO source_connections(
+        id, tenant_id, user_id, source, name, status, trust_level,
+        auto_create_missions, is_private, last_event_at, created_at, updated_at
+      ) VALUES (
+        'source_incident_b', 'tenant_incident_b', 'user_incident_b',
+        'trackalacker', 'TrackaLacker B', 'connected', 'trusted_exact',
+        1, 1, '2026-08-26T09:00:00.000Z',
+        '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z'
+      );
+      INSERT INTO signal_events(
+        id, tenant_id, user_id, source_connection_id, signal_id,
+        external_event_id, transport_hash, schema_version, source, event_type,
+        test, observed_at, received_at, identity_json, offer_json,
+        evidence_json, parser_version, resolution_status, created_at
+      ) VALUES (
+        'event_incident_b', 'tenant_incident_b', 'user_incident_b', 'source_incident_b',
+        'signal_incident_b', 'external_incident_b', 'transport_incident_b', 1,
+        'trackalacker', 'restock', 0,
+        '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z',
+        '{}', '{}', '{}', 'trackalacker-push-v1', 'matched',
+        '2026-08-26T09:00:00.000Z'
+      );
+      INSERT INTO signal_occurrences(
+        id, event_id, incident_id, source_connection_id,
+        observed_at, received_at, created_at
+      ) VALUES (
+        'occurrence_incident_b', 'event_incident_b', 'incident_owned_v48',
+        'source_incident_b', '2026-08-26T09:00:00.000Z',
+        '2026-08-26T09:00:00.000Z', '2026-08-26T09:00:00.000Z'
+      );
+    `);
+  }
+  legacy.close();
+}
+
+test("migration 48 assigns every signal incident one exact owner and preserves child references", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-signal-incident-owner-upgrade-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    createVersion47SignalIncidentFixture(filePath);
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.deepEqual({ ...upgraded.get(
+        "SELECT tenant_id AS tenantId, user_id AS userId FROM signal_incidents WHERE id = 'incident_owned_v48'"
+      ) }, {
+        tenantId: "tenant_incident_a",
+        userId: "user_incident_a"
+      });
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM signal_occurrences WHERE incident_id = 'incident_owned_v48'"
+      )?.count, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 48 AND name = 'tenant_owned_signal_incidents'"
+      )?.count, 1);
+      assert.deepEqual(upgraded.all("PRAGMA foreign_key_check"), []);
+      assert.equal(upgraded.get<{ foreign_keys: number }>("PRAGMA foreign_keys")?.foreign_keys, 1);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'signal_incidents_listing_owner_idx'"
+      )?.count, 1);
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("migration 48 fails atomically when historical evidence gives one incident multiple owners", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-signal-incident-ambiguous-upgrade-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    createVersion47SignalIncidentFixture(filePath, true);
+    assert.throws(
+      () => new YoinkDatabase(filePath),
+      /distinct_owner_count|CHECK constraint failed/
+    );
+    const preserved = new DatabaseSync(filePath, { readOnly: true });
+    try {
+      assert.equal(preserved.prepare(
+        "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 48"
+      ).get()?.count, 0);
+      assert.equal(preserved.prepare(
+        "SELECT COUNT(*) AS count FROM pragma_table_info('signal_incidents') WHERE name IN ('tenant_id', 'user_id')"
+      ).get()?.count, 0);
+      assert.equal(preserved.prepare(
+        "SELECT COUNT(*) AS count FROM signal_incidents WHERE id = 'incident_owned_v48'"
+      ).get()?.count, 1);
+    } finally {
+      preserved.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

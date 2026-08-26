@@ -706,7 +706,7 @@ async function inspectBoundary(
        AND relation.relrowsecurity = TRUE AND relation.relforcerowsecurity = TRUE`,
     [manifest.schemaName]
   );
-  if (exactInteger(rlsTables.rows[0]?.count, "tenant RLS table count") !== 82) {
+  if (exactInteger(rlsTables.rows[0]?.count, "tenant RLS table count") !== 83) {
     throw new PostgresTenantQueueWriteQualificationError(
       "The PostgreSQL tenant queue-write RLS table surface is incomplete."
     );

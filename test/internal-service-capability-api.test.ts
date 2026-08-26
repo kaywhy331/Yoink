@@ -185,9 +185,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Tenant-scope classification/);
     assert.match(cutoverText, /PostgreSQL worker-store contract/);
     assert.match(cutoverText, /Least-privilege read roles/);
-    assert.match(cutoverText, /5 NOLOGIN roles hold 94 exact SELECT grants/);
+    assert.match(cutoverText, /5 NOLOGIN roles hold 95 exact SELECT grants/);
     assert.match(cutoverText, /Server-bound tenant sessions/);
-    assert.match(cutoverText, /82 restrictive policies/);
+    assert.match(cutoverText, /83 restrictive policies/);
     assert.match(cutoverText, /PostgreSQL permits custom parameter changes, but they cannot widen the mapped tenant/);
     assert.match(cutoverText, /Bounded tenant queue repository/);
     assert.match(cutoverText, /5 tables expose 12 exact grants plus the binder, scope, and one immutable JSON constraint helper/);
