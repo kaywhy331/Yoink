@@ -5,6 +5,9 @@ import {
   type ObserverRecipeWitnessPublisher
 } from "../../observer-registry/src/witness.js";
 import type { ObserverRecipeWitnessCheckpoint } from "../../contracts/src/index.js";
+import type { BackgroundWorkerPrincipal } from "../../contracts/src/background-worker.js";
+
+type MaybePromise<T> = T | Promise<T>;
 
 interface WitnessStatus {
   state?: unknown;
@@ -19,18 +22,28 @@ interface WitnessStatus {
 }
 
 export interface ObserverRecipeWitnessStatePort {
-  witnessCheckpoint(): ObserverRecipeWitnessCheckpoint | null;
-  previousWitnessReceiptHash(): string;
-  acceptWitnessReceipt(value: unknown, now?: number): Record<string, unknown>;
-  recordWitnessFailure(code: ObserverRecipeWitnessFailureCode, now?: number): Record<string, unknown>;
-  witnessStatus(now?: number): Record<string, unknown>;
+  witnessCheckpoint(now?: number): MaybePromise<ObserverRecipeWitnessCheckpoint | null>;
+  previousWitnessReceiptHash(): MaybePromise<string>;
+  acceptWitnessReceipt(value: unknown, now?: number): MaybePromise<Record<string, unknown>>;
+  recordWitnessFailure(
+    code: ObserverRecipeWitnessFailureCode,
+    now?: number
+  ): MaybePromise<Record<string, unknown>>;
+  witnessStatus(now?: number): MaybePromise<Record<string, unknown>>;
+}
+
+export interface PrincipalBoundObserverRecipeWitnessStateFactory {
+  forPrincipal(
+    principal: BackgroundWorkerPrincipal,
+    runtimeVersion: string
+  ): MaybePromise<ObserverRecipeWitnessStatePort>;
 }
 
 export class ObserverRecipeWitnessRefreshError extends Error {
   readonly code: string;
 
-  constructor(reason: ObserverRecipeWitnessFailureCode) {
-    super("The independent observer recipe witness refresh failed closed.");
+  constructor(reason: ObserverRecipeWitnessFailureCode, cause?: unknown) {
+    super("The independent observer recipe witness refresh failed closed.", { cause });
     this.name = "ObserverRecipeWitnessRefreshError";
     this.code = `observer_recipe_witness_${reason}`;
   }
@@ -68,8 +81,8 @@ export class ObserverRecipeWitnessRefreshService {
   ) {}
 
   async execute(now = Date.now()): Promise<BackgroundTaskResult> {
-    const checkpoint = this.state.witnessCheckpoint();
-    const before = this.state.witnessStatus(now) as WitnessStatus;
+    const checkpoint = await this.state.witnessCheckpoint(now);
+    const before = await this.state.witnessStatus(now) as WitnessStatus;
     if (!checkpoint) {
       return result(before, { checkpointReady: false, refreshAttempted: false, receiptAccepted: false });
     }
@@ -91,15 +104,31 @@ export class ObserverRecipeWitnessRefreshService {
     try {
       const receiptEnvelope = await this.publisher.publish(
         checkpoint,
-        this.state.previousWitnessReceiptHash(),
+        await this.state.previousWitnessReceiptHash(),
         now
       );
-      const accepted = this.state.acceptWitnessReceipt(receiptEnvelope, now) as WitnessStatus;
+      const accepted = await this.state.acceptWitnessReceipt(receiptEnvelope, now) as WitnessStatus;
       return result(accepted, { checkpointReady: true, refreshAttempted: true, receiptAccepted: true });
     } catch (error) {
       const reason = error instanceof ObserverRecipeWitnessError ? error.code : "unavailable";
-      this.state.recordWitnessFailure(reason, now);
-      throw new ObserverRecipeWitnessRefreshError(reason);
+      await this.state.recordWitnessFailure(reason, now);
+      throw new ObserverRecipeWitnessRefreshError(reason, error);
     }
+  }
+}
+
+export class PrincipalBoundObserverRecipeWitnessRefreshService {
+  constructor(
+    private readonly states: PrincipalBoundObserverRecipeWitnessStateFactory,
+    private readonly publisher: ObserverRecipeWitnessPublisher
+  ) {}
+
+  async execute(
+    principal: BackgroundWorkerPrincipal,
+    runtimeVersion: string,
+    now = Date.now()
+  ): Promise<BackgroundTaskResult> {
+    const state = await this.states.forPrincipal(principal, runtimeVersion);
+    return new ObserverRecipeWitnessRefreshService(state, this.publisher).execute(now);
   }
 }

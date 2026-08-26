@@ -84,6 +84,13 @@ import {
   postgresOperatorAlertReconciliationCapabilityProjection
 } from "../packages/database/src/postgres-operator-alert-reconciliation.js";
 import {
+  POSTGRES_OBSERVER_WITNESS_REFRESH_CONTRACT_VERSION,
+  POSTGRES_OBSERVER_WITNESS_REFRESH_FUNCTION,
+  buildPostgresObserverWitnessRefreshManifest,
+  observerWitnessRefreshFunctionSource,
+  postgresObserverWitnessRefreshCapabilityProjection
+} from "../packages/database/src/postgres-observer-witness-refresh.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -1052,6 +1059,128 @@ test("the PostgreSQL operator-alert reconciliation boundary is server-derived, b
       "same_namespace"
     ),
     /must be distinct/
+  );
+});
+
+test("the PostgreSQL observer-witness refresh boundary is two-phase, public-only, and inert", () => {
+  const args = [
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test",
+    "yoink_notify_test",
+    "yoink_execute_test",
+    "yoink_retention_test",
+    "yoink_candidate_test",
+    "yoink_alert_dispatch_test",
+    "yoink_alert_reconcile_test",
+    "yoink_witness_refresh_test"
+  ] as const;
+  const manifest = buildPostgresObserverWitnessRefreshManifest(...args);
+  assert.deepEqual(buildPostgresObserverWitnessRefreshManifest(...args), manifest);
+  assert.equal(manifest.contractVersion, POSTGRES_OBSERVER_WITNESS_REFRESH_CONTRACT_VERSION);
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(
+    manifest.alertReconciliationContractVersion,
+    POSTGRES_OPERATOR_ALERT_RECONCILIATION_CONTRACT_VERSION
+  );
+  assert.equal(manifest.witnessRefreshRole.functionName, POSTGRES_OBSERVER_WITNESS_REFRESH_FUNCTION);
+  assert.deepEqual(manifest.witnessRefreshRole.functionArgumentTypes, Array(8).fill("text"));
+  assert.deepEqual(manifest.witnessRefreshRole.protectedTableNames, [
+    "audit_events",
+    "observer_recipe_transparency_events",
+    "observer_recipe_trust_manifests",
+    "observer_recipe_witness_checks",
+    "observer_recipe_witness_receipts",
+    "outbox_events"
+  ]);
+  assert.deepEqual(manifest.qualifiedHandlerTaskKinds, [
+    "notification_recovery",
+    "execution_recovery",
+    "operational_telemetry_retention",
+    "observer_recipe_candidate_evaluation",
+    "adapter_alert_reconciliation",
+    "observer_recipe_witness_refresh"
+  ]);
+  assert.equal(manifest.qualifiedHandlerTaskKindCount, 6);
+  assert.equal(manifest.totalHandlerTaskKindCount, 7);
+  assert.equal(manifest.maximumEnvelopeBytes, 65_536);
+  assert.equal(manifest.twoPhaseExternalIo, true);
+  assert.equal(manifest.externalIoOutsideTransaction, true);
+  assert.equal(manifest.applicationEd25519Verification, true);
+  assert.equal(manifest.serverDerivedCheckpoint, true);
+  assert.equal(manifest.databasePlanRevalidation, true);
+  assert.equal(manifest.databaseServerClock, true);
+  assert.equal(manifest.serverAuthenticatedReceiptActor, true);
+  assert.equal(manifest.publicCryptographicMetadataOnly, true);
+  assert.equal(manifest.witnessRefreshRepositoryParity, true);
+  assert.equal(manifest.allHandlerRepositoryParity, false);
+  assert.equal(manifest.protectedTableCount, 6);
+  assert.equal(manifest.forcedRlsTableCount, 6);
+  assert.equal(manifest.directTableGrantCount, 0);
+  assert.equal(manifest.functionGrantCount, 1);
+  assert.equal(manifest.mutationAuthority, false);
+  assert.equal(manifest.activePrincipalCount, 0);
+  assert.equal(manifest.runtimeAuthority, false);
+  assert.match(manifest.alertReconciliationManifestFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+
+  const source = observerWitnessRefreshFunctionSource(manifest);
+  assert.match(source, /principal\.principal_role = session_user::text/);
+  assert.match(source, /pg_advisory_xact_lock/);
+  assert.match(source, /operation_name NOT IN \('plan', 'accept', 'failure'\)/);
+  assert.match(source, /observer-witness plan changed before apply/);
+  assert.match(source, /independent_signature_verified/);
+  assert.match(source, /public_cryptographic_metadata/);
+  assert.doesNotMatch(source, /https?:\/\//);
+  assert.doesNotMatch(source, /publicKeySpki|privateKey|endpointOrigin|fetch\(/i);
+
+  const capability = postgresObserverWitnessRefreshCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_OBSERVER_WITNESS_REFRESH_CONTRACT_VERSION);
+  assert.equal(capability.deterministicManifestImplemented, true);
+  assert.equal(capability.atomicQualificationApplyImplemented, true);
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.securityDefinerRoutineVerified, true);
+  assert.equal(capability.serverBoundPrincipalLookup, true);
+  assert.equal(capability.twoPhaseExternalIo, true);
+  assert.equal(capability.externalIoOutsideTransaction, true);
+  assert.equal(capability.applicationEd25519Verification, true);
+  assert.equal(capability.serverDerivedCheckpoint, true);
+  assert.equal(capability.databasePlanRevalidation, true);
+  assert.equal(capability.databaseServerClock, true);
+  assert.equal(capability.serverAuthenticatedReceiptActor, true);
+  assert.equal(capability.publicCryptographicMetadataOnly, true);
+  assert.equal(capability.readCommittedTransactionAdapter, true);
+  assert.equal(capability.witnessRefreshRepositoryParity, true);
+  assert.equal(capability.allHandlerRepositoryParity, false);
+  assert.equal(capability.handlerTaskKindCount, 6);
+  assert.equal(capability.totalHandlerTaskKindCount, 7);
+  assert.equal(capability.maximumEnvelopeBytes, 65_536);
+  assert.equal(capability.protectedTableCount, 6);
+  assert.equal(capability.forcedRlsTableCount, 6);
+  assert.equal(capability.directTableGrantCount, 0);
+  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.mutationAuthority, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresObserverWitnessRefreshManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "control_namespace",
+      "notify_namespace",
+      "execute_namespace",
+      "retention_namespace",
+      "candidate_namespace",
+      "dispatch_namespace",
+      "reconcile_namespace",
+      "same_namespace"
+    ),
+    /must be independent/
   );
 });
 

@@ -22,6 +22,7 @@ import { postgresOperationalRetentionCapabilityProjection } from "../packages/da
 import { postgresObserverCandidateEvaluationCapabilityProjection } from "../packages/database/src/postgres-observer-repair-candidate-evaluation.js";
 import { postgresOperatorAlertConnectorDispatchCapabilityProjection } from "../packages/database/src/postgres-operator-alert-connector-dispatch.js";
 import { postgresOperatorAlertReconciliationCapabilityProjection } from "../packages/database/src/postgres-operator-alert-reconciliation.js";
+import { postgresObserverWitnessRefreshCapabilityProjection } from "../packages/database/src/postgres-observer-witness-refresh.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -112,6 +113,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresObserverCandidateEvaluation: ReturnType<typeof postgresObserverCandidateEvaluationCapabilityProjection>;
         postgresOperatorAlertConnectorDispatch: ReturnType<typeof postgresOperatorAlertConnectorDispatchCapabilityProjection>;
         postgresOperatorAlertReconciliation: ReturnType<typeof postgresOperatorAlertReconciliationCapabilityProjection>;
+        postgresObserverWitnessRefresh: ReturnType<typeof postgresObserverWitnessRefreshCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -154,6 +156,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresOperatorAlertReconciliation,
       postgresOperatorAlertReconciliationCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresObserverWitnessRefresh,
+      postgresObserverWitnessRefreshCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -192,6 +198,8 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /exposes neither raw webhook URLs nor signing secrets/);
     assert.match(cutoverText, /Server-bound operator-alert reconciliation/);
     assert.match(cutoverText, /Coverage is 5 of 7/);
+    assert.match(cutoverText, /Server-bound independent witness refresh/);
+    assert.match(cutoverText, /Coverage is 6 of 7/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);
     assert.match(cutoverText, /3 independent PostgreSQL 16 backend sessions/);

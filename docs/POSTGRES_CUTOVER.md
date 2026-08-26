@@ -814,6 +814,72 @@ composition. Exactly five of seven task-handler families now have repository
 parity. All qualification roles remain inactive, SQLite stays authoritative,
 and the remaining two handler families require independent boundaries.
 
+## Function-only independent observer-witness refresh qualification seam
+
+Version 0.71 completes the sixth handler with an independent boundary layered
+on the exact verified 0.70 alert-reconciliation contract. Its role is
+`NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no objects, has schema `USAGE`,
+zero direct/effective table or column grants, and can execute one exact strict
+security-definer routine. Trust manifests, transparency events, witness
+receipts/checks, audit, and outbox remain forced-RLS.
+
+The boundary is deliberately two phase. A short `READ COMMITTED` plan
+transaction resolves `session_user`, verifies the expected tenant/user, takes a
+tenant/log advisory lock, and derives the exact public checkpoint and current
+receipt chain. The application then publishes that checkpoint over the
+separately configured HTTPS client and verifies the pinned Ed25519 signature
+with no database transaction open. Apply must present the exact plan within 30
+seconds; PostgreSQL re-derives it and checks checkpoint, sequence, chain,
+lifetime, canonical envelope/payload bytes, SHA-256 hashes, and opaque IDs
+before appending anything.
+
+Only public cryptographic metadata and bounded audit/outbox receipts persist.
+The routine receives no endpoint URL or public SPKI, stores neither, and has no
+private key or network capability. Native PostgreSQL 16 proves initial
+acceptance, fresh no-op, renewal, fail-closed unavailability, invalid-signature
+rejection with zero writes, one concurrent winner, tenant isolation,
+mismatched/unmapped/direct-SQL/unrelated-function denial, altered-plan
+rejection, exact user attribution, temporary-authority cleanup, and immutable
+receipt rejection after function-catalog tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:witness-refresh -- plan \
+  yoink_cutover_qualification_071 yoink_q_071 yoink_session_q_071 \
+  yoink_queue_q_071 yoink_control_q_071 yoink_notify_q_071 \
+  yoink_execute_q_071 yoink_retain_q_071 yoink_candidate_q_071 \
+  yoink_dispatch_q_071 yoink_reconcile_q_071 yoink_witness_q_071
+```
+
+After the exact alert-reconciliation receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_WITNESS_REFRESH_QUALIFICATION_ACK=bounded-observer-witness-refresh-qualification \
+  npm run postgres:witness-refresh -- apply \
+  yoink_cutover_qualification_071 yoink_q_071 yoink_session_q_071 \
+  yoink_queue_q_071 yoink_control_q_071 yoink_notify_q_071 \
+  yoink_execute_q_071 yoink_retain_q_071 yoink_candidate_q_071 \
+  yoink_dispatch_q_071 yoink_reconcile_q_071 yoink_witness_q_071
+```
+
+Then independently re-inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:witness-refresh -- verify \
+  yoink_cutover_qualification_071 yoink_q_071 yoink_session_q_071 \
+  yoink_queue_q_071 yoink_control_q_071 yoink_notify_q_071 \
+  yoink_execute_q_071 yoink_retain_q_071 yoink_candidate_q_071 \
+  yoink_dispatch_q_071 yoink_reconcile_q_071 yoink_witness_q_071
+```
+
+Apply refuses reused objects and cannot create a login, membership, principal
+mapping, witness configuration, endpoint, key, network request, or runtime
+composition. Exactly six of seven task-handler families now have repository
+parity. All qualification roles remain inactive, SQLite stays authoritative,
+and hosted-delivery recovery still requires its own independent boundary.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -917,8 +983,8 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- PostgreSQL diagnostic reconciliation for the partially ported alert handler,
-  the remaining task-handler families, and every API repository;
+- PostgreSQL hosted-delivery recovery, the final task-handler family, and every
+  API request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers and the unresolved incident table; all qualified

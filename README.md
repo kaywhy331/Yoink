@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.70.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.71.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,26 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.71.0 ports `observer_recipe_witness_refresh`, the sixth of seven
+background-task handler families, to the inactive PostgreSQL qualification
+plane. Its independent `NOLOGIN`/`NOINHERIT`/`NOBYPASSRLS` role has zero
+direct/effective table or column grants and can execute one strict
+security-definer routine across six forced-RLS tables. The application performs
+HTTPS publication and pinned Ed25519 verification outside database
+transactions; PostgreSQL independently derives the tenant-scoped public
+checkpoint, revalidates the fresh two-phase plan and canonical receipt bytes,
+and atomically appends only public receipt, check, audit, and outbox metadata.
+
+Native PostgreSQL 16 proves signed acceptance, fresh no-op, renewal, bounded
+outage recording, invalid-signature rejection without writes, one winner under
+concurrent application, exact user attribution, tenant/unmapped/direct-SQL
+denial, stale-plan rejection, and catalog-tamper detection. Witness endpoint
+URLs, public-key SPKI configuration, and private keys are absent from the
+routine and persisted evidence. SQLite remains authoritative and no runtime
+principal or production authority is activated. Use
+`npm run postgres:witness-refresh -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.70.0 completes the PostgreSQL repository boundary for
 `adapter_alert_reconciliation`, bringing native handler parity to five of

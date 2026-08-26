@@ -133,6 +133,52 @@ test("the maintenance handler awaits the configured witness refresh service", as
   }
 });
 
+test("the maintenance handler binds PostgreSQL witness refresh to the exact principal and runtime", async () => {
+  const db = new YoinkDatabase();
+  try {
+    const calls: Array<Record<string, unknown>> = [];
+    const handler = new BackgroundMaintenanceHandler(db, {
+      principalBoundObserverRecipeWitnessRefresh: {
+        async execute(principal, runtimeVersion, now) {
+          calls.push({ principal, runtimeVersion, now });
+          return {
+            witnessConfigured: true,
+            checkpointReady: true,
+            refreshAttempted: false,
+            receiptAccepted: false,
+            deliveryAllowed: true,
+            witnessState: "healthy",
+            witnessSequence: 3
+          };
+        }
+      }
+    });
+    const result = await handler.execute({
+      principal: { tenantId: LOCAL_TENANT_ID, userId: LOCAL_USER_ID },
+      workerId: "background_worker_postgres_witness_test",
+      runtimeKind: "standalone",
+      runtimeVersion: "0.71.0",
+      deploymentFingerprint: DEPLOYMENT_FINGERPRINT
+    }, "observer_recipe_witness_refresh", NOW);
+    assert.deepEqual(calls, [{
+      principal: { tenantId: LOCAL_TENANT_ID, userId: LOCAL_USER_ID },
+      runtimeVersion: "0.71.0",
+      now: NOW
+    }]);
+    assert.deepEqual(result, {
+      witnessConfigured: true,
+      checkpointReady: true,
+      refreshAttempted: false,
+      receiptAccepted: false,
+      deliveryAllowed: true,
+      witnessState: "healthy",
+      witnessSequence: 3
+    });
+  } finally {
+    db.close();
+  }
+});
+
 test("the maintenance handler awaits the configured alert reconciliation repository", async () => {
   const db = new YoinkDatabase();
   try {

@@ -71,11 +71,30 @@ import {
   buildPostgresOperatorAlertReconciliationManifest,
   verifyPostgresOperatorAlertReconciliationBoundary
 } from "../packages/database/src/postgres-operator-alert-reconciliation.js";
+import {
+  NodePostgresObserverWitnessState,
+  applyPostgresObserverWitnessRefreshBoundary,
+  buildPostgresObserverWitnessRefreshManifest,
+  verifyPostgresObserverWitnessRefreshBoundary
+} from "../packages/database/src/postgres-observer-witness-refresh.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
 import { OperatorAlertConnectorDispatchService } from "../packages/engine/src/operator-alert-connector-dispatch.js";
 import { OperatorAlertReconciliationService } from "../packages/engine/src/operator-alert-reconciliation.js";
+import {
+  ObserverRecipeWitnessRefreshError,
+  PrincipalBoundObserverRecipeWitnessRefreshService
+} from "../packages/engine/src/observer-recipe-witness-refresh.js";
+import { ObserverRecipeSigner } from "../packages/observer-registry/src/signer.js";
+import {
+  createObserverRecipeWitnessReceipt,
+  ObserverRecipeWitnessError,
+  ObserverRecipeWitnessVerifier,
+  observerRecipeWitnessReceiptHash,
+  observerRecipeWitnessScopedLogId,
+  type ObserverRecipeWitnessPublisher
+} from "../packages/observer-registry/src/witness.js";
 import type { OperatorAlertWebhookRegistry } from "../packages/engine/src/operator-alert-webhook.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
 import {
@@ -98,6 +117,7 @@ const NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE = "yoink_native_retention";
 const NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE = "yoink_native_candidate";
 const NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE = "yoink_native_dispatch";
 const NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE = "yoink_native_reconcile";
+const NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE = "yoink_native_witness";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -925,8 +945,8 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and five handlers", {
-  timeout: 300_000
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and six handlers", {
+  timeout: 420_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
   const databaseDir = join(parent, "cluster");
@@ -991,6 +1011,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let alertReconciliationUnmapped: NodePostgresOperatorAlertReconciliationDatabase | null = null;
   let alertReconciliationDirectClient: Client | null = null;
   let alertReconciliationHandlerDb: YoinkDatabase | null = null;
+  let observerWitnessA: NodePostgresObserverWitnessState | null = null;
+  let observerWitnessASecond: NodePostgresObserverWitnessState | null = null;
+  let observerWitnessB: NodePostgresObserverWitnessState | null = null;
+  let observerWitnessUnmapped: NodePostgresObserverWitnessState | null = null;
+  let observerWitnessDirectClient: Client | null = null;
+  let observerWitnessHandlerDb: YoinkDatabase | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -1413,6 +1439,99 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       alertReconciliationBoundary
     );
+    const observerWitnessBoundary = await applyPostgresObserverWitnessRefreshBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:59.000Z").getTime()
+    );
+    assert.equal(observerWitnessBoundary.protectedTableCount, 6);
+    assert.equal(observerWitnessBoundary.forcedRlsTableCount, 6);
+    assert.equal(observerWitnessBoundary.directTableGrantCount, 0);
+    assert.equal(observerWitnessBoundary.functionGrantCount, 1);
+    assert.equal(observerWitnessBoundary.membershipCount, 0);
+    assert.equal(observerWitnessBoundary.activePrincipalCount, 0);
+    assert.equal(observerWitnessBoundary.qualifiedHandlerTaskKindCount, 6);
+    assert.equal(observerWitnessBoundary.totalHandlerTaskKindCount, 7);
+    assert.equal(observerWitnessBoundary.maximumEnvelopeBytes, 65_536);
+    assert.equal(observerWitnessBoundary.twoPhaseExternalIo, true);
+    assert.equal(observerWitnessBoundary.externalIoOutsideTransaction, true);
+    assert.equal(observerWitnessBoundary.applicationEd25519Verification, true);
+    assert.equal(observerWitnessBoundary.serverDerivedCheckpoint, true);
+    assert.equal(observerWitnessBoundary.databasePlanRevalidation, true);
+    assert.equal(observerWitnessBoundary.databaseServerClock, true);
+    assert.equal(observerWitnessBoundary.serverAuthenticatedReceiptActor, true);
+    assert.equal(observerWitnessBoundary.publicCryptographicMetadataOnly, true);
+    assert.equal(observerWitnessBoundary.witnessRefreshRepositoryParity, true);
+    assert.equal(observerWitnessBoundary.allHandlerRepositoryParity, false);
+    assert.equal(observerWitnessBoundary.mutationAuthority, false);
+    assert.equal(observerWitnessBoundary.directTableAccess, false);
+    assert.equal(observerWitnessBoundary.runtimeAuthority, false);
+    assert.equal(observerWitnessBoundary.productionReady, false);
+    assert.match(observerWitnessBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresObserverWitnessRefreshBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE
+      ),
+      observerWitnessBoundary
+    );
+    const observerWitnessRootKeyId = "1".repeat(64);
+    const observerWitnessManifestHash = "2".repeat(64);
+    const observerWitnessTransparencyEventHash = "3".repeat(64);
+    await importer.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."observer_recipe_trust_manifests"(
+         id, tenant_id, generation, root_key_id, manifest_hash,
+         previous_manifest_hash, payload_json, signature,
+         active_intermediate_key_id, revoked_key_ids_json, issued_at, expires_at,
+         installed_by_actor_id, installed_at
+       ) VALUES ('native_observer_witness_manifest', $1, 1, $2, $3, '', '{}',
+                 'native-public-signature', '', '[]', $4, $5, $6, $4)`,
+      [
+        NATIVE_TENANT,
+        observerWitnessRootKeyId,
+        observerWitnessManifestHash,
+        "2026-08-25T16:00:00.000Z",
+        "2027-08-25T16:00:00.000Z",
+        NATIVE_USER
+      ]
+    );
+    await importer.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."observer_recipe_transparency_events"(
+         id, tenant_id, sequence, event_type, manifest_generation, manifest_hash,
+         signing_key_id, subject_hash, previous_event_hash, event_hash,
+         actor_kind, actor_id, created_at
+       ) VALUES ('native_observer_witness_transparency', $1, 1, 'manifest_installed',
+                 1, $2, '', $2, '', $3, 'user', $4, $5)`,
+      [
+        NATIVE_TENANT,
+        observerWitnessManifestHash,
+        observerWitnessTransparencyEventHash,
+        NATIVE_USER,
+        "2026-08-25T16:00:00.000Z"
+      ]
+    );
     await importer.close();
     importer = null;
 
@@ -1540,6 +1659,20 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
       NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE
     );
+    const observerWitnessManifest = buildPostgresObserverWitnessRefreshManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -1574,6 +1707,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${alertReconciliationManifest.alertReconciliationRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${observerWitnessManifest.witnessRefreshRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -1807,6 +1943,99 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     alertReconciliationUnmapped = alertReconciliationDatabase(
       NATIVE_PRINCIPAL_UNMAPPED,
+      NATIVE_USER
+    );
+    const observerWitnessSigner = ObserverRecipeSigner.ephemeral();
+    const observerWitnessVerifier = new ObserverRecipeWitnessVerifier(
+      "yoink-native-witness",
+      {
+        algorithm: "Ed25519",
+        keyId: observerWitnessSigner.keyId,
+        publicKeySpki: observerWitnessSigner.publicKeySpki
+      },
+      120
+    );
+    const observerWitnessPublicTrust = {
+      rootKeyId: observerWitnessRootKeyId,
+      manifestGeneration: 1,
+      manifestHash: observerWitnessManifestHash
+    };
+    let observerWitnessPublishCalls = 0;
+    let observerWitnessFailure: "unavailable" | null = null;
+    const observerWitnessSequenceByHash = new Map<string, number>([["", 0]]);
+    const observerWitnessPublisher: ObserverRecipeWitnessPublisher = {
+      verifier: observerWitnessVerifier,
+      endpointOrigin: "https://witness.example.net",
+      async publish(checkpoint, previousReceiptHash, now = Date.now()) {
+        observerWitnessPublishCalls += 1;
+        if (observerWitnessFailure) {
+          throw new ObserverRecipeWitnessError(
+            observerWitnessFailure,
+            "The native witness publisher is intentionally unavailable."
+          );
+        }
+        const previousSequence = observerWitnessSequenceByHash.get(previousReceiptHash);
+        if (previousSequence === undefined) {
+          throw new ObserverRecipeWitnessError(
+            "chain_conflict",
+            "The native witness publisher received an unknown chain head."
+          );
+        }
+        const receipt = createObserverRecipeWitnessReceipt(observerWitnessSigner, {
+          checkpoint,
+          witnessSequence: previousSequence + 1,
+          previousReceiptHash,
+          witnessedAt: new Date(now).toISOString(),
+          validUntil: new Date(now + 60 * 60_000).toISOString()
+        });
+        observerWitnessSequenceByHash.set(
+          observerRecipeWitnessReceiptHash(receipt),
+          receipt.payload.witnessSequence
+        );
+        return receipt;
+      }
+    };
+    const observerWitnessDatabase = (
+      principalRole: string,
+      tenantId: string,
+      userId: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresObserverWitnessState({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, { tenantId, userId }, "0.71.0", NATIVE_SCHEMA,
+    NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+    NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE, {
+      publicTrust: observerWitnessPublicTrust,
+      verifier: observerWitnessVerifier,
+      endpointOrigin: observerWitnessPublisher.endpointOrigin,
+      witnessRequired: true,
+      maxConnections
+    });
+    observerWitnessA = observerWitnessDatabase(
+      NATIVE_PRINCIPAL_A,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      2
+    );
+    observerWitnessASecond = observerWitnessDatabase(
+      NATIVE_PRINCIPAL_A,
+      NATIVE_TENANT,
+      NATIVE_USER
+    );
+    observerWitnessB = observerWitnessDatabase(
+      NATIVE_PRINCIPAL_B,
+      "tenant_local",
+      "user_local"
+    );
+    observerWitnessUnmapped = observerWitnessDatabase(
+      NATIVE_PRINCIPAL_UNMAPPED,
+      NATIVE_TENANT,
       NATIVE_USER
     );
 
@@ -3475,6 +3704,385 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     await alertReconciliationDirectClient.end();
     alertReconciliationDirectClient = null;
+
+    observerWitnessHandlerDb = new YoinkDatabase();
+    const observerWitnessService = new PrincipalBoundObserverRecipeWitnessRefreshService(
+      {
+        forPrincipal(principal, runtimeVersion) {
+          assert.deepEqual(principal, { tenantId: NATIVE_TENANT, userId: NATIVE_USER });
+          assert.equal(runtimeVersion, "0.71.0");
+          return observerWitnessA!;
+        }
+      },
+      observerWitnessPublisher
+    );
+    const observerWitnessHandler = new BackgroundMaintenanceHandler(
+      observerWitnessHandlerDb,
+      { principalBoundObserverRecipeWitnessRefresh: observerWitnessService }
+    );
+    const observerWitnessContext: BackgroundWorkerContext = {
+      ...workerContext("native_observer_witness_handler"),
+      runtimeVersion: "0.71.0"
+    };
+    const observerWitnessNow = Date.now() - 30_000;
+    let initialObserverWitnessResult: Awaited<ReturnType<BackgroundMaintenanceHandler["execute"]>>;
+    try {
+      initialObserverWitnessResult = await observerWitnessHandler.execute(
+        observerWitnessContext,
+        "observer_recipe_witness_refresh",
+        observerWitnessNow
+      );
+    } catch (error) {
+      let rootCause: unknown = error;
+      while (rootCause instanceof Error && rootCause.cause !== undefined) {
+        rootCause = rootCause.cause;
+      }
+      throw rootCause;
+    }
+    assert.deepEqual(
+      initialObserverWitnessResult,
+      {
+        witnessConfigured: true,
+        checkpointReady: true,
+        refreshAttempted: true,
+        receiptAccepted: true,
+        deliveryAllowed: true,
+        witnessState: "healthy",
+        witnessSequence: 1
+      }
+    );
+    assert.equal(observerWitnessPublishCalls, 1);
+    const scopedObserverWitnessLogId = observerRecipeWitnessScopedLogId(
+      observerWitnessVerifier.logId,
+      NATIVE_TENANT
+    );
+    const firstWitnessEvidence = (await first.query<{
+      logId: string;
+      witnessKeyId: string;
+      witnessSequence: string | number | bigint;
+      manifestHash: string;
+      transparencyEventHash: string;
+      checkedByActorId: string;
+      outcome: string;
+      reasonCode: string;
+      receiptCount: string | number | bigint;
+      checkCount: string | number | bigint;
+      auditCount: string | number | bigint;
+      outboxCount: string | number | bigint;
+      storedEvidence: string;
+    }>(
+      `SELECT receipt.log_id AS "logId", receipt.witness_key_id AS "witnessKeyId",
+              receipt.witness_sequence AS "witnessSequence",
+              receipt.manifest_hash AS "manifestHash",
+              receipt.transparency_event_hash AS "transparencyEventHash",
+              witness_check.checked_by_actor_id AS "checkedByActorId",
+              witness_check.outcome, witness_check.reason_code AS "reasonCode",
+              (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_receipts"
+               WHERE tenant_id = $1 AND log_id = $2) AS "receiptCount",
+              (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_checks"
+               WHERE tenant_id = $1 AND log_id = $2) AS "checkCount",
+              (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+               WHERE tenant_id = $1 AND event_type = 'observer_recipe_checkpoint_witnessed')
+                 AS "auditCount",
+              (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+               WHERE tenant_id = $1 AND event_type = 'observer_recipe_checkpoint_witnessed')
+                 AS "outboxCount",
+              receipt.payload_json || '|' || receipt.signature || '|' || audit.data_json
+                AS "storedEvidence"
+       FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_receipts" AS receipt
+       JOIN "${NATIVE_SCHEMA}"."observer_recipe_witness_checks" AS witness_check
+         ON witness_check.receipt_hash = receipt.receipt_hash
+       JOIN "${NATIVE_SCHEMA}"."audit_events" AS audit
+         ON audit.correlation_id = receipt.receipt_hash
+       WHERE receipt.tenant_id = $1 AND receipt.log_id = $2
+       ORDER BY receipt.witness_sequence DESC LIMIT 1`,
+      [NATIVE_TENANT, scopedObserverWitnessLogId]
+    )).rows[0];
+    assert.ok(firstWitnessEvidence);
+    assert.equal(firstWitnessEvidence.logId, scopedObserverWitnessLogId);
+    assert.equal(firstWitnessEvidence.witnessKeyId, observerWitnessSigner.keyId);
+    assert.equal(Number(firstWitnessEvidence.witnessSequence), 1);
+    assert.equal(firstWitnessEvidence.manifestHash, observerWitnessManifestHash);
+    assert.equal(
+      firstWitnessEvidence.transparencyEventHash,
+      observerWitnessTransparencyEventHash
+    );
+    assert.equal(firstWitnessEvidence.checkedByActorId, NATIVE_USER);
+    assert.equal(firstWitnessEvidence.outcome, "accepted");
+    assert.equal(firstWitnessEvidence.reasonCode, "witness_receipt_accepted");
+    assert.equal(Number(firstWitnessEvidence.receiptCount), 1);
+    assert.equal(Number(firstWitnessEvidence.checkCount), 1);
+    assert.equal(Number(firstWitnessEvidence.auditCount), 1);
+    assert.equal(Number(firstWitnessEvidence.outboxCount), 1);
+    assert.equal(firstWitnessEvidence.storedEvidence.includes("witness.example.net"), false);
+    assert.equal(
+      firstWitnessEvidence.storedEvidence.includes(observerWitnessSigner.publicKeySpki),
+      false
+    );
+    assert.deepEqual(
+      await observerWitnessHandler.execute(
+        observerWitnessContext,
+        "observer_recipe_witness_refresh",
+        observerWitnessNow + 30_000
+      ),
+      {
+        witnessConfigured: true,
+        checkpointReady: true,
+        refreshAttempted: false,
+        receiptAccepted: false,
+        deliveryAllowed: true,
+        witnessState: "healthy",
+        witnessSequence: 1
+      }
+    );
+    assert.equal(observerWitnessPublishCalls, 1);
+
+    const observerWitnessRenewalNow = observerWitnessNow + 61_000;
+    assert.deepEqual(
+      await observerWitnessHandler.execute(
+        observerWitnessContext,
+        "observer_recipe_witness_refresh",
+        observerWitnessRenewalNow
+      ),
+      {
+        witnessConfigured: true,
+        checkpointReady: true,
+        refreshAttempted: true,
+        receiptAccepted: true,
+        deliveryAllowed: true,
+        witnessState: "healthy",
+        witnessSequence: 2
+      }
+    );
+    assert.equal(observerWitnessPublishCalls, 2);
+
+    const observerWitnessFailureNow = observerWitnessNow + 122_000;
+    observerWitnessFailure = "unavailable";
+    await assert.rejects(
+      observerWitnessHandler.execute(
+        observerWitnessContext,
+        "observer_recipe_witness_refresh",
+        observerWitnessFailureNow
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof ObserverRecipeWitnessRefreshError);
+        assert.equal(error.code, "observer_recipe_witness_unavailable");
+        return true;
+      }
+    );
+    observerWitnessFailure = null;
+    const failedWitnessEvidence = (await first.query<{
+      outcome: string;
+      reasonCode: string;
+      checkedByActorId: string;
+      receiptCount: string | number | bigint;
+      checkCount: string | number | bigint;
+      auditCount: string | number | bigint;
+      outboxCount: string | number | bigint;
+    }>(
+      `SELECT outcome, reason_code AS "reasonCode",
+              checked_by_actor_id AS "checkedByActorId",
+              (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_receipts"
+               WHERE tenant_id = $1 AND log_id = $2) AS "receiptCount",
+              (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_checks"
+               WHERE tenant_id = $1 AND log_id = $2) AS "checkCount",
+              (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+               WHERE tenant_id = $1 AND event_type IN (
+                 'observer_recipe_checkpoint_witnessed',
+                 'observer_recipe_witness_check_failed'
+               ))
+                 AS "auditCount",
+              (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+               WHERE tenant_id = $1 AND aggregate_type = 'observer_recipe_witness')
+                 AS "outboxCount"
+       FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_checks"
+       WHERE tenant_id = $1 AND log_id = $2
+       ORDER BY checked_at DESC, id DESC LIMIT 1`,
+      [NATIVE_TENANT, scopedObserverWitnessLogId]
+    )).rows[0];
+    assert.ok(failedWitnessEvidence);
+    assert.equal(failedWitnessEvidence.outcome, "unavailable");
+    assert.equal(failedWitnessEvidence.reasonCode, "witness_unavailable");
+    assert.equal(failedWitnessEvidence.checkedByActorId, NATIVE_USER);
+    assert.equal(Number(failedWitnessEvidence.receiptCount), 2);
+    assert.equal(Number(failedWitnessEvidence.checkCount), 3);
+    assert.equal(Number(failedWitnessEvidence.auditCount), 3);
+    assert.equal(Number(failedWitnessEvidence.outboxCount), 3);
+
+    const invalidCheckpoint = await observerWitnessA.witnessCheckpoint(
+      observerWitnessFailureNow + 1
+    );
+    assert.ok(invalidCheckpoint);
+    const invalidPreviousHash = await observerWitnessA.previousWitnessReceiptHash();
+    const invalidSigner = ObserverRecipeSigner.ephemeral();
+    const invalidEnvelope = createObserverRecipeWitnessReceipt(invalidSigner, {
+      checkpoint: invalidCheckpoint,
+      witnessSequence: 3,
+      previousReceiptHash: invalidPreviousHash,
+      witnessedAt: new Date(observerWitnessFailureNow + 1).toISOString(),
+      validUntil: new Date(observerWitnessFailureNow + 3_600_001).toISOString()
+    });
+    await assert.rejects(
+      observerWitnessA.acceptWitnessReceipt({
+        ...invalidEnvelope,
+        keyId: observerWitnessSigner.keyId
+      }, observerWitnessFailureNow + 1),
+      (error: unknown) => {
+        assert.ok(error instanceof ObserverRecipeWitnessError);
+        assert.equal(error.code, "invalid_signature");
+        return true;
+      }
+    );
+    assert.deepEqual(
+      (await first.query<{ receipts: string | number | bigint; checks: string | number | bigint }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_receipts"
+            WHERE tenant_id = $1 AND log_id = $2) AS receipts,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_checks"
+            WHERE tenant_id = $1 AND log_id = $2) AS checks`,
+        [NATIVE_TENANT, scopedObserverWitnessLogId]
+      )).rows.map((row) => ({ receipts: Number(row.receipts), checks: Number(row.checks) })),
+      [{ receipts: 2, checks: 3 }]
+    );
+
+    const observerWitnessContentionNow = observerWitnessNow + 123_000;
+    const [contentionCheckpointA, contentionCheckpointB] = await Promise.all([
+      observerWitnessA.witnessCheckpoint(observerWitnessContentionNow),
+      observerWitnessASecond.witnessCheckpoint(observerWitnessContentionNow)
+    ]);
+    assert.ok(contentionCheckpointA);
+    assert.deepEqual(contentionCheckpointB, contentionCheckpointA);
+    const [contentionPreviousA, contentionPreviousB] = await Promise.all([
+      observerWitnessA.previousWitnessReceiptHash(),
+      observerWitnessASecond.previousWitnessReceiptHash()
+    ]);
+    assert.equal(contentionPreviousB, contentionPreviousA);
+    const contentionReceipt = createObserverRecipeWitnessReceipt(observerWitnessSigner, {
+      checkpoint: contentionCheckpointA,
+      witnessSequence: 3,
+      previousReceiptHash: contentionPreviousA,
+      witnessedAt: new Date(observerWitnessContentionNow).toISOString(),
+      validUntil: new Date(observerWitnessContentionNow + 60 * 60_000).toISOString()
+    });
+    const contentionResults = await Promise.allSettled([
+      observerWitnessA.acceptWitnessReceipt(contentionReceipt, observerWitnessContentionNow),
+      observerWitnessASecond.acceptWitnessReceipt(contentionReceipt, observerWitnessContentionNow)
+    ]);
+    assert.equal(contentionResults.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(contentionResults.filter((result) => result.status === "rejected").length, 1);
+    const rejectedContention = contentionResults.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    assert.ok(rejectedContention?.reason instanceof ObserverRecipeWitnessError);
+    assert.equal(rejectedContention.reason.code, "checkpoint_conflict");
+    assert.deepEqual(
+      (await first.query<{ receipts: string | number | bigint; checks: string | number | bigint }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_receipts"
+            WHERE tenant_id = $1 AND log_id = $2) AS receipts,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_checks"
+            WHERE tenant_id = $1 AND log_id = $2) AS checks`,
+        [NATIVE_TENANT, scopedObserverWitnessLogId]
+      )).rows.map((row) => ({ receipts: Number(row.receipts), checks: Number(row.checks) })),
+      [{ receipts: 3, checks: 4 }]
+    );
+
+    assert.equal(await observerWitnessB.witnessCheckpoint(Date.now()), null);
+    await assert.rejects(
+      observerWitnessUnmapped.witnessCheckpoint(Date.now()),
+      /tenant session principal is not active/
+    );
+    observerWitnessDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    observerWitnessDirectClient.on("error", () => undefined);
+    await observerWitnessDirectClient.connect();
+    await observerWitnessDirectClient.query(
+      `SET ROLE "${observerWitnessManifest.witnessRefreshRole.name}"`
+    );
+    await assert.rejects(
+      observerWitnessDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."observer_recipe_witness_receipts"`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      observerWitnessDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."observer_recipe_witness_checks"(
+           id, tenant_id, log_id, outcome, reason_code,
+           checked_by_actor_id, checked_at
+         ) VALUES ('forbidden', $1, $2, 'accepted', 'forbidden', $3, $4)`,
+        [NATIVE_TENANT, scopedObserverWitnessLogId, NATIVE_USER, new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    const observerWitnessBinding = JSON.stringify({
+      rootKeyId: observerWitnessRootKeyId,
+      manifestGeneration: 1,
+      manifestHash: observerWitnessManifestHash,
+      logId: scopedObserverWitnessLogId,
+      witnessKeyId: observerWitnessSigner.keyId,
+      maxAgeSeconds: 120
+    });
+    await assert.rejects(
+      observerWitnessDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_refresh_observer_witness"(
+           $1, $2, '0.71.0', 'plan', $3, '', $4, '{}'
+         )`,
+        [
+          NATIVE_TENANT,
+          NATIVE_SAME_TENANT_USER,
+          observerWitnessBinding,
+          `witnessrefresh_${"a".repeat(48)}`
+        ]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    const directWitnessCorrelation = `witnessrefresh_${"b".repeat(48)}`;
+    const directWitnessPlanResult = await observerWitnessDirectClient.query<{
+      result_json: string;
+    }>(
+      `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_refresh_observer_witness"(
+         $1, $2, '0.71.0', 'plan', $3, '', $4, '{}'
+       )`,
+      [NATIVE_TENANT, NATIVE_USER, observerWitnessBinding, directWitnessCorrelation]
+    );
+    const directWitnessPlan = JSON.parse(
+      String(directWitnessPlanResult.rows[0]?.result_json)
+    ) as Record<string, unknown>;
+    await assert.rejects(
+      observerWitnessDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_refresh_observer_witness"(
+           $1, $2, '0.71.0', 'accept', $3, $4, $5, $6
+         )`,
+        [
+          NATIVE_TENANT,
+          NATIVE_USER,
+          observerWitnessBinding,
+          directWitnessPlan.evaluationTimestamp,
+          directWitnessCorrelation,
+          JSON.stringify({
+            plan: {
+              ...directWitnessPlan,
+              witnessCheckCount: Number(directWitnessPlan.witnessCheckCount) + 1
+            },
+            acceptance: {}
+          })
+        ]
+      ),
+      /plan changed before apply/
+    );
+    await assert.rejects(
+      observerWitnessDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."yoink_reconcile_operator_alerts"(
+           $1, $2, '0.71.0', 'plan', '', $3, '[]'
+         )`,
+        [NATIVE_TENANT, NATIVE_USER, `alertcorr_${"c".repeat(48)}`]
+      ),
+      /permission denied/
+    );
+    await observerWitnessDirectClient.end();
+    observerWitnessDirectClient = null;
     await first.query(
       `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
        WHERE principal_role = $1`,
@@ -4078,6 +4686,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       await first.query(
         `REVOKE "${alertReconciliationManifest.alertReconciliationRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${observerWitnessManifest.witnessRefreshRole.name}" FROM "${principalRole}"`
+      );
     }
     await first.query(
       `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
@@ -4204,6 +4815,71 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(
       cleanAlertReconciliationBoundary.boundaryCatalogFingerprint,
       alertReconciliationBoundary.boundaryCatalogFingerprint
+    );
+    const cleanObserverWitnessBoundary = await verifyPostgresObserverWitnessRefreshBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanObserverWitnessBoundary.boundaryCatalogFingerprint,
+      observerWitnessBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_refresh_observer_witness"(
+         text, text, text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresObserverWitnessRefreshBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_refresh_observer_witness"(
+         text, text, text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresObserverWitnessRefreshBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      observerWitnessBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_reconcile_operator_alerts"(
@@ -4566,13 +5242,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       alertReconciliationB?.close(),
       alertReconciliationC?.close(),
       alertReconciliationUnmapped?.close(),
-      alertReconciliationDirectClient?.end()
+      alertReconciliationDirectClient?.end(),
+      observerWitnessA?.close(),
+      observerWitnessASecond?.close(),
+      observerWitnessB?.close(),
+      observerWitnessUnmapped?.close(),
+      observerWitnessDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
     operationalRetentionHandlerDb?.close();
     observerCandidateHandlerDb?.close();
     alertReconciliationHandlerDb?.close();
+    observerWitnessHandlerDb?.close();
     await postgres.stop().catch(() => undefined);
     if (existsSync(parent)) rmSync(parent, { recursive: true, force: true });
     if (existsSync(fixture.directory)) rmSync(fixture.directory, { recursive: true, force: true });

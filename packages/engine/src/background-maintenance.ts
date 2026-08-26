@@ -21,7 +21,10 @@ import { SpendLedgerRepository } from "../../database/src/spend-ledger-repositor
 import { runWithRequestScope } from "../../database/src/request-scope.js";
 import { DurableSignalIngressProcessor } from "./signal-ingress.js";
 import { ObserverRecipeCandidateEvaluationService } from "./observer-recipe-candidate-evaluation.js";
-import type { ObserverRecipeWitnessRefreshService } from "./observer-recipe-witness-refresh.js";
+import type {
+  ObserverRecipeWitnessRefreshService,
+  PrincipalBoundObserverRecipeWitnessRefreshService
+} from "./observer-recipe-witness-refresh.js";
 import type { OperatorAlertConnectorDispatchService } from "./operator-alert-connector-dispatch.js";
 import type { OperatorAlertReconciliationService } from "./operator-alert-reconciliation.js";
 
@@ -29,6 +32,10 @@ export type BackgroundTaskHandler = BackgroundWorkerTaskHandler;
 
 export interface BackgroundMaintenanceHandlerOptions {
   observerRecipeWitnessRefresh?: Pick<ObserverRecipeWitnessRefreshService, "execute">;
+  principalBoundObserverRecipeWitnessRefresh?: Pick<
+    PrincipalBoundObserverRecipeWitnessRefreshService,
+    "execute"
+  >;
   operatorAlertConnectorDispatch?: Pick<OperatorAlertConnectorDispatchService, "execute">;
   operatorAlertReconciliation?: Pick<OperatorAlertReconciliationService, "execute">;
   notificationRecovery?: {
@@ -178,8 +185,14 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
             )
           : this.observerRecipeCandidates.execute(runtimeVersion, now);
       case "observer_recipe_witness_refresh":
-        return this.options.observerRecipeWitnessRefresh
-          ? this.options.observerRecipeWitnessRefresh.execute(now)
+        return this.options.principalBoundObserverRecipeWitnessRefresh
+          ? this.options.principalBoundObserverRecipeWitnessRefresh.execute(
+              context.principal,
+              runtimeVersion,
+              now
+            )
+          : this.options.observerRecipeWitnessRefresh
+            ? this.options.observerRecipeWitnessRefresh.execute(now)
           : {
               witnessConfigured: false,
               checkpointReady: false,

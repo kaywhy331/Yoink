@@ -46,6 +46,13 @@ audit, outbox, and secretless connector-queue receipts. Five of seven handlers
 now have PostgreSQL repository parity; the remaining two handlers and all
 request repositories remain SQLite-only, and every PostgreSQL runtime role
 stays inactive.
+Yoink 0.71 adds the sixth function-only boundary for independent observer-
+witness refresh. HTTPS publication and pinned Ed25519 verification remain in
+the application outside database transactions; PostgreSQL re-derives the
+tenant-scoped public checkpoint and accepts only an exact fresh canonical
+receipt plan. Six of seven handlers now have PostgreSQL repository parity;
+hosted-delivery recovery and all request repositories remain SQLite-only, and
+every PostgreSQL runtime role stays inactive.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
