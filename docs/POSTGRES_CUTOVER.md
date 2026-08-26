@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.66 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.67 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -64,9 +64,10 @@ Automated real-engine tests cover:
 
 This class is not imported by the API or standalone worker entry points. It
 cannot flip receipt authority, cannot enable dual writes, and does not give the
-PostgreSQL process any retailer-session capability. Five task-handler families
-still use only SQLite repositories; notification and execution recovery now
-have separately qualified but inactive PostgreSQL seams. The emulated
+PostgreSQL process any retailer-session capability. Four task-handler families
+still use only SQLite repositories; notification recovery, execution recovery,
+and operational retention now have separately qualified but inactive
+PostgreSQL seams. The emulated
 real-semantics suite continues to prove the
 complete store state machine; the separate native suite now proves the
 contention-critical path across independent server sessions.
@@ -104,7 +105,8 @@ against native PostgreSQL; it does not deploy independent worker processes,
 execute a production worker fleet, measure production load/outage behavior, or
 establish runtime authority. Version 0.65 separately executes the
 notification-recovery handler through its own native qualification path;
-version 0.66 does the same for action/spend execution recovery.
+version 0.66 does the same for action/spend execution recovery, and version
+0.67 does the same for bounded privacy retention.
 
 ## Restricted read-role qualification seam
 
@@ -534,6 +536,78 @@ Apply refuses reused objects and cannot create a login, membership, principal
 mapping, or runtime composition. Exactly two of seven task families now have
 repository parity; both roles remain inactive and SQLite stays authoritative.
 
+## Function-only operational-retention handler qualification seam
+
+Version 0.67 derives a third handler role from the exact verified
+execution-recovery chain. It covers only `operational_telemetry_retention`; its
+`NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no object, has no table, column,
+sequence, schema-create, policy, insert, update, or delete privilege, and may
+execute exactly one strict security-definer routine:
+
+| Routine | Exact authority | Data returned |
+| --- | --- | --- |
+| `yoink_apply_operational_retention(text, text)` | Apply the existing 30-day operational telemetry and completed-task-history windows plus the 90-day quarantined observer-recovery window; delete at most 500 eligible evidence rows; append the existing telemetry/evidence retention, audit, and outbox receipts | Counts, policy cutoffs, retention days, and receipt IDs only |
+
+The routine resolves PostgreSQL `session_user`, compares it with the expected
+authenticated tenant/user, takes a transaction-scoped advisory lock for that
+tenant, and derives both cutoffs from PostgreSQL's statement clock. Callers
+cannot advance a cutoff, select another tenant, attribute a receipt to an
+arbitrary process label, expand the evidence batch, or race duplicate receipts.
+Recent observer-evidence reviews preserve their evidence even when the evidence
+itself is older than 90 days. Current telemetry, current task history,
+dead-letter tasks, and fresh evidence are not deleted.
+
+Ten directly tenant-owned relations are sealed into the function-source and
+catalog receipt, and all ten retain forced RLS. The function's role has zero
+direct access to them. Evidence deletion remains capped at 500 and is locked
+before cascading review deletion; a changed set aborts the transaction. The
+authenticated PostgreSQL login principal—not a caller-supplied actor string—is
+recorded on the evidence retention receipt. No function path schedules or
+leases work, processes a signal, changes a recipe, invokes Chrome, mutates a
+retailer, enters checkout, submits an order, or returns deleted row content.
+
+The native PostgreSQL 16 suite executes the production maintenance handler and
+proves 30/90-day old/current boundaries, recent-review preservation, review and
+task-event cascade counts, exact retention/audit/outbox receipts, cross-tenant
+isolation, mismatch and unmapped denial, zero direct table/delete access,
+denial of the execution-recovery function, idempotent replay, exactly one
+concurrent winner, clean removal of temporary mappings/memberships, and receipt
+rejection after routine tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:operational-retention -- plan \
+  yoink_cutover_qualification_067 yoink_q_067 yoink_session_q_067 \
+  yoink_queue_q_067 yoink_control_q_067 yoink_notify_q_067 \
+  yoink_execute_q_067 yoink_retain_q_067
+```
+
+After the exact execution-recovery v1 receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_OPERATIONAL_RETENTION_QUALIFICATION_ACK=bounded-operational-retention-qualification \
+  npm run postgres:operational-retention -- apply \
+  yoink_cutover_qualification_067 yoink_q_067 yoink_session_q_067 \
+  yoink_queue_q_067 yoink_control_q_067 yoink_notify_q_067 \
+  yoink_execute_q_067 yoink_retain_q_067
+```
+
+Then independently re-inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:operational-retention -- verify \
+  yoink_cutover_qualification_067 yoink_q_067 yoink_session_q_067 \
+  yoink_queue_q_067 yoink_control_q_067 yoink_notify_q_067 \
+  yoink_execute_q_067 yoink_retain_q_067
+```
+
+Apply refuses reused objects and cannot create a login, membership, principal
+mapping, or runtime composition. Exactly three of seven task families now have
+repository parity; all three roles remain inactive and SQLite stays
+authoritative.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -637,7 +711,7 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- PostgreSQL implementations for the remaining five task-handler families and
+- PostgreSQL implementations for the remaining four task-handler families and
   every API repository;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for

@@ -49,6 +49,24 @@ export interface BackgroundMaintenanceHandlerOptions {
       releasedSpendReservations: number;
     }>;
   };
+  operationalTelemetryRetention?: {
+    prune(
+      principal: BackgroundWorkerContext["principal"],
+      now: number
+    ): Promise<{
+      deletedRollupRows: number;
+      deletedErrorEvents: number;
+      cutoffAt: string;
+      receiptId: string;
+      deletedTaskRuns: number;
+      taskHistoryCutoffAt: string;
+      deletedRecoveryEvidence: number;
+      deletedRecoveryReviewEvents: number;
+      recoveryEvidenceCutoffAt: string;
+      recoveryEvidenceRetentionDays: number;
+      recoveryEvidenceRetentionReceiptId: string;
+    }>;
+  };
 }
 
 export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler {
@@ -151,6 +169,9 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
               witnessSequence: 0
             };
       case "operational_telemetry_retention": {
+        if (this.options.operationalTelemetryRetention) {
+          return this.options.operationalTelemetryRetention.prune(context.principal, now);
+        }
         const result = this.operationalTelemetry.pruneExpired(now);
         const taskHistory = this.backgroundTasks.pruneCompletedHistory(now);
         const recoveryEvidence = this.observerRecipeRecoveryRetention.prune(now);

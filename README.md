@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.66.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.67.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,26 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.67.0 ports the third complete background-task handler family to the
+inactive PostgreSQL qualification plane. `operational_telemetry_retention` has
+its own `NOLOGIN`/`NOINHERIT`/`NOBYPASSRLS` role with zero direct table, column,
+insert, update, or delete grants and exactly one strict security-definer
+routine. PostgreSQL's statement clock applies the existing 30-day operational
+telemetry/task-history window and 90-day observer-recovery window; one call may
+delete at most 500 eligible quarantined evidence rows.
+
+The function resolves `session_user` through the server-owned principal
+registry, serializes tenant-wide cleanup, attributes evidence receipts to that
+authenticated database principal, and emits only the existing bounded
+retention, audit, and outbox receipts. Native PostgreSQL 16 proves old/current
+boundaries, recent-review preservation, cascade counts, cross-tenant isolation,
+idempotent replay, concurrent one-winner deletion, direct SQL denial,
+mismatched/unmapped rejection, production-handler routing, and catalog-tamper
+rejection. Exactly three of seven handler families are qualified; all roles and
+runtime authority remain inactive. Use
+`npm run postgres:operational-retention -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.66.0 ports the second complete background-task handler family to the
 inactive PostgreSQL qualification plane. `execution_recovery` has its own

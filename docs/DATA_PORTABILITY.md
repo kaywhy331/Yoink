@@ -26,6 +26,10 @@ SQLite-backed. Yoink 0.66 adds the same bounded model for execution recovery,
 including action/spend receipt parity and fail-closed cross-tenant shared-
 incident handling. The other five handlers remain SQLite-only, and all
 PostgreSQL roles remain inactive.
+Yoink 0.67 adds a third function-only role for bounded operational retention:
+30-day telemetry/task history, 90-day observer-recovery evidence, a 500-row
+evidence cap, authenticated receipt attribution, and exact retention/audit/
+outbox parity. The other four handlers remain SQLite-only.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
@@ -132,12 +136,15 @@ proves exact handler transitions, isolation, idempotent/concurrent replay, and
 tamper rejection. The optional execution-recovery qualifier adds a second
 server-clocked, principal-bound function-only role, preserves action, ledger,
 audit, and outbox receipts, and refuses cross-tenant shared-incident mutation.
+The optional operational-retention qualifier adds the third function-only role,
+proves bounded old/current privacy deletion and recent-review preservation, and
+returns only counts, cutoffs, and receipt IDs.
 Every fixture membership and mapping is removed afterward.
 Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
-A production cutover must still add the other five PostgreSQL task handlers and
+A production cutover must still add the other four PostgreSQL task handlers and
 every request repository, production identity-to-login provisioning and activate the
 qualified roles, add remaining write roles,
 governed mixed/incident access, deployed worker-fleet and handler replay proof,

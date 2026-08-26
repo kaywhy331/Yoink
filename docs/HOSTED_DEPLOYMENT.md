@@ -368,7 +368,9 @@ three-table/19-column-grant role in the 0.64 native qualification path. Version
 notification recovery has zero direct table grants and server-bound tenant/user
 resolution. Version 0.66 qualifies execution recovery through a second
 zero-direct-grant function that preserves action/spend receipts and refuses
-cross-tenant shared-incident mutation. No production login, mapping, membership, handler composition, or
+cross-tenant shared-incident mutation. Version 0.67 adds a third function-only
+role for server-clocked 30/90-day privacy retention with a 500-row evidence cap
+and authenticated receipt attribution. No production login, mapping, membership, handler composition, or
 API repository is provisioned. None of these releases deploys that runtime. Until
 it is provisioned and verified, SQLite is the source of truth and hosted
 boundary mode is suitable for integration/staging—not a claim of completed

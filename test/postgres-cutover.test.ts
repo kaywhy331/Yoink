@@ -58,6 +58,12 @@ import {
   postgresExecutionRecoveryCapabilityProjection
 } from "../packages/database/src/postgres-execution-recovery.js";
 import {
+  POSTGRES_OPERATIONAL_RETENTION_CONTRACT_VERSION,
+  POSTGRES_OPERATIONAL_RETENTION_FUNCTION,
+  buildPostgresOperationalRetentionManifest,
+  postgresOperationalRetentionCapabilityProjection
+} from "../packages/database/src/postgres-operational-retention.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -551,6 +557,117 @@ test("the PostgreSQL execution-recovery handler template is cumulative, fail clo
       "queue_namespace",
       "control_namespace",
       "notify_namespace",
+      "same_namespace"
+    ),
+    /must be distinct/
+  );
+});
+
+test("the PostgreSQL operational-retention handler template is bounded, cumulative, and inert", () => {
+  const manifest = buildPostgresOperationalRetentionManifest(
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test",
+    "yoink_notify_test",
+    "yoink_execute_test",
+    "yoink_retention_test"
+  );
+  assert.deepEqual(
+    buildPostgresOperationalRetentionManifest(
+      "yoink_cutover_test",
+      "yoink_q_test",
+      "yoink_session_test",
+      "yoink_queue_write_test",
+      "yoink_worker_control_test",
+      "yoink_notify_test",
+      "yoink_execute_test",
+      "yoink_retention_test"
+    ),
+    manifest
+  );
+  assert.equal(manifest.contractVersion, POSTGRES_OPERATIONAL_RETENTION_CONTRACT_VERSION);
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(
+    manifest.executionRecoveryContractVersion,
+    POSTGRES_EXECUTION_RECOVERY_CONTRACT_VERSION
+  );
+  assert.equal(
+    manifest.operationalRetentionRole.functionName,
+    POSTGRES_OPERATIONAL_RETENTION_FUNCTION
+  );
+  assert.deepEqual(manifest.operationalRetentionRole.functionArgumentTypes, ["text", "text"]);
+  assert.deepEqual(manifest.operationalRetentionRole.protectedTableNames, [
+    "audit_events",
+    "background_task_events",
+    "background_tasks",
+    "observer_recipe_recovery_evidence",
+    "observer_recipe_recovery_retention_receipts",
+    "observer_recipe_recovery_reviews",
+    "operational_error_events",
+    "operational_request_rollups",
+    "operational_telemetry_retention_receipts",
+    "outbox_events"
+  ]);
+  assert.deepEqual(manifest.boundaryHandlerTaskKinds, ["operational_telemetry_retention"]);
+  assert.deepEqual(manifest.qualifiedHandlerTaskKinds, [
+    "notification_recovery",
+    "execution_recovery",
+    "operational_telemetry_retention"
+  ]);
+  assert.equal(manifest.protectedTableCount, 10);
+  assert.equal(manifest.forcedRlsTableCount, 10);
+  assert.equal(manifest.directTableGrantCount, 0);
+  assert.equal(manifest.functionGrantCount, 1);
+  assert.equal(manifest.qualifiedHandlerTaskKindCount, 3);
+  assert.equal(manifest.totalHandlerTaskKindCount, 7);
+  assert.equal(manifest.operationalRetentionRepositoryParity, true);
+  assert.equal(manifest.executionRecoveryRepositoryParity, true);
+  assert.equal(manifest.notificationRecoveryRepositoryParity, true);
+  assert.equal(manifest.serverClockBoundRetention, true);
+  assert.equal(manifest.serverAuthenticatedReceiptActor, true);
+  assert.equal(manifest.boundedEvidenceDeletionLimit, 500);
+  assert.equal(manifest.fullHandlerRepositoryParity, false);
+  assert.equal(manifest.operationalRetentionRole.login, false);
+  assert.equal(manifest.operationalRetentionRole.inherit, false);
+  assert.equal(manifest.operationalRetentionRole.bypassRls, false);
+  assert.equal(manifest.operationalRetentionRole.directTableAccess, false);
+  assert.equal(manifest.operationalRetentionRole.insertAccess, false);
+  assert.equal(manifest.operationalRetentionRole.deleteAccess, false);
+  assert.match(manifest.executionRecoveryManifestFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+  const capability = postgresOperationalRetentionCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_OPERATIONAL_RETENTION_CONTRACT_VERSION);
+  assert.equal(
+    capability.executionRecoveryContractVersion,
+    POSTGRES_EXECUTION_RECOVERY_CONTRACT_VERSION
+  );
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.securityDefinerRoutineVerified, true);
+  assert.equal(capability.serverBoundPrincipalLookup, true);
+  assert.equal(capability.serverClockBoundRetention, true);
+  assert.equal(capability.serverAuthenticatedReceiptActor, true);
+  assert.equal(capability.boundedEvidenceDeletionLimit, 500);
+  assert.equal(capability.operationalRetentionRepositoryParity, true);
+  assert.equal(capability.handlerTaskKindCount, 3);
+  assert.equal(capability.totalHandlerTaskKindCount, 7);
+  assert.equal(capability.protectedTableCount, 10);
+  assert.equal(capability.forcedRlsTableCount, 10);
+  assert.equal(capability.directTableGrantCount, 0);
+  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresOperationalRetentionManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "control_namespace",
+      "notify_namespace",
+      "execute_namespace",
       "same_namespace"
     ),
     /must be distinct/

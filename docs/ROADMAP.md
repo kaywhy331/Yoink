@@ -1,6 +1,40 @@
 # Yoink roadmap
 
-## Shipped through 0.66.0
+## Shipped through 0.67.0
+
+### Server-bound PostgreSQL operational-retention handler (0.67.0)
+
+- The third of seven background-task handler families now has an asynchronous
+  PostgreSQL repository seam in the production maintenance handler.
+  `operational_telemetry_retention` keeps SQLite authoritative while accepting
+  a separately qualified PostgreSQL adapter
+- Its dedicated `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role has no direct table,
+  column, sequence, schema-create, policy, insert, update, or delete authority.
+  It can execute exactly one strict security-definer routine after the prior
+  execution-recovery boundary is independently verified
+- The routine resolves `session_user`, rejects any expected tenant/user
+  mismatch, serializes cleanup per tenant, and derives both cutoffs from the
+  PostgreSQL statement clock. Receipt attribution uses that authenticated
+  database principal rather than a caller-supplied worker label
+- Existing privacy semantics are preserved: operational telemetry and
+  succeeded/cancelled task history use the 30-day boundary; quarantined
+  observer-recovery evidence uses the 90-day boundary; a recent review keeps
+  its older evidence; dead letters are retained; and one call can delete at
+  most 500 evidence rows
+- Telemetry retention receipts, evidence retention receipts, cascading review
+  and task-event counts, audit events, and outbox events remain atomic. Only
+  aggregate counts, policy cutoffs, retention days, and receipt IDs are returned
+- Native PostgreSQL 16 proves old/current boundaries, recent-review
+  preservation, cascade parity, cross-tenant isolation, mismatched/unmapped
+  denial, zero direct SQL/delete access, production-handler routing,
+  idempotent replay, one total concurrent winner, clean authority removal, and
+  immutable receipt failure after routine tamper
+- Health and Admin → Operations report exactly 3 of 7 handler families. The
+  other four families, every request repository, production principal
+  provisioning, runtime authority, dual write, checkout, and retailer mutation
+  remain closed
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### Server-bound PostgreSQL execution-recovery handler (0.66.0)
 
@@ -1643,9 +1677,9 @@ admin plane, hosted extension transport, worker fleet, or PostgreSQL deployment.
 - Export, verify, compare, restore, and complete recovery-drill CLI commands;
   changed source tables are named and a non-quiescent drill fails closed
 
-## Architecture assessment after 0.66.0
+## Architecture assessment after 0.67.0
 
-Yoink 0.66.0 is a strong local commerce safety kernel with a production-shaped
+Yoink 0.67.0 is a strong local commerce safety kernel with a production-shaped
 trust/API/UI spine. It is not yet the full
 community-driven, self-correcting purchasing application. The existing exact
 identity graph, immutable action capabilities, Chrome-side final verification,
@@ -1658,7 +1692,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete table-scope classification, direct/inherited forced-RLS qualification, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; two of seven worker handler families (`notification_recovery` and `execution_recovery`) proven through inactive principal-bound function-only roles with zero direct table grants, database-owned clocks, aggregate-only results, and fail-closed shared-incident mutation; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 82 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt parity, idempotent/concurrent recovery, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | Five PostgreSQL task-handler families and every request-repository family remain unported; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, general governed mixed shared-offer/incident access outside the exact execution-recovery guard, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
+| Primary backend database | Transactional migration-47 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete table-scope classification, direct/inherited forced-RLS qualification, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; three of seven worker handler families (`notification_recovery`, `execution_recovery`, and `operational_telemetry_retention`) proven through inactive principal-bound function-only roles with zero direct table grants, database-owned clocks, exact receipts, fail-closed shared-incident mutation, authenticated retention attribution, and a 500-row evidence-deletion cap; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 82 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt parity, idempotent/concurrent execution, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | Four PostgreSQL task-handler families and every request-repository family remain unported; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, general governed mixed shared-offer/incident access outside the exact execution-recovery guard, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -1921,7 +1955,17 @@ principal denial, direct-access denial, idempotency, concurrent one-winner
 execution, and catalog tamper. Five of seven handler families remain
 SQLite-only.
 
-- Complete the remaining five PostgreSQL task-handler families and every
+Version 0.67 ports `operational_telemetry_retention` as the third complete
+handler family. Its zero-direct-grant routine authenticates the database
+principal, applies the existing 30-day telemetry/task and 90-day quarantined-
+evidence windows from the server clock, preserves recently reviewed evidence,
+caps evidence deletion at 500 rows, and appends exact retention/audit/outbox
+receipts. Native proof covers cutoff boundaries, cascades, cross-tenant
+isolation, principal denial, direct-delete denial, idempotency, concurrent
+one-winner execution, and catalog tamper. Four of seven handler families remain
+SQLite-only.
+
+- Complete the remaining four PostgreSQL task-handler families and every
   request-repository family over the qualified schema, activate the already
   qualified least-privilege control and queue roles through production
   identity-to-login provisioning, add the remaining restricted writer roles,
@@ -2352,10 +2396,11 @@ repository alone:
   manifest, full scope classification, direct/inherited tenant RLS proof,
   asynchronous tenant queue repository, server-bound tenant reader, narrow
   queue-writer contract, atomic deployment-attested queue transaction,
-  separately bounded principal/fleet control, two function-only recovery
-  handler families with fail-closed shared-incident mutation, and exact
+  separately bounded principal/fleet control, three function-only handler
+  families with fail-closed shared-incident mutation and bounded privacy
+  retention, and exact
   reconcile receipts are implemented, but all PostgreSQL roles remain
-  inactive, the other five task handlers remain on
+  inactive, the other four task handlers remain on
   SQLite, and every request repository remains on SQLite. The PostgreSQL
   runtime must add production principals, remaining restricted roles, and pass
   multi-connection contention, backup/PITR/restore, outage, and authority-switch drills.

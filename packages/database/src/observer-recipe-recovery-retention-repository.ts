@@ -6,6 +6,8 @@ import { currentRequestScope } from "./request-scope.js";
 export const OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION = "observer_recipe_recovery_retention_v1";
 export const OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS = 90;
 export const OBSERVER_RECIPE_RECOVERY_RETENTION_MAXIMUM_BATCH = 500;
+export const OBSERVER_RECIPE_RECOVERY_RETENTION_AUDIT_MESSAGE =
+  "Expired quarantined observer recovery evidence was removed under the bounded retention policy.";
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -108,7 +110,7 @@ export class ObserverRecipeRecoveryRetentionRepository {
         aggregateType: "observer_recipe_recovery_retention",
         eventType: "observer_recipe_recovery_retention_applied",
         reasonCode: OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION,
-        message: "Expired quarantined observer recovery evidence was removed under the bounded retention policy.",
+        message: OBSERVER_RECIPE_RECOVERY_RETENTION_AUDIT_MESSAGE,
         data: {
           policyVersion: OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION,
           retentionDays: OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,

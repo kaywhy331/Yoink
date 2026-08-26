@@ -65,6 +65,9 @@ does not weaken or participate in deployment attestation and remains inactive.
 Version 0.66 adds the same separate boundary for action/spend execution
 recovery, including fail-closed shared-incident handling. It also remains
 inactive and cannot schedule or lease new work.
+Version 0.67 adds an equally inactive function-only boundary for bounded
+operational telemetry, completed-task, and quarantined-evidence retention. It
+cannot schedule, lease, process a signal, or invoke a retailer.
 
 A mismatch may write only its normal bounded heartbeat with
 `worker_deployment_mismatch`. This gives the API and Operations workspace

@@ -278,7 +278,12 @@ still SQLite-only. Version 0.66 adds the second: execution recovery
 uses a separate zero-direct-grant, principal-bound, server-clocked function to
 preserve the complete action/spend/event/audit/outbox transition contract and
 fails closed instead of changing a cross-tenant shared incident. Production
-still requires the other five PostgreSQL task-handler repositories, production login provisioning and activation, remaining writer
+still requires the other four PostgreSQL task-handler repositories. Version
+0.67 adds the third bounded handler: operational telemetry retention uses its
+own zero-direct-grant function to enforce the existing 30-day telemetry/task
+history and 90-day quarantined-evidence windows, caps evidence deletion at 500,
+and writes the same retention/audit/outbox receipts under the authenticated
+database principal. Production also requires login provisioning and activation, remaining writer
 families, a deployed multi-process worker fleet with handler replay and failure testing, production
 identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode

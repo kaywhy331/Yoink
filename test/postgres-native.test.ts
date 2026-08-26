@@ -47,6 +47,12 @@ import {
   buildPostgresExecutionRecoveryManifest,
   verifyPostgresExecutionRecoveryBoundary
 } from "../packages/database/src/postgres-execution-recovery.js";
+import {
+  NodePostgresOperationalRetentionDatabase,
+  applyPostgresOperationalRetentionBoundary,
+  buildPostgresOperationalRetentionManifest,
+  verifyPostgresOperationalRetentionBoundary
+} from "../packages/database/src/postgres-operational-retention.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
@@ -66,6 +72,7 @@ const NATIVE_QUEUE_WRITE_ROLE_NAMESPACE = "yoink_native_queue_write";
 const NATIVE_WORKER_CONTROL_ROLE_NAMESPACE = "yoink_native_worker_control";
 const NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE = "yoink_native_notify";
 const NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE = "yoink_native_execute";
+const NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE = "yoink_native_retention";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_UNMAPPED = "yoink_native_principal_unmapped";
@@ -352,6 +359,194 @@ async function insertExecutionRecoveryFixtures(
   return { expiredLeaseAt, currentLeaseAt };
 }
 
+async function insertOperationalRetentionFixtures(
+  database: PostgresCutoverDatabase,
+  retentionNow: number
+): Promise<void> {
+  const oldOperationalAt = new Date(retentionNow - 31 * 24 * 60 * 60_000).toISOString();
+  const currentOperationalAt = new Date(retentionNow - 29 * 24 * 60 * 60_000).toISOString();
+  const oldEvidenceAt = new Date(retentionNow - 91 * 24 * 60 * 60_000).toISOString();
+  const currentEvidenceAt = new Date(retentionNow - 89 * 24 * 60 * 60_000).toISOString();
+  const currentReviewAt = new Date(retentionNow - 1 * 24 * 60 * 60_000).toISOString();
+  const futureAt = new Date(retentionNow + 24 * 60 * 60_000).toISOString();
+
+  for (const [suffix, tenantId, userId] of [
+    ["other", NATIVE_TENANT, NATIVE_USER],
+    ["local", "tenant_local", "user_local"]
+  ] as const) {
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."extension_devices"(
+         id, tenant_id, user_id, name, token_hash, extension_version,
+         status, capabilities_json, last_seen_at, created_at, updated_at,
+         credential_generation, credential_issued_at
+       ) VALUES ($1, $2, $3, 'Native retention device', $4, '0.67.0',
+                 'active', '{}', $5, $5, $5, 1, $5)`,
+      [
+        `native_retention_device_${suffix}`,
+        tenantId,
+        userId,
+        suffix === "other" ? "a".repeat(64) : "b".repeat(64),
+        oldEvidenceAt
+      ]
+    );
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."observer_recipe_candidates"(
+         id, tenant_id, user_id, retailer_id, recipe_version,
+         minimum_extension_version, recipe_json, recipe_fingerprint,
+         lifecycle_state, provenance_code, expires_at, created_at, updated_at
+       ) VALUES ($1, $2, $3, 'target', $4, '0.67.0', '{}', $5,
+                 'shadow', 'native_retention_fixture', $6, $7, $7)`,
+      [
+        `native_retention_recipe_${suffix}`,
+        tenantId,
+        userId,
+        `native-retention-${suffix}-v1`,
+        suffix === "other" ? "c".repeat(64) : "d".repeat(64),
+        futureAt,
+        oldEvidenceAt
+      ]
+    );
+  }
+
+  const evidence = [
+    ["eligible", "other", NATIVE_TENANT, NATIVE_USER, oldEvidenceAt],
+    ["recent_review", "other", NATIVE_TENANT, NATIVE_USER, oldEvidenceAt],
+    ["fresh", "other", NATIVE_TENANT, NATIVE_USER, currentEvidenceAt],
+    ["eligible", "local", "tenant_local", "user_local", oldEvidenceAt]
+  ] as const;
+  for (const [kind, suffix, tenantId, userId, observedAt] of evidence) {
+    const identity = `${suffix}_${kind}`;
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."observer_recipe_trials"(
+         id, tenant_id, user_id, device_id, recipe_id, retailer_id,
+         retailer_sku, observer_version, layout_fingerprint, outcome,
+         evaluated_field_count, agreed_field_count, ambiguous_field_count,
+         observed_at, received_at, validation_profile,
+         oracle_evaluated_field_count, oracle_agreed_field_count,
+         recipe_state_at_trial
+       ) VALUES ($1, $2, $3, $4, $5, 'target', $6, 'target-observer-v4',
+                 $7, 'passed', 1, 1, 0, $8, $8,
+                 'packaged_structured_oracle_v1', 1, 1, 'shadow')`,
+      [
+        `native_retention_trial_${identity}`,
+        tenantId,
+        userId,
+        `native_retention_device_${suffix}`,
+        `native_retention_recipe_${suffix}`,
+        `native-retention-sku-${identity}`,
+        suffix === "other" ? "e".repeat(64) : "f".repeat(64),
+        observedAt
+      ]
+    );
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."observer_recipe_recovery_evidence"(
+         id, tenant_id, user_id, device_id, trial_id, recipe_id,
+         retailer_id, retailer_sku, layout_fingerprint, field_name,
+         value_kind, normalized_value, recipe_state_at_trial,
+         observed_at, received_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, 'target', $7, $8,
+                 'availability', 'enum', 'in_stock', 'shadow', $9, $9)`,
+      [
+        `native_retention_evidence_${identity}`,
+        tenantId,
+        userId,
+        `native_retention_device_${suffix}`,
+        `native_retention_trial_${identity}`,
+        `native_retention_recipe_${suffix}`,
+        `native-retention-sku-${identity}`,
+        suffix === "other" ? "e".repeat(64) : "f".repeat(64),
+        observedAt
+      ]
+    );
+  }
+  for (const [kind, createdAt] of [
+    ["eligible", oldEvidenceAt],
+    ["recent_review", currentReviewAt]
+  ] as const) {
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."observer_recipe_recovery_reviews"(
+         id, tenant_id, user_id, evidence_id, sequence, decision,
+         confirmation_code, evidence_hash, actor_kind, actor_id, created_at
+       ) VALUES ($1, $2, $3, $4, 1, 'confirmed',
+                 'CONFIRM_NORMALIZED_RECOVERY_EVIDENCE', $5,
+                 'user', 'native_retention_reviewer', $6)`,
+      [
+        `native_retention_review_other_${kind}`,
+        NATIVE_TENANT,
+        NATIVE_USER,
+        `native_retention_evidence_other_${kind}`,
+        "9".repeat(64),
+        createdAt
+      ]
+    );
+  }
+
+  for (const [suffix, tenantId, bucketAt] of [
+    ["old_other", NATIVE_TENANT, oldOperationalAt],
+    ["current_other", NATIVE_TENANT, currentOperationalAt],
+    ["old_local", "tenant_local", oldOperationalAt]
+  ] as const) {
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."operational_request_rollups"(
+         tenant_id, bucket_start, route_key, method, actor_kind,
+         status_class, latency_bucket, request_count, total_duration_ms,
+         max_duration_ms, created_at, updated_at
+       ) VALUES ($1, $2, $3, 'GET', 'service', 'success', 'lt_100',
+                 1, 10, 10, $2, $2)`,
+      [tenantId, bucketAt, `native.retention.${suffix}`]
+    );
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."operational_error_events"(
+         id, tenant_id, correlation_key, route_key, method, actor_kind,
+         status_code, error_code, duration_ms, privacy_classification, occurred_at
+       ) VALUES ($1, $2, $3, $4, 'GET', 'service', 500,
+                 'native_retention_error', 10, 'operational_aggregate', $5)`,
+      [
+        `native_retention_error_${suffix}`,
+        tenantId,
+        `native-retention-correlation-${suffix}`,
+        `native.retention.${suffix}`,
+        bucketAt
+      ]
+    );
+  }
+
+  const tasks = [
+    ["old_terminal", NATIVE_TENANT, NATIVE_USER, "succeeded", oldOperationalAt],
+    ["current_terminal", NATIVE_TENANT, NATIVE_USER, "succeeded", currentOperationalAt],
+    ["old_dead_letter", NATIVE_TENANT, NATIVE_USER, "dead_letter", oldOperationalAt],
+    ["old_terminal_local", "tenant_local", "user_local", "cancelled", oldOperationalAt]
+  ] as const;
+  for (const [suffix, tenantId, userId, state, completedAt] of tasks) {
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."background_tasks"(
+         id, tenant_id, subject_user_id, task_kind, dedupe_key, state,
+         priority, attempt_count, maximum_attempts, scheduled_for,
+         result_json, completed_at, privacy_classification, created_at, updated_at
+       ) VALUES ($1, $2, $3, 'operational_telemetry_retention', $4, $5,
+                 50, 1, 3, $6, '{}', $6, 'operational_aggregate', $6, $6)`,
+      [
+        `native_retention_task_${suffix}`,
+        tenantId,
+        userId,
+        `native-retention:${suffix}`,
+        state,
+        completedAt
+      ]
+    );
+  }
+  await database.query(
+    `INSERT INTO "${NATIVE_SCHEMA}"."background_task_events"(
+       id, tenant_id, subject_user_id, task_id, sequence, event_type,
+       attempt, reason_code, worker_id, privacy_classification, created_at
+     ) VALUES ('native_retention_task_event_old', $1, $2,
+               'native_retention_task_old_terminal', 1, 'succeeded', 1,
+               'native_retention_fixture', 'native_retention_worker',
+               'operational_aggregate', $3)`,
+    [NATIVE_TENANT, NATIVE_USER, oldOperationalAt]
+  );
+}
+
 function workerContext(workerId: string): BackgroundWorkerContext {
   return {
     principal: { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
@@ -362,7 +557,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and two recovery handlers", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and three bounded handlers", {
   timeout: 240_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -405,6 +600,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let executionRecoveryUnmapped: NodePostgresExecutionRecoveryDatabase | null = null;
   let executionDirectClient: Client | null = null;
   let executionHandlerDb: YoinkDatabase | null = null;
+  let operationalRetentionA: NodePostgresOperationalRetentionDatabase | null = null;
+  let operationalRetentionB: NodePostgresOperationalRetentionDatabase | null = null;
+  let operationalRetentionUnmapped: NodePostgresOperationalRetentionDatabase | null = null;
+  let operationalRetentionDirectClient: Client | null = null;
+  let operationalRetentionHandlerDb: YoinkDatabase | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -604,6 +804,54 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       executionRecoveryBoundary
     );
+    const operationalRetentionBoundary = await applyPostgresOperationalRetentionBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:45.000Z").getTime()
+    );
+    assert.equal(operationalRetentionBoundary.protectedTableCount, 10);
+    assert.equal(operationalRetentionBoundary.forcedRlsTableCount, 10);
+    assert.equal(operationalRetentionBoundary.directTableGrantCount, 0);
+    assert.equal(operationalRetentionBoundary.functionGrantCount, 1);
+    assert.equal(operationalRetentionBoundary.membershipCount, 0);
+    assert.equal(operationalRetentionBoundary.activePrincipalCount, 0);
+    assert.equal(operationalRetentionBoundary.boundaryHandlerTaskKindCount, 1);
+    assert.equal(operationalRetentionBoundary.qualifiedHandlerTaskKindCount, 3);
+    assert.equal(operationalRetentionBoundary.totalHandlerTaskKindCount, 7);
+    assert.equal(operationalRetentionBoundary.serverBoundPrincipalLookup, true);
+    assert.equal(operationalRetentionBoundary.serverClockBoundRetention, true);
+    assert.equal(operationalRetentionBoundary.serverAuthenticatedReceiptActor, true);
+    assert.equal(operationalRetentionBoundary.boundedEvidenceDeletionLimit, 500);
+    assert.equal(operationalRetentionBoundary.operationalRetentionRepositoryParity, true);
+    assert.equal(operationalRetentionBoundary.executionRecoveryRepositoryParity, true);
+    assert.equal(operationalRetentionBoundary.notificationRecoveryRepositoryParity, true);
+    assert.equal(operationalRetentionBoundary.fullHandlerRepositoryParity, false);
+    assert.equal(operationalRetentionBoundary.directTableAccess, false);
+    assert.equal(operationalRetentionBoundary.insertAccess, false);
+    assert.equal(operationalRetentionBoundary.deleteAccess, false);
+    assert.equal(operationalRetentionBoundary.runtimeAuthority, false);
+    assert.match(operationalRetentionBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresOperationalRetentionBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE
+      ),
+      operationalRetentionBoundary
+    );
     await importer.close();
     importer = null;
 
@@ -685,6 +933,16 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
       NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE
     );
+    const operationalRetentionManifest = buildPostgresOperationalRetentionManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE
+    );
     for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
       await first.query(
         `CREATE ROLE "${principalRole}"
@@ -702,6 +960,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${executionRecoveryManifest.executionRecoveryRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${operationalRetentionManifest.operationalRetentionRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -819,6 +1080,30 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
     NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
     { maxConnections: 1 });
+    operationalRetentionA = new NodePostgresOperationalRetentionDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, { maxConnections: 2 });
+    operationalRetentionB = new NodePostgresOperationalRetentionDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_B),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, { maxConnections: 1 });
+    operationalRetentionUnmapped = new NodePostgresOperationalRetentionDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_UNMAPPED),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, { maxConnections: 1 });
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -1326,6 +1611,226 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.ok(concurrentExecutionRecovery.every((result) => result.expiredActionJobs === 0
       && result.releasedSpendReservations === 0));
 
+    const retentionNow = Date.now();
+    await insertOperationalRetentionFixtures(first, retentionNow);
+    operationalRetentionHandlerDb = new YoinkDatabase();
+    const operationalRetentionHandler = new BackgroundMaintenanceHandler(
+      operationalRetentionHandlerDb,
+      { operationalTelemetryRetention: operationalRetentionA }
+    );
+    const retentionResult = await operationalRetentionHandler.execute(
+      workerContext("native_operational_retention_handler"),
+      "operational_telemetry_retention",
+      retentionNow
+    );
+    assert.equal(retentionResult.deletedRollupRows, 1);
+    assert.equal(retentionResult.deletedErrorEvents, 1);
+    assert.equal(retentionResult.deletedTaskRuns, 1);
+    assert.equal(retentionResult.deletedRecoveryEvidence, 1);
+    assert.equal(retentionResult.deletedRecoveryReviewEvents, 1);
+    assert.equal(retentionResult.recoveryEvidenceRetentionDays, 90);
+    assert.match(String(retentionResult.receiptId), /^telemetry_retention_[a-f0-9]{32}$/);
+    assert.match(
+      String(retentionResult.recoveryEvidenceRetentionReceiptId),
+      /^observer_recovery_retention_[a-f0-9]{32}$/
+    );
+    assert.equal(retentionResult.cutoffAt, retentionResult.taskHistoryCutoffAt);
+    assert.ok(Math.abs(
+      Date.parse(String(retentionResult.cutoffAt))
+        - (retentionNow - 30 * 24 * 60 * 60_000)
+    ) < 10_000);
+    assert.ok(Math.abs(
+      Date.parse(String(retentionResult.recoveryEvidenceCutoffAt))
+        - (retentionNow - 90 * 24 * 60 * 60_000)
+    ) < 10_000);
+    assert.deepEqual(
+      (await first.query<{ routeKey: string }>(
+        `SELECT route_key AS "routeKey"
+         FROM "${NATIVE_SCHEMA}"."operational_request_rollups"
+         WHERE route_key LIKE 'native.retention.%' ORDER BY route_key`
+      )).rows.map((row) => row.routeKey),
+      ["native.retention.current_other", "native.retention.old_local"]
+    );
+    assert.deepEqual(
+      (await first.query<{ id: string }>(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."operational_error_events"
+         WHERE id LIKE 'native_retention_error_%' ORDER BY id`
+      )).rows.map((row) => row.id),
+      ["native_retention_error_current_other", "native_retention_error_old_local"]
+    );
+    assert.deepEqual(
+      (await first.query<{ id: string }>(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."background_tasks"
+         WHERE id LIKE 'native_retention_task_%' ORDER BY id`
+      )).rows.map((row) => row.id),
+      [
+        "native_retention_task_current_terminal",
+        "native_retention_task_old_dead_letter",
+        "native_retention_task_old_terminal_local"
+      ]
+    );
+    assert.equal(
+      Number((await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."background_task_events"
+         WHERE id = 'native_retention_task_event_old'`
+      )).rows[0]?.count),
+      0
+    );
+    assert.deepEqual(
+      (await first.query<{ id: string }>(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."observer_recipe_recovery_evidence"
+         WHERE id LIKE 'native_retention_evidence_%' ORDER BY id`
+      )).rows.map((row) => row.id),
+      [
+        "native_retention_evidence_local_eligible",
+        "native_retention_evidence_other_fresh",
+        "native_retention_evidence_other_recent_review"
+      ]
+    );
+    assert.deepEqual(
+      (await first.query<{ id: string }>(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."observer_recipe_recovery_reviews"
+         WHERE id LIKE 'native_retention_review_%' ORDER BY id`
+      )).rows.map((row) => row.id),
+      ["native_retention_review_other_recent_review"]
+    );
+    assert.deepEqual(
+      (await first.query<{
+        createdByActorId: string;
+        deletedEvidenceCount: string | number | bigint;
+        deletedReviewEventCount: string | number | bigint;
+      }>(
+        `SELECT created_by_actor_id AS "createdByActorId",
+                deleted_evidence_count AS "deletedEvidenceCount",
+                deleted_review_event_count AS "deletedReviewEventCount"
+         FROM "${NATIVE_SCHEMA}"."observer_recipe_recovery_retention_receipts"
+         WHERE id = $1`,
+        [retentionResult.recoveryEvidenceRetentionReceiptId]
+      )).rows.map((row) => ({
+        createdByActorId: row.createdByActorId,
+        deletedEvidenceCount: Number(row.deletedEvidenceCount),
+        deletedReviewEventCount: Number(row.deletedReviewEventCount)
+      })),
+      [{
+        createdByActorId: NATIVE_PRINCIPAL_A,
+        deletedEvidenceCount: 1,
+        deletedReviewEventCount: 1
+      }]
+    );
+    assert.deepEqual(
+      (await first.query<{ auditCount: string | number | bigint; outboxCount: string | number | bigint }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE correlation_id = $1) AS "auditCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE aggregate_id = $1) AS "outboxCount"`,
+        [retentionResult.recoveryEvidenceRetentionReceiptId]
+      )).rows.map((row) => ({
+        auditCount: Number(row.auditCount),
+        outboxCount: Number(row.outboxCount)
+      })),
+      [{ auditCount: 1, outboxCount: 1 }]
+    );
+
+    const retentionReplay = await operationalRetentionA.prune(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      retentionNow
+    );
+    assert.equal(retentionReplay.deletedRollupRows, 0);
+    assert.equal(retentionReplay.deletedErrorEvents, 0);
+    assert.equal(retentionReplay.deletedTaskRuns, 0);
+    assert.equal(retentionReplay.deletedRecoveryEvidence, 0);
+    assert.equal(retentionReplay.deletedRecoveryReviewEvents, 0);
+    assert.equal(retentionReplay.receiptId, "");
+    assert.equal(retentionReplay.recoveryEvidenceRetentionReceiptId, "");
+    await assert.rejects(
+      operationalRetentionA.prune(
+        { tenantId: "tenant_local", userId: "user_local" },
+        retentionNow
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      operationalRetentionUnmapped.prune(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        retentionNow
+      ),
+      /tenant session principal is not active/
+    );
+    const crossTenantRetention = await operationalRetentionB.prune(
+      { tenantId: "tenant_local", userId: "user_local" },
+      retentionNow
+    );
+    assert.equal(crossTenantRetention.deletedRollupRows, 1);
+    assert.equal(crossTenantRetention.deletedErrorEvents, 1);
+    assert.equal(crossTenantRetention.deletedTaskRuns, 1);
+    assert.equal(crossTenantRetention.deletedRecoveryEvidence, 1);
+    assert.equal(crossTenantRetention.deletedRecoveryReviewEvents, 0);
+    await assert.rejects(
+      operationalRetentionA.prune(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        retentionNow - 600_000
+      ),
+      /cycle timestamp differs from the process clock/
+    );
+    operationalRetentionDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    operationalRetentionDirectClient.on("error", () => undefined);
+    await operationalRetentionDirectClient.connect();
+    await operationalRetentionDirectClient.query(
+      `SET ROLE "${operationalRetentionManifest.operationalRetentionRole.name}"`
+    );
+    await assert.rejects(
+      operationalRetentionDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."operational_error_events"`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      operationalRetentionDirectClient.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."background_tasks"`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      operationalRetentionDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."yoink_recover_action_execution"($1, $2)`,
+        [NATIVE_TENANT, NATIVE_USER]
+      ),
+      /permission denied/
+    );
+    await operationalRetentionDirectClient.end();
+    operationalRetentionDirectClient = null;
+
+    const contentionAt = new Date(retentionNow - 31 * 24 * 60 * 60_000).toISOString();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."operational_error_events"(
+         id, tenant_id, correlation_key, route_key, method, actor_kind,
+         status_code, error_code, duration_ms, privacy_classification, occurred_at
+       ) VALUES ('native_retention_error_contention', $1,
+                 'native-retention-correlation-contention', 'native.retention.contention',
+                 'GET', 'service', 500, 'native_retention_error', 10,
+                 'operational_aggregate', $2)`,
+      [NATIVE_TENANT, contentionAt]
+    );
+    const concurrentRetention = await Promise.all([
+      operationalRetentionA.prune(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        retentionNow
+      ),
+      operationalRetentionA.prune(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        retentionNow
+      )
+    ]);
+    assert.equal(
+      concurrentRetention.reduce((sum, result) => sum + result.deletedErrorEvents, 0),
+      1
+    );
+    assert.ok(concurrentRetention.every((result) => result.deletedRollupRows === 0
+      && result.deletedTaskRuns === 0 && result.deletedRecoveryEvidence === 0));
+
     const heartbeatInsert = (
       writer: NodePostgresTenantQueueWriteDatabase,
       principal: { tenantId: string; userId: string },
@@ -1647,6 +2152,15 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
 
     await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."background_tasks"
+       SET state = 'cancelled', completed_at = '2000-01-01T00:00:00.000Z',
+           updated_at = '2000-01-01T00:00:00.000Z'
+       WHERE id IN (
+         'native_retention_task_current_terminal',
+         'native_retention_task_old_dead_letter'
+       )`
+    );
+    await first.query(
       `DELETE FROM "${NATIVE_SCHEMA}"."background_task_events"
        WHERE tenant_id = $1 AND subject_user_id = $2`,
       [NATIVE_TENANT, NATIVE_USER]
@@ -1885,6 +2399,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       await first.query(
         `REVOKE "${executionRecoveryManifest.executionRecoveryRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${operationalRetentionManifest.operationalRetentionRole.name}" FROM "${principalRole}"`
+      );
     }
     await first.query(
       `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
@@ -1945,6 +2462,59 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(
       cleanExecutionRecoveryBoundary.boundaryCatalogFingerprint,
       executionRecoveryBoundary.boundaryCatalogFingerprint
+    );
+    const cleanOperationalRetentionBoundary = await verifyPostgresOperationalRetentionBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanOperationalRetentionBoundary.boundaryCatalogFingerprint,
+      operationalRetentionBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_apply_operational_retention"(
+         text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresOperationalRetentionBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_apply_operational_retention"(
+         text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresOperationalRetentionBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      operationalRetentionBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_action_execution"(
@@ -2123,10 +2693,15 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       executionRecoveryA?.close(),
       executionRecoveryB?.close(),
       executionRecoveryUnmapped?.close(),
-      executionDirectClient?.end()
+      executionDirectClient?.end(),
+      operationalRetentionA?.close(),
+      operationalRetentionB?.close(),
+      operationalRetentionUnmapped?.close(),
+      operationalRetentionDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
+    operationalRetentionHandlerDb?.close();
     await postgres.stop().catch(() => undefined);
     if (existsSync(parent)) rmSync(parent, { recursive: true, force: true });
     if (existsSync(fixture.directory)) rmSync(fixture.directory, { recursive: true, force: true });
