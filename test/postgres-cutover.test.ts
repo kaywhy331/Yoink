@@ -94,9 +94,11 @@ import {
   POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION,
   POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION,
   POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION,
+  POSTGRES_HOSTED_SIGNAL_RESOLUTION_PLAN_FUNCTION,
   buildPostgresHostedDeliveryLeaseRecoveryManifest,
   hostedDeliveryLeaseRecoveryFunctionSource,
   hostedSignalInboxFunctionSource,
+  hostedSignalResolutionPlanFunctionSource,
   postgresHostedDeliveryLeaseRecoveryCapabilityProjection
 } from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
 import {
@@ -1234,6 +1236,14 @@ test("the PostgreSQL hosted-delivery and signal-inbox lifecycle boundary is exac
     manifest.leaseRecoveryRole.signalInboxFunctionArgumentTypes,
     ["text", "text", "text", "text", "text"]
   );
+  assert.equal(
+    manifest.leaseRecoveryRole.signalResolutionPlanFunctionName,
+    POSTGRES_HOSTED_SIGNAL_RESOLUTION_PLAN_FUNCTION
+  );
+  assert.deepEqual(
+    manifest.leaseRecoveryRole.signalResolutionPlanFunctionArgumentTypes,
+    ["text", "text", "text", "text"]
+  );
   assert.deepEqual(manifest.leaseRecoveryRole.protectedTableNames, [
     "hosted_delivery_receipts",
     "inbox_messages",
@@ -1243,11 +1253,14 @@ test("the PostgreSQL hosted-delivery and signal-inbox lifecycle boundary is exac
   assert.equal(manifest.qualifiedHandlerTaskKindCount, 6);
   assert.equal(manifest.totalHandlerTaskKindCount, 7);
   assert.equal(manifest.maximumDeliveryAttempts, 20);
+  assert.equal(manifest.maximumResolutionPlanAgeSeconds, 30);
   assert.equal(manifest.serverBoundPrincipalLookup, true);
   assert.equal(manifest.databaseServerClock, true);
   assert.equal(manifest.deterministicReceiptHashParity, true);
   assert.equal(manifest.leaseRecoverySubBoundaryParity, true);
   assert.equal(manifest.signalInboxLifecycleRepositoryParity, true);
+  assert.equal(manifest.signalResolutionPlanRepositoryParity, true);
+  assert.equal(manifest.signalEvaluationApplyRepositoryParity, false);
   assert.equal(manifest.signalEvaluationRepositoryParity, false);
   assert.equal(manifest.signalIngressRepositoryParity, false);
   assert.equal(manifest.hostedDeliveryHandlerRepositoryParity, false);
@@ -1255,7 +1268,7 @@ test("the PostgreSQL hosted-delivery and signal-inbox lifecycle boundary is exac
   assert.equal(manifest.protectedTableCount, 3);
   assert.equal(manifest.forcedRlsTableCount, 3);
   assert.equal(manifest.directTableGrantCount, 0);
-  assert.equal(manifest.functionGrantCount, 2);
+  assert.equal(manifest.functionGrantCount, 3);
   assert.equal(manifest.mutationAuthority, false);
   assert.equal(manifest.activePrincipalCount, 0);
   assert.equal(manifest.runtimeAuthority, false);
@@ -1285,6 +1298,22 @@ test("the PostgreSQL hosted-delivery and signal-inbox lifecycle boundary is exac
   assert.match(signalSource, /signal_processing_failed/);
   assert.doesNotMatch(signalSource, /signal_events|action_jobs|retailer_adapter/i);
 
+  const resolutionSource = hostedSignalResolutionPlanFunctionSource(manifest);
+  assert.match(resolutionSource, /principal\.principal_role = session_user::text/);
+  assert.match(resolutionSource, /statement_timestamp\(\)/);
+  assert.match(resolutionSource, /FOR SHARE/);
+  assert.match(resolutionSource, /hosted_delivery_capability_v1/);
+  assert.match(resolutionSource, /hosted_delivery_payload_v1/);
+  assert.match(resolutionSource, /postgres_hosted_signal_resolution_plan_v1/);
+  assert.match(resolutionSource, /source_listing_refs/);
+  assert.match(resolutionSource, /source_variant_retailer_refs/);
+  assert.match(resolutionSource, /shared_catalog_mutation_required_value/);
+  assert.doesNotMatch(resolutionSource, /\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\b/i);
+  assert.doesNotMatch(
+    resolutionSource,
+    /"(?:action_jobs|missions|strategies|signal_incidents)"/i
+  );
+
   const capability = postgresHostedDeliveryLeaseRecoveryCapabilityProjection();
   assert.equal(
     capability.contractVersion,
@@ -1301,6 +1330,10 @@ test("the PostgreSQL hosted-delivery and signal-inbox lifecycle boundary is exac
   assert.equal(capability.nativeContentionQualified, true);
   assert.equal(capability.leaseRecoverySubBoundaryParity, true);
   assert.equal(capability.signalInboxLifecycleRepositoryParity, true);
+  assert.equal(capability.signalResolutionPlanRepositoryParity, true);
+  assert.equal(capability.signalEvaluationApplyRepositoryParity, false);
+  assert.equal(capability.sharedCatalogMutationFailClosed, true);
+  assert.equal(capability.rawSignalPayloadReturned, false);
   assert.equal(capability.signalEvaluationRepositoryParity, false);
   assert.equal(capability.signalIngressRepositoryParity, false);
   assert.equal(capability.hostedDeliveryHandlerRepositoryParity, false);
@@ -1308,10 +1341,11 @@ test("the PostgreSQL hosted-delivery and signal-inbox lifecycle boundary is exac
   assert.equal(capability.handlerTaskKindCount, 6);
   assert.equal(capability.totalHandlerTaskKindCount, 7);
   assert.equal(capability.maximumDeliveryAttempts, 20);
+  assert.equal(capability.maximumResolutionPlanAgeSeconds, 30);
   assert.equal(capability.protectedTableCount, 3);
   assert.equal(capability.forcedRlsTableCount, 3);
   assert.equal(capability.directTableGrantCount, 0);
-  assert.equal(capability.functionGrantCount, 2);
+  assert.equal(capability.functionGrantCount, 3);
   assert.equal(capability.activeRuntimeRoleApplied, false);
   assert.equal(capability.mutationAuthority, false);
   assert.equal(capability.runtimeAuthority, false);

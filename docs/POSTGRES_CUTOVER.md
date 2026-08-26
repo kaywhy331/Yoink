@@ -889,13 +889,16 @@ real mutation domains and qualifies expired inbox/outbox lease recovery.
 Version 0.74 advances that same inactive boundary to contract v2 by adding the
 complete lease/acknowledgement/failure lifecycle for already accepted, fixed
 `signal_event_v1` inbox messages. Inbox acceptance and durable signal
-evaluation remain separate open repository ports. The honest complete-handler
-counter therefore remains six of seven.
+evaluation remain separate open repository ports. Version 0.75 advances the
+boundary to contract v3 with a read-only resolution-plan function for the exact
+leased message. Resolution-plan application and downstream evaluation remain
+open repository ports, so the honest complete-handler counter remains six of
+seven.
 
 The lease-recovery role is `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no
 objects, has schema `USAGE`, zero direct/effective table or column grants, and
-may execute exactly two strict security-definer functions. Inbox messages,
-outbox events, and hosted-delivery receipts are forced-RLS. Both functions
+may execute exactly three strict security-definer functions. Inbox messages,
+outbox events, and hosted-delivery receipts are forced-RLS. All three functions
 resolve `session_user` through the server-owned principal registry, check the
 expected tenant/user, and use the database statement clock. The expired-lease
 function takes a per-principal advisory transaction lock.
@@ -919,6 +922,28 @@ failure records `retry` with a fixed 30-second delay below attempt 20 or
 `dead_letter` at attempt 20. The raw capability is never returned in a receipt
 or stored in a table.
 
+The third function accepts only the exact message ID and unexpired capability
+for a processing TrackaLacker `signal_event_v1` row. It takes `FOR SHARE`,
+recomputes the stored `hosted_delivery_payload_v1` hash, validates the packaged
+normalized `trackalacker-push-v1` shape and principal-owned source connection,
+and recomputes the source-connection/external-event transport hash. It detects
+an existing principal-owned signal before consulting the catalog.
+
+For a new signal, PostgreSQL follows the same resolution priority as the SQLite
+repository: exact source listing, retailer/SKU, preferred source-product
+retailer, unique source-product retailer, preferred TrackaLacker-slug retailer,
+then unique slug retailer. Ambiguous candidates stay ambiguous. A result is
+valid for at most 30 seconds and never beyond its inbox lease; a deterministic
+length-delimited SHA-256 fingerprint binds principal, message, payload, source,
+signal, outcome, public listing projection, and the separate-catalog-authority
+flag. Raw identity, offer, and evidence objects are not returned.
+
+The planner contains no write statement. In particular it cannot create a
+catalog item, signal event, resolution, occurrence, mission, strategy, incident,
+offer observation, notification, spend reservation, or action job. A live
+unresolved identity from an auto-create-enabled `trusted_exact` connection only
+reports that a future shared-catalog authority would be required.
+
 Native PostgreSQL 16 proves all four transitions, preservation of live leases,
 exact receipt-hash parity with SQLite, cross-tenant isolation, idempotent
 replay, a single winner under simultaneous calls, mismatched and unmapped
@@ -928,6 +953,11 @@ proves one-winner signal leasing, same-tenant/different-user isolation, payload
 parsing, stored capability-hash parity, wrong-token and cross-principal denial,
 completion, delayed retry, attempt-20 dead letter, and immediate-retry
 exclusion.
+Contract v3 additionally proves exact source-listing and retailer-SKU matches,
+ambiguous and unresolved identity, duplicate detection, payload/transport/plan
+hash parity, wrong-token, cross-tenant and same-tenant/different-user denial,
+post-transition replay denial, direct invocation denial, and unchanged catalog,
+signal, mission, strategy, incident, observation, and action counts.
 
 Plan without a database connection:
 
@@ -1072,9 +1102,11 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- PostgreSQL hosted signal evaluation, composition with the qualified
-  hosted-delivery recovery and fixed signal-inbox lifecycle to complete the
-  final task-handler family, and every API request-repository family;
+- a separately qualified shared-catalog apply boundary for unknown exact
+  products, PostgreSQL hosted signal-resolution plan apply and downstream
+  evaluation, composition with the qualified hosted-delivery recovery, fixed
+  signal-inbox lifecycle, and read-only resolution plan to complete the final
+  task-handler family, and every API request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers; all qualified

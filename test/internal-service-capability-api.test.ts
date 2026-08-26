@@ -207,7 +207,8 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Server-bound independent witness refresh/);
     assert.match(cutoverText, /Server-bound hosted-delivery lease recovery/);
     assert.match(cutoverText, /signal lifecycle/);
-    assert.match(cutoverText, /two principal-bound functions/);
+    assert.match(cutoverText, /resolution planning/);
+    assert.match(cutoverText, /three principal-bound functions/);
     assert.match(cutoverText, /Coverage is 6 of 7/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);

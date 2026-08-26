@@ -81,6 +81,7 @@ import {
   NodePostgresHostedDeliveryLeaseRecoveryDatabase,
   applyPostgresHostedDeliveryLeaseRecoveryBoundary,
   buildPostgresHostedDeliveryLeaseRecoveryManifest,
+  postgresHostedSignalResolutionPlanFingerprint,
   verifyPostgresHostedDeliveryLeaseRecoveryBoundary
 } from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
@@ -952,8 +953,8 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, and hosted signal lifecycle", {
-  timeout: 480_000
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, and resolution planning", {
+  timeout: 600_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
   const databaseDir = join(parent, "cluster");
@@ -1530,17 +1531,22 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(deliveryLeaseRecoveryBoundary.protectedTableCount, 3);
     assert.equal(deliveryLeaseRecoveryBoundary.forcedRlsTableCount, 3);
     assert.equal(deliveryLeaseRecoveryBoundary.directTableGrantCount, 0);
-    assert.equal(deliveryLeaseRecoveryBoundary.functionGrantCount, 2);
+    assert.equal(deliveryLeaseRecoveryBoundary.functionGrantCount, 3);
     assert.equal(deliveryLeaseRecoveryBoundary.membershipCount, 0);
     assert.equal(deliveryLeaseRecoveryBoundary.activePrincipalCount, 0);
     assert.equal(deliveryLeaseRecoveryBoundary.qualifiedHandlerTaskKindCount, 6);
     assert.equal(deliveryLeaseRecoveryBoundary.totalHandlerTaskKindCount, 7);
     assert.equal(deliveryLeaseRecoveryBoundary.maximumDeliveryAttempts, 20);
+    assert.equal(deliveryLeaseRecoveryBoundary.maximumResolutionPlanAgeSeconds, 30);
     assert.equal(deliveryLeaseRecoveryBoundary.serverBoundPrincipalLookup, true);
     assert.equal(deliveryLeaseRecoveryBoundary.databaseServerClock, true);
     assert.equal(deliveryLeaseRecoveryBoundary.deterministicReceiptHashParity, true);
     assert.equal(deliveryLeaseRecoveryBoundary.leaseRecoverySubBoundaryParity, true);
     assert.equal(deliveryLeaseRecoveryBoundary.signalInboxLifecycleRepositoryParity, true);
+    assert.equal(deliveryLeaseRecoveryBoundary.signalResolutionPlanRepositoryParity, true);
+    assert.equal(deliveryLeaseRecoveryBoundary.signalEvaluationApplyRepositoryParity, false);
+    assert.equal(deliveryLeaseRecoveryBoundary.sharedCatalogMutationFailClosed, true);
+    assert.equal(deliveryLeaseRecoveryBoundary.rawSignalPayloadReturned, false);
     assert.equal(deliveryLeaseRecoveryBoundary.signalEvaluationRepositoryParity, false);
     assert.equal(deliveryLeaseRecoveryBoundary.signalIngressRepositoryParity, false);
     assert.equal(deliveryLeaseRecoveryBoundary.hostedDeliveryHandlerRepositoryParity, false);
@@ -2606,14 +2612,61 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         new Date(signalLifecycleNow - 5_000).toISOString()
       ]
     );
+    const signalFixtureTimestamp = new Date(signalLifecycleNow - 6_000).toISOString();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_connections"(
+         id, tenant_id, user_id, source, name, status, trust_level,
+         auto_create_missions, is_private, last_event_at, created_at, updated_at
+       ) VALUES
+         ('native_signal_source_a', $1, $2, 'trackalacker', 'Native signal source A',
+          'connected', 'trusted_exact', 1, 1, '', $4, $4),
+         ('native_signal_source_c', $1, $3, 'trackalacker', 'Native signal source C',
+          'connected', 'informational', 0, 1, '', $4, $4)`,
+      [NATIVE_TENANT, NATIVE_USER, NATIVE_SAME_TENANT_USER, signalFixtureTimestamp]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."listings"(
+         id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+         execution_supported, msrp_cents, currency, created_at, updated_at
+       ) VALUES (
+         'listing_native_signal', 'variant_cutover_scope', 'target',
+         'NATIVE-SIGNAL-SKU', 'https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU',
+         'in_stock', 1, 1299, 'USD', $1, $1
+       )`,
+      [signalFixtureTimestamp]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_listing_refs"(
+         id, source_connection_id, external_listing_id, external_product_id,
+         listing_id, source_url, observed_at
+       ) VALUES (
+         'source_listing_native_signal', 'native_signal_source_a',
+         'native-source-listing-a', 'native-source-product-a',
+         'listing_native_signal', 'https://trackalacker.example/native-source-listing-a', $1
+       )`,
+      [signalFixtureTimestamp]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_product_refs"(
+         id, source_connection_id, external_product_id, variant_id,
+         source_url, source_title, observed_at
+       ) VALUES (
+         'source_product_native_signal_ambiguous', 'native_signal_source_a',
+         'native-source-product-ambiguous', 'variant_cutover_scope',
+         'https://trackalacker.example/native-source-product-ambiguous',
+         'Native ambiguous source product', $1
+       )`,
+      [signalFixtureTimestamp]
+    );
     const insertSignalLifecycleInbox = async (
       id: string,
       tenantId: string,
       userId: string,
       deliveryAttempts: number,
-      receivedAt: string
+      receivedAt: string,
+      payload: Record<string, unknown> = { schemaVersion: 1, signalId: id }
     ) => {
-      const payloadJson = JSON.stringify({ schemaVersion: 1, signalId: id });
+      const payloadJson = JSON.stringify(payload);
       await first!.query(
         `INSERT INTO "${NATIVE_SCHEMA}"."inbox_messages"(
            id, tenant_id, user_id, source, message_key, event_type,
@@ -2633,6 +2686,42 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         ]
       );
     };
+    const resolutionSignalPayload = (
+      id: string,
+      sourceConnectionId: string,
+      identity: {
+        sourceProductId: string;
+        sourceListingId: string;
+        retailerId: string;
+        retailerSku: string;
+        canonicalUrl: string;
+        title: string;
+      },
+      testSignal = false
+    ): Record<string, unknown> => ({
+      schemaVersion: 1,
+      signalId: `signal-${id}`,
+      sourceConnectionId,
+      source: "trackalacker",
+      externalEventId: `event-${id}`,
+      eventType: "restock",
+      observedAt: new Date(signalLifecycleNow - 1_000).toISOString(),
+      receivedAt: new Date(signalLifecycleNow).toISOString(),
+      test: testSignal,
+      identity: { ...identity, globalIdentifiers: {} },
+      offer: {
+        availability: "in_stock",
+        unitPriceCents: 1199,
+        currency: "USD",
+        sellerName: "Target",
+        sellerType: "first_party",
+        orderLimit: 1,
+        fulfillment: "shipping",
+        offerFingerprint: stableHash("offer", id)
+      },
+      evidence: { headline: "Native signal", body: "", msrpStatus: "", clickUrl: "" },
+      parserVersion: "trackalacker-push-v1"
+    });
     const signalCompleteId = "native_signal_lifecycle_complete";
     const signalRetryId = "native_signal_lifecycle_retry";
     const signalPeerId = "native_signal_lifecycle_peer";
@@ -2849,6 +2938,432 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         errorCode: "signal_processing_failed"
       }]
     );
+
+    const matchedResolutionId = "native_signal_resolution_matched";
+    const matchedResolutionPayload = resolutionSignalPayload(
+      matchedResolutionId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-source-product-a",
+        sourceListingId: "native-source-listing-a",
+        retailerId: "target",
+        retailerSku: "NATIVE-SIGNAL-SKU",
+        canonicalUrl: "https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU",
+        title: "Native signal product"
+      }
+    );
+    const peerResolutionId = "native_signal_resolution_peer";
+    const peerResolutionPayload = resolutionSignalPayload(
+      peerResolutionId,
+      "native_signal_source_c",
+      {
+        sourceProductId: "",
+        sourceListingId: "",
+        retailerId: "target",
+        retailerSku: "NATIVE-SIGNAL-SKU",
+        canonicalUrl: "https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU",
+        title: "Native signal product"
+      }
+    );
+    const ambiguousResolutionId = "native_signal_resolution_ambiguous";
+    const ambiguousResolutionPayload = resolutionSignalPayload(
+      ambiguousResolutionId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-source-product-ambiguous",
+        sourceListingId: "",
+        retailerId: "target",
+        retailerSku: "",
+        canonicalUrl: "https://www.target.com/p/native-ambiguous/NATIVE-AMBIGUOUS-SKU",
+        title: "Native ambiguous signal product"
+      }
+    );
+    const unresolvedResolutionId = "native_signal_resolution_unresolved";
+    const unresolvedResolutionPayload = resolutionSignalPayload(
+      unresolvedResolutionId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-source-product-unresolved",
+        sourceListingId: "native-source-listing-unresolved",
+        retailerId: "target",
+        retailerSku: "NATIVE-UNRESOLVED-SKU",
+        canonicalUrl: "https://www.target.com/p/native-unresolved/NATIVE-UNRESOLVED-SKU",
+        title: "Native unresolved signal product"
+      }
+    );
+    const duplicateResolutionId = "native_signal_resolution_duplicate";
+    const duplicateResolutionPayload = resolutionSignalPayload(
+      duplicateResolutionId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-source-product-a",
+        sourceListingId: "native-source-listing-a",
+        retailerId: "target",
+        retailerSku: "NATIVE-SIGNAL-SKU",
+        canonicalUrl: "https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU",
+        title: "Native signal product"
+      }
+    );
+    const duplicateEventId = "signal_event_native_resolution_duplicate";
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."signal_events"(
+         id, tenant_id, user_id, source_connection_id, signal_id,
+         external_event_id, transport_hash, schema_version, source, event_type,
+         test, observed_at, received_at, identity_json, offer_json,
+         evidence_json, parser_version, resolution_status, created_at
+       ) VALUES (
+         $1, $2, $3, 'native_signal_source_a', $4, $5, $6, 1,
+         'trackalacker', 'restock', 0, $7, $8, $9, $10, $11,
+         'trackalacker-push-v1', 'unresolved', $8
+       )`,
+      [
+        duplicateEventId,
+        NATIVE_TENANT,
+        NATIVE_USER,
+        duplicateResolutionPayload.signalId,
+        duplicateResolutionPayload.externalEventId,
+        stableHash(
+          "native_signal_source_a",
+          String(duplicateResolutionPayload.externalEventId)
+        ),
+        duplicateResolutionPayload.observedAt,
+        duplicateResolutionPayload.receivedAt,
+        JSON.stringify(duplicateResolutionPayload.identity),
+        JSON.stringify(duplicateResolutionPayload.offer),
+        JSON.stringify(duplicateResolutionPayload.evidence)
+      ]
+    );
+    const signalResolutionMutationCounts = async () => {
+      const row = (await first!.query<{
+        signalEvents: string | number | bigint;
+        resolutionDecisions: string | number | bigint;
+        signalOccurrences: string | number | bigint;
+        signalIncidents: string | number | bigint;
+        offerObservations: string | number | bigint;
+        productFamilies: string | number | bigint;
+        variants: string | number | bigint;
+        listings: string | number | bigint;
+        sourceConnections: string | number | bigint;
+        sourceProductRefs: string | number | bigint;
+        sourceListingRefs: string | number | bigint;
+        sourceAliases: string | number | bigint;
+        preferredRefs: string | number | bigint;
+        missions: string | number | bigint;
+        missionTargets: string | number | bigint;
+        strategies: string | number | bigint;
+        actionJobs: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."signal_events") AS "signalEvents",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."resolution_decisions") AS "resolutionDecisions",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."signal_occurrences") AS "signalOccurrences",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."signal_incidents") AS "signalIncidents",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."offer_observations") AS "offerObservations",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."product_families") AS "productFamilies",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."variants") AS variants,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."listings") AS listings,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_connections") AS "sourceConnections",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_product_refs") AS "sourceProductRefs",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_listing_refs") AS "sourceListingRefs",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_product_aliases") AS "sourceAliases",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_variant_retailer_refs") AS "preferredRefs",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."missions") AS missions,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."mission_targets") AS "missionTargets",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."strategies") AS strategies,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_jobs") AS "actionJobs"`
+      )).rows[0]!;
+      return Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, Number(value)])
+      );
+    };
+    const countsBeforeResolutionPlans = await signalResolutionMutationCounts();
+    const resolutionPlanNow = Date.now();
+
+    await insertSignalLifecycleInbox(
+      matchedResolutionId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(resolutionPlanNow - 4_000).toISOString(),
+      matchedResolutionPayload
+    );
+    const matchedResolutionLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow
+    );
+    assert.ok(matchedResolutionLease);
+    assert.equal(matchedResolutionLease.id, matchedResolutionId);
+    const wrongResolutionCapability = `${
+      matchedResolutionLease.capabilityToken.startsWith("A") ? "B" : "A"
+    }${matchedResolutionLease.capabilityToken.slice(1)}`;
+    await assert.rejects(
+      deliveryLeaseRecoveryA.planSignalResolution(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        matchedResolutionId,
+        wrongResolutionCapability,
+        resolutionPlanNow
+      ),
+      /capability is invalid or expired/
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryB.planSignalResolution(
+        { tenantId: "tenant_local", userId: "user_local" },
+        matchedResolutionId,
+        matchedResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      /capability is invalid or expired/
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryC.planSignalResolution(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+        matchedResolutionId,
+        matchedResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      /capability is invalid or expired/
+    );
+    const matchedResolutionPlan = await deliveryLeaseRecoveryA.planSignalResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      matchedResolutionId,
+      matchedResolutionLease.capabilityToken,
+      resolutionPlanNow
+    );
+    assert.equal(matchedResolutionPlan.contractVersion, 1);
+    assert.equal(matchedResolutionPlan.messageId, matchedResolutionId);
+    assert.equal(
+      matchedResolutionPlan.payloadHash,
+      stableHash("hosted_delivery_payload_v1", JSON.stringify(matchedResolutionPayload))
+    );
+    assert.deepEqual(matchedResolutionPlan.sourceConnection, {
+      id: "native_signal_source_a",
+      trustLevel: "trusted_exact",
+      autoCreateMissions: true
+    });
+    assert.equal(matchedResolutionPlan.outcome, "matched");
+    assert.equal(matchedResolutionPlan.duplicateEventId, "");
+    assert.equal(matchedResolutionPlan.resolution?.status, "matched");
+    assert.equal(matchedResolutionPlan.resolution?.method, "source_listing_id");
+    assert.deepEqual(matchedResolutionPlan.resolution?.listing, {
+      id: "listing_native_signal",
+      variantId: "variant_cutover_scope",
+      title: "Cutover scope variant",
+      retailerId: "target",
+      retailerSku: "NATIVE-SIGNAL-SKU",
+      canonicalUrl: "https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU",
+      executionSupported: true,
+      msrpCents: 1299,
+      currency: "USD"
+    });
+    assert.equal(matchedResolutionPlan.sharedCatalogMutationRequired, false);
+    assert.ok(Date.parse(matchedResolutionPlan.validUntil) > Date.parse(matchedResolutionPlan.evaluatedAt));
+    assert.ok(
+      Date.parse(matchedResolutionPlan.validUntil) - Date.parse(matchedResolutionPlan.evaluatedAt)
+      <= 30_000
+    );
+    assert.equal(
+      matchedResolutionPlan.planFingerprint,
+      postgresHostedSignalResolutionPlanFingerprint(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        matchedResolutionPlan
+      )
+    );
+    const publicMatchedPlan = JSON.stringify(matchedResolutionPlan);
+    assert.equal(publicMatchedPlan.includes("native-source-product-a"), false);
+    assert.equal(publicMatchedPlan.includes("unitPriceCents"), false);
+    assert.equal(publicMatchedPlan.includes("evidence"), false);
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        matchedResolutionId,
+        matchedResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      true
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryA.planSignalResolution(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        matchedResolutionId,
+        matchedResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      /capability is invalid or expired/
+    );
+
+    await insertSignalLifecycleInbox(
+      peerResolutionId,
+      NATIVE_TENANT,
+      NATIVE_SAME_TENANT_USER,
+      0,
+      new Date(resolutionPlanNow - 3_000).toISOString(),
+      peerResolutionPayload
+    );
+    const peerResolutionLease = await deliveryLeaseRecoveryC.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+      resolutionPlanNow
+    );
+    assert.ok(peerResolutionLease);
+    const peerResolutionPlan = await deliveryLeaseRecoveryC.planSignalResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+      peerResolutionId,
+      peerResolutionLease.capabilityToken,
+      resolutionPlanNow
+    );
+    assert.equal(peerResolutionPlan.outcome, "matched");
+    assert.equal(peerResolutionPlan.resolution?.method, "retailer_sku");
+    assert.equal(peerResolutionPlan.resolution?.listing?.id, "listing_native_signal");
+    assert.equal(peerResolutionPlan.sourceConnection.trustLevel, "informational");
+    assert.equal(peerResolutionPlan.sharedCatalogMutationRequired, false);
+    assert.equal(
+      await deliveryLeaseRecoveryC.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+        peerResolutionId,
+        peerResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      true
+    );
+
+    await insertSignalLifecycleInbox(
+      ambiguousResolutionId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(resolutionPlanNow - 2_000).toISOString(),
+      ambiguousResolutionPayload
+    );
+    const ambiguousResolutionLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow
+    );
+    assert.ok(ambiguousResolutionLease);
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."inbox_messages"
+       SET payload_json = $2 WHERE id = $1`,
+      [
+        ambiguousResolutionId,
+        JSON.stringify({ ...ambiguousResolutionPayload, unexpected: "tampered" })
+      ]
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryA.planSignalResolution(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        ambiguousResolutionId,
+        ambiguousResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      /payload hash is invalid/
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."inbox_messages"
+       SET payload_json = $2 WHERE id = $1`,
+      [ambiguousResolutionId, JSON.stringify(ambiguousResolutionPayload)]
+    );
+    const ambiguousResolutionPlan = await deliveryLeaseRecoveryA.planSignalResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      ambiguousResolutionId,
+      ambiguousResolutionLease.capabilityToken,
+      resolutionPlanNow
+    );
+    assert.equal(ambiguousResolutionPlan.outcome, "ambiguous");
+    assert.deepEqual(ambiguousResolutionPlan.resolution, {
+      status: "ambiguous",
+      method: "source_product_retailer",
+      reason: "Multiple same-retailer listings exist for this source product; an exact listing ID or SKU is required.",
+      listing: null
+    });
+    assert.equal(ambiguousResolutionPlan.sharedCatalogMutationRequired, false);
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        ambiguousResolutionId,
+        ambiguousResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      true
+    );
+
+    await insertSignalLifecycleInbox(
+      unresolvedResolutionId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      19,
+      new Date(resolutionPlanNow - 1_000).toISOString(),
+      unresolvedResolutionPayload
+    );
+    const unresolvedResolutionLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow
+    );
+    assert.ok(unresolvedResolutionLease);
+    const unresolvedResolutionPlan = await deliveryLeaseRecoveryA.planSignalResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      unresolvedResolutionId,
+      unresolvedResolutionLease.capabilityToken,
+      resolutionPlanNow
+    );
+    assert.equal(unresolvedResolutionPlan.outcome, "unresolved");
+    assert.deepEqual(unresolvedResolutionPlan.resolution, {
+      status: "unresolved",
+      method: "none",
+      reason: "No exact source-listing or retailer-SKU mapping matched the signal.",
+      listing: null
+    });
+    assert.equal(unresolvedResolutionPlan.sharedCatalogMutationRequired, true);
+    assert.equal(
+      await deliveryLeaseRecoveryA.failSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        unresolvedResolutionId,
+        unresolvedResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      "dead_letter"
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryA.planSignalResolution(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        unresolvedResolutionId,
+        unresolvedResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      /capability is invalid or expired/
+    );
+
+    await insertSignalLifecycleInbox(
+      duplicateResolutionId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(resolutionPlanNow).toISOString(),
+      duplicateResolutionPayload
+    );
+    const duplicateResolutionLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow
+    );
+    assert.ok(duplicateResolutionLease);
+    const duplicateResolutionPlan = await deliveryLeaseRecoveryA.planSignalResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      duplicateResolutionId,
+      duplicateResolutionLease.capabilityToken,
+      resolutionPlanNow
+    );
+    assert.equal(duplicateResolutionPlan.outcome, "duplicate");
+    assert.equal(duplicateResolutionPlan.duplicateEventId, duplicateEventId);
+    assert.equal(duplicateResolutionPlan.resolution, null);
+    assert.equal(duplicateResolutionPlan.sharedCatalogMutationRequired, false);
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        duplicateResolutionId,
+        duplicateResolutionLease.capabilityToken,
+        resolutionPlanNow
+      ),
+      true
+    );
+    assert.deepEqual(await signalResolutionMutationCounts(), countsBeforeResolutionPlans);
+
     await assert.rejects(
       deliveryLeaseRecoveryA.leaseSignalInbox(
         { tenantId: "tenant_local", userId: "user_local" },
@@ -2963,6 +3478,15 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
            $1, $2, 'lease', '', $3
          )`,
         [NATIVE_TENANT, "user_local", "A".repeat(43)]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."yoink_plan_trackalacker_signal_resolution"(
+           $1, $2, $3, $4
+         )`,
+        [NATIVE_TENANT, "user_local", matchedResolutionId, "A".repeat(43)]
       ),
       /does not match the expected authenticated principal/
     );

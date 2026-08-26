@@ -72,6 +72,15 @@ authenticated tenant/user and statement clock, stores only a one-use
 capability hash, and appends the existing deterministic receipt. Inbox
 acceptance and signal evaluation remain SQLite-only, complete-handler parity
 remains six of seven, and every PostgreSQL runtime role remains inactive.
+Yoink 0.75 advances that boundary to contract v3 with a third exact function
+that derives a capability-bound, maximum-30-second signal-resolution plan.
+PostgreSQL verifies the stored payload and transport hashes, principal-owned
+TrackaLacker source, duplicate state, and the current shared catalog without
+returning raw signal payloads or changing any catalog or evaluation row.
+Unknown exact identities explicitly require a later, separately qualified
+shared-catalog authority. Resolution-plan apply and downstream signal
+evaluation remain SQLite-only, complete-handler parity remains six of seven,
+and every PostgreSQL runtime role remains inactive.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.

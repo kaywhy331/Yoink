@@ -3,7 +3,7 @@ import { Pool, type PoolClient, type PoolConfig } from "pg";
 import type { BackgroundWorkerPrincipal } from "../../contracts/src/background-worker.js";
 import { SIGNAL_INGRESS_EVENT_TYPE } from "../../contracts/src/signal-ingress.js";
 import { BACKGROUND_TASK_KINDS } from "../../domain/src/background-task.js";
-import { nowIso } from "../../domain/src/ids.js";
+import { nowIso, stableHash } from "../../domain/src/ids.js";
 import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
@@ -21,13 +21,15 @@ import {
 import { canonicalPortabilityJson } from "./portability.js";
 import { POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE } from "./postgres-tenant-session.js";
 
-export const POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION = 2;
+export const POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION = 3;
 export const POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_RECEIPT_TABLE =
   "yoink_hosted_delivery_lease_recovery_receipt";
 export const POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION =
   "yoink_recover_hosted_delivery_leases";
 export const POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION =
   "yoink_transition_trackalacker_signal_inbox";
+export const POSTGRES_HOSTED_SIGNAL_RESOLUTION_PLAN_FUNCTION =
+  "yoink_plan_trackalacker_signal_resolution";
 
 const MAXIMUM_DELIVERY_ATTEMPTS = 20;
 const MAXIMUM_CLOCK_SKEW_MS = 300_000;
@@ -38,6 +40,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const CAPABILITY_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const SIGNAL_LEASE_SECONDS = 60;
 const SIGNAL_RETRY_SECONDS = 30;
+const SIGNAL_RESOLUTION_PLAN_SECONDS = 30;
 const FUNCTION_ARGUMENT_TYPES = Object.freeze(["text", "text"] as const);
 const FUNCTION_RESULT_TYPE =
   "TABLE(inbox_requeued bigint, inbox_dead_lettered bigint, outbox_requeued bigint, outbox_dead_lettered bigint)";
@@ -46,6 +49,10 @@ const SIGNAL_FUNCTION_ARGUMENT_TYPES = Object.freeze([
 ] as const);
 const SIGNAL_FUNCTION_RESULT_TYPE =
   "TABLE(message_id text, source text, message_key text, event_type text, payload_json text, attempt bigint, lease_expires_at text, disposition text, changed boolean)";
+const SIGNAL_RESOLUTION_PLAN_FUNCTION_ARGUMENT_TYPES = Object.freeze([
+  "text", "text", "text", "text"
+] as const);
+const SIGNAL_RESOLUTION_PLAN_FUNCTION_RESULT_TYPE = "TABLE(result_json text)";
 const PROTECTED_TABLES = Object.freeze([
   "hosted_delivery_receipts",
   "inbox_messages",
@@ -85,6 +92,8 @@ export interface PostgresHostedDeliveryLeaseRecoveryManifest {
     functionArgumentTypes: string[];
     signalInboxFunctionName: typeof POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION;
     signalInboxFunctionArgumentTypes: string[];
+    signalResolutionPlanFunctionName: typeof POSTGRES_HOSTED_SIGNAL_RESOLUTION_PLAN_FUNCTION;
+    signalResolutionPlanFunctionArgumentTypes: string[];
     protectedTableNames: string[];
     forcedRlsTableNames: string[];
     login: false;
@@ -95,7 +104,7 @@ export interface PostgresHostedDeliveryLeaseRecoveryManifest {
   protectedTableCount: 3;
   forcedRlsTableCount: 3;
   directTableGrantCount: 0;
-  functionGrantCount: 2;
+  functionGrantCount: 3;
   boundaryHandlerTaskKinds: ["hosted_delivery_recovery"];
   qualifiedHandlerTaskKinds: [
     "notification_recovery",
@@ -108,11 +117,14 @@ export interface PostgresHostedDeliveryLeaseRecoveryManifest {
   qualifiedHandlerTaskKindCount: 6;
   totalHandlerTaskKindCount: number;
   maximumDeliveryAttempts: 20;
+  maximumResolutionPlanAgeSeconds: 30;
   serverBoundPrincipalLookup: true;
   databaseServerClock: true;
   deterministicReceiptHashParity: true;
   leaseRecoverySubBoundaryParity: true;
   signalInboxLifecycleRepositoryParity: true;
+  signalResolutionPlanRepositoryParity: true;
+  signalEvaluationApplyRepositoryParity: false;
   signalEvaluationRepositoryParity: false;
   signalIngressRepositoryParity: false;
   hostedDeliveryHandlerRepositoryParity: false;
@@ -124,7 +136,7 @@ export interface PostgresHostedDeliveryLeaseRecoveryManifest {
 }
 
 export interface PostgresHostedDeliveryLeaseRecoveryQualificationReceipt {
-  contractVersion: 2;
+  contractVersion: 3;
   cutoverContractVersion: 3;
   witnessRefreshContractVersion: 1;
   phase: "verified";
@@ -135,17 +147,22 @@ export interface PostgresHostedDeliveryLeaseRecoveryQualificationReceipt {
   protectedTableCount: 3;
   forcedRlsTableCount: 3;
   directTableGrantCount: 0;
-  functionGrantCount: 2;
+  functionGrantCount: 3;
   membershipCount: 0;
   activePrincipalCount: 0;
   qualifiedHandlerTaskKindCount: 6;
   totalHandlerTaskKindCount: number;
   maximumDeliveryAttempts: 20;
+  maximumResolutionPlanAgeSeconds: 30;
   serverBoundPrincipalLookup: true;
   databaseServerClock: true;
   deterministicReceiptHashParity: true;
   leaseRecoverySubBoundaryParity: true;
   signalInboxLifecycleRepositoryParity: true;
+  signalResolutionPlanRepositoryParity: true;
+  signalEvaluationApplyRepositoryParity: false;
+  sharedCatalogMutationFailClosed: true;
+  rawSignalPayloadReturned: false;
   signalEvaluationRepositoryParity: false;
   signalIngressRepositoryParity: false;
   hostedDeliveryHandlerRepositoryParity: false;
@@ -160,7 +177,7 @@ export interface PostgresHostedDeliveryLeaseRecoveryQualificationReceipt {
 }
 
 export interface PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
-  contractVersion: 2;
+  contractVersion: 3;
   cutoverContractVersion: 3;
   witnessRefreshContractVersion: 1;
   deterministicManifestImplemented: true;
@@ -179,6 +196,10 @@ export interface PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
   nativeContentionQualified: true;
   leaseRecoverySubBoundaryParity: true;
   signalInboxLifecycleRepositoryParity: true;
+  signalResolutionPlanRepositoryParity: true;
+  signalEvaluationApplyRepositoryParity: false;
+  sharedCatalogMutationFailClosed: true;
+  rawSignalPayloadReturned: false;
   signalEvaluationRepositoryParity: false;
   signalIngressRepositoryParity: false;
   hostedDeliveryHandlerRepositoryParity: false;
@@ -186,10 +207,11 @@ export interface PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
   handlerTaskKindCount: 6;
   totalHandlerTaskKindCount: number;
   maximumDeliveryAttempts: 20;
+  maximumResolutionPlanAgeSeconds: 30;
   protectedTableCount: 3;
   forcedRlsTableCount: 3;
   directTableGrantCount: 0;
-  functionGrantCount: 2;
+  functionGrantCount: 3;
   activePrincipalCount: 0;
   activeRuntimeRoleApplied: false;
   mutationAuthority: false;
@@ -214,6 +236,50 @@ export interface PostgresHostedSignalInboxLease {
   attempt: number;
   leaseExpiresAt: string;
   capabilityToken: string;
+}
+
+export interface PostgresHostedSignalResolutionListing {
+  id: string;
+  variantId: string;
+  title: string;
+  retailerId: string;
+  retailerSku: string;
+  canonicalUrl: string;
+  executionSupported: boolean;
+  msrpCents: number | null;
+  currency: string;
+}
+
+export interface PostgresHostedSignalResolutionPlan {
+  contractVersion: 1;
+  messageId: string;
+  payloadHash: string;
+  evaluatedAt: string;
+  validUntil: string;
+  sourceConnection: {
+    id: string;
+    trustLevel: string;
+    autoCreateMissions: boolean;
+  };
+  signal: {
+    signalId: string;
+    externalEventId: string;
+    eventType: "in_stock" | "restock" | "preorder" | "price_change" | "unknown";
+    observedAt: string;
+    receivedAt: string;
+    test: boolean;
+    transportHash: string;
+  };
+  outcome: "duplicate" | "matched" | "ambiguous" | "unresolved";
+  duplicateEventId: string;
+  resolution: null | {
+    status: "matched" | "ambiguous" | "unresolved";
+    method: string;
+    reason: string;
+    listing: PostgresHostedSignalResolutionListing | null;
+  };
+  sharedCatalogMutationRequired: boolean;
+  planFingerprint: string;
 }
 
 export interface NodePostgresHostedDeliveryLeaseRecoveryDatabaseOptions {
@@ -262,11 +328,16 @@ interface ReceiptRow extends Record<string, unknown> {
   qualified_handler_task_kind_count: string | number | bigint;
   total_handler_task_kind_count: string | number | bigint;
   maximum_delivery_attempts: string | number | bigint;
+  maximum_resolution_plan_age_seconds: string | number | bigint;
   server_bound_principal_lookup: boolean;
   database_server_clock: boolean;
   deterministic_receipt_hash_parity: boolean;
   lease_recovery_sub_boundary_parity: boolean;
   signal_inbox_lifecycle_repository_parity: boolean;
+  signal_resolution_plan_repository_parity: boolean;
+  signal_evaluation_apply_repository_parity: boolean;
+  shared_catalog_mutation_fail_closed: boolean;
+  raw_signal_payload_returned: boolean;
   signal_evaluation_repository_parity: boolean;
   signal_ingress_repository_parity: boolean;
   hosted_delivery_handler_repository_parity: boolean;
@@ -284,7 +355,7 @@ interface BoundaryInspection {
   protectedTableCount: number;
   forcedRlsTableCount: number;
   directTableGrantCount: 0;
-  functionGrantCount: 2;
+  functionGrantCount: 3;
   membershipCount: 0;
   activePrincipalCount: 0;
   boundaryCatalogFingerprint: string;
@@ -307,6 +378,10 @@ interface SignalInboxTransitionRow extends Record<string, unknown> {
   leaseExpiresAt: string;
   disposition: string;
   changed: boolean;
+}
+
+interface SignalResolutionPlanRow extends Record<string, unknown> {
+  resultJson: string;
 }
 
 let cachedCapabilityProjection:
@@ -449,6 +524,354 @@ function stableHashInputSql(parts: string[]): string {
   return parts.map((part) =>
     `pg_catalog.octet_length(${part})::text || ':' || ${part} || '|'`
   ).join(" || ");
+}
+
+export function postgresHostedSignalResolutionPlanFingerprint(
+  principal: Pick<BackgroundWorkerPrincipal, "tenantId" | "userId">,
+  plan: PostgresHostedSignalResolutionPlan
+): string {
+  const resolution = plan.resolution;
+  const listing = resolution?.listing;
+  return stableHash(
+    "postgres_hosted_signal_resolution_plan_v1",
+    principal.tenantId,
+    principal.userId,
+    plan.contractVersion,
+    plan.messageId,
+    plan.payloadHash,
+    plan.evaluatedAt,
+    plan.validUntil,
+    plan.sourceConnection.id,
+    plan.sourceConnection.trustLevel,
+    plan.sourceConnection.autoCreateMissions ? 1 : 0,
+    plan.signal.signalId,
+    plan.signal.externalEventId,
+    plan.signal.eventType,
+    plan.signal.observedAt,
+    plan.signal.receivedAt,
+    plan.signal.test ? 1 : 0,
+    plan.signal.transportHash,
+    plan.outcome,
+    plan.duplicateEventId,
+    resolution?.status,
+    resolution?.method,
+    resolution?.reason,
+    listing?.id,
+    listing?.variantId,
+    listing?.title,
+    listing?.retailerId,
+    listing?.retailerSku,
+    listing?.canonicalUrl,
+    listing ? (listing.executionSupported ? 1 : 0) : undefined,
+    listing?.msrpCents,
+    listing?.currency,
+    plan.sharedCatalogMutationRequired ? 1 : 0
+  );
+}
+
+function exactPlanObject(
+  value: unknown,
+  label: string,
+  expectedKeys: readonly string[]
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      `The PostgreSQL hosted signal resolution ${label} is invalid.`
+    );
+  }
+  const record = value as Record<string, unknown>;
+  const actual = Object.keys(record).sort();
+  const expected = [...expectedKeys].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      `The PostgreSQL hosted signal resolution ${label} is not exact.`
+    );
+  }
+  return record;
+}
+
+function exactPlanText(
+  value: unknown,
+  label: string,
+  maximum: number,
+  allowEmpty = false
+): string {
+  if (typeof value !== "string" || value.length > maximum
+    || (!allowEmpty && value.length === 0) || value.trim() !== value
+    || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      `The PostgreSQL hosted signal resolution ${label} is invalid.`
+    );
+  }
+  return value;
+}
+
+function exactPlanBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      `The PostgreSQL hosted signal resolution ${label} is invalid.`
+    );
+  }
+  return value;
+}
+
+function parseHostedSignalResolutionPlan(
+  value: unknown,
+  principal: BackgroundWorkerPrincipal,
+  expectedMessageId: string,
+  now: number
+): PostgresHostedSignalResolutionPlan {
+  const root = exactPlanObject(value, "plan", [
+    "contractVersion",
+    "messageId",
+    "payloadHash",
+    "evaluatedAt",
+    "validUntil",
+    "sourceConnection",
+    "signal",
+    "outcome",
+    "duplicateEventId",
+    "resolution",
+    "sharedCatalogMutationRequired",
+    "planFingerprint"
+  ]);
+  if (root.contractVersion !== 1) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution plan contract is invalid."
+    );
+  }
+  const messageId = signalMessageId(root.messageId);
+  if (messageId !== expectedMessageId) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution plan message is invalid."
+    );
+  }
+  const payloadHash = exactPlanText(root.payloadHash, "payload hash", 64);
+  const evaluatedAt = timestamp(
+    exactPlanText(root.evaluatedAt, "evaluation timestamp", 40),
+    "signal resolution evaluation timestamp"
+  );
+  const validUntil = timestamp(
+    exactPlanText(root.validUntil, "expiry timestamp", 40),
+    "signal resolution expiry timestamp"
+  );
+  if (!SHA256.test(payloadHash)) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution payload hash is invalid."
+    );
+  }
+  const evaluatedAtMs = Date.parse(evaluatedAt);
+  const validUntilMs = Date.parse(validUntil);
+  if (Math.abs(evaluatedAtMs - now) > MAXIMUM_CLOCK_SKEW_MS
+    || validUntilMs <= evaluatedAtMs
+    || validUntilMs - evaluatedAtMs > SIGNAL_RESOLUTION_PLAN_SECONDS * 1_000
+    || validUntilMs <= Date.now()) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution plan lifetime is invalid."
+    );
+  }
+
+  const source = exactPlanObject(root.sourceConnection, "source connection", [
+    "id", "trustLevel", "autoCreateMissions"
+  ]);
+  const sourceConnectionId = exactPlanText(source.id, "source connection ID", 120);
+  const trustLevel = exactPlanText(source.trustLevel, "source trust level", 40);
+  if (trustLevel !== "trusted_exact" && trustLevel !== "informational") {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution source trust level is invalid."
+    );
+  }
+  const autoCreateMissions = exactPlanBoolean(
+    source.autoCreateMissions,
+    "source auto-create flag"
+  );
+
+  const signal = exactPlanObject(root.signal, "signal", [
+    "signalId",
+    "externalEventId",
+    "eventType",
+    "observedAt",
+    "receivedAt",
+    "test",
+    "transportHash"
+  ]);
+  const signalId = exactPlanText(signal.signalId, "signal ID", 180);
+  const externalEventId = exactPlanText(signal.externalEventId, "external event ID", 180);
+  const eventType = exactPlanText(signal.eventType, "event type", 20);
+  if (!(["in_stock", "restock", "preorder", "price_change", "unknown"] as const)
+    .includes(eventType as PostgresHostedSignalResolutionPlan["signal"]["eventType"])) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution event type is invalid."
+    );
+  }
+  const observedAt = timestamp(
+    exactPlanText(signal.observedAt, "observed timestamp", 40),
+    "signal resolution observed timestamp"
+  );
+  const receivedAt = timestamp(
+    exactPlanText(signal.receivedAt, "received timestamp", 40),
+    "signal resolution received timestamp"
+  );
+  const test = exactPlanBoolean(signal.test, "test flag");
+  const transportHash = exactPlanText(signal.transportHash, "transport hash", 64);
+  if (!SHA256.test(transportHash)
+    || transportHash !== stableHash(sourceConnectionId, externalEventId)) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution transport hash is invalid."
+    );
+  }
+
+  const outcome = exactPlanText(root.outcome, "outcome", 20);
+  if (!(["duplicate", "matched", "ambiguous", "unresolved"] as const)
+    .includes(outcome as PostgresHostedSignalResolutionPlan["outcome"])) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution outcome is invalid."
+    );
+  }
+  const duplicateEventId = exactPlanText(root.duplicateEventId, "duplicate event ID", 200, true);
+  const sharedCatalogMutationRequired = exactPlanBoolean(
+    root.sharedCatalogMutationRequired,
+    "shared-catalog flag"
+  );
+
+  let resolution: PostgresHostedSignalResolutionPlan["resolution"] = null;
+  if (root.resolution !== null) {
+    const rawResolution = exactPlanObject(root.resolution, "resolution", [
+      "status", "method", "reason", "listing"
+    ]);
+    const status = exactPlanText(rawResolution.status, "resolution status", 20);
+    if (!(["matched", "ambiguous", "unresolved"] as const).includes(
+      status as Exclude<PostgresHostedSignalResolutionPlan["outcome"], "duplicate">
+    )) {
+      throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+        "The PostgreSQL hosted signal resolution status is invalid."
+      );
+    }
+    const method = exactPlanText(rawResolution.method, "resolution method", 80);
+    const reason = exactPlanText(rawResolution.reason, "resolution reason", 300);
+    let listing: PostgresHostedSignalResolutionListing | null = null;
+    if (rawResolution.listing !== null) {
+      const rawListing = exactPlanObject(rawResolution.listing, "listing", [
+        "id",
+        "variantId",
+        "title",
+        "retailerId",
+        "retailerSku",
+        "canonicalUrl",
+        "executionSupported",
+        "msrpCents",
+        "currency"
+      ]);
+      const msrpCents = rawListing.msrpCents === null
+        ? null
+        : exactInteger(rawListing.msrpCents, "signal resolution MSRP");
+      if (msrpCents !== null && (msrpCents < 1 || msrpCents > 100_000_000)) {
+        throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+          "The PostgreSQL hosted signal resolution MSRP is invalid."
+        );
+      }
+      const canonicalUrl = exactPlanText(rawListing.canonicalUrl, "canonical URL", 4_096);
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(canonicalUrl);
+      } catch {
+        throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+          "The PostgreSQL hosted signal resolution canonical URL is invalid."
+        );
+      }
+      if (parsedUrl.protocol !== "https:" || parsedUrl.username || parsedUrl.password) {
+        throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+          "The PostgreSQL hosted signal resolution canonical URL is invalid."
+        );
+      }
+      const currency = exactPlanText(rawListing.currency, "currency", 3);
+      if (!/^[A-Z]{3}$/.test(currency)) {
+        throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+          "The PostgreSQL hosted signal resolution currency is invalid."
+        );
+      }
+      listing = {
+        id: exactPlanText(rawListing.id, "listing ID", 200),
+        variantId: exactPlanText(rawListing.variantId, "variant ID", 200),
+        title: exactPlanText(rawListing.title, "listing title", 300),
+        retailerId: exactPlanText(rawListing.retailerId, "retailer ID", 60),
+        retailerSku: exactPlanText(rawListing.retailerSku, "retailer SKU", 64),
+        canonicalUrl,
+        executionSupported: exactPlanBoolean(
+          rawListing.executionSupported,
+          "execution-support flag"
+        ),
+        msrpCents,
+        currency
+      };
+    }
+    resolution = {
+      status: status as "matched" | "ambiguous" | "unresolved",
+      method,
+      reason,
+      listing
+    };
+  }
+
+  const allowedMatchedMethods = new Set([
+    "source_listing_id",
+    "retailer_sku",
+    "source_product_preferred_retailer",
+    "source_product_retailer",
+    "source_product_slug_preferred_retailer",
+    "source_product_slug_retailer"
+  ]);
+  const allowedAmbiguousMethods = new Set([
+    "source_product_retailer",
+    "source_product_slug_retailer"
+  ]);
+  if ((outcome === "duplicate" && (!duplicateEventId || resolution !== null
+      || sharedCatalogMutationRequired))
+    || (outcome !== "duplicate" && (duplicateEventId !== "" || !resolution
+      || resolution.status !== outcome))
+    || (outcome === "matched" && (!resolution?.listing
+      || !allowedMatchedMethods.has(resolution.method) || sharedCatalogMutationRequired))
+    || (outcome === "ambiguous" && (resolution?.listing !== null
+      || !allowedAmbiguousMethods.has(resolution?.method ?? "")
+      || sharedCatalogMutationRequired))
+    || (outcome === "unresolved" && (resolution?.listing !== null
+      || resolution?.method !== "none"))
+    || (sharedCatalogMutationRequired && (outcome !== "unresolved"
+      || test || trustLevel !== "trusted_exact" || !autoCreateMissions))) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution plan is internally inconsistent."
+    );
+  }
+
+  const plan: PostgresHostedSignalResolutionPlan = {
+    contractVersion: 1,
+    messageId,
+    payloadHash,
+    evaluatedAt,
+    validUntil,
+    sourceConnection: { id: sourceConnectionId, trustLevel, autoCreateMissions },
+    signal: {
+      signalId,
+      externalEventId,
+      eventType: eventType as PostgresHostedSignalResolutionPlan["signal"]["eventType"],
+      observedAt,
+      receivedAt,
+      test,
+      transportHash
+    },
+    outcome: outcome as PostgresHostedSignalResolutionPlan["outcome"],
+    duplicateEventId,
+    resolution,
+    sharedCatalogMutationRequired,
+    planFingerprint: exactPlanText(root.planFingerprint, "plan fingerprint", 64)
+  };
+  if (!SHA256.test(plan.planFingerprint)
+    || plan.planFingerprint !== postgresHostedSignalResolutionPlanFingerprint(principal, plan)) {
+    throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+      "The PostgreSQL hosted signal resolution plan fingerprint is invalid."
+    );
+  }
+  return plan;
 }
 
 export function hostedDeliveryLeaseRecoveryFunctionSource(
@@ -824,6 +1247,592 @@ END
 `;
 }
 
+export function hostedSignalResolutionPlanFunctionSource(
+  manifest: PostgresHostedDeliveryLeaseRecoveryManifest
+): string {
+  const capabilityParts = stableHashInputSql([
+    "'hosted_delivery_capability_v1'::text",
+    "message_record.id::text",
+    "capability_token"
+  ]);
+  const payloadParts = stableHashInputSql([
+    "'hosted_delivery_payload_v1'::text",
+    "message_record.payload_json::text"
+  ]);
+  const transportParts = stableHashInputSql([
+    "source_connection_id_value",
+    "external_event_id_value"
+  ]);
+  const planParts = stableHashInputSql([
+    "'postgres_hosted_signal_resolution_plan_v1'::text",
+    "resolved_tenant_id",
+    "resolved_user_id",
+    "'1'::text",
+    "message_record.id::text",
+    "message_record.payload_hash::text",
+    "plan_timestamp",
+    "valid_until_timestamp",
+    "source_connection_id_value",
+    "source_record.trust_level::text",
+    "CASE WHEN source_record.auto_create_missions = 1 THEN '1' ELSE '0' END",
+    "signal_id_value",
+    "external_event_id_value",
+    "event_type_value",
+    "observed_at_value",
+    "received_at_value",
+    "CASE WHEN test_value THEN '1' ELSE '0' END",
+    "transport_hash_value",
+    "outcome_value",
+    "duplicate_event_id_value",
+    "resolution_status_value",
+    "resolution_method_value",
+    "resolution_reason_value",
+    "listing_id_value",
+    "listing_variant_id_value",
+    "listing_title_value",
+    "listing_retailer_id_value",
+    "listing_retailer_sku_value",
+    "listing_canonical_url_value",
+    "CASE WHEN listing_id_value = '' THEN '' WHEN listing_execution_supported_value = 1 THEN '1' ELSE '0' END",
+    "COALESCE(listing_msrp_cents_value::text, '')",
+    "listing_currency_value",
+    "CASE WHEN shared_catalog_mutation_required_value THEN '1' ELSE '0' END"
+  ]);
+  return `
+DECLARE
+  resolved_tenant_id TEXT;
+  resolved_user_id TEXT;
+  resolved_principal_count BIGINT;
+  plan_timestamp TEXT;
+  valid_until_timestamp TEXT;
+  message_record RECORD;
+  source_record RECORD;
+  payload_value JSONB;
+  identity_value JSONB;
+  offer_value JSONB;
+  evidence_value JSONB;
+  capability_input TEXT;
+  payload_input TEXT;
+  transport_input TEXT;
+  plan_input TEXT;
+  expected_capability_hash TEXT;
+  expected_payload_hash TEXT;
+  transport_hash_value TEXT;
+  plan_fingerprint_value TEXT;
+  source_connection_id_value TEXT;
+  signal_id_value TEXT;
+  external_event_id_value TEXT;
+  event_type_value TEXT;
+  observed_at_value TEXT;
+  received_at_value TEXT;
+  test_value BOOLEAN;
+  source_product_id_value TEXT;
+  source_listing_id_value TEXT;
+  retailer_id_value TEXT;
+  retailer_sku_value TEXT;
+  canonical_url_value TEXT;
+  title_value TEXT;
+  trackalacker_slug_value TEXT;
+  duplicate_count BIGINT := 0;
+  duplicate_event_id_value TEXT := '';
+  outcome_value TEXT := 'unresolved';
+  resolution_status_value TEXT := 'unresolved';
+  resolution_method_value TEXT := 'none';
+  resolution_reason_value TEXT := 'No exact source-listing or retailer-SKU mapping matched the signal.';
+  candidate_count BIGINT := 0;
+  listing_id_value TEXT := '';
+  listing_variant_id_value TEXT := '';
+  listing_title_value TEXT := '';
+  listing_retailer_id_value TEXT := '';
+  listing_retailer_sku_value TEXT := '';
+  listing_canonical_url_value TEXT := '';
+  listing_execution_supported_value BIGINT := 0;
+  listing_msrp_cents_value BIGINT;
+  listing_currency_value TEXT := '';
+  shared_catalog_mutation_required_value BOOLEAN := FALSE;
+  result_value JSONB;
+BEGIN
+  IF expected_tenant_id = '' OR expected_user_id = '' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'expected hosted signal principal is invalid';
+  END IF;
+  IF target_message_id !~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{2,159}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal resolution message is invalid';
+  END IF;
+  IF capability_token !~ '^[A-Za-z0-9_-]{43}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal inbox capability is invalid';
+  END IF;
+
+  SELECT MIN(principal.tenant_id), MIN(principal.user_id), COUNT(*)
+    INTO resolved_tenant_id, resolved_user_id, resolved_principal_count
+  FROM ${relation(manifest.schemaName, POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE)} AS principal
+  WHERE principal.principal_role = session_user::text AND principal.active = TRUE;
+  IF resolved_principal_count <> 1 OR resolved_tenant_id IS NULL OR resolved_user_id IS NULL THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'tenant session principal is not active';
+  END IF;
+  IF resolved_tenant_id <> expected_tenant_id OR resolved_user_id <> expected_user_id THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'tenant session principal does not match the expected authenticated principal';
+  END IF;
+
+  plan_timestamp := pg_catalog.to_char(
+    pg_catalog.statement_timestamp() AT TIME ZONE 'UTC',
+    'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+  );
+  SELECT message.id, message.source, message.event_type, message.payload_hash,
+         message.payload_json, message.lease_capability_hash, message.lease_expires_at
+    INTO message_record
+  FROM ${relation(manifest.schemaName, "inbox_messages")} AS message
+  WHERE message.id = target_message_id
+    AND message.tenant_id = resolved_tenant_id
+    AND message.user_id = resolved_user_id
+    AND message.source = 'trackalacker'
+    AND message.event_type = '${SIGNAL_INGRESS_EVENT_TYPE}'
+    AND message.state = 'processing'
+  FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'hosted signal inbox capability is invalid or expired';
+  END IF;
+
+  capability_input := ${capabilityParts};
+  expected_capability_hash := pg_catalog.encode(
+    pg_catalog.sha256(pg_catalog.convert_to(capability_input, 'UTF8')),
+    'hex'
+  );
+  IF message_record.lease_capability_hash <> expected_capability_hash
+    OR message_record.lease_expires_at = ''
+    OR message_record.lease_expires_at <= plan_timestamp THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'hosted signal inbox capability is invalid or expired';
+  END IF;
+
+  payload_input := ${payloadParts};
+  expected_payload_hash := pg_catalog.encode(
+    pg_catalog.sha256(pg_catalog.convert_to(payload_input, 'UTF8')),
+    'hex'
+  );
+  IF message_record.payload_hash !~ '^[a-f0-9]{64}$'
+    OR message_record.payload_hash <> expected_payload_hash THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal inbox payload hash is invalid';
+  END IF;
+  BEGIN
+    payload_value := message_record.payload_json::jsonb;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal inbox payload is invalid';
+  END;
+  IF pg_catalog.jsonb_typeof(payload_value) IS DISTINCT FROM 'object'
+    OR payload_value - ARRAY[
+      'schemaVersion', 'signalId', 'sourceConnectionId', 'source',
+      'externalEventId', 'eventType', 'observedAt', 'receivedAt', 'test',
+      'identity', 'offer', 'evidence', 'parserVersion'
+    ]::text[] IS DISTINCT FROM '{}'::jsonb
+    OR pg_catalog.jsonb_typeof(payload_value->'schemaVersion') IS DISTINCT FROM 'number'
+    OR COALESCE(payload_value->>'schemaVersion', '') !~ '^[1-9][0-9]*$'
+    OR pg_catalog.jsonb_typeof(payload_value->'signalId') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(payload_value->>'signalId') NOT BETWEEN 1 AND 180
+    OR pg_catalog.jsonb_typeof(payload_value->'sourceConnectionId') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(payload_value->>'sourceConnectionId') NOT BETWEEN 1 AND 120
+    OR payload_value->>'source' IS DISTINCT FROM 'trackalacker'
+    OR pg_catalog.jsonb_typeof(payload_value->'externalEventId') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(payload_value->>'externalEventId') NOT BETWEEN 1 AND 180
+    OR pg_catalog.jsonb_typeof(payload_value->'eventType') IS DISTINCT FROM 'string'
+    OR COALESCE(payload_value->>'eventType', '') NOT IN ('in_stock', 'restock', 'preorder', 'price_change', 'unknown')
+    OR pg_catalog.jsonb_typeof(payload_value->'observedAt') IS DISTINCT FROM 'string'
+    OR pg_catalog.jsonb_typeof(payload_value->'receivedAt') IS DISTINCT FROM 'string'
+    OR pg_catalog.jsonb_typeof(payload_value->'test') IS DISTINCT FROM 'boolean'
+    OR pg_catalog.jsonb_typeof(payload_value->'identity') IS DISTINCT FROM 'object'
+    OR pg_catalog.jsonb_typeof(payload_value->'offer') IS DISTINCT FROM 'object'
+    OR pg_catalog.jsonb_typeof(payload_value->'evidence') IS DISTINCT FROM 'object'
+    OR payload_value->>'parserVersion' IS DISTINCT FROM 'trackalacker-push-v1'
+    OR (payload_value->'offer') ? 'offerId' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal inbox payload contract is invalid';
+  END IF;
+
+  identity_value := payload_value->'identity';
+  offer_value := payload_value->'offer';
+  evidence_value := payload_value->'evidence';
+  IF identity_value - ARRAY[
+      'sourceProductId', 'sourceListingId', 'retailerId', 'retailerSku',
+      'canonicalUrl', 'title', 'globalIdentifiers'
+    ]::text[] IS DISTINCT FROM '{}'::jsonb
+    OR pg_catalog.jsonb_typeof(identity_value->'sourceProductId') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(identity_value->>'sourceProductId') > 120
+    OR pg_catalog.jsonb_typeof(identity_value->'sourceListingId') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(identity_value->>'sourceListingId') > 120
+    OR pg_catalog.jsonb_typeof(identity_value->'retailerId') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(identity_value->>'retailerId') > 60
+    OR pg_catalog.jsonb_typeof(identity_value->'retailerSku') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(identity_value->>'retailerSku') > 64
+    OR pg_catalog.jsonb_typeof(identity_value->'canonicalUrl') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(identity_value->>'canonicalUrl') > 4096
+    OR pg_catalog.jsonb_typeof(identity_value->'title') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(identity_value->>'title') > 300
+    OR pg_catalog.jsonb_typeof(identity_value->'globalIdentifiers') IS DISTINCT FROM 'object' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal identity contract is invalid';
+  END IF;
+  IF offer_value - ARRAY[
+      'availability', 'unitPriceCents', 'currency', 'sellerName',
+      'sellerType', 'orderLimit', 'fulfillment', 'offerFingerprint'
+    ]::text[] IS DISTINCT FROM '{}'::jsonb
+    OR pg_catalog.jsonb_typeof(offer_value->'availability') IS DISTINCT FROM 'string'
+    OR COALESCE(offer_value->>'availability', '') NOT IN (
+      'in_stock', 'preorder', 'out_of_stock', 'unknown'
+    )
+    OR NOT (CASE
+      WHEN pg_catalog.jsonb_typeof(offer_value->'unitPriceCents') = 'null' THEN TRUE
+      WHEN pg_catalog.jsonb_typeof(offer_value->'unitPriceCents') = 'number'
+        AND COALESCE(offer_value->>'unitPriceCents', '') ~ '^[1-9][0-9]{0,8}$'
+        THEN (offer_value->>'unitPriceCents')::bigint <= 100000000
+      ELSE FALSE
+    END)
+    OR pg_catalog.jsonb_typeof(offer_value->'currency') IS DISTINCT FROM 'string'
+    OR COALESCE(offer_value->>'currency', '') !~ '^[A-Z]{3}$'
+    OR pg_catalog.jsonb_typeof(offer_value->'sellerName') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(offer_value->>'sellerName') > 160
+    OR pg_catalog.jsonb_typeof(offer_value->'sellerType') IS DISTINCT FROM 'string'
+    OR COALESCE(offer_value->>'sellerType', '') NOT IN ('first_party', 'third_party', 'unknown')
+    OR NOT (CASE
+      WHEN pg_catalog.jsonb_typeof(offer_value->'orderLimit') = 'null' THEN TRUE
+      WHEN pg_catalog.jsonb_typeof(offer_value->'orderLimit') = 'number'
+        AND COALESCE(offer_value->>'orderLimit', '') ~ '^[1-9][0-9]?$'
+        THEN (offer_value->>'orderLimit')::bigint <= 99
+      ELSE FALSE
+    END)
+    OR pg_catalog.jsonb_typeof(offer_value->'fulfillment') IS DISTINCT FROM 'string'
+    OR COALESCE(offer_value->>'fulfillment', '') NOT IN (
+      'shipping', 'pickup', 'either', 'manual', 'unknown'
+    )
+    OR pg_catalog.jsonb_typeof(offer_value->'offerFingerprint') IS DISTINCT FROM 'string'
+    OR (COALESCE(offer_value->>'offerFingerprint', '') <> ''
+      AND COALESCE(offer_value->>'offerFingerprint', '') !~ '^[a-f0-9]{64}$') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal offer contract is invalid';
+  END IF;
+  IF evidence_value - ARRAY[
+      'headline', 'body', 'msrpStatus', 'clickUrl'
+    ]::text[] IS DISTINCT FROM '{}'::jsonb
+    OR pg_catalog.jsonb_typeof(evidence_value->'headline') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(evidence_value->>'headline') > 500
+    OR pg_catalog.jsonb_typeof(evidence_value->'body') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(evidence_value->>'body') > 2000
+    OR pg_catalog.jsonb_typeof(evidence_value->'msrpStatus') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(evidence_value->>'msrpStatus') > 60
+    OR pg_catalog.jsonb_typeof(evidence_value->'clickUrl') IS DISTINCT FROM 'string'
+    OR pg_catalog.length(evidence_value->>'clickUrl') > 4096 THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal evidence contract is invalid';
+  END IF;
+
+  signal_id_value := payload_value->>'signalId';
+  source_connection_id_value := payload_value->>'sourceConnectionId';
+  external_event_id_value := payload_value->>'externalEventId';
+  event_type_value := payload_value->>'eventType';
+  observed_at_value := payload_value->>'observedAt';
+  received_at_value := payload_value->>'receivedAt';
+  test_value := (payload_value->>'test')::boolean;
+  source_product_id_value := identity_value->>'sourceProductId';
+  source_listing_id_value := identity_value->>'sourceListingId';
+  retailer_id_value := identity_value->>'retailerId';
+  retailer_sku_value := identity_value->>'retailerSku';
+  canonical_url_value := identity_value->>'canonicalUrl';
+  title_value := identity_value->>'title';
+  trackalacker_slug_value := pg_catalog.lower(
+    COALESCE(identity_value->'globalIdentifiers'->>'trackalacker_slug', '')
+  );
+  BEGIN
+    PERFORM observed_at_value::timestamptz;
+    PERFORM received_at_value::timestamptz;
+    PERFORM message_record.lease_expires_at::timestamptz;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal timestamp contract is invalid';
+  END;
+
+  SELECT connection.id, connection.trust_level, connection.auto_create_missions
+    INTO source_record
+  FROM ${relation(manifest.schemaName, "source_connections")} AS connection
+  WHERE connection.id = source_connection_id_value
+    AND connection.tenant_id = resolved_tenant_id
+    AND connection.user_id = resolved_user_id
+    AND connection.source = 'trackalacker';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'hosted signal source connection is unavailable';
+  END IF;
+
+  transport_input := ${transportParts};
+  transport_hash_value := pg_catalog.encode(
+    pg_catalog.sha256(pg_catalog.convert_to(transport_input, 'UTF8')),
+    'hex'
+  );
+  SELECT MIN(event.id), COUNT(*)
+    INTO duplicate_event_id_value, duplicate_count
+  FROM ${relation(manifest.schemaName, "signal_events")} AS event
+  WHERE event.tenant_id = resolved_tenant_id
+    AND event.user_id = resolved_user_id
+    AND event.source_connection_id = source_connection_id_value
+    AND (event.external_event_id = external_event_id_value
+      OR event.signal_id = signal_id_value
+      OR event.transport_hash = transport_hash_value);
+  duplicate_event_id_value := COALESCE(duplicate_event_id_value, '');
+  IF duplicate_count > 1 THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal duplicate identity is ambiguous';
+  END IF;
+
+  IF duplicate_count = 1 THEN
+    outcome_value := 'duplicate';
+    resolution_status_value := '';
+    resolution_method_value := '';
+    resolution_reason_value := '';
+  ELSE
+    IF source_listing_id_value <> '' THEN
+      SELECT listing.id, listing.variant_id, variant.title, listing.retailer_id,
+             listing.retailer_sku, listing.canonical_url, listing.execution_supported,
+             listing.msrp_cents, listing.currency
+        INTO listing_id_value, listing_variant_id_value, listing_title_value,
+             listing_retailer_id_value, listing_retailer_sku_value,
+             listing_canonical_url_value, listing_execution_supported_value,
+             listing_msrp_cents_value, listing_currency_value
+      FROM ${relation(manifest.schemaName, "source_listing_refs")} AS reference
+      JOIN ${relation(manifest.schemaName, "listings")} AS listing
+        ON listing.id = reference.listing_id
+      JOIN ${relation(manifest.schemaName, "variants")} AS variant
+        ON variant.id = listing.variant_id
+      WHERE reference.source_connection_id = source_connection_id_value
+        AND reference.external_listing_id = source_listing_id_value;
+      IF FOUND THEN
+        resolution_status_value := 'matched';
+        resolution_method_value := 'source_listing_id';
+        resolution_reason_value := 'Matched the exact source listing reference.';
+      END IF;
+    END IF;
+
+    IF resolution_status_value = 'unresolved'
+      AND retailer_id_value <> '' AND retailer_sku_value <> '' THEN
+      SELECT listing.id, listing.variant_id, variant.title, listing.retailer_id,
+             listing.retailer_sku, listing.canonical_url, listing.execution_supported,
+             listing.msrp_cents, listing.currency
+        INTO listing_id_value, listing_variant_id_value, listing_title_value,
+             listing_retailer_id_value, listing_retailer_sku_value,
+             listing_canonical_url_value, listing_execution_supported_value,
+             listing_msrp_cents_value, listing_currency_value
+      FROM ${relation(manifest.schemaName, "listings")} AS listing
+      JOIN ${relation(manifest.schemaName, "variants")} AS variant
+        ON variant.id = listing.variant_id
+      WHERE listing.retailer_id = retailer_id_value
+        AND listing.retailer_sku = retailer_sku_value;
+      IF FOUND THEN
+        resolution_status_value := 'matched';
+        resolution_method_value := 'retailer_sku';
+        resolution_reason_value := 'Matched the exact retailer and SKU.';
+      END IF;
+    END IF;
+
+    IF resolution_status_value = 'unresolved'
+      AND source_product_id_value <> '' AND retailer_id_value <> '' THEN
+      SELECT listing.id, listing.variant_id, variant.title, listing.retailer_id,
+             listing.retailer_sku, listing.canonical_url, listing.execution_supported,
+             listing.msrp_cents, listing.currency
+        INTO listing_id_value, listing_variant_id_value, listing_title_value,
+             listing_retailer_id_value, listing_retailer_sku_value,
+             listing_canonical_url_value, listing_execution_supported_value,
+             listing_msrp_cents_value, listing_currency_value
+      FROM ${relation(manifest.schemaName, "source_product_refs")} AS product_reference
+      JOIN ${relation(manifest.schemaName, "source_variant_retailer_refs")} AS preferred
+        ON preferred.source_connection_id = product_reference.source_connection_id
+       AND preferred.variant_id = product_reference.variant_id
+       AND preferred.retailer_id = retailer_id_value
+      JOIN ${relation(manifest.schemaName, "listings")} AS listing
+        ON listing.id = preferred.listing_id
+      JOIN ${relation(manifest.schemaName, "variants")} AS variant
+        ON variant.id = listing.variant_id
+      WHERE product_reference.source_connection_id = source_connection_id_value
+        AND product_reference.external_product_id = source_product_id_value;
+      IF FOUND THEN
+        resolution_status_value := 'matched';
+        resolution_method_value := 'source_product_preferred_retailer';
+        resolution_reason_value := 'Matched the preferred exact retailer route for this source product.';
+      ELSE
+        SELECT COUNT(*) INTO candidate_count
+        FROM ${relation(manifest.schemaName, "source_product_refs")} AS reference
+        JOIN ${relation(manifest.schemaName, "variants")} AS variant
+          ON variant.id = reference.variant_id
+        JOIN ${relation(manifest.schemaName, "listings")} AS listing
+          ON listing.variant_id = variant.id
+        WHERE reference.source_connection_id = source_connection_id_value
+          AND reference.external_product_id = source_product_id_value
+          AND listing.retailer_id = retailer_id_value;
+        IF candidate_count = 1 THEN
+          SELECT listing.id, listing.variant_id, variant.title, listing.retailer_id,
+                 listing.retailer_sku, listing.canonical_url, listing.execution_supported,
+                 listing.msrp_cents, listing.currency
+            INTO listing_id_value, listing_variant_id_value, listing_title_value,
+                 listing_retailer_id_value, listing_retailer_sku_value,
+                 listing_canonical_url_value, listing_execution_supported_value,
+                 listing_msrp_cents_value, listing_currency_value
+          FROM ${relation(manifest.schemaName, "source_product_refs")} AS reference
+          JOIN ${relation(manifest.schemaName, "variants")} AS variant
+            ON variant.id = reference.variant_id
+          JOIN ${relation(manifest.schemaName, "listings")} AS listing
+            ON listing.variant_id = variant.id
+          WHERE reference.source_connection_id = source_connection_id_value
+            AND reference.external_product_id = source_product_id_value
+            AND listing.retailer_id = retailer_id_value;
+          resolution_status_value := 'matched';
+          resolution_method_value := 'source_product_retailer';
+          resolution_reason_value := 'Matched the unique source product and retailer listing.';
+        ELSIF candidate_count > 1 THEN
+          resolution_status_value := 'ambiguous';
+          resolution_method_value := 'source_product_retailer';
+          resolution_reason_value := 'Multiple same-retailer listings exist for this source product; an exact listing ID or SKU is required.';
+        END IF;
+      END IF;
+    END IF;
+
+    IF resolution_status_value = 'unresolved'
+      AND trackalacker_slug_value <> '' AND retailer_id_value <> '' THEN
+      SELECT listing.id, listing.variant_id, variant.title, listing.retailer_id,
+             listing.retailer_sku, listing.canonical_url, listing.execution_supported,
+             listing.msrp_cents, listing.currency
+        INTO listing_id_value, listing_variant_id_value, listing_title_value,
+             listing_retailer_id_value, listing_retailer_sku_value,
+             listing_canonical_url_value, listing_execution_supported_value,
+             listing_msrp_cents_value, listing_currency_value
+      FROM ${relation(manifest.schemaName, "source_product_aliases")} AS alias
+      JOIN ${relation(manifest.schemaName, "source_variant_retailer_refs")} AS preferred
+        ON preferred.source_connection_id = alias.source_connection_id
+       AND preferred.variant_id = alias.variant_id
+       AND preferred.retailer_id = retailer_id_value
+      JOIN ${relation(manifest.schemaName, "listings")} AS listing
+        ON listing.id = preferred.listing_id
+      JOIN ${relation(manifest.schemaName, "variants")} AS variant
+        ON variant.id = listing.variant_id
+      WHERE alias.source_connection_id = source_connection_id_value
+        AND alias.alias_kind = 'trackalacker_slug'
+        AND alias.alias_value = trackalacker_slug_value;
+      IF FOUND THEN
+        resolution_status_value := 'matched';
+        resolution_method_value := 'source_product_slug_preferred_retailer';
+        resolution_reason_value := 'Matched the preferred exact retailer route for this TrackaLacker product slug.';
+      ELSE
+        SELECT COUNT(*) INTO candidate_count
+        FROM ${relation(manifest.schemaName, "source_product_aliases")} AS alias
+        JOIN ${relation(manifest.schemaName, "variants")} AS variant
+          ON variant.id = alias.variant_id
+        JOIN ${relation(manifest.schemaName, "listings")} AS listing
+          ON listing.variant_id = variant.id
+        WHERE alias.source_connection_id = source_connection_id_value
+          AND alias.alias_kind = 'trackalacker_slug'
+          AND alias.alias_value = trackalacker_slug_value
+          AND listing.retailer_id = retailer_id_value;
+        IF candidate_count = 1 THEN
+          SELECT listing.id, listing.variant_id, variant.title, listing.retailer_id,
+                 listing.retailer_sku, listing.canonical_url, listing.execution_supported,
+                 listing.msrp_cents, listing.currency
+            INTO listing_id_value, listing_variant_id_value, listing_title_value,
+                 listing_retailer_id_value, listing_retailer_sku_value,
+                 listing_canonical_url_value, listing_execution_supported_value,
+                 listing_msrp_cents_value, listing_currency_value
+          FROM ${relation(manifest.schemaName, "source_product_aliases")} AS alias
+          JOIN ${relation(manifest.schemaName, "variants")} AS variant
+            ON variant.id = alias.variant_id
+          JOIN ${relation(manifest.schemaName, "listings")} AS listing
+            ON listing.variant_id = variant.id
+          WHERE alias.source_connection_id = source_connection_id_value
+            AND alias.alias_kind = 'trackalacker_slug'
+            AND alias.alias_value = trackalacker_slug_value
+            AND listing.retailer_id = retailer_id_value;
+          resolution_status_value := 'matched';
+          resolution_method_value := 'source_product_slug_retailer';
+          resolution_reason_value := 'Matched the unique TrackaLacker product slug and retailer listing.';
+        ELSIF candidate_count > 1 THEN
+          resolution_status_value := 'ambiguous';
+          resolution_method_value := 'source_product_slug_retailer';
+          resolution_reason_value := 'Multiple same-retailer listings exist for this TrackaLacker product slug; an exact listing ID or SKU is required.';
+        END IF;
+      END IF;
+    END IF;
+
+    outcome_value := resolution_status_value;
+    shared_catalog_mutation_required_value := resolution_status_value = 'unresolved'
+      AND NOT test_value
+      AND source_record.trust_level = 'trusted_exact'
+      AND source_record.auto_create_missions = 1
+      AND source_product_id_value <> ''
+      AND retailer_id_value <> ''
+      AND retailer_sku_value <> ''
+      AND canonical_url_value <> ''
+      AND title_value <> '';
+  END IF;
+
+  IF resolution_status_value <> 'matched' THEN
+    listing_id_value := '';
+    listing_variant_id_value := '';
+    listing_title_value := '';
+    listing_retailer_id_value := '';
+    listing_retailer_sku_value := '';
+    listing_canonical_url_value := '';
+    listing_execution_supported_value := 0;
+    listing_msrp_cents_value := NULL;
+    listing_currency_value := '';
+  END IF;
+
+  valid_until_timestamp := pg_catalog.to_char(
+    LEAST(
+      pg_catalog.statement_timestamp() + INTERVAL '${SIGNAL_RESOLUTION_PLAN_SECONDS} seconds',
+      message_record.lease_expires_at::timestamptz
+    ) AT TIME ZONE 'UTC',
+    'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+  );
+  IF valid_until_timestamp <= plan_timestamp THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'hosted signal inbox capability is invalid or expired';
+  END IF;
+  plan_input := ${planParts};
+  plan_fingerprint_value := pg_catalog.encode(
+    pg_catalog.sha256(pg_catalog.convert_to(plan_input, 'UTF8')),
+    'hex'
+  );
+  result_value := pg_catalog.jsonb_build_object(
+    'contractVersion', 1,
+    'messageId', message_record.id::text,
+    'payloadHash', message_record.payload_hash::text,
+    'evaluatedAt', plan_timestamp,
+    'validUntil', valid_until_timestamp,
+    'sourceConnection', pg_catalog.jsonb_build_object(
+      'id', source_connection_id_value,
+      'trustLevel', source_record.trust_level::text,
+      'autoCreateMissions', source_record.auto_create_missions = 1
+    ),
+    'signal', pg_catalog.jsonb_build_object(
+      'signalId', signal_id_value,
+      'externalEventId', external_event_id_value,
+      'eventType', event_type_value,
+      'observedAt', observed_at_value,
+      'receivedAt', received_at_value,
+      'test', test_value,
+      'transportHash', transport_hash_value
+    ),
+    'outcome', outcome_value,
+    'duplicateEventId', duplicate_event_id_value,
+    'resolution', CASE WHEN outcome_value = 'duplicate' THEN 'null'::jsonb ELSE
+      pg_catalog.jsonb_build_object(
+        'status', resolution_status_value,
+        'method', resolution_method_value,
+        'reason', resolution_reason_value,
+        'listing', CASE WHEN listing_id_value = '' THEN 'null'::jsonb ELSE
+          pg_catalog.jsonb_build_object(
+            'id', listing_id_value,
+            'variantId', listing_variant_id_value,
+            'title', listing_title_value,
+            'retailerId', listing_retailer_id_value,
+            'retailerSku', listing_retailer_sku_value,
+            'canonicalUrl', listing_canonical_url_value,
+            'executionSupported', listing_execution_supported_value = 1,
+            'msrpCents', listing_msrp_cents_value,
+            'currency', listing_currency_value
+          ) END
+      ) END,
+    'sharedCatalogMutationRequired', shared_catalog_mutation_required_value,
+    'planFingerprint', plan_fingerprint_value
+  );
+  RETURN QUERY SELECT result_value::text;
+END
+`;
+}
+
 export function buildPostgresHostedDeliveryLeaseRecoveryManifest(
   requestedSchema = POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   requestedReadRoleNamespace = "yoink_qualification",
@@ -901,6 +1910,10 @@ export function buildPostgresHostedDeliveryLeaseRecoveryManifest(
       functionArgumentTypes: [...FUNCTION_ARGUMENT_TYPES],
       signalInboxFunctionName: POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION,
       signalInboxFunctionArgumentTypes: [...SIGNAL_FUNCTION_ARGUMENT_TYPES],
+      signalResolutionPlanFunctionName: POSTGRES_HOSTED_SIGNAL_RESOLUTION_PLAN_FUNCTION,
+      signalResolutionPlanFunctionArgumentTypes: [
+        ...SIGNAL_RESOLUTION_PLAN_FUNCTION_ARGUMENT_TYPES
+      ],
       protectedTableNames: [...PROTECTED_TABLES],
       forcedRlsTableNames: [...PROTECTED_TABLES],
       login: false,
@@ -911,17 +1924,20 @@ export function buildPostgresHostedDeliveryLeaseRecoveryManifest(
     protectedTableCount: 3,
     forcedRlsTableCount: 3,
     directTableGrantCount: 0,
-    functionGrantCount: 2,
+    functionGrantCount: 3,
     boundaryHandlerTaskKinds: ["hosted_delivery_recovery"],
     qualifiedHandlerTaskKinds: [...QUALIFIED_HANDLER_TASK_KINDS],
     qualifiedHandlerTaskKindCount: 6,
     totalHandlerTaskKindCount: BACKGROUND_TASK_KINDS.length,
     maximumDeliveryAttempts: 20,
+    maximumResolutionPlanAgeSeconds: SIGNAL_RESOLUTION_PLAN_SECONDS,
     serverBoundPrincipalLookup: true,
     databaseServerClock: true,
     deterministicReceiptHashParity: true,
     leaseRecoverySubBoundaryParity: true,
     signalInboxLifecycleRepositoryParity: true,
+    signalResolutionPlanRepositoryParity: true,
+    signalEvaluationApplyRepositoryParity: false,
     signalEvaluationRepositoryParity: false,
     signalIngressRepositoryParity: false,
     hostedDeliveryHandlerRepositoryParity: false,
@@ -957,6 +1973,10 @@ PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
     nativeContentionQualified: true,
     leaseRecoverySubBoundaryParity: true,
     signalInboxLifecycleRepositoryParity: true,
+    signalResolutionPlanRepositoryParity: true,
+    signalEvaluationApplyRepositoryParity: false,
+    sharedCatalogMutationFailClosed: true,
+    rawSignalPayloadReturned: false,
     signalEvaluationRepositoryParity: false,
     signalIngressRepositoryParity: false,
     hostedDeliveryHandlerRepositoryParity: false,
@@ -964,10 +1984,11 @@ PostgresHostedDeliveryLeaseRecoveryCapabilityProjection {
     handlerTaskKindCount: 6,
     totalHandlerTaskKindCount: manifest.totalHandlerTaskKindCount,
     maximumDeliveryAttempts: 20,
+    maximumResolutionPlanAgeSeconds: SIGNAL_RESOLUTION_PLAN_SECONDS,
     protectedTableCount: 3,
     forcedRlsTableCount: 3,
     directTableGrantCount: 0,
-    functionGrantCount: 2,
+    functionGrantCount: 3,
     activePrincipalCount: 0,
     activeRuntimeRoleApplied: false,
     mutationAuthority: false,
@@ -1112,6 +2133,11 @@ async function inspectBoundary(
       argumentTypes: SIGNAL_FUNCTION_ARGUMENT_TYPES.join(", "),
       resultType: SIGNAL_FUNCTION_RESULT_TYPE,
       source: hostedSignalInboxFunctionSource(manifest)
+    }],
+    [manifest.leaseRecoveryRole.signalResolutionPlanFunctionName, {
+      argumentTypes: SIGNAL_RESOLUTION_PLAN_FUNCTION_ARGUMENT_TYPES.join(", "),
+      resultType: SIGNAL_RESOLUTION_PLAN_FUNCTION_RESULT_TYPE,
+      source: hostedSignalResolutionPlanFunctionSource(manifest)
     }]
   ]);
   if (routines.rows.length !== expectedRoutines.size || routines.rows.some((routine) => {
@@ -1235,7 +2261,7 @@ async function inspectBoundary(
     protectedTableCount: rls.rows.length,
     forcedRlsTableCount: rls.rows.length,
     directTableGrantCount: 0,
-    functionGrantCount: 2,
+    functionGrantCount: 3,
     membershipCount: 0,
     activePrincipalCount: 0,
     boundaryCatalogFingerprint: fingerprint({
@@ -1252,7 +2278,7 @@ function receiptFromRow(
   manifest: PostgresHostedDeliveryLeaseRecoveryManifest
 ): PostgresHostedDeliveryLeaseRecoveryQualificationReceipt {
   const receipt: PostgresHostedDeliveryLeaseRecoveryQualificationReceipt = {
-    contractVersion: exactInteger(row.contract_version, "receipt contract version") as 2,
+    contractVersion: exactInteger(row.contract_version, "receipt contract version") as 3,
     cutoverContractVersion: exactInteger(row.cutover_contract_version, "cutover contract version") as 3,
     witnessRefreshContractVersion: exactInteger(
       row.witness_refresh_contract_version,
@@ -1266,7 +2292,7 @@ function receiptFromRow(
     protectedTableCount: exactInteger(row.protected_table_count, "protected-table count") as 3,
     forcedRlsTableCount: exactInteger(row.forced_rls_table_count, "forced-RLS count") as 3,
     directTableGrantCount: exactInteger(row.direct_table_grant_count, "direct-grant count") as 0,
-    functionGrantCount: exactInteger(row.function_grant_count, "function-grant count") as 2,
+    functionGrantCount: exactInteger(row.function_grant_count, "function-grant count") as 3,
     membershipCount: exactInteger(row.membership_count, "membership count") as 0,
     activePrincipalCount: exactInteger(row.active_principal_count, "active-principal count") as 0,
     qualifiedHandlerTaskKindCount: exactInteger(
@@ -1275,6 +2301,10 @@ function receiptFromRow(
     ) as 6,
     totalHandlerTaskKindCount: exactInteger(row.total_handler_task_kind_count, "total-handler count"),
     maximumDeliveryAttempts: exactInteger(row.maximum_delivery_attempts, "attempt limit") as 20,
+    maximumResolutionPlanAgeSeconds: exactInteger(
+      row.maximum_resolution_plan_age_seconds,
+      "resolution-plan age limit"
+    ) as 30,
     serverBoundPrincipalLookup: exactBoolean(
       row.server_bound_principal_lookup,
       true,
@@ -1295,6 +2325,26 @@ function receiptFromRow(
       row.signal_inbox_lifecycle_repository_parity,
       true,
       "signal-inbox lifecycle parity flag"
+    ),
+    signalResolutionPlanRepositoryParity: exactBoolean(
+      row.signal_resolution_plan_repository_parity,
+      true,
+      "signal-resolution plan parity flag"
+    ),
+    signalEvaluationApplyRepositoryParity: exactBoolean(
+      row.signal_evaluation_apply_repository_parity,
+      false,
+      "signal-evaluation apply parity flag"
+    ),
+    sharedCatalogMutationFailClosed: exactBoolean(
+      row.shared_catalog_mutation_fail_closed,
+      true,
+      "shared-catalog mutation flag"
+    ),
+    rawSignalPayloadReturned: exactBoolean(
+      row.raw_signal_payload_returned,
+      false,
+      "raw-signal payload flag"
     ),
     signalEvaluationRepositoryParity: exactBoolean(
       row.signal_evaluation_repository_parity,
@@ -1331,14 +2381,18 @@ function receiptFromRow(
     || receipt.witnessRefreshManifestFingerprint !== manifest.witnessRefreshManifestFingerprint
     || receipt.leaseRecoveryRoleName !== manifest.leaseRecoveryRole.name
     || receipt.protectedTableCount !== 3 || receipt.forcedRlsTableCount !== 3
-    || receipt.directTableGrantCount !== 0 || receipt.functionGrantCount !== 2
+    || receipt.directTableGrantCount !== 0 || receipt.functionGrantCount !== 3
     || receipt.membershipCount !== 0 || receipt.activePrincipalCount !== 0
     || receipt.qualifiedHandlerTaskKindCount !== 6
     || receipt.totalHandlerTaskKindCount !== BACKGROUND_TASK_KINDS.length
     || receipt.maximumDeliveryAttempts !== 20
+    || receipt.maximumResolutionPlanAgeSeconds !== SIGNAL_RESOLUTION_PLAN_SECONDS
     || !receipt.serverBoundPrincipalLookup || !receipt.databaseServerClock
     || !receipt.deterministicReceiptHashParity || !receipt.leaseRecoverySubBoundaryParity
     || !receipt.signalInboxLifecycleRepositoryParity
+    || !receipt.signalResolutionPlanRepositoryParity
+    || receipt.signalEvaluationApplyRepositoryParity
+    || !receipt.sharedCatalogMutationFailClosed || receipt.rawSignalPayloadReturned
     || receipt.signalEvaluationRepositoryParity
     || receipt.signalIngressRepositoryParity || receipt.hostedDeliveryHandlerRepositoryParity
     || receipt.allHandlerRepositoryParity || receipt.mutationAuthority
@@ -1496,23 +2550,27 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
     receiptExists: boolean;
     functionExists: boolean;
     signalFunctionExists: boolean;
+    signalResolutionFunctionExists: boolean;
     guardExists: boolean;
   }>(
     `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1) AS "roleExists",
             pg_catalog.to_regclass($2) IS NOT NULL AS "receiptExists",
             pg_catalog.to_regprocedure($3) IS NOT NULL AS "functionExists",
             pg_catalog.to_regprocedure($4) IS NOT NULL AS "signalFunctionExists",
-            pg_catalog.to_regprocedure($5) IS NOT NULL AS "guardExists"`,
+            pg_catalog.to_regprocedure($5) IS NOT NULL AS "signalResolutionFunctionExists",
+            pg_catalog.to_regprocedure($6) IS NOT NULL AS "guardExists"`,
     [
       manifest.leaseRecoveryRole.name,
       `${manifest.schemaName}.${POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_RECEIPT_TABLE}`,
       `${manifest.schemaName}.${POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION}(text,text)`,
       `${manifest.schemaName}.${POSTGRES_HOSTED_SIGNAL_INBOX_FUNCTION}(text,text,text,text,text)`,
+      `${manifest.schemaName}.${POSTGRES_HOSTED_SIGNAL_RESOLUTION_PLAN_FUNCTION}(text,text,text,text)`,
       `${manifest.schemaName}.yoink_guard_hosted_delivery_lease_recovery_receipt()`
     ]
   );
   if (existing.rows[0]?.roleExists || existing.rows[0]?.receiptExists
     || existing.rows[0]?.functionExists || existing.rows[0]?.signalFunctionExists
+    || existing.rows[0]?.signalResolutionFunctionExists
     || existing.rows[0]?.guardExists) {
     throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
       "Hosted-delivery lease-recovery qualification refuses to reuse a role, function, guard, or receipt."
@@ -1573,6 +2631,26 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
        TO ${identifier(manifest.leaseRecoveryRole.name)}`
     );
     await session.query(
+      `CREATE FUNCTION ${relation(
+        manifest.schemaName,
+        manifest.leaseRecoveryRole.signalResolutionPlanFunctionName
+      )}(
+         expected_tenant_id text, expected_user_id text,
+         target_message_id text, capability_token text
+       ) RETURNS ${SIGNAL_RESOLUTION_PLAN_FUNCTION_RESULT_TYPE}
+       LANGUAGE plpgsql VOLATILE STRICT SECURITY DEFINER SET search_path TO pg_catalog
+       AS $yoink$${hostedSignalResolutionPlanFunctionSource(manifest)}$yoink$`
+    );
+    const signalResolutionFunctionSignature = `${relation(
+      manifest.schemaName,
+      manifest.leaseRecoveryRole.signalResolutionPlanFunctionName
+    )}(text, text, text, text)`;
+    await session.query(`REVOKE ALL ON FUNCTION ${signalResolutionFunctionSignature} FROM PUBLIC`);
+    await session.query(
+      `GRANT EXECUTE ON FUNCTION ${signalResolutionFunctionSignature}
+       TO ${identifier(manifest.leaseRecoveryRole.name)}`
+    );
+    await session.query(
       `CREATE TABLE ${relation(manifest.schemaName, POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_RECEIPT_TABLE)}(
          singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton = TRUE),
          contract_version BIGINT NOT NULL CHECK (
@@ -1587,12 +2665,15 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
          protected_table_count BIGINT NOT NULL CHECK (protected_table_count = 3),
          forced_rls_table_count BIGINT NOT NULL CHECK (forced_rls_table_count = 3),
          direct_table_grant_count BIGINT NOT NULL CHECK (direct_table_grant_count = 0),
-         function_grant_count BIGINT NOT NULL CHECK (function_grant_count = 2),
+         function_grant_count BIGINT NOT NULL CHECK (function_grant_count = 3),
          membership_count BIGINT NOT NULL CHECK (membership_count = 0),
          active_principal_count BIGINT NOT NULL CHECK (active_principal_count = 0),
          qualified_handler_task_kind_count BIGINT NOT NULL CHECK (qualified_handler_task_kind_count = 6),
          total_handler_task_kind_count BIGINT NOT NULL CHECK (total_handler_task_kind_count = 7),
          maximum_delivery_attempts BIGINT NOT NULL CHECK (maximum_delivery_attempts = 20),
+         maximum_resolution_plan_age_seconds BIGINT NOT NULL CHECK (
+           maximum_resolution_plan_age_seconds = ${SIGNAL_RESOLUTION_PLAN_SECONDS}
+         ),
          server_bound_principal_lookup BOOLEAN NOT NULL CHECK (server_bound_principal_lookup = TRUE),
          database_server_clock BOOLEAN NOT NULL CHECK (database_server_clock = TRUE),
          deterministic_receipt_hash_parity BOOLEAN NOT NULL CHECK (deterministic_receipt_hash_parity = TRUE),
@@ -1600,6 +2681,16 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
          signal_inbox_lifecycle_repository_parity BOOLEAN NOT NULL CHECK (
            signal_inbox_lifecycle_repository_parity = TRUE
          ),
+         signal_resolution_plan_repository_parity BOOLEAN NOT NULL CHECK (
+           signal_resolution_plan_repository_parity = TRUE
+         ),
+         signal_evaluation_apply_repository_parity BOOLEAN NOT NULL CHECK (
+           signal_evaluation_apply_repository_parity = FALSE
+         ),
+         shared_catalog_mutation_fail_closed BOOLEAN NOT NULL CHECK (
+           shared_catalog_mutation_fail_closed = TRUE
+         ),
+         raw_signal_payload_returned BOOLEAN NOT NULL CHECK (raw_signal_payload_returned = FALSE),
          signal_evaluation_repository_parity BOOLEAN NOT NULL CHECK (
            signal_evaluation_repository_parity = FALSE
          ),
@@ -1656,10 +2747,14 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
          protected_table_count, forced_rls_table_count, direct_table_grant_count,
          function_grant_count, membership_count, active_principal_count,
          qualified_handler_task_kind_count, total_handler_task_kind_count,
-         maximum_delivery_attempts, server_bound_principal_lookup,
+         maximum_delivery_attempts, maximum_resolution_plan_age_seconds,
+         server_bound_principal_lookup,
          database_server_clock, deterministic_receipt_hash_parity,
          lease_recovery_sub_boundary_parity,
          signal_inbox_lifecycle_repository_parity,
+         signal_resolution_plan_repository_parity,
+         signal_evaluation_apply_repository_parity,
+         shared_catalog_mutation_fail_closed, raw_signal_payload_returned,
          signal_evaluation_repository_parity, signal_ingress_repository_parity,
          hosted_delivery_handler_repository_parity, all_handler_repository_parity,
          mutation_authority, direct_table_access, runtime_authority,
@@ -1667,9 +2762,9 @@ export async function applyPostgresHostedDeliveryLeaseRecoveryBoundary(
        ) VALUES (
          TRUE, ${POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION}, 3, 1,
          'verified', $1, $2, $3,
-         3, 3, 0, 2, 0, 0, 6, 7, 20,
-         TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE,
-         FALSE, FALSE, FALSE, FALSE, $4, $5, $6
+         3, 3, 0, 3, 0, 0, 6, 7, 20, ${SIGNAL_RESOLUTION_PLAN_SECONDS},
+         TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE,
+         FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, $4, $5, $6
        )`,
       [
         manifest.fingerprint,
@@ -1906,6 +3001,70 @@ export class NodePostgresHostedDeliveryLeaseRecoveryDatabase {
       leaseExpiresAt: timestamp(row.leaseExpiresAt, "signal inbox lease expiry"),
       capabilityToken: signalCapabilityToken(capabilityToken)
     };
+  }
+
+  async planSignalResolution(
+    principal: BackgroundWorkerPrincipal,
+    messageId: string,
+    capabilityToken: string,
+    now = Date.now()
+  ): Promise<PostgresHostedSignalResolutionPlan> {
+    const expectedTenantId = principalId(principal.tenantId, "expected tenant ID");
+    const expectedUserId = principalId(principal.userId, "expected user ID");
+    const expectedMessageId = signalMessageId(messageId);
+    const expectedCapabilityToken = signalCapabilityToken(capabilityToken);
+    if (!Number.isSafeInteger(now) || Math.abs(Date.now() - now) > MAXIMUM_CLOCK_SKEW_MS) {
+      throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+        "The PostgreSQL hosted signal resolution timestamp differs from the process clock."
+      );
+    }
+    const client = await this.pool.connect();
+    let destroyed = false;
+    try {
+      // The exact leased inbox row is held with FOR SHARE inside the function. The
+      // transaction is therefore read-write even though the function has no write statement.
+      await client.query("BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE");
+      await client.query(`SET LOCAL ROLE ${identifier(this.manifest.leaseRecoveryRole.name)}`);
+      const result = await client.query<SignalResolutionPlanRow>(
+        `SELECT result_json AS "resultJson"
+         FROM ${relation(
+          this.manifest.schemaName,
+          this.manifest.leaseRecoveryRole.signalResolutionPlanFunctionName
+        )}($1, $2, $3, $4)`,
+        [expectedTenantId, expectedUserId, expectedMessageId, expectedCapabilityToken]
+      );
+      if (result.rows.length !== 1 || !result.rows[0]) {
+        throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+          "The PostgreSQL hosted signal resolution function returned an ambiguous result."
+        );
+      }
+      let rawPlan: unknown;
+      try {
+        rawPlan = JSON.parse(String(result.rows[0].resultJson ?? ""));
+      } catch {
+        throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+          "The PostgreSQL hosted signal resolution function returned invalid JSON."
+        );
+      }
+      const plan = parseHostedSignalResolutionPlan(
+        rawPlan,
+        { ...principal, tenantId: expectedTenantId, userId: expectedUserId },
+        expectedMessageId,
+        now
+      );
+      await client.query("COMMIT");
+      return plan;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        destroyed = true;
+        client.release(true);
+      }
+      throw error;
+    } finally {
+      if (!destroyed) client.release();
+    }
   }
 
   async completeSignalInbox(

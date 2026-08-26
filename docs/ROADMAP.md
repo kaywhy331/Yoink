@@ -1,6 +1,46 @@
 # Yoink roadmap
 
-## Shipped through 0.74.0
+## Shipped through 0.75.0
+
+### Server-derived PostgreSQL signal-resolution plan (0.75.0)
+
+- Hosted-delivery qualification contract v3 adds a third strict security-
+  definer function for a currently leased, fixed `signal_event_v1` message. It
+  does not accept an inbox message, apply a resolution, or execute downstream
+  signal evaluation
+- The same inactive `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role still owns no
+  objects and has zero direct/effective table or column grants. Its three exact
+  functions now cover expired-lease recovery, signal-inbox lifecycle, and a
+  read-only resolution plan; only the original three transport tables are
+  forced-RLS by this boundary
+- PostgreSQL binds `session_user` to the expected tenant/user, takes `FOR SHARE`
+  on the exact processing row, requires its unexpired 60-second capability,
+  recomputes the stored payload hash, validates the normalized
+  `trackalacker-push-v1` contract and principal-owned source connection, and
+  recomputes transport identity before resolving anything
+- Resolution follows the SQLite catalog priority exactly: source listing,
+  retailer/SKU, preferred source-product retailer, unique source-product
+  retailer, preferred TrackaLacker slug retailer, then unique slug retailer.
+  Multiple same-retailer candidates remain ambiguous; existing signal identity
+  produces a duplicate plan
+- Each result uses PostgreSQL's statement clock, expires within 30 seconds or
+  the inbox lease (whichever comes first), and carries a length-delimited
+  SHA-256 fingerprint recomputed by the Node adapter. The projection returns no
+  raw identity, offer, or evidence payload
+- An unresolved live identity from an auto-create-enabled `trusted_exact`
+  source reports that separate shared-catalog authority is required. The
+  function contains no insert, update, delete, catalog, mission, strategy,
+  incident, observation, notification, spend, or action mutation
+- Native PostgreSQL 16 proves exact/retailer-SKU/ambiguous/unresolved/duplicate
+  outcomes, capability and payload binding, plan-fingerprint parity, cross-
+  tenant and same-tenant/different-user isolation, replay/direct denial, and
+  unchanged counts across the complete affected graph
+- Health and Admin → Operations expose plan parity independently. Plan apply,
+  signal-event/resolution/occurrence/mission/policy/action mutations, inbox
+  acceptance, runtime composition, and production authority remain closed;
+  honest complete-handler coverage remains 6 of 7
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### Server-bound PostgreSQL signal-inbox lifecycle sub-boundary (0.74.0)
 
@@ -1924,7 +1964,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-48 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete zero-unresolved table-scope classification, direct/inherited forced-RLS qualification over all 83 private tables, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; six of seven worker handler families (`notification_recovery`, `execution_recovery`, `operational_telemetry_retention`, `observer_recipe_candidate_evaluation`, `adapter_alert_reconciliation`, and `observer_recipe_witness_refresh`) proven through inactive principal-bound function-only roles with zero direct table grants, plus the final hosted-delivery handler's complete three-table lease-recovery sub-boundary with exact SHA-256 retry/dead-letter receipts; database-owned clocks, directly tenant/user-owned signal incidents, fail-closed shared-incident mutation, authenticated bounded retention, a two-phase evidence-revalidated quarantine-only candidate compiler, full diagnostic-to-incident lifecycle reconciliation, secretless connector dispatch, and external-transaction-free Ed25519 witness publication with database-revalidated public receipt evidence; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 83 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt parity, idempotent/concurrent execution, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | Hosted signal evaluation (the remaining half of `hosted_delivery_recovery`) and every request-repository family remain incomplete; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
+| Primary backend database | Transactional migration-48 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete zero-unresolved table-scope classification, direct/inherited forced-RLS qualification over all 83 private tables, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; six of seven worker handler families (`notification_recovery`, `execution_recovery`, `operational_telemetry_retention`, `observer_recipe_candidate_evaluation`, `adapter_alert_reconciliation`, and `observer_recipe_witness_refresh`) proven through inactive principal-bound function-only roles with zero direct table grants, plus the final hosted-delivery handler's complete three-table lease-recovery and fixed signal-lifecycle sub-boundaries with exact SHA-256 receipts and a capability-bound, maximum-30-second exact catalog-resolution plan; database-owned clocks, directly tenant/user-owned signal incidents, fail-closed shared-incident mutation, authenticated bounded retention, a two-phase evidence-revalidated quarantine-only candidate compiler, full diagnostic-to-incident lifecycle reconciliation, secretless connector dispatch, and external-transaction-free Ed25519 witness publication with database-revalidated public receipt evidence; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 83 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt and plan-hash parity, idempotent/concurrent execution, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | Shared-catalog apply for unknown exact products, hosted signal-resolution plan application and downstream evaluation (the remaining mutation graph of `hosted_delivery_recovery`), and every request-repository family remain incomplete; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -2257,9 +2297,21 @@ tenant user isolation, capability rejection, all terminal states, and catalog
 tamper. Inbox acceptance and signal evaluation remain unported, so the handler
 counter still remains six of seven.
 
-- Complete the PostgreSQL hosted signal-evaluation repository, compose it with
-  the qualified delivery-recovery and signal-inbox lifecycle sub-boundaries to
-  finish the seventh handler, and port every request-repository family over the
+Version 0.75 advances the same role to contract v3 with a third exact,
+capability-bound function that derives a maximum-30-second resolution plan from
+the stored normalized payload, duplicate state, and current exact catalog.
+PostgreSQL and the Node adapter independently seal the plan fingerprint. The
+function returns no raw signal payload and changes no shared catalog or
+evaluation row; an unknown trusted exact identity only declares the need for a
+separately qualified catalog authority. Plan application and the downstream
+signal graph remain unported, so the handler counter still remains six of
+seven.
+
+- Add a separately qualified shared-catalog create/apply boundary for unknown
+  exact products, then complete the PostgreSQL hosted signal-evaluation apply
+  repository and compose it with the qualified delivery-recovery,
+  signal-inbox lifecycle, and resolution-plan sub-boundaries to finish the
+  seventh handler. Port every request-repository family over the
   qualified schema; activate the already qualified least-privilege control and
   queue roles through production
   identity-to-login provisioning, add the remaining restricted writer roles,
@@ -2697,9 +2749,11 @@ repository alone:
   function-only connector-dispatch sub-boundary with exact user isolation,
   one-use hashed capabilities, and no endpoint secrets, plus exact
   reconcile receipts and the final handler's hosted-delivery recovery plus
-  fixed signal-inbox lifecycle are implemented, but all PostgreSQL roles remain
-  inactive, hosted signal evaluation remains on SQLite, complete-handler parity
-  remains six of seven, and every request repository remains on SQLite. The
+  fixed signal-inbox lifecycle and capability-bound exact resolution plan are
+  implemented, but all PostgreSQL roles remain inactive. Shared-catalog apply,
+  resolution-plan apply, and downstream hosted signal evaluation remain on
+  SQLite, complete-handler parity remains six of seven, and every request
+  repository remains on SQLite. The
   PostgreSQL runtime must add production principals, remaining restricted
   roles, and pass multi-connection contention, backup/PITR/restore, outage, and
   authority-switch drills.

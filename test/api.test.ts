@@ -111,7 +111,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Server-bound independent witness refresh/);
     assert.match(adminScript, /Server-bound hosted-delivery lease recovery/);
     assert.match(adminScript, /signal lifecycle/);
-    assert.match(adminScript, /two principal-bound functions/);
+    assert.match(adminScript, /resolution planning/);
+    assert.match(adminScript, /three principal-bound functions/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
