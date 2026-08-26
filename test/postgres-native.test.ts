@@ -77,6 +77,12 @@ import {
   buildPostgresObserverWitnessRefreshManifest,
   verifyPostgresObserverWitnessRefreshBoundary
 } from "../packages/database/src/postgres-observer-witness-refresh.js";
+import {
+  NodePostgresHostedDeliveryLeaseRecoveryDatabase,
+  applyPostgresHostedDeliveryLeaseRecoveryBoundary,
+  buildPostgresHostedDeliveryLeaseRecoveryManifest,
+  verifyPostgresHostedDeliveryLeaseRecoveryBoundary
+} from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
@@ -118,6 +124,7 @@ const NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE = "yoink_native_candidate";
 const NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE = "yoink_native_dispatch";
 const NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE = "yoink_native_reconcile";
 const NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE = "yoink_native_witness";
+const NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE = "yoink_native_delivery";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -945,8 +952,8 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and six handlers", {
-  timeout: 420_000
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, and delivery lease recovery", {
+  timeout: 480_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
   const databaseDir = join(parent, "cluster");
@@ -1017,6 +1024,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let observerWitnessUnmapped: NodePostgresObserverWitnessState | null = null;
   let observerWitnessDirectClient: Client | null = null;
   let observerWitnessHandlerDb: YoinkDatabase | null = null;
+  let deliveryLeaseRecoveryA: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
+  let deliveryLeaseRecoveryASecond: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
+  let deliveryLeaseRecoveryB: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
+  let deliveryLeaseRecoveryUnmapped: NodePostgresHostedDeliveryLeaseRecoveryDatabase | null = null;
+  let deliveryLeaseRecoveryDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -1497,6 +1509,63 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       observerWitnessBoundary
     );
+    const deliveryLeaseRecoveryBoundary = await applyPostgresHostedDeliveryLeaseRecoveryBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:59.500Z").getTime()
+    );
+    assert.equal(deliveryLeaseRecoveryBoundary.protectedTableCount, 3);
+    assert.equal(deliveryLeaseRecoveryBoundary.forcedRlsTableCount, 3);
+    assert.equal(deliveryLeaseRecoveryBoundary.directTableGrantCount, 0);
+    assert.equal(deliveryLeaseRecoveryBoundary.functionGrantCount, 1);
+    assert.equal(deliveryLeaseRecoveryBoundary.membershipCount, 0);
+    assert.equal(deliveryLeaseRecoveryBoundary.activePrincipalCount, 0);
+    assert.equal(deliveryLeaseRecoveryBoundary.qualifiedHandlerTaskKindCount, 6);
+    assert.equal(deliveryLeaseRecoveryBoundary.totalHandlerTaskKindCount, 7);
+    assert.equal(deliveryLeaseRecoveryBoundary.maximumDeliveryAttempts, 20);
+    assert.equal(deliveryLeaseRecoveryBoundary.serverBoundPrincipalLookup, true);
+    assert.equal(deliveryLeaseRecoveryBoundary.databaseServerClock, true);
+    assert.equal(deliveryLeaseRecoveryBoundary.deterministicReceiptHashParity, true);
+    assert.equal(deliveryLeaseRecoveryBoundary.leaseRecoverySubBoundaryParity, true);
+    assert.equal(deliveryLeaseRecoveryBoundary.signalIngressRepositoryParity, false);
+    assert.equal(deliveryLeaseRecoveryBoundary.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(deliveryLeaseRecoveryBoundary.allHandlerRepositoryParity, false);
+    assert.equal(deliveryLeaseRecoveryBoundary.mutationAuthority, false);
+    assert.equal(deliveryLeaseRecoveryBoundary.directTableAccess, false);
+    assert.equal(deliveryLeaseRecoveryBoundary.runtimeAuthority, false);
+    assert.equal(deliveryLeaseRecoveryBoundary.productionReady, false);
+    assert.match(deliveryLeaseRecoveryBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresHostedDeliveryLeaseRecoveryBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE
+      ),
+      deliveryLeaseRecoveryBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -1673,6 +1742,21 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
       NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE
     );
+    const deliveryLeaseRecoveryManifest = buildPostgresHostedDeliveryLeaseRecoveryManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -1710,6 +1794,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${observerWitnessManifest.witnessRefreshRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${deliveryLeaseRecoveryManifest.leaseRecoveryRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -2038,6 +2125,24 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_TENANT,
       NATIVE_USER
     );
+    const deliveryLeaseRecoveryDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresHostedDeliveryLeaseRecoveryDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+    NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE, NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+    { maxConnections });
+    deliveryLeaseRecoveryA = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_A, 2);
+    deliveryLeaseRecoveryASecond = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_A);
+    deliveryLeaseRecoveryB = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_B);
+    deliveryLeaseRecoveryUnmapped = deliveryLeaseRecoveryDatabase(NATIVE_PRINCIPAL_UNMAPPED);
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -2140,6 +2245,364 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       { tenantId: NATIVE_TENANT, userId: NATIVE_USER }
     );
+
+    const deliveryLeaseNow = Date.now();
+    const deliveryLeaseExpiredAt = new Date(deliveryLeaseNow - 60_000).toISOString();
+    const deliveryLeaseCurrentAt = new Date(deliveryLeaseNow + 60_000).toISOString();
+    const deliveryLeaseCreatedAt = new Date(deliveryLeaseNow - 120_000).toISOString();
+    const insertDeliveryLeaseInbox = async (
+      id: string,
+      tenantId: string,
+      userId: string,
+      attempt: number,
+      leaseExpiresAt: string
+    ) => first!.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."inbox_messages"(
+         id, tenant_id, user_id, source, message_key, event_type,
+         payload_hash, payload_json, state, delivery_attempts,
+         lease_capability_hash, lease_expires_at, received_at, updated_at
+       ) VALUES ($1, $2, $3, 'trackalacker', $1, 'signal_event_v1',
+                 $4, '{}', 'processing', $5, $6, $7, $8, $8)`,
+      [id, tenantId, userId, "f".repeat(64), attempt, `lease:${id}`, leaseExpiresAt, deliveryLeaseCreatedAt]
+    );
+    const insertDeliveryLeaseOutbox = async (
+      id: string,
+      tenantId: string,
+      attempt: number,
+      leaseExpiresAt: string
+    ) => first!.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."outbox_events"(
+         id, tenant_id, aggregate_type, aggregate_id, event_type,
+         payload_json, created_at, delivered_at, delivery_attempts,
+         delivery_state, lease_capability_hash, lease_expires_at, updated_at
+       ) VALUES ($1, $2, 'native_delivery', $1, 'native_delivery_event',
+                 '{}', $3, '', $4, 'pending', $5, $6, $3)`,
+      [id, tenantId, deliveryLeaseCreatedAt, attempt, `lease:${id}`, leaseExpiresAt]
+    );
+    await insertDeliveryLeaseInbox(
+      "native_delivery_lease_a_inbox_retry",
+      NATIVE_TENANT,
+      NATIVE_USER,
+      4,
+      deliveryLeaseExpiredAt
+    );
+    await insertDeliveryLeaseInbox(
+      "native_delivery_lease_a_inbox_dead",
+      NATIVE_TENANT,
+      NATIVE_USER,
+      20,
+      deliveryLeaseExpiredAt
+    );
+    await insertDeliveryLeaseInbox(
+      "native_delivery_lease_a_inbox_current",
+      NATIVE_TENANT,
+      NATIVE_USER,
+      2,
+      deliveryLeaseCurrentAt
+    );
+    await insertDeliveryLeaseInbox(
+      "native_delivery_lease_b_inbox_retry",
+      "tenant_local",
+      "user_local",
+      3,
+      deliveryLeaseExpiredAt
+    );
+    await insertDeliveryLeaseOutbox(
+      "native_delivery_lease_a_outbox_retry",
+      NATIVE_TENANT,
+      5,
+      deliveryLeaseExpiredAt
+    );
+    await insertDeliveryLeaseOutbox(
+      "native_delivery_lease_a_outbox_dead",
+      NATIVE_TENANT,
+      20,
+      deliveryLeaseExpiredAt
+    );
+    await insertDeliveryLeaseOutbox(
+      "native_delivery_lease_a_outbox_current",
+      NATIVE_TENANT,
+      2,
+      deliveryLeaseCurrentAt
+    );
+    await insertDeliveryLeaseOutbox(
+      "native_delivery_lease_b_outbox_retry",
+      "tenant_local",
+      3,
+      deliveryLeaseExpiredAt
+    );
+
+    assert.deepEqual(
+      await deliveryLeaseRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        deliveryLeaseNow
+      ),
+      {
+        inboxRequeued: 1,
+        inboxDeadLettered: 1,
+        outboxRequeued: 1,
+        outboxDeadLettered: 1
+      }
+    );
+    assert.deepEqual(
+      (await first.query<{
+        id: string;
+        state: string;
+        capabilityHash: string;
+        leaseExpiresAt: string;
+        nextAttemptAt: string;
+        errorCode: string;
+      }>(
+        `SELECT id, state, lease_capability_hash AS "capabilityHash",
+                lease_expires_at AS "leaseExpiresAt", next_attempt_at AS "nextAttemptAt",
+                last_error_code AS "errorCode"
+         FROM "${NATIVE_SCHEMA}"."inbox_messages"
+         WHERE id LIKE 'native_delivery_lease_a_inbox_%' ORDER BY id`
+      )).rows,
+      [
+        {
+          id: "native_delivery_lease_a_inbox_current",
+          state: "processing",
+          capabilityHash: "lease:native_delivery_lease_a_inbox_current",
+          leaseExpiresAt: deliveryLeaseCurrentAt,
+          nextAttemptAt: "",
+          errorCode: ""
+        },
+        {
+          id: "native_delivery_lease_a_inbox_dead",
+          state: "dead_letter",
+          capabilityHash: "",
+          leaseExpiresAt: "",
+          nextAttemptAt: "",
+          errorCode: "lease_expired"
+        },
+        {
+          id: "native_delivery_lease_a_inbox_retry",
+          state: "failed",
+          capabilityHash: "",
+          leaseExpiresAt: "",
+          nextAttemptAt: (await first.query<{ value: string }>(
+            `SELECT updated_at AS value FROM "${NATIVE_SCHEMA}"."inbox_messages"
+             WHERE id = 'native_delivery_lease_a_inbox_retry'`
+          )).rows[0]!.value,
+          errorCode: "lease_expired"
+        }
+      ]
+    );
+    assert.deepEqual(
+      (await first.query<{
+        id: string;
+        state: string;
+        capabilityHash: string;
+        leaseExpiresAt: string;
+        nextAttemptAt: string;
+        errorCode: string;
+      }>(
+        `SELECT id, delivery_state AS state, lease_capability_hash AS "capabilityHash",
+                lease_expires_at AS "leaseExpiresAt", next_attempt_at AS "nextAttemptAt",
+                last_error_code AS "errorCode"
+         FROM "${NATIVE_SCHEMA}"."outbox_events"
+         WHERE id LIKE 'native_delivery_lease_a_outbox_%' ORDER BY id`
+      )).rows,
+      [
+        {
+          id: "native_delivery_lease_a_outbox_current",
+          state: "pending",
+          capabilityHash: "lease:native_delivery_lease_a_outbox_current",
+          leaseExpiresAt: deliveryLeaseCurrentAt,
+          nextAttemptAt: "",
+          errorCode: ""
+        },
+        {
+          id: "native_delivery_lease_a_outbox_dead",
+          state: "dead_letter",
+          capabilityHash: "",
+          leaseExpiresAt: "",
+          nextAttemptAt: "",
+          errorCode: "lease_expired"
+        },
+        {
+          id: "native_delivery_lease_a_outbox_retry",
+          state: "pending",
+          capabilityHash: "",
+          leaseExpiresAt: "",
+          nextAttemptAt: (await first.query<{ value: string }>(
+            `SELECT updated_at AS value FROM "${NATIVE_SCHEMA}"."outbox_events"
+             WHERE id = 'native_delivery_lease_a_outbox_retry'`
+          )).rows[0]!.value,
+          errorCode: "lease_expired"
+        }
+      ]
+    );
+    assert.equal(
+      Number((await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."inbox_messages"
+         WHERE id = 'native_delivery_lease_b_inbox_retry' AND state = 'processing'`
+      )).rows[0]?.count),
+      1
+    );
+    assert.equal(
+      Number((await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."outbox_events"
+         WHERE id = 'native_delivery_lease_b_outbox_retry'
+           AND delivery_state = 'pending' AND lease_capability_hash <> ''`
+      )).rows[0]?.count),
+      1
+    );
+    const deliveryLeaseReceipts = (await first.query<{
+      id: string;
+      tenantId: string;
+      userId: string;
+      direction: string;
+      messageId: string;
+      disposition: string;
+      attempt: number;
+      reasonCode: string;
+      receiptHash: string;
+      createdAt: string;
+    }>(
+      `SELECT id, tenant_id AS "tenantId", user_id AS "userId", direction,
+              message_id AS "messageId", disposition, attempt,
+              reason_code AS "reasonCode", receipt_hash AS "receiptHash",
+              created_at AS "createdAt"
+       FROM "${NATIVE_SCHEMA}"."hosted_delivery_receipts"
+       WHERE message_id LIKE 'native_delivery_lease_a_%'
+       ORDER BY direction, message_id`
+    )).rows;
+    assert.equal(deliveryLeaseReceipts.length, 4);
+    for (const receipt of deliveryLeaseReceipts) {
+      assert.match(receipt.id, /^delivery_receipt_[a-f0-9]{32}$/);
+      assert.equal(receipt.tenantId, NATIVE_TENANT);
+      assert.equal(receipt.userId, NATIVE_USER);
+      assert.equal(receipt.reasonCode, "lease_expired");
+      assert.equal(
+        receipt.receiptHash,
+        stableHash(
+          "hosted_delivery_receipt_v1",
+          receipt.tenantId,
+          receipt.userId,
+          receipt.direction,
+          receipt.messageId,
+          receipt.disposition,
+          Number(receipt.attempt),
+          receipt.reasonCode,
+          receipt.createdAt
+        )
+      );
+    }
+    assert.deepEqual(
+      await deliveryLeaseRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        deliveryLeaseNow
+      ),
+      {
+        inboxRequeued: 0,
+        inboxDeadLettered: 0,
+        outboxRequeued: 0,
+        outboxDeadLettered: 0
+      }
+    );
+    await insertDeliveryLeaseInbox(
+      "native_delivery_lease_a_inbox_contention",
+      NATIVE_TENANT,
+      NATIVE_USER,
+      1,
+      deliveryLeaseExpiredAt
+    );
+    await insertDeliveryLeaseOutbox(
+      "native_delivery_lease_a_outbox_contention",
+      NATIVE_TENANT,
+      1,
+      deliveryLeaseExpiredAt
+    );
+    const contendedDeliveryRecovery = await Promise.all([
+      deliveryLeaseRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        deliveryLeaseNow
+      ),
+      deliveryLeaseRecoveryASecond.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        deliveryLeaseNow
+      )
+    ]);
+    assert.deepEqual(
+      contendedDeliveryRecovery.reduce((total, result) => ({
+        inboxRequeued: total.inboxRequeued + result.inboxRequeued,
+        inboxDeadLettered: total.inboxDeadLettered + result.inboxDeadLettered,
+        outboxRequeued: total.outboxRequeued + result.outboxRequeued,
+        outboxDeadLettered: total.outboxDeadLettered + result.outboxDeadLettered
+      }), {
+        inboxRequeued: 0,
+        inboxDeadLettered: 0,
+        outboxRequeued: 0,
+        outboxDeadLettered: 0
+      }),
+      {
+        inboxRequeued: 1,
+        inboxDeadLettered: 0,
+        outboxRequeued: 1,
+        outboxDeadLettered: 0
+      }
+    );
+    assert.equal(
+      Number((await first.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."hosted_delivery_receipts"
+         WHERE message_id IN (
+           'native_delivery_lease_a_inbox_contention',
+           'native_delivery_lease_a_outbox_contention'
+         )`
+      )).rows[0]?.count),
+      2
+    );
+    assert.deepEqual(
+      await deliveryLeaseRecoveryB.recover(
+        { tenantId: "tenant_local", userId: "user_local" },
+        deliveryLeaseNow
+      ),
+      {
+        inboxRequeued: 1,
+        inboxDeadLettered: 0,
+        outboxRequeued: 1,
+        outboxDeadLettered: 0
+      }
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryA.recover(
+        { tenantId: "tenant_local", userId: "user_local" },
+        deliveryLeaseNow
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryUnmapped.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        deliveryLeaseNow
+      ),
+      /tenant session principal is not active/
+    );
+    deliveryLeaseRecoveryDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    deliveryLeaseRecoveryDirectClient.on("error", () => undefined);
+    await deliveryLeaseRecoveryDirectClient.connect();
+    await deliveryLeaseRecoveryDirectClient.query(
+      `SET ROLE "${deliveryLeaseRecoveryManifest.leaseRecoveryRole.name}"`
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."inbox_messages" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      deliveryLeaseRecoveryDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."yoink_recover_hosted_delivery_leases"($1, $2)`,
+        [NATIVE_TENANT, "user_local"]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await deliveryLeaseRecoveryDirectClient.end();
+    deliveryLeaseRecoveryDirectClient = null;
 
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
@@ -4689,6 +5152,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       await first.query(
         `REVOKE "${observerWitnessManifest.witnessRefreshRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${deliveryLeaseRecoveryManifest.leaseRecoveryRole.name}" FROM "${principalRole}"`
+      );
     }
     await first.query(
       `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
@@ -4834,6 +5300,74 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(
       cleanObserverWitnessBoundary.boundaryCatalogFingerprint,
       observerWitnessBoundary.boundaryCatalogFingerprint
+    );
+    const cleanDeliveryLeaseRecoveryBoundary = await verifyPostgresHostedDeliveryLeaseRecoveryBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanDeliveryLeaseRecoveryBoundary.boundaryCatalogFingerprint,
+      deliveryLeaseRecoveryBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_hosted_delivery_leases"(
+         text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresHostedDeliveryLeaseRecoveryBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_hosted_delivery_leases"(
+         text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresHostedDeliveryLeaseRecoveryBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      deliveryLeaseRecoveryBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_refresh_observer_witness"(
@@ -5247,7 +5781,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       observerWitnessASecond?.close(),
       observerWitnessB?.close(),
       observerWitnessUnmapped?.close(),
-      observerWitnessDirectClient?.end()
+      observerWitnessDirectClient?.end(),
+      deliveryLeaseRecoveryA?.close(),
+      deliveryLeaseRecoveryASecond?.close(),
+      deliveryLeaseRecoveryB?.close(),
+      deliveryLeaseRecoveryUnmapped?.close(),
+      deliveryLeaseRecoveryDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

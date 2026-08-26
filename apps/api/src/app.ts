@@ -130,6 +130,7 @@ import { postgresObserverCandidateEvaluationCapabilityProjection } from "../../.
 import { postgresOperatorAlertConnectorDispatchCapabilityProjection } from "../../../packages/database/src/postgres-operator-alert-connector-dispatch.js";
 import { postgresOperatorAlertReconciliationCapabilityProjection } from "../../../packages/database/src/postgres-operator-alert-reconciliation.js";
 import { postgresObserverWitnessRefreshCapabilityProjection } from "../../../packages/database/src/postgres-observer-witness-refresh.js";
+import { postgresHostedDeliveryLeaseRecoveryCapabilityProjection } from "../../../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -392,6 +393,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const postgresOperatorAlertConnectorDispatch = postgresOperatorAlertConnectorDispatchCapabilityProjection();
   const postgresOperatorAlertReconciliation = postgresOperatorAlertReconciliationCapabilityProjection();
   const postgresObserverWitnessRefresh = postgresObserverWitnessRefreshCapabilityProjection();
+  const postgresHostedDeliveryLeaseRecovery = postgresHostedDeliveryLeaseRecoveryCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -668,6 +670,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresOperatorAlertConnectorDispatch,
           postgresOperatorAlertReconciliation,
           postgresObserverWitnessRefresh,
+          postgresHostedDeliveryLeaseRecovery,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1521,7 +1524,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresObserverCandidateEvaluation,
             postgresOperatorAlertConnectorDispatch,
             postgresOperatorAlertReconciliation,
-            postgresObserverWitnessRefresh
+            postgresObserverWitnessRefresh,
+            postgresHostedDeliveryLeaseRecovery
           },
           capabilities: {
             catalog: true,
@@ -1681,6 +1685,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresOperatorAlertConnectorDispatch,
             postgresOperatorAlertReconciliation,
             postgresObserverWitnessRefresh,
+            postgresHostedDeliveryLeaseRecovery,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

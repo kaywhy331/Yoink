@@ -91,6 +91,13 @@ import {
   postgresObserverWitnessRefreshCapabilityProjection
 } from "../packages/database/src/postgres-observer-witness-refresh.js";
 import {
+  POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION,
+  POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION,
+  buildPostgresHostedDeliveryLeaseRecoveryManifest,
+  hostedDeliveryLeaseRecoveryFunctionSource,
+  postgresHostedDeliveryLeaseRecoveryCapabilityProjection
+} from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -1178,6 +1185,125 @@ test("the PostgreSQL observer-witness refresh boundary is two-phase, public-only
       "candidate_namespace",
       "dispatch_namespace",
       "reconcile_namespace",
+      "same_namespace"
+    ),
+    /must be independent/
+  );
+});
+
+test("the PostgreSQL hosted-delivery lease-recovery sub-boundary is exact and does not claim handler parity", () => {
+  const args = [
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test",
+    "yoink_notify_test",
+    "yoink_execute_test",
+    "yoink_retention_test",
+    "yoink_candidate_test",
+    "yoink_alert_dispatch_test",
+    "yoink_alert_reconcile_test",
+    "yoink_witness_refresh_test",
+    "yoink_delivery_lease_test"
+  ] as const;
+  const manifest = buildPostgresHostedDeliveryLeaseRecoveryManifest(...args);
+  assert.deepEqual(buildPostgresHostedDeliveryLeaseRecoveryManifest(...args), manifest);
+  assert.equal(
+    manifest.contractVersion,
+    POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION
+  );
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(
+    manifest.witnessRefreshContractVersion,
+    POSTGRES_OBSERVER_WITNESS_REFRESH_CONTRACT_VERSION
+  );
+  assert.equal(
+    manifest.leaseRecoveryRole.functionName,
+    POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_FUNCTION
+  );
+  assert.deepEqual(manifest.leaseRecoveryRole.functionArgumentTypes, ["text", "text"]);
+  assert.deepEqual(manifest.leaseRecoveryRole.protectedTableNames, [
+    "hosted_delivery_receipts",
+    "inbox_messages",
+    "outbox_events"
+  ]);
+  assert.deepEqual(manifest.boundaryHandlerTaskKinds, ["hosted_delivery_recovery"]);
+  assert.equal(manifest.qualifiedHandlerTaskKindCount, 6);
+  assert.equal(manifest.totalHandlerTaskKindCount, 7);
+  assert.equal(manifest.maximumDeliveryAttempts, 20);
+  assert.equal(manifest.serverBoundPrincipalLookup, true);
+  assert.equal(manifest.databaseServerClock, true);
+  assert.equal(manifest.deterministicReceiptHashParity, true);
+  assert.equal(manifest.leaseRecoverySubBoundaryParity, true);
+  assert.equal(manifest.signalIngressRepositoryParity, false);
+  assert.equal(manifest.hostedDeliveryHandlerRepositoryParity, false);
+  assert.equal(manifest.allHandlerRepositoryParity, false);
+  assert.equal(manifest.protectedTableCount, 3);
+  assert.equal(manifest.forcedRlsTableCount, 3);
+  assert.equal(manifest.directTableGrantCount, 0);
+  assert.equal(manifest.functionGrantCount, 1);
+  assert.equal(manifest.mutationAuthority, false);
+  assert.equal(manifest.activePrincipalCount, 0);
+  assert.equal(manifest.runtimeAuthority, false);
+  assert.match(manifest.witnessRefreshManifestFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+
+  const source = hostedDeliveryLeaseRecoveryFunctionSource(manifest);
+  assert.match(source, /principal\.principal_role = session_user::text/);
+  assert.match(source, /statement_timestamp\(\)/);
+  assert.match(source, /pg_advisory_xact_lock/);
+  assert.match(source, /delivery_attempts AS attempt/);
+  assert.match(source, /message_record\.attempt >= 20/);
+  assert.match(source, /last_error_code = 'lease_expired'/);
+  assert.match(source, /pg_catalog\.sha256/);
+  assert.match(source, /hosted_delivery_receipt_v1/);
+  assert.doesNotMatch(source, /payload_json/);
+  assert.doesNotMatch(source, /signal_events|action_jobs|retailer_adapter/i);
+
+  const capability = postgresHostedDeliveryLeaseRecoveryCapabilityProjection();
+  assert.equal(
+    capability.contractVersion,
+    POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION
+  );
+  assert.equal(capability.deterministicManifestImplemented, true);
+  assert.equal(capability.atomicQualificationApplyImplemented, true);
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.securityDefinerRoutineVerified, true);
+  assert.equal(capability.serverBoundPrincipalLookup, true);
+  assert.equal(capability.databaseServerClock, true);
+  assert.equal(capability.deterministicReceiptHashParity, true);
+  assert.equal(capability.readCommittedTransactionAdapter, true);
+  assert.equal(capability.nativeContentionQualified, true);
+  assert.equal(capability.leaseRecoverySubBoundaryParity, true);
+  assert.equal(capability.signalIngressRepositoryParity, false);
+  assert.equal(capability.hostedDeliveryHandlerRepositoryParity, false);
+  assert.equal(capability.allHandlerRepositoryParity, false);
+  assert.equal(capability.handlerTaskKindCount, 6);
+  assert.equal(capability.totalHandlerTaskKindCount, 7);
+  assert.equal(capability.maximumDeliveryAttempts, 20);
+  assert.equal(capability.protectedTableCount, 3);
+  assert.equal(capability.forcedRlsTableCount, 3);
+  assert.equal(capability.directTableGrantCount, 0);
+  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.mutationAuthority, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresHostedDeliveryLeaseRecoveryManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "control_namespace",
+      "notify_namespace",
+      "execute_namespace",
+      "retention_namespace",
+      "candidate_namespace",
+      "dispatch_namespace",
+      "reconcile_namespace",
+      "witness_namespace",
       "same_namespace"
     ),
     /must be independent/

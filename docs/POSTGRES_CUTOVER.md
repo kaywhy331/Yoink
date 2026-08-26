@@ -878,7 +878,77 @@ Apply refuses reused objects and cannot create a login, membership, principal
 mapping, witness configuration, endpoint, key, network request, or runtime
 composition. Exactly six of seven task-handler families now have repository
 parity. All qualification roles remain inactive, SQLite stays authoritative,
-and hosted-delivery recovery still requires its own independent boundary.
+and hosted-delivery signal evaluation still requires its own independent
+repository boundary.
+
+## Function-only hosted-delivery lease-recovery qualification seam
+
+Version 0.72 decomposes the final `hosted_delivery_recovery` task into its two
+real mutation domains. This boundary completes expired inbox/outbox lease
+recovery only; durable `signal_event_v1` evaluation remains a separate open
+repository port. The honest complete-handler counter therefore remains six of
+seven.
+
+The lease-recovery role is `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no
+objects, has schema `USAGE`, zero direct/effective table or column grants, and
+may execute one exact strict security-definer function. Inbox messages, outbox
+events, and hosted-delivery receipts are forced-RLS. The function resolves
+`session_user` through the server-owned principal registry, checks the expected
+tenant/user, uses the database statement clock, and takes a per-principal
+advisory transaction lock.
+
+Only rows with a nonempty lease that expired by the server timestamp can move.
+Inbox attempts below 20 become `failed` with an immediate retry time; attempt
+20 becomes `dead_letter`. Outbox attempts below 20 return to `pending`; attempt
+20 becomes `dead_letter`. Each winning transition clears the capability and
+expiry, records `lease_expired`, and appends the existing length-delimited
+SHA-256 receipt with the authenticated user. The function returns four counts
+and never exposes message payloads.
+
+Native PostgreSQL 16 proves all four transitions, preservation of live leases,
+exact receipt-hash parity with SQLite, cross-tenant isolation, idempotent
+replay, a single winner under simultaneous calls, mismatched and unmapped
+principal denial, direct table denial, clean temporary membership removal, and
+immutable receipt rejection after function-catalog tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:delivery-lease-recovery -- plan \
+  yoink_cutover_qualification_072 yoink_q_072 yoink_session_q_072 \
+  yoink_queue_q_072 yoink_control_q_072 yoink_notify_q_072 \
+  yoink_execute_q_072 yoink_retain_q_072 yoink_candidate_q_072 \
+  yoink_dispatch_q_072 yoink_reconcile_q_072 yoink_witness_q_072 \
+  yoink_delivery_q_072
+```
+
+After the exact witness-refresh receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_DELIVERY_LEASE_RECOVERY_QUALIFICATION_ACK=bounded-delivery-lease-recovery-qualification \
+  npm run postgres:delivery-lease-recovery -- apply \
+  yoink_cutover_qualification_072 yoink_q_072 yoink_session_q_072 \
+  yoink_queue_q_072 yoink_control_q_072 yoink_notify_q_072 \
+  yoink_execute_q_072 yoink_retain_q_072 yoink_candidate_q_072 \
+  yoink_dispatch_q_072 yoink_reconcile_q_072 yoink_witness_q_072 \
+  yoink_delivery_q_072
+```
+
+Then independently re-inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:delivery-lease-recovery -- verify \
+  yoink_cutover_qualification_072 yoink_q_072 yoink_session_q_072 \
+  yoink_queue_q_072 yoink_control_q_072 yoink_notify_q_072 \
+  yoink_execute_q_072 yoink_retain_q_072 yoink_candidate_q_072 \
+  yoink_dispatch_q_072 yoink_reconcile_q_072 yoink_witness_q_072 \
+  yoink_delivery_q_072
+```
+
+Apply refuses reused objects and cannot create a login, membership, principal
+mapping, runtime composition, message, signal, mission, action job, retailer
+mutation, or production authority. SQLite remains authoritative.
 
 ## Requirements
 
@@ -983,8 +1053,9 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- PostgreSQL hosted-delivery recovery, the final task-handler family, and every
-  API request-repository family;
+- PostgreSQL hosted signal evaluation, composition with the qualified
+  hosted-delivery lease-recovery half to complete the final task-handler
+  family, and every API request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers and the unresolved incident table; all qualified

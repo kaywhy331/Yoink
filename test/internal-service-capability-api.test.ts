@@ -23,6 +23,7 @@ import { postgresObserverCandidateEvaluationCapabilityProjection } from "../pack
 import { postgresOperatorAlertConnectorDispatchCapabilityProjection } from "../packages/database/src/postgres-operator-alert-connector-dispatch.js";
 import { postgresOperatorAlertReconciliationCapabilityProjection } from "../packages/database/src/postgres-operator-alert-reconciliation.js";
 import { postgresObserverWitnessRefreshCapabilityProjection } from "../packages/database/src/postgres-observer-witness-refresh.js";
+import { postgresHostedDeliveryLeaseRecoveryCapabilityProjection } from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -114,6 +115,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresOperatorAlertConnectorDispatch: ReturnType<typeof postgresOperatorAlertConnectorDispatchCapabilityProjection>;
         postgresOperatorAlertReconciliation: ReturnType<typeof postgresOperatorAlertReconciliationCapabilityProjection>;
         postgresObserverWitnessRefresh: ReturnType<typeof postgresObserverWitnessRefreshCapabilityProjection>;
+        postgresHostedDeliveryLeaseRecovery: ReturnType<typeof postgresHostedDeliveryLeaseRecoveryCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -160,6 +162,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresObserverWitnessRefresh,
       postgresObserverWitnessRefreshCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresHostedDeliveryLeaseRecovery,
+      postgresHostedDeliveryLeaseRecoveryCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -199,6 +205,7 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Server-bound operator-alert reconciliation/);
     assert.match(cutoverText, /Coverage is 5 of 7/);
     assert.match(cutoverText, /Server-bound independent witness refresh/);
+    assert.match(cutoverText, /Server-bound hosted-delivery lease recovery/);
     assert.match(cutoverText, /Coverage is 6 of 7/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);

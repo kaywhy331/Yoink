@@ -53,6 +53,12 @@ tenant-scoped public checkpoint and accepts only an exact fresh canonical
 receipt plan. Six of seven handlers now have PostgreSQL repository parity;
 hosted-delivery recovery and all request repositories remain SQLite-only, and
 every PostgreSQL runtime role stays inactive.
+Yoink 0.72 decomposes the final hosted-delivery handler and adds a seventh
+function-only role for its complete lease-recovery half. PostgreSQL now applies
+the exact inbox/outbox expired-lease retry/dead-letter matrix and deterministic
+SHA-256 delivery receipts with server-bound principals and server time. Complete
+handler coverage remains six of seven because durable signal evaluation is
+still SQLite-only; every PostgreSQL role remains inactive.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.

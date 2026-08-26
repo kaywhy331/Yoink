@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.71.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.72.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,25 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.72.0 qualifies the compact lease-recovery half of the final
+`hosted_delivery_recovery` PostgreSQL handler without overstating handler
+parity. A new inactive `NOLOGIN`/`NOINHERIT`/`NOBYPASSRLS` role owns no objects,
+has zero direct or effective table/column grants, and can execute one strict
+security-definer routine across inbox, outbox, and append-only delivery receipt
+tables. PostgreSQL binds `session_user` to the expected tenant/user, uses its
+statement clock, and preserves the existing attempt-20 retry/dead-letter
+transitions plus exact SHA-256 receipt construction.
+
+Native PostgreSQL 16 proves stale/current boundaries, all four aggregate
+results, deterministic receipt parity, idempotent replay, one winner under
+concurrency, cross-tenant isolation, mismatched/unmapped/direct-SQL denial, and
+catalog-tamper detection. Complete handler coverage deliberately remains six of
+seven because the same worker task also evaluates durable TrackaLacker signals;
+that wider catalog/mission/policy/action repository graph is not yet ported.
+SQLite remains authoritative and no runtime principal or production authority
+is activated. Use `npm run postgres:delivery-lease-recovery -- plan ...` and
+the [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.71.0 ports `observer_recipe_witness_refresh`, the sixth of seven
 background-task handler families, to the inactive PostgreSQL qualification
