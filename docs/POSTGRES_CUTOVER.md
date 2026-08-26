@@ -69,7 +69,8 @@ were still incomplete at the original worker-store milestone. The current
 qualification chain has separate inactive seams for six complete handler
 families plus connector dispatch and the final handler's expired-lease and
 fixed signal-inbox lifecycle, catalog-create, and event-resolution commit sub-
-boundaries. Only the remaining downstream hosted signal graph and final
+boundaries plus known-product source-reference refresh. Only the remaining
+downstream hosted signal graph and final
 composition prevent complete seventh-handler parity. The emulated real-semantics suite
 continues to prove the complete store state machine; the separate native suite
 proves each contention-critical path across independent server sessions.
@@ -1165,6 +1166,90 @@ The receipt permanently records `runtimeAuthority: false` and
 composition, inbox acknowledgement, or retailer-session authority is created.
 SQLite remains authoritative and complete handler parity remains six of seven.
 
+## Known-product source-reference refresh qualification seam
+
+Version 0.78 adds a fourth independent hosted-signal role for the exact tenant
+reference refresh that follows a committed matched resolution. It does not
+widen the hosted-delivery, catalog-create, or event-resolution roles. The new
+`NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no object, belongs to no role,
+has zero direct/effective table or column privileges, and can execute one strict
+security-definer function across seven forced-RLS tenant tables.
+
+The Node adapter plans and applies within one `READ COMMITTED` read-write
+transaction. PostgreSQL authenticates `session_user`, validates the current
+leased TrackaLacker inbox capability before taking locks, requires the exact
+already-committed event and one unique resolution decision, and invokes the
+v0.75 resolver again. The application accepts only a principal-bound SHA-256
+plan no older than 30 seconds; the plan contains a hash of the reference
+identity, never the raw source product, listing, or alias values.
+
+Only three relations may change:
+
+- `source_product_refs` binds the source product to the resolved variant;
+- `source_listing_refs` binds the source listing to the resolved listing; and
+- `source_product_aliases` binds the TrackaLacker slug to the variant.
+
+Missing bindings are inserted. An existing binding may update only when the
+incoming observation is newer, preserving its source URL while refreshing the
+observation timestamp and product title. A current or older replay writes
+nothing. Test, ambiguous, unresolved, missing-identity, or non-TrackaLacker
+signals are mutation-free. Any attempted remap to another variant or listing
+aborts the entire transaction. The function has no SQL for shared catalog,
+occurrence, offer, incident, mission, policy, action, notification, spend,
+audit/outbox, or inbox-lifecycle mutation.
+
+Native PostgreSQL 16 proves exact insert/update row semantics, zero-write test
+and nonmatched outcomes, invalid capability, cross-tenant, same-tenant/
+different-user, unmapped-principal and direct-SQL denial, one mutation under
+simultaneous calls, mutation-free replay, conflicting-remap rollback and
+recovery, clean temporary membership removal, and immutable receipt rejection
+after function-catalog tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-source-reference-refresh -- plan \
+  yoink_cutover_qualification_078 yoink_q_078 yoink_session_q_078 \
+  yoink_queue_q_078 yoink_control_q_078 yoink_notify_q_078 \
+  yoink_execute_q_078 yoink_retain_q_078 yoink_candidate_q_078 \
+  yoink_dispatch_q_078 yoink_reconcile_q_078 yoink_witness_q_078 \
+  yoink_delivery_q_078 yoink_catalog_q_078 yoink_resolution_q_078 \
+  yoink_reference_q_078
+```
+
+After the exact v0.77 resolution-apply receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_SOURCE_REFERENCE_REFRESH_QUALIFICATION_ACK=bounded-signal-source-reference-refresh-qualification \
+  npm run postgres:signal-source-reference-refresh -- apply \
+  yoink_cutover_qualification_078 yoink_q_078 yoink_session_q_078 \
+  yoink_queue_q_078 yoink_control_q_078 yoink_notify_q_078 \
+  yoink_execute_q_078 yoink_retain_q_078 yoink_candidate_q_078 \
+  yoink_dispatch_q_078 yoink_reconcile_q_078 yoink_witness_q_078 \
+  yoink_delivery_q_078 yoink_catalog_q_078 yoink_resolution_q_078 \
+  yoink_reference_q_078
+```
+
+Then independently inspect the role, function, forced-RLS tables, immutable
+receipt, and full prerequisite fingerprint chain:
+
+```bash
+npm run postgres:signal-source-reference-refresh -- verify \
+  yoink_cutover_qualification_078 yoink_q_078 yoink_session_q_078 \
+  yoink_queue_q_078 yoink_control_q_078 yoink_notify_q_078 \
+  yoink_execute_q_078 yoink_retain_q_078 yoink_candidate_q_078 \
+  yoink_dispatch_q_078 yoink_reconcile_q_078 yoink_witness_q_078 \
+  yoink_delivery_q_078 yoink_catalog_q_078 yoink_resolution_q_078 \
+  yoink_reference_q_078
+```
+
+The receipt permanently records `runtimeAuthority: false` and
+`productionReady: false`. No login, principal mapping, membership, runtime
+composition, downstream evaluation, inbox acknowledgement, or retailer-session
+authority is created. SQLite remains authoritative and complete handler parity
+remains six of seven.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -1268,12 +1353,12 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- source-reference refresh for known products, occurrence/incident/offer
-  mutation, mission and purchase-policy evaluation, action-job creation, and
-  final inbox composition with the qualified hosted-delivery recovery, fixed
-  signal-inbox lifecycle, read-only resolution plan, insert-only catalog-create,
-  and event/resolution-commit boundaries to complete the final task-handler
-  family, plus every API request-repository family;
+- occurrence/incident/offer mutation, mission and purchase-policy evaluation,
+  action-job creation, and final inbox composition with the qualified hosted-
+  delivery recovery, fixed signal-inbox lifecycle, read-only resolution plan,
+  insert-only catalog-create, event/resolution-commit, and known-product source-
+  reference-refresh boundaries to complete the final task-handler family, plus
+  every API request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers; all qualified

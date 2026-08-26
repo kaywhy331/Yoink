@@ -26,6 +26,7 @@ import { postgresObserverWitnessRefreshCapabilityProjection } from "../packages/
 import { postgresHostedDeliveryLeaseRecoveryCapabilityProjection } from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
 import { postgresSignalCatalogApplyCapabilityProjection } from "../packages/database/src/postgres-signal-catalog-apply.js";
 import { postgresSignalResolutionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-resolution-apply.js";
+import { postgresSignalSourceReferenceRefreshCapabilityProjection } from "../packages/database/src/postgres-signal-source-reference-refresh.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -120,6 +121,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresHostedDeliveryLeaseRecovery: ReturnType<typeof postgresHostedDeliveryLeaseRecoveryCapabilityProjection>;
         postgresSignalCatalogApply: ReturnType<typeof postgresSignalCatalogApplyCapabilityProjection>;
         postgresSignalResolutionApply: ReturnType<typeof postgresSignalResolutionApplyCapabilityProjection>;
+        postgresSignalSourceReferenceRefresh: ReturnType<typeof postgresSignalSourceReferenceRefreshCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -178,6 +180,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalResolutionApply,
       postgresSignalResolutionApplyCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalSourceReferenceRefresh,
+      postgresSignalSourceReferenceRefreshCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -229,6 +235,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Server-bound signal event and resolution commit/);
     assert.match(cutoverText, /exact event, source heartbeat, and resolution-decision commit/);
     assert.match(cutoverText, /occurrences, incidents, offer observations, missions, actions/);
+    assert.match(cutoverText, /Server-bound known-product source-reference refresh/);
+    assert.match(cutoverText, /3 tenant source-reference tables/);
+    assert.match(cutoverText, /conflicting remap cases fail closed/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);
     assert.match(cutoverText, /3 independent PostgreSQL 16 backend sessions/);

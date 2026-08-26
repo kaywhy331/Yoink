@@ -21,6 +21,7 @@ import { postgresObserverWitnessRefreshCapabilityProjection } from "../packages/
 import { postgresHostedDeliveryLeaseRecoveryCapabilityProjection } from "../packages/database/src/postgres-hosted-delivery-lease-recovery.js";
 import { postgresSignalCatalogApplyCapabilityProjection } from "../packages/database/src/postgres-signal-catalog-apply.js";
 import { postgresSignalResolutionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-resolution-apply.js";
+import { postgresSignalSourceReferenceRefreshCapabilityProjection } from "../packages/database/src/postgres-signal-source-reference-refresh.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -138,6 +139,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const postgresHostedDeliveryLeaseRecovery = postgresHostedDeliveryLeaseRecoveryCapabilityProjection();
     const postgresSignalCatalogApply = postgresSignalCatalogApplyCapabilityProjection();
     const postgresSignalResolutionApply = postgresSignalResolutionApplyCapabilityProjection();
+    const postgresSignalSourceReferenceRefresh = postgresSignalSourceReferenceRefreshCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -162,6 +164,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresHostedDeliveryLeaseRecovery,
       postgresSignalCatalogApply,
       postgresSignalResolutionApply,
+      postgresSignalSourceReferenceRefresh,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -399,6 +402,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalResolutionApply,
       postgresSignalResolutionApply
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalSourceReferenceRefresh,
+      postgresSignalSourceReferenceRefresh
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -415,7 +422,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresObserverWitnessRefresh,
       postgresHostedDeliveryLeaseRecovery,
       postgresSignalCatalogApply,
-      postgresSignalResolutionApply
+      postgresSignalResolutionApply,
+      postgresSignalSourceReferenceRefresh
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

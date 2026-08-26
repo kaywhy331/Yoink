@@ -103,6 +103,18 @@ replay, one-mutation concurrency, direct denial, and catalog-tamper detection.
 Downstream signal evaluation, final handler composition, and all runtime
 authority remain closed, so complete-handler parity stays six of seven and
 SQLite remains authoritative.
+Yoink 0.78 adds a fourth distinct function-only role for known-product source-
+reference refresh. It binds the leased message to the exact committed event and
+unique matched decision, then can insert or refresh only the tenant source
+product, source listing, and TrackaLacker-slug reference rows. Test/nonmatched
+signals write nothing, older evidence cannot regress metadata, conflicting
+remaps abort, replay is mutation-free, and raw source identities are replaced
+by a SHA-256 hash in the application plan. Native PostgreSQL proves exact
+insert/update semantics, isolation, direct denial, one-mutation concurrency,
+remap rollback/recovery, and catalog-tamper detection. The occurrence/incident/
+offer/mission/action graph, final handler composition, and all runtime authority
+remain closed, so complete-handler parity stays six of seven and SQLite remains
+authoritative.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.

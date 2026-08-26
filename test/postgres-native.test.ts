@@ -98,6 +98,13 @@ import {
   buildPostgresSignalResolutionApplyManifest,
   verifyPostgresSignalResolutionApplyBoundary
 } from "../packages/database/src/postgres-signal-resolution-apply.js";
+import {
+  NodePostgresSignalSourceReferenceRefreshDatabase,
+  POSTGRES_SIGNAL_SOURCE_REFERENCE_REFRESH_FUNCTION,
+  applyPostgresSignalSourceReferenceRefreshBoundary,
+  buildPostgresSignalSourceReferenceRefreshManifest,
+  verifyPostgresSignalSourceReferenceRefreshBoundary
+} from "../packages/database/src/postgres-signal-source-reference-refresh.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
@@ -142,6 +149,7 @@ const NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE = "yoink_native_witness";
 const NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE = "yoink_native_delivery";
 const NATIVE_CATALOG_APPLY_ROLE_NAMESPACE = "yoink_native_catalog";
 const NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE = "yoink_native_resolution";
+const NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE = "yoink_native_ref";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -969,7 +977,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, and event-resolution commit", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, and source-reference refresh", {
   timeout: 600_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1059,6 +1067,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalResolutionApplyC: NodePostgresSignalResolutionApplyDatabase | null = null;
   let signalResolutionApplyUnmapped: NodePostgresSignalResolutionApplyDatabase | null = null;
   let signalResolutionApplyDirectClient: Client | null = null;
+  let signalSourceReferenceA: NodePostgresSignalSourceReferenceRefreshDatabase | null = null;
+  let signalSourceReferenceASecond: NodePostgresSignalSourceReferenceRefreshDatabase | null = null;
+  let signalSourceReferenceB: NodePostgresSignalSourceReferenceRefreshDatabase | null = null;
+  let signalSourceReferenceC: NodePostgresSignalSourceReferenceRefreshDatabase | null = null;
+  let signalSourceReferenceUnmapped: NodePostgresSignalSourceReferenceRefreshDatabase | null = null;
+  let signalSourceReferenceDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -1731,6 +1745,78 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalResolutionApplyBoundary
     );
+    const signalSourceReferenceBoundary = await applyPostgresSignalSourceReferenceRefreshBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+      NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+      NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:59.950Z").getTime()
+    );
+    assert.equal(signalSourceReferenceBoundary.protectedTenantTableCount, 7);
+    assert.equal(signalSourceReferenceBoundary.forcedRlsTableCount, 7);
+    assert.equal(signalSourceReferenceBoundary.mutationTableCount, 3);
+    assert.equal(signalSourceReferenceBoundary.directTableGrantCount, 0);
+    assert.equal(signalSourceReferenceBoundary.functionGrantCount, 1);
+    assert.equal(signalSourceReferenceBoundary.membershipCount, 0);
+    assert.equal(signalSourceReferenceBoundary.activePrincipalCount, 0);
+    assert.equal(signalSourceReferenceBoundary.maximumPlanAgeSeconds, 30);
+    assert.equal(signalSourceReferenceBoundary.serverBoundPrincipalLookup, true);
+    assert.equal(signalSourceReferenceBoundary.databasePlanRevalidation, true);
+    assert.equal(signalSourceReferenceBoundary.committedResolutionBinding, true);
+    assert.equal(signalSourceReferenceBoundary.matchedResolutionRequired, true);
+    assert.equal(signalSourceReferenceBoundary.testSignalMutation, false);
+    assert.equal(signalSourceReferenceBoundary.conflictingReferenceFailClosed, true);
+    assert.equal(signalSourceReferenceBoundary.idempotentReplay, true);
+    assert.equal(signalSourceReferenceBoundary.sourceProductReferenceRepositoryParity, true);
+    assert.equal(signalSourceReferenceBoundary.sourceListingReferenceRepositoryParity, true);
+    assert.equal(signalSourceReferenceBoundary.sourceProductAliasRepositoryParity, true);
+    assert.equal(signalSourceReferenceBoundary.sharedCatalogMutation, false);
+    assert.equal(signalSourceReferenceBoundary.sourceReferenceRefreshRepositoryParity, true);
+    assert.equal(signalSourceReferenceBoundary.downstreamSignalGraphMutation, false);
+    assert.equal(signalSourceReferenceBoundary.inboxLifecycleMutation, false);
+    assert.equal(signalSourceReferenceBoundary.rawSignalPayloadReturned, false);
+    assert.equal(signalSourceReferenceBoundary.signalEvaluationApplyRepositoryParity, false);
+    assert.equal(signalSourceReferenceBoundary.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalSourceReferenceBoundary.mutationAuthority, true);
+    assert.equal(signalSourceReferenceBoundary.directTableAccess, false);
+    assert.equal(signalSourceReferenceBoundary.runtimeAuthority, false);
+    assert.equal(signalSourceReferenceBoundary.productionReady, false);
+    assert.match(signalSourceReferenceBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalSourceReferenceRefreshBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE
+      ),
+      signalSourceReferenceBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -1955,6 +2041,24 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
       NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE
     );
+    const signalSourceReferenceManifest = buildPostgresSignalSourceReferenceRefreshManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+      NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+      NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -2001,6 +2105,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalResolutionApplyManifest.resolutionApplyRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalSourceReferenceManifest.sourceReferenceRefreshRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -2387,6 +2494,26 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalResolutionApplyB = signalResolutionApplyDatabase(NATIVE_PRINCIPAL_B);
     signalResolutionApplyC = signalResolutionApplyDatabase(NATIVE_PRINCIPAL_C);
     signalResolutionApplyUnmapped = signalResolutionApplyDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+    const signalSourceReferenceDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalSourceReferenceRefreshDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE, NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+    NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE, NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+    NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE, NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+    NATIVE_CATALOG_APPLY_ROLE_NAMESPACE, NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+    NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE, { maxConnections });
+    signalSourceReferenceA = signalSourceReferenceDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalSourceReferenceASecond = signalSourceReferenceDatabase(NATIVE_PRINCIPAL_A);
+    signalSourceReferenceB = signalSourceReferenceDatabase(NATIVE_PRINCIPAL_B);
+    signalSourceReferenceC = signalSourceReferenceDatabase(NATIVE_PRINCIPAL_C);
+    signalSourceReferenceUnmapped = signalSourceReferenceDatabase(NATIVE_PRINCIPAL_UNMAPPED);
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -4141,6 +4268,15 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         listingId: null
       }]
     );
+    const ambiguousReferenceResult = await signalSourceReferenceA.refreshSignalSourceReferences(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      ambiguousApplyMessageId,
+      ambiguousApplyLease.capabilityToken,
+      resolutionPlanNow + 3_000
+    );
+    assert.equal(ambiguousReferenceResult.outcome, "not_matched");
+    assert.equal(ambiguousReferenceResult.mutationStatementCount, 0);
+    assert.equal(ambiguousReferenceResult.sourceReferenceRefreshApplied, false);
     assert.equal(
       await deliveryLeaseRecoveryA.completeSignalInbox(
         { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
@@ -4211,12 +4347,436 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         listingId: null
       }]
     );
+    const testReferenceResult = await signalSourceReferenceA.refreshSignalSourceReferences(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      unresolvedApplyMessageId,
+      unresolvedApplyLease.capabilityToken,
+      resolutionPlanNow + 4_000
+    );
+    assert.equal(testReferenceResult.outcome, "test_signal");
+    assert.equal(testReferenceResult.mutationStatementCount, 0);
+    assert.equal(testReferenceResult.sourceReferenceRefreshApplied, false);
     assert.equal(
       await deliveryLeaseRecoveryA.completeSignalInbox(
         { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
         unresolvedApplyMessageId,
         unresolvedApplyLease.capabilityToken,
         resolutionPlanNow + 4_000
+      ),
+      true
+    );
+
+    const referenceRefreshMessageId = "inbox_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const referenceRefreshPayloadBase = resolutionSignalPayload(
+      referenceRefreshMessageId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-reference-product-a",
+        sourceListingId: "native-reference-listing-a",
+        retailerId: "target",
+        retailerSku: "NATIVE-SIGNAL-SKU",
+        canonicalUrl: "https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU",
+        title: "Native reference product"
+      }
+    );
+    const referenceRefreshPayload = {
+      ...referenceRefreshPayloadBase,
+      identity: {
+        ...(referenceRefreshPayloadBase.identity as Record<string, unknown>),
+        globalIdentifiers: { trackalacker_slug: "native-reference-product-a" }
+      }
+    };
+    const referenceRefreshObservedAt = new Date(signalLifecycleNow - 1_000).toISOString();
+    await insertSignalLifecycleInbox(
+      referenceRefreshMessageId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(resolutionPlanNow + 5_000).toISOString(),
+      referenceRefreshPayload
+    );
+    const referenceRefreshLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow + 5_000
+    );
+    assert.ok(referenceRefreshLease);
+    assert.equal(referenceRefreshLease.id, referenceRefreshMessageId);
+    await assert.rejects(
+      signalSourceReferenceA.refreshSignalSourceReferences(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /signal event and resolution must commit before source-reference refresh/
+    );
+    const wrongReferenceCapability = `${
+      referenceRefreshLease.capabilityToken.startsWith("A") ? "B" : "A"
+    }${referenceRefreshLease.capabilityToken.slice(1)}`;
+    await assert.rejects(
+      signalSourceReferenceA.refreshSignalSourceReferences(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        wrongReferenceCapability,
+        resolutionPlanNow + 5_000
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalSourceReferenceB.refreshSignalSourceReferences(
+        { tenantId: "tenant_local", userId: "user_local" },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalSourceReferenceC.refreshSignalSourceReferences(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalSourceReferenceUnmapped.refreshSignalSourceReferences(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      /tenant session principal is not active/
+    );
+    const referenceResolutionResult = await signalResolutionApplyA.applySignalEventResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      referenceRefreshMessageId,
+      referenceRefreshLease.capabilityToken,
+      resolutionPlanNow + 5_000
+    );
+    assert.equal(referenceResolutionResult.duplicate, false);
+    const countsBeforeReferenceRefresh = await signalResolutionMutationCounts();
+    const concurrentReferenceRefresh = await Promise.all([
+      signalSourceReferenceA.refreshSignalSourceReferences(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      signalSourceReferenceASecond.refreshSignalSourceReferences(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      )
+    ]);
+    const referenceRefreshWinner = concurrentReferenceRefresh.find(
+      (result) => result.sourceReferenceRefreshApplied
+    );
+    const referenceRefreshReplay = concurrentReferenceRefresh.find(
+      (result) => !result.sourceReferenceRefreshApplied
+    );
+    assert.ok(referenceRefreshWinner);
+    assert.ok(referenceRefreshReplay);
+    assert.equal(referenceRefreshWinner.outcome, "refresh");
+    assert.equal(referenceRefreshWinner.eventId, referenceResolutionResult.eventId);
+    assert.equal(
+      referenceRefreshWinner.resolutionDecisionId,
+      referenceResolutionResult.resolutionDecisionId
+    );
+    assert.equal(referenceRefreshWinner.sourceProductAction, "insert");
+    assert.equal(referenceRefreshWinner.sourceListingAction, "insert");
+    assert.equal(referenceRefreshWinner.sourceAliasAction, "insert");
+    assert.equal(referenceRefreshWinner.mutationStatementCount, 3);
+    assert.equal(referenceRefreshWinner.idempotentReplay, true);
+    assert.equal(referenceRefreshWinner.sharedCatalogMutated, false);
+    assert.equal(referenceRefreshWinner.downstreamSignalGraphMutated, false);
+    assert.equal(referenceRefreshWinner.inboxLifecycleMutated, false);
+    assert.equal(referenceRefreshWinner.rawSignalPayloadReturned, false);
+    assert.equal(referenceRefreshReplay.outcome, "already_current");
+    assert.equal(referenceRefreshReplay.mutationStatementCount, 0);
+    assert.equal(referenceRefreshReplay.sourceProductAction, "none");
+    assert.equal(referenceRefreshReplay.sourceListingAction, "none");
+    assert.equal(referenceRefreshReplay.sourceAliasAction, "none");
+    assert.equal(
+      JSON.stringify(concurrentReferenceRefresh).includes("native-reference-product-a"),
+      false
+    );
+    assert.equal(
+      JSON.stringify(concurrentReferenceRefresh).includes("native-reference-listing-a"),
+      false
+    );
+    assert.deepEqual(await signalResolutionMutationCounts(), {
+      ...countsBeforeReferenceRefresh,
+      sourceProductRefs: Number(countsBeforeReferenceRefresh.sourceProductRefs) + 1,
+      sourceListingRefs: Number(countsBeforeReferenceRefresh.sourceListingRefs) + 1,
+      sourceAliases: Number(countsBeforeReferenceRefresh.sourceAliases) + 1
+    });
+    assert.deepEqual(
+      (await first.query<{
+        productRefId: string;
+        productVariantId: string;
+        productSourceUrl: string;
+        productTitle: string;
+        productObservedAt: string;
+        listingRefId: string;
+        listingId: string;
+        listingProductId: string;
+        listingSourceUrl: string;
+        listingObservedAt: string;
+        aliasId: string;
+        aliasVariantId: string;
+        aliasObservedAt: string;
+      }>(
+        `SELECT product_ref.id AS "productRefId",
+                product_ref.variant_id AS "productVariantId",
+                product_ref.source_url AS "productSourceUrl",
+                product_ref.source_title AS "productTitle",
+                product_ref.observed_at AS "productObservedAt",
+                listing_ref.id AS "listingRefId",
+                listing_ref.listing_id AS "listingId",
+                listing_ref.external_product_id AS "listingProductId",
+                listing_ref.source_url AS "listingSourceUrl",
+                listing_ref.observed_at AS "listingObservedAt",
+                alias.id AS "aliasId", alias.variant_id AS "aliasVariantId",
+                alias.observed_at AS "aliasObservedAt"
+         FROM "${NATIVE_SCHEMA}"."source_product_refs" AS product_ref
+         JOIN "${NATIVE_SCHEMA}"."source_listing_refs" AS listing_ref
+           ON listing_ref.source_connection_id = product_ref.source_connection_id
+          AND listing_ref.external_product_id = product_ref.external_product_id
+         JOIN "${NATIVE_SCHEMA}"."source_product_aliases" AS alias
+           ON alias.source_connection_id = product_ref.source_connection_id
+          AND alias.variant_id = product_ref.variant_id
+         WHERE product_ref.source_connection_id = 'native_signal_source_a'
+           AND product_ref.external_product_id = 'native-reference-product-a'
+           AND listing_ref.external_listing_id = 'native-reference-listing-a'
+           AND alias.alias_kind = 'trackalacker_slug'
+           AND alias.alias_value = 'native-reference-product-a'`
+      )).rows.map((row) => ({
+        ...row,
+        productRefId: row.productRefId.replace(/^source_product_[a-f0-9]{32}$/, "source_product_<uuid>"),
+        listingRefId: row.listingRefId.replace(/^source_listing_[a-f0-9]{32}$/, "source_listing_<uuid>"),
+        aliasId: row.aliasId.replace(/^source_alias_[a-f0-9]{32}$/, "source_alias_<uuid>")
+      })),
+      [{
+        productRefId: "source_product_<uuid>",
+        productVariantId: "variant_cutover_scope",
+        productSourceUrl: "",
+        productTitle: "Native reference product",
+        productObservedAt: referenceRefreshObservedAt,
+        listingRefId: "source_listing_<uuid>",
+        listingId: "listing_native_signal",
+        listingProductId: "native-reference-product-a",
+        listingSourceUrl: "",
+        listingObservedAt: referenceRefreshObservedAt,
+        aliasId: "source_alias_<uuid>",
+        aliasVariantId: "variant_cutover_scope",
+        aliasObservedAt: referenceRefreshObservedAt
+      }]
+    );
+    const referenceReplayCounts = await signalResolutionMutationCounts();
+    const explicitReferenceReplay = await signalSourceReferenceA.refreshSignalSourceReferences(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      referenceRefreshMessageId,
+      referenceRefreshLease.capabilityToken,
+      resolutionPlanNow + 5_000
+    );
+    assert.equal(explicitReferenceReplay.outcome, "already_current");
+    assert.equal(explicitReferenceReplay.mutationStatementCount, 0);
+    assert.deepEqual(await signalResolutionMutationCounts(), referenceReplayCounts);
+    assert.equal(
+      (await first.query<{ state: string }>(
+        `SELECT state FROM "${NATIVE_SCHEMA}"."inbox_messages" WHERE id = $1`,
+        [referenceRefreshMessageId]
+      )).rows[0]?.state,
+      "processing"
+    );
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceRefreshMessageId,
+        referenceRefreshLease.capabilityToken,
+        resolutionPlanNow + 5_000
+      ),
+      true
+    );
+
+    const referenceUpdateMessageId = "inbox_ffffffffffffffffffffffffffffffff";
+    const referenceUpdatePayloadBase = resolutionSignalPayload(
+      referenceUpdateMessageId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-reference-product-a",
+        sourceListingId: "native-reference-listing-a",
+        retailerId: "target",
+        retailerSku: "NATIVE-SIGNAL-SKU",
+        canonicalUrl: "https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU",
+        title: "Native reference product updated"
+      }
+    );
+    const referenceUpdateObservedAt = new Date(signalLifecycleNow + 1_000).toISOString();
+    const referenceUpdatePayload = {
+      ...referenceUpdatePayloadBase,
+      observedAt: referenceUpdateObservedAt,
+      identity: {
+        ...(referenceUpdatePayloadBase.identity as Record<string, unknown>),
+        globalIdentifiers: { trackalacker_slug: "native-reference-product-a" }
+      }
+    };
+    await insertSignalLifecycleInbox(
+      referenceUpdateMessageId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(resolutionPlanNow + 6_000).toISOString(),
+      referenceUpdatePayload
+    );
+    const referenceUpdateLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow + 6_000
+    );
+    assert.ok(referenceUpdateLease);
+    assert.equal(referenceUpdateLease.id, referenceUpdateMessageId);
+    const referenceUpdateResolution = await signalResolutionApplyA.applySignalEventResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      referenceUpdateMessageId,
+      referenceUpdateLease.capabilityToken,
+      resolutionPlanNow + 6_000
+    );
+    assert.equal(referenceUpdateResolution.duplicate, false);
+    const countsBeforeReferenceUpdate = await signalResolutionMutationCounts();
+    const referenceUpdateResult = await signalSourceReferenceA.refreshSignalSourceReferences(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      referenceUpdateMessageId,
+      referenceUpdateLease.capabilityToken,
+      resolutionPlanNow + 6_000
+    );
+    assert.equal(referenceUpdateResult.outcome, "refresh");
+    assert.equal(referenceUpdateResult.sourceProductAction, "update");
+    assert.equal(referenceUpdateResult.sourceListingAction, "update");
+    assert.equal(referenceUpdateResult.sourceAliasAction, "update");
+    assert.equal(referenceUpdateResult.mutationStatementCount, 3);
+    assert.equal(referenceUpdateResult.sourceReferenceRefreshApplied, true);
+    assert.deepEqual(await signalResolutionMutationCounts(), countsBeforeReferenceUpdate);
+    assert.deepEqual(
+      (await first.query<{
+        productTitle: string;
+        productObservedAt: string;
+        listingObservedAt: string;
+        aliasObservedAt: string;
+      }>(
+        `SELECT product_ref.source_title AS "productTitle",
+                product_ref.observed_at AS "productObservedAt",
+                listing_ref.observed_at AS "listingObservedAt",
+                alias.observed_at AS "aliasObservedAt"
+         FROM "${NATIVE_SCHEMA}"."source_product_refs" AS product_ref
+         JOIN "${NATIVE_SCHEMA}"."source_listing_refs" AS listing_ref
+           ON listing_ref.source_connection_id = product_ref.source_connection_id
+          AND listing_ref.external_product_id = product_ref.external_product_id
+         JOIN "${NATIVE_SCHEMA}"."source_product_aliases" AS alias
+           ON alias.source_connection_id = product_ref.source_connection_id
+          AND alias.variant_id = product_ref.variant_id
+         WHERE product_ref.source_connection_id = 'native_signal_source_a'
+           AND product_ref.external_product_id = 'native-reference-product-a'
+           AND listing_ref.external_listing_id = 'native-reference-listing-a'
+           AND alias.alias_kind = 'trackalacker_slug'
+           AND alias.alias_value = 'native-reference-product-a'`
+      )).rows,
+      [{
+        productTitle: "Native reference product updated",
+        productObservedAt: referenceUpdateObservedAt,
+        listingObservedAt: referenceUpdateObservedAt,
+        aliasObservedAt: referenceUpdateObservedAt
+      }]
+    );
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceUpdateMessageId,
+        referenceUpdateLease.capabilityToken,
+        resolutionPlanNow + 6_000
+      ),
+      true
+    );
+
+    const referenceConflictMessageId = "inbox_1234567890abcdef1234567890abcdef";
+    const referenceConflictPayload = resolutionSignalPayload(
+      referenceConflictMessageId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-reference-conflict-product",
+        sourceListingId: "native-reference-conflict-listing",
+        retailerId: "target",
+        retailerSku: "NATIVE-SIGNAL-SKU",
+        canonicalUrl: "https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU",
+        title: "Native reference conflict product"
+      }
+    );
+    await insertSignalLifecycleInbox(
+      referenceConflictMessageId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(resolutionPlanNow + 7_000).toISOString(),
+      referenceConflictPayload
+    );
+    const referenceConflictLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      resolutionPlanNow + 7_000
+    );
+    assert.ok(referenceConflictLease);
+    assert.equal(referenceConflictLease.id, referenceConflictMessageId);
+    const referenceConflictResolution = await signalResolutionApplyA.applySignalEventResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      referenceConflictMessageId,
+      referenceConflictLease.capabilityToken,
+      resolutionPlanNow + 7_000
+    );
+    assert.equal(referenceConflictResolution.duplicate, false);
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_listing_refs"(
+         id, source_connection_id, external_listing_id, external_product_id,
+         listing_id, source_url, observed_at
+       ) VALUES (
+         'source_listing_native_reference_conflict', 'native_signal_source_a',
+         'native-reference-conflict-listing', 'native-reference-conflict-product',
+         'listing_cutover_scope', '', $1
+       )`,
+      [String(referenceConflictPayload.observedAt)]
+    );
+    const countsBeforeReferenceConflict = await signalResolutionMutationCounts();
+    await assert.rejects(
+      signalSourceReferenceA.refreshSignalSourceReferences(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceConflictMessageId,
+        referenceConflictLease.capabilityToken,
+        resolutionPlanNow + 7_000
+      ),
+      /source listing reference conflicts with the committed listing/
+    );
+    assert.deepEqual(await signalResolutionMutationCounts(), countsBeforeReferenceConflict);
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."source_listing_refs"
+       WHERE id = 'source_listing_native_reference_conflict'`
+    );
+    const recoveredReferenceResult = await signalSourceReferenceA.refreshSignalSourceReferences(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      referenceConflictMessageId,
+      referenceConflictLease.capabilityToken,
+      resolutionPlanNow + 7_000
+    );
+    assert.equal(recoveredReferenceResult.outcome, "refresh");
+    assert.equal(recoveredReferenceResult.sourceProductAction, "insert");
+    assert.equal(recoveredReferenceResult.sourceListingAction, "insert");
+    assert.equal(recoveredReferenceResult.sourceAliasAction, "none");
+    assert.equal(recoveredReferenceResult.mutationStatementCount, 2);
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        referenceConflictMessageId,
+        referenceConflictLease.capabilityToken,
+        resolutionPlanNow + 7_000
       ),
       true
     );
@@ -4436,6 +4996,53 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     await signalResolutionApplyDirectClient.end();
     signalResolutionApplyDirectClient = null;
+
+    signalSourceReferenceDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalSourceReferenceDirectClient.on("error", () => undefined);
+    await signalSourceReferenceDirectClient.connect();
+    await signalSourceReferenceDirectClient.query(
+      `SET ROLE "${signalSourceReferenceManifest.sourceReferenceRefreshRole.name}"`
+    );
+    await assert.rejects(
+      signalSourceReferenceDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."source_product_refs" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceReferenceDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."source_listing_refs"(
+           id, source_connection_id, external_listing_id, external_product_id,
+           listing_id, source_url, observed_at
+         ) VALUES (
+           'source_listing_forbidden', 'native_signal_source_a', 'forbidden', '',
+           'listing_native_signal', '', $1
+         )`,
+        [new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceReferenceDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."source_product_aliases"
+         SET observed_at = $1 WHERE source_connection_id = 'native_signal_source_a'`,
+        [new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceReferenceDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_REFERENCE_REFRESH_FUNCTION}"(
+           $1, $2, 'plan', $3, $4, '', '{}'
+         )`,
+        [NATIVE_TENANT, "user_local", referenceRefreshMessageId, "A".repeat(43)]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await signalSourceReferenceDirectClient.end();
+    signalSourceReferenceDirectClient = null;
 
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
@@ -6989,6 +7596,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       await first.query(
         `REVOKE "${signalResolutionApplyManifest.resolutionApplyRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${signalSourceReferenceManifest.sourceReferenceRefreshRole.name}" FROM "${principalRole}"`
+      );
     }
     await first.query(
       `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
@@ -7197,6 +7807,83 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(
       cleanSignalResolutionApplyBoundary.boundaryCatalogFingerprint,
       signalResolutionApplyBoundary.boundaryCatalogFingerprint
+    );
+    const cleanSignalSourceReferenceBoundary = await verifyPostgresSignalSourceReferenceRefreshBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+      NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+      NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanSignalSourceReferenceBoundary.boundaryCatalogFingerprint,
+      signalSourceReferenceBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_REFERENCE_REFRESH_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresSignalSourceReferenceRefreshBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_REFERENCE_REFRESH_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresSignalSourceReferenceRefreshBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+        NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+        NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+        NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+        NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+        NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+        NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+        NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      signalSourceReferenceBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_RESOLUTION_APPLY_FUNCTION}"(
@@ -7778,7 +8465,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalResolutionApplyB?.close(),
       signalResolutionApplyC?.close(),
       signalResolutionApplyUnmapped?.close(),
-      signalResolutionApplyDirectClient?.end()
+      signalResolutionApplyDirectClient?.end(),
+      signalSourceReferenceA?.close(),
+      signalSourceReferenceASecond?.close(),
+      signalSourceReferenceB?.close(),
+      signalSourceReferenceC?.close(),
+      signalSourceReferenceUnmapped?.close(),
+      signalSourceReferenceDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
