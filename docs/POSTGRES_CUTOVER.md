@@ -1,6 +1,6 @@
 # PostgreSQL cutover qualification
 
-Yoink 0.65 extends the offline, one-shot PostgreSQL qualification path. It proves
+Yoink 0.66 extends the offline, one-shot PostgreSQL qualification path. It proves
 that one verified `yoink-portability-ndjson-v1` archive can be loaded into a
 new private PostgreSQL schema and reconciled exactly. It does **not** switch the
 API or worker away from SQLite, and it cannot authorize retailer actions.
@@ -64,9 +64,10 @@ Automated real-engine tests cover:
 
 This class is not imported by the API or standalone worker entry points. It
 cannot flip receipt authority, cannot enable dual writes, and does not give the
-PostgreSQL process any retailer-session capability. Six task-handler families
-still use only SQLite repositories; notification recovery now has a separately
-qualified but inactive PostgreSQL seam. The emulated real-semantics suite continues to prove the
+PostgreSQL process any retailer-session capability. Five task-handler families
+still use only SQLite repositories; notification and execution recovery now
+have separately qualified but inactive PostgreSQL seams. The emulated
+real-semantics suite continues to prove the
 complete store state machine; the separate native suite now proves the
 contention-critical path across independent server sessions.
 
@@ -102,7 +103,8 @@ strictly `SERIALIZABLE`. This proves the queue algorithm and production driver
 against native PostgreSQL; it does not deploy independent worker processes,
 execute a production worker fleet, measure production load/outage behavior, or
 establish runtime authority. Version 0.65 separately executes the
-notification-recovery handler through its own native qualification path.
+notification-recovery handler through its own native qualification path;
+version 0.66 does the same for action/spend execution recovery.
 
 ## Restricted read-role qualification seam
 
@@ -463,6 +465,75 @@ construct this adapter in their shipped runtime composition. Exactly one of
 seven task families has repository parity; the role remains inactive and
 SQLite remains authoritative.
 
+## Function-only execution-recovery handler qualification seam
+
+Version 0.66 derives a second handler role from the exact verified
+notification-recovery chain. It covers only `execution_recovery`; its
+`NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no object, has no table, column,
+sequence, schema-create, policy, insert, update, or delete privilege, and may
+execute exactly one strict security-definer routine:
+
+| Routine | Exact authority | Data returned |
+| --- | --- | --- |
+| `yoink_recover_action_execution(text, text)` | Retire expired Chrome action leases according to the existing pre/post-mutation state machine; expire unleased action windows; release expired spend reservations; append the corresponding action, spend-ledger, audit, and outbox receipts | Recovered-lease, expired-job, and released-reservation counts only |
+
+The routine independently resolves PostgreSQL `session_user`, compares it with
+the expected authenticated tenant/user, takes a transaction-scoped advisory
+lock for that exact principal, and uses PostgreSQL's statement clock. Callers
+cannot advance expiration, select a different tenant, or race duplicate
+receipts. `add_authorized` closes as cancelled, states before the mutation
+boundary expire, states after it lock for manual review, and `submitting`
+becomes submission-uncertain. No function path leases new work, clicks a
+retailer, enters checkout, submits an order, commits spend, deletes history, or
+returns row content.
+
+Nine relations are sealed into the function-source/catalog receipt. Eight are
+directly or transitively tenant-owned forced-RLS tables. The ninth,
+`signal_incidents`, remains deliberately unavailable to every runtime role
+because its general shared ownership is unresolved. The routine may close or
+lock one incident only when both independent checks find no action job and no
+signal occurrence belonging to another tenant/user. If either check finds a
+cross-tenant binding, the private action and spend state recover but incident
+mutation is skipped. The same guard now applies to SQLite transitions.
+
+The native PostgreSQL 16 suite executes the production maintenance handler and
+proves every transition class, future-state preservation, capability
+retirement, spend-ledger/audit/outbox parity, mismatch and unmapped denial,
+zero direct table access, denial of the notification function, cross-tenant
+shared-incident preservation after both tenants recover, idempotent replay,
+exactly one concurrent winner, clean removal of temporary mappings/memberships,
+and receipt rejection after routine tamper.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:execution-recovery -- plan \
+  yoink_cutover_qualification_066 yoink_q_066 yoink_session_q_066 \
+  yoink_queue_q_066 yoink_control_q_066 yoink_notify_q_066 yoink_execute_q_066
+```
+
+After the exact notification-recovery v1 receipt is verified, apply once with
+the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_EXECUTION_RECOVERY_QUALIFICATION_ACK=bounded-execution-recovery-qualification \
+  npm run postgres:execution-recovery -- apply \
+  yoink_cutover_qualification_066 yoink_q_066 yoink_session_q_066 \
+  yoink_queue_q_066 yoink_control_q_066 yoink_notify_q_066 yoink_execute_q_066
+```
+
+Then independently re-inspect the catalogs and immutable receipt:
+
+```bash
+npm run postgres:execution-recovery -- verify \
+  yoink_cutover_qualification_066 yoink_q_066 yoink_session_q_066 \
+  yoink_queue_q_066 yoink_control_q_066 yoink_notify_q_066 yoink_execute_q_066
+```
+
+Apply refuses reused objects and cannot create a login, membership, principal
+mapping, or runtime composition. Exactly two of seven task families now have
+repository parity; both roles remain inactive and SQLite stays authoritative.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -566,7 +637,7 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- PostgreSQL implementations for the remaining six task-handler families and
+- PostgreSQL implementations for the remaining five task-handler families and
   every API repository;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for

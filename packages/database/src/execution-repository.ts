@@ -19,6 +19,27 @@ import { SpendLedgerRepository } from "./spend-ledger-repository.js";
 const LEASE_TTL_MS = 45_000;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
 const REASON_PATTERN = /^[a-z][a-z0-9_]{1,79}$/;
+export const EXECUTION_RECOVERY_LEASE_STATES = Object.freeze([
+  "leased",
+  "navigating",
+  "verifying_listing",
+  "offer_verified",
+  "add_authorized",
+  "adding",
+  "cart_verified",
+  "checkout_review",
+  "submit_authorized",
+  "submitting"
+] as const);
+export const EXECUTION_RECOVERY_BEFORE_MUTATION_REASON = "lease_expired_before_mutation";
+export const EXECUTION_RECOVERY_AFTER_MUTATION_REASON = "lease_expired_after_mutation_boundary";
+export const EXECUTION_RECOVERY_BEFORE_MUTATION_MESSAGE =
+  "The Chrome lease expired before retailer mutation and was closed without retrying the stale job.";
+export const EXECUTION_RECOVERY_AFTER_MUTATION_MESSAGE =
+  "The Chrome lease expired after retailer mutation may have occurred; automatic retry is locked for review.";
+export const EXECUTION_RECOVERY_SIGNAL_WINDOW_REASON = "signal_window_expired";
+export const EXECUTION_RECOVERY_SIGNAL_WINDOW_MESSAGE =
+  "The signal action window expired before Chrome leased the job; no retailer action occurred.";
 const ACTION_RANK: Record<string, number> = {
   notify: 0,
   add_to_cart: 1,
@@ -151,14 +172,11 @@ export class ExecutionRepository {
     const expired = this.db.all<ExpiredLeaseRow>(
       `SELECT id, state FROM action_jobs
        WHERE user_id = ? AND lease_expires_at <> '' AND lease_expires_at < ?
-         AND state IN (
-           'leased', 'navigating', 'verifying_listing', 'offer_verified',
-           'add_authorized', 'adding', 'cart_verified', 'checkout_review',
-           'submit_authorized', 'submitting'
-         )
+         AND state IN (${EXECUTION_RECOVERY_LEASE_STATES.map(() => "?").join(", ")})
        ORDER BY lease_expires_at, id`,
       currentRequestScope().userId,
-      nowIso(now)
+      nowIso(now),
+      ...EXECUTION_RECOVERY_LEASE_STATES
     );
     for (const job of expired) {
       const nextState: JobState = job.state === "submitting"
@@ -169,10 +187,12 @@ export class ExecutionRepository {
       this.signals.transitionJob(
         job.id,
         nextState,
-        jobMayHaveMutated(job.state) ? "lease_expired_after_mutation_boundary" : "lease_expired_before_mutation",
         jobMayHaveMutated(job.state)
-          ? "The Chrome lease expired after retailer mutation may have occurred; automatic retry is locked for review."
-          : "The Chrome lease expired before retailer mutation and was closed without retrying the stale job.",
+          ? EXECUTION_RECOVERY_AFTER_MUTATION_REASON
+          : EXECUTION_RECOVERY_BEFORE_MUTATION_REASON,
+        jobMayHaveMutated(job.state)
+          ? EXECUTION_RECOVERY_AFTER_MUTATION_MESSAGE
+          : EXECUTION_RECOVERY_BEFORE_MUTATION_MESSAGE,
         { previousState: job.state },
         now
       );
@@ -200,8 +220,8 @@ export class ExecutionRepository {
       this.signals.transitionJob(
         job.id,
         "expired",
-        "signal_window_expired",
-        "The signal action window expired before Chrome leased the job; no retailer action occurred.",
+        EXECUTION_RECOVERY_SIGNAL_WINDOW_REASON,
+        EXECUTION_RECOVERY_SIGNAL_WINDOW_MESSAGE,
         { previousState: job.state },
         now
       );

@@ -512,6 +512,109 @@ test("Target add-only leasing binds the exact adapter and expires safely before 
   }
 });
 
+test("action recovery leaves a cross-tenant shared signal incident unchanged", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db);
+    const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
+    assert.equal(lease.reason, "leased");
+    assert.ok(lease.job);
+    const incidentId = db.get<{ incident_id: string }>(
+      "SELECT incident_id FROM action_jobs WHERE id = ?",
+      lease.job.id
+    )?.incident_id;
+    assert.ok(incidentId);
+    db.run(
+      "INSERT INTO tenants(id, name, created_at) VALUES (?, ?, ?)",
+      "tenant_execution_shared",
+      "Execution shared tenant",
+      new Date(NOW).toISOString()
+    );
+    db.run(
+      "INSERT INTO users(id, tenant_id, display_name, created_at) VALUES (?, ?, ?, ?)",
+      "user_execution_shared",
+      "tenant_execution_shared",
+      "Execution shared user",
+      new Date(NOW).toISOString()
+    );
+    db.run(
+      `INSERT INTO source_connections(
+         id, tenant_id, user_id, source, name, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      "source_execution_shared",
+      "tenant_execution_shared",
+      "user_execution_shared",
+      "fixture",
+      "Shared incident fixture",
+      new Date(NOW).toISOString(),
+      new Date(NOW).toISOString()
+    );
+    db.run(
+      `INSERT INTO signal_events(
+         id, tenant_id, user_id, source_connection_id, signal_id,
+         external_event_id, transport_hash, schema_version, source, event_type,
+         observed_at, received_at, identity_json, offer_json, evidence_json,
+         parser_version, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'fixture', 'restock', ?, ?, '{}', '{}', '{}',
+                 'execution-shared-v1', ?)`,
+      "signal_execution_shared",
+      "tenant_execution_shared",
+      "user_execution_shared",
+      "source_execution_shared",
+      "signal-execution-shared",
+      "external-execution-shared",
+      "transport-execution-shared",
+      new Date(NOW).toISOString(),
+      new Date(NOW).toISOString(),
+      new Date(NOW).toISOString()
+    );
+    db.run(
+      `INSERT INTO signal_occurrences(
+         id, event_id, incident_id, source_connection_id,
+         observed_at, received_at, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      "occurrence_execution_shared",
+      "signal_execution_shared",
+      incidentId,
+      "source_execution_shared",
+      new Date(NOW).toISOString(),
+      new Date(NOW).toISOString(),
+      new Date(NOW).toISOString()
+    );
+    assert.equal(execution.reconcileJob(
+      deviceId,
+      lease.job.id,
+      lease.job.capabilityToken,
+      "navigating",
+      "navigation_started",
+      "Navigation started.",
+      {},
+      NOW + 4_000
+    ).state, "navigating");
+    assert.equal(execution.recoverExpiredLeases(NOW + 50_000), 1);
+    assert.equal(
+      db.get<{ state: string }>("SELECT state FROM action_jobs WHERE id = ?", lease.job.id)?.state,
+      "expired"
+    );
+    assert.deepEqual(
+      { ...db.get<{ status: string; closedReason: string }>(
+        "SELECT status, closed_reason AS closedReason FROM signal_incidents WHERE id = ?",
+        incidentId
+      ) },
+      { status: "open", closedReason: "" }
+    );
+    assert.equal(
+      db.get<{ status: string }>(
+        "SELECT status FROM spend_reservations WHERE action_job_id = ?",
+        lease.job.id
+      )?.status,
+      "released"
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test("an expired Target lease after the add boundary locks instead of clicking twice", () => {
   const db = new YoinkDatabase();
   try {

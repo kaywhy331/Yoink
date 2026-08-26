@@ -41,6 +41,12 @@ import {
   buildPostgresNotificationRecoveryManifest,
   verifyPostgresNotificationRecoveryBoundary
 } from "../packages/database/src/postgres-notification-recovery.js";
+import {
+  NodePostgresExecutionRecoveryDatabase,
+  applyPostgresExecutionRecoveryBoundary,
+  buildPostgresExecutionRecoveryManifest,
+  verifyPostgresExecutionRecoveryBoundary
+} from "../packages/database/src/postgres-execution-recovery.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
@@ -59,6 +65,7 @@ const NATIVE_SESSION_ROLE_NAMESPACE = "yoink_native_session";
 const NATIVE_QUEUE_WRITE_ROLE_NAMESPACE = "yoink_native_queue_write";
 const NATIVE_WORKER_CONTROL_ROLE_NAMESPACE = "yoink_native_worker_control";
 const NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE = "yoink_native_notify";
+const NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE = "yoink_native_execute";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_UNMAPPED = "yoink_native_principal_unmapped";
@@ -162,6 +169,189 @@ async function insertNotificationRecoveryFixtures(
   return { expiredLeaseAt, currentLeaseAt };
 }
 
+async function insertExecutionRecoveryFixtures(
+  database: PostgresCutoverDatabase,
+  recoveryNow: number
+): Promise<{ expiredLeaseAt: string; currentLeaseAt: string }> {
+  const createdAt = new Date(recoveryNow - 7_200_000).toISOString();
+  const expiredLeaseAt = new Date(recoveryNow - 60_000).toISOString();
+  const currentLeaseAt = new Date(recoveryNow + 60_000).toISOString();
+  const expiredJobAt = new Date(recoveryNow - 120_000).toISOString();
+  const currentJobAt = new Date(recoveryNow + 3_600_000).toISOString();
+  for (const [suffix, tenantId, userId, missionId] of [
+    ["other", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other"],
+    ["local", "tenant_local", "user_local", "mission_cutover_local"]
+  ] as const) {
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."exact_offer_keys"(
+         id, tenant_id, listing_id, retailer_id, retailer_sku,
+         seller_name, seller_key, seller_type, fulfillment, identity_hash, created_at
+       ) VALUES ($1, $2, 'listing_cutover_scope', 'target', 'cutover-scope-sku',
+                 'Target', 'target', 'first_party', 'shipping', $3, $4)`,
+      [`native_exec_offer_${suffix}`, tenantId, `native-exec-offer-${suffix}`, createdAt]
+    );
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."mission_intent_revisions"(
+         id, tenant_id, user_id, mission_id, revision, quantity, currency,
+         max_all_in_cents, action_ceiling, substitution_policy, expires_at,
+         cooldown_seconds, target_policy_json, policy_hash, created_by_actor_id, created_at
+       ) VALUES ($1, $2, $3, $4, 1, 9, 'USD', 2500, 'submit_order',
+                 'exact_only', $5, 0, '{}', $6, 'native_execution_fixture', $7)`,
+      [
+        `native_exec_intent_${suffix}`,
+        tenantId,
+        userId,
+        missionId,
+        currentJobAt,
+        `native-exec-policy-${suffix}`,
+        createdAt
+      ]
+    );
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."offer_snapshots"(
+         id, tenant_id, user_id, mission_id, intent_revision_id,
+         exact_offer_key_id, listing_id, availability, unit_price_cents,
+         quantity, item_subtotal_cents, maximum_all_in_cents, currency,
+         seller_name, seller_type, fulfillment, evidence_hash,
+         observed_at, expires_at, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, 'listing_cutover_scope', 'in_stock',
+                 1000, 1, 1000, 1200, 'USD', 'Target', 'first_party', 'shipping',
+                 $7, $8, $9, $8)`,
+      [
+        `native_exec_snapshot_${suffix}`,
+        tenantId,
+        userId,
+        missionId,
+        `native_exec_intent_${suffix}`,
+        `native_exec_offer_${suffix}`,
+        `native-exec-evidence-${suffix}`,
+        createdAt,
+        currentJobAt
+      ]
+    );
+  }
+
+  const incidentIds = [
+    "native_exec_incident_leased",
+    "native_exec_incident_add_authorized",
+    "native_exec_incident_adding",
+    "native_exec_incident_submitting",
+    "native_exec_incident_pending",
+    "native_exec_incident_reservation_only",
+    "native_exec_incident_current",
+    "native_exec_incident_contention",
+    "native_exec_incident_shared"
+  ];
+  for (const incidentId of incidentIds) {
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."signal_incidents"(
+         id, listing_id, event_type, semantic_key, first_observed_at,
+         last_observed_at, created_at, updated_at
+       ) VALUES ($1, 'listing_cutover_scope', 'restock', $2, $3, $3, $3, $3)`,
+      [incidentId, `semantic:${incidentId}`, createdAt]
+    );
+  }
+
+  const jobs = [
+    ["native_exec_leased", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", "native_exec_incident_leased", "leased", "add_to_cart", currentJobAt, expiredLeaseAt, currentJobAt],
+    ["native_exec_add_authorized", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", "native_exec_incident_add_authorized", "add_authorized", "add_to_cart", currentJobAt, expiredLeaseAt, currentJobAt],
+    ["native_exec_adding", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", "native_exec_incident_adding", "adding", "add_to_cart", currentJobAt, expiredLeaseAt, currentJobAt],
+    ["native_exec_submitting", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", "native_exec_incident_submitting", "submitting", "submit_order", currentJobAt, expiredLeaseAt, currentJobAt],
+    ["native_exec_pending", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", "native_exec_incident_pending", "awaiting_executor", "add_to_cart", expiredJobAt, "", currentJobAt],
+    ["native_exec_reservation_only", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", "native_exec_incident_reservation_only", "awaiting_executor", "add_to_cart", currentJobAt, "", expiredJobAt],
+    ["native_exec_current", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", "native_exec_incident_current", "leased", "add_to_cart", currentJobAt, currentLeaseAt, null],
+    ["native_exec_contention", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", "native_exec_incident_contention", "leased", "add_to_cart", currentJobAt, currentLeaseAt, null],
+    ["native_exec_shared", NATIVE_TENANT, NATIVE_USER, "mission_cutover_other", "native_notify_target_other", "native_exec_incident_shared", "leased", "add_to_cart", currentJobAt, expiredLeaseAt, null],
+    ["native_exec_cross_tenant", "tenant_local", "user_local", "mission_cutover_local", "native_notify_target_local", "native_exec_incident_shared", "leased", "add_to_cart", currentJobAt, expiredLeaseAt, null]
+  ] as const;
+  for (const [
+    id,
+    tenantId,
+    userId,
+    missionId,
+    missionTargetId,
+    incidentId,
+    state,
+    action,
+    expiresAt,
+    leaseExpiresAt,
+    reservationExpiresAt
+  ] of jobs) {
+    const suffix = tenantId === NATIVE_TENANT ? "other" : "local";
+    await database.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."action_jobs"(
+         id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+         state, action, quantity, max_unit_price_cents, max_order_total_cents,
+         currency, seller_policy, fulfillment, expected_seller, listing_id,
+         canonical_url, idempotency_key, capability_nonce_hash, expires_at,
+         leased_at, lease_expires_at, intent_revision_id, exact_offer_key_id,
+         offer_snapshot_id, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 1000, 1200, 'USD',
+                 'first_party_only', 'shipping', 'Target', 'listing_cutover_scope',
+                 'https://www.target.com/p/-/A-cutover-scope-sku', $9, $10, $11,
+                 $12, $12, $13, $14, $15, $16, $16)`,
+      [
+        id,
+        tenantId,
+        userId,
+        missionId,
+        missionTargetId,
+        incidentId,
+        state,
+        action,
+        `idempotency:${id}`,
+        `original-capability:${id}`,
+        expiresAt,
+        leaseExpiresAt,
+        `native_exec_intent_${suffix}`,
+        `native_exec_offer_${suffix}`,
+        `native_exec_snapshot_${suffix}`,
+        createdAt
+      ]
+    );
+    if (reservationExpiresAt) {
+      const reservationId = `native_exec_reservation_${id.replace("native_exec_", "")}`;
+      await database.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."spend_reservations"(
+           id, tenant_id, user_id, mission_id, intent_revision_id,
+           exact_offer_key_id, offer_snapshot_id, action_job_id, idempotency_key,
+           action, quantity, reserved_amount_cents, committed_amount_cents,
+           currency, status, release_reason, expires_at, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, 1200, 0,
+                   'USD', 'active', '', $11, $12, $12)`,
+        [
+          reservationId,
+          tenantId,
+          userId,
+          missionId,
+          `native_exec_intent_${suffix}`,
+          `native_exec_offer_${suffix}`,
+          `native_exec_snapshot_${suffix}`,
+          id,
+          `reservation-idempotency:${id}`,
+          action,
+          reservationExpiresAt,
+          createdAt
+        ]
+      );
+      await database.query(
+        `UPDATE "${NATIVE_SCHEMA}"."action_jobs" SET spend_reservation_id = $1 WHERE id = $2`,
+        [reservationId, id]
+      );
+      await database.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."spend_ledger_entries"(
+           id, tenant_id, user_id, reservation_id, action_job_id, entry_type,
+           reserved_delta_cents, spent_delta_cents, quantity_delta, currency,
+           reason_code, correlation_id, metadata_json, created_at
+         ) VALUES ($1, $2, $3, $4, $5, 'reserved', 1200, 0, 1, 'USD',
+                   'action_job_reserved', $5, '{}', $6)`,
+        [`native_exec_ledger_reserved_${id}`, tenantId, userId, reservationId, id, createdAt]
+      );
+    }
+  }
+  return { expiredLeaseAt, currentLeaseAt };
+}
+
 function workerContext(workerId: string): BackgroundWorkerContext {
   return {
     principal: { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
@@ -172,8 +362,8 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and notification recovery", {
-  timeout: 180_000
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, and two recovery handlers", {
+  timeout: 240_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
   const databaseDir = join(parent, "cluster");
@@ -210,6 +400,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let notificationRecoveryUnmapped: NodePostgresNotificationRecoveryDatabase | null = null;
   let notificationDirectClient: Client | null = null;
   let notificationHandlerDb: YoinkDatabase | null = null;
+  let executionRecoveryA: NodePostgresExecutionRecoveryDatabase | null = null;
+  let executionRecoveryB: NodePostgresExecutionRecoveryDatabase | null = null;
+  let executionRecoveryUnmapped: NodePostgresExecutionRecoveryDatabase | null = null;
+  let executionDirectClient: Client | null = null;
+  let executionHandlerDb: YoinkDatabase | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -364,6 +559,51 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       notificationRecoveryBoundary
     );
+    const executionRecoveryBoundary = await applyPostgresExecutionRecoveryBoundary(
+      importer,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      new Date("2026-08-25T16:54:30.000Z").getTime()
+    );
+    assert.equal(executionRecoveryBoundary.protectedTableCount, 9);
+    assert.equal(executionRecoveryBoundary.forcedRlsTableCount, 8);
+    assert.equal(executionRecoveryBoundary.indirectScopeTableCount, 1);
+    assert.equal(executionRecoveryBoundary.directTableGrantCount, 0);
+    assert.equal(executionRecoveryBoundary.functionGrantCount, 1);
+    assert.equal(executionRecoveryBoundary.membershipCount, 0);
+    assert.equal(executionRecoveryBoundary.activePrincipalCount, 0);
+    assert.equal(executionRecoveryBoundary.boundaryHandlerTaskKindCount, 1);
+    assert.equal(executionRecoveryBoundary.qualifiedHandlerTaskKindCount, 2);
+    assert.equal(executionRecoveryBoundary.totalHandlerTaskKindCount, 7);
+    assert.equal(executionRecoveryBoundary.serverBoundPrincipalLookup, true);
+    assert.equal(executionRecoveryBoundary.serverClockBoundRecovery, true);
+    assert.equal(executionRecoveryBoundary.sharedIncidentMutationFailClosed, true);
+    assert.equal(executionRecoveryBoundary.executionRecoveryRepositoryParity, true);
+    assert.equal(executionRecoveryBoundary.notificationRecoveryRepositoryParity, true);
+    assert.equal(executionRecoveryBoundary.fullHandlerRepositoryParity, false);
+    assert.equal(executionRecoveryBoundary.directTableAccess, false);
+    assert.equal(executionRecoveryBoundary.insertAccess, false);
+    assert.equal(executionRecoveryBoundary.deleteAccess, false);
+    assert.equal(executionRecoveryBoundary.runtimeAuthority, false);
+    assert.match(executionRecoveryBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresExecutionRecoveryBoundary(
+        importer,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE
+      ),
+      executionRecoveryBoundary
+    );
     await importer.close();
     importer = null;
 
@@ -436,6 +676,15 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
       NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE
     );
+    const executionRecoveryManifest = buildPostgresExecutionRecoveryManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE
+    );
     for (const principalRole of [NATIVE_PRINCIPAL_A, NATIVE_PRINCIPAL_B, NATIVE_PRINCIPAL_UNMAPPED]) {
       await first.query(
         `CREATE ROLE "${principalRole}"
@@ -450,6 +699,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${notificationRecoveryManifest.recoveryRole.name}" TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${executionRecoveryManifest.executionRecoveryRole.name}" TO "${principalRole}"`
       );
     }
     await first.query(
@@ -543,6 +795,30 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
     NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
     NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, { maxConnections: 1 });
+    executionRecoveryA = new NodePostgresExecutionRecoveryDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    { maxConnections: 2 });
+    executionRecoveryB = new NodePostgresExecutionRecoveryDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_B),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    { maxConnections: 1 });
+    executionRecoveryUnmapped = new NodePostgresExecutionRecoveryDatabase({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_UNMAPPED),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE, NATIVE_SESSION_ROLE_NAMESPACE,
+    NATIVE_QUEUE_WRITE_ROLE_NAMESPACE, NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+    NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE, NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+    { maxConnections: 1 });
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -800,6 +1076,255 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     assert.ok(concurrentRecovery.every((result) => result.expiredNotifications === 0
       && result.failedLeases === 0));
+
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."action_jobs"
+       SET state = 'notify_only'
+       WHERE id LIKE 'native_notify_%'`
+    );
+    const executionNow = Date.now();
+    const executionFixture = await insertExecutionRecoveryFixtures(first, executionNow);
+    executionHandlerDb = new YoinkDatabase();
+    const executionHandler = new BackgroundMaintenanceHandler(executionHandlerDb, {
+      executionRecovery: executionRecoveryA
+    });
+    assert.deepEqual(
+      await executionHandler.execute(
+        workerContext("native_execution_handler"),
+        "execution_recovery",
+        executionNow
+      ),
+      {
+        recoveredActionLeases: 5,
+        expiredActionJobs: 1,
+        releasedSpendReservations: 1
+      }
+    );
+    const executionJobs = (await first.query<{
+      id: string;
+      state: string;
+      capabilityNonceHash: string;
+      leaseExpiresAt: string;
+    }>(
+      `SELECT id, state, capability_nonce_hash AS "capabilityNonceHash",
+              lease_expires_at AS "leaseExpiresAt"
+       FROM "${NATIVE_SCHEMA}"."action_jobs"
+       WHERE tenant_id = $1 AND user_id = $2 AND id LIKE 'native_exec_%'
+       ORDER BY id`,
+      [NATIVE_TENANT, NATIVE_USER]
+    )).rows;
+    assert.deepEqual(
+      executionJobs.map((job) => ({ id: job.id, state: job.state })),
+      [
+        { id: "native_exec_add_authorized", state: "cancelled" },
+        { id: "native_exec_adding", state: "manual_review" },
+        { id: "native_exec_contention", state: "leased" },
+        { id: "native_exec_current", state: "leased" },
+        { id: "native_exec_leased", state: "expired" },
+        { id: "native_exec_pending", state: "expired" },
+        { id: "native_exec_reservation_only", state: "awaiting_executor" },
+        { id: "native_exec_shared", state: "expired" },
+        { id: "native_exec_submitting", state: "submission_uncertain" }
+      ]
+    );
+    for (const job of executionJobs.filter((row) => [
+      "native_exec_add_authorized",
+      "native_exec_adding",
+      "native_exec_leased",
+      "native_exec_shared",
+      "native_exec_submitting"
+    ].includes(row.id))) {
+      assert.match(job.capabilityNonceHash, /^[a-f0-9]{64}$/);
+      assert.notEqual(job.capabilityNonceHash, `original-capability:${job.id}`);
+      assert.notEqual(job.leaseExpiresAt, executionFixture.expiredLeaseAt);
+    }
+    assert.equal(
+      executionJobs.find((job) => job.id === "native_exec_current")?.leaseExpiresAt,
+      executionFixture.currentLeaseAt
+    );
+    assert.equal(
+      executionJobs.find((job) => job.id === "native_exec_pending")?.capabilityNonceHash,
+      "original-capability:native_exec_pending"
+    );
+    assert.deepEqual(
+      (await first.query<{ id: string; status: string; closedReason: string }>(
+        `SELECT id, status, closed_reason AS "closedReason"
+         FROM "${NATIVE_SCHEMA}"."signal_incidents"
+         WHERE id LIKE 'native_exec_incident_%' ORDER BY id`
+      )).rows,
+      [
+        { id: "native_exec_incident_add_authorized", status: "closed", closedReason: "cancelled" },
+        { id: "native_exec_incident_adding", status: "locked", closedReason: "manual_review" },
+        { id: "native_exec_incident_contention", status: "open", closedReason: "" },
+        { id: "native_exec_incident_current", status: "open", closedReason: "" },
+        { id: "native_exec_incident_leased", status: "closed", closedReason: "expired" },
+        { id: "native_exec_incident_pending", status: "closed", closedReason: "expired" },
+        { id: "native_exec_incident_reservation_only", status: "open", closedReason: "" },
+        { id: "native_exec_incident_shared", status: "open", closedReason: "" },
+        { id: "native_exec_incident_submitting", status: "locked", closedReason: "submission_uncertain" }
+      ]
+    );
+    assert.deepEqual(
+      (await first.query<{ id: string; status: string; releaseReason: string }>(
+        `SELECT id, status, release_reason AS "releaseReason"
+         FROM "${NATIVE_SCHEMA}"."spend_reservations"
+         WHERE tenant_id = $1 AND user_id = $2 AND id LIKE 'native_exec_reservation_%'
+         ORDER BY id`,
+        [NATIVE_TENANT, NATIVE_USER]
+      )).rows,
+      [
+        { id: "native_exec_reservation_add_authorized", status: "released", releaseReason: "cancelled" },
+        { id: "native_exec_reservation_adding", status: "active", releaseReason: "" },
+        { id: "native_exec_reservation_leased", status: "released", releaseReason: "expired" },
+        { id: "native_exec_reservation_pending", status: "released", releaseReason: "expired" },
+        { id: "native_exec_reservation_reservation_only", status: "released", releaseReason: "reservation_expired" },
+        { id: "native_exec_reservation_submitting", status: "active", releaseReason: "" }
+      ]
+    );
+    assert.deepEqual(
+      (await first.query<{ actionJobId: string; reasonCode: string }>(
+        `SELECT action_job_id AS "actionJobId", reason_code AS "reasonCode"
+         FROM "${NATIVE_SCHEMA}"."spend_ledger_entries"
+         WHERE tenant_id = $1 AND user_id = $2 AND entry_type = 'released'
+           AND action_job_id LIKE 'native_exec_%'
+         ORDER BY action_job_id`,
+        [NATIVE_TENANT, NATIVE_USER]
+      )).rows,
+      [
+        { actionJobId: "native_exec_add_authorized", reasonCode: "cancelled" },
+        { actionJobId: "native_exec_leased", reasonCode: "expired" },
+        { actionJobId: "native_exec_pending", reasonCode: "expired" },
+        { actionJobId: "native_exec_reservation_only", reasonCode: "reservation_expired" }
+      ]
+    );
+    assert.deepEqual(
+      (await first.query<{ jobId: string; state: string; reasonCode: string }>(
+        `SELECT job_id AS "jobId", state, reason_code AS "reasonCode"
+         FROM "${NATIVE_SCHEMA}"."action_events"
+         WHERE job_id LIKE 'native_exec_%' ORDER BY job_id`
+      )).rows,
+      [
+        { jobId: "native_exec_add_authorized", state: "cancelled", reasonCode: "lease_expired_before_mutation" },
+        { jobId: "native_exec_adding", state: "manual_review", reasonCode: "lease_expired_after_mutation_boundary" },
+        { jobId: "native_exec_leased", state: "expired", reasonCode: "lease_expired_before_mutation" },
+        { jobId: "native_exec_pending", state: "expired", reasonCode: "signal_window_expired" },
+        { jobId: "native_exec_shared", state: "expired", reasonCode: "lease_expired_before_mutation" },
+        { jobId: "native_exec_submitting", state: "submission_uncertain", reasonCode: "lease_expired_after_mutation_boundary" }
+      ]
+    );
+    assert.deepEqual(
+      (await first.query<{ auditCount: string | number | bigint; outboxCount: string | number | bigint }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE correlation_id LIKE 'native_exec_%') AS "auditCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE aggregate_id LIKE 'native_exec_%') AS "outboxCount"`
+      )).rows.map((row) => ({
+        auditCount: Number(row.auditCount),
+        outboxCount: Number(row.outboxCount)
+      })),
+      [{ auditCount: 10, outboxCount: 10 }]
+    );
+    assert.deepEqual(
+      await executionRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        executionNow
+      ),
+      { recoveredActionLeases: 0, expiredActionJobs: 0, releasedSpendReservations: 0 }
+    );
+    await assert.rejects(
+      executionRecoveryA.recover(
+        { tenantId: "tenant_local", userId: "user_local" },
+        executionNow
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      executionRecoveryUnmapped.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        executionNow
+      ),
+      /tenant session principal is not active/
+    );
+    assert.deepEqual(
+      await executionRecoveryB.recover(
+        { tenantId: "tenant_local", userId: "user_local" },
+        executionNow
+      ),
+      { recoveredActionLeases: 1, expiredActionJobs: 0, releasedSpendReservations: 0 }
+    );
+    assert.deepEqual(
+      (await first.query<{ id: string; state: string }>(
+        `SELECT id, state FROM "${NATIVE_SCHEMA}"."action_jobs"
+         WHERE id IN ('native_exec_shared', 'native_exec_cross_tenant') ORDER BY id`
+      )).rows,
+      [
+        { id: "native_exec_cross_tenant", state: "expired" },
+        { id: "native_exec_shared", state: "expired" }
+      ]
+    );
+    assert.deepEqual(
+      (await first.query<{ status: string; closedReason: string }>(
+        `SELECT status, closed_reason AS "closedReason"
+         FROM "${NATIVE_SCHEMA}"."signal_incidents"
+         WHERE id = 'native_exec_incident_shared'`
+      )).rows,
+      [{ status: "open", closedReason: "" }]
+    );
+    await assert.rejects(
+      executionRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        executionNow - 600_000
+      ),
+      /cycle timestamp differs from the process clock/
+    );
+    executionDirectClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
+    executionDirectClient.on("error", () => undefined);
+    await executionDirectClient.connect();
+    await executionDirectClient.query(
+      `SET ROLE "${executionRecoveryManifest.executionRecoveryRole.name}"`
+    );
+    await assert.rejects(
+      executionDirectClient.query(`SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs"`),
+      /permission denied/
+    );
+    await assert.rejects(
+      executionDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."spend_reservations" SET status = 'committed'`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      executionDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."yoink_recover_notification_deliveries"($1, $2)`,
+        [NATIVE_TENANT, NATIVE_USER]
+      ),
+      /permission denied/
+    );
+    await executionDirectClient.end();
+    executionDirectClient = null;
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."action_jobs"
+       SET lease_expires_at = $1
+       WHERE id = 'native_exec_contention' AND state = 'leased'`,
+      [executionFixture.expiredLeaseAt]
+    );
+    const concurrentExecutionRecovery = await Promise.all([
+      executionRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        executionNow
+      ),
+      executionRecoveryA.recover(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        executionNow
+      )
+    ]);
+    assert.equal(
+      concurrentExecutionRecovery.reduce((sum, result) => sum + result.recoveredActionLeases, 0),
+      1
+    );
+    assert.ok(concurrentExecutionRecovery.every((result) => result.expiredActionJobs === 0
+      && result.releasedSpendReservations === 0));
 
     const heartbeatInsert = (
       writer: NodePostgresTenantQueueWriteDatabase,
@@ -1357,6 +1882,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       await first.query(
         `REVOKE "${notificationRecoveryManifest.recoveryRole.name}" FROM "${principalRole}"`
       );
+      await first.query(
+        `REVOKE "${executionRecoveryManifest.executionRecoveryRole.name}" FROM "${principalRole}"`
+      );
     }
     await first.query(
       `REVOKE "${workerControlManifest.controlRole.name}" FROM "${NATIVE_CONTROL_PRINCIPAL}"`
@@ -1403,6 +1931,56 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(
       cleanNotificationRecoveryBoundary.boundaryCatalogFingerprint,
       notificationRecoveryBoundary.boundaryCatalogFingerprint
+    );
+    const cleanExecutionRecoveryBoundary = await verifyPostgresExecutionRecoveryBoundary(
+      first,
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE
+    );
+    assert.equal(
+      cleanExecutionRecoveryBoundary.boundaryCatalogFingerprint,
+      executionRecoveryBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_action_execution"(
+         text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresExecutionRecoveryBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE
+      ),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_action_execution"(
+         text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresExecutionRecoveryBoundary(
+        first,
+        NATIVE_SCHEMA,
+        NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE,
+        NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+        NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+        NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+        NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE
+      )).boundaryCatalogFingerprint,
+      executionRecoveryBoundary.boundaryCatalogFingerprint
     );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."yoink_recover_notification_deliveries"(
@@ -1541,9 +2119,14 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       notificationRecoveryA?.close(),
       notificationRecoveryB?.close(),
       notificationRecoveryUnmapped?.close(),
-      notificationDirectClient?.end()
+      notificationDirectClient?.end(),
+      executionRecoveryA?.close(),
+      executionRecoveryB?.close(),
+      executionRecoveryUnmapped?.close(),
+      executionDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
+    executionHandlerDb?.close();
     await postgres.stop().catch(() => undefined);
     if (existsSync(parent)) rmSync(parent, { recursive: true, force: true });
     if (existsSync(fixture.directory)) rmSync(fixture.directory, { recursive: true, force: true });

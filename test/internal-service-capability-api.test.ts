@@ -17,6 +17,7 @@ import { postgresTenantSessionCapabilityProjection } from "../packages/database/
 import { postgresTenantQueueWriteCapabilityProjection } from "../packages/database/src/postgres-tenant-queue-writes.js";
 import { postgresWorkerControlCapabilityProjection } from "../packages/database/src/postgres-worker-control.js";
 import { postgresNotificationRecoveryCapabilityProjection } from "../packages/database/src/postgres-notification-recovery.js";
+import { postgresExecutionRecoveryCapabilityProjection } from "../packages/database/src/postgres-execution-recovery.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -102,6 +103,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresTenantQueueWrites: ReturnType<typeof postgresTenantQueueWriteCapabilityProjection>;
         postgresWorkerControl: ReturnType<typeof postgresWorkerControlCapabilityProjection>;
         postgresNotificationRecovery: ReturnType<typeof postgresNotificationRecoveryCapabilityProjection>;
+        postgresExecutionRecovery: ReturnType<typeof postgresExecutionRecoveryCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -123,6 +125,10 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.deepEqual(
       snapshot.dataPlane.postgresNotificationRecovery,
       postgresNotificationRecoveryCapabilityProjection()
+    );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresExecutionRecovery,
+      postgresExecutionRecoveryCapabilityProjection()
     );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
@@ -153,6 +159,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Least-privilege fleet control/);
     assert.match(cutoverText, /Server-bound notification recovery/);
     assert.match(cutoverText, /1 of 7 worker task families/);
+    assert.match(cutoverText, /Server-bound action and spend recovery/);
+    assert.match(cutoverText, /2 of 7 worker task families/);
+    assert.match(cutoverText, /refuses cross-tenant shared-incident mutation/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);
     assert.match(cutoverText, /3 independent PostgreSQL 16 backend sessions/);

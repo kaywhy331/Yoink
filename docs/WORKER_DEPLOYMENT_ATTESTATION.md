@@ -62,6 +62,9 @@ stopping through their own adapter without queue, insert, delete, login,
 membership, or runtime authority. Version 0.65 adds one separate function-only
 notification-recovery handler boundary with no direct table privileges; it
 does not weaken or participate in deployment attestation and remains inactive.
+Version 0.66 adds the same separate boundary for action/spend execution
+recovery, including fail-closed shared-incident handling. It also remains
+inactive and cannot schedule or lease new work.
 
 A mismatch may write only its normal bounded heartbeat with
 `worker_deployment_mismatch`. This gives the API and Operations workspace

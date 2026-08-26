@@ -366,7 +366,9 @@ enumeration, fleet status, and stopping run through a separate inactive
 three-table/19-column-grant role in the 0.64 native qualification path. Version
 0.65 qualifies the first handler family through a separate function-only role:
 notification recovery has zero direct table grants and server-bound tenant/user
-resolution. No production login, mapping, membership, handler composition, or
+resolution. Version 0.66 qualifies execution recovery through a second
+zero-direct-grant function that preserves action/spend receipts and refuses
+cross-tenant shared-incident mutation. No production login, mapping, membership, handler composition, or
 API repository is provisioned. None of these releases deploys that runtime. Until
 it is provisioned and verified, SQLite is the source of truth and hosted
 boundary mode is suitable for integration/staging—not a claim of completed

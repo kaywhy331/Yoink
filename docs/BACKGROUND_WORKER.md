@@ -273,8 +273,12 @@ pagination, coverage, stopping, and prohibited operations through its dedicated
 transaction adapter. Version 0.65 adds the first task-handler repository:
 notification recovery runs through one principal-bound function-only role with
 zero direct table grants in native qualification, including idempotent and
-concurrent replay proof. Production still requires the other six PostgreSQL
-task-handler repositories, production login provisioning and activation, remaining writer
+concurrent replay proof. At that boundary, the other six task handlers were
+still SQLite-only. Version 0.66 adds the second: execution recovery
+uses a separate zero-direct-grant, principal-bound, server-clocked function to
+preserve the complete action/spend/event/audit/outbox transition contract and
+fails closed instead of changing a cross-tenant shared incident. Production
+still requires the other five PostgreSQL task-handler repositories, production login provisioning and activation, remaining writer
 families, a deployed multi-process worker fleet with handler replay and failure testing, production
 identity and secrets, backups/PITR, load and outage drills, SLO
 alerting, and controlled cutover. Do not advertise either external SQLite mode

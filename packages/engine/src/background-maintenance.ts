@@ -39,6 +39,16 @@ export interface BackgroundMaintenanceHandlerOptions {
       failedLeases: number;
     }>;
   };
+  executionRecovery?: {
+    recover(
+      principal: BackgroundWorkerContext["principal"],
+      now: number
+    ): Promise<{
+      recoveredActionLeases: number;
+      expiredActionJobs: number;
+      releasedSpendReservations: number;
+    }>;
+  };
 }
 
 export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler {
@@ -92,11 +102,13 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
   ): Promise<BackgroundTaskResult> {
     switch (taskKind) {
       case "execution_recovery":
-        return {
-          recoveredActionLeases: this.execution.recoverExpiredLeases(now),
-          expiredActionJobs: this.execution.expirePendingJobs(now),
-          releasedSpendReservations: this.spendLedger.releaseExpired(now)
-        };
+        return this.options.executionRecovery
+          ? this.options.executionRecovery.recover(context.principal, now)
+          : {
+              recoveredActionLeases: this.execution.recoverExpiredLeases(now),
+              expiredActionJobs: this.execution.expirePendingJobs(now),
+              releasedSpendReservations: this.spendLedger.releaseExpired(now)
+            };
       case "notification_recovery":
         return this.options.notificationRecovery
           ? this.options.notificationRecovery.recover(context.principal, now)

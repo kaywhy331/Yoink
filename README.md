@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.65.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.66.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,27 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.66.0 ports the second complete background-task handler family to the
+inactive PostgreSQL qualification plane. `execution_recovery` has its own
+`NOLOGIN`/`NOINHERIT`/`NOBYPASSRLS` role with zero direct table or column
+grants and exactly one strict security-definer routine. The database statement
+clock—not caller time—drives stale lease, action-window, and spend-reservation
+decisions. The routine preserves action events, append-only spend-ledger
+entries, audit events, and outbox receipts while returning only three aggregate
+counts.
+
+The port also closes a latent multi-tenant edge in both SQLite and PostgreSQL:
+an action transition can close or lock a shared `signal_incidents` row only
+when every bound action and signal occurrence belongs to the exact tenant/user.
+Otherwise the private action and spend state recover while the shared incident
+remains unchanged. Native PostgreSQL 16 proves every pre/post-mutation state,
+receipt parity, direct-SQL denial, mismatched/unmapped principal rejection,
+cross-tenant shared-incident isolation, idempotent replay, concurrent one-winner
+recovery, and catalog-tamper rejection. Exactly two of seven handler families
+are qualified; runtime composition and PostgreSQL authority remain closed. Use
+`npm run postgres:execution-recovery -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.65.0 ports the first complete background-task handler family to the
 qualified PostgreSQL plane without activating it. `notification_recovery` now

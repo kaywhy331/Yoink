@@ -1027,14 +1027,16 @@ principal enumeration, deployment status, and worker stopping now route
 through a separate inactive role with 19 exact column grants on three tables
 and three explicit policies. Native PostgreSQL proves its repository behavior and
 denies queue access, insert/delete, unrelated updates, routines, ownership,
-membership, and login. The first handler boundary now routes
-`notification_recovery` through a separate server-principal-bound
-security-definer routine. Its inactive role has one function grant and zero
-direct table grants; native tests prove handler parity, isolation, replay,
-contention, denial, and tamper detection. Production login provisioning and
-activation, remaining writer families, mixed shared-offer/incident semantics,
-the other six PostgreSQL task handlers and every request repository, deployed
-fleet/load/outage proof, and backup/cutover drills remain
+membership, and login. Two handler boundaries now route
+`notification_recovery` and `execution_recovery` through separate
+server-principal-bound security-definer routines. Each inactive role has one
+function grant and zero direct table grants; native tests prove handler parity,
+isolation, replay, contention, denial, receipt completeness, and tamper
+detection. Execution recovery additionally refuses to mutate a shared incident
+when another tenant/user owns any bound action or occurrence. Production login
+provisioning and activation, remaining writer families, general mixed
+shared-offer/incident semantics, the other five PostgreSQL task handlers and
+every request repository, deployed fleet/load/outage proof, and backup/cutover drills remain
 gated, so SQLite retains runtime authority. See
 [Data portability and recovery](DATA_PORTABILITY.md) and
 [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).

@@ -644,11 +644,39 @@ export class SignalRepository {
   }
 
   closeIncident(incidentId: string, reason: string, now = Date.now()): void {
+    this.updateIncidentForCurrentScope(incidentId, "closed", reason, now);
+  }
+
+  private updateIncidentForCurrentScope(
+    incidentId: string,
+    status: "closed" | "locked",
+    reason: string,
+    now: number
+  ): void {
+    const scope = currentRequestScope();
     this.db.run(
-      `UPDATE signal_incidents SET status = 'closed', closed_reason = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE signal_incidents
+       SET status = ?, closed_reason = ?, updated_at = ?
+       WHERE id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM action_jobs other_job
+           WHERE other_job.incident_id = signal_incidents.id
+             AND (other_job.tenant_id <> ? OR other_job.user_id <> ?)
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM signal_occurrences occurrence
+           JOIN signal_events event ON event.id = occurrence.event_id
+           WHERE occurrence.incident_id = signal_incidents.id
+             AND (event.tenant_id <> ? OR event.user_id <> ?)
+         )`,
+      status,
       reason,
       nowIso(now),
-      incidentId
+      incidentId,
+      scope.tenantId,
+      scope.userId,
+      scope.tenantId,
+      scope.userId
     );
   }
 
@@ -697,12 +725,7 @@ export class SignalRepository {
         this.closeIncident(job.incident_id, nextState, now);
         this.spendLedger.releaseForJob(job.id, nextState, now);
       } else if (nextState === "submission_uncertain" || nextState === "manual_review") {
-        this.db.run(
-          `UPDATE signal_incidents SET status = 'locked', closed_reason = ?, updated_at = ? WHERE id = ?`,
-          nextState,
-          timestamp,
-          job.incident_id
-        );
+        this.updateIncidentForCurrentScope(job.incident_id, "locked", nextState, now);
       } else if (nextState === "confirmed") {
         this.closeIncident(job.incident_id, "confirmed", now);
         if (job.action === "submit_order") {

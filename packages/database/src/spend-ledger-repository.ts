@@ -11,6 +11,8 @@ import type { YoinkDatabase } from "./database.js";
 import { PurchaseSafetyError } from "./purchase-policy-repository.js";
 import { currentRequestScope } from "./request-scope.js";
 
+export const SPEND_RESERVATION_EXPIRY_REASON = "reservation_expired";
+
 export interface SpendReservation {
   id: string;
   missionId: string;
@@ -442,7 +444,9 @@ export class SpendLedgerRepository {
       currentRequestScope().userId,
       nowIso(now)
     );
-    for (const reservation of expired) this.releaseForJob(reservation.actionJobId, "reservation_expired", now);
+    for (const reservation of expired) {
+      this.releaseForJob(reservation.actionJobId, SPEND_RESERVATION_EXPIRY_REASON, now);
+    }
     return expired.length;
   }
 

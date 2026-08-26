@@ -52,6 +52,12 @@ import {
   postgresNotificationRecoveryCapabilityProjection
 } from "../packages/database/src/postgres-notification-recovery.js";
 import {
+  POSTGRES_EXECUTION_RECOVERY_CONTRACT_VERSION,
+  POSTGRES_EXECUTION_RECOVERY_FUNCTION,
+  buildPostgresExecutionRecoveryManifest,
+  postgresExecutionRecoveryCapabilityProjection
+} from "../packages/database/src/postgres-execution-recovery.js";
+import {
   POSTGRES_TEST_WORKER_FINGERPRINT as WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION as WORKER_VERSION,
   createPostgresCutoverFixture
@@ -439,6 +445,112 @@ test("the PostgreSQL notification-recovery handler template is deterministic, se
       "session_namespace",
       "queue_namespace",
       "control_namespace",
+      "same_namespace"
+    ),
+    /must be distinct/
+  );
+});
+
+test("the PostgreSQL execution-recovery handler template is cumulative, fail closed, and inert", () => {
+  const manifest = buildPostgresExecutionRecoveryManifest(
+    "yoink_cutover_test",
+    "yoink_q_test",
+    "yoink_session_test",
+    "yoink_queue_write_test",
+    "yoink_worker_control_test",
+    "yoink_notify_test",
+    "yoink_execute_test"
+  );
+  assert.deepEqual(
+    buildPostgresExecutionRecoveryManifest(
+      "yoink_cutover_test",
+      "yoink_q_test",
+      "yoink_session_test",
+      "yoink_queue_write_test",
+      "yoink_worker_control_test",
+      "yoink_notify_test",
+      "yoink_execute_test"
+    ),
+    manifest
+  );
+  assert.equal(manifest.contractVersion, POSTGRES_EXECUTION_RECOVERY_CONTRACT_VERSION);
+  assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
+  assert.equal(
+    manifest.notificationRecoveryContractVersion,
+    POSTGRES_NOTIFICATION_RECOVERY_CONTRACT_VERSION
+  );
+  assert.equal(manifest.executionRecoveryRole.functionName, POSTGRES_EXECUTION_RECOVERY_FUNCTION);
+  assert.deepEqual(manifest.executionRecoveryRole.functionArgumentTypes, ["text", "text"]);
+  assert.deepEqual(manifest.executionRecoveryRole.protectedTableNames, [
+    "action_events",
+    "action_jobs",
+    "audit_events",
+    "outbox_events",
+    "signal_events",
+    "signal_incidents",
+    "signal_occurrences",
+    "spend_ledger_entries",
+    "spend_reservations"
+  ]);
+  assert.deepEqual(manifest.executionRecoveryRole.indirectScopeTableNames, ["signal_incidents"]);
+  assert.equal(manifest.protectedTableCount, 9);
+  assert.equal(manifest.forcedRlsTableCount, 8);
+  assert.equal(manifest.indirectScopeTableCount, 1);
+  assert.equal(manifest.directTableGrantCount, 0);
+  assert.equal(manifest.functionGrantCount, 1);
+  assert.deepEqual(manifest.boundaryHandlerTaskKinds, ["execution_recovery"]);
+  assert.deepEqual(manifest.qualifiedHandlerTaskKinds, [
+    "notification_recovery",
+    "execution_recovery"
+  ]);
+  assert.equal(manifest.boundaryHandlerTaskKindCount, 1);
+  assert.equal(manifest.qualifiedHandlerTaskKindCount, 2);
+  assert.equal(manifest.totalHandlerTaskKindCount, 7);
+  assert.equal(manifest.executionRecoveryRepositoryParity, true);
+  assert.equal(manifest.notificationRecoveryRepositoryParity, true);
+  assert.equal(manifest.serverClockBoundRecovery, true);
+  assert.equal(manifest.sharedIncidentMutationFailClosed, true);
+  assert.equal(manifest.fullHandlerRepositoryParity, false);
+  assert.equal(manifest.executionRecoveryRole.login, false);
+  assert.equal(manifest.executionRecoveryRole.inherit, false);
+  assert.equal(manifest.executionRecoveryRole.bypassRls, false);
+  assert.equal(manifest.executionRecoveryRole.directTableAccess, false);
+  assert.equal(manifest.executionRecoveryRole.insertAccess, false);
+  assert.equal(manifest.executionRecoveryRole.deleteAccess, false);
+  assert.match(manifest.notificationRecoveryManifestFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
+  const capability = postgresExecutionRecoveryCapabilityProjection();
+  assert.equal(capability.contractVersion, POSTGRES_EXECUTION_RECOVERY_CONTRACT_VERSION);
+  assert.equal(
+    capability.notificationRecoveryContractVersion,
+    POSTGRES_NOTIFICATION_RECOVERY_CONTRACT_VERSION
+  );
+  assert.equal(capability.exactEffectivePrivilegeVerification, true);
+  assert.equal(capability.securityDefinerRoutineVerified, true);
+  assert.equal(capability.serverBoundPrincipalLookup, true);
+  assert.equal(capability.serverClockBoundRecovery, true);
+  assert.equal(capability.sharedIncidentMutationFailClosed, true);
+  assert.equal(capability.notificationRecoveryRepositoryParity, true);
+  assert.equal(capability.executionRecoveryRepositoryParity, true);
+  assert.equal(capability.fullHandlerRepositoryParity, false);
+  assert.equal(capability.handlerTaskKindCount, 2);
+  assert.equal(capability.totalHandlerTaskKindCount, 7);
+  assert.equal(capability.protectedTableCount, 9);
+  assert.equal(capability.forcedRlsTableCount, 8);
+  assert.equal(capability.indirectScopeTableCount, 1);
+  assert.equal(capability.directTableGrantCount, 0);
+  assert.equal(capability.functionGrantCount, 1);
+  assert.equal(capability.activeRuntimeRoleApplied, false);
+  assert.equal(capability.runtimeAuthority, false);
+  assert.equal(capability.productionReady, false);
+  assert.throws(
+    () => buildPostgresExecutionRecoveryManifest(
+      "yoink_cutover_test",
+      "same_namespace",
+      "session_namespace",
+      "queue_namespace",
+      "control_namespace",
+      "notify_namespace",
       "same_namespace"
     ),
     /must be distinct/

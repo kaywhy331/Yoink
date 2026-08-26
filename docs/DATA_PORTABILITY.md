@@ -22,7 +22,9 @@ three-table/19-column-grant control role and routes principal pagination, fleet
 status, and worker stopping through its native qualification adapter. Yoink
 0.65 adds a zero-direct-grant, function-only qualification role for the first
 handler family, notification recovery. The runtime API and worker remain
-SQLite-backed, the other six handlers remain SQLite-only, and all
+SQLite-backed. Yoink 0.66 adds the same bounded model for execution recovery,
+including action/spend receipt parity and fail-closed cross-tenant shared-
+incident handling. The other five handlers remain SQLite-only, and all
 PostgreSQL roles remain inactive.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
@@ -127,12 +129,15 @@ read/update through a separate role; native tests prove the exact operations
 and denials. The optional notification-recovery qualifier adds one
 server-clocked, principal-bound function grant with zero direct table access and
 proves exact handler transitions, isolation, idempotent/concurrent replay, and
-tamper rejection. Every fixture membership and mapping is removed afterward.
+tamper rejection. The optional execution-recovery qualifier adds a second
+server-clocked, principal-bound function-only role, preserves action, ledger,
+audit, and outbox receipts, and refuses cross-tenant shared-incident mutation.
+Every fixture membership and mapping is removed afterward.
 Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
-A production cutover must still add the other six PostgreSQL task handlers and
+A production cutover must still add the other five PostgreSQL task handlers and
 every request repository, production identity-to-login provisioning and activate the
 qualified roles, add remaining write roles,
 governed mixed/incident access, deployed worker-fleet and handler replay proof,
