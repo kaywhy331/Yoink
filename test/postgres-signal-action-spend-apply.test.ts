@@ -17,6 +17,7 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   assert.equal(manifest.contractVersion, POSTGRES_SIGNAL_ACTION_SPEND_APPLY_CONTRACT_VERSION);
   assert.equal(manifest.strategyEvaluationApplyContractVersion, 1);
   assert.equal(manifest.writerLockProtocolContractVersion, 1);
+  assert.equal(manifest.constraintConfigApplyContractVersion, 1);
   assert.equal(manifest.actionSpendRole.kind, "signal_action_spend_apply_boundary");
   assert.equal(manifest.actionSpendRole.functionName, POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION);
   assert.equal(manifest.actionSpendRole.login, false);
@@ -34,6 +35,13 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   assert.equal(manifest.fixedOrderConfigurationLocks, true);
   assert.equal(manifest.sharedWriterLockProtocolImplemented, true);
   assert.equal(manifest.writerLockProtocolConsumed, true);
+  assert.equal(manifest.constraintConfigBoundaryQualified, true);
+  assert.equal(manifest.settingsPauseWriterParity, true);
+  assert.equal(manifest.guardrailSettingsWriterParity, true);
+  assert.equal(manifest.spendPolicyWriterParity, true);
+  assert.equal(manifest.settingsWriterParity, false);
+  assert.equal(manifest.configurationWriterParity, false);
+  assert.equal(manifest.reservationWriterParity, false);
   assert.equal(manifest.currentMissionTargetRevalidation, true);
   assert.equal(manifest.currentSpendPolicyRevalidation, true);
   assert.equal(manifest.remainingQuantityRevalidation, true);
@@ -86,6 +94,13 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   assert.equal(capability.actionSpendRepositoryParity, true);
   assert.equal(capability.sharedWriterLockProtocolImplemented, true);
   assert.equal(capability.writerLockProtocolConsumed, true);
+  assert.equal(capability.constraintConfigBoundaryQualified, true);
+  assert.equal(capability.settingsPauseWriterParity, true);
+  assert.equal(capability.guardrailSettingsWriterParity, true);
+  assert.equal(capability.spendPolicyWriterParity, true);
+  assert.equal(capability.settingsWriterParity, false);
+  assert.equal(capability.configurationWriterParity, false);
+  assert.equal(capability.reservationWriterParity, false);
   assert.equal(capability.purchaseIntentOnly, true);
   assert.equal(capability.strategyActionAuthority, false);
   assert.equal(capability.actionMutation, true);
@@ -102,7 +117,7 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   assert.throws(
     () => buildPostgresSignalActionSpendApplyManifest(
       manifest.predecessorManifest,
-      manifest.predecessorManifest.writerLockRoleNamespace
+      manifest.predecessorManifest.constraintConfigRoleNamespace
     ),
     /independent/
   );

@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.85.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.86.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,32 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.86.0 adds the twelfth independently receipted piece of the inactive
+PostgreSQL hosted-signal plane: one bounded configuration writer for the three
+current user-facing safety operations—global action pause/resume, guardrail
+settings, and periodic spend caps. Its separate `NOLOGIN`, `NOINHERIT`,
+`NOBYPASSRLS` role has zero direct/effective table or column grants and may call
+one strict security-definer function across four forced-RLS tables.
+
+Every request is bound to the authenticated `session_user`, exact tenant/user,
+operation, deterministic request ID, and canonical payload. Settings updates
+consume only the shared settings lock; spend-policy updates consume only the
+shared spend lock. PostgreSQL owns timestamps, requires the expected settings
+timestamp or policy revision, appends audit/outbox receipts atomically, permits
+mutation-free exact replay, and rejects a changed payload under the same
+request identity. Native PostgreSQL 16 proves late-failure rollback, principal
+isolation, direct-table denial, unchanged spend-policy behavior, and a held
+pause transaction blocking the reviewed action writer until commit.
+
+This is partial writer parity, not runtime activation. Qualification-settings,
+source-trust, retailer-qualification, strategy, mission-policy, and reservation
+writers remain outside this boundary, so `settingsWriterParity`,
+`configurationWriterParity`, `reservationWriterParity`, and
+`writerLockProtocolParity` remain false. SQLite stays authoritative and no
+production principal is provisioned. Use
+`npm run postgres:signal-constraint-config-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.85.0 adds the eleventh independently receipted piece of the inactive
 PostgreSQL hosted-signal plane: a database-owned, lock-only coordination

@@ -8,13 +8,14 @@ import { buildPostgresSignalPostIncidentDecisionApplyManifest } from "../dist/pa
 import { buildPostgresSignalMissionBindingApplyManifest } from "../dist/packages/database/src/postgres-signal-mission-binding-apply.js";
 import { buildPostgresSignalStrategyEvaluationApplyManifest } from "../dist/packages/database/src/postgres-signal-strategy-evaluation-apply.js";
 import { buildPostgresSignalWriterLockProtocolManifest } from "../dist/packages/database/src/postgres-signal-writer-lock-protocol.js";
+import { buildPostgresSignalConstraintConfigApplyManifest } from "../dist/packages/database/src/postgres-signal-constraint-config-apply.js";
 import {
   applyPostgresSignalActionSpendApplyBoundary,
   buildPostgresSignalActionSpendApplyManifest,
   verifyPostgresSignalActionSpendApplyBoundary
 } from "../dist/packages/database/src/postgres-signal-action-spend-apply.js";
 
-const roleArguments = "[private_schema] [read_role_namespace] [session_role_namespace] [queue_role_namespace] [control_role_namespace] [notification_role_namespace] [execution_role_namespace] [retention_role_namespace] [candidate_role_namespace] [dispatch_role_namespace] [reconciliation_role_namespace] [witness_role_namespace] [delivery_lease_role_namespace] [catalog_apply_role_namespace] [resolution_apply_role_namespace] [source_reference_role_namespace] [terminal_decision_role_namespace] [offer_incident_role_namespace] [post_incident_decision_role_namespace] [mission_binding_role_namespace] [strategy_evaluation_role_namespace] [writer_lock_role_namespace] [action_spend_role_namespace]";
+const roleArguments = "[private_schema] [read_role_namespace] [session_role_namespace] [queue_role_namespace] [control_role_namespace] [notification_role_namespace] [execution_role_namespace] [retention_role_namespace] [candidate_role_namespace] [dispatch_role_namespace] [reconciliation_role_namespace] [witness_role_namespace] [delivery_lease_role_namespace] [catalog_apply_role_namespace] [resolution_apply_role_namespace] [source_reference_role_namespace] [terminal_decision_role_namespace] [offer_incident_role_namespace] [post_incident_decision_role_namespace] [mission_binding_role_namespace] [strategy_evaluation_role_namespace] [writer_lock_role_namespace] [constraint_config_role_namespace] [action_spend_role_namespace]";
 
 function usage() {
   process.stderr.write(`Usage:
@@ -33,8 +34,10 @@ quantity-one add-to-cart job and reservation graph.
 
 Strategy-authorized actions, retailer DOM mutation, checkout, order submission,
 inbox completion, runtime principals, and the SQLite authority switch stay
-closed. Configuration-writer lock parity, attribution-policy parity, and final
-hosted-handler composition are still required. SQLite remains authoritative.
+closed. User pause/guardrail and spend-policy writers now consume the shared
+protocol, but qualification settings, source, mission-policy, reservation,
+attribution-policy, and final hosted-handler parity are still required. SQLite
+remains authoritative.
 `);
 }
 
@@ -46,7 +49,7 @@ function safeFailureCode(error) {
   const message = error instanceof Error ? error.message : "";
   if (/acknowledgement is required/i.test(message)) return "qualification_acknowledgement_required";
   if (/YOINK_POSTGRES_URL|TLS|loopback|certificate|namespace|schema is invalid|identifier limit/i.test(message)) return "configuration_invalid";
-  if (/strategy-evaluation|mission-binding|post-incident|offer-incident|terminal-decision|source-reference|signal-resolution|signal-catalog|hosted-delivery|witness-refresh|alert-reconciliation|alert-dispatch|observer-candidate|operational-retention|execution-recovery|notification-recovery|worker-control|queue-write|tenant-session|read-role|cutover|manifest|contract/i.test(message)) return "prerequisite_contract_invalid";
+  if (/constraint-configuration|writer-lock|strategy-evaluation|mission-binding|post-incident|offer-incident|terminal-decision|source-reference|signal-resolution|signal-catalog|hosted-delivery|witness-refresh|alert-reconciliation|alert-dispatch|observer-candidate|operational-retention|execution-recovery|notification-recovery|worker-control|queue-write|tenant-session|read-role|cutover|manifest|contract/i.test(message)) return "prerequisite_contract_invalid";
   if (/existing role|function|guard|receipt|already exists|duplicate|refuses/i.test(message)) return "qualification_target_reused";
   if (/grant|privilege|membership|inherit another role|attribute|principal|boundary|protected table|mutation table|drift/i.test(message)) return "signal_action_spend_verification_failed";
   if (/server|CREATEROLE|BYPASSRLS/i.test(message)) return "signal_action_spend_preflight_failed";
@@ -62,6 +65,7 @@ const [command, schemaName, readRoleNamespace, sessionRoleNamespace,
   terminalDecisionRoleNamespace, offerIncidentRoleNamespace,
   postIncidentDecisionRoleNamespace, missionBindingRoleNamespace,
   strategyEvaluationRoleNamespace, writerLockRoleNamespace,
+  constraintConfigRoleNamespace,
   actionSpendRoleNamespace] = process.argv.slice(2);
 const predecessorArgs = [
   schemaName, readRoleNamespace, sessionRoleNamespace, queueRoleNamespace,
@@ -93,8 +97,12 @@ try {
       strategyEvaluationManifest,
       writerLockRoleNamespace
     );
-    const manifest = buildPostgresSignalActionSpendApplyManifest(
+    const constraintConfigManifest = buildPostgresSignalConstraintConfigApplyManifest(
       writerLockManifest,
+      constraintConfigRoleNamespace
+    );
+    const manifest = buildPostgresSignalActionSpendApplyManifest(
+      constraintConfigManifest,
       actionSpendRoleNamespace
     );
     if (command === "plan") {

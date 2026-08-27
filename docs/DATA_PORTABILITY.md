@@ -190,6 +190,16 @@ constraint before activation. Action jobs, spend, inbox completion, and all
 runtime authority remain closed, so complete-handler parity stays six of seven
 and SQLite remains authoritative.
 
+Yoink 0.84 through 0.86 add the reviewed purchase-intent action/spend writer,
+the shared five-domain fixed-order lock protocol, and a bounded writer for
+global pause/resume, guardrail settings, and periodic spend caps. All are
+separately receipted, principal-bound, zero-direct-grant, and inactive. Native
+PostgreSQL proves atomic rollback, immutable replay, one-writer contention, and
+real blocking between a configuration mutation and the action transaction.
+Qualification-settings, source, retailer-qualification, strategy, mission-
+policy, and reservation writers remain on SQLite, so aggregate configuration,
+reservation, and writer-lock parity stay false.
+
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
 
@@ -308,9 +318,10 @@ Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
-A production cutover must still complete the atomic action/spend and final-
-inbox composition of the hosted signal-evaluation handler, every request
-repository, production identity-to-login
+A production cutover must still compose the qualified action/spend and bounded
+configuration writers with the remaining writer families and final-inbox
+completion of the hosted signal-evaluation handler, every request repository,
+production identity-to-login
 provisioning and activation of the qualified roles, add remaining write roles,
 governed mixed/incident access, deployed worker-fleet and handler replay proof,
 production identity, backup/PITR and restore, outage/load testing, and

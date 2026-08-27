@@ -148,6 +148,13 @@ import {
   verifyPostgresSignalWriterLockProtocolBoundary
 } from "../packages/database/src/postgres-signal-writer-lock-protocol.js";
 import {
+  NodePostgresSignalConstraintConfigApplyDatabase,
+  POSTGRES_SIGNAL_CONSTRAINT_CONFIG_APPLY_FUNCTION,
+  applyPostgresSignalConstraintConfigApplyBoundary,
+  buildPostgresSignalConstraintConfigApplyManifest,
+  verifyPostgresSignalConstraintConfigApplyBoundary
+} from "../packages/database/src/postgres-signal-constraint-config-apply.js";
+import {
   NodePostgresSignalActionSpendApplyDatabase,
   POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION,
   applyPostgresSignalActionSpendApplyBoundary,
@@ -219,6 +226,7 @@ const NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE = "yoink_native_post";
 const NATIVE_MISSION_BINDING_APPLY_ROLE_NAMESPACE = "yoink_native_mission";
 const NATIVE_STRATEGY_EVALUATION_APPLY_ROLE_NAMESPACE = "yoink_native_strategy";
 const NATIVE_WRITER_LOCK_ROLE_NAMESPACE = "yoink_native_writer_lock";
+const NATIVE_CONSTRAINT_CONFIG_APPLY_ROLE_NAMESPACE = "yoink_native_constraint_config";
 const NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE = "yoink_native_action_spend";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
@@ -1055,7 +1063,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, and reviewed purchase-intent action/spend", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration writers, and reviewed purchase-intent action/spend", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1182,6 +1190,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalStrategyEvaluationUnmapped: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
   let signalStrategyEvaluationDirectClient: Client | null = null;
   let signalWriterLockDirectClient: Client | null = null;
+  let signalConstraintConfigA: NodePostgresSignalConstraintConfigApplyDatabase | null = null;
+  let signalConstraintConfigASecond: NodePostgresSignalConstraintConfigApplyDatabase | null = null;
+  let signalConstraintConfigB: NodePostgresSignalConstraintConfigApplyDatabase | null = null;
+  let signalConstraintConfigC: NodePostgresSignalConstraintConfigApplyDatabase | null = null;
+  let signalConstraintConfigUnmapped: NodePostgresSignalConstraintConfigApplyDatabase | null = null;
+  let signalConstraintConfigDirectClient: Client | null = null;
   let signalActionSpendA: NodePostgresSignalActionSpendApplyDatabase | null = null;
   let signalActionSpendASecond: NodePostgresSignalActionSpendApplyDatabase | null = null;
   let signalActionSpendB: NodePostgresSignalActionSpendApplyDatabase | null = null;
@@ -2330,15 +2344,56 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalWriterLockBoundary
     );
+    const qualifiedSignalConstraintConfigManifest =
+      buildPostgresSignalConstraintConfigApplyManifest(
+        qualifiedSignalWriterLockManifest,
+        NATIVE_CONSTRAINT_CONFIG_APPLY_ROLE_NAMESPACE
+      );
+    const signalConstraintConfigBoundary =
+      await applyPostgresSignalConstraintConfigApplyBoundary(
+        importer,
+        qualifiedSignalConstraintConfigManifest,
+        new Date("2026-08-25T16:54:59.994Z").getTime()
+      );
+    assert.equal(signalConstraintConfigBoundary.protectedTenantTableCount, 4);
+    assert.equal(signalConstraintConfigBoundary.forcedRlsTableCount, 4);
+    assert.equal(signalConstraintConfigBoundary.mutationTableCount, 4);
+    assert.equal(signalConstraintConfigBoundary.directTableGrantCount, 0);
+    assert.equal(signalConstraintConfigBoundary.functionGrantCount, 1);
+    assert.equal(signalConstraintConfigBoundary.membershipCount, 0);
+    assert.equal(signalConstraintConfigBoundary.activePrincipalCount, 0);
+    assert.equal(signalConstraintConfigBoundary.metadata.operationCount, 3);
+    assert.equal(signalConstraintConfigBoundary.metadata.sharedWriterLockProtocolImplemented, true);
+    assert.equal(signalConstraintConfigBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(signalConstraintConfigBoundary.metadata.settingsPauseWriterParity, true);
+    assert.equal(signalConstraintConfigBoundary.metadata.guardrailSettingsWriterParity, true);
+    assert.equal(signalConstraintConfigBoundary.metadata.spendPolicyWriterParity, true);
+    assert.equal(signalConstraintConfigBoundary.metadata.qualificationSettingsWriterParity, false);
+    assert.equal(signalConstraintConfigBoundary.metadata.sourceWriterParity, false);
+    assert.equal(signalConstraintConfigBoundary.metadata.retailerQualificationWriterParity, false);
+    assert.equal(signalConstraintConfigBoundary.metadata.missionPolicyWriterParity, false);
+    assert.equal(signalConstraintConfigBoundary.metadata.settingsWriterParity, false);
+    assert.equal(signalConstraintConfigBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalConstraintConfigBoundary.metadata.reservationWriterParity, false);
+    assert.equal(signalConstraintConfigBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalConstraintConfigBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalConstraintConfigBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalConstraintConfigApplyBoundary(
+        importer,
+        qualifiedSignalConstraintConfigManifest
+      ),
+      signalConstraintConfigBoundary
+    );
     const qualifiedSignalActionSpendManifest =
       buildPostgresSignalActionSpendApplyManifest(
-        qualifiedSignalWriterLockManifest,
+        qualifiedSignalConstraintConfigManifest,
         NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE
       );
     const signalActionSpendBoundary = await applyPostgresSignalActionSpendApplyBoundary(
       importer,
       qualifiedSignalActionSpendManifest,
-      new Date("2026-08-25T16:54:59.994Z").getTime()
+      new Date("2026-08-25T16:54:59.995Z").getTime()
     );
     assert.equal(signalActionSpendBoundary.protectedTenantTableCount, 19);
     assert.equal(signalActionSpendBoundary.forcedRlsTableCount, 19);
@@ -2351,6 +2406,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(signalActionSpendBoundary.metadata.writerLockProtocolContractVersion, 1);
     assert.equal(signalActionSpendBoundary.metadata.sharedWriterLockProtocolImplemented, true);
     assert.equal(signalActionSpendBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(signalActionSpendBoundary.metadata.constraintConfigApplyContractVersion, 1);
+    assert.equal(signalActionSpendBoundary.metadata.constraintConfigBoundaryQualified, true);
+    assert.equal(signalActionSpendBoundary.metadata.settingsPauseWriterParity, true);
+    assert.equal(signalActionSpendBoundary.metadata.guardrailSettingsWriterParity, true);
+    assert.equal(signalActionSpendBoundary.metadata.spendPolicyWriterParity, true);
+    assert.equal(signalActionSpendBoundary.metadata.configurationWriterParity, false);
     assert.equal(signalActionSpendBoundary.metadata.fixedOrderConfigurationLocks, true);
     assert.equal(signalActionSpendBoundary.metadata.purchaseIntentOnly, true);
     assert.equal(signalActionSpendBoundary.metadata.strategyActionAuthority, false);
@@ -2680,8 +2741,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalStrategyEvaluationManifest,
       NATIVE_WRITER_LOCK_ROLE_NAMESPACE
     );
-    const signalActionSpendManifest = buildPostgresSignalActionSpendApplyManifest(
+    const signalConstraintConfigManifest = buildPostgresSignalConstraintConfigApplyManifest(
       signalWriterLockManifest,
+      NATIVE_CONSTRAINT_CONFIG_APPLY_ROLE_NAMESPACE
+    );
+    const signalActionSpendManifest = buildPostgresSignalActionSpendApplyManifest(
+      signalConstraintConfigManifest,
       NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE
     );
     for (const principalRole of [
@@ -2754,6 +2819,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalWriterLockManifest.writerLockRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalConstraintConfigManifest.constraintConfigRole.name}"
          TO "${principalRole}"`
       );
       await first.query(
@@ -3258,6 +3327,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalStrategyEvaluationB = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_B);
     signalStrategyEvaluationC = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_C);
     signalStrategyEvaluationUnmapped = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+    const signalConstraintConfigDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalConstraintConfigApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalConstraintConfigManifest, { maxConnections });
+    signalConstraintConfigA = signalConstraintConfigDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalConstraintConfigASecond = signalConstraintConfigDatabase(NATIVE_PRINCIPAL_A);
+    signalConstraintConfigB = signalConstraintConfigDatabase(NATIVE_PRINCIPAL_B);
+    signalConstraintConfigC = signalConstraintConfigDatabase(NATIVE_PRINCIPAL_C);
+    signalConstraintConfigUnmapped = signalConstraintConfigDatabase(NATIVE_PRINCIPAL_UNMAPPED);
     const signalActionSpendDatabase = (
       principalRole: string,
       maxConnections: 1 | 2 = 1
@@ -8928,6 +9010,214 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       /tenant session principal is not active/
     );
+    type NativeConstraintSettingsRow = {
+      actionsPaused: string | number;
+      pauseReason: string;
+      executionMode: string;
+      dedupeWindowSeconds: number;
+      affiliateMode: string;
+      taxBps: number;
+      storeAllowancesJson: string;
+      updatedAt: string;
+    };
+    const readNativeConstraintSettings = async (): Promise<NativeConstraintSettingsRow> =>
+      (await first!.query<NativeConstraintSettingsRow>(
+        `SELECT actions_paused AS "actionsPaused", pause_reason AS "pauseReason",
+                execution_mode AS "executionMode",
+                dedupe_window_seconds AS "dedupeWindowSeconds",
+                affiliate_mode AS "affiliateMode", tax_bps AS "taxBps",
+                store_allowances_json AS "storeAllowancesJson",
+                updated_at AS "updatedAt"
+         FROM "${NATIVE_SCHEMA}"."app_settings" WHERE user_id = $1`,
+        [NATIVE_USER]
+      )).rows[0]!;
+    const readNativeConstraintEventCounts = async (): Promise<{
+      audits: number;
+      outbox: number;
+    }> => {
+      const row = (await first!.query<{ audits: string; outbox: string }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+             WHERE event_type IN (
+               'actions_pause_changed', 'guardrail_settings_updated', 'spend_policy_revised'
+             )) AS audits,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+             WHERE event_type IN (
+               'actions_pause_changed', 'guardrail_settings_updated', 'spend_policy_revised'
+             )) AS outbox`
+      )).rows[0]!;
+      return { audits: Number(row.audits), outbox: Number(row.outbox) };
+    };
+    const settingsBeforeForcedConstraintFailure = await readNativeConstraintSettings();
+    const constraintEventsBeforeForcedFailure = await readNativeConstraintEventCounts();
+    const nativeStoreAllowances = JSON.parse(
+      settingsBeforeForcedConstraintFailure.storeAllowancesJson
+    ) as Record<string, number>;
+    const nativeGuardrailPayload = {
+      expectedUpdatedAt: settingsBeforeForcedConstraintFailure.updatedAt,
+      dedupeWindowSeconds: 301,
+      affiliateMode: "disabled",
+      taxBps: 1200,
+      storeAllowancesCents: {
+        target: nativeStoreAllowances.target,
+        walmart: nativeStoreAllowances.walmart,
+        amazon: nativeStoreAllowances.amazon,
+        bestbuy: nativeStoreAllowances.bestbuy
+      }
+    };
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_constraint_config_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $body$
+       BEGIN
+         IF NEW.event_type = 'guardrail_settings_updated' THEN
+           RAISE EXCEPTION 'native forced constraint-configuration outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $body$;
+       CREATE TRIGGER "yoink_native_reject_constraint_config_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION
+         "${NATIVE_SCHEMA}"."yoink_native_reject_constraint_config_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        signalConstraintConfigA.applyConstraintConfiguration(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          "update_guardrail_settings",
+          "native_constraint_forced_rollback",
+          nativeGuardrailPayload
+        ),
+        /native forced constraint-configuration outbox failure/
+      );
+      assert.deepEqual(
+        await readNativeConstraintSettings(),
+        settingsBeforeForcedConstraintFailure
+      );
+      assert.deepEqual(
+        await readNativeConstraintEventCounts(),
+        constraintEventsBeforeForcedFailure
+      );
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_constraint_config_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS
+           "${NATIVE_SCHEMA}"."yoink_native_reject_constraint_config_outbox"()`
+      );
+    }
+    const guardrailApply = await signalConstraintConfigA.applyConstraintConfiguration(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      "update_guardrail_settings",
+      "native_constraint_guardrails",
+      nativeGuardrailPayload
+    );
+    assert.equal(guardrailApply.outcome, "applied");
+    assert.equal(guardrailApply.mutationApplied, true);
+    assert.equal(guardrailApply.idempotentReplay, false);
+    assert.equal(guardrailApply.mutationStatementCount, 3);
+    assert.equal(guardrailApply.mutationRowCount, 3);
+    assert.equal(guardrailApply.settingsMutated, true);
+    assert.equal(guardrailApply.spendPolicyMutated, false);
+    assert.equal(guardrailApply.auditMutated, true);
+    assert.equal(guardrailApply.outboxMutated, true);
+    assert.equal(guardrailApply.configuration.dedupeWindowSeconds, 301);
+    assert.equal(guardrailApply.configuration.affiliateMode, "disabled");
+    assert.equal(guardrailApply.configuration.taxBps, 1200);
+    assert.equal(guardrailApply.configurationWriterParity, false);
+    assert.equal(guardrailApply.reservationWriterParity, false);
+    assert.equal(guardrailApply.writerLockProtocolParity, false);
+    const guardrailReplay = await signalConstraintConfigASecond.applyConstraintConfiguration(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      "update_guardrail_settings",
+      "native_constraint_guardrails",
+      nativeGuardrailPayload
+    );
+    assert.equal(guardrailReplay.outcome, "already_applied");
+    assert.equal(guardrailReplay.mutationApplied, false);
+    assert.equal(guardrailReplay.idempotentReplay, true);
+    assert.equal(guardrailReplay.mutationStatementCount, 0);
+    assert.deepEqual(guardrailReplay.configuration, guardrailApply.configuration);
+    await assert.rejects(
+      signalConstraintConfigA.applyConstraintConfiguration(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "update_guardrail_settings",
+        "native_constraint_guardrails",
+        {
+          ...nativeGuardrailPayload,
+          expectedUpdatedAt: guardrailApply.configuration.updatedAt,
+          dedupeWindowSeconds: 302
+        }
+      ),
+      /replay graph changed/
+    );
+    await assert.rejects(
+      signalConstraintConfigB.applyConstraintConfiguration(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "update_guardrail_settings",
+        "native_constraint_wrong_principal",
+        {
+          ...nativeGuardrailPayload,
+          expectedUpdatedAt: guardrailApply.configuration.updatedAt
+        }
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      signalConstraintConfigUnmapped.applyConstraintConfiguration(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "update_guardrail_settings",
+        "native_constraint_unmapped_principal",
+        {
+          ...nativeGuardrailPayload,
+          expectedUpdatedAt: guardrailApply.configuration.updatedAt
+        }
+      ),
+      /tenant session principal is not active/
+    );
+    const nativeSpendPolicyPayload = {
+      expectedRevision: 1,
+      perOrderCapCents: 6000,
+      dailyCapCents: 12000,
+      monthlyCapCents: 30000
+    };
+    const spendPolicyApply = await signalConstraintConfigA.applyConstraintConfiguration(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      "update_spend_policy",
+      "native_constraint_spend_policy",
+      nativeSpendPolicyPayload
+    );
+    assert.equal(spendPolicyApply.outcome, "applied");
+    assert.equal(spendPolicyApply.mutationStatementCount, 3);
+    assert.equal(spendPolicyApply.mutationRowCount, 3);
+    assert.equal(spendPolicyApply.settingsMutated, false);
+    assert.equal(spendPolicyApply.spendPolicyMutated, true);
+    assert.equal(spendPolicyApply.configuration.revision, 2);
+    assert.equal(spendPolicyApply.configuration.perOrderCapCents, 6000);
+    assert.equal(spendPolicyApply.configuration.dailyCapCents, 12000);
+    assert.equal(spendPolicyApply.configuration.monthlyCapCents, 30000);
+    const spendPolicyReplay = await signalConstraintConfigASecond.applyConstraintConfiguration(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      "update_spend_policy",
+      "native_constraint_spend_policy",
+      nativeSpendPolicyPayload
+    );
+    assert.equal(spendPolicyReplay.outcome, "already_applied");
+    assert.equal(spendPolicyReplay.idempotentReplay, true);
+    assert.deepEqual(spendPolicyReplay.configuration, spendPolicyApply.configuration);
+    const spendPolicyUnchanged = await signalConstraintConfigA.applyConstraintConfiguration(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      "update_spend_policy",
+      "native_constraint_spend_policy_unchanged",
+      { ...nativeSpendPolicyPayload, expectedRevision: 2 }
+    );
+    assert.equal(spendPolicyUnchanged.outcome, "unchanged");
+    assert.equal(spendPolicyUnchanged.mutationApplied, false);
+    assert.equal(spendPolicyUnchanged.idempotentReplay, false);
+    assert.equal(spendPolicyUnchanged.mutationStatementCount, 0);
+    assert.equal(spendPolicyUnchanged.mutationRowCount, 0);
+    assert.equal(spendPolicyUnchanged.auditMutated, false);
+    assert.equal(spendPolicyUnchanged.outboxMutated, false);
     const actionSpendGraphCounts = async (): Promise<Record<string, number>> => {
       const row = (await first!.query<Record<string, string | number | bigint>>(
         `SELECT
@@ -8972,6 +9262,139 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       audits: 0,
       outbox: 0
     };
+    assert.deepEqual(await actionSpendGraphCounts(), emptyActionSpendGraph);
+    const settingsBeforeConstraintContention = await readNativeConstraintSettings();
+    const constraintDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalConstraintConfigDirectClient = constraintDirectClient;
+    constraintDirectClient.on("error", () => undefined);
+    await constraintDirectClient.connect();
+    await constraintDirectClient.query(
+      `SET ROLE "${signalConstraintConfigManifest.constraintConfigRole.name}"`
+    );
+    await assert.rejects(
+      constraintDirectClient.query(
+        `SELECT user_id FROM "${NATIVE_SCHEMA}"."app_settings" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      constraintDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_CONSTRAINT_CONFIG_APPLY_FUNCTION}"(
+           $1, $2, 'set_actions_paused', $3, $4
+         )`,
+        [
+          NATIVE_TENANT,
+          "user_local",
+          "native_constraint_direct_wrong_principal",
+          JSON.stringify({
+            expectedUpdatedAt: settingsBeforeConstraintContention.updatedAt,
+            paused: true,
+            reason: "Native direct principal rejection"
+          })
+        ]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    let constraintContentionTransactionOpen = false;
+    let constraintBlockedActionAttempt: ReturnType<
+      NodePostgresSignalActionSpendApplyDatabase["applySignalActionSpend"]
+    > | null = null;
+    try {
+      await constraintDirectClient.query("BEGIN");
+      constraintContentionTransactionOpen = true;
+      const pauseReceipt = await constraintDirectClient.query<{ resultJson: string }>(
+        `SELECT result_json AS "resultJson"
+         FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_CONSTRAINT_CONFIG_APPLY_FUNCTION}"(
+           $1, $2, 'set_actions_paused', $3, $4
+         )`,
+        [
+          NATIVE_TENANT,
+          NATIVE_USER,
+          "native_constraint_pause_for_action",
+          JSON.stringify({
+            expectedUpdatedAt: settingsBeforeConstraintContention.updatedAt,
+            paused: true,
+            reason: "Native config/action contention"
+          })
+        ]
+      );
+      assert.equal(pauseReceipt.rows.length, 1);
+      assert.deepEqual(JSON.parse(pauseReceipt.rows[0]!.resultJson), {
+        contractVersion: 1,
+        operation: "set_actions_paused",
+        requestId: "native_constraint_pause_for_action",
+        requestFingerprint: JSON.parse(pauseReceipt.rows[0]!.resultJson).requestFingerprint,
+        outcome: "applied",
+        mutationApplied: true,
+        idempotentReplay: false,
+        mutationStatementCount: 3,
+        mutationRowCount: 3,
+        settingsMutated: true,
+        spendPolicyMutated: false,
+        auditMutated: true,
+        outboxMutated: true,
+        configuration: JSON.parse(pauseReceipt.rows[0]!.resultJson).configuration,
+        configurationWriterParity: false,
+        reservationWriterParity: false,
+        writerLockProtocolParity: false,
+        mutationAuthority: true,
+        runtimeAuthority: false
+      });
+      const pauseResult = JSON.parse(pauseReceipt.rows[0]!.resultJson) as {
+        requestFingerprint: string;
+        configuration: Record<string, unknown>;
+      };
+      assert.match(pauseResult.requestFingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(pauseResult.configuration.actionsPaused, true);
+      assert.equal(
+        pauseResult.configuration.pauseReason,
+        "Native config/action contention"
+      );
+      let constraintBlockedActionSettled = false;
+      constraintBlockedActionAttempt = signalActionSpendA.applySignalActionSpend(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        actionSpendMessageId,
+        actionSpendLease.capabilityToken,
+        actionSpendAttestation,
+        actionSpendNow
+      ).finally(() => { constraintBlockedActionSettled = true; });
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      assert.equal(constraintBlockedActionSettled, false);
+      assert.deepEqual(await actionSpendGraphCounts(), emptyActionSpendGraph);
+      await constraintDirectClient.query("COMMIT");
+      constraintContentionTransactionOpen = false;
+      await assert.rejects(
+        constraintBlockedActionAttempt,
+        /live canonical execution settings are closed/
+      );
+    } finally {
+      if (constraintContentionTransactionOpen) {
+        await constraintDirectClient.query("ROLLBACK").catch(() => undefined);
+      }
+      if (constraintBlockedActionAttempt) {
+        await constraintBlockedActionAttempt.catch(() => undefined);
+      }
+      await constraintDirectClient.end().catch(() => undefined);
+      signalConstraintConfigDirectClient = null;
+    }
+    const settingsAfterConstraintPause = await readNativeConstraintSettings();
+    assert.equal(Number(settingsAfterConstraintPause.actionsPaused), 1);
+    const constraintResume = await signalConstraintConfigASecond.applyConstraintConfiguration(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      "set_actions_paused",
+      "native_constraint_resume_after_contention",
+      {
+        expectedUpdatedAt: settingsAfterConstraintPause.updatedAt,
+        paused: false,
+        reason: ""
+      }
+    );
+    assert.equal(constraintResume.outcome, "applied");
+    assert.equal(constraintResume.settingsMutated, true);
+    assert.equal(constraintResume.configuration.actionsPaused, false);
+    assert.equal(constraintResume.configuration.pauseReason, "");
     assert.deepEqual(await actionSpendGraphCounts(), emptyActionSpendGraph);
     await first.query(
       `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_action_spend_outbox"()
@@ -13032,6 +13455,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalStrategyEvaluationUnmapped?.close(),
       signalStrategyEvaluationDirectClient?.end(),
       signalWriterLockDirectClient?.end(),
+      signalConstraintConfigA?.close(),
+      signalConstraintConfigASecond?.close(),
+      signalConstraintConfigB?.close(),
+      signalConstraintConfigC?.close(),
+      signalConstraintConfigUnmapped?.close(),
+      signalConstraintConfigDirectClient?.end(),
       signalActionSpendA?.close(),
       signalActionSpendASecond?.close(),
       signalActionSpendB?.close(),

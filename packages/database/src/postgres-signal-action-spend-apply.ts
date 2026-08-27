@@ -23,11 +23,14 @@ import {
 import {
   POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_CONTRACT_VERSION,
   POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FULL_MASK,
-  POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION,
-  buildPostgresSignalWriterLockProtocolManifest,
-  verifyPostgresSignalWriterLockProtocolBoundary,
-  type PostgresSignalWriterLockProtocolManifest
+  POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION
 } from "./postgres-signal-writer-lock-protocol.js";
+import {
+  POSTGRES_SIGNAL_CONSTRAINT_CONFIG_APPLY_CONTRACT_VERSION,
+  buildPostgresSignalConstraintConfigApplyManifest,
+  verifyPostgresSignalConstraintConfigApplyBoundary,
+  type PostgresSignalConstraintConfigApplyManifest
+} from "./postgres-signal-constraint-config-apply.js";
 import { POSTGRES_SIGNAL_RESOLUTION_APPLY_FUNCTION } from "./postgres-signal-resolution-apply.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -103,11 +106,13 @@ export interface PostgresSignalActionSpendApplyManifest {
   cutoverContractVersion: 3;
   strategyEvaluationApplyContractVersion: 1;
   writerLockProtocolContractVersion: 1;
+  constraintConfigApplyContractVersion: 1;
   schemaName: string;
   actionSpendRoleNamespace: string;
   strategyEvaluationApplyManifestFingerprint: string;
   writerLockProtocolManifestFingerprint: string;
-  predecessorManifest: PostgresSignalWriterLockProtocolManifest;
+  constraintConfigApplyManifestFingerprint: string;
+  predecessorManifest: PostgresSignalConstraintConfigApplyManifest;
   actionSpendRole: {
     kind: "signal_action_spend_apply_boundary";
     name: string;
@@ -132,6 +137,17 @@ export interface PostgresSignalActionSpendApplyManifest {
   missionSerialization: true;
   sharedWriterLockProtocolImplemented: true;
   writerLockProtocolConsumed: true;
+  constraintConfigBoundaryQualified: true;
+  settingsPauseWriterParity: true;
+  guardrailSettingsWriterParity: true;
+  spendPolicyWriterParity: true;
+  qualificationSettingsWriterParity: false;
+  sourceWriterParity: false;
+  retailerQualificationWriterParity: false;
+  missionPolicyWriterParity: false;
+  settingsWriterParity: false;
+  configurationWriterParity: false;
+  reservationWriterParity: false;
   fixedOrderConfigurationLocks: true;
   currentMissionTargetRevalidation: true;
   currentPolicyRevalidation: true;
@@ -172,6 +188,7 @@ export interface PostgresSignalActionSpendCapabilityProjection {
   cutoverContractVersion: 3;
   strategyEvaluationApplyContractVersion: 1;
   writerLockProtocolContractVersion: 1;
+  constraintConfigApplyContractVersion: 1;
   deterministicManifestImplemented: true;
   atomicQualificationApplyImplemented: true;
   exactEffectivePrivilegeVerification: true;
@@ -188,6 +205,17 @@ export interface PostgresSignalActionSpendCapabilityProjection {
   missionSerialization: true;
   sharedWriterLockProtocolImplemented: true;
   writerLockProtocolConsumed: true;
+  constraintConfigBoundaryQualified: true;
+  settingsPauseWriterParity: true;
+  guardrailSettingsWriterParity: true;
+  spendPolicyWriterParity: true;
+  qualificationSettingsWriterParity: false;
+  sourceWriterParity: false;
+  retailerQualificationWriterParity: false;
+  missionPolicyWriterParity: false;
+  settingsWriterParity: false;
+  configurationWriterParity: false;
+  reservationWriterParity: false;
   twoPhasePlanApply: true;
   readCommittedTransactionAdapter: true;
   fixedOrderConfigurationLocks: true;
@@ -374,8 +402,9 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(canonicalPortabilityJson(value)).digest("hex");
 }
 
-function predecessorNamespaces(manifest: PostgresSignalWriterLockProtocolManifest): string[] {
-  const strategy = manifest.predecessorManifest;
+function predecessorNamespaces(manifest: PostgresSignalConstraintConfigApplyManifest): string[] {
+  const writerLock = manifest.predecessorManifest;
+  const strategy = writerLock.predecessorManifest;
   const mission = strategy.predecessorManifest;
   const predecessor = mission.predecessorManifest;
   return [
@@ -399,12 +428,13 @@ function predecessorNamespaces(manifest: PostgresSignalWriterLockProtocolManifes
     predecessor.postIncidentDecisionApplyRoleNamespace,
     mission.missionBindingApplyRoleNamespace,
     strategy.strategyEvaluationRoleNamespace,
-    manifest.writerLockRoleNamespace
+    writerLock.writerLockRoleNamespace,
+    manifest.constraintConfigRoleNamespace
   ];
 }
 
 export function buildPostgresSignalActionSpendApplyManifest(
-  predecessorManifest = buildPostgresSignalWriterLockProtocolManifest(),
+  predecessorManifest = buildPostgresSignalConstraintConfigApplyManifest(),
   requestedRoleNamespace = "yoink_action_spend_qual"
 ): PostgresSignalActionSpendApplyManifest {
   const schemaName = safeSchema(predecessorManifest.schemaName || POSTGRES_CUTOVER_DEFAULT_SCHEMA);
@@ -419,10 +449,14 @@ export function buildPostgresSignalActionSpendApplyManifest(
     cutoverContractVersion: POSTGRES_CUTOVER_CONTRACT_VERSION,
     strategyEvaluationApplyContractVersion: POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_CONTRACT_VERSION,
     writerLockProtocolContractVersion: POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_CONTRACT_VERSION,
+    constraintConfigApplyContractVersion:
+      POSTGRES_SIGNAL_CONSTRAINT_CONFIG_APPLY_CONTRACT_VERSION,
     schemaName,
     actionSpendRoleNamespace,
-    strategyEvaluationApplyManifestFingerprint: predecessorManifest.predecessorManifest.fingerprint,
-    writerLockProtocolManifestFingerprint: predecessorManifest.fingerprint,
+    strategyEvaluationApplyManifestFingerprint:
+      predecessorManifest.predecessorManifest.predecessorManifest.fingerprint,
+    writerLockProtocolManifestFingerprint: predecessorManifest.predecessorManifest.fingerprint,
+    constraintConfigApplyManifestFingerprint: predecessorManifest.fingerprint,
     predecessorManifest,
     actionSpendRole: {
       kind: "signal_action_spend_apply_boundary",
@@ -448,6 +482,17 @@ export function buildPostgresSignalActionSpendApplyManifest(
     missionSerialization: true,
     sharedWriterLockProtocolImplemented: true,
     writerLockProtocolConsumed: true,
+    constraintConfigBoundaryQualified: true,
+    settingsPauseWriterParity: true,
+    guardrailSettingsWriterParity: true,
+    spendPolicyWriterParity: true,
+    qualificationSettingsWriterParity: false,
+    sourceWriterParity: false,
+    retailerQualificationWriterParity: false,
+    missionPolicyWriterParity: false,
+    settingsWriterParity: false,
+    configurationWriterParity: false,
+    reservationWriterParity: false,
     fixedOrderConfigurationLocks: true,
     currentMissionTargetRevalidation: true,
     currentPolicyRevalidation: true,
@@ -493,6 +538,7 @@ PostgresSignalActionSpendCapabilityProjection {
     cutoverContractVersion: 3,
     strategyEvaluationApplyContractVersion: 1,
     writerLockProtocolContractVersion: 1,
+    constraintConfigApplyContractVersion: 1,
     deterministicManifestImplemented: true,
     atomicQualificationApplyImplemented: true,
     exactEffectivePrivilegeVerification: true,
@@ -509,6 +555,17 @@ PostgresSignalActionSpendCapabilityProjection {
     missionSerialization: true,
     sharedWriterLockProtocolImplemented: true,
     writerLockProtocolConsumed: true,
+    constraintConfigBoundaryQualified: true,
+    settingsPauseWriterParity: true,
+    guardrailSettingsWriterParity: true,
+    spendPolicyWriterParity: true,
+    qualificationSettingsWriterParity: false,
+    sourceWriterParity: false,
+    retailerQualificationWriterParity: false,
+    missionPolicyWriterParity: false,
+    settingsWriterParity: false,
+    configurationWriterParity: false,
+    reservationWriterParity: false,
     twoPhasePlanApply: true,
     readCommittedTransactionAdapter: true,
     fixedOrderConfigurationLocks: true,
@@ -2111,7 +2168,7 @@ function boundarySpec(
     receiptGuardFunctionName: "yoink_guard_signal_action_spend_apply_receipt",
     receiptTriggerName: "yoink_signal_action_spend_apply_receipt_immutable",
     manifestFingerprint: manifest.fingerprint,
-    predecessorFingerprint: manifest.writerLockProtocolManifestFingerprint,
+    predecessorFingerprint: manifest.constraintConfigApplyManifestFingerprint,
     protectedTenantTableNames: [...PROTECTED_TENANT_TABLES],
     mutationTableNames: [...MUTATION_TABLES],
     metadata: {
@@ -2119,9 +2176,17 @@ function boundarySpec(
       cutoverContractVersion: 3,
       strategyEvaluationApplyContractVersion: 1,
       writerLockProtocolContractVersion: 1,
+      constraintConfigApplyContractVersion: 1,
       maximumPlanAgeSeconds: 30,
       sharedWriterLockProtocolImplemented: true,
       writerLockProtocolConsumed: true,
+      constraintConfigBoundaryQualified: true,
+      settingsPauseWriterParity: true,
+      guardrailSettingsWriterParity: true,
+      spendPolicyWriterParity: true,
+      settingsWriterParity: false,
+      configurationWriterParity: false,
+      reservationWriterParity: false,
       fixedOrderConfigurationLocks: true,
       purchaseIntentOnly: true,
       strategyActionAuthority: false,
@@ -2139,7 +2204,7 @@ export async function verifyPostgresSignalActionSpendApplyBoundary(
   database: PostgresCutoverDatabase,
   manifest = buildPostgresSignalActionSpendApplyManifest()
 ): Promise<PostgresSignalActionSpendApplyQualificationReceipt> {
-  await verifyPostgresSignalWriterLockProtocolBoundary(database, manifest.predecessorManifest);
+  await verifyPostgresSignalConstraintConfigApplyBoundary(database, manifest.predecessorManifest);
   return verifyPostgresQualifiedFunctionBoundary(database, boundarySpec(manifest));
 }
 
@@ -2148,7 +2213,7 @@ export async function applyPostgresSignalActionSpendApplyBoundary(
   manifest = buildPostgresSignalActionSpendApplyManifest(),
   now = Date.now()
 ): Promise<PostgresSignalActionSpendApplyQualificationReceipt> {
-  await verifyPostgresSignalWriterLockProtocolBoundary(database, manifest.predecessorManifest);
+  await verifyPostgresSignalConstraintConfigApplyBoundary(database, manifest.predecessorManifest);
   return applyPostgresQualifiedFunctionBoundary(database, boundarySpec(manifest), now);
 }
 
