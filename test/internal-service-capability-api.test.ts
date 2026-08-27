@@ -31,6 +31,7 @@ import { postgresSignalTerminalDecisionApplyCapabilityProjection } from "../pack
 import { postgresSignalOfferIncidentApplyCapabilityProjection } from "../packages/database/src/postgres-signal-offer-incident-apply.js";
 import { postgresSignalPostIncidentDecisionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-post-incident-decision-apply.js";
 import { postgresSignalMissionBindingApplyCapabilityProjection } from "../packages/database/src/postgres-signal-mission-binding-apply.js";
+import { postgresSignalStrategyEvaluationApplyCapabilityProjection } from "../packages/database/src/postgres-signal-strategy-evaluation-apply.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -130,6 +131,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalOfferIncidentApply: ReturnType<typeof postgresSignalOfferIncidentApplyCapabilityProjection>;
         postgresSignalPostIncidentDecisionApply: ReturnType<typeof postgresSignalPostIncidentDecisionApplyCapabilityProjection>;
         postgresSignalMissionBindingApply: ReturnType<typeof postgresSignalMissionBindingApplyCapabilityProjection>;
+        postgresSignalStrategyEvaluationApply: ReturnType<typeof postgresSignalStrategyEvaluationApplyCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -208,6 +210,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalMissionBindingApply,
       postgresSignalMissionBindingApplyCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalStrategyEvaluationApply,
+      postgresSignalStrategyEvaluationApplyCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -265,6 +271,13 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Server-bound terminal signal decisions/);
     assert.match(cutoverText, /one occurrence, one terminal mission decision/);
     assert.match(cutoverText, /partial graphs and inconsistent replays fail closed/);
+    assert.match(cutoverText, /Server-bound actionable offer incidents/);
+    assert.match(cutoverText, /Server-bound post-incident decisions/);
+    assert.match(cutoverText, /Server-bound signal mission binding/);
+    assert.match(cutoverText, /Server-bound strategy and purchase-policy evaluation/);
+    assert.match(cutoverText, /ninth independently inactive NOLOGIN boundary/);
+    assert.match(cutoverText, /matched and price-required evaluations make a zero-write handoff/);
+    assert.match(cutoverText, /PostgreSQL does not claim semantic evaluator authority/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);
     assert.match(cutoverText, /3 independent PostgreSQL 16 backend sessions/);

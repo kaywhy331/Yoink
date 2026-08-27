@@ -1578,6 +1578,88 @@ spend, notifications, inbox lifecycle, retailer sessions, checkout, and order
 submission remain closed. Qualification creates no login or principal mapping;
 SQLite remains authoritative and complete handler parity remains six of seven.
 
+## Signal strategy/purchase-policy evaluation qualification seam
+
+Version 0.83 adds the ninth independent hosted-signal role for the bounded
+application-owned evaluation immediately after v0.82 mission binding.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+and can execute one strict security-definer function across 19 forced-RLS
+tenant tables. Each plan authenticates `session_user`, proves the live leased-
+inbox capability through the resolution predecessor, binds the exact settled
+event/mission graph, and expires after 30 seconds. Message and canonical
+event/mission advisory locks close same-message and cross-message races.
+
+The application evaluator supplies a fingerprinted attestation over the exact
+transport hash, listing, mission target and quantity, current immutable policy
+revision/hash, full ordered strategy set, selected strategy, freshness, unit
+cap, quantity, action, seller/fulfillment policy, and source restriction.
+PostgreSQL revalidates current input snapshots on first application.
+`matched` and `needs_price` write nothing. `unmatched`, `stale`, and
+`quantity_limited` must be quantity-one, first-party, unknown-fulfillment,
+notification-only results and atomically append exactly one mission decision,
+audit event, and outbox event.
+
+Immutable replay remains valid after a later policy/strategy revision and
+after normal outbox delivery; it verifies the original attestation, exact IDs,
+payloads, cross-links, and equal canonical creation timestamps while preserving
+all delivery lifecycle fields. Partial graphs and changed immutable rows abort.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-strategy-evaluation-apply -- plan \
+  yoink_cutover_qualification_083 yoink_q_083 yoink_session_q_083 \
+  yoink_queue_q_083 yoink_control_q_083 yoink_notify_q_083 \
+  yoink_execute_q_083 yoink_retain_q_083 yoink_candidate_q_083 \
+  yoink_dispatch_q_083 yoink_reconcile_q_083 yoink_witness_q_083 \
+  yoink_delivery_q_083 yoink_catalog_q_083 yoink_resolution_q_083 \
+  yoink_reference_q_083 yoink_terminal_q_083 yoink_offer_q_083 \
+  yoink_post_q_083 yoink_mission_q_083 yoink_strategy_q_083
+```
+
+After the exact v0.82 mission-binding receipt is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_QUALIFICATION_ACK=bounded-signal-strategy-evaluation-apply-qualification \
+  npm run postgres:signal-strategy-evaluation-apply -- apply \
+  yoink_cutover_qualification_083 yoink_q_083 yoink_session_q_083 \
+  yoink_queue_q_083 yoink_control_q_083 yoink_notify_q_083 \
+  yoink_execute_q_083 yoink_retain_q_083 yoink_candidate_q_083 \
+  yoink_dispatch_q_083 yoink_reconcile_q_083 yoink_witness_q_083 \
+  yoink_delivery_q_083 yoink_catalog_q_083 yoink_resolution_q_083 \
+  yoink_reference_q_083 yoink_terminal_q_083 yoink_offer_q_083 \
+  yoink_post_q_083 yoink_mission_q_083 yoink_strategy_q_083
+```
+
+Then independently verify the role, function, 19 forced-RLS tables, immutable
+receipt, and complete predecessor fingerprint chain:
+
+```bash
+npm run postgres:signal-strategy-evaluation-apply -- verify \
+  yoink_cutover_qualification_083 yoink_q_083 yoink_session_q_083 \
+  yoink_queue_q_083 yoink_control_q_083 yoink_notify_q_083 \
+  yoink_execute_q_083 yoink_retain_q_083 yoink_candidate_q_083 \
+  yoink_dispatch_q_083 yoink_reconcile_q_083 yoink_witness_q_083 \
+  yoink_delivery_q_083 yoink_catalog_q_083 yoink_resolution_q_083 \
+  yoink_reference_q_083 yoink_terminal_q_083 yoink_offer_q_083 \
+  yoink_post_q_083 yoink_mission_q_083 yoink_strategy_q_083
+```
+
+The receipt permanently records `databaseSemanticEvaluation: false`,
+`evaluationAuthority: false`, `runtimeAuthority: false`, and
+`productionReady: false`. The fingerprint is an application integrity binding,
+not a keyed database authorization. Before activation, policy, strategy, and
+source-trust writers must share fixed-order configuration locks (or equivalent
+serializable/retry coordination). The next action/spend boundary must treat
+every effective attestation field as untrusted and atomically lock, re-read,
+rederive, and cap the current mission/target state, remaining and fulfilled
+quantity, action ceiling, price/all-in/spend limits, cooldown, seller,
+fulfillment, expiry, source trust, and existing claims. No action, spend,
+inbox, retailer-session, checkout, or order-submission authority exists here.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -1681,13 +1763,16 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- strategy and purchase-policy evaluation, action-job creation, and final inbox
-  composition with the qualified hosted-
+- atomic action-job/spend-reservation creation and final inbox composition with
+  the qualified strategy/purchase-policy evaluation and hosted-
   delivery recovery, fixed signal-inbox lifecycle, read-only resolution plan,
   insert-only catalog-create, event/resolution-commit, known-product source-
   reference-refresh, terminal-decision, actionable offer/incident,
-  post-incident decision, and signal mission-binding boundaries to complete
-  the final task-handler family, plus every API
+  post-incident decision, signal mission-binding, and strategy-evaluation
+  boundaries to complete the final task-handler family. The action seam must
+  lock and rederive every current policy, strategy, source-trust, mission,
+  quantity, cap, cooldown, seller, fulfillment, and claim constraint; plus
+  every API
   request-repository family;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for

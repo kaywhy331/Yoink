@@ -138,6 +138,7 @@ import { postgresSignalTerminalDecisionApplyCapabilityProjection } from "../../.
 import { postgresSignalOfferIncidentApplyCapabilityProjection } from "../../../packages/database/src/postgres-signal-offer-incident-apply.js";
 import { postgresSignalPostIncidentDecisionApplyCapabilityProjection } from "../../../packages/database/src/postgres-signal-post-incident-decision-apply.js";
 import { postgresSignalMissionBindingApplyCapabilityProjection } from "../../../packages/database/src/postgres-signal-mission-binding-apply.js";
+import { postgresSignalStrategyEvaluationApplyCapabilityProjection } from "../../../packages/database/src/postgres-signal-strategy-evaluation-apply.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -410,6 +411,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     postgresSignalPostIncidentDecisionApplyCapabilityProjection();
   const postgresSignalMissionBindingApply =
     postgresSignalMissionBindingApplyCapabilityProjection();
+  const postgresSignalStrategyEvaluationApply =
+    postgresSignalStrategyEvaluationApplyCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -694,6 +697,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresSignalOfferIncidentApply,
           postgresSignalPostIncidentDecisionApply,
           postgresSignalMissionBindingApply,
+          postgresSignalStrategyEvaluationApply,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1555,7 +1559,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalTerminalDecisionApply,
             postgresSignalOfferIncidentApply,
             postgresSignalPostIncidentDecisionApply,
-            postgresSignalMissionBindingApply
+            postgresSignalMissionBindingApply,
+            postgresSignalStrategyEvaluationApply
           },
           capabilities: {
             catalog: true,
@@ -1723,6 +1728,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalOfferIncidentApply,
             postgresSignalPostIncidentDecisionApply,
             postgresSignalMissionBindingApply,
+            postgresSignalStrategyEvaluationApply,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

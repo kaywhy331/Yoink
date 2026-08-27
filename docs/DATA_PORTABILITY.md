@@ -172,6 +172,24 @@ access, and non-USD initial policy inputs abort. Strategy evaluation, action
 jobs, spend, final inbox composition, and all runtime authority remain closed,
 so complete-handler parity stays six of seven and SQLite remains authoritative.
 
+Yoink 0.83 adds a ninth distinct function-only role for the application-owned
+strategy and purchase-policy evaluation after exact mission binding. A complete
+fingerprinted attestation binds the signal transport, mission target, immutable
+policy revision, ordered strategy set, source restriction, freshness, caps,
+quantity, seller/fulfillment policy, and effective result. PostgreSQL revalidates
+current inputs on first application. Fail-closed terminal results append only a
+deterministic decision/audit/outbox triplet; matched and price-required results
+write nothing. Canonical event/mission locking closes cross-message races, and
+immutable replay tolerates later configuration revisions and normal outbox
+delivery without tolerating changed or partial receipts. Native PostgreSQL
+proves direct/principal denial, canonical numeric validation, deterministic
+identities/timestamps, third-insert rollback, lifecycle-preserving replay, and
+catalog tamper detection. The checksum is not database semantic authority:
+action/spend composition must atomically lock and rederive every current safety
+constraint before activation. Action jobs, spend, inbox completion, and all
+runtime authority remain closed, so complete-handler parity stays six of seven
+and SQLite remains authoritative.
+
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
 
@@ -290,8 +308,9 @@ Use the separate [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md)
 runbook; its receipt permanently records that runtime authority and cutover
 readiness are false.
 
-A production cutover must still complete and compose the hosted signal-
-evaluation handler, every request repository, production identity-to-login
+A production cutover must still complete the atomic action/spend and final-
+inbox composition of the hosted signal-evaluation handler, every request
+repository, production identity-to-login
 provisioning and activation of the qualified roles, add remaining write roles,
 governed mixed/incident access, deployed worker-fleet and handler replay proof,
 production identity, backup/PITR and restore, outage/load testing, and

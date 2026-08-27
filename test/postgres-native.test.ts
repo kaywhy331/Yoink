@@ -133,8 +133,21 @@ import {
   buildPostgresSignalMissionBindingApplyManifest,
   verifyPostgresSignalMissionBindingApplyBoundary
 } from "../packages/database/src/postgres-signal-mission-binding-apply.js";
+import {
+  NodePostgresSignalStrategyEvaluationApplyDatabase,
+  POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_FUNCTION,
+  applyPostgresSignalStrategyEvaluationApplyBoundary,
+  buildPostgresSignalStrategyEvaluationApplyManifest,
+  verifyPostgresSignalStrategyEvaluationApplyBoundary
+} from "../packages/database/src/postgres-signal-strategy-evaluation-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
+import { normalizeSignal } from "../packages/domain/src/normalize.js";
+import {
+  attestSignalPolicyEvaluation,
+  signalPolicyEvaluationFingerprint,
+  type SignalPolicyEvaluationAttestation
+} from "../packages/domain/src/signal-policy-evaluation.js";
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
 import { OperatorAlertConnectorDispatchService } from "../packages/engine/src/operator-alert-connector-dispatch.js";
 import { OperatorAlertReconciliationService } from "../packages/engine/src/operator-alert-reconciliation.js";
@@ -153,6 +166,13 @@ import {
 } from "../packages/observer-registry/src/witness.js";
 import type { OperatorAlertWebhookRegistry } from "../packages/engine/src/operator-alert-webhook.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
+import type {
+  ListingContext,
+  MissionContext,
+  PurchaseIntentPolicy,
+  SignalEventInput,
+  StrategyDefinition
+} from "../packages/contracts/src/index.js";
 import {
   POSTGRES_TEST_WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION,
@@ -182,6 +202,7 @@ const NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE = "yoink_native_terminal";
 const NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE = "yoink_native_offer";
 const NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE = "yoink_native_post";
 const NATIVE_MISSION_BINDING_APPLY_ROLE_NAMESPACE = "yoink_native_mission";
+const NATIVE_STRATEGY_EVALUATION_APPLY_ROLE_NAMESPACE = "yoink_native_strategy";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1017,7 +1038,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, and mission binding", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, and strategy evaluation", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1137,6 +1158,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalMissionBindingC: NodePostgresSignalMissionBindingApplyDatabase | null = null;
   let signalMissionBindingUnmapped: NodePostgresSignalMissionBindingApplyDatabase | null = null;
   let signalMissionBindingDirectClient: Client | null = null;
+  let signalStrategyEvaluationA: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
+  let signalStrategyEvaluationASecond: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
+  let signalStrategyEvaluationB: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
+  let signalStrategyEvaluationC: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
+  let signalStrategyEvaluationUnmapped: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
+  let signalStrategyEvaluationDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2217,6 +2244,37 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalMissionBindingBoundary
     );
+    const qualifiedSignalStrategyEvaluationManifest =
+      buildPostgresSignalStrategyEvaluationApplyManifest(
+        qualifiedSignalMissionBindingManifest,
+        NATIVE_STRATEGY_EVALUATION_APPLY_ROLE_NAMESPACE
+      );
+    const signalStrategyEvaluationBoundary =
+      await applyPostgresSignalStrategyEvaluationApplyBoundary(
+        importer,
+        qualifiedSignalStrategyEvaluationManifest,
+        new Date("2026-08-25T16:54:59.992Z").getTime()
+      );
+    assert.equal(signalStrategyEvaluationBoundary.protectedTenantTableCount, 19);
+    assert.equal(signalStrategyEvaluationBoundary.forcedRlsTableCount, 19);
+    assert.equal(signalStrategyEvaluationBoundary.mutationTableCount, 3);
+    assert.equal(signalStrategyEvaluationBoundary.directTableGrantCount, 0);
+    assert.equal(signalStrategyEvaluationBoundary.functionGrantCount, 1);
+    assert.equal(signalStrategyEvaluationBoundary.membershipCount, 0);
+    assert.equal(signalStrategyEvaluationBoundary.activePrincipalCount, 0);
+    assert.equal(signalStrategyEvaluationBoundary.metadata.maximumPlanAgeSeconds, 30);
+    assert.equal(signalStrategyEvaluationBoundary.metadata.maximumStrategies, 100);
+    assert.equal(signalStrategyEvaluationBoundary.metadata.databaseSemanticEvaluation, false);
+    assert.equal(signalStrategyEvaluationBoundary.metadata.evaluationAuthority, false);
+    assert.equal(signalStrategyEvaluationBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalStrategyEvaluationBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalStrategyEvaluationApplyBoundary(
+        importer,
+        qualifiedSignalStrategyEvaluationManifest
+      ),
+      signalStrategyEvaluationBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -2524,6 +2582,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalPostIncidentDecisionManifest,
       NATIVE_MISSION_BINDING_APPLY_ROLE_NAMESPACE
     );
+    const signalStrategyEvaluationManifest = buildPostgresSignalStrategyEvaluationApplyManifest(
+      signalMissionBindingManifest,
+      NATIVE_STRATEGY_EVALUATION_APPLY_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -2586,6 +2648,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalMissionBindingManifest.missionBindingApplyRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalStrategyEvaluationManifest.strategyEvaluationRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -3073,6 +3139,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalMissionBindingB = signalMissionBindingDatabase(NATIVE_PRINCIPAL_B);
     signalMissionBindingC = signalMissionBindingDatabase(NATIVE_PRINCIPAL_C);
     signalMissionBindingUnmapped = signalMissionBindingDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+    const signalStrategyEvaluationDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalStrategyEvaluationApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalStrategyEvaluationManifest, { maxConnections });
+    signalStrategyEvaluationA = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalStrategyEvaluationASecond = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_A);
+    signalStrategyEvaluationB = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_B);
+    signalStrategyEvaluationC = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_C);
+    signalStrategyEvaluationUnmapped = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_UNMAPPED);
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -4008,6 +4087,128 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     };
     const countsBeforeResolutionPlans = await signalResolutionMutationCounts();
     const resolutionPlanNow = Date.now();
+    const signalEvaluationAdmin = first;
+    assert.ok(signalEvaluationAdmin);
+    const attestNativeSignalEvaluation = async (input: {
+      payload: Record<string, unknown>;
+      missionId: string;
+      missionTargetId: string;
+      listingId: string;
+      missionEvaluationQuantity: number;
+      strategies: StrategyDefinition[];
+      now: number;
+    }): Promise<SignalPolicyEvaluationAttestation> => {
+      const listingRow = (await signalEvaluationAdmin.query<{
+        id: string;
+        variantId: string;
+        title: string;
+        retailerId: string;
+        retailerSku: string;
+        canonicalUrl: string;
+        executionSupported: number;
+        msrpCents: number | null;
+        currency: string;
+      }>(
+        `SELECT listing.id, listing.variant_id AS "variantId", variant.title,
+                listing.retailer_id AS "retailerId", listing.retailer_sku AS "retailerSku",
+                listing.canonical_url AS "canonicalUrl",
+                listing.execution_supported AS "executionSupported",
+                listing.msrp_cents AS "msrpCents", listing.currency
+         FROM "${NATIVE_SCHEMA}"."listings" AS listing
+         JOIN "${NATIVE_SCHEMA}"."variants" AS variant ON variant.id = listing.variant_id
+         WHERE listing.id = $1`,
+        [input.listingId]
+      )).rows[0]!;
+      const missionRow = (await signalEvaluationAdmin.query<{
+        id: string;
+        status: MissionContext["status"];
+        targetId: string;
+        targetEnabled: number;
+        maxUnitPriceCents: number | null;
+        sellerPolicy: MissionContext["sellerPolicy"];
+        fulfillment: MissionContext["fulfillment"];
+      }>(
+        `SELECT mission.id, mission.status, target.id AS "targetId",
+                target.enabled AS "targetEnabled",
+                target.max_unit_price_cents AS "maxUnitPriceCents",
+                target.seller_policy AS "sellerPolicy", target.fulfillment
+         FROM "${NATIVE_SCHEMA}"."missions" AS mission
+         JOIN "${NATIVE_SCHEMA}"."mission_targets" AS target ON target.mission_id = mission.id
+         WHERE mission.id = $1 AND target.id = $2`,
+        [input.missionId, input.missionTargetId]
+      )).rows[0]!;
+      const policyRow = (await signalEvaluationAdmin.query<{
+        id: string;
+        missionId: string;
+        revision: number;
+        quantity: number;
+        currency: string;
+        maxAllInCents: number | null;
+        actionCeiling: PurchaseIntentPolicy["actionCeiling"];
+        decisionMode: PurchaseIntentPolicy["decisionMode"];
+        maxSignalAgeSeconds: number;
+        substitutionPolicy: PurchaseIntentPolicy["substitutionPolicy"];
+        expiresAt: string;
+        cooldownSeconds: number;
+        targetPolicyJson: string;
+        policyHash: string;
+        changeReason: string;
+        createdByActorId: string;
+        createdAt: string;
+      }>(
+        `SELECT id, mission_id AS "missionId", revision, quantity, currency,
+                max_all_in_cents AS "maxAllInCents", action_ceiling AS "actionCeiling",
+                decision_mode AS "decisionMode",
+                max_signal_age_seconds AS "maxSignalAgeSeconds",
+                substitution_policy AS "substitutionPolicy", expires_at AS "expiresAt",
+                cooldown_seconds AS "cooldownSeconds", target_policy_json AS "targetPolicyJson",
+                policy_hash AS "policyHash", change_reason AS "changeReason",
+                created_by_actor_id AS "createdByActorId", created_at AS "createdAt"
+         FROM "${NATIVE_SCHEMA}"."mission_intent_revisions"
+         WHERE mission_id = $1 ORDER BY revision DESC LIMIT 1`,
+        [input.missionId]
+      )).rows[0]!;
+      const listing: ListingContext = {
+        ...listingRow,
+        executionSupported: Number(listingRow.executionSupported) === 1,
+        msrpCents: listingRow.msrpCents === null ? null : Number(listingRow.msrpCents)
+      };
+      const mission: MissionContext = {
+        id: missionRow.id,
+        status: missionRow.status,
+        targetQuantity: input.missionEvaluationQuantity,
+        targetId: missionRow.targetId,
+        targetEnabled: Number(missionRow.targetEnabled) === 1,
+        maxUnitPriceCents: missionRow.maxUnitPriceCents === null
+          ? null : Number(missionRow.maxUnitPriceCents),
+        sellerPolicy: missionRow.sellerPolicy,
+        fulfillment: missionRow.fulfillment
+      };
+      const policy: PurchaseIntentPolicy = {
+        ...policyRow,
+        revision: Number(policyRow.revision),
+        quantity: Number(policyRow.quantity),
+        maxAllInCents: policyRow.maxAllInCents === null ? null : Number(policyRow.maxAllInCents),
+        maxSignalAgeSeconds: Number(policyRow.maxSignalAgeSeconds),
+        cooldownSeconds: Number(policyRow.cooldownSeconds),
+        targets: JSON.parse(policyRow.targetPolicyJson)
+      };
+      const normalized = normalizeSignal(input.payload as unknown as SignalEventInput, input.now);
+      const sourceTrust = (await signalEvaluationAdmin.query<{ trustLevel: string }>(
+        `SELECT trust_level AS "trustLevel" FROM "${NATIVE_SCHEMA}"."source_connections"
+         WHERE id = $1`,
+        [normalized.sourceConnectionId]
+      )).rows[0]!.trustLevel;
+      return attestSignalPolicyEvaluation({
+        strategies: input.strategies,
+        policy,
+        signal: normalized,
+        listing,
+        mission,
+        sourceTrustLevel: sourceTrust,
+        now: input.now
+      });
+    };
 
     await insertSignalLifecycleInbox(
       matchedResolutionId,
@@ -6860,12 +7061,729 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         { eventType: "purchase_intent_policy_revised", reasonCode: "initial_policy", aggregateType: "purchase_intent" }
       ]
     );
+    const missionCreateDuplicateMessageId = "inbox_13579bdf13579bdf13579bdf13579bdf";
+    const missionCreateDuplicateNow = resolutionPlanNow + 6_260;
+    await insertSignalLifecycleInbox(
+      missionCreateDuplicateMessageId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(missionCreateDuplicateNow).toISOString(),
+      missionCreatePayload
+    );
+    const missionCreateDuplicateLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      missionCreateDuplicateNow
+    );
+    assert.ok(missionCreateDuplicateLease);
+    assert.equal(missionCreateDuplicateLease.id, missionCreateDuplicateMessageId);
+    const missionCreateDuplicateResolution = await signalResolutionApplyA.applySignalEventResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      missionCreateDuplicateMessageId,
+      missionCreateDuplicateLease.capabilityToken,
+      missionCreateDuplicateNow
+    );
+    assert.equal(missionCreateDuplicateResolution.duplicate, true);
+    assert.equal(missionCreateDuplicateResolution.eventId, missionCreateResolution.eventId);
+    assert.equal(
+      (await signalSourceReferenceA.refreshSignalSourceReferences(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateDuplicateMessageId,
+        missionCreateDuplicateLease.capabilityToken,
+        missionCreateDuplicateNow
+      )).mutationStatementCount,
+      0
+    );
+    assert.equal(
+      (await signalTerminalDecisionA.applySignalTerminalDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateDuplicateMessageId,
+        missionCreateDuplicateLease.capabilityToken,
+        missionCreateDuplicateNow
+      )).continueDownstream,
+      true
+    );
+    assert.equal(
+      (await signalOfferIncidentA.applySignalOfferIncident(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateDuplicateMessageId,
+        missionCreateDuplicateLease.capabilityToken,
+        missionCreateDuplicateNow
+      )).mutationStatementCount,
+      0
+    );
+    assert.equal(
+      (await signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateDuplicateMessageId,
+        missionCreateDuplicateLease.capabilityToken,
+        missionCreateDuplicateNow
+      )).continueDownstream,
+      true
+    );
+    const missionCreateDuplicateBinding = await signalMissionBindingA.applySignalMissionBinding(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      missionCreateDuplicateMessageId,
+      missionCreateDuplicateLease.capabilityToken,
+      missionCreateDuplicateNow
+    );
+    assert.equal(missionCreateDuplicateBinding.outcome, "already_bound");
+    assert.equal(missionCreateDuplicateBinding.missionId, missionCreateWinner.missionId);
+    assert.equal(missionCreateDuplicateBinding.missionTargetId, missionCreateWinner.missionTargetId);
+    assert.equal(missionCreateDuplicateBinding.mutationStatementCount, 0);
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."strategies"
+       WHERE tenant_id = $1 AND user_id = $2`,
+      [NATIVE_TENANT, NATIVE_USER]
+    );
+    const nativeMatchedStrategy: StrategyDefinition = {
+      id: "strategy_native_signal_evaluation",
+      name: "Native exact signal",
+      enabled: true,
+      position: 1,
+      revision: 1,
+      sources: ["trackalacker"],
+      retailers: ["target"],
+      pricePolicy: { kind: "absolute_max", maxPriceCents: 1_300 },
+      sellerPolicy: "first_party_only",
+      allowedSellers: ["target"],
+      includeKeywords: "native",
+      excludeKeywords: "damaged",
+      action: "add_to_cart",
+      quantity: 1,
+      fulfillment: "shipping",
+      maxSignalAgeSeconds: 120
+    };
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."strategies"(
+         id, tenant_id, user_id, name, enabled, position, revision,
+         definition_json, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 1, 1, 1, $5, $6, $6)`,
+      [
+        nativeMatchedStrategy.id,
+        NATIVE_TENANT,
+        NATIVE_USER,
+        nativeMatchedStrategy.name,
+        JSON.stringify(nativeMatchedStrategy),
+        new Date(resolutionPlanNow + 6_250).toISOString()
+      ]
+    );
+    const widenedMissionEvaluationAttestation = await attestNativeSignalEvaluation({
+      payload: missionCreatePayload,
+      missionId: missionCreateWinner.missionId,
+      missionTargetId: missionCreateWinner.missionTargetId,
+      listingId: "listing_native_mission_create",
+      missionEvaluationQuantity: 5,
+      strategies: [nativeMatchedStrategy],
+      now: resolutionPlanNow + 6_250
+    });
+    await assert.rejects(
+      signalStrategyEvaluationA.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        widenedMissionEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      /mission quantity projection is invalid/
+    );
+    const matchedEvaluationAttestation = await attestNativeSignalEvaluation({
+      payload: missionCreatePayload,
+      missionId: missionCreateWinner.missionId,
+      missionTargetId: missionCreateWinner.missionTargetId,
+      listingId: "listing_native_mission_create",
+      missionEvaluationQuantity: 1,
+      strategies: [nativeMatchedStrategy],
+      now: resolutionPlanNow + 6_250
+    });
+    assert.equal(matchedEvaluationAttestation.state, "matched");
+    assert.equal(matchedEvaluationAttestation.strategyId, nativeMatchedStrategy.id);
+    assert.equal(matchedEvaluationAttestation.effectiveAction, "add_to_cart");
+    assert.equal(matchedEvaluationAttestation.effectiveQuantity, 1);
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."mission_targets"
+       SET enabled = 0, updated_at = $2 WHERE id = $1`,
+      [missionCreateWinner.missionTargetId, new Date(resolutionPlanNow + 6_251).toISOString()]
+    );
+    try {
+      await assert.rejects(
+        signalStrategyEvaluationA.applySignalStrategyEvaluation(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          missionCreateMessageId,
+          missionCreateLease.capabilityToken,
+          matchedEvaluationAttestation,
+          resolutionPlanNow + 6_250
+        ),
+        /current mission target is inactive/
+      );
+    } finally {
+      await first.query(
+        `UPDATE "${NATIVE_SCHEMA}"."mission_targets"
+         SET enabled = 1, updated_at = $2 WHERE id = $1`,
+        [missionCreateWinner.missionTargetId, new Date(resolutionPlanNow + 6_252).toISOString()]
+      );
+    }
+    await assert.rejects(
+      signalStrategyEvaluationB.applySignalStrategyEvaluation(
+        { tenantId: "tenant_local", userId: "user_local" },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        matchedEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalStrategyEvaluationC.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        matchedEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await assert.rejects(
+      signalStrategyEvaluationUnmapped.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        matchedEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      /tenant session principal is not active/
+    );
+    await assert.rejects(
+      signalStrategyEvaluationA.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        { ...matchedEvaluationAttestation, evaluationFingerprint: "0".repeat(64) },
+        resolutionPlanNow + 6_250
+      ),
+      /attestation fingerprint is invalid/
+    );
+    const countsBeforeMatchedEvaluation = await signalResolutionMutationCounts();
+    const matchedEvaluations = await Promise.all([
+      signalStrategyEvaluationA.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        matchedEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      signalStrategyEvaluationASecond.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        matchedEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      )
+    ]);
+    for (const matchedEvaluation of matchedEvaluations) {
+      assert.equal(matchedEvaluation.outcome, "continue_downstream");
+      assert.equal(matchedEvaluation.evaluationState, "matched");
+      assert.equal(matchedEvaluation.strategyId, nativeMatchedStrategy.id);
+      assert.equal(matchedEvaluation.decisionAction, "none");
+      assert.equal(matchedEvaluation.auditAction, "none");
+      assert.equal(matchedEvaluation.outboxAction, "none");
+      assert.equal(matchedEvaluation.mutationStatementCount, 0);
+      assert.equal(matchedEvaluation.strategyEvaluationApplyApplied, false);
+      assert.equal(matchedEvaluation.continueDownstream, true);
+      assert.equal(matchedEvaluation.actionMutation, false);
+      assert.equal(matchedEvaluation.spendMutation, false);
+      assert.equal(matchedEvaluation.evaluationAuthority, false);
+      assert.equal(matchedEvaluation.terminalDecisionMutated, false);
+    }
+    assert.deepEqual(await signalResolutionMutationCounts(), countsBeforeMatchedEvaluation);
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."strategies"
+       WHERE tenant_id = $1 AND user_id = $2`,
+      [NATIVE_TENANT, NATIVE_USER]
+    );
+    await assert.rejects(
+      signalStrategyEvaluationA.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        matchedEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      /strategy snapshot changed/
+    );
+    const terminalEvaluationAttestation = await attestNativeSignalEvaluation({
+      payload: missionCreatePayload,
+      missionId: missionCreateWinner.missionId,
+      missionTargetId: missionCreateWinner.missionTargetId,
+      listingId: "listing_native_mission_create",
+      missionEvaluationQuantity: 1,
+      strategies: [],
+      now: resolutionPlanNow + 6_250
+    });
+    assert.equal(terminalEvaluationAttestation.state, "unmatched");
+    assert.equal(terminalEvaluationAttestation.strategyId, "");
+    assert.equal(terminalEvaluationAttestation.effectiveAction, "notify");
+    assert.equal(terminalEvaluationAttestation.effectiveQuantity, 1);
+    signalStrategyEvaluationDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalStrategyEvaluationDirectClient.on("error", () => undefined);
+    await signalStrategyEvaluationDirectClient.connect();
+    await signalStrategyEvaluationDirectClient.query(
+      `SET ROLE "${signalStrategyEvaluationManifest.strategyEvaluationRole.name}"`
+    );
+    const directEvaluationPlan = (attestation: unknown) => signalStrategyEvaluationDirectClient!.query(
+      `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_FUNCTION}"(
+         $1, $2, 'plan', $3, $4, '', $5
+       )`,
+      [
+        NATIVE_TENANT,
+        NATIVE_USER,
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        JSON.stringify({ attestation })
+      ]
+    );
+    await assert.rejects(
+      directEvaluationPlan({ ...terminalEvaluationAttestation, strategyCount: 0.4 }),
+      /numeric values are not canonical integers/
+    );
+    const {
+      effectiveUnitCapCents: _omittedEffectiveUnitCapCents,
+      ...missingEffectiveUnitCapAttestation
+    } = terminalEvaluationAttestation;
+    await assert.rejects(
+      directEvaluationPlan(missingEffectiveUnitCapAttestation),
+      /attestation shape is invalid/
+    );
+    await signalStrategyEvaluationDirectClient.end();
+    signalStrategyEvaluationDirectClient = null;
+    const {
+      evaluationFingerprint: _terminalEvaluationFingerprint,
+      ...terminalEvaluationWithoutFingerprint
+    } = terminalEvaluationAttestation;
+    const unsafeTerminalWithoutFingerprint = {
+      ...terminalEvaluationWithoutFingerprint,
+      sellerPolicy: "allow_third_party" as const
+    };
+    const unsafeTerminalAttestation: SignalPolicyEvaluationAttestation = {
+      ...unsafeTerminalWithoutFingerprint,
+      evaluationFingerprint: signalPolicyEvaluationFingerprint(unsafeTerminalWithoutFingerprint)
+    };
+    await assert.rejects(
+      signalStrategyEvaluationA.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        unsafeTerminalAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      /terminal strategy evaluation is not fail closed/
+    );
+    const countsBeforeTerminalEvaluation = await signalResolutionMutationCounts();
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_signal_evaluation_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $body$
+       BEGIN
+         IF NEW.event_type = 'signal_decided' THEN
+           RAISE EXCEPTION 'native forced signal evaluation outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $body$;
+       CREATE TRIGGER "yoink_native_reject_signal_evaluation_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_signal_evaluation_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        signalStrategyEvaluationA.applySignalStrategyEvaluation(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          missionCreateMessageId,
+          missionCreateLease.capabilityToken,
+          terminalEvaluationAttestation,
+          resolutionPlanNow + 6_250
+        ),
+        /native forced signal evaluation outbox failure/
+      );
+      assert.deepEqual(await signalResolutionMutationCounts(), countsBeforeTerminalEvaluation);
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_signal_evaluation_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS "${NATIVE_SCHEMA}"."yoink_native_reject_signal_evaluation_outbox"()`
+      );
+    }
+    const concurrentTerminalEvaluations = await Promise.all([
+      signalStrategyEvaluationA.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        terminalEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      signalStrategyEvaluationASecond.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateDuplicateMessageId,
+        missionCreateDuplicateLease.capabilityToken,
+        terminalEvaluationAttestation,
+        missionCreateDuplicateNow
+      )
+    ]);
+    const terminalEvaluationWinner = concurrentTerminalEvaluations.find(
+      (result) => result.strategyEvaluationApplyApplied
+    );
+    const terminalEvaluationReplay = concurrentTerminalEvaluations.find(
+      (result) => !result.strategyEvaluationApplyApplied
+    );
+    assert.ok(terminalEvaluationWinner);
+    assert.ok(terminalEvaluationReplay);
+    assert.equal(terminalEvaluationWinner.outcome, "unmatched");
+    assert.equal(terminalEvaluationWinner.evaluationState, "unmatched");
+    assert.equal(terminalEvaluationWinner.decisionAction, "insert");
+    assert.equal(terminalEvaluationWinner.auditAction, "insert");
+    assert.equal(terminalEvaluationWinner.outboxAction, "insert");
+    assert.equal(terminalEvaluationWinner.mutationStatementCount, 3);
+    assert.equal(terminalEvaluationWinner.mutationRowCount, 3);
+    assert.equal(terminalEvaluationWinner.continueDownstream, false);
+    assert.equal(terminalEvaluationWinner.terminalDecisionMutated, true);
+    assert.equal(terminalEvaluationWinner.actionMutation, false);
+    assert.equal(terminalEvaluationWinner.spendMutation, false);
+    assert.equal(terminalEvaluationWinner.inboxLifecycleMutation, false);
+    assert.equal(terminalEvaluationReplay.outcome, "unmatched");
+    assert.equal(terminalEvaluationReplay.decisionAction, "none");
+    assert.equal(terminalEvaluationReplay.mutationStatementCount, 0);
+    assert.equal(terminalEvaluationReplay.terminalDecisionMutated, false);
+    assert.deepEqual(await signalResolutionMutationCounts(), {
+      ...countsBeforeTerminalEvaluation,
+      missionDecisions: Number(countsBeforeTerminalEvaluation.missionDecisions) + 1,
+      auditEvents: Number(countsBeforeTerminalEvaluation.auditEvents) + 1,
+      outboxEvents: Number(countsBeforeTerminalEvaluation.outboxEvents) + 1
+    });
+    const storedTerminalEvaluation = (await first.query<{
+      decisionId: string;
+      outcome: string;
+      decisionSource: string;
+      effectiveAction: string;
+      effectiveQuantity: number;
+      strategyId: string | null;
+      reason: string;
+      decisionCreatedAt: string;
+      auditId: string;
+      auditReason: string;
+      auditData: string;
+      auditCreatedAt: string;
+      outboxId: string;
+      outboxAggregateType: string;
+      outboxPayload: string;
+      outboxCreatedAt: string;
+    }>(
+      `SELECT decision.id AS "decisionId", decision.outcome,
+              decision.decision_source AS "decisionSource",
+              decision.effective_action AS "effectiveAction",
+              decision.effective_quantity AS "effectiveQuantity",
+              decision.strategy_id AS "strategyId", decision.reason,
+              decision.created_at AS "decisionCreatedAt", audit.id AS "auditId",
+              audit.reason_code AS "auditReason", audit.data_json AS "auditData",
+              audit.created_at AS "auditCreatedAt", outbox.id AS "outboxId",
+              outbox.aggregate_type AS "outboxAggregateType",
+              outbox.payload_json AS "outboxPayload", outbox.created_at AS "outboxCreatedAt"
+       FROM "${NATIVE_SCHEMA}"."mission_decisions" AS decision
+       JOIN "${NATIVE_SCHEMA}"."signal_events" AS signal ON signal.id = decision.event_id
+       JOIN "${NATIVE_SCHEMA}"."audit_events" AS audit
+         ON audit.correlation_id = signal.signal_id AND audit.event_type = 'signal_decided'
+        AND audit.reason_code = decision.outcome
+       JOIN "${NATIVE_SCHEMA}"."outbox_events" AS outbox
+         ON (outbox.payload_json::jsonb->>'auditId') = audit.id
+       WHERE decision.mission_id = $1 AND decision.outcome = 'unmatched'`,
+      [missionCreateWinner.missionId]
+    )).rows[0]!;
+    const normalizedStoredTerminalEvaluation = {
+      ...storedTerminalEvaluation,
+      effectiveQuantity: Number(storedTerminalEvaluation.effectiveQuantity),
+      auditData: JSON.parse(storedTerminalEvaluation.auditData),
+      outboxPayload: JSON.parse(storedTerminalEvaluation.outboxPayload)
+    };
+    const expectedTerminalDecisionId = `mission_decision_${stableHash(
+      "postgres_signal_strategy_evaluation_decision_v1",
+      NATIVE_TENANT,
+      NATIVE_USER,
+      terminalEvaluationWinner.eventId,
+      missionCreateWinner.missionId,
+      terminalEvaluationAttestation.evaluationFingerprint
+    ).slice(0, 32)}`;
+    const expectedTerminalAuditId = `audit_${stableHash(
+      "postgres_signal_strategy_evaluation_audit_v1",
+      NATIVE_TENANT,
+      NATIVE_USER,
+      terminalEvaluationWinner.eventId,
+      missionCreateWinner.missionId,
+      terminalEvaluationAttestation.evaluationFingerprint
+    ).slice(0, 32)}`;
+    const expectedTerminalOutboxId = `outbox_${stableHash(
+      "postgres_signal_strategy_evaluation_outbox_v1",
+      NATIVE_TENANT,
+      NATIVE_USER,
+      terminalEvaluationWinner.eventId,
+      missionCreateWinner.missionId,
+      terminalEvaluationAttestation.evaluationFingerprint
+    ).slice(0, 32)}`;
+    assert.equal(storedTerminalEvaluation.decisionId, expectedTerminalDecisionId);
+    assert.equal(storedTerminalEvaluation.auditId, expectedTerminalAuditId);
+    assert.equal(storedTerminalEvaluation.outboxId, expectedTerminalOutboxId);
+    assert.match(storedTerminalEvaluation.decisionCreatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.equal(storedTerminalEvaluation.auditCreatedAt, storedTerminalEvaluation.decisionCreatedAt);
+    assert.equal(storedTerminalEvaluation.outboxCreatedAt, storedTerminalEvaluation.decisionCreatedAt);
+    assert.deepEqual(normalizedStoredTerminalEvaluation, {
+      decisionId: expectedTerminalDecisionId,
+      outcome: "unmatched",
+      decisionSource: "strategy",
+      effectiveAction: "notify",
+      effectiveQuantity: 1,
+      strategyId: null,
+      reason: terminalEvaluationAttestation.reason,
+      decisionCreatedAt: storedTerminalEvaluation.decisionCreatedAt,
+      auditId: expectedTerminalAuditId,
+      auditReason: "unmatched",
+      auditData: {
+        missionId: missionCreateWinner.missionId,
+        incidentId: missionCreateOfferIncident.incidentId,
+        evaluationAttestation: terminalEvaluationAttestation
+      },
+      auditCreatedAt: storedTerminalEvaluation.decisionCreatedAt,
+      outboxId: expectedTerminalOutboxId,
+      outboxAggregateType: "signal",
+      outboxPayload: {
+        auditId: expectedTerminalAuditId,
+        correlationId: normalizeSignal(
+          missionCreatePayload as unknown as SignalEventInput,
+          resolutionPlanNow + 6_250
+        ).signalId,
+        reasonCode: "unmatched",
+        message: terminalEvaluationAttestation.reason,
+        data: {
+          missionId: missionCreateWinner.missionId,
+          incidentId: missionCreateOfferIncident.incidentId,
+          evaluationAttestation: terminalEvaluationAttestation
+        }
+      },
+      outboxCreatedAt: storedTerminalEvaluation.decisionCreatedAt
+    });
+    const storedTerminalOutbox = (await first.query<{
+      id: string;
+      tenantId: string;
+      aggregateType: string;
+      aggregateId: string;
+      eventType: string;
+      payloadJson: string;
+      createdAt: string;
+      deliveredAt: string;
+      deliveryAttempts: number;
+      deliveryState: string;
+      leaseCapabilityHash: string;
+      leaseExpiresAt: string;
+      nextAttemptAt: string;
+      lastErrorCode: string;
+      updatedAt: string;
+    }>(
+      `SELECT id, tenant_id AS "tenantId", aggregate_type AS "aggregateType",
+              aggregate_id AS "aggregateId", event_type AS "eventType",
+              payload_json AS "payloadJson", created_at AS "createdAt",
+              delivered_at AS "deliveredAt", delivery_attempts AS "deliveryAttempts",
+              delivery_state AS "deliveryState",
+              lease_capability_hash AS "leaseCapabilityHash",
+              lease_expires_at AS "leaseExpiresAt", next_attempt_at AS "nextAttemptAt",
+              last_error_code AS "lastErrorCode", updated_at AS "updatedAt"
+       FROM "${NATIVE_SCHEMA}"."outbox_events" WHERE id = $1`,
+      [expectedTerminalOutboxId]
+    )).rows[0]!;
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."outbox_events" WHERE id = $1`,
+      [expectedTerminalOutboxId]
+    );
+    await assert.rejects(
+      signalStrategyEvaluationA.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        terminalEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      /graph is partial/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."outbox_events"(
+         id, tenant_id, aggregate_type, aggregate_id, event_type, payload_json,
+         created_at, delivered_at, delivery_attempts, delivery_state,
+         lease_capability_hash, lease_expires_at, next_attempt_at,
+         last_error_code, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [
+        storedTerminalOutbox.id,
+        storedTerminalOutbox.tenantId,
+        storedTerminalOutbox.aggregateType,
+        storedTerminalOutbox.aggregateId,
+        storedTerminalOutbox.eventType,
+        storedTerminalOutbox.payloadJson,
+        storedTerminalOutbox.createdAt,
+        storedTerminalOutbox.deliveredAt,
+        Number(storedTerminalOutbox.deliveryAttempts),
+        storedTerminalOutbox.deliveryState,
+        storedTerminalOutbox.leaseCapabilityHash,
+        storedTerminalOutbox.leaseExpiresAt,
+        storedTerminalOutbox.nextAttemptAt,
+        storedTerminalOutbox.lastErrorCode,
+        storedTerminalOutbox.updatedAt
+      ]
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."audit_events"
+       SET message = 'Corrupt terminal evaluation receipt'
+       WHERE id = ($1::jsonb->>'auditId')`,
+      [storedTerminalEvaluation.outboxPayload]
+    );
+    await assert.rejects(
+      signalStrategyEvaluationA.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        terminalEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      ),
+      /replay graph changed/
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."audit_events"
+       SET message = $1 WHERE id = ($2::jsonb->>'auditId')`,
+      [terminalEvaluationAttestation.reason, storedTerminalEvaluation.outboxPayload]
+    );
+    assert.equal(
+      (await signalStrategyEvaluationA.applySignalStrategyEvaluation(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateMessageId,
+        missionCreateLease.capabilityToken,
+        terminalEvaluationAttestation,
+        resolutionPlanNow + 6_250
+      )).strategyEvaluationApplyApplied,
+      false
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."strategies"(
+         id, tenant_id, user_id, name, enabled, position, revision,
+         definition_json, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 1, 1, 1, $5, $6, $6)`,
+      [
+        nativeMatchedStrategy.id,
+        NATIVE_TENANT,
+        NATIVE_USER,
+        nativeMatchedStrategy.name,
+        JSON.stringify(nativeMatchedStrategy),
+        new Date(missionCreateDuplicateNow + 1).toISOString()
+      ]
+    );
+    const postTerminalPolicyHash = stableHash(
+      "intent-policy-v2",
+      missionCreateWinner.missionId,
+      2,
+      "USD",
+      null,
+      "add_to_cart",
+      "strategy",
+      120,
+      "exact_only",
+      "",
+      0,
+      JSON.stringify(expectedMissionTargetPolicy)
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."mission_intent_revisions"(
+         id, tenant_id, user_id, mission_id, revision, quantity, currency,
+         max_all_in_cents, action_ceiling, substitution_policy, expires_at,
+         cooldown_seconds, target_policy_json, policy_hash, change_reason,
+         decision_mode, max_signal_age_seconds, created_by_actor_id, created_at
+       )
+       SELECT 'intent_revision_44444444444444444444444444444444', tenant_id,
+              user_id, mission_id, 2, quantity, currency, max_all_in_cents,
+              action_ceiling, substitution_policy, expires_at, cooldown_seconds,
+              target_policy_json, $2, 'Native post-terminal policy revision.',
+              decision_mode, max_signal_age_seconds, created_by_actor_id, $3
+       FROM "${NATIVE_SCHEMA}"."mission_intent_revisions" WHERE id = $1`,
+      [
+        missionCreateWinner.policyRevisionId,
+        postTerminalPolicyHash,
+        new Date(missionCreateDuplicateNow + 1).toISOString()
+      ]
+    );
+    const deliveredAt = new Date(missionCreateDuplicateNow + 2).toISOString();
+    const deliveredUpdatedAt = new Date(missionCreateDuplicateNow + 3).toISOString();
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."outbox_events"
+       SET delivered_at = $1, delivery_state = 'delivered', delivery_attempts = 2,
+           lease_capability_hash = '', lease_expires_at = '', next_attempt_at = '',
+           last_error_code = '', updated_at = $2
+       WHERE (payload_json::jsonb->>'auditId') = ($3::jsonb->>'auditId')`,
+      [deliveredAt, deliveredUpdatedAt, storedTerminalEvaluation.outboxPayload]
+    );
+    const countsBeforeImmutableReplay = await signalResolutionMutationCounts();
+    const immutableReplay = await signalStrategyEvaluationA.applySignalStrategyEvaluation(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      missionCreateDuplicateMessageId,
+      missionCreateDuplicateLease.capabilityToken,
+      terminalEvaluationAttestation,
+      missionCreateDuplicateNow
+    );
+    assert.equal(immutableReplay.outcome, "unmatched");
+    assert.equal(immutableReplay.strategyEvaluationApplyApplied, false);
+    assert.equal(immutableReplay.mutationStatementCount, 0);
+    assert.deepEqual(await signalResolutionMutationCounts(), countsBeforeImmutableReplay);
+    assert.deepEqual((await first.query<{
+      deliveredAt: string;
+      deliveryState: string;
+      deliveryAttempts: number;
+      leaseCapabilityHash: string;
+      leaseExpiresAt: string;
+      nextAttemptAt: string;
+      lastErrorCode: string;
+      updatedAt: string;
+    }>(
+      `SELECT delivered_at AS "deliveredAt", delivery_state AS "deliveryState",
+              delivery_attempts AS "deliveryAttempts",
+              lease_capability_hash AS "leaseCapabilityHash",
+              lease_expires_at AS "leaseExpiresAt", next_attempt_at AS "nextAttemptAt",
+              last_error_code AS "lastErrorCode", updated_at AS "updatedAt"
+       FROM "${NATIVE_SCHEMA}"."outbox_events"
+       WHERE (payload_json::jsonb->>'auditId') = ($1::jsonb->>'auditId')`,
+      [storedTerminalEvaluation.outboxPayload]
+    )).rows.map((row) => ({ ...row, deliveryAttempts: Number(row.deliveryAttempts) })), [{
+      deliveredAt,
+      deliveryState: "delivered",
+      deliveryAttempts: 2,
+      leaseCapabilityHash: "",
+      leaseExpiresAt: "",
+      nextAttemptAt: "",
+      lastErrorCode: "",
+      updatedAt: deliveredUpdatedAt
+    }]);
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."strategies"
+       WHERE tenant_id = $1 AND user_id = $2`,
+      [NATIVE_TENANT, NATIVE_USER]
+    );
     assert.equal(
       await deliveryLeaseRecoveryA.completeSignalInbox(
         { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
         missionCreateMessageId,
         missionCreateLease.capabilityToken,
         resolutionPlanNow + 6_250
+      ),
+      true
+    );
+    assert.equal(
+      await deliveryLeaseRecoveryA.completeSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        missionCreateDuplicateMessageId,
+        missionCreateDuplicateLease.capabilityToken,
+        missionCreateDuplicateNow
       ),
       true
     );
@@ -7573,6 +8491,51 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     await signalMissionBindingDirectClient.end();
     signalMissionBindingDirectClient = null;
+
+    signalStrategyEvaluationDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalStrategyEvaluationDirectClient.on("error", () => undefined);
+    await signalStrategyEvaluationDirectClient.connect();
+    await signalStrategyEvaluationDirectClient.query(
+      `SET ROLE "${signalStrategyEvaluationManifest.strategyEvaluationRole.name}"`
+    );
+    await assert.rejects(
+      signalStrategyEvaluationDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."strategies" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalStrategyEvaluationDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."mission_decisions"(
+           id, event_id, incident_id, mission_id, decision_source,
+           outcome, reason, effective_action, effective_quantity, created_at
+         ) VALUES (
+           'mission_decision_forbidden', 'signal_event_forbidden', NULL, NULL,
+           'strategy', 'unmatched', 'forbidden', 'notify', 1, $1
+         )`,
+        [new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalStrategyEvaluationDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_FUNCTION}"(
+           $1, $2, 'plan', $3, $4, '', $5
+         )`,
+        [
+          NATIVE_TENANT,
+          "user_local",
+          missionCreateMessageId,
+          "A".repeat(43),
+          JSON.stringify({ attestation: terminalEvaluationAttestation })
+        ]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await signalStrategyEvaluationDirectClient.end();
+    signalStrategyEvaluationDirectClient = null;
 
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
@@ -10703,6 +11666,39 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       )).boundaryCatalogFingerprint,
       signalMissionBindingBoundary.boundaryCatalogFingerprint
     );
+    const cleanSignalStrategyEvaluationBoundary =
+      await verifyPostgresSignalStrategyEvaluationApplyBoundary(
+        first,
+        signalStrategyEvaluationManifest
+      );
+    assert.equal(
+      cleanSignalStrategyEvaluationBoundary.boundaryCatalogFingerprint,
+      signalStrategyEvaluationBoundary.boundaryCatalogFingerprint
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresSignalStrategyEvaluationApplyBoundary(
+        first,
+        signalStrategyEvaluationManifest
+      ),
+      /qualified security-definer function is incomplete|drifted from its receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.equal(
+      (await verifyPostgresSignalStrategyEvaluationApplyBoundary(
+        first,
+        signalStrategyEvaluationManifest
+      )).boundaryCatalogFingerprint,
+      signalStrategyEvaluationBoundary.boundaryCatalogFingerprint
+    );
     await first.query(
       `ALTER FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_RESOLUTION_APPLY_FUNCTION}"(
          text, text, text, text, text, text, text
@@ -11313,7 +12309,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalMissionBindingB?.close(),
       signalMissionBindingC?.close(),
       signalMissionBindingUnmapped?.close(),
-      signalMissionBindingDirectClient?.end()
+      signalMissionBindingDirectClient?.end(),
+      signalStrategyEvaluationA?.close(),
+      signalStrategyEvaluationASecond?.close(),
+      signalStrategyEvaluationB?.close(),
+      signalStrategyEvaluationC?.close(),
+      signalStrategyEvaluationUnmapped?.close(),
+      signalStrategyEvaluationDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

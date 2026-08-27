@@ -10,7 +10,7 @@ import { ControlRepository } from "../../database/src/control-repository.js";
 import { YoinkDatabase } from "../../database/src/database.js";
 import { SignalRepository } from "../../database/src/signal-repository.js";
 import { normalizeSignal } from "../../domain/src/normalize.js";
-import { evaluatePurchaseIntent, evaluateStrategies } from "../../domain/src/strategies.js";
+import { evaluateSignalPolicySnapshot } from "../../domain/src/signal-policy-evaluation.js";
 
 function emptyResult(signalId: string, resolution: ResolutionResult): SignalProcessingResult {
   return {
@@ -146,19 +146,17 @@ export class SignalEngine {
 
       const evaluationMission = missionCreated ? { ...mission, targetQuantity: 5 } : mission;
       const intentPolicy = this.control.currentPurchaseIntentPolicy(mission.id, now);
-      let evaluation = intentPolicy.decisionMode === "purchase_intent"
-        ? evaluatePurchaseIntent(intentPolicy, signal, listing, evaluationMission, now)
-        : evaluateStrategies(this.control.listStrategies(), signal, listing, evaluationMission, now);
-      const directSourceRestricted = evaluation.decisionSource === "purchase_intent"
-        && evaluation.effectiveAction !== "notify"
-        && sourceConnection.trustLevel !== "trusted_exact";
-      if (directSourceRestricted) {
-        evaluation = {
-          ...evaluation,
-          effectiveAction: "notify",
-          reason: "The exact offer matched the reviewed plan, but this source is informational and cannot authorize a retailer action."
-        };
-      }
+      const evaluated = evaluateSignalPolicySnapshot(
+        this.control.listStrategies(),
+        intentPolicy,
+        signal,
+        listing,
+        evaluationMission,
+        sourceConnection.trustLevel,
+        now
+      );
+      let evaluation = evaluated.evaluation;
+      const directSourceRestricted = evaluated.sourceActionRestricted;
       if (missionCreated && evaluation.strategy) {
         this.control.setMissionTargetQuantity(mission.id, evaluation.effectiveQuantity, now);
         mission = { ...mission, targetQuantity: evaluation.effectiveQuantity };
