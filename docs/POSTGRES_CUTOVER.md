@@ -1941,7 +1941,7 @@ npm run postgres:signal-target-qualification-apply -- plan \
   yoink_reference_q_087 yoink_terminal_q_087 yoink_offer_q_087 \
   yoink_post_q_087 yoink_mission_q_087 yoink_strategy_q_087 \
   yoink_writer_lock_q_087 yoink_constraint_config_q_087 \
-  yoink_action_spend_q_087 yoink_target_qualification_q_087
+  yoink_action_spend_q_087 yoink_target_qual_q_087
 ```
 
 After every predecessor receipt through action/spend is verified, apply once
@@ -1958,7 +1958,7 @@ YOINK_POSTGRES_SIGNAL_TARGET_QUALIFICATION_APPLY_QUALIFICATION_ACK=bounded-signa
   yoink_reference_q_087 yoink_terminal_q_087 yoink_offer_q_087 \
   yoink_post_q_087 yoink_mission_q_087 yoink_strategy_q_087 \
   yoink_writer_lock_q_087 yoink_constraint_config_q_087 \
-  yoink_action_spend_q_087 yoink_target_qualification_q_087
+  yoink_action_spend_q_087 yoink_target_qual_q_087
 ```
 
 Then independently verify the role, function, nine forced-RLS tables, six-table
@@ -1974,7 +1974,7 @@ npm run postgres:signal-target-qualification-apply -- verify \
   yoink_reference_q_087 yoink_terminal_q_087 yoink_offer_q_087 \
   yoink_post_q_087 yoink_mission_q_087 yoink_strategy_q_087 \
   yoink_writer_lock_q_087 yoink_constraint_config_q_087 \
-  yoink_action_spend_q_087 yoink_target_qualification_q_087
+  yoink_action_spend_q_087 yoink_target_qual_q_087
 ```
 
 The receipt permanently records `qualificationSettingsWriterParity: true` and
@@ -2022,7 +2022,7 @@ npm run postgres:signal-source-trust-apply -- plan \
   yoink_reference_q_088 yoink_terminal_q_088 yoink_offer_q_088 \
   yoink_post_q_088 yoink_mission_q_088 yoink_strategy_q_088 \
   yoink_writer_lock_q_088 yoink_constraint_config_q_088 \
-  yoink_action_spend_q_088 yoink_target_qualification_q_088 \
+  yoink_action_spend_q_088 yoink_target_qual_q_088 \
   yoink_source_trust_q_088
 ```
 
@@ -2040,7 +2040,7 @@ YOINK_POSTGRES_SIGNAL_SOURCE_TRUST_APPLY_QUALIFICATION_ACK=bounded-signal-source
   yoink_reference_q_088 yoink_terminal_q_088 yoink_offer_q_088 \
   yoink_post_q_088 yoink_mission_q_088 yoink_strategy_q_088 \
   yoink_writer_lock_q_088 yoink_constraint_config_q_088 \
-  yoink_action_spend_q_088 yoink_target_qualification_q_088 \
+  yoink_action_spend_q_088 yoink_target_qual_q_088 \
   yoink_source_trust_q_088
 ```
 
@@ -2057,7 +2057,7 @@ npm run postgres:signal-source-trust-apply -- verify \
   yoink_reference_q_088 yoink_terminal_q_088 yoink_offer_q_088 \
   yoink_post_q_088 yoink_mission_q_088 yoink_strategy_q_088 \
   yoink_writer_lock_q_088 yoink_constraint_config_q_088 \
-  yoink_action_spend_q_088 yoink_target_qualification_q_088 \
+  yoink_action_spend_q_088 yoink_target_qual_q_088 \
   yoink_source_trust_q_088
 ```
 
@@ -2112,8 +2112,8 @@ npm run postgres:signal-retailer-qualification-apply -- plan \
   yoink_reference_q_089 yoink_terminal_q_089 yoink_offer_q_089 \
   yoink_post_q_089 yoink_mission_q_089 yoink_strategy_q_089 \
   yoink_writer_lock_q_089 yoink_constraint_config_q_089 \
-  yoink_action_spend_q_089 yoink_target_qualification_q_089 \
-  yoink_source_trust_q_089 yoink_retailer_qualification_q_089
+  yoink_action_spend_q_089 yoink_target_qual_q_089 \
+  yoink_source_trust_q_089 yoink_retailer_qual_q_089
 ```
 
 After every predecessor through source trust is verified, apply once with the
@@ -2130,8 +2130,8 @@ YOINK_POSTGRES_SIGNAL_RETAILER_QUALIFICATION_APPLY_QUALIFICATION_ACK=bounded-sig
   yoink_reference_q_089 yoink_terminal_q_089 yoink_offer_q_089 \
   yoink_post_q_089 yoink_mission_q_089 yoink_strategy_q_089 \
   yoink_writer_lock_q_089 yoink_constraint_config_q_089 \
-  yoink_action_spend_q_089 yoink_target_qualification_q_089 \
-  yoink_source_trust_q_089 yoink_retailer_qualification_q_089
+  yoink_action_spend_q_089 yoink_target_qual_q_089 \
+  yoink_source_trust_q_089 yoink_retailer_qual_q_089
 ```
 
 Then independently verify the role, function, tenant/shared table sets,
@@ -2147,8 +2147,8 @@ npm run postgres:signal-retailer-qualification-apply -- verify \
   yoink_reference_q_089 yoink_terminal_q_089 yoink_offer_q_089 \
   yoink_post_q_089 yoink_mission_q_089 yoink_strategy_q_089 \
   yoink_writer_lock_q_089 yoink_constraint_config_q_089 \
-  yoink_action_spend_q_089 yoink_target_qualification_q_089 \
-  yoink_source_trust_q_089 yoink_retailer_qualification_q_089
+  yoink_action_spend_q_089 yoink_target_qual_q_089 \
+  yoink_source_trust_q_089 yoink_retailer_qual_q_089
 ```
 
 The receipt permanently records `nonTargetQualificationWriterParity: true`,
@@ -2161,6 +2161,103 @@ shared-retailer identity tamper rejection, Amazon offer-route validation,
 bounded job promotion, and all three operations. General source lifecycle,
 mission-policy, reservations, production principals, and the SQLite authority
 switch remain closed.
+
+## Mission-policy revision writer seam
+
+Version 0.90 adds the sixteenth independent hosted-signal role. It ports only
+one full `revise_mission_policy` replacement and cannot change mission
+lifecycle, targets, listings, settings, sources, spend reservations, actions,
+checkout, or orders.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+and can execute one strict security-definer function. The receipt seals six
+forced-RLS tenant tables, exactly three mutation tables
+(`mission_intent_revisions`, `audit_events`, and `outbox_events`), and one
+read-only shared catalog table (`listings`). PostgreSQL binds `session_user` to
+one active tenant/user and consumes the settings then mission-policy mask
+`00110`.
+
+The request must contain the exact mission ID, current revision and
+`intent-policy-v2` hash, a complete bounded preference replacement, and the
+`REVISE_MISSION_POLICY_V1` confirmation. PostgreSQL locks and revalidates the
+mission, complete ordered target/listing graph, variant and USD identity,
+current tax, and store allowances, then reconstructs byte-identical target JSON
+and policy hashing. Direct `purchase_intent` + `add_to_cart` preferences also
+require at least one enabled execution-supported first-party shipping target,
+a reviewed unit-price cap, and an all-in cap sufficient for quantity, tax, and
+the current store allowance.
+
+A changed policy appends exactly one revision and one deterministic
+audit/outbox pair. An unchanged policy is a true zero-write success. Exact
+replay writes nothing and validates the immutable stored graph; an altered or
+partial replay fails closed. Strategy-mode preferences do not authorize
+strategy actions.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-mission-policy-apply -- plan \
+  yoink_cutover_qualification_090 yoink_q_090 yoink_session_q_090 \
+  yoink_queue_q_090 yoink_control_q_090 yoink_notify_q_090 \
+  yoink_execute_q_090 yoink_retain_q_090 yoink_candidate_q_090 \
+  yoink_dispatch_q_090 yoink_reconcile_q_090 yoink_witness_q_090 \
+  yoink_delivery_q_090 yoink_catalog_q_090 yoink_resolution_q_090 \
+  yoink_reference_q_090 yoink_terminal_q_090 yoink_offer_q_090 \
+  yoink_post_q_090 yoink_mission_q_090 yoink_strategy_q_090 \
+  yoink_writer_lock_q_090 yoink_constraint_config_q_090 \
+  yoink_action_spend_q_090 yoink_target_qual_q_090 \
+  yoink_source_trust_q_090 yoink_retailer_qual_q_090 \
+  yoink_mission_policy_q_090
+```
+
+After every predecessor through non-Target retailer qualification is verified,
+apply once with the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_MISSION_POLICY_APPLY_QUALIFICATION_ACK=bounded-signal-mission-policy-apply-qualification \
+  npm run postgres:signal-mission-policy-apply -- apply \
+  yoink_cutover_qualification_090 yoink_q_090 yoink_session_q_090 \
+  yoink_queue_q_090 yoink_control_q_090 yoink_notify_q_090 \
+  yoink_execute_q_090 yoink_retain_q_090 yoink_candidate_q_090 \
+  yoink_dispatch_q_090 yoink_reconcile_q_090 yoink_witness_q_090 \
+  yoink_delivery_q_090 yoink_catalog_q_090 yoink_resolution_q_090 \
+  yoink_reference_q_090 yoink_terminal_q_090 yoink_offer_q_090 \
+  yoink_post_q_090 yoink_mission_q_090 yoink_strategy_q_090 \
+  yoink_writer_lock_q_090 yoink_constraint_config_q_090 \
+  yoink_action_spend_q_090 yoink_target_qual_q_090 \
+  yoink_source_trust_q_090 yoink_retailer_qual_q_090 \
+  yoink_mission_policy_q_090
+```
+
+Then independently verify the role, routine, protected/mutation table sets,
+immutable receipt, exact grants, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-mission-policy-apply -- verify \
+  yoink_cutover_qualification_090 yoink_q_090 yoink_session_q_090 \
+  yoink_queue_q_090 yoink_control_q_090 yoink_notify_q_090 \
+  yoink_execute_q_090 yoink_retain_q_090 yoink_candidate_q_090 \
+  yoink_dispatch_q_090 yoink_reconcile_q_090 yoink_witness_q_090 \
+  yoink_delivery_q_090 yoink_catalog_q_090 yoink_resolution_q_090 \
+  yoink_reference_q_090 yoink_terminal_q_090 yoink_offer_q_090 \
+  yoink_post_q_090 yoink_mission_q_090 yoink_strategy_q_090 \
+  yoink_writer_lock_q_090 yoink_constraint_config_q_090 \
+  yoink_action_spend_q_090 yoink_target_qual_q_090 \
+  yoink_source_trust_q_090 yoink_retailer_qual_q_090 \
+  yoink_mission_policy_q_090
+```
+
+The receipt permanently records `missionPolicyWriterParity: true`, while
+`sourceWriterParity: false`, `configurationWriterParity: false`,
+`reservationWriterParity: false`, `writerLockProtocolParity: false`, and
+`runtimeAuthority: false` remain explicit. Native PostgreSQL 16 proves forced
+late rollback, wrong/same-tenant-peer/unmapped denial, zero direct and cross-
+boundary SQL, stale revision/hash denial, unsafe direct-purchase rejection,
+byte-identical hashing, exact/altered replay, zero-write unchanged requests,
+settings/mission contention, catalog tamper rejection, and zero action
+creation. General source lifecycle/status, reservations, production principals,
+and the SQLite authority switch remain closed.
 
 ## Requirements
 
@@ -2265,11 +2362,11 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- port the remaining source-lifecycle, strategy, mission-policy, and
-  reservation writers through the shared fixed-
+- port the remaining source-lifecycle and reservation writers through the shared fixed-
   order protocol (global pause, guardrails, spend-policy caps, complete Target
   qualification/settings activation, bounded source trust, and exact Walmart/
-  Amazon/Best Buy qualification are already qualified);
+  Amazon/Best Buy qualification plus full mission-policy revision are already
+  qualified);
   add attribution-policy parity and separately qualified strategy-action
   semantics; then compose the qualified purchase-intent action/spend,
   strategy/purchase-policy evaluation, hosted-delivery recovery, fixed signal-

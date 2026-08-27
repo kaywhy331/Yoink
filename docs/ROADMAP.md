@@ -1,6 +1,40 @@
 # Yoink roadmap
 
-## Shipped through 0.89.0
+## Shipped through 0.90.0
+
+### PostgreSQL mission-policy revision (0.90.0)
+
+- A sixteenth separately receipted hosted-signal qualification role ports one
+  full `revise_mission_policy` replacement. It consumes settings then mission-
+  policy scopes (`00110`) from the shared fixed-order protocol
+- The role is independently `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no
+  application object, inherits no role, has zero direct/effective table or
+  column grants, and can execute one strict security-definer routine. Six
+  forced-RLS tenant tables and one read-only shared catalog table are protected;
+  only `mission_intent_revisions`, `audit_events`, and `outbox_events` mutate
+- PostgreSQL authenticates `session_user`, requires the exact mission owner,
+  current revision and `intent-policy-v2` hash, explicit
+  `REVISE_MISSION_POLICY_V1` confirmation, and a complete bounded replacement.
+  It reconstructs the ordered target JSON byte-for-byte and revalidates every
+  target/listing variant, USD currency, current tax, and retailer allowance
+- Direct `purchase_intent` + `add_to_cart` preferences additionally require an
+  enabled execution-supported first-party shipping target, reviewed per-item
+  cap, and a sufficient all-in cap for quantity, tax, and store allowance.
+  Strategy preferences do not confer strategy action authority
+- A changed request appends one immutable policy revision and one audit/outbox
+  pair atomically. An unchanged hash is a true zero-write success; exact replay
+  is mutation-free, while altered or partial graphs abort
+- Native PostgreSQL 16 proves late rollback, zero direct/cross-boundary SQL,
+  wrong/same-tenant-peer/unmapped denial, optimistic concurrency, direct-
+  purchase safety, byte-identical hashing, exact/altered replay, zero-write
+  unchanged requests, mission/settings contention, catalog tamper rejection,
+  and zero action creation
+- Health and Admin → Operations expose the boundary independently. It closes
+  `missionPolicyWriterParity` but remains qualification-only with
+  `runtimeAuthority: false`. General source lifecycle/status, reservations,
+  production roles, and the SQLite authority switch stay closed
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### PostgreSQL non-Target retailer qualification (0.89.0)
 
@@ -2491,7 +2525,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-48 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete zero-unresolved table-scope classification, direct/inherited forced-RLS qualification over all 83 private tables, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; six of seven worker handler families (`notification_recovery`, `execution_recovery`, `operational_telemetry_retention`, `observer_recipe_candidate_evaluation`, `adapter_alert_reconciliation`, and `observer_recipe_witness_refresh`) proven through inactive principal-bound function-only roles with zero direct table grants, plus the final hosted-delivery handler's complete three-table lease-recovery and fixed signal-lifecycle sub-boundaries with exact SHA-256 receipts, a capability-bound maximum-30-second exact catalog-resolution plan, a separate insert-only unknown-product catalog creator, a separate transport-deduplicating event/source-heartbeat/resolution commit, a separate known-product source-reference refresh, a separate terminal occurrence/decision/audit/outbox apply boundary, a separate actionable offer/incident/occurrence apply boundary, a separate post-incident decision boundary, exact existing-or-trusted-created mission binding with complete variant targets and an initial append-only policy, an application-owned fingerprinted strategy/purchase-policy evaluation boundary with terminal decision receipts and zero-write actionable handoff, a shared five-domain lock-only protocol, a bounded pause/guardrail/spend-cap configuration writer that consumes it, a purchase-intent-only atomic action-job/spend-reservation boundary that consumes it with immutable lifecycle-aware replay, a complete Target qualification/settings activation boundary with current evidence/device revalidation and bounded job promotion, and a bounded source-trust writer with private-source ownership, optimistic revision, and trust/auto-mission invariant enforcement; database-owned clocks, directly tenant/user-owned signal incidents, fail-closed shared-incident mutation, authenticated bounded retention, a two-phase evidence-revalidated quarantine-only candidate compiler, full diagnostic-to-incident lifecycle reconciliation, secretless connector dispatch, and external-transaction-free Ed25519 witness publication with database-revalidated public receipt evidence; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 83 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt and plan-hash parity, idempotent/concurrent execution, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | Final inbox composition, adoption of the shared lock protocol by the remaining source-lifecycle/non-Target-retailer-qualification/strategy/mission-policy/reservation writers, attribution-policy parity, separately qualified strategy action semantics, and every request-repository family remain incomplete; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
+| Primary backend database | Transactional migration-48 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete zero-unresolved table-scope classification, direct/inherited forced-RLS qualification over all 83 private tables, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; six of seven worker handler families (`notification_recovery`, `execution_recovery`, `operational_telemetry_retention`, `observer_recipe_candidate_evaluation`, `adapter_alert_reconciliation`, and `observer_recipe_witness_refresh`) proven through inactive principal-bound function-only roles with zero direct table grants, plus the final hosted-delivery handler's complete three-table lease-recovery and fixed signal-lifecycle sub-boundaries with exact SHA-256 receipts, a capability-bound maximum-30-second exact catalog-resolution plan, a separate insert-only unknown-product catalog creator, a separate transport-deduplicating event/source-heartbeat/resolution commit, a separate known-product source-reference refresh, a separate terminal occurrence/decision/audit/outbox apply boundary, a separate actionable offer/incident/occurrence apply boundary, a separate post-incident decision boundary, exact existing-or-trusted-created mission binding with complete variant targets and an initial append-only policy, an application-owned fingerprinted strategy/purchase-policy evaluation boundary with terminal decision receipts and zero-write actionable handoff, a shared five-domain lock-only protocol, a bounded pause/guardrail/spend-cap configuration writer that consumes it, a purchase-intent-only atomic action-job/spend-reservation boundary that consumes it with immutable lifecycle-aware replay, a complete Target qualification/settings activation boundary with current evidence/device revalidation and bounded job promotion, a bounded source-trust writer with private-source ownership, optimistic revision, and trust/auto-mission invariant enforcement, an exact Walmart/Amazon/Best Buy qualification and monotonic catalog-promotion writer, and an append-only full mission-policy revision writer with current target/settings safety revalidation; database-owned clocks, directly tenant/user-owned signal incidents, fail-closed shared-incident mutation, authenticated bounded retention, a two-phase evidence-revalidated quarantine-only candidate compiler, full diagnostic-to-incident lifecycle reconciliation, secretless connector dispatch, and external-transaction-free Ed25519 witness publication with database-revalidated public receipt evidence; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 83 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt and plan-hash parity, idempotent/concurrent execution, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | Final inbox composition, adoption of the shared lock protocol by the remaining source-lifecycle/reservation writers, attribution-policy parity, separately qualified strategy action semantics, and every request-repository family remain incomplete; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -2978,10 +3012,24 @@ rollback, principal/direct denial, replay, settings and retailer contention,
 identity tamper rejection, and all three operations.
 `retailerQualificationWriterParity` is now true, while general source
 lifecycle/status, mission policy, reservations, and every runtime role remain
-closed.
+closed at that boundary.
+
+Version 0.90 adds the sixteenth inactive function-only boundary. It accepts one
+exact full mission-policy replacement, consumes settings then mission-policy
+scopes, revalidates the current revision/hash and complete mission target,
+listing, tax, and store-allowance graph, and reconstructs the byte-identical
+`intent-policy-v2` hash. Changed policies append one revision plus audit/outbox
+receipts; unchanged policies write nothing. Direct add-to-cart preferences fail
+closed unless every enabled target is execution-supported, first-party,
+shipping, per-item bounded, and covered by the submitted all-in cap. Native
+PostgreSQL proves principal/direct denial, late rollback, exact/altered replay,
+zero-write unchanged behavior, real mission/settings contention, catalog
+tamper detection, and zero action creation. `missionPolicyWriterParity` is now
+true, while general source lifecycle/status, reservations, trusted strategy
+action semantics, and every runtime role remain closed.
 
 - Complete the remaining PostgreSQL hosted signal-evaluation graph: add the
-  source-lifecycle, strategy, mission-policy, and reservation writers behind
+  source-lifecycle and reservation writers behind
   the shipped shared fixed-order lock protocol;
   then add attribution-policy parity, trusted strategy semantic authority as a
   separately qualified boundary, and final inbox composition.
@@ -3443,9 +3491,10 @@ repository alone:
   configuration writer, plus a complete Target qualification/settings writer
   with current dossier/device revalidation and bounded job promotion, plus an
   exact Walmart/Amazon/Best Buy qualification and monotonic shared-catalog
-  promotion writer, are implemented, but all PostgreSQL roles remain inactive.
-  General source lifecycle, strategy, mission-policy, and reservation writer
-  adoption of the protocol,
+  promotion writer, plus an append-only full mission-policy replacement writer
+  with current target/settings safety revalidation, are implemented, but all
+  PostgreSQL roles remain inactive.
+  General source lifecycle and reservation writer adoption of the protocol,
   attribution-policy parity, separately qualified strategy action semantics,
   and final inbox composition remain on SQLite,
   complete-handler parity remains six of seven, and every request

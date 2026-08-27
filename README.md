@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.89.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.90.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,39 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.90.0 adds the sixteenth independently receipted piece of the inactive
+PostgreSQL hosted-signal plane: one exact append-only mission-policy revision
+writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role has zero
+direct/effective table or column grants and may call one strict
+security-definer function. The boundary protects six forced-RLS tenant tables
+and the shared `listings` catalog, but can mutate only
+`mission_intent_revisions`, `audit_events`, and `outbox_events`.
+
+PostgreSQL binds `session_user` to one exact tenant/user and accepts only a
+full `revise_mission_policy` replacement with the explicit
+`REVISE_MISSION_POLICY_V1` confirmation. It consumes settings then mission-
+policy locks (`00110`), requires the exact current revision and `intent-policy-
+v2` hash, and revalidates the mission, complete ordered target/listing graph,
+USD currency, tax, and retailer allowances. A direct add-to-cart preference is
+accepted only when at least one enabled target is execution-supported,
+first-party, shipping, price-bounded, and covered by the submitted all-in cap.
+
+A changed policy appends exactly one revision plus deterministic audit/outbox
+receipts in one transaction; an unchanged policy is a true zero-write success.
+Native PostgreSQL 16 proves wrong, same-tenant-peer, and unmapped principal
+denial, zero direct SQL and cross-boundary access, stale revision/hash denial,
+unsafe direct-purchase rejection, late-failure rollback, exact and altered
+replay, settings and mission-lock contention, byte-identical policy hashes,
+catalog tamper rejection, and zero action creation.
+
+This closes `missionPolicyWriterParity` without granting action, shared-catalog,
+or runtime authority. General source lifecycle/status and reservation writers
+remain outside the boundary, so `sourceWriterParity`,
+`configurationWriterParity`, `reservationWriterParity`, and
+`writerLockProtocolParity` remain false. SQLite stays authoritative; use
+`npm run postgres:signal-mission-policy-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.89.0 adds the fifteenth independently receipted piece of the inactive
 PostgreSQL hosted-signal plane: one exact activation writer for the packaged
