@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.90.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.91.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,42 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.91.0 adds the seventeenth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the TrackaLacker push-status and
+heartbeat writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role has
+zero direct/effective table or column grants and may call one strict
+security-definer function. The boundary protects five forced-RLS tenant tables
+and can mutate only `source_device_states`, `source_connections`,
+`audit_events`, and `outbox_events`.
+
+PostgreSQL binds `session_user` to one exact tenant/user, consumes only the
+shared source lock (`10000`), and accepts the explicit
+`RECORD_TRACKALACKER_STATUS_V1` operation for one exact private TrackaLacker
+connection and active user-owned Chrome device. Every request ID is derived
+from the authenticated principal plus the complete normalized payload. Client
+observation timestamps must be exact and monotonic; stale updates and same-
+timestamp state collisions fail closed. PostgreSQL owns the connection and
+event timestamps while preserving the exact client observation time on the
+device state.
+
+An initial or materially changed state atomically writes the two status rows
+plus deterministic audit/outbox receipts. A heartbeat that only advances
+`updatedAt` refreshes those two rows without flooding history, and an exact
+latest retry writes nothing. That nonmaterial path is deliberately described
+as latest-state replay only; immutable replay is claimed only for material
+requests with receipts, which remain replayable after later state changes.
+
+Native PostgreSQL 16 proves wrong, same-tenant-peer, and unmapped principal
+denial, active-device/private-source/TrackaLacker binding, zero direct and
+cross-boundary SQL, forced late-failure rollback, source-lock contention,
+deterministic request identity, material replay, timestamp-only no-audit
+refresh, exact-current replay, stale/collision rejection, and zero action
+creation. This closes `sourceStatusWriterParity`, while source sync/import and
+connection provisioning remain separate, so `sourceSyncWriterParity` and
+aggregate `sourceWriterParity` stay false. SQLite remains authoritative; use
+`npm run postgres:signal-source-status-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.90.0 adds the sixteenth independently receipted piece of the inactive
 PostgreSQL hosted-signal plane: one exact append-only mission-policy revision

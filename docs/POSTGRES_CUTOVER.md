@@ -2259,6 +2259,99 @@ settings/mission contention, catalog tamper rejection, and zero action
 creation. General source lifecycle/status, reservations, production principals,
 and the SQLite authority switch remain closed.
 
+## TrackaLacker source-status writer seam
+
+Version 0.91 adds the seventeenth independent hosted-signal role. It ports only
+`record_trackalacker_push_status`; source sync/import, connection provisioning,
+catalog mutation, actions, checkout, and orders are outside the function.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+and can execute one strict security-definer function. The receipt seals five
+forced-RLS tenant tables and exactly four mutation tables:
+`source_device_states`, `source_connections`, `audit_events`, and
+`outbox_events`. PostgreSQL binds `session_user` to one active tenant/user and
+consumes only the source mask `10000`.
+
+The request must contain one exact private TrackaLacker connection, one active
+user-owned Chrome device, the complete normalized push status, and
+`RECORD_TRACKALACKER_STATUS_V1`. Its request ID is derived from the authenticated
+principal and every payload field. Exact ISO client timestamps are preserved on
+the device state and must move monotonically; stale updates and changed state at
+an equal timestamp fail closed. PostgreSQL owns connection and event times.
+
+An initial or materially changed state atomically updates the device and
+connection rows and appends deterministic audit/outbox receipts. A heartbeat
+that changes only `updatedAt` updates the two status rows without adding audit
+history. Exact latest replay is zero-write. Immutable replay is intentionally
+claimed only for material requests with receipts; a nonmaterial refresh is
+explicitly latest-state replay and fails stale after a later state supersedes
+it.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-source-status-apply -- plan \
+  yoink_cutover_qualification_091 yoink_q_091 yoink_session_q_091 \
+  yoink_queue_q_091 yoink_control_q_091 yoink_notify_q_091 \
+  yoink_execute_q_091 yoink_retain_q_091 yoink_candidate_q_091 \
+  yoink_dispatch_q_091 yoink_reconcile_q_091 yoink_witness_q_091 \
+  yoink_delivery_q_091 yoink_catalog_q_091 yoink_resolution_q_091 \
+  yoink_reference_q_091 yoink_terminal_q_091 yoink_offer_q_091 \
+  yoink_post_q_091 yoink_mission_q_091 yoink_strategy_q_091 \
+  yoink_writer_lock_q_091 yoink_constraint_config_q_091 \
+  yoink_action_spend_q_091 yoink_target_qual_q_091 \
+  yoink_source_trust_q_091 yoink_retailer_qual_q_091 \
+  yoink_mission_policy_q_091 yoink_source_status_q_091
+```
+
+After every predecessor through mission-policy revision is verified, apply once
+with the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_SOURCE_STATUS_APPLY_QUALIFICATION_ACK=bounded-signal-source-status-apply-qualification \
+  npm run postgres:signal-source-status-apply -- apply \
+  yoink_cutover_qualification_091 yoink_q_091 yoink_session_q_091 \
+  yoink_queue_q_091 yoink_control_q_091 yoink_notify_q_091 \
+  yoink_execute_q_091 yoink_retain_q_091 yoink_candidate_q_091 \
+  yoink_dispatch_q_091 yoink_reconcile_q_091 yoink_witness_q_091 \
+  yoink_delivery_q_091 yoink_catalog_q_091 yoink_resolution_q_091 \
+  yoink_reference_q_091 yoink_terminal_q_091 yoink_offer_q_091 \
+  yoink_post_q_091 yoink_mission_q_091 yoink_strategy_q_091 \
+  yoink_writer_lock_q_091 yoink_constraint_config_q_091 \
+  yoink_action_spend_q_091 yoink_target_qual_q_091 \
+  yoink_source_trust_q_091 yoink_retailer_qual_q_091 \
+  yoink_mission_policy_q_091 yoink_source_status_q_091
+```
+
+Then independently verify the role, routine, protected/mutation table sets,
+immutable boundary receipt, exact grants, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-source-status-apply -- verify \
+  yoink_cutover_qualification_091 yoink_q_091 yoink_session_q_091 \
+  yoink_queue_q_091 yoink_control_q_091 yoink_notify_q_091 \
+  yoink_execute_q_091 yoink_retain_q_091 yoink_candidate_q_091 \
+  yoink_dispatch_q_091 yoink_reconcile_q_091 yoink_witness_q_091 \
+  yoink_delivery_q_091 yoink_catalog_q_091 yoink_resolution_q_091 \
+  yoink_reference_q_091 yoink_terminal_q_091 yoink_offer_q_091 \
+  yoink_post_q_091 yoink_mission_q_091 yoink_strategy_q_091 \
+  yoink_writer_lock_q_091 yoink_constraint_config_q_091 \
+  yoink_action_spend_q_091 yoink_target_qual_q_091 \
+  yoink_source_trust_q_091 yoink_retailer_qual_q_091 \
+  yoink_mission_policy_q_091 yoink_source_status_q_091
+```
+
+The receipt permanently records `sourceStatusWriterParity: true`, while
+`sourceSyncWriterParity: false`, `sourceWriterParity: false`,
+`configurationWriterParity: false`, `reservationWriterParity: false`,
+`writerLockProtocolParity: false`, and `runtimeAuthority: false` remain
+explicit. Native PostgreSQL 16 proves forced late rollback,
+wrong/same-tenant-peer/unmapped denial, active-device/private-source/type
+binding, zero direct and cross-boundary SQL, source-lock contention,
+deterministic request identity, material/historic replay, no-audit refresh,
+exact-current replay, stale/collision rejection, and zero action creation.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -2362,11 +2455,11 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- port the remaining source-lifecycle and reservation writers through the shared fixed-
-  order protocol (global pause, guardrails, spend-policy caps, complete Target
-  qualification/settings activation, bounded source trust, and exact Walmart/
-  Amazon/Best Buy qualification plus full mission-policy revision are already
-  qualified);
+- port source sync/import, connection provisioning, and reservation writers
+  through the shared fixed-order protocol (global pause, guardrails, spend-
+  policy caps, complete Target qualification/settings activation, bounded
+  source trust and status, exact Walmart/Amazon/Best Buy qualification, and
+  full mission-policy revision are already qualified);
   add attribution-policy parity and separately qualified strategy-action
   semantics; then compose the qualified purchase-intent action/spend,
   strategy/purchase-policy evaluation, hosted-delivery recovery, fixed signal-

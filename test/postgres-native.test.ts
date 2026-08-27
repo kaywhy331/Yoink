@@ -191,6 +191,16 @@ import {
   buildPostgresSignalMissionPolicyApplyManifest,
   verifyPostgresSignalMissionPolicyApplyBoundary
 } from "../packages/database/src/postgres-signal-mission-policy-apply.js";
+import {
+  NodePostgresSignalSourceStatusApplyDatabase,
+  POSTGRES_SIGNAL_SOURCE_STATUS_APPLY_CONFIRMATION,
+  POSTGRES_SIGNAL_SOURCE_STATUS_APPLY_FUNCTION,
+  applyPostgresSignalSourceStatusApplyBoundary,
+  buildPostgresSignalSourceStatusApplyManifest,
+  buildPostgresSignalSourceStatusRequestId,
+  verifyPostgresSignalSourceStatusApplyBoundary,
+  type PostgresSignalSourceStatusPayload
+} from "../packages/database/src/postgres-signal-source-status-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -275,6 +285,7 @@ const NATIVE_TARGET_QUALIFICATION_APPLY_ROLE_NAMESPACE = "yoink_native_target_qu
 const NATIVE_SOURCE_TRUST_APPLY_ROLE_NAMESPACE = "yoink_native_source_trust";
 const NATIVE_RETAILER_QUALIFICATION_APPLY_ROLE_NAMESPACE = "yoink_native_retailer_qual";
 const NATIVE_MISSION_POLICY_APPLY_ROLE_NAMESPACE = "yoink_native_policy";
+const NATIVE_SOURCE_STATUS_APPLY_ROLE_NAMESPACE = "yoink_native_source_status";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1110,7 +1121,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, and append-only mission-policy revision", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, and no-flood source status", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1273,6 +1284,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalMissionPolicyC: NodePostgresSignalMissionPolicyApplyDatabase | null = null;
   let signalMissionPolicyUnmapped: NodePostgresSignalMissionPolicyApplyDatabase | null = null;
   let signalMissionPolicyDirectClient: Client | null = null;
+  let signalSourceStatusA: NodePostgresSignalSourceStatusApplyDatabase | null = null;
+  let signalSourceStatusASecond: NodePostgresSignalSourceStatusApplyDatabase | null = null;
+  let signalSourceStatusB: NodePostgresSignalSourceStatusApplyDatabase | null = null;
+  let signalSourceStatusC: NodePostgresSignalSourceStatusApplyDatabase | null = null;
+  let signalSourceStatusUnmapped: NodePostgresSignalSourceStatusApplyDatabase | null = null;
+  let signalSourceStatusDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2715,6 +2732,61 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalMissionPolicyBoundary
     );
+    const qualifiedSignalSourceStatusManifest =
+      buildPostgresSignalSourceStatusApplyManifest(
+        qualifiedSignalMissionPolicyManifest,
+        NATIVE_SOURCE_STATUS_APPLY_ROLE_NAMESPACE
+      );
+    const signalSourceStatusBoundary =
+      await applyPostgresSignalSourceStatusApplyBoundary(
+        importer,
+        qualifiedSignalSourceStatusManifest,
+        new Date("2026-08-25T16:55:00.000Z").getTime()
+      );
+    assert.equal(signalSourceStatusBoundary.protectedTenantTableCount, 5);
+    assert.equal(signalSourceStatusBoundary.forcedRlsTableCount, 5);
+    assert.equal(signalSourceStatusBoundary.mutationTableCount, 4);
+    assert.equal(signalSourceStatusBoundary.directTableGrantCount, 0);
+    assert.equal(signalSourceStatusBoundary.functionGrantCount, 1);
+    assert.equal(signalSourceStatusBoundary.membershipCount, 0);
+    assert.equal(signalSourceStatusBoundary.activePrincipalCount, 0);
+    assert.equal(signalSourceStatusBoundary.metadata.operationCount, 1);
+    assert.equal(signalSourceStatusBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(signalSourceStatusBoundary.metadata.sourceScopeConsumed, true);
+    assert.equal(signalSourceStatusBoundary.metadata.deterministicRequestIdentity, true);
+    assert.equal(signalSourceStatusBoundary.metadata.immutableMaterialReplay, true);
+    assert.equal(signalSourceStatusBoundary.metadata.latestStateReplayOnly, true);
+    assert.equal(signalSourceStatusBoundary.metadata.nonMaterialAuditSuppression, true);
+    assert.equal(signalSourceStatusBoundary.metadata.monotonicDeviceTimestamp, true);
+    assert.equal(signalSourceStatusBoundary.metadata.databaseOwnedEventTimestamps, true);
+    assert.equal(signalSourceStatusBoundary.metadata.clientObservedAtPreserved, true);
+    assert.equal(signalSourceStatusBoundary.metadata.atomicMaterialStatusAuditOutbox, true);
+    assert.equal(signalSourceStatusBoundary.metadata.currentSourceOwnershipRevalidation, true);
+    assert.equal(signalSourceStatusBoundary.metadata.currentDeviceOwnershipRevalidation, true);
+    assert.equal(signalSourceStatusBoundary.metadata.activeDeviceOnly, true);
+    assert.equal(signalSourceStatusBoundary.metadata.privateSourceOnly, true);
+    assert.equal(signalSourceStatusBoundary.metadata.trackalackerOnly, true);
+    assert.equal(signalSourceStatusBoundary.metadata.materialChangeAuditParity, true);
+    assert.equal(signalSourceStatusBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalSourceStatusBoundary.metadata.sourceStatusWriterParity, true);
+    assert.equal(signalSourceStatusBoundary.metadata.sourceSyncWriterParity, false);
+    assert.equal(signalSourceStatusBoundary.metadata.sourceWriterParity, false);
+    assert.equal(signalSourceStatusBoundary.metadata.retailerQualificationWriterParity, true);
+    assert.equal(signalSourceStatusBoundary.metadata.missionPolicyWriterParity, true);
+    assert.equal(signalSourceStatusBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalSourceStatusBoundary.metadata.reservationWriterParity, false);
+    assert.equal(signalSourceStatusBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalSourceStatusBoundary.metadata.sharedCatalogMutationAuthority, false);
+    assert.equal(signalSourceStatusBoundary.metadata.actionAuthority, false);
+    assert.equal(signalSourceStatusBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalSourceStatusBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalSourceStatusApplyBoundary(
+        importer,
+        qualifiedSignalSourceStatusManifest
+      ),
+      signalSourceStatusBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -3058,6 +3130,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalRetailerQualificationManifest,
         NATIVE_MISSION_POLICY_APPLY_ROLE_NAMESPACE
       );
+    const signalSourceStatusManifest =
+      buildPostgresSignalSourceStatusApplyManifest(
+        signalMissionPolicyManifest,
+        NATIVE_SOURCE_STATUS_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -3152,6 +3229,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalMissionPolicyManifest.missionPolicyRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalSourceStatusManifest.sourceStatusRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -11993,6 +12074,572 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalMissionPolicyUnmapped = null;
     })();
 
+    await (async () => {
+    const sourceStatusDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalSourceStatusApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalSourceStatusManifest, { maxConnections });
+    signalSourceStatusA = sourceStatusDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalSourceStatusASecond = sourceStatusDatabase(NATIVE_PRINCIPAL_A);
+    signalSourceStatusB = sourceStatusDatabase(NATIVE_PRINCIPAL_B);
+    signalSourceStatusC = sourceStatusDatabase(NATIVE_PRINCIPAL_C);
+    signalSourceStatusUnmapped = sourceStatusDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const sourceStatusDeviceId = "native_source_status_device";
+    const sourceStatusPeerDeviceId = "native_source_status_peer_device";
+    const sourceStatusConnectionId = "native_signal_source_a";
+    const sourceStatusNow = Date.now();
+    const sourceStatusCreatedAt = new Date(sourceStatusNow - 10_000).toISOString();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."extension_devices"(
+         id, tenant_id, user_id, name, token_hash, extension_version,
+         status, capabilities_json, last_seen_at, created_at, updated_at,
+         credential_generation, credential_issued_at
+       ) VALUES
+         ($1, $2, $3, 'Native source-status device', $4, '0.91.0',
+          'active', '{}', $6, $6, $6, 1, $6),
+         ($5, $2, $7, 'Native source-status peer device', $8, '0.91.0',
+          'active', '{}', $6, $6, $6, 1, $6)`,
+      [
+        sourceStatusDeviceId,
+        NATIVE_TENANT,
+        NATIVE_USER,
+        stableHash("native-source-status-device-token"),
+        sourceStatusPeerDeviceId,
+        sourceStatusCreatedAt,
+        NATIVE_SAME_TENANT_USER,
+        stableHash("native-source-status-peer-device-token")
+      ]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_connections"(
+         id, tenant_id, user_id, source, name, status, trust_level,
+         auto_create_missions, is_private, last_event_at, created_at, updated_at
+       ) VALUES
+         ('native_source_status_non_track', $1, $2, 'manual',
+          'Native non-TrackaLacker source', 'disconnected', 'informational',
+          0, 1, '', $3, $3),
+         ('native_source_status_public', $1, $2, 'trackalacker',
+          'Native public TrackaLacker source', 'disconnected', 'informational',
+          0, 0, '', $3, $3)`,
+      [NATIVE_TENANT, NATIVE_USER, sourceStatusCreatedAt]
+    );
+
+    const principal = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const basePayload: PostgresSignalSourceStatusPayload = {
+      deviceId: sourceStatusDeviceId,
+      sourceConnectionId: sourceStatusConnectionId,
+      state: "registering",
+      ready: false,
+      subscriptionPresent: true,
+      pendingSignals: 2,
+      lastHttpStatus: 0,
+      errorCode: "",
+      lastRegistrationAt: new Date(sourceStatusNow - 2_000).toISOString(),
+      lastNotificationAt: "",
+      lastDeliveryAt: "",
+      updatedAt: new Date(sourceStatusNow).toISOString(),
+      confirmation: POSTGRES_SIGNAL_SOURCE_STATUS_APPLY_CONFIRMATION
+    };
+    const applySourceStatus = (
+      database: NodePostgresSignalSourceStatusApplyDatabase,
+      payload: PostgresSignalSourceStatusPayload
+    ) => database.applySourceStatus(
+      principal,
+      "record_trackalacker_push_status",
+      buildPostgresSignalSourceStatusRequestId(principal, payload),
+      payload
+    );
+    const sourceStatusSnapshot = async () => {
+      const row = (await first!.query<{
+        connectionStatus: string;
+        connectionUpdatedAt: string;
+        deviceStateCount: string | number | bigint;
+        state: string | null;
+        ready: number | null;
+        subscriptionPresent: number | null;
+        pendingSignals: number | null;
+        lastHttpStatus: number | null;
+        errorCode: string | null;
+        lastRegistrationAt: string | null;
+        lastNotificationAt: string | null;
+        lastDeliveryAt: string | null;
+        updatedAt: string | null;
+        auditCount: string | number | bigint;
+        outboxCount: string | number | bigint;
+        actionCount: string | number | bigint;
+      }>(
+        `SELECT connection.status AS "connectionStatus",
+                connection.updated_at AS "connectionUpdatedAt",
+                COUNT(device_state.device_id) AS "deviceStateCount",
+                MIN(device_state.state) AS state,
+                MIN(device_state.ready) AS ready,
+                MIN(device_state.subscription_present) AS "subscriptionPresent",
+                MIN(device_state.pending_signals) AS "pendingSignals",
+                MIN(device_state.last_http_status) AS "lastHttpStatus",
+                MIN(device_state.error_code) AS "errorCode",
+                MIN(device_state.last_registration_at) AS "lastRegistrationAt",
+                MIN(device_state.last_notification_at) AS "lastNotificationAt",
+                MIN(device_state.last_delivery_at) AS "lastDeliveryAt",
+                MIN(device_state.updated_at) AS "updatedAt",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events" audit
+                 WHERE audit.correlation_id = $1
+                   AND audit.event_type = 'source_connection_status') AS "auditCount",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events" outbox
+                 WHERE outbox.aggregate_id = $1
+                   AND outbox.event_type = 'source_connection_status') AS "outboxCount",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_jobs") AS "actionCount"
+         FROM "${NATIVE_SCHEMA}"."source_connections" connection
+         LEFT JOIN "${NATIVE_SCHEMA}"."source_device_states" device_state
+           ON device_state.source_connection_id = connection.id
+          AND device_state.device_id = $1
+         WHERE connection.id = $2
+         GROUP BY connection.status, connection.updated_at`,
+        [sourceStatusDeviceId, sourceStatusConnectionId]
+      )).rows[0]!;
+      return {
+        ...row,
+        deviceStateCount: Number(row.deviceStateCount),
+        ready: row.ready === null ? null : Number(row.ready),
+        subscriptionPresent: row.subscriptionPresent === null
+          ? null
+          : Number(row.subscriptionPresent),
+        pendingSignals: row.pendingSignals === null ? null : Number(row.pendingSignals),
+        lastHttpStatus: row.lastHttpStatus === null ? null : Number(row.lastHttpStatus),
+        auditCount: Number(row.auditCount),
+        outboxCount: Number(row.outboxCount),
+        actionCount: Number(row.actionCount)
+      };
+    };
+    const sourceStatusBefore = await sourceStatusSnapshot();
+    assert.equal(sourceStatusBefore.deviceStateCount, 0);
+
+    await assert.rejects(
+      signalSourceStatusB.applySourceStatus(
+        principal,
+        "record_trackalacker_push_status",
+        buildPostgresSignalSourceStatusRequestId(principal, basePayload),
+        basePayload
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER,
+        sourceStatusCreatedAt]
+    );
+    try {
+      await assert.rejects(
+        signalSourceStatusC.applySourceStatus(
+          principal,
+          "record_trackalacker_push_status",
+          buildPostgresSignalSourceStatusRequestId(principal, basePayload),
+          basePayload
+        ),
+        /does not match the expected authenticated principal/
+      );
+      const peerPrincipal = {
+        tenantId: NATIVE_TENANT,
+        userId: NATIVE_SAME_TENANT_USER
+      };
+      const peerPayload = {
+        ...basePayload,
+        sourceConnectionId: "native_signal_source_c",
+        deviceId: sourceStatusDeviceId
+      };
+      await assert.rejects(
+        signalSourceStatusC.applySourceStatus(
+          peerPrincipal,
+          "record_trackalacker_push_status",
+          buildPostgresSignalSourceStatusRequestId(peerPrincipal, peerPayload),
+          peerPayload
+        ),
+        /device ownership is invalid/
+      );
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    await assert.rejects(
+      signalSourceStatusUnmapped.applySourceStatus(
+        principal,
+        "record_trackalacker_push_status",
+        buildPostgresSignalSourceStatusRequestId(principal, basePayload),
+        basePayload
+      ),
+      /tenant session principal is not active/
+    );
+    await assert.rejects(
+      signalSourceStatusA.applySourceStatus(
+        principal,
+        "record_trackalacker_push_status",
+        `source_status_${"f".repeat(32)}`,
+        basePayload
+      ),
+      /apply request is invalid/
+    );
+    const peerDevicePayload = { ...basePayload, deviceId: sourceStatusPeerDeviceId };
+    await assert.rejects(
+      applySourceStatus(signalSourceStatusA, peerDevicePayload),
+      /device ownership is invalid/
+    );
+    const nonTrackPayload = {
+      ...basePayload,
+      sourceConnectionId: "native_source_status_non_track"
+    };
+    await assert.rejects(
+      applySourceStatus(signalSourceStatusA, nonTrackPayload),
+      /source is not TrackaLacker/
+    );
+    const publicPayload = {
+      ...basePayload,
+      sourceConnectionId: "native_source_status_public"
+    };
+    await assert.rejects(
+      applySourceStatus(signalSourceStatusA, publicPayload),
+      /source is not private/
+    );
+    const invalidReadyPayload = {
+      ...basePayload,
+      state: "registering" as const,
+      ready: true
+    };
+    await assert.rejects(
+      applySourceStatus(signalSourceStatusA, invalidReadyPayload),
+      /payload shape is invalid/
+    );
+
+    signalSourceStatusDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalSourceStatusDirectClient.on("error", () => undefined);
+    await signalSourceStatusDirectClient.connect();
+    await signalSourceStatusDirectClient.query(
+      `SET ROLE "${signalSourceStatusManifest.sourceStatusRole.name}"`
+    );
+    await assert.rejects(
+      signalSourceStatusDirectClient.query(
+        `SELECT state FROM "${NATIVE_SCHEMA}"."source_device_states" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceStatusDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."source_connections" SET status = 'connected'`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceStatusDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."source_sync_runs"(
+           id, tenant_id, user_id, source_connection_id, device_id, phase,
+           page, pages, discovered, processed, imported, failed, message,
+           started_at, updated_at, completed_at
+         ) VALUES ('forbidden_source_sync', $1, $2, $3, $4, 'starting',
+                   0, 0, 0, 0, 0, 0, '', $5, $5, '')`,
+        [NATIVE_TENANT, NATIVE_USER, sourceStatusConnectionId,
+          sourceStatusDeviceId, sourceStatusCreatedAt]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceStatusDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_MISSION_POLICY_APPLY_FUNCTION}"(
+           $1, $2, 'revise_mission_policy', 'forbidden_cross_boundary', '{}'
+         )`,
+        [NATIVE_TENANT, NATIVE_USER]
+      ),
+      /permission denied/
+    );
+
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_source_status_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $failure$
+       BEGIN
+         IF NEW.aggregate_id = '${sourceStatusDeviceId}'
+           AND NEW.event_type = 'source_connection_status' THEN
+           RAISE EXCEPTION 'native forced source-status outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $failure$;
+       CREATE TRIGGER "yoink_native_reject_source_status_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION
+         "${NATIVE_SCHEMA}"."yoink_native_reject_source_status_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        applySourceStatus(signalSourceStatusA, basePayload),
+        /native forced source-status outbox failure/
+      );
+      assert.deepEqual(await sourceStatusSnapshot(), sourceStatusBefore);
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_source_status_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS
+           "${NATIVE_SCHEMA}"."yoink_native_reject_source_status_outbox"()`
+      );
+    }
+
+    let sourceStatusTransactionOpen = false;
+    let blockedSourceStatusReplay: ReturnType<
+      NodePostgresSignalSourceStatusApplyDatabase["applySourceStatus"]
+    > | null = null;
+    const baseRequestId = buildPostgresSignalSourceStatusRequestId(
+      principal,
+      basePayload
+    );
+    try {
+      await signalSourceStatusDirectClient.query("BEGIN");
+      sourceStatusTransactionOpen = true;
+      const firstStatusQuery = await signalSourceStatusDirectClient.query<{
+        resultJson: string;
+      }>(
+        `SELECT result_json AS "resultJson"
+         FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_STATUS_APPLY_FUNCTION}"(
+           $1, $2, 'record_trackalacker_push_status', $3, $4
+         )`,
+        [NATIVE_TENANT, NATIVE_USER, baseRequestId, JSON.stringify(basePayload)]
+      );
+      const firstStatusResult = JSON.parse(firstStatusQuery.rows[0]!.resultJson) as {
+        requestFingerprint: string;
+        outcome: string;
+        mutationApplied: boolean;
+        idempotentReplay: boolean;
+        mutationStatementCount: number;
+        mutationRowCount: number;
+        stateMutated: boolean;
+        connectionMutated: boolean;
+        auditMutated: boolean;
+        outboxMutated: boolean;
+        status: Record<string, unknown>;
+        sourceStatusWriterParity: boolean;
+        sourceSyncWriterParity: boolean;
+        sourceWriterParity: boolean;
+        sharedCatalogMutationAuthority: boolean;
+        actionAuthority: boolean;
+        runtimeAuthority: boolean;
+      };
+      assert.match(firstStatusResult.requestFingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(firstStatusResult.outcome, "applied");
+      assert.equal(firstStatusResult.mutationApplied, true);
+      assert.equal(firstStatusResult.idempotentReplay, false);
+      assert.equal(firstStatusResult.mutationStatementCount, 4);
+      assert.equal(firstStatusResult.mutationRowCount, 4);
+      assert.equal(firstStatusResult.stateMutated, true);
+      assert.equal(firstStatusResult.connectionMutated, true);
+      assert.equal(firstStatusResult.auditMutated, true);
+      assert.equal(firstStatusResult.outboxMutated, true);
+      assert.equal(firstStatusResult.sourceStatusWriterParity, true);
+      assert.equal(firstStatusResult.sourceSyncWriterParity, false);
+      assert.equal(firstStatusResult.sourceWriterParity, false);
+      assert.equal(firstStatusResult.sharedCatalogMutationAuthority, false);
+      assert.equal(firstStatusResult.actionAuthority, false);
+      assert.equal(firstStatusResult.runtimeAuthority, false);
+      assert.equal(firstStatusResult.status.updatedAt, basePayload.updatedAt);
+      assert.equal(firstStatusResult.status.connectionStatus, "connecting");
+      assert.match(
+        String(firstStatusResult.status.connectionUpdatedAt),
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+      );
+
+      let replaySettled = false;
+      blockedSourceStatusReplay = applySourceStatus(
+        signalSourceStatusASecond,
+        basePayload
+      ).finally(() => { replaySettled = true; });
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      assert.equal(replaySettled, false);
+      assert.deepEqual(await sourceStatusSnapshot(), sourceStatusBefore);
+      await signalSourceStatusDirectClient.query("COMMIT");
+      sourceStatusTransactionOpen = false;
+      const replay = await blockedSourceStatusReplay;
+      assert.equal(replay.outcome, "already_applied");
+      assert.equal(replay.mutationApplied, false);
+      assert.equal(replay.idempotentReplay, true);
+      assert.equal(replay.mutationStatementCount, 0);
+      assert.equal(replay.mutationRowCount, 0);
+      assert.equal(replay.stateMutated, false);
+      assert.equal(replay.connectionMutated, false);
+      assert.equal(replay.status.updatedAt, basePayload.updatedAt);
+    } finally {
+      if (sourceStatusTransactionOpen) {
+        await signalSourceStatusDirectClient.query("ROLLBACK").catch(() => undefined);
+      }
+      if (blockedSourceStatusReplay) {
+        await blockedSourceStatusReplay.catch(() => undefined);
+      }
+    }
+
+    const sourceStatusAfterMaterial = await sourceStatusSnapshot();
+    assert.equal(sourceStatusAfterMaterial.connectionStatus, "connecting");
+    assert.equal(sourceStatusAfterMaterial.deviceStateCount, 1);
+    assert.equal(sourceStatusAfterMaterial.state, "registering");
+    assert.equal(sourceStatusAfterMaterial.ready, 0);
+    assert.equal(sourceStatusAfterMaterial.subscriptionPresent, 1);
+    assert.equal(sourceStatusAfterMaterial.pendingSignals, 2);
+    assert.equal(sourceStatusAfterMaterial.lastHttpStatus, 0);
+    assert.equal(sourceStatusAfterMaterial.errorCode, "");
+    assert.equal(sourceStatusAfterMaterial.updatedAt, basePayload.updatedAt);
+    assert.equal(sourceStatusAfterMaterial.auditCount, sourceStatusBefore.auditCount + 1);
+    assert.equal(sourceStatusAfterMaterial.outboxCount, sourceStatusBefore.outboxCount + 1);
+    assert.equal(sourceStatusAfterMaterial.actionCount, sourceStatusBefore.actionCount);
+
+    const materialAudit = (await first.query<{
+      reasonCode: string;
+      message: string;
+      data: Record<string, unknown>;
+      outboxData: Record<string, unknown>;
+    }>(
+      `SELECT audit.reason_code AS "reasonCode", audit.message,
+              audit.data_json::jsonb AS data,
+              outbox.payload_json::jsonb->'data' AS "outboxData"
+       FROM "${NATIVE_SCHEMA}"."audit_events" audit
+       JOIN "${NATIVE_SCHEMA}"."outbox_events" outbox
+         ON outbox.payload_json::jsonb->>'auditId' = audit.id
+       WHERE audit.correlation_id = $1
+         AND audit.event_type = 'source_connection_status'`,
+      [sourceStatusDeviceId]
+    )).rows[0]!;
+    assert.equal(materialAudit.reasonCode, "registering");
+    assert.equal(materialAudit.message, "TrackaLacker push bridge status changed.");
+    assert.equal(materialAudit.data.state, "registering");
+    assert.equal(materialAudit.data.pendingSignals, 2);
+    assert.equal(materialAudit.data.lastHttpStatus, 0);
+    assert.equal(materialAudit.data.errorCode, "");
+    assert.deepEqual(materialAudit.outboxData, materialAudit.data);
+
+    const refreshPayload: PostgresSignalSourceStatusPayload = {
+      ...basePayload,
+      updatedAt: new Date(sourceStatusNow + 1_000).toISOString()
+    };
+    const refreshResult = await applySourceStatus(signalSourceStatusA, refreshPayload);
+    assert.equal(refreshResult.outcome, "refreshed");
+    assert.equal(refreshResult.mutationApplied, true);
+    assert.equal(refreshResult.idempotentReplay, false);
+    assert.equal(refreshResult.mutationStatementCount, 2);
+    assert.equal(refreshResult.mutationRowCount, 2);
+    assert.equal(refreshResult.stateMutated, true);
+    assert.equal(refreshResult.connectionMutated, true);
+    assert.equal(refreshResult.auditMutated, false);
+    assert.equal(refreshResult.outboxMutated, false);
+    const sourceStatusAfterRefresh = await sourceStatusSnapshot();
+    assert.equal(sourceStatusAfterRefresh.updatedAt, refreshPayload.updatedAt);
+    assert.equal(sourceStatusAfterRefresh.auditCount, sourceStatusAfterMaterial.auditCount);
+    assert.equal(sourceStatusAfterRefresh.outboxCount, sourceStatusAfterMaterial.outboxCount);
+
+    const currentReplay = await applySourceStatus(signalSourceStatusA, refreshPayload);
+    assert.equal(currentReplay.outcome, "already_current");
+    assert.equal(currentReplay.mutationApplied, false);
+    assert.equal(currentReplay.idempotentReplay, true);
+    assert.equal(currentReplay.mutationStatementCount, 0);
+    assert.equal(currentReplay.mutationRowCount, 0);
+    assert.deepEqual(await sourceStatusSnapshot(), sourceStatusAfterRefresh);
+
+    const collisionPayload: PostgresSignalSourceStatusPayload = {
+      ...refreshPayload,
+      pendingSignals: 3
+    };
+    await assert.rejects(
+      applySourceStatus(signalSourceStatusA, collisionPayload),
+      /timestamp collision changed state/
+    );
+    const stalePayload: PostgresSignalSourceStatusPayload = {
+      ...refreshPayload,
+      updatedAt: new Date(sourceStatusNow - 1).toISOString()
+    };
+    await assert.rejects(
+      applySourceStatus(signalSourceStatusA, stalePayload),
+      /update is stale/
+    );
+
+    const readyPayload: PostgresSignalSourceStatusPayload = {
+      ...refreshPayload,
+      state: "ready",
+      ready: true,
+      pendingSignals: 0,
+      lastHttpStatus: 204,
+      lastDeliveryAt: new Date(sourceStatusNow + 1_500).toISOString(),
+      updatedAt: new Date(sourceStatusNow + 2_000).toISOString()
+    };
+    const readyResult = await applySourceStatus(signalSourceStatusA, readyPayload);
+    assert.equal(readyResult.outcome, "applied");
+    assert.equal(readyResult.mutationStatementCount, 4);
+    assert.equal(readyResult.status.connectionStatus, "connected");
+    const sourceStatusReady = await sourceStatusSnapshot();
+    assert.equal(sourceStatusReady.connectionStatus, "connected");
+    assert.equal(sourceStatusReady.state, "ready");
+    assert.equal(sourceStatusReady.ready, 1);
+    assert.equal(sourceStatusReady.pendingSignals, 0);
+    assert.equal(sourceStatusReady.lastHttpStatus, 204);
+    assert.equal(sourceStatusReady.lastDeliveryAt, readyPayload.lastDeliveryAt);
+    assert.equal(sourceStatusReady.auditCount, sourceStatusAfterRefresh.auditCount + 1);
+    assert.equal(sourceStatusReady.outboxCount, sourceStatusAfterRefresh.outboxCount + 1);
+    assert.equal(sourceStatusReady.actionCount, sourceStatusBefore.actionCount);
+
+    const historicMaterialReplay = await applySourceStatus(
+      signalSourceStatusA,
+      basePayload
+    );
+    assert.equal(historicMaterialReplay.outcome, "already_applied");
+    assert.equal(historicMaterialReplay.mutationApplied, false);
+    assert.equal(historicMaterialReplay.status.updatedAt, basePayload.updatedAt);
+    assert.deepEqual(await sourceStatusSnapshot(), sourceStatusReady);
+    await assert.rejects(
+      applySourceStatus(signalSourceStatusA, refreshPayload),
+      /update is stale/
+    );
+
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."extension_devices"
+       SET status = 'disabled' WHERE id = $1`,
+      [sourceStatusDeviceId]
+    );
+    const disabledPayload: PostgresSignalSourceStatusPayload = {
+      ...readyPayload,
+      updatedAt: new Date(sourceStatusNow + 3_000).toISOString()
+    };
+    try {
+      await assert.rejects(
+        applySourceStatus(signalSourceStatusA, disabledPayload),
+        /device is not active/
+      );
+    } finally {
+      await first.query(
+        `UPDATE "${NATIVE_SCHEMA}"."extension_devices"
+         SET status = 'active' WHERE id = $1`,
+        [sourceStatusDeviceId]
+      );
+    }
+    assert.deepEqual(await sourceStatusSnapshot(), sourceStatusReady);
+
+    await signalSourceStatusDirectClient.end();
+    signalSourceStatusDirectClient = null;
+    await Promise.all([
+      signalSourceStatusA.close(),
+      signalSourceStatusASecond.close(),
+      signalSourceStatusB.close(),
+      signalSourceStatusC.close(),
+      signalSourceStatusUnmapped.close()
+    ]);
+    signalSourceStatusA = null;
+    signalSourceStatusASecond = null;
+    signalSourceStatusB = null;
+    signalSourceStatusC = null;
+    signalSourceStatusUnmapped = null;
+    })();
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -15818,7 +16465,18 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NodePostgresSignalMissionPolicyApplyDatabase | null)?.close(),
       (signalMissionPolicyUnmapped as
         NodePostgresSignalMissionPolicyApplyDatabase | null)?.close(),
-      (signalMissionPolicyDirectClient as Client | null)?.end()
+      (signalMissionPolicyDirectClient as Client | null)?.end(),
+      (signalSourceStatusA as
+        NodePostgresSignalSourceStatusApplyDatabase | null)?.close(),
+      (signalSourceStatusASecond as
+        NodePostgresSignalSourceStatusApplyDatabase | null)?.close(),
+      (signalSourceStatusB as
+        NodePostgresSignalSourceStatusApplyDatabase | null)?.close(),
+      (signalSourceStatusC as
+        NodePostgresSignalSourceStatusApplyDatabase | null)?.close(),
+      (signalSourceStatusUnmapped as
+        NodePostgresSignalSourceStatusApplyDatabase | null)?.close(),
+      (signalSourceStatusDirectClient as Client | null)?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
