@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.86.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.87.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,34 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.87.0 adds the thirteenth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: complete Target add-only
+qualification/settings activation. Its separate `NOLOGIN`, `NOINHERIT`,
+`NOBYPASSRLS` role has zero direct/effective table or column grants and may
+call one strict security-definer function over nine forced-RLS tenant tables,
+with a six-table mutation set.
+
+PostgreSQL binds `session_user` to one exact tenant/user, consumes the shared
+retailer-qualification then settings scopes (`01100`), and revalidates the
+current 30-day Target dossier, exact evidence hash, passed no-click rehearsal,
+active Target add-v1 Chrome capability, and settings revision. One transaction
+upserts the user-scoped Target qualification, changes settings to live and
+unpaused, promotes only fresh first-party shipping quantity-one shadow jobs,
+and appends deterministic action, audit, and outbox receipts. Exact replay is
+mutation-free; altered or partial receipt graphs fail closed.
+
+Native PostgreSQL 16 proves late-outbox-failure rollback, wrong and unmapped
+principal rejection, zero direct SQL, exact evidence recomputation, one-job
+promotion, immutable replay, and real contention with the bounded settings
+writer. This closes `qualificationSettingsWriterParity` for Target only.
+Walmart, Amazon, and Best Buy activation still requires a separate writer that
+safely handles their shared retailer/listing capability flags, so aggregate
+`retailerQualificationWriterParity`, `configurationWriterParity`,
+`reservationWriterParity`, and `writerLockProtocolParity` remain false.
+SQLite stays authoritative and no production principal is provisioned. Use
+`npm run postgres:signal-target-qualification-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.86.0 adds the twelfth independently receipted piece of the inactive
 PostgreSQL hosted-signal plane: one bounded configuration writer for the three
@@ -32,9 +60,9 @@ request identity. Native PostgreSQL 16 proves late-failure rollback, principal
 isolation, direct-table denial, unchanged spend-policy behavior, and a held
 pause transaction blocking the reviewed action writer until commit.
 
-This is partial writer parity, not runtime activation. Qualification-settings,
-source-trust, retailer-qualification, strategy, mission-policy, and reservation
-writers remain outside this boundary, so `settingsWriterParity`,
+This is partial writer parity, not runtime activation. At this 0.86 boundary,
+qualification-settings, source-trust, retailer-qualification, strategy,
+mission-policy, and reservation writers remained outside it, so `settingsWriterParity`,
 `configurationWriterParity`, `reservationWriterParity`, and
 `writerLockProtocolParity` remain false. SQLite stays authoritative and no
 production principal is provisioned. Use

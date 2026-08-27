@@ -1698,9 +1698,11 @@ npm run postgres:signal-action-spend-apply -- plan \
   yoink_action_spend_q_084
 ```
 
-With the current v0.86 CLI, first apply and verify the shared writer-lock and
+With the current v0.87 CLI, first apply and verify the shared writer-lock and
 bounded constraint-configuration successors below. Then apply the action/spend
-boundary once with the qualification connection and explicit acknowledgement:
+boundary once with the qualification connection and explicit acknowledgement;
+the Target qualification/settings successor is applied afterward as documented
+in its dedicated section:
 
 ```bash
 YOINK_POSTGRES_SIGNAL_ACTION_SPEND_APPLY_QUALIFICATION_ACK=bounded-signal-action-spend-apply-qualification \
@@ -1738,10 +1740,11 @@ The receipt permanently records `purchaseIntentOnly: true`,
 `strategyActionAuthority: false`, `writerLockProtocolParity: false`,
 `attributionPolicyParity: false`, and `runtimeAuthority: false`. Marketplace,
 pickup, retailer DOM mutation, checkout, order submission, and inbox completion
-remain closed. The bounded pause/guardrail/spend-policy writer now joins the
-fixed-order locking protocol, but remaining qualification-settings, source,
-retailer-qualification, strategy, mission-policy, and reservation writers must
-do the same. Attribution must reach policy parity, and final handler composition
+remain closed. The bounded pause/guardrail/spend-policy writer and complete
+Target qualification/settings activation now join the fixed-order locking
+protocol, but source trust, non-Target retailer qualification, strategy,
+mission-policy, and reservation writers must do the same. Attribution must
+reach policy parity, and final handler composition
 and production principal provisioning must be qualified before activation.
 SQLite remains authoritative and complete handler parity remains six of seven.
 
@@ -1813,10 +1816,11 @@ The receipt permanently records `lockOnly: true`,
 `writerLockProtocolParity: false`, and `runtimeAuthority: false`. The protocol
 does not mutate configuration, reservations, actions, inbox state, retailer
 sessions, checkout, or orders. The v0.86 pause/guardrail/spend-policy boundary
-is the first configuration consumer; remaining qualification-settings, source,
-retailer-qualification, strategy, mission-policy, and reservation writers must
-use the same scope contract before parity can become true. There are no runtime
-principals and SQLite remains authoritative.
+is the first configuration consumer and v0.87 adds the complete Target
+qualification/settings consumer. Source trust, non-Target retailer
+qualification, strategy, mission-policy, and reservation writers must still use
+the same scope contract before aggregate parity can become true. There are no
+runtime principals and SQLite remains authoritative.
 
 ## Bounded constraint-configuration writer qualification seam
 
@@ -1892,6 +1896,93 @@ server-bound principal isolation, zero direct SQL, an unchanged-policy
 zero-write path, and real blocking between an uncommitted pause mutation and
 the reviewed action/spend transaction. No runtime principal is provisioned and
 SQLite remains authoritative.
+
+## Target qualification/settings writer qualification seam
+
+Version 0.87 adds the thirteenth independent hosted-signal role. It ports the
+complete Target add-only activation transaction, not retailer DOM execution.
+The operation can only qualify `target-add-v1`, set the current user's control
+state to live and unpaused, promote already-created eligible Target shadow jobs,
+and append the existing receipts. Walmart, Amazon, and Best Buy remain outside
+this boundary because their SQLite activation also changes shared retailer and
+listing capability rows that need a separately governed shared-catalog writer.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+and can execute one strict security-definer function over nine forced-RLS
+tenant tables. The declared mutation set is exactly six tables. PostgreSQL
+binds `session_user` to one active tenant/user and consumes the shared retailer-
+qualification then settings mask `01100`.
+
+Before the first mutation, PostgreSQL holds the evidence/trial append boundary
+stable and recomputes the exact current 30-day Target qualification hash from
+`target-observer-v1` observations and passed `target-add-v1` rehearsals. It
+requires at least one Target-sold actionable observation, one shipping
+actionable observation, two distinct TCINs, one passed no-click rehearsal, the
+latest active companion's exact Target add-v1 capability, and the expected
+settings timestamp. One transaction then upserts qualification, enables live
+unpaused settings, promotes only unexpired `shadow_ready` first-party shipping
+quantity-one add jobs, and appends deterministic action-event, audit, and
+outbox rows. Exact replay is mutation-free and validates immutable promotion
+events while tolerating ordinary outbox delivery lifecycle changes.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-target-qualification-apply -- plan \
+  yoink_cutover_qualification_087 yoink_q_087 yoink_session_q_087 \
+  yoink_queue_q_087 yoink_control_q_087 yoink_notify_q_087 \
+  yoink_execute_q_087 yoink_retain_q_087 yoink_candidate_q_087 \
+  yoink_dispatch_q_087 yoink_reconcile_q_087 yoink_witness_q_087 \
+  yoink_delivery_q_087 yoink_catalog_q_087 yoink_resolution_q_087 \
+  yoink_reference_q_087 yoink_terminal_q_087 yoink_offer_q_087 \
+  yoink_post_q_087 yoink_mission_q_087 yoink_strategy_q_087 \
+  yoink_writer_lock_q_087 yoink_constraint_config_q_087 \
+  yoink_action_spend_q_087 yoink_target_qualification_q_087
+```
+
+After every predecessor receipt through action/spend is verified, apply once
+with the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_TARGET_QUALIFICATION_APPLY_QUALIFICATION_ACK=bounded-signal-target-qualification-apply-qualification \
+  npm run postgres:signal-target-qualification-apply -- apply \
+  yoink_cutover_qualification_087 yoink_q_087 yoink_session_q_087 \
+  yoink_queue_q_087 yoink_control_q_087 yoink_notify_q_087 \
+  yoink_execute_q_087 yoink_retain_q_087 yoink_candidate_q_087 \
+  yoink_dispatch_q_087 yoink_reconcile_q_087 yoink_witness_q_087 \
+  yoink_delivery_q_087 yoink_catalog_q_087 yoink_resolution_q_087 \
+  yoink_reference_q_087 yoink_terminal_q_087 yoink_offer_q_087 \
+  yoink_post_q_087 yoink_mission_q_087 yoink_strategy_q_087 \
+  yoink_writer_lock_q_087 yoink_constraint_config_q_087 \
+  yoink_action_spend_q_087 yoink_target_qualification_q_087
+```
+
+Then independently verify the role, function, nine forced-RLS tables, six-table
+mutation declaration, immutable receipt, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-target-qualification-apply -- verify \
+  yoink_cutover_qualification_087 yoink_q_087 yoink_session_q_087 \
+  yoink_queue_q_087 yoink_control_q_087 yoink_notify_q_087 \
+  yoink_execute_q_087 yoink_retain_q_087 yoink_candidate_q_087 \
+  yoink_dispatch_q_087 yoink_reconcile_q_087 yoink_witness_q_087 \
+  yoink_delivery_q_087 yoink_catalog_q_087 yoink_resolution_q_087 \
+  yoink_reference_q_087 yoink_terminal_q_087 yoink_offer_q_087 \
+  yoink_post_q_087 yoink_mission_q_087 yoink_strategy_q_087 \
+  yoink_writer_lock_q_087 yoink_constraint_config_q_087 \
+  yoink_action_spend_q_087 yoink_target_qualification_q_087
+```
+
+The receipt permanently records `qualificationSettingsWriterParity: true` and
+`targetJobPromotionParity: true`, while
+`retailerQualificationWriterParity: false`, `configurationWriterParity: false`,
+`reservationWriterParity: false`, `writerLockProtocolParity: false`, and
+`runtimeAuthority: false` remain explicit. Native PostgreSQL 16 proves forced
+late rollback and recovery, wrong/same-tenant-peer/unmapped principal denial,
+zero direct SQL, exact evidence recomputation, one-job promotion, immutable
+replay, altered-replay rejection, and real blocking between an uncommitted
+Target activation and the bounded settings writer. SQLite remains authoritative.
 
 ## Requirements
 
@@ -1996,10 +2087,10 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- port the remaining qualification-settings, source-trust, retailer-
-  qualification, strategy, mission-policy, and reservation writers through the
-  shared fixed-order protocol (global pause, guardrails, and spend-policy caps
-  are already qualified);
+- port the remaining source-trust, non-Target retailer-qualification, strategy,
+  mission-policy, and reservation writers through the shared fixed-order
+  protocol (global pause, guardrails, spend-policy caps, and complete Target
+  qualification/settings activation are already qualified);
   add attribution-policy parity and separately qualified strategy-action
   semantics; then compose the qualified purchase-intent action/spend,
   strategy/purchase-policy evaluation, hosted-delivery recovery, fixed signal-

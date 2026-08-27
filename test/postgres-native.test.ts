@@ -161,6 +161,13 @@ import {
   buildPostgresSignalActionSpendApplyManifest,
   verifyPostgresSignalActionSpendApplyBoundary
 } from "../packages/database/src/postgres-signal-action-spend-apply.js";
+import {
+  NodePostgresSignalTargetQualificationApplyDatabase,
+  POSTGRES_SIGNAL_TARGET_QUALIFICATION_APPLY_FUNCTION,
+  applyPostgresSignalTargetQualificationApplyBoundary,
+  buildPostgresSignalTargetQualificationApplyManifest,
+  verifyPostgresSignalTargetQualificationApplyBoundary
+} from "../packages/database/src/postgres-signal-target-qualification-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -194,7 +201,11 @@ import type {
   SignalEventInput,
   StrategyDefinition
 } from "../packages/contracts/src/index.js";
-import { TARGET_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
+import {
+  TARGET_ADD_ACTIVATION_CONFIRMATION,
+  TARGET_ADD_ADAPTER_VERSION,
+  TARGET_OBSERVER_VERSION
+} from "../packages/contracts/src/index.js";
 import {
   POSTGRES_TEST_WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION,
@@ -228,6 +239,7 @@ const NATIVE_STRATEGY_EVALUATION_APPLY_ROLE_NAMESPACE = "yoink_native_strategy";
 const NATIVE_WRITER_LOCK_ROLE_NAMESPACE = "yoink_native_writer_lock";
 const NATIVE_CONSTRAINT_CONFIG_APPLY_ROLE_NAMESPACE = "yoink_native_constraint_config";
 const NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE = "yoink_native_action_spend";
+const NATIVE_TARGET_QUALIFICATION_APPLY_ROLE_NAMESPACE = "yoink_native_target_qual";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1063,7 +1075,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration writers, and reviewed purchase-intent action/spend", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, and Target qualification/settings", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1202,6 +1214,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalActionSpendC: NodePostgresSignalActionSpendApplyDatabase | null = null;
   let signalActionSpendUnmapped: NodePostgresSignalActionSpendApplyDatabase | null = null;
   let signalActionSpendDirectClient: Client | null = null;
+  let signalTargetQualificationA: NodePostgresSignalTargetQualificationApplyDatabase | null = null;
+  let signalTargetQualificationASecond: NodePostgresSignalTargetQualificationApplyDatabase | null = null;
+  let signalTargetQualificationB: NodePostgresSignalTargetQualificationApplyDatabase | null = null;
+  let signalTargetQualificationC: NodePostgresSignalTargetQualificationApplyDatabase | null = null;
+  let signalTargetQualificationUnmapped: NodePostgresSignalTargetQualificationApplyDatabase | null = null;
+  let signalTargetQualificationDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2426,6 +2444,48 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalActionSpendBoundary
     );
+    const qualifiedSignalTargetQualificationManifest =
+      buildPostgresSignalTargetQualificationApplyManifest(
+        qualifiedSignalActionSpendManifest,
+        NATIVE_TARGET_QUALIFICATION_APPLY_ROLE_NAMESPACE
+      );
+    const signalTargetQualificationBoundary =
+      await applyPostgresSignalTargetQualificationApplyBoundary(
+        importer,
+        qualifiedSignalTargetQualificationManifest,
+        new Date("2026-08-25T16:54:59.996Z").getTime()
+      );
+    assert.equal(signalTargetQualificationBoundary.protectedTenantTableCount, 9);
+    assert.equal(signalTargetQualificationBoundary.forcedRlsTableCount, 9);
+    assert.equal(signalTargetQualificationBoundary.mutationTableCount, 6);
+    assert.equal(signalTargetQualificationBoundary.directTableGrantCount, 0);
+    assert.equal(signalTargetQualificationBoundary.functionGrantCount, 1);
+    assert.equal(signalTargetQualificationBoundary.membershipCount, 0);
+    assert.equal(signalTargetQualificationBoundary.activePrincipalCount, 0);
+    assert.equal(signalTargetQualificationBoundary.metadata.operationCount, 1);
+    assert.equal(signalTargetQualificationBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(signalTargetQualificationBoundary.metadata.retailerQualificationScopeConsumed, true);
+    assert.equal(signalTargetQualificationBoundary.metadata.settingsScopeConsumed, true);
+    assert.equal(signalTargetQualificationBoundary.metadata.currentEvidenceRevalidation, true);
+    assert.equal(signalTargetQualificationBoundary.metadata.currentDeviceCapabilityRevalidation, true);
+    assert.equal(signalTargetQualificationBoundary.metadata.targetQualificationSettingsWriterParity, true);
+    assert.equal(signalTargetQualificationBoundary.metadata.targetJobPromotionParity, true);
+    assert.equal(signalTargetQualificationBoundary.metadata.qualificationSettingsWriterParity, true);
+    assert.equal(signalTargetQualificationBoundary.metadata.sourceWriterParity, false);
+    assert.equal(signalTargetQualificationBoundary.metadata.retailerQualificationWriterParity, false);
+    assert.equal(signalTargetQualificationBoundary.metadata.missionPolicyWriterParity, false);
+    assert.equal(signalTargetQualificationBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalTargetQualificationBoundary.metadata.reservationWriterParity, false);
+    assert.equal(signalTargetQualificationBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalTargetQualificationBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalTargetQualificationBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalTargetQualificationApplyBoundary(
+        importer,
+        qualifiedSignalTargetQualificationManifest
+      ),
+      signalTargetQualificationBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -2749,6 +2809,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalConstraintConfigManifest,
       NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE
     );
+    const signalTargetQualificationManifest =
+      buildPostgresSignalTargetQualificationApplyManifest(
+        signalActionSpendManifest,
+        NATIVE_TARGET_QUALIFICATION_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -2827,6 +2892,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalActionSpendManifest.actionSpendRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalTargetQualificationManifest.targetQualificationRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -3353,6 +3422,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalActionSpendB = signalActionSpendDatabase(NATIVE_PRINCIPAL_B);
     signalActionSpendC = signalActionSpendDatabase(NATIVE_PRINCIPAL_C);
     signalActionSpendUnmapped = signalActionSpendDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+    const signalTargetQualificationDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalTargetQualificationApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalTargetQualificationManifest, { maxConnections });
+    signalTargetQualificationA = signalTargetQualificationDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalTargetQualificationASecond = signalTargetQualificationDatabase(NATIVE_PRINCIPAL_A);
+    signalTargetQualificationB = signalTargetQualificationDatabase(NATIVE_PRINCIPAL_B);
+    signalTargetQualificationC = signalTargetQualificationDatabase(NATIVE_PRINCIPAL_C);
+    signalTargetQualificationUnmapped = signalTargetQualificationDatabase(NATIVE_PRINCIPAL_UNMAPPED);
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -9675,6 +9757,400 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     await signalActionSpendDirectClient.end();
     signalActionSpendDirectClient = null;
 
+    const targetQualificationNow = Date.now();
+    const targetQualificationObservedAt = new Date(targetQualificationNow - 1_000).toISOString();
+    const targetQualificationExpiresAt = new Date(targetQualificationNow + 300_000).toISOString();
+    const targetObservationEvidence = ["1".repeat(64), "2".repeat(64)];
+    const targetTrialEvidence = "3".repeat(64);
+    const targetQualificationEvidenceHash = stableHash(
+      "target-add-qualification-evidence-v1",
+      TARGET_ADD_ADAPTER_VERSION,
+      ...[...targetObservationEvidence, targetTrialEvidence].sort()
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."extension_devices"(
+         id, tenant_id, user_id, name, token_hash, extension_version,
+         status, capabilities_json, last_seen_at, created_at, updated_at,
+         credential_generation, credential_issued_at
+       ) VALUES (
+         'native_target_qualification_device', $1, $2,
+         'Native Target qualification device', $3, '0.87.0', 'active', $4,
+         $5, $5, $5, 1, $5
+       )`,
+      [
+        NATIVE_TENANT,
+        NATIVE_USER,
+        stableHash("native-target-qualification-device-token"),
+        JSON.stringify({
+          targetAddOnly: true,
+          targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
+        }),
+        targetQualificationObservedAt
+      ]
+    );
+    for (const [index, evidenceHash] of targetObservationEvidence.entries()) {
+      const sku = `${index + 1}`.repeat(8);
+      await first.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."retailer_shadow_observations"(
+           id, tenant_id, user_id, device_id, retailer_id, adapter_version,
+           contract_version, page_kind, retailer_sku, canonical_url,
+           availability, unit_price_cents, currency, seller_name, seller_type,
+           fulfillment, add_control_actionable, security_challenge,
+           interactive_block, observation_state, evidence_hash,
+           observed_at, received_at
+         ) VALUES (
+           $1, $2, $3, 'native_target_qualification_device', 'target', $4,
+           1, 'product', $5, $6, 'in_stock', $7, 'USD', 'Target',
+           'first_party', 'shipping', 1, 0, '', 'actionable_candidate',
+           $8, $9, $9
+         )`,
+        [
+          `native_target_qualification_observation_${index + 1}`,
+          NATIVE_TENANT,
+          NATIVE_USER,
+          TARGET_OBSERVER_VERSION,
+          sku,
+          `https://www.target.com/p/-/A-${sku}`,
+          799 + index,
+          evidenceHash,
+          targetQualificationObservedAt
+        ]
+      );
+    }
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."retailer_adapter_trials"(
+         id, tenant_id, user_id, device_id, retailer_id, adapter_version,
+         observer_version, contract_version, trial_kind, shadow_observation_id,
+         retailer_sku, outcome, reason_code, evidence_hash, observed_at, received_at
+       ) VALUES (
+         'native_target_qualification_trial', $1, $2,
+         'native_target_qualification_device', 'target', $3, $4, 1,
+         'pre_click_rehearsal', 'native_target_qualification_observation_1',
+         '11111111', 'passed', 'rehearsal_passed', $5, $6, $6
+       )`,
+      [
+        NATIVE_TENANT,
+        NATIVE_USER,
+        TARGET_ADD_ADAPTER_VERSION,
+        TARGET_OBSERVER_VERSION,
+        targetTrialEvidence,
+        targetQualificationObservedAt
+      ]
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."action_jobs"
+       SET state = 'shadow_ready', expires_at = $2, updated_at = $3
+       WHERE id = $1`,
+      [
+        actionSpendWinner.actionJobId,
+        targetQualificationExpiresAt,
+        targetQualificationObservedAt
+      ]
+    );
+    const targetSettingsSeedAt = new Date(targetQualificationNow - 500).toISOString();
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."app_settings"
+       SET actions_paused = 1, pause_reason = 'Native Target qualification gate',
+           execution_mode = 'shadow', updated_at = $1
+       WHERE user_id = $2`,
+      [targetSettingsSeedAt, NATIVE_USER]
+    );
+    const targetQualificationPayload = {
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+      confirmation: TARGET_ADD_ACTIVATION_CONFIRMATION,
+      evidenceHash: targetQualificationEvidenceHash,
+      expectedSettingsUpdatedAt: targetSettingsSeedAt
+    };
+    const targetStateSnapshot = async () => {
+      const row = (await first!.query<{
+        actionsPaused: number;
+        pauseReason: string;
+        executionMode: string;
+        settingsUpdatedAt: string;
+        qualificationEvidenceHash: string;
+        qualificationUpdatedAt: string;
+        jobState: string;
+        promotionEvents: string | number | bigint;
+        qualificationAudits: string | number | bigint;
+        qualificationOutbox: string | number | bigint;
+      }>(
+        `SELECT settings.actions_paused AS "actionsPaused",
+                settings.pause_reason AS "pauseReason",
+                settings.execution_mode AS "executionMode",
+                settings.updated_at AS "settingsUpdatedAt",
+                qualification.evidence_hash AS "qualificationEvidenceHash",
+                qualification.updated_at AS "qualificationUpdatedAt",
+                job.state AS "jobState",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_events" event
+                 WHERE event.job_id = job.id
+                   AND event.reason_code = 'target_add_v1_activated') AS "promotionEvents",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events" audit
+                 WHERE audit.user_id = $1
+                   AND audit.event_type = 'retailer_adapter_qualified'
+                   AND audit.reason_code = 'explicit_target_add_v1_activation') AS "qualificationAudits",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events" outbox
+                 WHERE outbox.tenant_id = $2
+                   AND outbox.aggregate_type = 'retailer_qualification'
+                   AND outbox.aggregate_id = 'target'
+                   AND outbox.event_type = 'retailer_adapter_qualified') AS "qualificationOutbox"
+         FROM "${NATIVE_SCHEMA}"."app_settings" settings
+         JOIN "${NATIVE_SCHEMA}"."retailer_adapter_qualifications" qualification
+           ON qualification.user_id = settings.user_id
+          AND qualification.retailer_id = 'target'
+         JOIN "${NATIVE_SCHEMA}"."action_jobs" job ON job.id = $3
+         WHERE settings.user_id = $1`,
+        [NATIVE_USER, NATIVE_TENANT, actionSpendWinner.actionJobId]
+      )).rows[0]!;
+      return {
+        ...row,
+        actionsPaused: Number(row.actionsPaused),
+        promotionEvents: Number(row.promotionEvents),
+        qualificationAudits: Number(row.qualificationAudits),
+        qualificationOutbox: Number(row.qualificationOutbox)
+      };
+    };
+    const targetStateBefore = await targetStateSnapshot();
+    assert.equal(targetStateBefore.actionsPaused, 1);
+    assert.equal(targetStateBefore.executionMode, "shadow");
+    assert.equal(targetStateBefore.jobState, "shadow_ready");
+    assert.equal(targetStateBefore.promotionEvents, 0);
+    await assert.rejects(
+      signalTargetQualificationB.applyTargetQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_target_add",
+        "native_target_qualification_wrong_tenant_principal",
+        targetQualificationPayload
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [
+        NATIVE_PRINCIPAL_C,
+        NATIVE_TENANT,
+        NATIVE_SAME_TENANT_USER,
+        targetQualificationObservedAt
+      ]
+    );
+    try {
+      await assert.rejects(
+        signalTargetQualificationC.applyTargetQualification(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          "activate_target_add",
+          "native_target_qualification_wrong_user_principal",
+          targetQualificationPayload
+        ),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    await assert.rejects(
+      signalTargetQualificationUnmapped.applyTargetQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_target_add",
+        "native_target_qualification_unmapped_principal",
+        targetQualificationPayload
+      ),
+      /tenant session principal is not active/
+    );
+    signalTargetQualificationDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalTargetQualificationDirectClient.on("error", () => undefined);
+    await signalTargetQualificationDirectClient.connect();
+    await signalTargetQualificationDirectClient.query(
+      `SET ROLE "${signalTargetQualificationManifest.targetQualificationRole.name}"`
+    );
+    await assert.rejects(
+      signalTargetQualificationDirectClient.query(
+        `SELECT user_id FROM "${NATIVE_SCHEMA}"."retailer_adapter_qualifications" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalTargetQualificationDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_TARGET_QUALIFICATION_APPLY_FUNCTION}"(
+           $1, $2, 'activate_target_add', $3, $4
+         )`,
+        [
+          NATIVE_TENANT,
+          "user_local",
+          "native_target_qualification_direct_wrong_principal",
+          JSON.stringify(targetQualificationPayload)
+        ]
+      ),
+      /does not match the expected authenticated principal/
+    );
+
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_target_qualification_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $body$
+       BEGIN
+         IF NEW.event_type = 'retailer_adapter_qualified'
+           AND NEW.aggregate_type = 'retailer_qualification'
+           AND NEW.aggregate_id = 'target' THEN
+           RAISE EXCEPTION 'native forced Target qualification outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $body$;
+       CREATE TRIGGER "yoink_native_reject_target_qualification_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_target_qualification_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        signalTargetQualificationA.applyTargetQualification(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          "activate_target_add",
+          "native_target_qualification_rollback",
+          targetQualificationPayload
+        ),
+        /native forced Target qualification outbox failure/
+      );
+      assert.deepEqual(await targetStateSnapshot(), targetStateBefore);
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_target_qualification_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS "${NATIVE_SCHEMA}"."yoink_native_reject_target_qualification_outbox"()`
+      );
+    }
+
+    let targetQualificationTransactionOpen = false;
+    let blockedTargetReplay: ReturnType<
+      NodePostgresSignalTargetQualificationApplyDatabase["applyTargetQualification"]
+    > | null = null;
+    let blockedTargetConfig: ReturnType<
+      NodePostgresSignalConstraintConfigApplyDatabase["applyConstraintConfiguration"]
+    > | null = null;
+    try {
+      await signalTargetQualificationDirectClient.query("BEGIN");
+      targetQualificationTransactionOpen = true;
+      const firstTargetQualification = await signalTargetQualificationDirectClient.query<{
+        resultJson: string;
+      }>(
+        `SELECT result_json AS "resultJson"
+         FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_TARGET_QUALIFICATION_APPLY_FUNCTION}"(
+           $1, $2, 'activate_target_add', $3, $4
+         )`,
+        [
+          NATIVE_TENANT,
+          NATIVE_USER,
+          "native_target_qualification_apply",
+          JSON.stringify(targetQualificationPayload)
+        ]
+      );
+      const firstTargetResult = JSON.parse(firstTargetQualification.rows[0]!.resultJson) as {
+        requestFingerprint: string;
+        outcome: string;
+        mutationApplied: boolean;
+        mutationStatementCount: number;
+        mutationRowCount: number;
+        qualificationMutated: boolean;
+        settingsMutated: boolean;
+        promotedJobCount: number;
+        actionEventsMutated: number;
+        activation: Record<string, unknown>;
+      };
+      assert.match(firstTargetResult.requestFingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(firstTargetResult.outcome, "applied");
+      assert.equal(firstTargetResult.mutationApplied, true);
+      assert.equal(firstTargetResult.mutationStatementCount, 6);
+      assert.equal(firstTargetResult.mutationRowCount, 6);
+      assert.equal(firstTargetResult.qualificationMutated, true);
+      assert.equal(firstTargetResult.settingsMutated, true);
+      assert.equal(firstTargetResult.promotedJobCount, 1);
+      assert.equal(firstTargetResult.actionEventsMutated, 1);
+      assert.equal(firstTargetResult.activation.evidenceHash, targetQualificationEvidenceHash);
+      assert.equal(firstTargetResult.activation.observationCount, 2);
+      assert.equal(firstTargetResult.activation.distinctSkuCount, 2);
+      assert.equal(firstTargetResult.activation.rehearsalCount, 1);
+      assert.equal(firstTargetResult.activation.promotedJobs, 1);
+      assert.equal((firstTargetResult.activation.promotions as unknown[]).length, 1);
+      let targetReplaySettled = false;
+      let targetConfigSettled = false;
+      blockedTargetReplay = signalTargetQualificationASecond.applyTargetQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_target_add",
+        "native_target_qualification_apply",
+        targetQualificationPayload
+      ).finally(() => { targetReplaySettled = true; });
+      blockedTargetConfig = signalConstraintConfigA.applyConstraintConfiguration(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "set_actions_paused",
+        "native_target_qualification_blocked_config",
+        {
+          expectedUpdatedAt: targetSettingsSeedAt,
+          paused: true,
+          reason: "Native Target qualification contention"
+        }
+      ).finally(() => { targetConfigSettled = true; });
+      void blockedTargetConfig.catch(() => undefined);
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      assert.equal(targetReplaySettled, false);
+      assert.equal(targetConfigSettled, false);
+      assert.deepEqual(await targetStateSnapshot(), targetStateBefore);
+      await signalTargetQualificationDirectClient.query("COMMIT");
+      targetQualificationTransactionOpen = false;
+      const replay = await blockedTargetReplay;
+      assert.equal(replay.outcome, "already_applied");
+      assert.equal(replay.mutationApplied, false);
+      assert.equal(replay.idempotentReplay, true);
+      assert.equal(replay.mutationStatementCount, 0);
+      assert.equal(replay.mutationRowCount, 0);
+      assert.equal(replay.promotedJobCount, 1);
+      assert.equal(replay.actionEventsMutated, 0);
+      await assert.rejects(blockedTargetConfig, /settings revision changed/);
+    } finally {
+      if (targetQualificationTransactionOpen) {
+        await signalTargetQualificationDirectClient.query("ROLLBACK").catch(() => undefined);
+      }
+      if (blockedTargetReplay) await blockedTargetReplay.catch(() => undefined);
+      if (blockedTargetConfig) await blockedTargetConfig.catch(() => undefined);
+    }
+    const targetStateAfter = await targetStateSnapshot();
+    assert.equal(targetStateAfter.actionsPaused, 0);
+    assert.equal(targetStateAfter.pauseReason, "");
+    assert.equal(targetStateAfter.executionMode, "live");
+    assert.notEqual(targetStateAfter.settingsUpdatedAt, targetSettingsSeedAt);
+    assert.equal(targetStateAfter.qualificationEvidenceHash, targetQualificationEvidenceHash);
+    assert.equal(targetStateAfter.qualificationUpdatedAt, targetStateAfter.settingsUpdatedAt);
+    assert.equal(targetStateAfter.jobState, "awaiting_executor");
+    assert.equal(targetStateAfter.promotionEvents, 1);
+    assert.equal(targetStateAfter.qualificationAudits, targetStateBefore.qualificationAudits + 1);
+    assert.equal(targetStateAfter.qualificationOutbox, targetStateBefore.qualificationOutbox + 1);
+    await assert.rejects(
+      signalTargetQualificationA.applyTargetQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_target_add",
+        "native_target_qualification_apply",
+        { ...targetQualificationPayload, evidenceHash: "f".repeat(64) }
+      ),
+      /replay graph changed/
+    );
+    await signalTargetQualificationDirectClient.end();
+    signalTargetQualificationDirectClient = null;
+    await Promise.all([
+      signalTargetQualificationA.close(),
+      signalTargetQualificationASecond.close(),
+      signalTargetQualificationB.close(),
+      signalTargetQualificationC.close(),
+      signalTargetQualificationUnmapped.close()
+    ]);
+    signalTargetQualificationA = null;
+    signalTargetQualificationASecond = null;
+    signalTargetQualificationB = null;
+    signalTargetQualificationC = null;
+    signalTargetQualificationUnmapped = null;
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -13466,7 +13942,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalActionSpendB?.close(),
       signalActionSpendC?.close(),
       signalActionSpendUnmapped?.close(),
-      signalActionSpendDirectClient?.end()
+      signalActionSpendDirectClient?.end(),
+      signalTargetQualificationA?.close(),
+      signalTargetQualificationASecond?.close(),
+      signalTargetQualificationB?.close(),
+      signalTargetQualificationC?.close(),
+      signalTargetQualificationUnmapped?.close(),
+      signalTargetQualificationDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
