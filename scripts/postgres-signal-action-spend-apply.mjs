@@ -7,13 +7,14 @@ import {
 import { buildPostgresSignalPostIncidentDecisionApplyManifest } from "../dist/packages/database/src/postgres-signal-post-incident-decision-apply.js";
 import { buildPostgresSignalMissionBindingApplyManifest } from "../dist/packages/database/src/postgres-signal-mission-binding-apply.js";
 import { buildPostgresSignalStrategyEvaluationApplyManifest } from "../dist/packages/database/src/postgres-signal-strategy-evaluation-apply.js";
+import { buildPostgresSignalWriterLockProtocolManifest } from "../dist/packages/database/src/postgres-signal-writer-lock-protocol.js";
 import {
   applyPostgresSignalActionSpendApplyBoundary,
   buildPostgresSignalActionSpendApplyManifest,
   verifyPostgresSignalActionSpendApplyBoundary
 } from "../dist/packages/database/src/postgres-signal-action-spend-apply.js";
 
-const roleArguments = "[private_schema] [read_role_namespace] [session_role_namespace] [queue_role_namespace] [control_role_namespace] [notification_role_namespace] [execution_role_namespace] [retention_role_namespace] [candidate_role_namespace] [dispatch_role_namespace] [reconciliation_role_namespace] [witness_role_namespace] [delivery_lease_role_namespace] [catalog_apply_role_namespace] [resolution_apply_role_namespace] [source_reference_role_namespace] [terminal_decision_role_namespace] [offer_incident_role_namespace] [post_incident_decision_role_namespace] [mission_binding_role_namespace] [strategy_evaluation_role_namespace] [action_spend_role_namespace]";
+const roleArguments = "[private_schema] [read_role_namespace] [session_role_namespace] [queue_role_namespace] [control_role_namespace] [notification_role_namespace] [execution_role_namespace] [retention_role_namespace] [candidate_role_namespace] [dispatch_role_namespace] [reconciliation_role_namespace] [witness_role_namespace] [delivery_lease_role_namespace] [catalog_apply_role_namespace] [resolution_apply_role_namespace] [source_reference_role_namespace] [terminal_decision_role_namespace] [offer_incident_role_namespace] [post_incident_decision_role_namespace] [mission_binding_role_namespace] [strategy_evaluation_role_namespace] [writer_lock_role_namespace] [action_spend_role_namespace]";
 
 function usage() {
   process.stderr.write(`Usage:
@@ -60,7 +61,8 @@ const [command, schemaName, readRoleNamespace, sessionRoleNamespace,
   resolutionApplyRoleNamespace, sourceReferenceRoleNamespace,
   terminalDecisionRoleNamespace, offerIncidentRoleNamespace,
   postIncidentDecisionRoleNamespace, missionBindingRoleNamespace,
-  strategyEvaluationRoleNamespace, actionSpendRoleNamespace] = process.argv.slice(2);
+  strategyEvaluationRoleNamespace, writerLockRoleNamespace,
+  actionSpendRoleNamespace] = process.argv.slice(2);
 const predecessorArgs = [
   schemaName, readRoleNamespace, sessionRoleNamespace, queueRoleNamespace,
   controlRoleNamespace, notificationRoleNamespace, executionRoleNamespace,
@@ -87,8 +89,12 @@ try {
       missionBindingManifest,
       strategyEvaluationRoleNamespace
     );
-    const manifest = buildPostgresSignalActionSpendApplyManifest(
+    const writerLockManifest = buildPostgresSignalWriterLockProtocolManifest(
       strategyEvaluationManifest,
+      writerLockRoleNamespace
+    );
+    const manifest = buildPostgresSignalActionSpendApplyManifest(
+      writerLockManifest,
       actionSpendRoleNamespace
     );
     if (command === "plan") {

@@ -18,11 +18,16 @@ import {
 import {
   POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_CONTRACT_VERSION,
   POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_FUNCTION,
-  buildPostgresSignalStrategyEvaluationApplyManifest,
-  validateSignalPolicyEvaluationAttestation,
-  verifyPostgresSignalStrategyEvaluationApplyBoundary,
-  type PostgresSignalStrategyEvaluationApplyManifest
+  validateSignalPolicyEvaluationAttestation
 } from "./postgres-signal-strategy-evaluation-apply.js";
+import {
+  POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_CONTRACT_VERSION,
+  POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FULL_MASK,
+  POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION,
+  buildPostgresSignalWriterLockProtocolManifest,
+  verifyPostgresSignalWriterLockProtocolBoundary,
+  type PostgresSignalWriterLockProtocolManifest
+} from "./postgres-signal-writer-lock-protocol.js";
 import { POSTGRES_SIGNAL_RESOLUTION_APPLY_FUNCTION } from "./postgres-signal-resolution-apply.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -97,10 +102,12 @@ export interface PostgresSignalActionSpendApplyManifest {
   contractVersion: 1;
   cutoverContractVersion: 3;
   strategyEvaluationApplyContractVersion: 1;
+  writerLockProtocolContractVersion: 1;
   schemaName: string;
   actionSpendRoleNamespace: string;
   strategyEvaluationApplyManifestFingerprint: string;
-  predecessorManifest: PostgresSignalStrategyEvaluationApplyManifest;
+  writerLockProtocolManifestFingerprint: string;
+  predecessorManifest: PostgresSignalWriterLockProtocolManifest;
   actionSpendRole: {
     kind: "signal_action_spend_apply_boundary";
     name: string;
@@ -123,6 +130,8 @@ export interface PostgresSignalActionSpendApplyManifest {
   predecessorEvaluationRequired: true;
   messageSerialization: true;
   missionSerialization: true;
+  sharedWriterLockProtocolImplemented: true;
+  writerLockProtocolConsumed: true;
   fixedOrderConfigurationLocks: true;
   currentMissionTargetRevalidation: true;
   currentPolicyRevalidation: true;
@@ -162,6 +171,7 @@ export interface PostgresSignalActionSpendCapabilityProjection {
   contractVersion: 1;
   cutoverContractVersion: 3;
   strategyEvaluationApplyContractVersion: 1;
+  writerLockProtocolContractVersion: 1;
   deterministicManifestImplemented: true;
   atomicQualificationApplyImplemented: true;
   exactEffectivePrivilegeVerification: true;
@@ -176,6 +186,8 @@ export interface PostgresSignalActionSpendCapabilityProjection {
   predecessorEvaluationRequired: true;
   messageSerialization: true;
   missionSerialization: true;
+  sharedWriterLockProtocolImplemented: true;
+  writerLockProtocolConsumed: true;
   twoPhasePlanApply: true;
   readCommittedTransactionAdapter: true;
   fixedOrderConfigurationLocks: true;
@@ -362,8 +374,9 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(canonicalPortabilityJson(value)).digest("hex");
 }
 
-function predecessorNamespaces(manifest: PostgresSignalStrategyEvaluationApplyManifest): string[] {
-  const mission = manifest.predecessorManifest;
+function predecessorNamespaces(manifest: PostgresSignalWriterLockProtocolManifest): string[] {
+  const strategy = manifest.predecessorManifest;
+  const mission = strategy.predecessorManifest;
   const predecessor = mission.predecessorManifest;
   return [
     predecessor.readRoleNamespace,
@@ -385,12 +398,13 @@ function predecessorNamespaces(manifest: PostgresSignalStrategyEvaluationApplyMa
     predecessor.offerIncidentApplyRoleNamespace,
     predecessor.postIncidentDecisionApplyRoleNamespace,
     mission.missionBindingApplyRoleNamespace,
-    manifest.strategyEvaluationRoleNamespace
+    strategy.strategyEvaluationRoleNamespace,
+    manifest.writerLockRoleNamespace
   ];
 }
 
 export function buildPostgresSignalActionSpendApplyManifest(
-  predecessorManifest = buildPostgresSignalStrategyEvaluationApplyManifest(),
+  predecessorManifest = buildPostgresSignalWriterLockProtocolManifest(),
   requestedRoleNamespace = "yoink_action_spend_qual"
 ): PostgresSignalActionSpendApplyManifest {
   const schemaName = safeSchema(predecessorManifest.schemaName || POSTGRES_CUTOVER_DEFAULT_SCHEMA);
@@ -404,9 +418,11 @@ export function buildPostgresSignalActionSpendApplyManifest(
     contractVersion: 1,
     cutoverContractVersion: POSTGRES_CUTOVER_CONTRACT_VERSION,
     strategyEvaluationApplyContractVersion: POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_CONTRACT_VERSION,
+    writerLockProtocolContractVersion: POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_CONTRACT_VERSION,
     schemaName,
     actionSpendRoleNamespace,
-    strategyEvaluationApplyManifestFingerprint: predecessorManifest.fingerprint,
+    strategyEvaluationApplyManifestFingerprint: predecessorManifest.predecessorManifest.fingerprint,
+    writerLockProtocolManifestFingerprint: predecessorManifest.fingerprint,
     predecessorManifest,
     actionSpendRole: {
       kind: "signal_action_spend_apply_boundary",
@@ -430,6 +446,8 @@ export function buildPostgresSignalActionSpendApplyManifest(
     predecessorEvaluationRequired: true,
     messageSerialization: true,
     missionSerialization: true,
+    sharedWriterLockProtocolImplemented: true,
+    writerLockProtocolConsumed: true,
     fixedOrderConfigurationLocks: true,
     currentMissionTargetRevalidation: true,
     currentPolicyRevalidation: true,
@@ -474,6 +492,7 @@ PostgresSignalActionSpendCapabilityProjection {
     contractVersion: 1,
     cutoverContractVersion: 3,
     strategyEvaluationApplyContractVersion: 1,
+    writerLockProtocolContractVersion: 1,
     deterministicManifestImplemented: true,
     atomicQualificationApplyImplemented: true,
     exactEffectivePrivilegeVerification: true,
@@ -488,6 +507,8 @@ PostgresSignalActionSpendCapabilityProjection {
     predecessorEvaluationRequired: true,
     messageSerialization: true,
     missionSerialization: true,
+    sharedWriterLockProtocolImplemented: true,
+    writerLockProtocolConsumed: true,
     twoPhasePlanApply: true,
     readCommittedTransactionAdapter: true,
     fixedOrderConfigurationLocks: true,
@@ -650,10 +671,13 @@ DECLARE
   resolution_plan_count BIGINT;
   evaluation_plan JSONB;
   evaluation_plan_count BIGINT;
+  writer_lock_result JSONB;
+  writer_lock_result_count BIGINT;
   message_id_value TEXT;
   payload_hash_value TEXT;
   event_id_value TEXT;
   signal_id_value TEXT;
+  source_connection_id_value TEXT;
   listing_id_value TEXT;
   variant_id_value TEXT;
   retailer_id_value TEXT;
@@ -1095,24 +1119,38 @@ BEGIN
     strategy_revision_value := (evaluation_plan->>'strategyRevision')::bigint;
     effective_unit_cap_cents_value := (evaluation_plan->>'effectiveUnitCapCents')::bigint;
 
-    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
-      'yoink_signal_action_spend_02_source_v1:' || resolved_tenant_id || ':' ||
-        resolved_user_id || ':' || event_id_value, 0
-    ));
-    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
-      'yoink_signal_action_spend_03_settings_v1:' || resolved_tenant_id || ':' ||
-        resolved_user_id, 0
-    ));
-    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
-      'yoink_signal_action_spend_04_policy_v1:' || resolved_tenant_id || ':' ||
-        resolved_user_id || ':' || mission_id_value, 0
-    ));
-    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
-      'yoink_signal_action_spend_05_spend_v1:' || resolved_tenant_id || ':' ||
-        resolved_user_id, 0
-    ));
+    SELECT signal.source_connection_id, listing.retailer_id
+      INTO STRICT source_connection_id_value, retailer_id_value
+    FROM ${relation(manifest.schemaName, "signal_events")} AS signal
+    JOIN ${relation(manifest.schemaName, "listings")} AS listing
+      ON listing.id = listing_id_value
+    WHERE signal.id = event_id_value
+      AND signal.tenant_id = resolved_tenant_id
+      AND signal.user_id = resolved_user_id;
 
-    SELECT signal.signal_id, signal.source, signal.observed_at, signal.offer_json,
+    SELECT MIN(lock_result.result_json)::jsonb, COUNT(*)
+      INTO writer_lock_result, writer_lock_result_count
+    FROM ${relation(manifest.schemaName, POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION)}(
+      expected_tenant_id, expected_user_id, source_connection_id_value,
+      retailer_id_value, mission_id_value,
+      '${POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FULL_MASK}'
+    ) AS lock_result;
+    IF writer_lock_result_count <> 1 OR writer_lock_result IS NULL
+      OR writer_lock_result->>'contractVersion' <> '1'
+      OR writer_lock_result->>'lockProtocolVersion' <> 'signal_action_constraints_v1'
+      OR writer_lock_result->>'lockMask' <> '${POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FULL_MASK}'
+      OR writer_lock_result->>'scopeCount' <> '5'
+      OR writer_lock_result->>'sourceConnectionId' <> source_connection_id_value
+      OR writer_lock_result->>'retailerId' <> retailer_id_value
+      OR writer_lock_result->>'missionId' <> mission_id_value
+      OR writer_lock_result->>'mutationApplied' <> 'false'
+      OR writer_lock_result->>'mutationAuthority' <> 'false'
+      OR writer_lock_result->>'runtimeAuthority' <> 'false' THEN
+      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend shared writer-lock protocol failed';
+    END IF;
+
+    SELECT signal.signal_id, signal.source_connection_id, signal.source,
+           signal.observed_at, signal.offer_json,
            source_connection.trust_level, resolution.listing_id,
            resolution.variant_id, occurrence.incident_id,
            incident.status AS incident_status, incident.unit_price_cents,
@@ -1156,6 +1194,7 @@ BEGIN
       AND signal.user_id = resolved_user_id
     FOR UPDATE OF source_connection, incident;
     IF event_record.signal_id <> signal_id_value
+      OR event_record.source_connection_id <> source_connection_id_value
       OR event_record.listing_id <> listing_id_value
       OR event_record.variant_id <> variant_id_value
       OR event_record.incident_id <> incident_id_value
@@ -1175,7 +1214,9 @@ BEGIN
       OR COALESCE(event_record.offer_json::jsonb->>'offerFingerprint', '') = '' THEN
       RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend exact first-party shipping offer is invalid';
     END IF;
-    retailer_id_value := event_record.retailer_id;
+    IF event_record.retailer_id <> retailer_id_value THEN
+      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend retailer changed after writer locking';
+    END IF;
     retailer_sku_value := event_record.retailer_sku;
     canonical_url_value := event_record.canonical_url;
     unit_price_cents_value := (event_record.offer_json::jsonb->>'unitPriceCents')::bigint;
@@ -2070,14 +2111,17 @@ function boundarySpec(
     receiptGuardFunctionName: "yoink_guard_signal_action_spend_apply_receipt",
     receiptTriggerName: "yoink_signal_action_spend_apply_receipt_immutable",
     manifestFingerprint: manifest.fingerprint,
-    predecessorFingerprint: manifest.strategyEvaluationApplyManifestFingerprint,
+    predecessorFingerprint: manifest.writerLockProtocolManifestFingerprint,
     protectedTenantTableNames: [...PROTECTED_TENANT_TABLES],
     mutationTableNames: [...MUTATION_TABLES],
     metadata: {
       contractVersion: 1,
       cutoverContractVersion: 3,
       strategyEvaluationApplyContractVersion: 1,
+      writerLockProtocolContractVersion: 1,
       maximumPlanAgeSeconds: 30,
+      sharedWriterLockProtocolImplemented: true,
+      writerLockProtocolConsumed: true,
       fixedOrderConfigurationLocks: true,
       purchaseIntentOnly: true,
       strategyActionAuthority: false,
@@ -2095,7 +2139,7 @@ export async function verifyPostgresSignalActionSpendApplyBoundary(
   database: PostgresCutoverDatabase,
   manifest = buildPostgresSignalActionSpendApplyManifest()
 ): Promise<PostgresSignalActionSpendApplyQualificationReceipt> {
-  await verifyPostgresSignalStrategyEvaluationApplyBoundary(database, manifest.predecessorManifest);
+  await verifyPostgresSignalWriterLockProtocolBoundary(database, manifest.predecessorManifest);
   return verifyPostgresQualifiedFunctionBoundary(database, boundarySpec(manifest));
 }
 
@@ -2104,7 +2148,7 @@ export async function applyPostgresSignalActionSpendApplyBoundary(
   manifest = buildPostgresSignalActionSpendApplyManifest(),
   now = Date.now()
 ): Promise<PostgresSignalActionSpendApplyQualificationReceipt> {
-  await verifyPostgresSignalStrategyEvaluationApplyBoundary(database, manifest.predecessorManifest);
+  await verifyPostgresSignalWriterLockProtocolBoundary(database, manifest.predecessorManifest);
   return applyPostgresQualifiedFunctionBoundary(database, boundarySpec(manifest), now);
 }
 

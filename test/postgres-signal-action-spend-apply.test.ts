@@ -16,6 +16,7 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   assert.deepEqual(buildPostgresSignalActionSpendApplyManifest(), manifest);
   assert.equal(manifest.contractVersion, POSTGRES_SIGNAL_ACTION_SPEND_APPLY_CONTRACT_VERSION);
   assert.equal(manifest.strategyEvaluationApplyContractVersion, 1);
+  assert.equal(manifest.writerLockProtocolContractVersion, 1);
   assert.equal(manifest.actionSpendRole.kind, "signal_action_spend_apply_boundary");
   assert.equal(manifest.actionSpendRole.functionName, POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION);
   assert.equal(manifest.actionSpendRole.login, false);
@@ -31,6 +32,8 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
     "spend_ledger_entries", "spend_reservations"
   ]);
   assert.equal(manifest.fixedOrderConfigurationLocks, true);
+  assert.equal(manifest.sharedWriterLockProtocolImplemented, true);
+  assert.equal(manifest.writerLockProtocolConsumed, true);
   assert.equal(manifest.currentMissionTargetRevalidation, true);
   assert.equal(manifest.currentSpendPolicyRevalidation, true);
   assert.equal(manifest.remainingQuantityRevalidation, true);
@@ -56,9 +59,11 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   const source = signalActionSpendApplyFunctionSource(manifest);
   assert.match(source, /principal\.principal_role = session_user::text/);
   assert.match(source, /yoink_apply_trackalacker_signal_strategy_evaluation/);
+  assert.match(source, /yoink_lock_signal_action_constraints/);
   assert.match(source, /signal_action_spend_00_message_v1/);
   assert.match(source, /signal_action_spend_01_mission_v1/);
-  assert.match(source, /signal_action_spend_05_spend_v1/);
+  assert.match(source, /shared writer-lock protocol failed/);
+  assert.doesNotMatch(source, /signal_action_spend_0[2345]_(?:source|settings|policy|spend)_v1/);
   assert.match(source, /FOR UPDATE OF mission, target/);
   assert.match(source, /remaining quantity is exhausted/);
   assert.match(source, /periodic spending capacity is exhausted/);
@@ -79,6 +84,8 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   const capability = postgresSignalActionSpendCapabilityProjection();
   assert.equal(capability.phase, "qualified_inactive");
   assert.equal(capability.actionSpendRepositoryParity, true);
+  assert.equal(capability.sharedWriterLockProtocolImplemented, true);
+  assert.equal(capability.writerLockProtocolConsumed, true);
   assert.equal(capability.purchaseIntentOnly, true);
   assert.equal(capability.strategyActionAuthority, false);
   assert.equal(capability.actionMutation, true);
@@ -95,7 +102,7 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   assert.throws(
     () => buildPostgresSignalActionSpendApplyManifest(
       manifest.predecessorManifest,
-      manifest.predecessorManifest.strategyEvaluationRoleNamespace
+      manifest.predecessorManifest.writerLockRoleNamespace
     ),
     /independent/
   );

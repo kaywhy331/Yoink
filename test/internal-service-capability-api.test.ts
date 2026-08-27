@@ -32,6 +32,7 @@ import { postgresSignalOfferIncidentApplyCapabilityProjection } from "../package
 import { postgresSignalPostIncidentDecisionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-post-incident-decision-apply.js";
 import { postgresSignalMissionBindingApplyCapabilityProjection } from "../packages/database/src/postgres-signal-mission-binding-apply.js";
 import { postgresSignalStrategyEvaluationApplyCapabilityProjection } from "../packages/database/src/postgres-signal-strategy-evaluation-apply.js";
+import { postgresSignalWriterLockProtocolCapabilityProjection } from "../packages/database/src/postgres-signal-writer-lock-protocol.js";
 import { postgresSignalActionSpendCapabilityProjection } from "../packages/database/src/postgres-signal-action-spend-apply.js";
 
 const require = createRequire(import.meta.url);
@@ -133,6 +134,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalPostIncidentDecisionApply: ReturnType<typeof postgresSignalPostIncidentDecisionApplyCapabilityProjection>;
         postgresSignalMissionBindingApply: ReturnType<typeof postgresSignalMissionBindingApplyCapabilityProjection>;
         postgresSignalStrategyEvaluationApply: ReturnType<typeof postgresSignalStrategyEvaluationApplyCapabilityProjection>;
+        postgresSignalWriterLockProtocol: ReturnType<typeof postgresSignalWriterLockProtocolCapabilityProjection>;
         postgresSignalActionSpendApply: ReturnType<typeof postgresSignalActionSpendCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
@@ -217,6 +219,10 @@ test("health and the admin Access workspace expose only safe workload capability
       postgresSignalStrategyEvaluationApplyCapabilityProjection()
     );
     assert.deepEqual(
+      snapshot.dataPlane.postgresSignalWriterLockProtocol,
+      postgresSignalWriterLockProtocolCapabilityProjection()
+    );
+    assert.deepEqual(
       snapshot.dataPlane.postgresSignalActionSpendApply,
       postgresSignalActionSpendCapabilityProjection()
     );
@@ -284,10 +290,15 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /ninth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /matched and price-required evaluations make a zero-write handoff/);
     assert.match(cutoverText, /PostgreSQL does not claim semantic evaluator authority/);
+    assert.match(cutoverText, /Server-bound signal action writer-lock protocol/);
+    assert.match(cutoverText, /eleventh independently inactive NOLOGIN boundary/);
+    assert.match(cutoverText, /source → retailer qualification → settings → mission policy → spend lock order/);
+    assert.match(cutoverText, /Configuration and reservation writers are not yet ported/);
     assert.match(cutoverText, /Server-bound reviewed purchase-intent action and spend/);
     assert.match(cutoverText, /tenth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /quantity-one add-to-cart job/);
     assert.match(cutoverText, /Strategy-authorized actions, retailer mutation, checkout, order submission, and inbox completion remain closed/);
+    assert.match(cutoverText, /It consumes the shared writer-lock protocol/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);
     assert.match(cutoverText, /3 independent PostgreSQL 16 backend sessions/);

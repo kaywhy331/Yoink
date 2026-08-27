@@ -141,6 +141,13 @@ import {
   verifyPostgresSignalStrategyEvaluationApplyBoundary
 } from "../packages/database/src/postgres-signal-strategy-evaluation-apply.js";
 import {
+  POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FULL_MASK,
+  POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION,
+  applyPostgresSignalWriterLockProtocolBoundary,
+  buildPostgresSignalWriterLockProtocolManifest,
+  verifyPostgresSignalWriterLockProtocolBoundary
+} from "../packages/database/src/postgres-signal-writer-lock-protocol.js";
+import {
   NodePostgresSignalActionSpendApplyDatabase,
   POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION,
   applyPostgresSignalActionSpendApplyBoundary,
@@ -211,6 +218,7 @@ const NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE = "yoink_native_offer";
 const NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE = "yoink_native_post";
 const NATIVE_MISSION_BINDING_APPLY_ROLE_NAMESPACE = "yoink_native_mission";
 const NATIVE_STRATEGY_EVALUATION_APPLY_ROLE_NAMESPACE = "yoink_native_strategy";
+const NATIVE_WRITER_LOCK_ROLE_NAMESPACE = "yoink_native_writer_lock";
 const NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE = "yoink_native_action_spend";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
@@ -1047,7 +1055,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, and reviewed purchase-intent action/spend", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, and reviewed purchase-intent action/spend", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1173,6 +1181,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalStrategyEvaluationC: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
   let signalStrategyEvaluationUnmapped: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
   let signalStrategyEvaluationDirectClient: Client | null = null;
+  let signalWriterLockDirectClient: Client | null = null;
   let signalActionSpendA: NodePostgresSignalActionSpendApplyDatabase | null = null;
   let signalActionSpendASecond: NodePostgresSignalActionSpendApplyDatabase | null = null;
   let signalActionSpendB: NodePostgresSignalActionSpendApplyDatabase | null = null;
@@ -2290,9 +2299,40 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalStrategyEvaluationBoundary
     );
+    const qualifiedSignalWriterLockManifest =
+      buildPostgresSignalWriterLockProtocolManifest(
+        qualifiedSignalStrategyEvaluationManifest,
+        NATIVE_WRITER_LOCK_ROLE_NAMESPACE
+      );
+    const signalWriterLockBoundary = await applyPostgresSignalWriterLockProtocolBoundary(
+      importer,
+      qualifiedSignalWriterLockManifest,
+      new Date("2026-08-25T16:54:59.993Z").getTime()
+    );
+    assert.equal(signalWriterLockBoundary.protectedTenantTableCount, 7);
+    assert.equal(signalWriterLockBoundary.forcedRlsTableCount, 7);
+    assert.equal(signalWriterLockBoundary.mutationTableCount, 0);
+    assert.equal(signalWriterLockBoundary.directTableGrantCount, 0);
+    assert.equal(signalWriterLockBoundary.functionGrantCount, 1);
+    assert.equal(signalWriterLockBoundary.membershipCount, 0);
+    assert.equal(signalWriterLockBoundary.activePrincipalCount, 0);
+    assert.equal(signalWriterLockBoundary.metadata.lockOnly, true);
+    assert.equal(signalWriterLockBoundary.metadata.actionSpendConsumerParity, true);
+    assert.equal(signalWriterLockBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalWriterLockBoundary.metadata.reservationWriterParity, false);
+    assert.equal(signalWriterLockBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalWriterLockBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalWriterLockBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalWriterLockProtocolBoundary(
+        importer,
+        qualifiedSignalWriterLockManifest
+      ),
+      signalWriterLockBoundary
+    );
     const qualifiedSignalActionSpendManifest =
       buildPostgresSignalActionSpendApplyManifest(
-        qualifiedSignalStrategyEvaluationManifest,
+        qualifiedSignalWriterLockManifest,
         NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE
       );
     const signalActionSpendBoundary = await applyPostgresSignalActionSpendApplyBoundary(
@@ -2308,6 +2348,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(signalActionSpendBoundary.membershipCount, 0);
     assert.equal(signalActionSpendBoundary.activePrincipalCount, 0);
     assert.equal(signalActionSpendBoundary.metadata.maximumPlanAgeSeconds, 30);
+    assert.equal(signalActionSpendBoundary.metadata.writerLockProtocolContractVersion, 1);
+    assert.equal(signalActionSpendBoundary.metadata.sharedWriterLockProtocolImplemented, true);
+    assert.equal(signalActionSpendBoundary.metadata.writerLockProtocolConsumed, true);
     assert.equal(signalActionSpendBoundary.metadata.fixedOrderConfigurationLocks, true);
     assert.equal(signalActionSpendBoundary.metadata.purchaseIntentOnly, true);
     assert.equal(signalActionSpendBoundary.metadata.strategyActionAuthority, false);
@@ -2633,8 +2676,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalMissionBindingManifest,
       NATIVE_STRATEGY_EVALUATION_APPLY_ROLE_NAMESPACE
     );
-    const signalActionSpendManifest = buildPostgresSignalActionSpendApplyManifest(
+    const signalWriterLockManifest = buildPostgresSignalWriterLockProtocolManifest(
       signalStrategyEvaluationManifest,
+      NATIVE_WRITER_LOCK_ROLE_NAMESPACE
+    );
+    const signalActionSpendManifest = buildPostgresSignalActionSpendApplyManifest(
+      signalWriterLockManifest,
       NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE
     );
     for (const principalRole of [
@@ -2703,6 +2750,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalStrategyEvaluationManifest.strategyEvaluationRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalWriterLockManifest.writerLockRole.name}"
          TO "${principalRole}"`
       );
       await first.query(
@@ -8972,21 +9023,82 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
          DROP FUNCTION IF EXISTS "${NATIVE_SCHEMA}"."yoink_native_reject_action_spend_outbox"()`
       );
     }
-    const concurrentActionSpend = await Promise.all([
-      signalActionSpendA.applySignalActionSpend(
-        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
-        actionSpendMessageId,
-        actionSpendLease.capabilityToken,
-        actionSpendAttestation,
-        actionSpendNow
+    signalWriterLockDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalWriterLockDirectClient.on("error", () => undefined);
+    await signalWriterLockDirectClient.connect();
+    await signalWriterLockDirectClient.query(
+      `SET ROLE "${signalWriterLockManifest.writerLockRole.name}"`
+    );
+    await assert.rejects(
+      signalWriterLockDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION}"(
+           $1, $2, $3, 'target', $4, $5
+         )`,
+        [
+          NATIVE_TENANT,
+          "user_local",
+          "native_signal_source_a",
+          actionSpendBinding.missionId,
+          POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FULL_MASK
+        ]
       ),
-      signalActionSpendASecond.applySignalActionSpend(
+      /does not match the expected authenticated principal/
+    );
+    await signalWriterLockDirectClient.query("BEGIN");
+    const lockReceipt = await signalWriterLockDirectClient.query<{ resultJson: string }>(
+      `SELECT result_json AS "resultJson"
+       FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION}"(
+         $1, $2, $3, 'target', $4, $5
+       )`,
+      [
+        NATIVE_TENANT,
+        NATIVE_USER,
+        "native_signal_source_a",
+        actionSpendBinding.missionId,
+        POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FULL_MASK
+      ]
+    );
+    assert.deepEqual(JSON.parse(lockReceipt.rows[0]!.resultJson), {
+      contractVersion: 1,
+      lockProtocolVersion: "signal_action_constraints_v1",
+      lockMask: POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FULL_MASK,
+      scopeCount: 5,
+      lockScopeOrder: [
+        "source", "retailer_qualification", "settings", "mission_policy", "spend"
+      ],
+      sourceConnectionId: "native_signal_source_a",
+      retailerId: "target",
+      missionId: actionSpendBinding.missionId,
+      mutationApplied: false,
+      mutationAuthority: false,
+      runtimeAuthority: false
+    });
+    let actionSpendSettledCount = 0;
+    const firstActionSpendAttempt = signalActionSpendA.applySignalActionSpend(
         { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
         actionSpendMessageId,
         actionSpendLease.capabilityToken,
         actionSpendAttestation,
         actionSpendNow
-      )
+      ).finally(() => { actionSpendSettledCount += 1; });
+    const secondActionSpendAttempt = signalActionSpendASecond.applySignalActionSpend(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        actionSpendMessageId,
+        actionSpendLease.capabilityToken,
+        actionSpendAttestation,
+        actionSpendNow
+      ).finally(() => { actionSpendSettledCount += 1; });
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    assert.equal(actionSpendSettledCount, 0);
+    assert.deepEqual(await actionSpendGraphCounts(), emptyActionSpendGraph);
+    await signalWriterLockDirectClient.query("COMMIT");
+    await signalWriterLockDirectClient.end();
+    signalWriterLockDirectClient = null;
+    const concurrentActionSpend = await Promise.all([
+      firstActionSpendAttempt,
+      secondActionSpendAttempt
     ]);
     const actionSpendWinner = concurrentActionSpend.find(
       (result) => result.actionSpendApplyApplied
@@ -12919,6 +13031,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalStrategyEvaluationC?.close(),
       signalStrategyEvaluationUnmapped?.close(),
       signalStrategyEvaluationDirectClient?.end(),
+      signalWriterLockDirectClient?.end(),
       signalActionSpendA?.close(),
       signalActionSpendASecond?.close(),
       signalActionSpendB?.close(),

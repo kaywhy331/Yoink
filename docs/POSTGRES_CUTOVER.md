@@ -1693,11 +1693,13 @@ npm run postgres:signal-action-spend-apply -- plan \
   yoink_delivery_q_084 yoink_catalog_q_084 yoink_resolution_q_084 \
   yoink_reference_q_084 yoink_terminal_q_084 yoink_offer_q_084 \
   yoink_post_q_084 yoink_mission_q_084 yoink_strategy_q_084 \
+  yoink_writer_lock_q_085 \
   yoink_action_spend_q_084
 ```
 
-After the exact v0.83 strategy-evaluation receipt is verified, apply once with
-the qualification connection and explicit acknowledgement:
+With the current v0.85 CLI, first apply and verify the shared writer-lock
+successor below. Then apply the action/spend boundary once with the
+qualification connection and explicit acknowledgement:
 
 ```bash
 YOINK_POSTGRES_SIGNAL_ACTION_SPEND_APPLY_QUALIFICATION_ACK=bounded-signal-action-spend-apply-qualification \
@@ -1709,6 +1711,7 @@ YOINK_POSTGRES_SIGNAL_ACTION_SPEND_APPLY_QUALIFICATION_ACK=bounded-signal-action
   yoink_delivery_q_084 yoink_catalog_q_084 yoink_resolution_q_084 \
   yoink_reference_q_084 yoink_terminal_q_084 yoink_offer_q_084 \
   yoink_post_q_084 yoink_mission_q_084 yoink_strategy_q_084 \
+  yoink_writer_lock_q_085 \
   yoink_action_spend_q_084
 ```
 
@@ -1724,6 +1727,7 @@ npm run postgres:signal-action-spend-apply -- verify \
   yoink_delivery_q_084 yoink_catalog_q_084 yoink_resolution_q_084 \
   yoink_reference_q_084 yoink_terminal_q_084 yoink_offer_q_084 \
   yoink_post_q_084 yoink_mission_q_084 yoink_strategy_q_084 \
+  yoink_writer_lock_q_085 \
   yoink_action_spend_q_084
 ```
 
@@ -1735,6 +1739,77 @@ remain closed. Existing writers must join the fixed-order locking protocol,
 attribution must reach policy parity, and final handler composition and
 production principal provisioning must be qualified before activation. SQLite
 remains authoritative and complete handler parity remains six of seven.
+
+## Shared signal-writer lock qualification seam
+
+Version 0.85 adds the eleventh independent hosted-signal role. It is a
+database-owned, lock-only coordination protocol for the five constraint
+domains that can invalidate an action decision: source, retailer
+qualification, settings, mission policy, and spend. The protocol fixes that
+global order and lets a qualified consumer request a nonempty five-bit scope
+mask; the v0.84 action/spend successor requests all five scopes with `11111`.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+has no mutation tables, and can execute one strict security-definer function
+across seven forced-RLS tenant tables. PostgreSQL authenticates `session_user`,
+requires the exact tenant/user identity, validates source and mission ownership
+and retailer identity, and takes transaction-scoped advisory locks only in the
+declared order. The returned receipt contains identifiers and lock metadata,
+never configuration contents or credentials.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-writer-lock-protocol -- plan \
+  yoink_cutover_qualification_085 yoink_q_085 yoink_session_q_085 \
+  yoink_queue_q_085 yoink_control_q_085 yoink_notify_q_085 \
+  yoink_execute_q_085 yoink_retain_q_085 yoink_candidate_q_085 \
+  yoink_dispatch_q_085 yoink_reconcile_q_085 yoink_witness_q_085 \
+  yoink_delivery_q_085 yoink_catalog_q_085 yoink_resolution_q_085 \
+  yoink_reference_q_085 yoink_terminal_q_085 yoink_offer_q_085 \
+  yoink_post_q_085 yoink_mission_q_085 yoink_strategy_q_085 \
+  yoink_writer_lock_q_085
+```
+
+After the exact v0.83 strategy-evaluation receipt is verified, apply once with
+the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_QUALIFICATION_ACK=bounded-signal-writer-lock-protocol-qualification \
+  npm run postgres:signal-writer-lock-protocol -- apply \
+  yoink_cutover_qualification_085 yoink_q_085 yoink_session_q_085 \
+  yoink_queue_q_085 yoink_control_q_085 yoink_notify_q_085 \
+  yoink_execute_q_085 yoink_retain_q_085 yoink_candidate_q_085 \
+  yoink_dispatch_q_085 yoink_reconcile_q_085 yoink_witness_q_085 \
+  yoink_delivery_q_085 yoink_catalog_q_085 yoink_resolution_q_085 \
+  yoink_reference_q_085 yoink_terminal_q_085 yoink_offer_q_085 \
+  yoink_post_q_085 yoink_mission_q_085 yoink_strategy_q_085 \
+  yoink_writer_lock_q_085
+```
+
+Then independently verify the role, function, seven forced-RLS tables, zero
+mutation tables, immutable receipt, and complete predecessor fingerprint chain:
+
+```bash
+npm run postgres:signal-writer-lock-protocol -- verify \
+  yoink_cutover_qualification_085 yoink_q_085 yoink_session_q_085 \
+  yoink_queue_q_085 yoink_control_q_085 yoink_notify_q_085 \
+  yoink_execute_q_085 yoink_retain_q_085 yoink_candidate_q_085 \
+  yoink_dispatch_q_085 yoink_reconcile_q_085 yoink_witness_q_085 \
+  yoink_delivery_q_085 yoink_catalog_q_085 yoink_resolution_q_085 \
+  yoink_reference_q_085 yoink_terminal_q_085 yoink_offer_q_085 \
+  yoink_post_q_085 yoink_mission_q_085 yoink_strategy_q_085 \
+  yoink_writer_lock_q_085
+```
+
+The receipt permanently records `lockOnly: true`,
+`configurationWriterParity: false`, `reservationWriterParity: false`,
+`writerLockProtocolParity: false`, and `runtimeAuthority: false`. The protocol
+does not mutate configuration, reservations, actions, inbox state, retailer
+sessions, checkout, or orders. Existing configuration and reservation writers
+must be ported through the same scope contract before parity can become true.
+There are no runtime principals and SQLite remains authoritative.
 
 ## Requirements
 
@@ -1839,17 +1914,16 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- atomic action-job/spend-reservation creation and final inbox composition with
-  the qualified strategy/purchase-policy evaluation and hosted-
-  delivery recovery, fixed signal-inbox lifecycle, read-only resolution plan,
-  insert-only catalog-create, event/resolution-commit, known-product source-
-  reference-refresh, terminal-decision, actionable offer/incident,
-  post-incident decision, signal mission-binding, and strategy-evaluation
-  boundaries to complete the final task-handler family. The action seam must
-  lock and rederive every current policy, strategy, source-trust, mission,
-  quantity, cap, cooldown, seller, fulfillment, and claim constraint; plus
-  every API
-  request-repository family;
+- port the actual source-trust, retailer-qualification, settings, mission-
+  policy, and reservation writers through the shared fixed-order protocol;
+  add attribution-policy parity and separately qualified strategy-action
+  semantics; then compose the qualified purchase-intent action/spend,
+  strategy/purchase-policy evaluation, hosted-delivery recovery, fixed signal-
+  inbox lifecycle, resolution plan, catalog-create, event/resolution-commit,
+  source-reference-refresh, terminal-decision, actionable offer/incident,
+  post-incident decision, and mission-binding boundaries with final inbox
+  completion to finish the seventh handler. Every API request-repository
+  family also remains to be ported;
 - production identity-to-login provisioning and activation of the qualified
   tenant/control roles, remaining writer families, and governed semantics for
   mixed source-less offers; all qualified

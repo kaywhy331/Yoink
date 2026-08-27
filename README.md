@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.84.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.85.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,32 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.85.0 adds the eleventh independently receipted piece of the inactive
+PostgreSQL hosted-signal plane: a database-owned, lock-only coordination
+protocol for source trust, retailer qualification, application settings,
+mission policy, and spend constraints. Its separate `NOLOGIN`, `NOINHERIT`,
+`NOBYPASSRLS` role has zero direct/effective table or column grants, no mutation
+tables, and one strict security-definer function across seven forced-RLS tenant
+tables. PostgreSQL binds the caller through `session_user`, validates the exact
+tenant/user, source, mission, and retailer identities, and acquires only the
+requested scopes in the fixed global order.
+
+The reviewed action/spend boundary now consumes the complete five-scope mask
+before re-reading its current constraints. Native PostgreSQL 16 holds that
+protocol from one session while two competing action applications block, then
+proves one atomic writer and one mutation-free replay after release. The
+protocol itself never changes configuration, reservations, actions, inbox
+state, retailer sessions, checkout, or orders.
+
+This is coordination infrastructure, not runtime activation. Existing source,
+qualification, settings, mission-policy, and reservation writers have not yet
+been ported through the helper, so `configurationWriterParity`,
+`reservationWriterParity`, and `writerLockProtocolParity` remain false. There
+are no production principals, SQLite remains authoritative, and attribution,
+strategy action semantics, final inbox composition, and hosted cutover remain
+closed. Use `npm run postgres:signal-writer-lock-protocol -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.84.0 adds the tenth independently receipted piece of the inactive
 PostgreSQL hosted-signal plane: atomic action-job and spend-reservation creation

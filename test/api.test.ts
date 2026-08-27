@@ -27,6 +27,7 @@ import { postgresSignalOfferIncidentApplyCapabilityProjection } from "../package
 import { postgresSignalPostIncidentDecisionApplyCapabilityProjection } from "../packages/database/src/postgres-signal-post-incident-decision-apply.js";
 import { postgresSignalMissionBindingApplyCapabilityProjection } from "../packages/database/src/postgres-signal-mission-binding-apply.js";
 import { postgresSignalStrategyEvaluationApplyCapabilityProjection } from "../packages/database/src/postgres-signal-strategy-evaluation-apply.js";
+import { postgresSignalWriterLockProtocolCapabilityProjection } from "../packages/database/src/postgres-signal-writer-lock-protocol.js";
 import { postgresSignalActionSpendCapabilityProjection } from "../packages/database/src/postgres-signal-action-spend-apply.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
@@ -165,6 +166,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalMissionBindingApplyCapabilityProjection();
     const postgresSignalStrategyEvaluationApply =
       postgresSignalStrategyEvaluationApplyCapabilityProjection();
+    const postgresSignalWriterLockProtocol =
+      postgresSignalWriterLockProtocolCapabilityProjection();
     const postgresSignalActionSpendApply =
       postgresSignalActionSpendCapabilityProjection();
     assert.deepEqual(health, {
@@ -197,6 +200,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalPostIncidentDecisionApply,
       postgresSignalMissionBindingApply,
       postgresSignalStrategyEvaluationApply,
+      postgresSignalWriterLockProtocol,
       postgresSignalActionSpendApply,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
@@ -460,6 +464,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalStrategyEvaluationApply
     );
     assert.deepEqual(
+      snapshot.capabilities.postgresSignalWriterLockProtocol,
+      postgresSignalWriterLockProtocol
+    );
+    assert.deepEqual(
       snapshot.capabilities.postgresSignalActionSpendApply,
       postgresSignalActionSpendApply
     );
@@ -486,6 +494,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalPostIncidentDecisionApply,
       postgresSignalMissionBindingApply,
       postgresSignalStrategyEvaluationApply,
+      postgresSignalWriterLockProtocol,
       postgresSignalActionSpendApply
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
