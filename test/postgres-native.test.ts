@@ -168,6 +168,14 @@ import {
   buildPostgresSignalTargetQualificationApplyManifest,
   verifyPostgresSignalTargetQualificationApplyBoundary
 } from "../packages/database/src/postgres-signal-target-qualification-apply.js";
+import {
+  NodePostgresSignalSourceTrustApplyDatabase,
+  POSTGRES_SIGNAL_SOURCE_TRUST_APPLY_CONFIRMATION,
+  POSTGRES_SIGNAL_SOURCE_TRUST_APPLY_FUNCTION,
+  applyPostgresSignalSourceTrustApplyBoundary,
+  buildPostgresSignalSourceTrustApplyManifest,
+  verifyPostgresSignalSourceTrustApplyBoundary
+} from "../packages/database/src/postgres-signal-source-trust-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -240,6 +248,7 @@ const NATIVE_WRITER_LOCK_ROLE_NAMESPACE = "yoink_native_writer_lock";
 const NATIVE_CONSTRAINT_CONFIG_APPLY_ROLE_NAMESPACE = "yoink_native_constraint_config";
 const NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE = "yoink_native_action_spend";
 const NATIVE_TARGET_QUALIFICATION_APPLY_ROLE_NAMESPACE = "yoink_native_target_qual";
+const NATIVE_SOURCE_TRUST_APPLY_ROLE_NAMESPACE = "yoink_native_source_trust";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1075,7 +1084,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, and Target qualification/settings", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, and source trust", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1220,6 +1229,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalTargetQualificationC: NodePostgresSignalTargetQualificationApplyDatabase | null = null;
   let signalTargetQualificationUnmapped: NodePostgresSignalTargetQualificationApplyDatabase | null = null;
   let signalTargetQualificationDirectClient: Client | null = null;
+  let signalSourceTrustA: NodePostgresSignalSourceTrustApplyDatabase | null = null;
+  let signalSourceTrustASecond: NodePostgresSignalSourceTrustApplyDatabase | null = null;
+  let signalSourceTrustB: NodePostgresSignalSourceTrustApplyDatabase | null = null;
+  let signalSourceTrustC: NodePostgresSignalSourceTrustApplyDatabase | null = null;
+  let signalSourceTrustUnmapped: NodePostgresSignalSourceTrustApplyDatabase | null = null;
+  let signalSourceTrustDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2486,6 +2501,46 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalTargetQualificationBoundary
     );
+    const qualifiedSignalSourceTrustManifest =
+      buildPostgresSignalSourceTrustApplyManifest(
+        qualifiedSignalTargetQualificationManifest,
+        NATIVE_SOURCE_TRUST_APPLY_ROLE_NAMESPACE
+      );
+    const signalSourceTrustBoundary = await applyPostgresSignalSourceTrustApplyBoundary(
+      importer,
+      qualifiedSignalSourceTrustManifest,
+      new Date("2026-08-25T16:54:59.997Z").getTime()
+    );
+    assert.equal(signalSourceTrustBoundary.protectedTenantTableCount, 3);
+    assert.equal(signalSourceTrustBoundary.forcedRlsTableCount, 3);
+    assert.equal(signalSourceTrustBoundary.mutationTableCount, 3);
+    assert.equal(signalSourceTrustBoundary.directTableGrantCount, 0);
+    assert.equal(signalSourceTrustBoundary.functionGrantCount, 1);
+    assert.equal(signalSourceTrustBoundary.membershipCount, 0);
+    assert.equal(signalSourceTrustBoundary.activePrincipalCount, 0);
+    assert.equal(signalSourceTrustBoundary.metadata.operationCount, 1);
+    assert.equal(signalSourceTrustBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(signalSourceTrustBoundary.metadata.sourceScopeConsumed, true);
+    assert.equal(signalSourceTrustBoundary.metadata.optimisticConcurrency, true);
+    assert.equal(signalSourceTrustBoundary.metadata.atomicSourceAuditOutbox, true);
+    assert.equal(signalSourceTrustBoundary.metadata.currentSourceOwnershipRevalidation, true);
+    assert.equal(signalSourceTrustBoundary.metadata.privateSourceOnly, true);
+    assert.equal(signalSourceTrustBoundary.metadata.trustedExactAutoCreateCoupling, true);
+    assert.equal(signalSourceTrustBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalSourceTrustBoundary.metadata.sourceWriterParity, false);
+    assert.equal(signalSourceTrustBoundary.metadata.retailerQualificationWriterParity, false);
+    assert.equal(signalSourceTrustBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalSourceTrustBoundary.metadata.reservationWriterParity, false);
+    assert.equal(signalSourceTrustBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalSourceTrustBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalSourceTrustBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalSourceTrustApplyBoundary(
+        importer,
+        qualifiedSignalSourceTrustManifest
+      ),
+      signalSourceTrustBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -2814,6 +2869,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalActionSpendManifest,
         NATIVE_TARGET_QUALIFICATION_APPLY_ROLE_NAMESPACE
       );
+    const signalSourceTrustManifest = buildPostgresSignalSourceTrustApplyManifest(
+      signalTargetQualificationManifest,
+      NATIVE_SOURCE_TRUST_APPLY_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -2896,6 +2955,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalTargetQualificationManifest.targetQualificationRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalSourceTrustManifest.sourceTrustRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -10151,6 +10214,348 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalTargetQualificationC = null;
     signalTargetQualificationUnmapped = null;
 
+    const signalSourceTrustDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalSourceTrustApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalSourceTrustManifest, { maxConnections });
+    signalSourceTrustA = signalSourceTrustDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalSourceTrustASecond = signalSourceTrustDatabase(NATIVE_PRINCIPAL_A);
+    signalSourceTrustB = signalSourceTrustDatabase(NATIVE_PRINCIPAL_B);
+    signalSourceTrustC = signalSourceTrustDatabase(NATIVE_PRINCIPAL_C);
+    signalSourceTrustUnmapped = signalSourceTrustDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+    const sourceTrustSnapshot = async (): Promise<{
+      source: string;
+      trustLevel: string;
+      autoCreateMissions: number;
+      updatedAt: string;
+      auditCount: number;
+      outboxCount: number;
+    }> => {
+      const row = (await first!.query<{
+        source: string;
+        trustLevel: string;
+        autoCreateMissions: number;
+        updatedAt: string;
+        auditCount: string | number | bigint;
+        outboxCount: string | number | bigint;
+      }>(
+        `SELECT connection.source, connection.trust_level AS "trustLevel",
+                connection.auto_create_missions AS "autoCreateMissions",
+                connection.updated_at AS "updatedAt",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events" audit
+                 WHERE audit.user_id = $1
+                   AND audit.correlation_id = connection.id
+                   AND audit.event_type = 'source_trust_configured') AS "auditCount",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events" outbox
+                 WHERE outbox.tenant_id = $2
+                   AND outbox.aggregate_type = 'source_connection'
+                   AND outbox.aggregate_id = connection.id
+                   AND outbox.event_type = 'source_trust_configured') AS "outboxCount"
+         FROM "${NATIVE_SCHEMA}"."source_connections" connection
+         WHERE connection.id = 'native_signal_source_a'
+           AND connection.tenant_id = $2 AND connection.user_id = $1`,
+        [NATIVE_USER, NATIVE_TENANT]
+      )).rows[0]!;
+      return {
+        ...row,
+        autoCreateMissions: Number(row.autoCreateMissions),
+        auditCount: Number(row.auditCount),
+        outboxCount: Number(row.outboxCount)
+      };
+    };
+    const sourceTrustBefore = await sourceTrustSnapshot();
+    assert.equal(sourceTrustBefore.source, "trackalacker");
+    assert.equal(sourceTrustBefore.trustLevel, "trusted_exact");
+    assert.equal(sourceTrustBefore.autoCreateMissions, 1);
+    const sourceTrustPayload = {
+      sourceConnectionId: "native_signal_source_a",
+      trustLevel: "informational",
+      autoCreateMissions: false,
+      expectedUpdatedAt: sourceTrustBefore.updatedAt,
+      confirmation: POSTGRES_SIGNAL_SOURCE_TRUST_APPLY_CONFIRMATION
+    };
+    await assert.rejects(
+      signalSourceTrustB.applySourceTrust(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "configure_source_trust",
+        "native_source_trust_wrong_tenant_principal",
+        sourceTrustPayload
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [
+        NATIVE_PRINCIPAL_C,
+        NATIVE_TENANT,
+        NATIVE_SAME_TENANT_USER,
+        sourceTrustBefore.updatedAt
+      ]
+    );
+    try {
+      await assert.rejects(
+        signalSourceTrustC.applySourceTrust(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          "configure_source_trust",
+          "native_source_trust_wrong_user_principal",
+          sourceTrustPayload
+        ),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    await assert.rejects(
+      signalSourceTrustUnmapped.applySourceTrust(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "configure_source_trust",
+        "native_source_trust_unmapped_principal",
+        sourceTrustPayload
+      ),
+      /tenant session principal is not active/
+    );
+    await assert.rejects(
+      signalSourceTrustA.applySourceTrust(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "configure_source_trust",
+        "native_source_trust_invalid_auto_create",
+        { ...sourceTrustPayload, autoCreateMissions: true }
+      ),
+      /payload shape is invalid/
+    );
+    signalSourceTrustDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalSourceTrustDirectClient.on("error", () => undefined);
+    await signalSourceTrustDirectClient.connect();
+    await signalSourceTrustDirectClient.query(
+      `SET ROLE "${signalSourceTrustManifest.sourceTrustRole.name}"`
+    );
+    await assert.rejects(
+      signalSourceTrustDirectClient.query(
+        `SELECT trust_level FROM "${NATIVE_SCHEMA}"."source_connections" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceTrustDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_TRUST_APPLY_FUNCTION}"(
+           $1, $2, 'configure_source_trust', $3, $4
+         )`,
+        [
+          NATIVE_TENANT,
+          "user_local",
+          "native_source_trust_direct_wrong_principal",
+          JSON.stringify(sourceTrustPayload)
+        ]
+      ),
+      /does not match the expected authenticated principal/
+    );
+
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_source_trust_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $body$
+       BEGIN
+         IF NEW.event_type = 'source_trust_configured'
+           AND NEW.aggregate_type = 'source_connection'
+           AND NEW.aggregate_id = 'native_signal_source_a' THEN
+           RAISE EXCEPTION 'native forced source-trust outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $body$;
+       CREATE TRIGGER "yoink_native_reject_source_trust_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_source_trust_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        signalSourceTrustA.applySourceTrust(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          "configure_source_trust",
+          "native_source_trust_rollback",
+          sourceTrustPayload
+        ),
+        /native forced source-trust outbox failure/
+      );
+      assert.deepEqual(await sourceTrustSnapshot(), sourceTrustBefore);
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_source_trust_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS "${NATIVE_SCHEMA}"."yoink_native_reject_source_trust_outbox"()`
+      );
+    }
+
+    signalWriterLockDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalWriterLockDirectClient.on("error", () => undefined);
+    await signalWriterLockDirectClient.connect();
+    await signalWriterLockDirectClient.query(
+      `SET ROLE "${signalWriterLockManifest.writerLockRole.name}"`
+    );
+    let sourceTrustTransactionOpen = false;
+    let blockedSourceReplay: ReturnType<
+      NodePostgresSignalSourceTrustApplyDatabase["applySourceTrust"]
+    > | null = null;
+    let blockedSourceLock: Promise<{ rows: Array<{ resultJson: string }> }> | null = null;
+    try {
+      await signalSourceTrustDirectClient.query("BEGIN");
+      sourceTrustTransactionOpen = true;
+      const firstSourceTrust = await signalSourceTrustDirectClient.query<{
+        resultJson: string;
+      }>(
+        `SELECT result_json AS "resultJson"
+         FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_TRUST_APPLY_FUNCTION}"(
+           $1, $2, 'configure_source_trust', $3, $4
+         )`,
+        [
+          NATIVE_TENANT,
+          NATIVE_USER,
+          "native_source_trust_apply",
+          JSON.stringify(sourceTrustPayload)
+        ]
+      );
+      const firstSourceResult = JSON.parse(firstSourceTrust.rows[0]!.resultJson) as {
+        requestFingerprint: string;
+        outcome: string;
+        mutationApplied: boolean;
+        mutationStatementCount: number;
+        mutationRowCount: number;
+        sourceMutated: boolean;
+        auditMutated: boolean;
+        outboxMutated: boolean;
+        configuration: Record<string, unknown>;
+      };
+      assert.match(firstSourceResult.requestFingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(firstSourceResult.outcome, "applied");
+      assert.equal(firstSourceResult.mutationApplied, true);
+      assert.equal(firstSourceResult.mutationStatementCount, 3);
+      assert.equal(firstSourceResult.mutationRowCount, 3);
+      assert.equal(firstSourceResult.sourceMutated, true);
+      assert.equal(firstSourceResult.auditMutated, true);
+      assert.equal(firstSourceResult.outboxMutated, true);
+      assert.deepEqual(firstSourceResult.configuration, {
+        sourceConnectionId: "native_signal_source_a",
+        source: "trackalacker",
+        trustLevel: "informational",
+        autoCreateMissions: false,
+        previousTrustLevel: "trusted_exact",
+        previousAutoCreateMissions: true,
+        updatedAt: firstSourceResult.configuration.updatedAt
+      });
+      assert.match(String(firstSourceResult.configuration.updatedAt),
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      let sourceReplaySettled = false;
+      let sourceLockSettled = false;
+      blockedSourceReplay = signalSourceTrustASecond.applySourceTrust(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "configure_source_trust",
+        "native_source_trust_apply",
+        sourceTrustPayload
+      ).finally(() => { sourceReplaySettled = true; });
+      const pendingSourceLock = signalWriterLockDirectClient.query<{ resultJson: string }>(
+        `SELECT result_json AS "resultJson"
+         FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION}"(
+           $1, $2, 'native_signal_source_a', '', '', '10000'
+         )`,
+        [NATIVE_TENANT, NATIVE_USER]
+      ).finally(() => { sourceLockSettled = true; });
+      blockedSourceLock = pendingSourceLock;
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      assert.equal(sourceReplaySettled, false);
+      assert.equal(sourceLockSettled, false);
+      assert.deepEqual(await sourceTrustSnapshot(), sourceTrustBefore);
+      await signalSourceTrustDirectClient.query("COMMIT");
+      sourceTrustTransactionOpen = false;
+      const replay = await blockedSourceReplay;
+      assert.equal(replay.outcome, "already_applied");
+      assert.equal(replay.mutationApplied, false);
+      assert.equal(replay.idempotentReplay, true);
+      assert.equal(replay.mutationStatementCount, 0);
+      assert.equal(replay.mutationRowCount, 0);
+      assert.equal(replay.sourceMutated, false);
+      const lockRows = (await pendingSourceLock).rows;
+      assert.equal(lockRows.length, 1);
+      assert.deepEqual(JSON.parse(lockRows[0]!.resultJson), {
+        contractVersion: 1,
+        lockProtocolVersion: "signal_action_constraints_v1",
+        lockMask: "10000",
+        scopeCount: 1,
+        lockScopeOrder: [
+          "source",
+          "retailer_qualification",
+          "settings",
+          "mission_policy",
+          "spend"
+        ],
+        sourceConnectionId: "native_signal_source_a",
+        retailerId: "",
+        missionId: "",
+        mutationApplied: false,
+        mutationAuthority: false,
+        runtimeAuthority: false
+      });
+    } finally {
+      if (sourceTrustTransactionOpen) {
+        await signalSourceTrustDirectClient.query("ROLLBACK").catch(() => undefined);
+      }
+      if (blockedSourceReplay) await blockedSourceReplay.catch(() => undefined);
+      if (blockedSourceLock) await blockedSourceLock.catch(() => undefined);
+    }
+    const sourceTrustAfter = await sourceTrustSnapshot();
+    assert.equal(sourceTrustAfter.source, "trackalacker");
+    assert.equal(sourceTrustAfter.trustLevel, "informational");
+    assert.equal(sourceTrustAfter.autoCreateMissions, 0);
+    assert.notEqual(sourceTrustAfter.updatedAt, sourceTrustBefore.updatedAt);
+    assert.equal(sourceTrustAfter.auditCount, sourceTrustBefore.auditCount + 1);
+    assert.equal(sourceTrustAfter.outboxCount, sourceTrustBefore.outboxCount + 1);
+    await assert.rejects(
+      signalSourceTrustA.applySourceTrust(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "configure_source_trust",
+        "native_source_trust_apply",
+        { ...sourceTrustPayload, trustLevel: "trusted_exact" }
+      ),
+      /replay graph changed/
+    );
+    await assert.rejects(
+      signalSourceTrustA.applySourceTrust(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "configure_source_trust",
+        "native_source_trust_stale_revision",
+        sourceTrustPayload
+      ),
+      /revision changed/
+    );
+    await signalSourceTrustDirectClient.end();
+    signalSourceTrustDirectClient = null;
+    await signalWriterLockDirectClient.end();
+    signalWriterLockDirectClient = null;
+    await Promise.all([
+      signalSourceTrustA.close(),
+      signalSourceTrustASecond.close(),
+      signalSourceTrustB.close(),
+      signalSourceTrustC.close(),
+      signalSourceTrustUnmapped.close()
+    ]);
+    signalSourceTrustA = null;
+    signalSourceTrustASecond = null;
+    signalSourceTrustB = null;
+    signalSourceTrustC = null;
+    signalSourceTrustUnmapped = null;
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -13948,7 +14353,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalTargetQualificationB?.close(),
       signalTargetQualificationC?.close(),
       signalTargetQualificationUnmapped?.close(),
-      signalTargetQualificationDirectClient?.end()
+      signalTargetQualificationDirectClient?.end(),
+      signalSourceTrustA?.close(),
+      signalSourceTrustASecond?.close(),
+      signalSourceTrustB?.close(),
+      signalSourceTrustC?.close(),
+      signalSourceTrustUnmapped?.close(),
+      signalSourceTrustDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

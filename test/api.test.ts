@@ -31,6 +31,7 @@ import { postgresSignalWriterLockProtocolCapabilityProjection } from "../package
 import { postgresSignalConstraintConfigCapabilityProjection } from "../packages/database/src/postgres-signal-constraint-config-apply.js";
 import { postgresSignalActionSpendCapabilityProjection } from "../packages/database/src/postgres-signal-action-spend-apply.js";
 import { postgresSignalTargetQualificationCapabilityProjection } from "../packages/database/src/postgres-signal-target-qualification-apply.js";
+import { postgresSignalSourceTrustCapabilityProjection } from "../packages/database/src/postgres-signal-source-trust-apply.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -140,8 +141,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /creates only a missing initial append-only intent policy/);
     assert.match(adminScript, /Server-bound bounded configuration writers/);
     assert.match(adminScript, /Server-bound Target qualification and settings activation/);
+    assert.match(adminScript, /Server-bound source-trust configuration/);
     assert.match(adminScript, /global action pause\/resume, guardrail settings, and periodic spend caps/);
-    assert.match(adminScript, /thirteen independently qualified signal boundaries proven/);
+    assert.match(adminScript, /fourteen independently qualified signal boundaries proven/);
     assert.match(adminScript, /Server-bound reviewed purchase-intent action and spend/);
     assert.match(adminScript, /Strategy-authorized actions, retailer mutation, checkout, order submission, and inbox completion remain closed/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
@@ -180,6 +182,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalActionSpendCapabilityProjection();
     const postgresSignalTargetQualificationApply =
       postgresSignalTargetQualificationCapabilityProjection();
+    const postgresSignalSourceTrustApply =
+      postgresSignalSourceTrustCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -214,6 +218,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalConstraintConfigApply,
       postgresSignalActionSpendApply,
       postgresSignalTargetQualificationApply,
+      postgresSignalSourceTrustApply,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -491,6 +496,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalTargetQualificationApply,
       postgresSignalTargetQualificationApply
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalSourceTrustApply,
+      postgresSignalSourceTrustApply
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -517,7 +526,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalWriterLockProtocol,
       postgresSignalConstraintConfigApply,
       postgresSignalActionSpendApply,
-      postgresSignalTargetQualificationApply
+      postgresSignalTargetQualificationApply,
+      postgresSignalSourceTrustApply
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

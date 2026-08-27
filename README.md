@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.87.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.88.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,35 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.88.0 adds the fourteenth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: bounded source-trust configuration.
+Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role has zero
+direct/effective table or column grants and may call one strict
+security-definer function over exactly three forced-RLS tenant tables:
+`source_connections`, `audit_events`, and `outbox_events`.
+
+PostgreSQL binds `session_user` to one exact tenant/user, consumes only the
+shared source scope (`10000`), revalidates one private user-owned connection,
+and requires its optimistic `updated_at` value plus the explicit
+`CONFIGURE_SOURCE_TRUST_V1` confirmation. The transaction accepts only
+`informational` or `trusted_exact`; an informational source can never receive
+auto-mission authority. PostgreSQL owns the next timestamp and atomically
+updates trust plus deterministic audit/outbox receipts. Exact replay is
+mutation-free and remains valid after later outbox delivery, while changed,
+partial, or stale requests fail closed.
+
+Native PostgreSQL 16 proves late-outbox-failure rollback, wrong,
+same-tenant-peer, and unmapped principal rejection, zero direct SQL, invalid
+trust/auto-mission rejection, immutable replay, stale revision denial, and an
+uncommitted source writer blocking an independent shared-lock consumer. This
+closes `sourceTrustWriterParity`, but general source lifecycle/status remains
+outside the boundary, so `sourceWriterParity`, non-Target
+`retailerQualificationWriterParity`, `configurationWriterParity`,
+`reservationWriterParity`, and `writerLockProtocolParity` remain false. SQLite
+stays authoritative and no production principal is provisioned. Use
+`npm run postgres:signal-source-trust-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.87.0 adds the thirteenth independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: complete Target add-only
@@ -34,9 +63,10 @@ mutation-free; altered or partial receipt graphs fail closed.
 Native PostgreSQL 16 proves late-outbox-failure rollback, wrong and unmapped
 principal rejection, zero direct SQL, exact evidence recomputation, one-job
 promotion, immutable replay, and real contention with the bounded settings
-writer. This closes `qualificationSettingsWriterParity` for Target only.
-Walmart, Amazon, and Best Buy activation still requires a separate writer that
-safely handles their shared retailer/listing capability flags, so aggregate
+writer. This closes `qualificationSettingsWriterParity` for Target only. At
+that boundary, Walmart, Amazon, and Best Buy activation still required a
+separate writer that safely handles their shared retailer/listing capability
+flags, so aggregate
 `retailerQualificationWriterParity`, `configurationWriterParity`,
 `reservationWriterParity`, and `writerLockProtocolParity` remain false.
 SQLite stays authoritative and no production principal is provisioned. Use

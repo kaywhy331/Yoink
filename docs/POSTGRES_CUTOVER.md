@@ -1698,11 +1698,11 @@ npm run postgres:signal-action-spend-apply -- plan \
   yoink_action_spend_q_084
 ```
 
-With the current v0.87 CLI, first apply and verify the shared writer-lock and
+With the current v0.88 CLI, first apply and verify the shared writer-lock and
 bounded constraint-configuration successors below. Then apply the action/spend
 boundary once with the qualification connection and explicit acknowledgement;
-the Target qualification/settings successor is applied afterward as documented
-in its dedicated section:
+the Target qualification/settings and source-trust successors are applied
+afterward as documented in their dedicated sections:
 
 ```bash
 YOINK_POSTGRES_SIGNAL_ACTION_SPEND_APPLY_QUALIFICATION_ACK=bounded-signal-action-spend-apply-qualification \
@@ -1741,9 +1741,10 @@ The receipt permanently records `purchaseIntentOnly: true`,
 `attributionPolicyParity: false`, and `runtimeAuthority: false`. Marketplace,
 pickup, retailer DOM mutation, checkout, order submission, and inbox completion
 remain closed. The bounded pause/guardrail/spend-policy writer and complete
-Target qualification/settings activation now join the fixed-order locking
-protocol, but source trust, non-Target retailer qualification, strategy,
-mission-policy, and reservation writers must do the same. Attribution must
+Target qualification/settings activation and bounded source-trust configuration
+now join the fixed-order locking protocol, but general source lifecycle,
+non-Target retailer qualification, strategy, mission-policy, and reservation
+writers must do the same. Attribution must
 reach policy parity, and final handler composition
 and production principal provisioning must be qualified before activation.
 SQLite remains authoritative and complete handler parity remains six of seven.
@@ -1816,11 +1817,12 @@ The receipt permanently records `lockOnly: true`,
 `writerLockProtocolParity: false`, and `runtimeAuthority: false`. The protocol
 does not mutate configuration, reservations, actions, inbox state, retailer
 sessions, checkout, or orders. The v0.86 pause/guardrail/spend-policy boundary
-is the first configuration consumer and v0.87 adds the complete Target
-qualification/settings consumer. Source trust, non-Target retailer
-qualification, strategy, mission-policy, and reservation writers must still use
-the same scope contract before aggregate parity can become true. There are no
-runtime principals and SQLite remains authoritative.
+is the first configuration consumer, v0.87 adds the complete Target
+qualification/settings consumer, and v0.88 adds the bounded source-trust
+consumer. General source lifecycle/status, non-Target retailer qualification,
+strategy, mission-policy, and reservation writers must still use the same
+scope contract before aggregate parity can become true. There are no runtime
+principals and SQLite remains authoritative.
 
 ## Bounded constraint-configuration writer qualification seam
 
@@ -1984,6 +1986,90 @@ zero direct SQL, exact evidence recomputation, one-job promotion, immutable
 replay, altered-replay rejection, and real blocking between an uncommitted
 Target activation and the bounded settings writer. SQLite remains authoritative.
 
+## Source-trust writer qualification seam
+
+Version 0.88 adds the fourteenth independent hosted-signal role. It ports one
+explicit trust configuration for an existing private user-owned source; it is
+not a source enrollment, credential, delivery-status, or connector-lifecycle
+writer. The operation accepts only `informational` or `trusted_exact`, and
+`informational` is structurally incompatible with auto-mission creation.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+and can execute one strict security-definer function over three forced-RLS
+tenant tables. Its mutation declaration is exactly `source_connections`,
+`audit_events`, and `outbox_events`. PostgreSQL binds `session_user` to one
+active tenant/user and consumes only the shared source mask `10000`.
+
+Before mutation, the database revalidates exact ownership, private scope, the
+current trust/auto-mission invariant, the expected `updated_at`, and the
+explicit `CONFIGURE_SOURCE_TRUST_V1` confirmation. PostgreSQL owns a monotonic
+next timestamp and atomically updates the source plus deterministic audit and
+outbox receipts. Exact replay writes nothing and tolerates ordinary outbox
+delivery lifecycle changes; partial graphs, altered payloads, invalid
+trust/auto-mission combinations, and stale revisions fail closed.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-source-trust-apply -- plan \
+  yoink_cutover_qualification_088 yoink_q_088 yoink_session_q_088 \
+  yoink_queue_q_088 yoink_control_q_088 yoink_notify_q_088 \
+  yoink_execute_q_088 yoink_retain_q_088 yoink_candidate_q_088 \
+  yoink_dispatch_q_088 yoink_reconcile_q_088 yoink_witness_q_088 \
+  yoink_delivery_q_088 yoink_catalog_q_088 yoink_resolution_q_088 \
+  yoink_reference_q_088 yoink_terminal_q_088 yoink_offer_q_088 \
+  yoink_post_q_088 yoink_mission_q_088 yoink_strategy_q_088 \
+  yoink_writer_lock_q_088 yoink_constraint_config_q_088 \
+  yoink_action_spend_q_088 yoink_target_qualification_q_088 \
+  yoink_source_trust_q_088
+```
+
+After every predecessor through Target qualification/settings is verified,
+apply once with the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_SOURCE_TRUST_APPLY_QUALIFICATION_ACK=bounded-signal-source-trust-apply-qualification \
+  npm run postgres:signal-source-trust-apply -- apply \
+  yoink_cutover_qualification_088 yoink_q_088 yoink_session_q_088 \
+  yoink_queue_q_088 yoink_control_q_088 yoink_notify_q_088 \
+  yoink_execute_q_088 yoink_retain_q_088 yoink_candidate_q_088 \
+  yoink_dispatch_q_088 yoink_reconcile_q_088 yoink_witness_q_088 \
+  yoink_delivery_q_088 yoink_catalog_q_088 yoink_resolution_q_088 \
+  yoink_reference_q_088 yoink_terminal_q_088 yoink_offer_q_088 \
+  yoink_post_q_088 yoink_mission_q_088 yoink_strategy_q_088 \
+  yoink_writer_lock_q_088 yoink_constraint_config_q_088 \
+  yoink_action_spend_q_088 yoink_target_qualification_q_088 \
+  yoink_source_trust_q_088
+```
+
+Then independently verify the role, function, three forced-RLS/mutation
+tables, immutable receipt, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-source-trust-apply -- verify \
+  yoink_cutover_qualification_088 yoink_q_088 yoink_session_q_088 \
+  yoink_queue_q_088 yoink_control_q_088 yoink_notify_q_088 \
+  yoink_execute_q_088 yoink_retain_q_088 yoink_candidate_q_088 \
+  yoink_dispatch_q_088 yoink_reconcile_q_088 yoink_witness_q_088 \
+  yoink_delivery_q_088 yoink_catalog_q_088 yoink_resolution_q_088 \
+  yoink_reference_q_088 yoink_terminal_q_088 yoink_offer_q_088 \
+  yoink_post_q_088 yoink_mission_q_088 yoink_strategy_q_088 \
+  yoink_writer_lock_q_088 yoink_constraint_config_q_088 \
+  yoink_action_spend_q_088 yoink_target_qualification_q_088 \
+  yoink_source_trust_q_088
+```
+
+The receipt permanently records `sourceTrustWriterParity: true`, while
+`sourceWriterParity: false`, `retailerQualificationWriterParity: false`,
+`configurationWriterParity: false`, `reservationWriterParity: false`,
+`writerLockProtocolParity: false`, and `runtimeAuthority: false` remain
+explicit. Native PostgreSQL 16 proves forced late rollback, wrong,
+same-tenant-peer, and unmapped principal denial, zero direct SQL, invariant and
+stale-revision rejection, immutable replay, and real contention between an
+uncommitted source writer and an independent shared-lock consumer. General
+source lifecycle/status and SQLite authority remain unchanged.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -2087,10 +2173,11 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- port the remaining source-trust, non-Target retailer-qualification, strategy,
-  mission-policy, and reservation writers through the shared fixed-order
-  protocol (global pause, guardrails, spend-policy caps, and complete Target
-  qualification/settings activation are already qualified);
+- port the remaining source-lifecycle, non-Target retailer-qualification,
+  strategy, mission-policy, and reservation writers through the shared fixed-
+  order protocol (global pause, guardrails, spend-policy caps, complete Target
+  qualification/settings activation, and bounded source trust are already
+  qualified);
   add attribution-policy parity and separately qualified strategy-action
   semantics; then compose the qualified purchase-intent action/spend,
   strategy/purchase-policy evaluation, hosted-delivery recovery, fixed signal-
