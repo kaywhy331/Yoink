@@ -11,6 +11,8 @@ import {
   type PurchaseIntentPolicy,
   type PurchaseIntentPolicyUpdateInput,
   type MissionUpdateInput,
+  type PurchaseProfile,
+  type PurchaseProfileInput,
   type SellerPolicy,
   type StrategyDefinition
 } from "../../contracts/src/index.js";
@@ -290,6 +292,120 @@ export class ControlRepository {
       data: { dedupeWindowSeconds, affiliateMode: input.affiliateMode, taxBps, storeAllowancesCents: allowances }
     }, now);
     return this.settings();
+  }
+
+  listPurchaseProfiles(): PurchaseProfile[] {
+    const row = this.db.get<{ purchase_profiles_json: string }>(
+      "SELECT purchase_profiles_json FROM app_settings WHERE user_id = ?",
+      currentRequestScope().userId
+    );
+    if (!row) throw new Error("Local application settings are unavailable.");
+    try {
+      const parsed = JSON.parse(row.purchase_profiles_json) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((value): value is PurchaseProfile => Boolean(value) && typeof value === "object");
+    } catch {
+      return [];
+    }
+  }
+
+  private validatePurchaseProfile(input: PurchaseProfileInput, existing: PurchaseProfile[], now: number): PurchaseProfile {
+    const id = cleanText(input?.id, 120);
+    const name = cleanText(input?.name, 60);
+    if (!name) throw new Error("A purchase profile needs a short name.");
+    if (name.toLocaleLowerCase("en-US") === "default") {
+      throw new Error("\"Default\" is reserved for the built-in quick-add configuration.");
+    }
+    const duplicate = existing.find((profile) => profile.id !== id
+      && profile.name.toLocaleLowerCase("en-US") === name.toLocaleLowerCase("en-US"));
+    if (duplicate) throw new Error("Another purchase profile already uses that name.");
+    const targetQuantity = Number(input?.targetQuantity);
+    if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > 99) {
+      throw new Error("Profile quantity must be 1 through 99.");
+    }
+    const actionCeiling = input?.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify";
+    const priceMode = input?.priceMode === "fixed_cap" ? "fixed_cap" : "store_price";
+    let maxUnitPriceCents: number | null = null;
+    if (priceMode === "fixed_cap") {
+      maxUnitPriceCents = Number(input?.maxUnitPriceCents);
+      if (!Number.isSafeInteger(maxUnitPriceCents) || maxUnitPriceCents < 1 || maxUnitPriceCents > 100_000_000) {
+        throw new Error("A fixed-cap profile needs a positive maximum item price.");
+      }
+    }
+    const cooldownSeconds = Number(input?.cooldownSeconds ?? 0);
+    if (!Number.isInteger(cooldownSeconds) || cooldownSeconds < 0 || cooldownSeconds > 2_592_000) {
+      throw new Error("The profile wait between attempts must be from zero through 30 days.");
+    }
+    const timestamp = nowIso(now);
+    const current = id ? existing.find((profile) => profile.id === id) : undefined;
+    if (id && !current) throw new Error("That purchase profile no longer exists.");
+    return {
+      id: current?.id ?? newId("purchase_profile"),
+      name,
+      targetQuantity,
+      actionCeiling,
+      priceMode,
+      maxUnitPriceCents,
+      cooldownSeconds,
+      createdAt: current?.createdAt ?? timestamp,
+      updatedAt: timestamp
+    };
+  }
+
+  savePurchaseProfile(input: PurchaseProfileInput, now = Date.now()): PurchaseProfile[] {
+    return this.db.transaction(() => {
+      const existing = this.listPurchaseProfiles();
+      const profile = this.validatePurchaseProfile(input, existing, now);
+      const created = !existing.some((candidate) => candidate.id === profile.id);
+      if (created && existing.length >= 12) {
+        throw new Error("Up to 12 purchase profiles are supported; remove one first.");
+      }
+      const next = created
+        ? [...existing, profile]
+        : existing.map((candidate) => (candidate.id === profile.id ? profile : candidate));
+      this.db.run(
+        "UPDATE app_settings SET purchase_profiles_json = ?, updated_at = ? WHERE user_id = ?",
+        JSON.stringify(next),
+        nowIso(now),
+        currentRequestScope().userId
+      );
+      this.auditEvents.record({
+        correlationId: currentRequestScope().userId,
+        aggregateType: "user_settings",
+        eventType: created ? "purchase_profile_created" : "purchase_profile_updated",
+        reasonCode: "saved",
+        message: created
+          ? "A reusable quick-add purchase profile was created."
+          : "A reusable quick-add purchase profile was updated.",
+        data: { profile }
+      }, now);
+      return next;
+    });
+  }
+
+  deletePurchaseProfile(id: string, now = Date.now()): PurchaseProfile[] {
+    return this.db.transaction(() => {
+      const profileId = cleanText(id, 120);
+      const existing = this.listPurchaseProfiles();
+      const target = existing.find((profile) => profile.id === profileId);
+      if (!target) throw new Error("That purchase profile no longer exists.");
+      const next = existing.filter((profile) => profile.id !== profileId);
+      this.db.run(
+        "UPDATE app_settings SET purchase_profiles_json = ?, updated_at = ? WHERE user_id = ?",
+        JSON.stringify(next),
+        nowIso(now),
+        currentRequestScope().userId
+      );
+      this.auditEvents.record({
+        correlationId: currentRequestScope().userId,
+        aggregateType: "user_settings",
+        eventType: "purchase_profile_deleted",
+        reasonCode: "deleted",
+        message: "A reusable quick-add purchase profile was removed.",
+        data: { profileId, name: target.name }
+      }, now);
+      return next;
+    });
   }
 
   listStrategies(): StrategyDefinition[] {

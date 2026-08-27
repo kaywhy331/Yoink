@@ -36,6 +36,7 @@ import {
   type MissionUpdateInput,
   type PurchaseIntentCreateInput,
   type PurchaseIntentPreflightInput,
+  type PurchaseProfileInput,
   PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS,
   type OperatorAlertAcknowledgeInput,
   type OperatorAlertConnectorInput,
@@ -1807,6 +1808,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, { items, total: catalog.libraryCount(query), offset, limit: items.length });
         return;
       }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/library/products") {
+        const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
+        const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
+        const query = String(requestUrl.searchParams.get("q") ?? "");
+        const items = catalog.listLibraryProducts(limit, offset, query);
+        json(response, 200, { items, total: catalog.libraryProductCount(query), offset, limit: items.length });
+        return;
+      }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/missions") {
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
@@ -2464,6 +2473,20 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/settings") {
         const body = await readJson(request);
         json(response, 200, { settings: control.updateSettings(body as unknown as AppSettingsUpdateInput) });
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/purchase-profiles") {
+        json(response, 200, { items: control.listPurchaseProfiles() });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/purchase-profiles") {
+        const body = await readJson(request);
+        json(response, 200, { items: control.savePurchaseProfile(body as unknown as PurchaseProfileInput) });
+        return;
+      }
+      const purchaseProfileMatch = /^\/api\/v1\/purchase-profiles\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
+      if (request.method === "DELETE" && purchaseProfileMatch) {
+        json(response, 200, { items: control.deletePurchaseProfile(purchaseProfileMatch[1] ?? "") });
         return;
       }
       if (request.method === "PUT" && [

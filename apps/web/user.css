@@ -228,6 +228,46 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .toast.show { transform: none; opacity: 1; }
 .toast.error { background: #7b2f2e; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.browse-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin: 0 0 16px; }
+.browse-toolbar label { display: grid; gap: 4px; font-size: 11px; font-weight: 700; color: var(--muted); }
+.browse-toolbar select { border: 1px solid var(--line); background: white; border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; color: inherit; }
+.browse-count { margin-left: auto; padding-bottom: 9px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.card-media { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 4 / 3; margin: 0 0 10px; padding: 0; border: 0; border-radius: 12px; background: var(--wash); overflow: hidden; cursor: pointer; }
+.card-media .media-letter { font-size: 42px; font-weight: 800; color: var(--muted); opacity: .45; }
+.card-media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: white; }
+.title-link { padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.title-link:hover, .title-link:focus-visible { color: var(--green-dark); text-decoration: underline; }
+.other-stores { display: inline-block; margin-top: 10px; padding: 0; border: 0; background: none; font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; }
+.other-stores:hover, .other-stores:focus-visible { color: var(--green-dark); text-decoration: underline; }
+.split-button { display: inline-flex; }
+.split-button .button.primary { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.split-button .button.caret { margin-left: 1px; padding: 0 10px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.quick-menu { position: fixed; z-index: 60; display: grid; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: var(--shadow); }
+.quick-menu button { display: grid; gap: 2px; padding: 9px 11px; border: 0; border-radius: 8px; background: none; font: inherit; text-align: left; cursor: pointer; }
+.quick-menu button:hover, .quick-menu button:focus-visible { background: var(--wash); }
+.quick-menu strong { font-size: 13px; }
+.quick-menu small { font-size: 11px; color: var(--muted); }
+.product-detail-dialog { width: min(680px, calc(100vw - 32px)); }
+.detail-summary { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
+.detail-image { width: 96px; height: 96px; flex: none; object-fit: contain; border-radius: 10px; background: white; border: 1px solid var(--line); }
+.detail-rows { display: grid; gap: 8px; }
+.detail-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 11px; border-radius: 12px; background: var(--wash); }
+.detail-row.muted { opacity: .75; }
+.detail-store, .detail-price { display: grid; min-width: 110px; }
+.detail-store small, .detail-price small { font-size: 11px; color: var(--muted); }
+.detail-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.profile-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
+.profile-fields label { display: grid; gap: 4px; font-size: 11px; font-weight: 700; color: var(--muted); }
+.profile-fields input, .profile-fields select { border: 1px solid var(--line); background: white; border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; }
+.profile-fields input:disabled { opacity: .5; }
+.profile-row small { color: var(--muted); font-weight: 400; }
+.store-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.store-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); background: var(--wash); border-radius: 999px; padding: 5px 10px; font: inherit; font-size: 11px; font-weight: 700; color: inherit; cursor: pointer; }
+.store-chip:hover, .store-chip:focus-visible { border-color: var(--green); }
+.store-chip .chip-store { color: var(--green); }
+.store-chip.muted .chip-store { color: var(--muted); }
+.store-chip .chip-status.good { color: var(--green-dark); }
+.store-chip .chip-status.warn { color: var(--amber); }
 @media (max-width: 1000px) { .setup-guide { grid-template-columns: 1fr; } .setup-safety { grid-column: 1; } .setup-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 850px) { .hero { grid-template-columns: 1fr; } .metrics, .card-grid { grid-template-columns: repeat(2, 1fr); } .preference-grid { grid-template-columns: 1fr; } .setup-layout { grid-template-columns: 1fr; } .plan-review { position: static; } }
-@media (max-width: 560px) { .app-header { padding: 0 15px; } .brand small, .mode-pill { display: none; } main { width: min(100% - 26px, 1180px); padding-top: 34px; } .metrics, .card-grid, .setup-steps, .privacy-list { grid-template-columns: 1fr; } .setup-step p { min-height: 0; } .section-heading, .plan-card, .action-card, .selected-product, .recovery-review-item { display: block; } .section-actions { display: grid; margin-top: 14px; } .search { display: block; } .search input { width: 100%; } .plan-card .button { margin-top: 12px; } .recovery-review-actions { justify-content: flex-start; margin-top: 12px; } .target-fields, .form-row, .form-row.three, .budget-fields, .store-commitment, .action-choices { grid-template-columns: 1fr; } .selected-product .exact-price { display: block; margin-top: 12px; } dialog form { padding: 18px; } }
+@media (max-width: 560px) { .app-header { padding: 0 15px; } .brand small, .mode-pill { display: none; } main { width: min(100% - 26px, 1180px); padding-top: 34px; } .metrics, .card-grid, .setup-steps, .privacy-list { grid-template-columns: 1fr; } .setup-step p { min-height: 0; } .section-heading, .plan-card, .action-card, .selected-product, .recovery-review-item { display: block; } .section-actions { display: grid; margin-top: 14px; } .search { display: block; } .search input { width: 100%; } .plan-card .button { margin-top: 12px; } .recovery-review-actions { justify-content: flex-start; margin-top: 12px; } .target-fields, .form-row, .form-row.three, .budget-fields, .store-commitment, .action-choices { grid-template-columns: 1fr; } .selected-product .exact-price { display: block; margin-top: 12px; } dialog form { padding: 18px; } .browse-toolbar { display: grid; } .browse-toolbar select { width: 100%; } .browse-count { margin-left: 0; padding-bottom: 0; } }

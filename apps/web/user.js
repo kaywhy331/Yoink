@@ -1,6 +1,11 @@
 const state = {
   overview: null,
   products: [],
+  productGroups: [],
+  productTotal: 0,
+  browse: { store: "", availability: "", plan: "", price: "", sort: "newest" },
+  profiles: [],
+  quickAddBusy: false,
   plans: [],
   actions: [],
   proposals: [],
@@ -268,30 +273,334 @@ function renderRecoveryEvidence() {
   }).join("");
 }
 
+function listingEffectivePrice(listing) {
+  const current = Number(listing.currentPriceCents);
+  if (listing.currentPriceCents !== null && listing.currentPriceCents !== undefined && Number.isFinite(current) && current > 0) {
+    return { cents: current, kind: "seen" };
+  }
+  const msrp = Number(listing.msrpCents);
+  if (listing.msrpCents !== null && listing.msrpCents !== undefined && Number.isFinite(msrp) && msrp > 0) {
+    return { cents: msrp, kind: "catalog" };
+  }
+  return null;
+}
+
+function listingAvailable(listing) {
+  return ["in_stock", "preorder"].includes(String(listing.status));
+}
+
+function bestListing(group) {
+  return [...(group.listings || [])].sort((first, second) => {
+    const availability = Number(!listingAvailable(first)) - Number(!listingAvailable(second));
+    if (availability !== 0) return availability;
+    const lane = Number(!(first.executionSupported && guardedLaneReady(first.retailerId)))
+      - Number(!(second.executionSupported && guardedLaneReady(second.retailerId)));
+    if (lane !== 0) return lane;
+    const firstPrice = listingEffectivePrice(first)?.cents;
+    const secondPrice = listingEffectivePrice(second)?.cents;
+    if (firstPrice === undefined && secondPrice === undefined) return 0;
+    if (firstPrice === undefined) return 1;
+    if (secondPrice === undefined) return -1;
+    return firstPrice - secondPrice;
+  })[0];
+}
+
+function browseFilteredGroups(missionByVariant) {
+  const browse = state.browse;
+  const timeOf = (value) => {
+    const time = new Date(String(value ?? "")).getTime();
+    return Number.isFinite(time) ? time : 0;
+  };
+  const priceOf = (group) => {
+    const cents = Number(group.bestPriceCents);
+    return group.bestPriceCents !== null && group.bestPriceCents !== undefined && Number.isFinite(cents) ? cents : null;
+  };
+  const filtered = state.productGroups.filter((group) => {
+    const listings = group.listings || [];
+    if (browse.store && !listings.some((listing) => String(listing.retailerId) === browse.store)) return false;
+    const statuses = listings.map((listing) => String(listing.status));
+    if (browse.availability === "available" && !statuses.includes("in_stock")) return false;
+    if (browse.availability === "preorder" && !statuses.includes("preorder")) return false;
+    if (browse.availability === "unavailable" && listings.some(listingAvailable)) return false;
+    if (browse.plan === "planned" && !missionByVariant.has(group.variantId)) return false;
+    if (browse.plan === "unplanned" && missionByVariant.has(group.variantId)) return false;
+    if (browse.price) {
+      const cents = priceOf(group);
+      if (cents === null) return false;
+      const [min, max] = browse.price.split("-");
+      if (min !== "" && cents < Number(min)) return false;
+      if (max !== "" && cents >= Number(max)) return false;
+    }
+    return true;
+  });
+  const byPriceAsc = (first, second) => {
+    const firstPrice = priceOf(first);
+    const secondPrice = priceOf(second);
+    if (firstPrice === null && secondPrice === null) return 0;
+    if (firstPrice === null) return 1;
+    if (secondPrice === null) return -1;
+    return firstPrice - secondPrice;
+  };
+  const sorts = {
+    newest: (first, second) => timeOf(second.createdAt) - timeOf(first.createdAt),
+    oldest: (first, second) => timeOf(first.createdAt) - timeOf(second.createdAt),
+    price_asc: byPriceAsc,
+    price_desc: (first, second) => byPriceAsc(second, first),
+    active: (first, second) => timeOf(second.lastActivityAt) - timeOf(first.lastActivityAt),
+    title: (first, second) => String(first.title).localeCompare(String(second.title))
+  };
+  return filtered.sort(sorts[browse.sort] || sorts.newest);
+}
+
+function renderStoreFilterOptions() {
+  const select = $("#browseStore");
+  if (!select) return;
+  const stores = new Map();
+  for (const group of state.productGroups) {
+    for (const listing of group.listings || []) stores.set(String(listing.retailerId), String(listing.retailerName));
+  }
+  select.innerHTML = ['<option value="">All stores</option>', ...[...stores.entries()]
+    .sort((first, second) => first[1].localeCompare(second[1]))
+    .map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`)].join("");
+  select.value = stores.has(state.browse.store) ? state.browse.store : "";
+}
+
 function renderProducts() {
   const missionByVariant = new Map(state.plans.map((plan) => [plan.variantId, plan]));
-  $("#productList").innerHTML = state.products.length ? state.products.map((product) => {
-    const plan = missionByVariant.get(product.variantId);
-    const available = ["in_stock", "preorder"].includes(product.status);
-    const exactVariant = variantSummary(product.variantAttributes);
-    const hasCurrentPrice = product.currentPriceCents !== null
-      && product.currentPriceCents !== undefined
-      && Number.isFinite(Number(product.currentPriceCents));
-    const currentPrice = hasCurrentPrice
-      ? product.currentPriceCents
-      : product.msrpCents;
-    const priceKind = hasCurrentPrice ? "Last seen" : "Catalog price";
-    return `<article class="product-card">
-      <div class="card-top"><span class="store">${escapeHtml(product.retailerName)}</span><span class="tag ${available ? "good" : "warn"}">${escapeHtml(String(product.status).replaceAll("_", " "))}</span></div>
-      <h3>${escapeHtml(product.title)}</h3>
-      <p>Exact store item ${escapeHtml(product.retailerSku)}${exactVariant ? ` · ${escapeHtml(exactVariant)}` : ""}</p>
-      <div class="tags"><span class="tag">${escapeHtml(priceKind)} ${escapeHtml(money(currentPrice, product.currency))}${hasCurrentPrice && product.priceObservedAt ? ` · ${escapeHtml(relative(product.priceObservedAt))}` : ""}</span><span class="tag ${guardedLaneReady(product.retailerId) ? "good" : ""}">${product.executionSupported ? guardedLaneReady(product.retailerId) ? "Qualified guarded add" : "Packaged mapping · lane pending" : "Monitor only"}</span></div>
-      <div class="card-actions">
-        ${plan ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit purchase plan</button>` : `<button class="button primary" data-track-listing="${escapeHtml(product.listingId)}" type="button">Set up purchase</button>`}
-        <a class="canonical" href="${escapeHtml(product.canonicalUrl)}" target="_blank" rel="noreferrer">View at store ↗</a>
+  renderStoreFilterOptions();
+  const groups = browseFilteredGroups(missionByVariant);
+  const filtering = Boolean(state.browse.store || state.browse.availability || state.browse.plan || state.browse.price);
+  $("#browseCount").textContent = state.productGroups.length
+    ? `${groups.length} of ${state.productTotal} product${state.productTotal === 1 ? "" : "s"}`
+    : "";
+  if (!state.productGroups.length) {
+    $("#productList").innerHTML = '<div class="empty"><p>No approved exact products match yet. Paste a supported store product page and Yoink will hold the exact item for independent review.</p><button class="button secondary" data-open-product-link type="button">Add product link</button></div>';
+    return;
+  }
+  if (!groups.length) {
+    $("#productList").innerHTML = '<div class="empty"><p>No products match the current filters.</p><button class="button secondary" data-clear-browse type="button">Clear filters</button></div>';
+    return;
+  }
+  $("#productList").innerHTML = groups.map((group) => productCardMarkup(group, missionByVariant)).join("");
+  for (const image of $$("#productList .card-media img")) {
+    image.addEventListener("error", () => { image.remove(); }, { once: true });
+  }
+}
+
+function mediaMarkup(group) {
+  const letter = String(group.title || "?").trim().charAt(0).toUpperCase() || "?";
+  const image = group.imageUrl
+    ? `<img src="${escapeHtml(group.imageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+    : "";
+  return `<button class="card-media" data-product-detail="${escapeHtml(group.variantId)}" type="button" title="${escapeHtml(`View ${group.title} across every store`)}"><span class="media-letter" aria-hidden="true">${escapeHtml(letter)}</span>${image}</button>`;
+}
+
+function quickAddMarkup(listing, group) {
+  if (!listing) return "";
+  const caret = state.profiles.length
+    ? `<button class="button primary caret" data-quick-menu="${escapeHtml(listing.listingId)}" type="button" aria-label="Choose a quick-add profile" title="Choose a quick-add profile">▾</button>`
+    : "";
+  return `<span class="split-button">
+    <button class="button primary" data-quick-add="${escapeHtml(listing.listingId)}" type="button" title="${escapeHtml(`Quick add ${group.title} with your default configuration`)}">Quick add</button>
+    ${caret}
+  </span>`;
+}
+
+function productCardMarkup(group, missionByVariant) {
+  const plan = missionByVariant.get(group.variantId);
+  const listings = group.listings || [];
+  const exactVariant = variantSummary(group.variantAttributes);
+  const available = Number(group.availableListingCount) > 0;
+  const laneReady = listings.some((listing) => listing.executionSupported && guardedLaneReady(listing.retailerId));
+  const packaged = listings.some((listing) => listing.executionSupported);
+  const focusListing = state.browse.store
+    ? listings.find((listing) => String(listing.retailerId) === state.browse.store) || null
+    : null;
+  const primary = focusListing || bestListing(group);
+  const primaryPrice = listingEffectivePrice(primary || {});
+  let storeArea = "";
+  let priceTag = "";
+  if (focusListing) {
+    priceTag = `<span class="tag">${primaryPrice
+      ? escapeHtml(`${money(primaryPrice.cents, focusListing.currency)} at ${focusListing.retailerName}${primaryPrice.kind === "catalog" ? " · catalog price" : ""}`)
+      : escapeHtml(`No ${focusListing.retailerName} price recorded`)}</span>`;
+    const others = listings.filter((listing) => listing !== focusListing);
+    if (others.length) {
+      const prices = others.map((listing) => listingEffectivePrice(listing)?.cents).filter((cents) => cents !== undefined && cents !== null);
+      const range = prices.length
+        ? prices.length > 1 && Math.min(...prices) !== Math.max(...prices)
+          ? ` · ${money(Math.min(...prices), group.currency)}–${money(Math.max(...prices), group.currency)}`
+          : ` · ${money(Math.min(...prices), group.currency)}`
+        : "";
+      storeArea = `<button class="other-stores" data-product-detail="${escapeHtml(group.variantId)}" type="button">${escapeHtml(`${others.length} other store${others.length === 1 ? "" : "s"}${range}`)}</button>`;
+    }
+  } else {
+    priceTag = `<span class="tag">${primaryPrice ? escapeHtml(`From ${money(primaryPrice.cents, group.currency)}`) : "No price recorded"}</span>`;
+    storeArea = `<div class="store-chips">${listings.map((listing) => {
+      const price = listingEffectivePrice(listing);
+      const chipAvailable = listingAvailable(listing);
+      const chipTitle = plan
+        ? `Review the ${group.title} purchase plan`
+        : `Quick add from ${listing.retailerName}`;
+      return `<button class="store-chip${chipAvailable ? "" : " muted"}" data-quick-add="${escapeHtml(listing.listingId)}" type="button" title="${escapeHtml(chipTitle)}">
+        <span class="chip-store">${escapeHtml(listing.retailerName)}</span>
+        <span class="chip-price">${price ? escapeHtml(money(price.cents, listing.currency)) : "No price"}</span>
+        <span class="chip-status ${chipAvailable ? "good" : "warn"}">${escapeHtml(words(String(listing.status)))}</span>
+      </button>`;
+    }).join("")}</div>`;
+  }
+  const availabilityTag = focusListing
+    ? `<span class="tag ${listingAvailable(focusListing) ? "good" : "warn"}">${escapeHtml(`${words(String(focusListing.status))} at ${focusListing.retailerName}`)}</span>`
+    : `<span class="tag ${available ? "good" : "warn"}">${available ? escapeHtml(`${group.availableListingCount} of ${group.listingCount} listings available`) : "Out of stock everywhere"}</span>`;
+  return `<article class="product-card product-group">
+    ${mediaMarkup(group)}
+    <div class="card-top"><span class="store">${escapeHtml(focusListing ? focusListing.retailerName : `${group.storeCount} store${Number(group.storeCount) === 1 ? "" : "s"}`)}</span>${availabilityTag}</div>
+    <h3><button class="title-link" data-product-detail="${escapeHtml(group.variantId)}" type="button">${escapeHtml(group.title)}</button></h3>
+    <p>${exactVariant ? escapeHtml(exactVariant) : "One exact product across every store that offers it."}</p>
+    <div class="tags">
+      ${priceTag}
+      <span class="tag ${laneReady ? "good" : ""}">${packaged ? laneReady ? "Qualified guarded add" : "Packaged mapping · lane pending" : "Monitor only"}</span>
+      ${plan ? '<span class="tag good">Plan active</span>' : ""}
+    </div>
+    ${storeArea}
+    <div class="card-actions">
+      ${plan ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit purchase plan</button>` : quickAddMarkup(primary, group)}
+      ${primary ? `<a class="canonical" href="${escapeHtml(primary.canonicalUrl)}" target="_blank" rel="noreferrer">View at ${escapeHtml(primary.retailerName)} ↗</a>` : ""}
+    </div>
+  </article>`;
+}
+
+function profileSummary(profile) {
+  const price = profile.priceMode === "fixed_cap" ? `cap ${money(profile.maxUnitPriceCents)}` : "store price cap";
+  const action = profile.actionCeiling === "add_to_cart" ? "may add to cart" : "notify only";
+  return `qty ${Number(profile.targetQuantity)} · ${price} · ${action}`;
+}
+
+function closeQuickMenu() {
+  const menu = $("#quickAddMenu");
+  menu.hidden = true;
+  menu.innerHTML = "";
+}
+
+function openQuickMenu(anchor, listingId) {
+  const menu = $("#quickAddMenu");
+  menu.innerHTML = [
+    `<button data-quick-add="${escapeHtml(listingId)}" type="button"><strong>Default</strong><small>qty 1 · store price cap · notify only</small></button>`,
+    ...state.profiles.map((profile) => `<button data-quick-add="${escapeHtml(listingId)}" data-profile-id="${escapeHtml(profile.id)}" type="button"><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(profileSummary(profile))}</small></button>`),
+    `<button data-track-listing="${escapeHtml(listingId)}" type="button"><strong>Custom setup…</strong><small>Review every limit before creating the plan</small></button>`
+  ].join("");
+  const rect = anchor.getBoundingClientRect();
+  menu.hidden = false;
+  const width = Math.min(300, window.innerWidth - 24);
+  menu.style.width = `${width}px`;
+  menu.style.left = `${Math.max(12, Math.min(rect.right - width, window.innerWidth - width - 12))}px`;
+  menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - menu.offsetHeight - 12)}px`;
+}
+
+async function quickAdd(listingId, profileId = "") {
+  if (state.quickAddBusy) return;
+  const product = state.products.find((item) => item.listingId === listingId);
+  if (!product) throw new Error("That exact product is no longer in the current catalog view. Refresh and try again.");
+  const existing = state.plans.find((plan) => plan.variantId === product.variantId);
+  if (existing) return openPlan(existing.id);
+  const profile = profileId ? state.profiles.find((candidate) => candidate.id === profileId) : null;
+  if (profileId && !profile) throw new Error("That quick-add profile is no longer available.");
+  const price = listingEffectivePrice(product);
+  const maxUnitPriceCents = profile?.priceMode === "fixed_cap" ? Number(profile.maxUnitPriceCents) : price?.cents;
+  if (!maxUnitPriceCents) {
+    toast(`No ${product.retailerName} price is recorded yet, so choose your own caps.`);
+    return openSetup(listingId);
+  }
+  const targetQuantity = Number(profile?.targetQuantity ?? 1);
+  const actionCeiling = profile?.actionCeiling === "add_to_cart" && product.executionSupported === true
+    ? "add_to_cart"
+    : "notify";
+  state.quickAddBusy = true;
+  try {
+    let draft = {
+      contractVersion: 2,
+      listingId,
+      targetQuantity,
+      maxUnitPriceCents,
+      maxAllInCents: maxUnitPriceCents * targetQuantity,
+      actionCeiling,
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      expiresAt: "",
+      cooldownSeconds: Number(profile?.cooldownSeconds ?? 0),
+      confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN"
+    };
+    let { preflight } = await api("/api/v1/user/purchase-intents/preflight", { method: "POST", body: JSON.stringify(draft) });
+    if (Number(preflight?.cost?.minimumAllInCents) > draft.maxAllInCents) {
+      draft = { ...draft, maxAllInCents: Number(preflight.cost.minimumAllInCents) };
+      ({ preflight } = await api("/api/v1/user/purchase-intents/preflight", { method: "POST", body: JSON.stringify(draft) }));
+    }
+    await api("/api/v1/user/purchase-intents", {
+      method: "POST",
+      body: JSON.stringify({
+        ...draft,
+        confirmation: "CREATE_EXACT_PURCHASE_PLAN",
+        preflightFingerprint: preflight.preflightFingerprint,
+        preflightedAt: preflight.preflightedAt
+      })
+    });
+    await refresh();
+    toast(actionCeiling === "add_to_cart"
+      ? `${product.title} added with ${profile ? `the “${profile.name}” profile` : "your default"} — cart automation obeys your saved limits; checkout stays manual.`
+      : `${product.title} added with ${profile ? `the “${profile.name}” profile` : "your default"} — you'll be notified on a fresh exact offer (cap ${money(draft.maxUnitPriceCents, product.currency)}).`);
+  } catch (error) {
+    if (error.code === "purchase_intent_exists") {
+      await refresh();
+      toast("That exact product already has a purchase plan. Review its current limits before changing it.");
+    } else {
+      throw error;
+    }
+  } finally {
+    state.quickAddBusy = false;
+  }
+}
+
+function openProductDetail(variantId) {
+  const group = state.productGroups.find((candidate) => candidate.variantId === variantId);
+  if (!group) throw new Error("That product is no longer in the current catalog view. Refresh and try again.");
+  const plan = state.plans.find((candidate) => candidate.variantId === variantId);
+  const exactVariant = variantSummary(group.variantAttributes);
+  $("#productDialogTitle").textContent = group.title;
+  const rows = (group.listings || []).map((listing) => {
+    const price = listingEffectivePrice(listing);
+    const chipAvailable = listingAvailable(listing);
+    return `<div class="detail-row${chipAvailable ? "" : " muted"}">
+      <div class="detail-store"><strong>${escapeHtml(listing.retailerName)}</strong><small>Exact item ${escapeHtml(listing.retailerSku)}</small></div>
+      <div class="detail-price"><strong>${price ? escapeHtml(money(price.cents, listing.currency)) : "No price"}</strong><small>${price ? price.kind === "seen" ? "Last seen" : "Catalog price" : ""}</small></div>
+      <span class="tag ${chipAvailable ? "good" : "warn"}">${escapeHtml(words(String(listing.status)))}</span>
+      <div class="detail-actions">
+        ${plan
+          ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit plan</button>`
+          : `<button class="button primary" data-quick-add="${escapeHtml(listing.listingId)}" type="button">Quick add</button>
+             <button class="button quiet" data-track-listing="${escapeHtml(listing.listingId)}" type="button">Custom setup</button>`}
+        <a class="canonical" href="${escapeHtml(listing.canonicalUrl)}" target="_blank" rel="noreferrer">View ↗</a>
       </div>
-    </article>`;
-  }).join("") : '<div class="empty"><p>No approved exact products match yet. Paste a supported store product page and Yoink will hold the exact item for independent review.</p><button class="button secondary" data-open-product-link type="button">Add product link</button></div>';
+    </div>`;
+  }).join("");
+  $("#productDialogBody").innerHTML = `
+    <div class="detail-summary">
+      ${group.imageUrl ? `<img class="detail-image" src="${escapeHtml(group.imageUrl)}" alt="" referrerpolicy="no-referrer">` : ""}
+      <p>${exactVariant ? escapeHtml(exactVariant) : "One exact product; every store below feeds the same purchase plan."}${plan ? ' <span class="tag good">Plan active</span>' : ""}</p>
+    </div>
+    <div class="detail-rows">${rows}</div>`;
+  for (const image of $$("#productDialogBody img")) {
+    image.addEventListener("error", () => { image.remove(); }, { once: true });
+  }
+  $("#productDialog").showModal();
+}
+
+function renderProfiles() {
+  const list = $("#profileList");
+  if (!list) return;
+  list.innerHTML = state.profiles.length
+    ? state.profiles.map((profile) => `<div class="mini-row profile-row"><span><strong>${escapeHtml(profile.name)}</strong><small> · ${escapeHtml(profileSummary(profile))}</small></span><span class="inline-actions"><button class="button quiet" data-profile-edit="${escapeHtml(profile.id)}" type="button">Edit</button><button class="button quiet" data-profile-delete="${escapeHtml(profile.id)}" type="button">Remove</button></span></div>`).join("")
+    : '<div class="mini-row"><span>No saved profiles yet. Quick add uses the built-in default until you save one.</span></div>';
 }
 
 function renderWalmartDraws() {
@@ -361,17 +670,25 @@ function renderProposals() {
 
 async function refresh() {
   const query = state.query ? `&q=${encodeURIComponent(state.query)}` : "";
-  const [overview, products, plans, actions, proposals, privacy, recoveryEvidence] = await Promise.all([
+  const [overview, products, plans, actions, proposals, privacy, recoveryEvidence, profiles] = await Promise.all([
     api("/api/v1/user/overview"),
-    api(`/api/v1/user/library?limit=200&offset=0${query}`),
+    api(`/api/v1/user/library/products?limit=200&offset=0${query}`),
     api("/api/v1/user/purchase-intents?limit=200&offset=0"),
     api("/api/v1/user/jobs?limit=100&offset=0"),
     api("/api/v1/user/catalog/proposals?limit=100&offset=0"),
     state.privacy ? Promise.resolve({ inventory: state.privacy }) : api("/api/v1/user/privacy"),
-    api("/api/v1/user/community/recovery-evidence")
+    api("/api/v1/user/community/recovery-evidence"),
+    api("/api/v1/user/purchase-profiles").catch(() => ({ items: [] }))
   ]);
   state.overview = overview;
-  state.products = products.items || [];
+  state.productGroups = products.items || [];
+  state.productTotal = Number(products.total ?? state.productGroups.length);
+  state.products = state.productGroups.flatMap((group) => (group.listings || []).map((listing) => ({
+    variantId: group.variantId,
+    title: group.title,
+    variantAttributes: group.variantAttributes,
+    ...listing
+  })));
   state.plans = plans.items || [];
   state.actions = actions.items || [];
   state.proposals = proposals.items || [];
@@ -379,7 +696,8 @@ async function refresh() {
   state.recoveryEvidence = recoveryEvidence.items || [];
   state.recoveryRetention = recoveryEvidence.retention || null;
   state.contributorEligibility = recoveryEvidence.contributorEligibility || null;
-  renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals(); renderPrivacy(); renderRecoveryEvidence();
+  state.profiles = profiles.items || [];
+  renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals(); renderPrivacy(); renderRecoveryEvidence(); renderProfiles();
 }
 
 async function toggleActions() {
@@ -789,17 +1107,54 @@ async function checkProductLink() {
 
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
+  const quickMenu = $("#quickAddMenu");
+  if (!quickMenu.hidden && !quickMenu.contains(event.target) && !(button && button.dataset.quickMenu)) closeQuickMenu();
   if (!button) return;
   try {
     if (button.dataset.tab) setTab(button.dataset.tab);
     if (button.hasAttribute("data-close-dialog")) button.closest("dialog")?.close();
+    if (button.dataset.quickMenu) {
+      if (!quickMenu.hidden && quickMenu.dataset.anchor === button.dataset.quickMenu) {
+        closeQuickMenu();
+      } else {
+        openQuickMenu(button, button.dataset.quickMenu);
+        quickMenu.dataset.anchor = button.dataset.quickMenu;
+      }
+    }
+    if (button.dataset.quickAdd) {
+      closeQuickMenu();
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      await quickAdd(button.dataset.quickAdd, button.dataset.profileId || "");
+    }
+    if (button.dataset.productDetail) openProductDetail(button.dataset.productDetail);
+    if (button.dataset.profileEdit) beginProfileEdit(button.dataset.profileEdit);
+    if (button.dataset.profileDelete) {
+      const result = await api(`/api/v1/user/purchase-profiles/${encodeURIComponent(button.dataset.profileDelete)}`, { method: "DELETE" });
+      state.profiles = result.items || [];
+      renderProfiles();
+      renderProducts();
+      toast("Quick-add profile removed.");
+    }
     if (button.id === "pauseButton" || button.id === "preferencePauseButton") await toggleActions();
     if (button.id === "addProductButton" || button.hasAttribute("data-open-product-link")) openProductLinkDialog();
+    if (button.hasAttribute("data-clear-browse")) {
+      state.browse = { store: "", availability: "", plan: "", price: "", sort: state.browse.sort };
+      for (const id of ["browseStore", "browseAvailability", "browsePlan", "browsePrice"]) {
+        const control = $(`#${id}`);
+        if (control) control.value = "";
+      }
+      renderProducts();
+    }
     if (button.id === "checkProductLinkButton") await checkProductLink();
     if (button.dataset.trackListing) {
+      closeQuickMenu();
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
       await openSetup(button.dataset.trackListing);
     }
-    if (button.dataset.editPlan) await openPlan(button.dataset.editPlan);
+    if (button.dataset.editPlan) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      await openPlan(button.dataset.editPlan);
+    }
     if (button.id === "pairButton") {
       await createPairingCode();
     }
@@ -1038,6 +1393,87 @@ $("#spendForm").addEventListener("submit", async (event) => {
     toast("Spending limits saved.");
   } catch (error) { toast(error.message || "Spending limits could not be saved.", true); }
 });
+
+function beginProfileEdit(profileId) {
+  const profile = state.profiles.find((candidate) => candidate.id === profileId);
+  if (!profile) return;
+  const form = $("#profileForm");
+  form.elements.id.value = profile.id;
+  form.elements.name.value = profile.name;
+  form.elements.targetQuantity.value = profile.targetQuantity;
+  form.elements.priceMode.value = profile.priceMode;
+  form.elements.maxUnitPrice.value = profile.priceMode === "fixed_cap" ? moneyInput(profile.maxUnitPriceCents) : "";
+  form.elements.actionCeiling.value = profile.actionCeiling;
+  form.elements.cooldownMinutes.value = Math.round(Number(profile.cooldownSeconds || 0) / 60);
+  syncProfilePriceMode();
+  $("#saveProfileButton").textContent = "Save changes";
+  $("#resetProfileButton").hidden = false;
+  setTab("preferences");
+  form.elements.name.focus();
+}
+
+function resetProfileForm() {
+  const form = $("#profileForm");
+  form.reset();
+  form.elements.id.value = "";
+  syncProfilePriceMode();
+  $("#saveProfileButton").textContent = "Save profile";
+  $("#resetProfileButton").hidden = true;
+}
+
+function syncProfilePriceMode() {
+  const form = $("#profileForm");
+  const fixed = form.elements.priceMode.value === "fixed_cap";
+  form.elements.maxUnitPrice.disabled = !fixed;
+  if (!fixed) form.elements.maxUnitPrice.value = "";
+}
+
+$("#profileForm").elements.priceMode.addEventListener("change", syncProfilePriceMode);
+syncProfilePriceMode();
+
+$("#resetProfileButton").addEventListener("click", resetProfileForm);
+
+$("#profileForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  try {
+    const cooldownMinutes = Number(form.elements.cooldownMinutes.value || 0);
+    if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 43_200) {
+      throw new Error("The wait between attempts must be from zero through 43,200 minutes.");
+    }
+    const priceMode = form.elements.priceMode.value === "fixed_cap" ? "fixed_cap" : "store_price";
+    const result = await api("/api/v1/user/purchase-profiles", {
+      method: "POST",
+      body: JSON.stringify({
+        id: form.elements.id.value || undefined,
+        name: form.elements.name.value.trim(),
+        targetQuantity: Number(form.elements.targetQuantity.value),
+        actionCeiling: form.elements.actionCeiling.value === "add_to_cart" ? "add_to_cart" : "notify",
+        priceMode,
+        maxUnitPriceCents: priceMode === "fixed_cap" ? centsInput(form.elements.maxUnitPrice.value, "The fixed maximum item price") : null,
+        cooldownSeconds: cooldownMinutes * 60
+      })
+    });
+    state.profiles = result.items || [];
+    resetProfileForm();
+    renderProfiles();
+    renderProducts();
+    toast("Quick-add profile saved.");
+  } catch (error) { toast(error.message || "The profile could not be saved.", true); }
+});
+
+for (const [controlId, browseKey] of [
+  ["browseStore", "store"],
+  ["browseAvailability", "availability"],
+  ["browsePlan", "plan"],
+  ["browsePrice", "price"],
+  ["browseSort", "sort"]
+]) {
+  $(`#${controlId}`).addEventListener("change", (event) => {
+    state.browse[browseKey] = event.target.value;
+    renderProducts();
+  });
+}
 
 let searchTimer;
 $("#productSearch").addEventListener("input", (event) => {

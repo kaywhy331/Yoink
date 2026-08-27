@@ -7,6 +7,7 @@ interface FollowedProduct {
   sourceProductSlug: string;
   sourceProductUrl: string;
   title: string;
+  imageUrl: string;
   msrpCents: number | null;
 }
 
@@ -68,6 +69,30 @@ function productSlug(value: unknown): string {
   return /^[a-z0-9](?:[a-z0-9-]{0,198}[a-z0-9])?$/.test(text) ? text : "";
 }
 
+function productImageUrl(...sources: Array<Record<string, unknown> | undefined>): string {
+  for (const record of sources) {
+    if (!record) continue;
+    for (const field of ["image_url", "imageUrl", "image", "photo_url", "primary_image_url", "thumbnail_url", "thumb_url"]) {
+      const candidate = record[field];
+      const value = typeof candidate === "string"
+        ? candidate
+        : candidate && typeof candidate === "object" && !Array.isArray(candidate)
+          ? String((candidate as Record<string, unknown>).url ?? "")
+          : "";
+      if (!value) continue;
+      try {
+        const url = new URL(cleanText(value, 2_048));
+        if (url.protocol !== "https:" || url.username || url.password) continue;
+        url.hash = "";
+        return url.href;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return "";
+}
+
 function slugFromUrl(value: string): string {
   try {
     return productSlug(new URL(value).pathname.match(/\/products\/showcase\/([^/]+)/i)?.[1]);
@@ -110,6 +135,7 @@ function parseFollowedPage(documentValue: Document, pageUrl: string): { items: F
       sourceProductSlug: slug || slugFromUrl(sourceProductUrl),
       sourceProductUrl,
       title,
+      imageUrl: productImageUrl(item),
       msrpCents: moneyCents(item.default_price)
     });
   }
@@ -261,6 +287,7 @@ async function parseProductPayload(data: Record<string, unknown>, summary: Follo
   return {
     ...summary,
     title: cleanText(product.name, 300) || summary.title,
+    imageUrl: productImageUrl(product) || summary.imageUrl,
     observedAt: new Date().toISOString(),
     listings
   };

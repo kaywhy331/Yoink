@@ -54,6 +54,34 @@ test("guided dashboard setup does not create a plan before review and submits ex
     currency: "USD",
     variantAttributes: { edition: "First", color: "Forest" }
   };
+  const libraryGroup = {
+    variantId: product.variantId,
+    familyId: "family_dashboard_test",
+    title: product.title,
+    brand: "",
+    variantAttributes: product.variantAttributes,
+    createdAt: "2026-08-25T17:00:00.000Z",
+    storeCount: 1,
+    listingCount: 1,
+    availableListingCount: 1,
+    bestPriceCents: product.currentPriceCents,
+    currency: product.currency,
+    lastActivityAt: "2026-08-25T17:30:00.000Z",
+    listings: [{
+      listingId: product.listingId,
+      retailerId: product.retailerId,
+      retailerName: product.retailerName,
+      retailerSku: product.retailerSku,
+      canonicalUrl: product.canonicalUrl,
+      status: product.status,
+      executionSupported: product.executionSupported,
+      msrpCents: product.msrpCents,
+      currency: product.currency,
+      currentPriceCents: product.currentPriceCents,
+      priceObservedAt: "2026-08-25T17:30:00.000Z",
+      updatedAt: "2026-08-25T17:30:00.000Z"
+    }]
+  };
   const overview = {
     settings: {
       actionsPaused: true,
@@ -140,7 +168,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
       credentialMaterialsExcluded: true,
       categories: [{ id: "catalog_and_plans", label: "Products and purchase plans", recordCount: 12 }]
     } };
-    if (path.startsWith("/api/v1/user/library")) return { items: [product] };
+    if (path.startsWith("/api/v1/user/library")) return { items: [libraryGroup], total: 1 };
     if (path === "/api/v1/user/purchase-intents/mission_dashboard_test") return { purchaseIntent: planDetail };
     if (path.startsWith("/api/v1/user/purchase-intents")) return { items: created ? [planSummary] : [] };
     if (path.startsWith("/api/v1/user/jobs")) return { items: [] };
@@ -201,11 +229,16 @@ test("guided dashboard setup does not create a plan before review and submits ex
 
   try {
     browser.eval(`${script}\n//# sourceURL=user-dashboard-test.js`);
-    await eventually(() => assert.ok(browser.document.querySelector("[data-track-listing]")));
+    await eventually(() => assert.ok(browser.document.querySelector("[data-quick-add]")));
     assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /12 records/);
     assert.equal((browser.document.querySelector("#privacyExportLink") as HTMLAnchorElement).pathname, "/api/v1/user/privacy/export");
     assert.equal(posts.length, 0);
-    (browser.document.querySelector("[data-track-listing]") as HTMLButtonElement).click();
+    (browser.document.querySelector("[data-product-detail]") as HTMLButtonElement).click();
+    const productDialog = browser.document.querySelector("#productDialog") as HTMLDialogElement;
+    assert.equal(productDialog.hasAttribute("open"), true);
+    assert.equal(posts.length, 0);
+    (browser.document.querySelector("#productDialogBody [data-track-listing]") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(productDialog.hasAttribute("open"), false));
     const dialog = browser.document.querySelector("#setupDialog") as HTMLDialogElement;
     assert.equal(dialog.hasAttribute("open"), true);
     assert.equal(posts.length, 0);
@@ -432,6 +465,125 @@ test("the user dashboard reviews quarantined store details with closed, revocabl
     });
     await eventually(() => assert.match(browser.document.querySelector("#recoveryReviewList")?.textContent ?? "", /confirmation withdrawn/i));
     assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /quarantined and unused/i);
+  } finally {
+    browser.close();
+  }
+});
+
+test("quick add creates one defaulted plan through server preflight without opening the setup dialog", async () => {
+  const webRoot = join(process.cwd(), "apps", "web");
+  const html = readFileSync(join(webRoot, "user.html"), "utf8");
+  const script = readFileSync(join(webRoot, "user.js"), "utf8");
+  const dom = new JSDOM(html, {
+    url: "http://127.0.0.1:32991/",
+    runScripts: "outside-only",
+    pretendToBeVisual: true
+  });
+  const browser = dom.window;
+  const preflights: Array<Record<string, unknown>> = [];
+  const posts: Array<Record<string, unknown>> = [];
+  const listing = {
+    listingId: "listing_quick_add_test",
+    retailerId: "target",
+    retailerName: "Target",
+    retailerSku: "95280901",
+    canonicalUrl: "https://www.target.com/p/-/A-95280901",
+    status: "in_stock",
+    executionSupported: true,
+    msrpCents: 2495,
+    currency: "USD",
+    currentPriceCents: 1298,
+    priceObservedAt: "2026-08-25T17:30:00.000Z",
+    updatedAt: "2026-08-25T17:30:00.000Z"
+  };
+  const group = {
+    variantId: "variant_quick_add_test",
+    familyId: "family_quick_add_test",
+    title: "Quick Add Fixture",
+    brand: "",
+    imageUrl: "",
+    variantAttributes: {},
+    createdAt: "2026-08-25T17:00:00.000Z",
+    storeCount: 1,
+    listingCount: 1,
+    availableListingCount: 1,
+    bestPriceCents: 1298,
+    currency: "USD",
+    lastActivityAt: "2026-08-25T17:30:00.000Z",
+    listings: [listing]
+  };
+  Object.defineProperty(browser, "fetch", {
+    configurable: true,
+    value: async (path: string, options: { method?: string; body?: string } = {}) => {
+      if (path === "/api/v1/user/purchase-intents/preflight" && options.method === "POST") {
+        const draft = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
+        preflights.push(draft);
+        const itemSubtotalCapCents = Number(draft.targetQuantity) * Number(draft.maxUnitPriceCents);
+        return { ok: true, status: 200, json: async () => ({ preflight: {
+          contractVersion: 1,
+          noPurchasePlanSaved: true,
+          cost: { currency: "USD", itemSubtotalCapCents, minimumAllInCents: itemSubtotalCapCents, headroomCents: 0 },
+          preflightFingerprint: "b".repeat(64),
+          preflightedAt: "2026-08-25T18:00:00.000Z",
+          validUntil: "2026-08-25T18:05:00.000Z",
+          validForSeconds: 300
+        } }) };
+      }
+      if (path === "/api/v1/user/purchase-intents" && options.method === "POST") {
+        posts.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
+        return { ok: true, status: 201, json: async () => ({ created: true, purchaseIntent: {} }) };
+      }
+      if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => ({
+        settings: { actionsPaused: false, executionMode: "shadow", taxBps: 0, storeAllowancesCents: {} },
+        counts: { products: 1, purchaseIntents: 0, actions: 0, pendingCatalogProposals: 0 },
+        sources: [],
+        permissions: [],
+        spend: {
+          activeReservationCount: 0,
+          activeReservedCents: 0,
+          spentTodayCents: 0,
+          policy: { revision: 1, perOrderCapCents: null, dailyCapCents: null, monthlyCapCents: null }
+        },
+        walmartDraws: { latestScan: null, items: [] }
+      }) };
+      if (path.startsWith("/api/v1/user/library")) return { ok: true, status: 200, json: async () => ({ items: [group], total: 1 }) };
+      if (path === "/api/v1/user/privacy") return { ok: true, status: 200, json: async () => ({ inventory: {
+        totalRecords: 1, credentialMaterialsExcluded: true, categories: []
+      } }) };
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }
+  });
+  Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
+  Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.setAttribute("open", ""); }
+  });
+  Object.defineProperty(browser.HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.removeAttribute("open"); }
+  });
+
+  try {
+    browser.eval(`${script}\n//# sourceURL=user-dashboard-quick-add-test.js`);
+    await eventually(() => assert.ok(browser.document.querySelector("[data-quick-add]")));
+    assert.equal(browser.document.querySelector("[data-quick-menu]"), null, "no profile caret renders before any profile is saved");
+    (browser.document.querySelector("[data-quick-add]") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(posts.length, 1));
+    assert.equal((browser.document.querySelector("#setupDialog") as HTMLDialogElement).hasAttribute("open"), false);
+    assert.ok(preflights.length >= 1);
+    assert.equal(preflights[0]?.confirmation, "PREFLIGHT_EXACT_PURCHASE_PLAN");
+    const created = posts[0] ?? {};
+    assert.equal(created.contractVersion, 2);
+    assert.equal(created.listingId, "listing_quick_add_test");
+    assert.equal(created.targetQuantity, 1);
+    assert.equal(created.maxUnitPriceCents, 1298, "the default profile caps at the current store price");
+    assert.equal(created.maxAllInCents, 1298);
+    assert.equal(created.actionCeiling, "notify", "the built-in default stays notification-only");
+    assert.equal(created.sellerPolicy, "first_party_only");
+    assert.equal(created.fulfillment, "shipping");
+    assert.equal(created.confirmation, "CREATE_EXACT_PURCHASE_PLAN");
+    assert.equal(created.preflightFingerprint, "b".repeat(64));
+    assert.equal(created.preflightedAt, "2026-08-25T18:00:00.000Z");
   } finally {
     browser.close();
   }

@@ -73,7 +73,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/user/spend" || pathname === "/api/v1/user/spend-ledger") return "user.read";
   if (pathname === "/api/v1/user/spend-policy") return "user.settings.manage";
   if (pathname === "/api/v1/user/privacy" || pathname === "/api/v1/user/privacy/export") return "user.privacy.export";
-  if (["/api/v1/library", "/api/v1/missions", "/api/v1/signals", "/api/v1/jobs", "/api/v1/audit", "/api/v1/strategies"].includes(pathname)
+  if (["/api/v1/library", "/api/v1/library/products", "/api/v1/missions", "/api/v1/signals", "/api/v1/jobs", "/api/v1/audit", "/api/v1/strategies"].includes(pathname)
     || /^\/api\/v1\/missions\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
     return method === "GET" ? "user.read" : "user.intent.manage";
   }
@@ -84,6 +84,9 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/catalog/listings" || pathname.startsWith("/api/v1/user/catalog/")) return "user.catalog.propose";
   if (pathname === "/api/v1/attribution-policies") return "user.attribution.manage";
   if (pathname === "/api/v1/settings" || pathname === "/api/v1/settings/actions") return "user.settings.manage";
+  if (pathname === "/api/v1/purchase-profiles" || /^\/api\/v1\/purchase-profiles\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
+    return method === "GET" ? "user.read" : "user.intent.manage";
+  }
   if (pathname === "/api/v1/signals" || /^\/api\/v1\/jobs\/[A-Za-z0-9_-]{3,120}\/resolve$/.test(pathname)) return "user.intent.manage";
   return undefined;
 }
@@ -151,6 +154,7 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     authorization: "authorization",
     catalog: "catalog",
     "purchase-intents": "purchase_intents",
+    "purchase-profiles": "purchase_intents",
     spend: "spend",
     library: "library",
     missions: "missions",

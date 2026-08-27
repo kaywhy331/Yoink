@@ -51,8 +51,38 @@
 
     <section class="workspace active" data-panel="products">
       <div class="section-heading">
-        <div><p class="eyebrow">Exact catalog matches</p><h2>Products</h2><p>Choose a store listing, review every limit, then create one private plan for that exact product.</p></div>
+        <div><p class="eyebrow">Exact catalog matches</p><h2>Products</h2><p>Each product gathers every store offering it. Review one plan per product; its price caps and rules apply across every store you enable.</p></div>
         <div class="section-actions"><button class="button secondary" id="addProductButton" type="button">Add product link</button><label class="search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label></div>
+      </div>
+      <div class="browse-toolbar" aria-label="Browse and filter products">
+        <label><span>Store</span><select id="browseStore"><option value="">All stores</option></select></label>
+        <label><span>Availability</span><select id="browseAvailability">
+          <option value="">Any availability</option>
+          <option value="available">Available now</option>
+          <option value="preorder">Preorder</option>
+          <option value="unavailable">Out of stock</option>
+        </select></label>
+        <label><span>Plans</span><select id="browsePlan">
+          <option value="">All products</option>
+          <option value="planned">With a purchase plan</option>
+          <option value="unplanned">Without a plan</option>
+        </select></label>
+        <label><span>Price</span><select id="browsePrice">
+          <option value="">Any price</option>
+          <option value="0-2500">Under $25</option>
+          <option value="2500-5000">$25 – $50</option>
+          <option value="5000-10000">$50 – $100</option>
+          <option value="10000-">$100 and up</option>
+        </select></label>
+        <label><span>Sort</span><select id="browseSort">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="price_asc">Price · low to high</option>
+          <option value="price_desc">Price · high to low</option>
+          <option value="active">Recently active</option>
+          <option value="title">Name · A to Z</option>
+        </select></label>
+        <span class="browse-count" id="browseCount" role="status"></span>
       </div>
       <div class="card-grid" id="productList"></div>
     </section>
@@ -79,6 +109,18 @@
         <article class="preference-card"><span class="icon">Ⅱ</span><div><h3>Action state</h3><p id="actionStateCopy">Loading your action state…</p><button class="button secondary" id="preferencePauseButton" type="button">Change action state</button></div></article>
         <article class="preference-card budget-card"><span class="icon">$</span><div><h3>Spending limits</h3><p id="spendSummary">Loading your private spending limits…</p><form id="spendForm"><input name="revision" type="hidden"><div class="budget-fields"><label><span>Per order</span><input name="perOrder" inputmode="decimal" placeholder="Optional"></label><label><span>Per day</span><input name="daily" inputmode="decimal" placeholder="Optional"></label><label><span>Per month</span><input name="monthly" inputmode="decimal" placeholder="Optional"></label></div><button class="button secondary" type="submit">Save spending limits</button></form></div></article>
         <article class="preference-card"><span class="icon">⌁</span><div><h3>Chrome companion</h3><p>Pair Chrome with a one-time code. The extension remains the only component allowed to perform a qualified retailer click.</p><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><div class="pairing" id="pairing" hidden></div></div></article>
+        <article class="preference-card profile-card"><span class="icon">⚡</span><div><h3>Quick-add profiles</h3><p>Quick add creates a plan in one click using the built-in default: one item, first-party seller, shipping, the current store price as the cap, notifications only. Save profiles for your own one-click configurations.</p><div class="mini-list" id="profileList"></div><form id="profileForm">
+          <input name="id" type="hidden">
+          <div class="profile-fields">
+            <label><span>Profile name</span><input name="name" type="text" maxlength="60" placeholder="e.g. Grab two under MSRP" required></label>
+            <label><span>Quantity</span><input name="targetQuantity" type="number" min="1" max="99" value="1" required></label>
+            <label><span>Item price cap</span><select name="priceMode"><option value="store_price">Current store price</option><option value="fixed_cap">Fixed maximum</option></select></label>
+            <label><span>Fixed maximum</span><input name="maxUnitPrice" inputmode="decimal" placeholder="$"></label>
+            <label><span>After a hit</span><select name="actionCeiling"><option value="notify">Notify me only</option><option value="add_to_cart">May add one to cart</option></select></label>
+            <label><span>Wait between attempts (min)</span><input name="cooldownMinutes" type="number" min="0" max="43200" value="0"></label>
+          </div>
+          <div class="inline-actions"><button class="button secondary" type="submit" id="saveProfileButton">Save profile</button><button class="button quiet" type="button" id="resetProfileButton" hidden>Cancel edit</button></div>
+        </form></div></article>
         <article class="preference-card"><span class="icon">✓</span><div><h3>Catalog review</h3><p id="proposalCopy">Checking your pending product suggestions…</p><div class="mini-list" id="proposalList"></div></div></article>
         <article class="preference-card"><span class="icon">◎</span><div><h3>Signal connections</h3><p>Your sources discover opportunities; they never raise your plan limits.</p><div class="mini-list" id="sourceList"></div></div></article>
         <article class="preference-card recovery-review-card"><span class="icon">?</span><div><h3>Help improve store reading</h3><p id="recoveryReviewSummary">Checking whether Yoink has any store details for you to review…</p><div class="recovery-review-list" id="recoveryReviewList"></div><p class="privacy-boundary">Your answer only labels quarantined evidence; it never fills a field, changes a purchase plan, qualifies a store, or clicks anything. Hosted account and coarse-region checks happen automatically when available; local reviews remain private and never count as independent public quorum.</p></div></article>
@@ -86,6 +128,18 @@
       </div>
     </section>
   </main>
+
+  <div id="quickAddMenu" class="quick-menu" hidden></div>
+
+  <dialog id="productDialog" class="product-detail-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">One product · every store</p><h2 id="productDialogTitle">Product</h2></div>
+        <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
+      </div>
+      <div id="productDialogBody"></div>
+    </form>
+  </dialog>
 
   <dialog id="productLinkDialog" class="product-link-dialog">
     <form id="productLinkForm">

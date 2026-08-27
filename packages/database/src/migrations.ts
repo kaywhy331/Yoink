@@ -3430,5 +3430,14 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       DROP TABLE yoink_signal_incident_copy_check_v48;
       DROP TABLE yoink_signal_incident_owners_v48;
     `
+  },
+  {
+    version: 49,
+    name: "product_images_and_purchase_profiles",
+    sql: `
+      ALTER TABLE variants ADD COLUMN image_url TEXT NOT NULL DEFAULT '';
+
+      ALTER TABLE app_settings ADD COLUMN purchase_profiles_json TEXT NOT NULL DEFAULT '[]';
+    `
   }
 ]);

@@ -963,6 +963,7 @@ export interface TrackalackerCatalogItemInput {
   sourceProductSlug?: string;
   sourceProductUrl: string;
   title: string;
+  imageUrl?: string;
   msrpCents?: number | null;
   observedAt: string;
   listings: TrackalackerCatalogListingInput[];
@@ -1191,6 +1192,28 @@ export interface AppSettingsUpdateInput {
   affiliateMode: "prefer_fallback" | "require" | "disabled";
   taxBps: number;
   storeAllowancesCents: Record<string, number>;
+}
+
+export interface PurchaseProfile {
+  id: string;
+  name: string;
+  targetQuantity: number;
+  actionCeiling: "notify" | "add_to_cart";
+  priceMode: "store_price" | "fixed_cap";
+  maxUnitPriceCents: number | null;
+  cooldownSeconds: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PurchaseProfileInput {
+  id?: string;
+  name: string;
+  targetQuantity: number;
+  actionCeiling: "notify" | "add_to_cart";
+  priceMode: "store_price" | "fixed_cap";
+  maxUnitPriceCents?: number | null;
+  cooldownSeconds?: number;
 }
 
 export type AttributionProvider = "canonical" | "howl" | "amazon_associates";

@@ -483,7 +483,7 @@ export class CatalogRepository {
               r.display_name AS retailerName, l.retailer_sku AS retailerSku,
               l.canonical_url AS canonicalUrl, l.status,
               l.execution_supported AS executionSupported, l.msrp_cents AS msrpCents,
-              l.currency, v.attributes_json AS variantAttributesJson,
+              l.currency, v.image_url AS imageUrl, v.attributes_json AS variantAttributesJson,
               (SELECT oo.unit_price_cents FROM offer_observations oo
                WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
                ORDER BY oo.observed_at DESC LIMIT 1) AS currentPriceCents,
@@ -549,6 +549,147 @@ export class CatalogRepository {
     )?.count ?? 0);
   }
 
+  listLibraryProducts(limit = 100, offset = 0, search = ""): Array<Record<string, unknown>> {
+    const query = cleanText(search, 200);
+    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+    const safeLimit = Math.max(1, Math.min(200, Math.floor(Number(limit) || 100)));
+    const safeOffset = Number.isSafeInteger(Number(offset)) && Number(offset) >= 0 ? Math.floor(Number(offset)) : 0;
+    const variants = this.db.all<{
+      variantId: string;
+      familyId: string;
+      title: string;
+      brand: string;
+      imageUrl: string;
+      variantAttributesJson: string;
+      createdAt: string;
+    }>(
+      `SELECT v.id AS variantId, v.family_id AS familyId, v.title, f.brand,
+              v.image_url AS imageUrl,
+              v.attributes_json AS variantAttributesJson, v.created_at AS createdAt
+       FROM variants v
+       JOIN product_families f ON f.id = v.family_id
+       WHERE EXISTS (
+         SELECT 1 FROM listings l JOIN retailers r ON r.id = l.retailer_id
+         WHERE l.variant_id = v.id
+           AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+             OR r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+             OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE))
+       ORDER BY v.created_at DESC, v.title COLLATE NOCASE, v.id
+       LIMIT ? OFFSET ?`,
+      query,
+      pattern,
+      pattern,
+      pattern,
+      safeLimit,
+      safeOffset
+    );
+    if (!variants.length) return [];
+    const placeholders = variants.map(() => "?").join(", ");
+    const listingRows = this.db.all<Record<string, unknown>>(
+      `SELECT l.variant_id AS variantId, l.id AS listingId, l.retailer_id AS retailerId,
+              r.display_name AS retailerName, l.retailer_sku AS retailerSku,
+              l.canonical_url AS canonicalUrl, l.status,
+              l.execution_supported AS executionSupported, l.msrp_cents AS msrpCents,
+              l.currency, l.updated_at AS updatedAt,
+              (SELECT oo.unit_price_cents FROM offer_observations oo
+               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
+               ORDER BY oo.observed_at DESC LIMIT 1) AS currentPriceCents,
+              (SELECT oo.observed_at FROM offer_observations oo
+               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
+               ORDER BY oo.observed_at DESC LIMIT 1) AS priceObservedAt
+       FROM listings l
+       JOIN retailers r ON r.id = l.retailer_id
+       WHERE l.variant_id IN (${placeholders})
+       ORDER BY r.display_name COLLATE NOCASE, l.retailer_sku`,
+      ...variants.map((variant) => variant.variantId)
+    );
+    const listingsByVariant = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of listingRows) {
+      const key = String(row.variantId);
+      const listing = {
+        listingId: row.listingId,
+        retailerId: row.retailerId,
+        retailerName: row.retailerName,
+        retailerSku: row.retailerSku,
+        canonicalUrl: row.canonicalUrl,
+        status: row.status,
+        executionSupported: Number(row.executionSupported) === 1,
+        msrpCents: row.msrpCents,
+        currency: row.currency,
+        currentPriceCents: row.currentPriceCents,
+        priceObservedAt: row.priceObservedAt,
+        updatedAt: row.updatedAt
+      };
+      const bucket = listingsByVariant.get(key);
+      if (bucket) bucket.push(listing);
+      else listingsByVariant.set(key, [listing]);
+    }
+    return variants.map((variant) => {
+      let variantAttributes: Record<string, string> = {};
+      try {
+        const parsed = JSON.parse(String(variant.variantAttributesJson ?? "{}")) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          variantAttributes = Object.fromEntries(
+            Object.entries(parsed as Record<string, unknown>)
+              .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+          );
+        }
+      } catch {
+        variantAttributes = {};
+      }
+      const listings = listingsByVariant.get(variant.variantId) ?? [];
+      const priceOf = (listing: Record<string, unknown>): number | null => {
+        const current = Number(listing.currentPriceCents);
+        if (Number.isFinite(current) && current > 0 && listing.currentPriceCents !== null) return current;
+        const msrp = Number(listing.msrpCents);
+        return Number.isFinite(msrp) && msrp > 0 && listing.msrpCents !== null ? msrp : null;
+      };
+      const available = listings.filter((listing) => ["in_stock", "preorder"].includes(String(listing.status)));
+      const priced = (available.length ? available : listings)
+        .map(priceOf)
+        .filter((cents): cents is number => cents !== null);
+      const activityTimes = listings
+        .flatMap((listing) => [listing.priceObservedAt, listing.updatedAt])
+        .map((value) => String(value ?? ""))
+        .filter((value) => value !== "");
+      return {
+        variantId: variant.variantId,
+        familyId: variant.familyId,
+        title: variant.title,
+        brand: variant.brand,
+        imageUrl: variant.imageUrl,
+        variantAttributes,
+        createdAt: variant.createdAt,
+        storeCount: new Set(listings.map((listing) => String(listing.retailerId))).size,
+        listingCount: listings.length,
+        availableListingCount: available.length,
+        bestPriceCents: priced.length ? Math.min(...priced) : null,
+        currency: String(listings[0]?.currency ?? "USD"),
+        lastActivityAt: activityTimes.length ? activityTimes.sort().at(-1) : null,
+        listings
+      };
+    });
+  }
+
+  libraryProductCount(search = ""): number {
+    const query = cleanText(search, 200);
+    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+    return Number(this.db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM variants v
+       WHERE EXISTS (
+         SELECT 1 FROM listings l JOIN retailers r ON r.id = l.retailer_id
+         WHERE l.variant_id = v.id
+           AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+             OR r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+             OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE))`,
+      query,
+      pattern,
+      pattern,
+      pattern
+    )?.count ?? 0);
+  }
+
   createListingFromExactSignal(signal: NormalizedSignal): CatalogUpsertResult | null {
     const connection = this.sourceConnection(signal.sourceConnectionId);
     if (
@@ -601,6 +742,14 @@ export class CatalogRepository {
     const listings = Array.isArray(input.listings) ? input.listings : [];
     const msrpCents = positiveCents(input.msrpCents, true);
     const observedAt = observed.toISOString();
+    let imageUrl = "";
+    if (input?.imageUrl) {
+      try {
+        imageUrl = safeHttpsUrl(cleanText(input.imageUrl, 2_048));
+      } catch {
+        imageUrl = "";
+      }
+    }
 
     return this.db.transaction(() => {
       let variantId = this.db.get<{ variant_id: string }>(
@@ -638,12 +787,21 @@ export class CatalogRepository {
           timestamp
         );
         this.db.run(
-          "INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?)",
+          "INSERT INTO variants(id, family_id, title, attributes_json, image_url, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?, ?)",
           variantId,
           familyId,
           title,
+          imageUrl,
           timestamp,
           timestamp
+        );
+      } else if (imageUrl) {
+        this.db.run(
+          "UPDATE variants SET image_url = ?, updated_at = ? WHERE id = ? AND image_url <> ?",
+          imageUrl,
+          nowIso(now),
+          variantId,
+          imageUrl
         );
       }
       this.db.run(

@@ -54,6 +54,25 @@ var YoinkTrackalackerSyncModule = (() => {
     const text = cleanText(value, 240).toLowerCase();
     return /^[a-z0-9](?:[a-z0-9-]{0,198}[a-z0-9])?$/.test(text) ? text : "";
   }
+  function productImageUrl(...sources) {
+    for (const record of sources) {
+      if (!record) continue;
+      for (const field of ["image_url", "imageUrl", "image", "photo_url", "primary_image_url", "thumbnail_url", "thumb_url"]) {
+        const candidate = record[field];
+        const value = typeof candidate === "string" ? candidate : candidate && typeof candidate === "object" && !Array.isArray(candidate) ? String(candidate.url ?? "") : "";
+        if (!value) continue;
+        try {
+          const url = new URL(cleanText(value, 2048));
+          if (url.protocol !== "https:" || url.username || url.password) continue;
+          url.hash = "";
+          return url.href;
+        } catch {
+          continue;
+        }
+      }
+    }
+    return "";
+  }
   function slugFromUrl(value) {
     try {
       return productSlug(new URL(value).pathname.match(/\/products\/showcase\/([^/]+)/i)?.[1]);
@@ -93,6 +112,7 @@ var YoinkTrackalackerSyncModule = (() => {
         sourceProductSlug: slug || slugFromUrl(sourceProductUrl),
         sourceProductUrl,
         title,
+        imageUrl: productImageUrl(item),
         msrpCents: moneyCents(item.default_price)
       });
     }
@@ -230,6 +250,7 @@ var YoinkTrackalackerSyncModule = (() => {
     return {
       ...summary,
       title: cleanText(product.name, 300) || summary.title,
+      imageUrl: productImageUrl(product) || summary.imageUrl,
       observedAt: (/* @__PURE__ */ new Date()).toISOString(),
       listings
     };
