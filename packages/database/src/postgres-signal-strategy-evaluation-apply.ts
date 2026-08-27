@@ -1549,7 +1549,9 @@ function nullableCents(value: unknown, label: string): number | null {
   return value === null ? null : exactInteger(value, label, 1, 100_000_000);
 }
 
-function validateAttestation(value: SignalPolicyEvaluationAttestation): SignalPolicyEvaluationAttestation {
+export function validateSignalPolicyEvaluationAttestation(
+  value: SignalPolicyEvaluationAttestation
+): SignalPolicyEvaluationAttestation {
   const record = exactObject(value, "attestation", [
     "contractVersion", "signalTransportHash", "listingId", "missionId",
     "missionTargetId", "missionEvaluationQuantity", "policyRevisionId",
@@ -1873,7 +1875,7 @@ export class NodePostgresSignalStrategyEvaluationApplyDatabase {
     const userId = exactText(principal?.userId, "expected user ID", 200);
     const messageId = String(messageIdValue ?? "");
     const capabilityToken = String(capabilityTokenValue ?? "");
-    const attestation = validateAttestation(attestationValue);
+    const attestation = validateSignalPolicyEvaluationAttestation(attestationValue);
     if (!MESSAGE_ID.test(messageId) || !CAPABILITY_TOKEN.test(capabilityToken)
       || !Number.isSafeInteger(now) || Math.abs(Date.now() - now) > MAXIMUM_CLOCK_SKEW_MS) {
       throw new PostgresSignalStrategyEvaluationApplyQualificationError(

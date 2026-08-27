@@ -1653,12 +1653,88 @@ The receipt permanently records `databaseSemanticEvaluation: false`,
 `productionReady: false`. The fingerprint is an application integrity binding,
 not a keyed database authorization. Before activation, policy, strategy, and
 source-trust writers must share fixed-order configuration locks (or equivalent
-serializable/retry coordination). The next action/spend boundary must treat
-every effective attestation field as untrusted and atomically lock, re-read,
-rederive, and cap the current mission/target state, remaining and fulfilled
-quantity, action ceiling, price/all-in/spend limits, cooldown, seller,
-fulfillment, expiry, source trust, and existing claims. No action, spend,
-inbox, retailer-session, checkout, or order-submission authority exists here.
+serializable/retry coordination). The v0.84 successor treats every effective
+attestation field as untrusted and performs that atomic lock/re-read/rederive
+step only for reviewed purchase intents. No action, spend, inbox, retailer-
+session, checkout, or order-submission authority exists in this v0.83 role.
+
+## Reviewed purchase-intent action/spend qualification seam
+
+Version 0.84 adds the tenth independent hosted-signal role. It accepts only the
+exact v0.83 actionable handoff for a directly reviewed `purchase_intent` and
+atomically creates its bounded action-job and spend-reservation graph.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+and can execute one strict security-definer function across 19 forced-RLS
+tenant tables. PostgreSQL authenticates `session_user`, verifies the complete
+predecessor receipt chain, and takes fixed-order locks over the message,
+mission, target, policy, application settings, source, retailer qualification,
+and spend policy.
+
+The transaction revalidates the exact active target, current policy and source
+trust, remaining and fulfilled quantity, sibling claims, cooldown, current
+retailer add-only qualification, and per-order/daily/monthly capacity. It
+accepts only fresh first-party shipping evidence, quantity one,
+`add_to_cart`, canonical attribution, and the exact reviewed unit/all-in caps.
+A valid first application appends an offer/snapshot, action job and initial
+event, active reservation and reserved ledger entry, qualified mission
+decision, audit event, and outbox event across nine mutation tables. Complete
+replay writes nothing; partial or altered graphs abort.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-action-spend-apply -- plan \
+  yoink_cutover_qualification_084 yoink_q_084 yoink_session_q_084 \
+  yoink_queue_q_084 yoink_control_q_084 yoink_notify_q_084 \
+  yoink_execute_q_084 yoink_retain_q_084 yoink_candidate_q_084 \
+  yoink_dispatch_q_084 yoink_reconcile_q_084 yoink_witness_q_084 \
+  yoink_delivery_q_084 yoink_catalog_q_084 yoink_resolution_q_084 \
+  yoink_reference_q_084 yoink_terminal_q_084 yoink_offer_q_084 \
+  yoink_post_q_084 yoink_mission_q_084 yoink_strategy_q_084 \
+  yoink_action_spend_q_084
+```
+
+After the exact v0.83 strategy-evaluation receipt is verified, apply once with
+the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_ACTION_SPEND_APPLY_QUALIFICATION_ACK=bounded-signal-action-spend-apply-qualification \
+  npm run postgres:signal-action-spend-apply -- apply \
+  yoink_cutover_qualification_084 yoink_q_084 yoink_session_q_084 \
+  yoink_queue_q_084 yoink_control_q_084 yoink_notify_q_084 \
+  yoink_execute_q_084 yoink_retain_q_084 yoink_candidate_q_084 \
+  yoink_dispatch_q_084 yoink_reconcile_q_084 yoink_witness_q_084 \
+  yoink_delivery_q_084 yoink_catalog_q_084 yoink_resolution_q_084 \
+  yoink_reference_q_084 yoink_terminal_q_084 yoink_offer_q_084 \
+  yoink_post_q_084 yoink_mission_q_084 yoink_strategy_q_084 \
+  yoink_action_spend_q_084
+```
+
+Then independently verify the role, function, 19 forced-RLS tables, immutable
+receipt, and complete predecessor fingerprint chain:
+
+```bash
+npm run postgres:signal-action-spend-apply -- verify \
+  yoink_cutover_qualification_084 yoink_q_084 yoink_session_q_084 \
+  yoink_queue_q_084 yoink_control_q_084 yoink_notify_q_084 \
+  yoink_execute_q_084 yoink_retain_q_084 yoink_candidate_q_084 \
+  yoink_dispatch_q_084 yoink_reconcile_q_084 yoink_witness_q_084 \
+  yoink_delivery_q_084 yoink_catalog_q_084 yoink_resolution_q_084 \
+  yoink_reference_q_084 yoink_terminal_q_084 yoink_offer_q_084 \
+  yoink_post_q_084 yoink_mission_q_084 yoink_strategy_q_084 \
+  yoink_action_spend_q_084
+```
+
+The receipt permanently records `purchaseIntentOnly: true`,
+`strategyActionAuthority: false`, `writerLockProtocolParity: false`,
+`attributionPolicyParity: false`, and `runtimeAuthority: false`. Marketplace,
+pickup, retailer DOM mutation, checkout, order submission, and inbox completion
+remain closed. Existing writers must join the fixed-order locking protocol,
+attribution must reach policy parity, and final handler composition and
+production principal provisioning must be qualified before activation. SQLite
+remains authoritative and complete handler parity remains six of seven.
 
 ## Requirements
 

@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.83.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.84.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,36 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.84.0 adds the tenth independently receipted piece of the inactive
+PostgreSQL hosted-signal plane: atomic action-job and spend-reservation creation
+for one exact, explicitly reviewed purchase intent. Its separate `NOLOGIN`,
+`NOINHERIT`, `NOBYPASSRLS` role owns no application object, inherits no role,
+has zero direct/effective table or column grants, and may execute one strict
+security-definer function across 19 forced-RLS tenant tables.
+
+PostgreSQL authenticates `session_user`, requires the complete v0.83
+predecessor graph, and locks the inbox message, mission, target, policy,
+settings, source, retailer qualification, and spend policy in fixed order. It
+revalidates the exact product and active target, remaining quantity and sibling
+claims, fulfilled quantity, cooldown, fresh trusted first-party shipping
+evidence, the exact current add-only adapter, quantity one, and per-order,
+daily, and monthly limits. A valid first application atomically appends the
+exact offer/snapshot, action job and initial event, active reservation and
+reserved ledger entry, qualified mission decision, audit event, and outbox
+event across nine mutation tables. Complete immutable replay writes nothing
+and tolerates only normal action/outbox lifecycle changes; partial or altered
+graphs fail closed.
+
+The qualification is intentionally purchase-intent-only. Strategy-authorized
+actions, marketplace and pickup offers, noncanonical attribution, retailer DOM
+mutation, checkout, order submission, and inbox completion are structurally
+closed. The role remains inactive and SQLite remains authoritative. Existing
+configuration/reservation writers still need the same lock protocol,
+attribution-policy parity is incomplete, and final hosted-handler composition,
+production principals, repository parity, and cutover drills remain required.
+Use `npm run postgres:signal-action-spend-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.83.0 adds the ninth independently receipted piece of the inactive
 PostgreSQL hosted-signal plane: application-owned strategy and purchase-policy
@@ -45,10 +75,9 @@ direct-SQL denial, and immutable function-catalog verification.
 
 The role remains inactive: SQLite is authoritative. This seam creates no
 action job or spend reservation, does not complete the inbox message, and does
-not authorize any retailer action. The next boundary must atomically recheck
-the current mission/action ceiling, fulfilled quantity, price and spend caps,
-cooldown, seller, fulfillment, and signal freshness while composing the action
-job and reservation. Use `npm run
+not authorize any retailer action. Its v0.84 successor now performs that
+atomic recheck and composition only for an exact reviewed purchase intent, but
+remains separately inactive. Use `npm run
 postgres:signal-strategy-evaluation-apply -- plan ...` and the
 [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 

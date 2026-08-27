@@ -140,6 +140,13 @@ import {
   buildPostgresSignalStrategyEvaluationApplyManifest,
   verifyPostgresSignalStrategyEvaluationApplyBoundary
 } from "../packages/database/src/postgres-signal-strategy-evaluation-apply.js";
+import {
+  NodePostgresSignalActionSpendApplyDatabase,
+  POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION,
+  applyPostgresSignalActionSpendApplyBoundary,
+  buildPostgresSignalActionSpendApplyManifest,
+  verifyPostgresSignalActionSpendApplyBoundary
+} from "../packages/database/src/postgres-signal-action-spend-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -173,6 +180,7 @@ import type {
   SignalEventInput,
   StrategyDefinition
 } from "../packages/contracts/src/index.js";
+import { TARGET_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
 import {
   POSTGRES_TEST_WORKER_FINGERPRINT,
   POSTGRES_TEST_WORKER_VERSION,
@@ -203,6 +211,7 @@ const NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE = "yoink_native_offer";
 const NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE = "yoink_native_post";
 const NATIVE_MISSION_BINDING_APPLY_ROLE_NAMESPACE = "yoink_native_mission";
 const NATIVE_STRATEGY_EVALUATION_APPLY_ROLE_NAMESPACE = "yoink_native_strategy";
+const NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE = "yoink_native_action_spend";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1038,7 +1047,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, and strategy evaluation", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, and reviewed purchase-intent action/spend", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1164,6 +1173,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalStrategyEvaluationC: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
   let signalStrategyEvaluationUnmapped: NodePostgresSignalStrategyEvaluationApplyDatabase | null = null;
   let signalStrategyEvaluationDirectClient: Client | null = null;
+  let signalActionSpendA: NodePostgresSignalActionSpendApplyDatabase | null = null;
+  let signalActionSpendASecond: NodePostgresSignalActionSpendApplyDatabase | null = null;
+  let signalActionSpendB: NodePostgresSignalActionSpendApplyDatabase | null = null;
+  let signalActionSpendC: NodePostgresSignalActionSpendApplyDatabase | null = null;
+  let signalActionSpendUnmapped: NodePostgresSignalActionSpendApplyDatabase | null = null;
+  let signalActionSpendDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2275,6 +2290,38 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalStrategyEvaluationBoundary
     );
+    const qualifiedSignalActionSpendManifest =
+      buildPostgresSignalActionSpendApplyManifest(
+        qualifiedSignalStrategyEvaluationManifest,
+        NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE
+      );
+    const signalActionSpendBoundary = await applyPostgresSignalActionSpendApplyBoundary(
+      importer,
+      qualifiedSignalActionSpendManifest,
+      new Date("2026-08-25T16:54:59.994Z").getTime()
+    );
+    assert.equal(signalActionSpendBoundary.protectedTenantTableCount, 19);
+    assert.equal(signalActionSpendBoundary.forcedRlsTableCount, 19);
+    assert.equal(signalActionSpendBoundary.mutationTableCount, 9);
+    assert.equal(signalActionSpendBoundary.directTableGrantCount, 0);
+    assert.equal(signalActionSpendBoundary.functionGrantCount, 1);
+    assert.equal(signalActionSpendBoundary.membershipCount, 0);
+    assert.equal(signalActionSpendBoundary.activePrincipalCount, 0);
+    assert.equal(signalActionSpendBoundary.metadata.maximumPlanAgeSeconds, 30);
+    assert.equal(signalActionSpendBoundary.metadata.fixedOrderConfigurationLocks, true);
+    assert.equal(signalActionSpendBoundary.metadata.purchaseIntentOnly, true);
+    assert.equal(signalActionSpendBoundary.metadata.strategyActionAuthority, false);
+    assert.equal(signalActionSpendBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalActionSpendBoundary.metadata.attributionPolicyParity, false);
+    assert.equal(signalActionSpendBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalActionSpendBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalActionSpendApplyBoundary(
+        importer,
+        qualifiedSignalActionSpendManifest
+      ),
+      signalActionSpendBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -2586,6 +2633,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalMissionBindingManifest,
       NATIVE_STRATEGY_EVALUATION_APPLY_ROLE_NAMESPACE
     );
+    const signalActionSpendManifest = buildPostgresSignalActionSpendApplyManifest(
+      signalStrategyEvaluationManifest,
+      NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -2652,6 +2703,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalStrategyEvaluationManifest.strategyEvaluationRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalActionSpendManifest.actionSpendRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -3152,6 +3207,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalStrategyEvaluationB = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_B);
     signalStrategyEvaluationC = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_C);
     signalStrategyEvaluationUnmapped = signalStrategyEvaluationDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+    const signalActionSpendDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalActionSpendApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalActionSpendManifest, { maxConnections });
+    signalActionSpendA = signalActionSpendDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalActionSpendASecond = signalActionSpendDatabase(NATIVE_PRINCIPAL_A);
+    signalActionSpendB = signalActionSpendDatabase(NATIVE_PRINCIPAL_B);
+    signalActionSpendC = signalActionSpendDatabase(NATIVE_PRINCIPAL_C);
+    signalActionSpendUnmapped = signalActionSpendDatabase(NATIVE_PRINCIPAL_UNMAPPED);
 
     directClient = new Client({ connectionString: principalConnection(NATIVE_PRINCIPAL_A) });
     directClient.on("error", () => undefined);
@@ -8537,6 +8605,541 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     await signalStrategyEvaluationDirectClient.end();
     signalStrategyEvaluationDirectClient = null;
 
+    const actionSpendNow = Date.now();
+    const actionSpendMessageId = "inbox_abcdef0123456789abcdef0123456789";
+    const actionSpendObservedAt = new Date(actionSpendNow - 1_000).toISOString();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."variants"(
+         id, family_id, title, attributes_json, created_at, updated_at
+       ) VALUES (
+         'variant_native_action_spend', 'family_cutover_scope',
+         'Native atomic action and spend product', '{}', $1, $1
+       )`,
+      [actionSpendObservedAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."listings"(
+         id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+         execution_supported, msrp_cents, currency, created_at, updated_at
+       ) VALUES (
+         'listing_native_action_spend', 'variant_native_action_spend', 'target',
+         'NATIVE-ACTION-SPEND',
+         'https://www.target.com/p/native-action-spend/NATIVE-ACTION-SPEND',
+         'in_stock', 1, 1599, 'USD', $1, $1
+       )`,
+      [actionSpendObservedAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_product_refs"(
+         id, source_connection_id, external_product_id, variant_id,
+         source_url, source_title, observed_at
+       ) VALUES (
+         'source_product_native_action_spend', 'native_signal_source_a',
+         'native-action-spend-product', 'variant_native_action_spend',
+         'https://trackalacker.example/native-action-spend-product',
+         'Native atomic action and spend product', $1
+       )`,
+      [actionSpendObservedAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_listing_refs"(
+         id, source_connection_id, external_listing_id, external_product_id,
+         listing_id, source_url, observed_at
+       ) VALUES (
+         'source_listing_native_action_spend', 'native_signal_source_a',
+         'native-action-spend-listing', 'native-action-spend-product',
+         'listing_native_action_spend',
+         'https://trackalacker.example/native-action-spend-listing', $1
+       )`,
+      [actionSpendObservedAt]
+    );
+    const actionSpendPayloadBase = resolutionSignalPayload(
+      actionSpendMessageId,
+      "native_signal_source_a",
+      {
+        sourceProductId: "native-action-spend-product",
+        sourceListingId: "native-action-spend-listing",
+        retailerId: "target",
+        retailerSku: "NATIVE-ACTION-SPEND",
+        canonicalUrl: "https://www.target.com/p/native-action-spend/NATIVE-ACTION-SPEND",
+        title: "Native atomic action and spend product"
+      }
+    );
+    const actionSpendPayload = {
+      ...actionSpendPayloadBase,
+      observedAt: actionSpendObservedAt,
+      identity: {
+        ...(actionSpendPayloadBase.identity as Record<string, unknown>),
+        globalIdentifiers: { trackalacker_slug: "native-action-spend-product" }
+      }
+    };
+    await insertSignalLifecycleInbox(
+      actionSpendMessageId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(actionSpendNow).toISOString(),
+      actionSpendPayload
+    );
+    const actionSpendLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      actionSpendNow
+    );
+    assert.ok(actionSpendLease);
+    assert.equal(actionSpendLease.id, actionSpendMessageId);
+    assert.equal((await signalResolutionApplyA.applySignalEventResolution(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      actionSpendMessageId,
+      actionSpendLease.capabilityToken,
+      actionSpendNow
+    )).duplicate, false);
+    assert.equal((await signalSourceReferenceA.refreshSignalSourceReferences(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      actionSpendMessageId,
+      actionSpendLease.capabilityToken,
+      actionSpendNow
+    )).downstreamSignalGraphMutated, false);
+    assert.equal((await signalTerminalDecisionA.applySignalTerminalDecision(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      actionSpendMessageId,
+      actionSpendLease.capabilityToken,
+      actionSpendNow
+    )).continueDownstream, true);
+    const actionSpendIncident = await signalOfferIncidentA.applySignalOfferIncident(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      actionSpendMessageId,
+      actionSpendLease.capabilityToken,
+      actionSpendNow
+    );
+    assert.equal(actionSpendIncident.continueDownstream, true);
+    assert.equal((await signalPostIncidentDecisionA.applySignalPostIncidentDecision(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      actionSpendMessageId,
+      actionSpendLease.capabilityToken,
+      actionSpendNow
+    )).continueDownstream, true);
+    const actionSpendBinding = await signalMissionBindingA.applySignalMissionBinding(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      actionSpendMessageId,
+      actionSpendLease.capabilityToken,
+      actionSpendNow
+    );
+    assert.equal(actionSpendBinding.missionCreated, true);
+    const actionSpendTargetPolicy = [{
+      targetId: actionSpendBinding.missionTargetId,
+      listingId: "listing_native_action_spend",
+      retailerId: "target",
+      enabled: true,
+      maxUnitPriceCents: 1300,
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping"
+    }];
+    const actionSpendPolicyHash = stableHash(
+      "intent-policy-v2",
+      actionSpendBinding.missionId,
+      2,
+      "USD",
+      5000,
+      "add_to_cart",
+      "purchase_intent",
+      120,
+      "exact_only",
+      "",
+      0,
+      JSON.stringify(actionSpendTargetPolicy)
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."mission_targets"
+       SET max_unit_price_cents = 1300, seller_policy = 'first_party_only',
+           fulfillment = 'shipping', updated_at = $2
+       WHERE id = $1`,
+      [
+        actionSpendBinding.missionTargetId,
+        new Date(actionSpendNow + 1).toISOString()
+      ]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."mission_intent_revisions"(
+         id, tenant_id, user_id, mission_id, revision, quantity, currency,
+         max_all_in_cents, action_ceiling, substitution_policy, expires_at,
+         cooldown_seconds, target_policy_json, policy_hash, change_reason,
+         decision_mode, max_signal_age_seconds, created_by_actor_id, created_at
+       ) VALUES (
+         'intent_revision_native_action_spend', $1, $2, $3, 2, 1, 'USD',
+         5000, 'add_to_cart', 'exact_only', '', 0, $4, $5,
+         'Native bounded action/spend qualification.', 'purchase_intent', 120, $6, $7
+       )`,
+      [
+        NATIVE_TENANT,
+        NATIVE_USER,
+        actionSpendBinding.missionId,
+        JSON.stringify(actionSpendTargetPolicy),
+        actionSpendPolicyHash,
+        NATIVE_PRINCIPAL_A,
+        new Date(actionSpendNow + 1).toISOString()
+      ]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."user_spend_policies"(
+         user_id, tenant_id, revision, currency, per_order_cap_cents,
+         daily_cap_cents, monthly_cap_cents, order_submission_enabled,
+         created_at, updated_at
+       ) VALUES ($1, $2, 1, 'USD', NULL, NULL, NULL, 0, $3, $3)`,
+      [NATIVE_USER, NATIVE_TENANT, new Date(actionSpendNow + 1).toISOString()]
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."app_settings"
+       SET actions_paused = 0, pause_reason = '', execution_mode = 'live',
+           affiliate_mode = 'disabled', updated_at = $1
+       WHERE user_id = $2`,
+      [new Date(actionSpendNow + 1).toISOString(), NATIVE_USER]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."retailer_adapter_qualifications"(
+         tenant_id, user_id, retailer_id, adapter_version, highest_action,
+         status, evidence_hash, qualified_at, updated_at
+       ) VALUES ($1, $2, 'target', $3, 'add_to_cart', 'qualified', $4, $5, $5)
+       ON CONFLICT (user_id, retailer_id) DO UPDATE SET
+         adapter_version = EXCLUDED.adapter_version,
+         highest_action = EXCLUDED.highest_action,
+         status = EXCLUDED.status,
+         evidence_hash = EXCLUDED.evidence_hash,
+         qualified_at = EXCLUDED.qualified_at,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        NATIVE_TENANT,
+        NATIVE_USER,
+        TARGET_ADD_ADAPTER_VERSION,
+        stableHash("native-action-spend-qualification", actionSpendBinding.missionId),
+        new Date(actionSpendNow + 1).toISOString()
+      ]
+    );
+    const actionSpendAttestation = await attestNativeSignalEvaluation({
+      payload: actionSpendPayload,
+      missionId: actionSpendBinding.missionId,
+      missionTargetId: actionSpendBinding.missionTargetId,
+      listingId: "listing_native_action_spend",
+      missionEvaluationQuantity: 1,
+      strategies: [],
+      now: actionSpendNow
+    });
+    assert.equal(actionSpendAttestation.state, "matched");
+    assert.equal(actionSpendAttestation.decisionSource, "purchase_intent");
+    assert.equal(actionSpendAttestation.strategyId, "");
+    assert.equal(actionSpendAttestation.effectiveUnitCapCents, 1199);
+    assert.equal(actionSpendAttestation.effectiveAction, "add_to_cart");
+    await assert.rejects(
+      signalActionSpendB.applySignalActionSpend(
+        { tenantId: "tenant_local", userId: "user_local" },
+        actionSpendMessageId,
+        actionSpendLease.capabilityToken,
+        actionSpendAttestation,
+        actionSpendNow
+      ),
+      /capability (?:is invalid or expired|validation failed)/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [
+        NATIVE_PRINCIPAL_C,
+        NATIVE_TENANT,
+        NATIVE_SAME_TENANT_USER,
+        new Date(actionSpendNow).toISOString()
+      ]
+    );
+    try {
+      await assert.rejects(
+        signalActionSpendC.applySignalActionSpend(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER },
+          actionSpendMessageId,
+          actionSpendLease.capabilityToken,
+          actionSpendAttestation,
+          actionSpendNow
+        ),
+        /capability (?:is invalid or expired|validation failed)/
+      );
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    await assert.rejects(
+      signalActionSpendUnmapped.applySignalActionSpend(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        actionSpendMessageId,
+        actionSpendLease.capabilityToken,
+        actionSpendAttestation,
+        actionSpendNow
+      ),
+      /tenant session principal is not active/
+    );
+    const actionSpendGraphCounts = async (): Promise<Record<string, number>> => {
+      const row = (await first!.query<Record<string, string | number | bigint>>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."exact_offer_keys"
+             WHERE listing_id = 'listing_native_action_spend') AS "exactOffers",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."offer_snapshots"
+             WHERE mission_id = $1) AS snapshots,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_jobs"
+             WHERE mission_id = $1) AS jobs,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_events"
+             WHERE job_id IN (SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs"
+               WHERE mission_id = $1)) AS "actionEvents",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."spend_reservations"
+             WHERE mission_id = $1) AS reservations,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."spend_ledger_entries"
+             WHERE action_job_id IN (SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs"
+               WHERE mission_id = $1)) AS ledger,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."mission_decisions"
+             WHERE mission_id = $1 AND outcome = 'qualified') AS decisions,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+             WHERE event_type = 'action_job_created'
+               AND correlation_id IN (SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs"
+                 WHERE mission_id = $1)) AS audits,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+             WHERE event_type = 'action_job_created'
+               AND aggregate_id IN (SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs"
+                 WHERE mission_id = $1)) AS outbox`,
+        [actionSpendBinding.missionId]
+      )).rows[0]!;
+      return Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, Number(value)])
+      );
+    };
+    const emptyActionSpendGraph = {
+      exactOffers: 0,
+      snapshots: 0,
+      jobs: 0,
+      actionEvents: 0,
+      reservations: 0,
+      ledger: 0,
+      decisions: 0,
+      audits: 0,
+      outbox: 0
+    };
+    assert.deepEqual(await actionSpendGraphCounts(), emptyActionSpendGraph);
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_action_spend_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $body$
+       BEGIN
+         IF NEW.event_type = 'action_job_created' THEN
+           RAISE EXCEPTION 'native forced action/spend outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $body$;
+       CREATE TRIGGER "yoink_native_reject_action_spend_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_action_spend_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        signalActionSpendA.applySignalActionSpend(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          actionSpendMessageId,
+          actionSpendLease.capabilityToken,
+          actionSpendAttestation,
+          actionSpendNow
+        ),
+        (error: unknown) => {
+          const postgresError = error as Error & {
+            where?: string;
+            internalQuery?: string;
+            position?: string;
+          };
+          assert.match(
+            postgresError.message,
+            /native forced action\/spend outbox failure/,
+            `Unexpected action/spend PostgreSQL error context: ${JSON.stringify({
+              message: postgresError.message,
+              where: postgresError.where ?? "",
+              internalQuery: postgresError.internalQuery ?? "",
+              position: postgresError.position ?? ""
+            })}`
+          );
+          return true;
+        }
+      );
+      assert.deepEqual(await actionSpendGraphCounts(), emptyActionSpendGraph);
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_action_spend_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS "${NATIVE_SCHEMA}"."yoink_native_reject_action_spend_outbox"()`
+      );
+    }
+    const concurrentActionSpend = await Promise.all([
+      signalActionSpendA.applySignalActionSpend(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        actionSpendMessageId,
+        actionSpendLease.capabilityToken,
+        actionSpendAttestation,
+        actionSpendNow
+      ),
+      signalActionSpendASecond.applySignalActionSpend(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        actionSpendMessageId,
+        actionSpendLease.capabilityToken,
+        actionSpendAttestation,
+        actionSpendNow
+      )
+    ]);
+    const actionSpendWinner = concurrentActionSpend.find(
+      (result) => result.actionSpendApplyApplied
+    );
+    const actionSpendReplay = concurrentActionSpend.find(
+      (result) => !result.actionSpendApplyApplied
+    );
+    assert.ok(actionSpendWinner);
+    assert.ok(actionSpendReplay);
+    assert.equal(actionSpendWinner.initialJobState, "awaiting_executor");
+    assert.equal(actionSpendWinner.action, "add_to_cart");
+    assert.equal(actionSpendWinner.quantity, 1);
+    assert.equal(actionSpendWinner.unitPriceCents, 1199);
+    assert.equal(actionSpendWinner.effectiveUnitCapCents, 1199);
+    assert.equal(actionSpendWinner.maximumAllInCents, 4343);
+    assert.equal(actionSpendWinner.sellerName, "Target");
+    assert.equal(actionSpendWinner.sellerType, "first_party");
+    assert.equal(actionSpendWinner.fulfillment, "shipping");
+    assert.equal(actionSpendWinner.exactOfferAction, "insert");
+    assert.equal(actionSpendWinner.offerSnapshotAction, "insert");
+    assert.equal(actionSpendWinner.mutationStatementCount, 10);
+    assert.equal(actionSpendWinner.mutationRowCount, 10);
+    assert.equal(actionSpendWinner.actionJobMutated, true);
+    assert.equal(actionSpendWinner.spendReservationMutated, true);
+    assert.equal(actionSpendWinner.retailerMutation, false);
+    assert.equal(actionSpendWinner.checkoutMutation, false);
+    assert.equal(actionSpendWinner.orderSubmissionMutation, false);
+    assert.equal(actionSpendWinner.inboxLifecycleMutation, false);
+    assert.equal(actionSpendReplay.immutableReplay, true);
+    assert.equal(actionSpendReplay.mutationStatementCount, 0);
+    assert.equal(actionSpendReplay.actionJobMutated, false);
+    assert.deepEqual(await actionSpendGraphCounts(), {
+      exactOffers: 1,
+      snapshots: 1,
+      jobs: 1,
+      actionEvents: 1,
+      reservations: 1,
+      ledger: 1,
+      decisions: 1,
+      audits: 1,
+      outbox: 1
+    });
+    assert.deepEqual((await first.query<{
+      jobState: string;
+      jobAction: string;
+      jobQuantity: number;
+      attributionProvider: string;
+      affiliateMode: string;
+      reservationStatus: string;
+      reservedAmountCents: number;
+      ledgerEntryType: string;
+      reservedDeltaCents: number;
+      outcome: string;
+    }>(
+      `SELECT job.state AS "jobState", job.action AS "jobAction",
+              job.quantity AS "jobQuantity",
+              job.attribution_provider AS "attributionProvider",
+              job.affiliate_mode AS "affiliateMode",
+              reservation.status AS "reservationStatus",
+              reservation.reserved_amount_cents AS "reservedAmountCents",
+              ledger.entry_type AS "ledgerEntryType",
+              ledger.reserved_delta_cents AS "reservedDeltaCents",
+              decision.outcome
+       FROM "${NATIVE_SCHEMA}"."action_jobs" AS job
+       JOIN "${NATIVE_SCHEMA}"."spend_reservations" AS reservation
+         ON reservation.id = job.spend_reservation_id
+       JOIN "${NATIVE_SCHEMA}"."spend_ledger_entries" AS ledger
+         ON ledger.reservation_id = reservation.id
+       JOIN "${NATIVE_SCHEMA}"."mission_decisions" AS decision
+         ON decision.mission_id = job.mission_id AND decision.outcome = 'qualified'
+       WHERE job.id = $1`,
+      [actionSpendWinner.actionJobId]
+    )).rows.map((row) => ({
+      ...row,
+      jobQuantity: Number(row.jobQuantity),
+      reservedAmountCents: Number(row.reservedAmountCents),
+      reservedDeltaCents: Number(row.reservedDeltaCents)
+    })), [{
+      jobState: "awaiting_executor",
+      jobAction: "add_to_cart",
+      jobQuantity: 1,
+      attributionProvider: "canonical",
+      affiliateMode: "disabled",
+      reservationStatus: "active",
+      reservedAmountCents: 4343,
+      ledgerEntryType: "reserved",
+      reservedDeltaCents: 4343,
+      outcome: "qualified"
+    }]);
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."action_jobs"
+       SET state = 'leased', updated_at = $2 WHERE id = $1`,
+      [actionSpendWinner.actionJobId, new Date(actionSpendNow + 2).toISOString()]
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."outbox_events"
+       SET delivery_state = 'delivered', delivery_attempts = 1,
+           delivered_at = $2, updated_at = $2
+       WHERE aggregate_id = $1 AND event_type = 'action_job_created'`,
+      [actionSpendWinner.actionJobId, new Date(actionSpendNow + 2).toISOString()]
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."app_settings"
+       SET actions_paused = 1, pause_reason = 'Native qualification restored',
+           execution_mode = 'shadow', affiliate_mode = 'prefer_fallback', updated_at = $1
+       WHERE user_id = $2`,
+      [
+        new Date(actionSpendNow + 2).toISOString(),
+        NATIVE_USER
+      ]
+    );
+    const lifecycleReplay = await signalActionSpendA.applySignalActionSpend(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      actionSpendMessageId,
+      actionSpendLease.capabilityToken,
+      actionSpendAttestation,
+      actionSpendNow
+    );
+    assert.equal(lifecycleReplay.actionSpendApplyApplied, false);
+    assert.equal(lifecycleReplay.immutableReplay, true);
+    assert.equal(lifecycleReplay.mutationStatementCount, 0);
+    signalActionSpendDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalActionSpendDirectClient.on("error", () => undefined);
+    await signalActionSpendDirectClient.connect();
+    await signalActionSpendDirectClient.query(
+      `SET ROLE "${signalActionSpendManifest.actionSpendRole.name}"`
+    );
+    await assert.rejects(
+      signalActionSpendDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalActionSpendDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION}"(
+           $1, $2, 'plan', $3, $4, '', $5
+         )`,
+        [
+          NATIVE_TENANT,
+          "user_local",
+          actionSpendMessageId,
+          actionSpendLease.capabilityToken,
+          JSON.stringify({ attestation: actionSpendAttestation })
+        ]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await signalActionSpendDirectClient.end();
+    signalActionSpendDirectClient = null;
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -12315,7 +12918,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalStrategyEvaluationB?.close(),
       signalStrategyEvaluationC?.close(),
       signalStrategyEvaluationUnmapped?.close(),
-      signalStrategyEvaluationDirectClient?.end()
+      signalStrategyEvaluationDirectClient?.end(),
+      signalActionSpendA?.close(),
+      signalActionSpendASecond?.close(),
+      signalActionSpendB?.close(),
+      signalActionSpendC?.close(),
+      signalActionSpendUnmapped?.close(),
+      signalActionSpendDirectClient?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
