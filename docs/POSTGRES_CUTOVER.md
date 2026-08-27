@@ -2457,6 +2457,110 @@ fresh-active exclusion, stale-run interruption, monotonic progress, terminal
 audit/replay, latest-state item insert/current/refresh behavior, and zero
 catalog or action creation.
 
+## Spend-reservation lifecycle qualification (0.93.0)
+
+Version 0.93 adds a nineteenth independent, inactive hosted-signal boundary
+for `release_spend_reservation` and `commit_spend_reservation`. It succeeds the
+qualified source-sync boundary and consumes only the shared spend lock mask
+`00001`. The operation does not execute a retailer action: it records a
+terminal reservation fact that an independently authorized action path has
+already established.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+and can execute one strict security-definer function. Its immutable receipt
+seals six forced-RLS tables: `action_jobs`, `action_events`,
+`spend_reservations`, `spend_ledger_entries`, `audit_events`, and
+`outbox_events`. Only the last four are mutation tables.
+
+Every request carries exact action-job and reservation IDs plus
+`APPLY_SPEND_RESERVATION_LIFECYCLE_V1`. PostgreSQL resolves `session_user` to
+one active tenant/user, acquires the spend lock, and revalidates tenant, user,
+mission, intent revision, exact offer, snapshot, action, quantity, currency,
+and both graph links under row locks. Request identity includes the principal,
+operation, IDs, release reason or committed amount, and confirmation.
+
+Release accepts only an active reservation bound to the exact current job
+state. The allowed facts are `offer_rejected`, `expired`, `cancelled`, a
+confirmed add-to-cart or prepare-checkout with no order, or reservation expiry
+proven against the database statement clock while the job remains before any
+possible retailer mutation. Commit accepts only an active
+`submit_order` reservation whose job is already `confirmed`. The newest
+confirmed `action_events` evidence must contain a positive numeric
+`allInTotalCents` or `orderTotalCents`; if both exist they must agree, the
+requested amount must match, and it cannot exceed the reserved amount.
+
+One applied request updates the reservation and appends a ledger entry, audit,
+and outbox record in one transaction. Exact replay is mutation-free after
+normal delivery-state changes; partial, altered, or conflicting receipt graphs
+abort. The role cannot mutate action state or evidence, mission fulfillment,
+inbox state, checkout, order submission, source data, or catalog data.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-reservation-lifecycle-apply -- plan \
+  yoink_cutover_qualification_093 yoink_q_093 yoink_session_q_093 \
+  yoink_queue_q_093 yoink_control_q_093 yoink_notify_q_093 \
+  yoink_execute_q_093 yoink_retain_q_093 yoink_candidate_q_093 \
+  yoink_dispatch_q_093 yoink_reconcile_q_093 yoink_witness_q_093 \
+  yoink_delivery_q_093 yoink_catalog_q_093 yoink_resolution_q_093 \
+  yoink_reference_q_093 yoink_terminal_q_093 yoink_offer_q_093 \
+  yoink_post_q_093 yoink_mission_q_093 yoink_strategy_q_093 \
+  yoink_writer_lock_q_093 yoink_constraint_config_q_093 \
+  yoink_action_spend_q_093 yoink_target_qual_q_093 \
+  yoink_source_trust_q_093 yoink_retailer_qual_q_093 \
+  yoink_mission_policy_q_093 yoink_source_status_q_093 \
+  yoink_source_sync_q_093 yoink_reservation_q_093
+```
+
+After every predecessor through source sync is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_QUALIFICATION_ACK=bounded-signal-reservation-lifecycle-apply-qualification \
+  npm run postgres:signal-reservation-lifecycle-apply -- apply \
+  yoink_cutover_qualification_093 yoink_q_093 yoink_session_q_093 \
+  yoink_queue_q_093 yoink_control_q_093 yoink_notify_q_093 \
+  yoink_execute_q_093 yoink_retain_q_093 yoink_candidate_q_093 \
+  yoink_dispatch_q_093 yoink_reconcile_q_093 yoink_witness_q_093 \
+  yoink_delivery_q_093 yoink_catalog_q_093 yoink_resolution_q_093 \
+  yoink_reference_q_093 yoink_terminal_q_093 yoink_offer_q_093 \
+  yoink_post_q_093 yoink_mission_q_093 yoink_strategy_q_093 \
+  yoink_writer_lock_q_093 yoink_constraint_config_q_093 \
+  yoink_action_spend_q_093 yoink_target_qual_q_093 \
+  yoink_source_trust_q_093 yoink_retailer_qual_q_093 \
+  yoink_mission_policy_q_093 yoink_source_status_q_093 \
+  yoink_source_sync_q_093 yoink_reservation_q_093
+```
+
+Then independently verify the function, role, protected/mutation sets, exact
+grants, immutable receipt, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-reservation-lifecycle-apply -- verify \
+  yoink_cutover_qualification_093 yoink_q_093 yoink_session_q_093 \
+  yoink_queue_q_093 yoink_control_q_093 yoink_notify_q_093 \
+  yoink_execute_q_093 yoink_retain_q_093 yoink_candidate_q_093 \
+  yoink_dispatch_q_093 yoink_reconcile_q_093 yoink_witness_q_093 \
+  yoink_delivery_q_093 yoink_catalog_q_093 yoink_resolution_q_093 \
+  yoink_reference_q_093 yoink_terminal_q_093 yoink_offer_q_093 \
+  yoink_post_q_093 yoink_mission_q_093 yoink_strategy_q_093 \
+  yoink_writer_lock_q_093 yoink_constraint_config_q_093 \
+  yoink_action_spend_q_093 yoink_target_qual_q_093 \
+  yoink_source_trust_q_093 yoink_retailer_qual_q_093 \
+  yoink_mission_policy_q_093 yoink_source_status_q_093 \
+  yoink_source_sync_q_093 yoink_reservation_q_093
+```
+
+The receipt records `reservationWriterParity: true` while
+`sourceWriterParity: false`, `configurationWriterParity: false`,
+`writerLockProtocolParity: false`, and `runtimeAuthority: false` remain
+explicit. Native PostgreSQL 16 proves principal isolation, direct and cross-
+boundary denial, graph and terminal-state binding, database-clock pre-mutation expiry,
+verified-total rejection and acceptance, late rollback, spend-lock contention,
+immutable replay, append-only accounting, and zero action/mission mutation.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.

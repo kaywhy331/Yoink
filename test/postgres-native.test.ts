@@ -212,6 +212,17 @@ import {
   type PostgresSignalSourceSyncItemPayload,
   type PostgresSignalSourceSyncProgressPayload
 } from "../packages/database/src/postgres-signal-source-sync-apply.js";
+import {
+  NodePostgresSignalReservationLifecycleApplyDatabase,
+  POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION,
+  POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_FUNCTION,
+  applyPostgresSignalReservationLifecycleApplyBoundary,
+  buildPostgresSignalReservationLifecycleApplyManifest,
+  buildPostgresSignalReservationLifecycleRequestId,
+  verifyPostgresSignalReservationLifecycleApplyBoundary,
+  type PostgresSignalReservationLifecycleOperation,
+  type PostgresSignalReservationLifecyclePayload
+} from "../packages/database/src/postgres-signal-reservation-lifecycle-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -298,6 +309,8 @@ const NATIVE_RETAILER_QUALIFICATION_APPLY_ROLE_NAMESPACE = "yoink_native_retaile
 const NATIVE_MISSION_POLICY_APPLY_ROLE_NAMESPACE = "yoink_native_policy";
 const NATIVE_SOURCE_STATUS_APPLY_ROLE_NAMESPACE = "yoink_native_source_status";
 const NATIVE_SOURCE_SYNC_APPLY_ROLE_NAMESPACE = "yoink_native_source_sync";
+const NATIVE_RESERVATION_LIFECYCLE_APPLY_ROLE_NAMESPACE =
+  "yoink_native_reservation";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1133,7 +1146,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, and durable source sync", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, and terminal reservation lifecycle", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1308,6 +1321,18 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalSourceSyncC: NodePostgresSignalSourceSyncApplyDatabase | null = null;
   let signalSourceSyncUnmapped: NodePostgresSignalSourceSyncApplyDatabase | null = null;
   let signalSourceSyncDirectClient: Client | null = null;
+  let signalReservationLifecycleA:
+    NodePostgresSignalReservationLifecycleApplyDatabase | null = null;
+  let signalReservationLifecycleASecond:
+    NodePostgresSignalReservationLifecycleApplyDatabase | null = null;
+  let signalReservationLifecycleB:
+    NodePostgresSignalReservationLifecycleApplyDatabase | null = null;
+  let signalReservationLifecycleC:
+    NodePostgresSignalReservationLifecycleApplyDatabase | null = null;
+  let signalReservationLifecycleUnmapped:
+    NodePostgresSignalReservationLifecycleApplyDatabase | null = null;
+  let signalReservationLifecycleDirectClient: Client | null = null;
+  let signalReservationLifecycleLockClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2861,6 +2886,103 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalSourceSyncBoundary
     );
+    const qualifiedSignalReservationLifecycleManifest =
+      buildPostgresSignalReservationLifecycleApplyManifest(
+        qualifiedSignalSourceSyncManifest,
+        NATIVE_RESERVATION_LIFECYCLE_APPLY_ROLE_NAMESPACE
+      );
+    const signalReservationLifecycleBoundary =
+      await applyPostgresSignalReservationLifecycleApplyBoundary(
+        importer,
+        qualifiedSignalReservationLifecycleManifest,
+        new Date("2026-08-25T16:57:00.000Z").getTime()
+      );
+    assert.equal(signalReservationLifecycleBoundary.protectedTenantTableCount, 6);
+    assert.equal(signalReservationLifecycleBoundary.forcedRlsTableCount, 6);
+    assert.equal(signalReservationLifecycleBoundary.mutationTableCount, 4);
+    assert.equal(signalReservationLifecycleBoundary.directTableGrantCount, 0);
+    assert.equal(signalReservationLifecycleBoundary.functionGrantCount, 1);
+    assert.equal(signalReservationLifecycleBoundary.membershipCount, 0);
+    assert.equal(signalReservationLifecycleBoundary.activePrincipalCount, 0);
+    assert.equal(signalReservationLifecycleBoundary.metadata.operationCount, 2);
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.writerLockProtocolConsumed,
+      true
+    );
+    assert.equal(signalReservationLifecycleBoundary.metadata.spendScopeConsumed, true);
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.deterministicRequestIdentity,
+      true
+    );
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.immutableLifecycleReplay,
+      true
+    );
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.lifecycleAwareOutboxReplay,
+      true
+    );
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.currentActionReservationGraphRevalidation,
+      true
+    );
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.terminalReleaseStateRevalidation,
+      true
+    );
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.serverClockExpiryRelease,
+      true
+    );
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.possibleMutationExpiryReleaseBlocked,
+      true
+    );
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.verifiedSubmitOrderCommit,
+      true
+    );
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.unambiguousVerifiedTotal,
+      true
+    );
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.reservationCreationPredecessorParity,
+      true
+    );
+    assert.equal(signalReservationLifecycleBoundary.metadata.reservationReleaseParity, true);
+    assert.equal(signalReservationLifecycleBoundary.metadata.reservationCommitParity, true);
+    assert.equal(signalReservationLifecycleBoundary.metadata.appendOnlyLedgerParity, true);
+    assert.equal(
+      signalReservationLifecycleBoundary.metadata.atomicReservationLedgerAuditOutbox,
+      true
+    );
+    assert.equal(signalReservationLifecycleBoundary.metadata.databaseOwnedTimestamps, true);
+    assert.equal(signalReservationLifecycleBoundary.metadata.missionFulfillmentMutation, false);
+    assert.equal(signalReservationLifecycleBoundary.metadata.checkoutMutation, false);
+    assert.equal(signalReservationLifecycleBoundary.metadata.orderSubmissionMutation, false);
+    assert.equal(signalReservationLifecycleBoundary.metadata.sourceSyncWriterParity, true);
+    assert.equal(signalReservationLifecycleBoundary.metadata.sourceWriterParity, false);
+    assert.equal(signalReservationLifecycleBoundary.metadata.retailerQualificationWriterParity, true);
+    assert.equal(signalReservationLifecycleBoundary.metadata.missionPolicyWriterParity, true);
+    assert.equal(signalReservationLifecycleBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalReservationLifecycleBoundary.metadata.reservationWriterParity, true);
+    assert.equal(signalReservationLifecycleBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalReservationLifecycleBoundary.metadata.actionAuthority, false);
+    assert.equal(signalReservationLifecycleBoundary.metadata.checkoutAuthority, false);
+    assert.equal(signalReservationLifecycleBoundary.metadata.orderSubmissionAuthority, false);
+    assert.equal(signalReservationLifecycleBoundary.metadata.runtimeAuthority, false);
+    assert.match(
+      signalReservationLifecycleBoundary.boundaryCatalogFingerprint,
+      /^[a-f0-9]{64}$/
+    );
+    assert.deepEqual(
+      await verifyPostgresSignalReservationLifecycleApplyBoundary(
+        importer,
+        qualifiedSignalReservationLifecycleManifest
+      ),
+      signalReservationLifecycleBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -3214,6 +3336,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalSourceStatusManifest,
         NATIVE_SOURCE_SYNC_APPLY_ROLE_NAMESPACE
       );
+    const signalReservationLifecycleManifest =
+      buildPostgresSignalReservationLifecycleApplyManifest(
+        signalSourceSyncManifest,
+        NATIVE_RESERVATION_LIFECYCLE_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -3316,6 +3443,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalSourceSyncManifest.sourceSyncRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalReservationLifecycleManifest.reservationLifecycleRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -13283,6 +13414,857 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalSourceSyncUnmapped = null;
     })();
 
+    await (async () => {
+    const reservationLifecycleDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalReservationLifecycleApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalReservationLifecycleManifest, { maxConnections });
+    signalReservationLifecycleA = reservationLifecycleDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalReservationLifecycleASecond = reservationLifecycleDatabase(NATIVE_PRINCIPAL_A);
+    signalReservationLifecycleB = reservationLifecycleDatabase(NATIVE_PRINCIPAL_B);
+    signalReservationLifecycleC = reservationLifecycleDatabase(NATIVE_PRINCIPAL_C);
+    signalReservationLifecycleUnmapped = reservationLifecycleDatabase(
+      NATIVE_PRINCIPAL_UNMAPPED
+    );
+
+    const reservationLifecycleNow = Date.now();
+    const reservationLifecycleCreatedAt = new Date(
+      reservationLifecycleNow - 5_000
+    ).toISOString();
+    const baseReservationId = actionSpendWinner.spendReservationId;
+    const createReservationLifecycleFixture = async (input: {
+      suffix: string;
+      action: "add_to_cart" | "prepare_checkout" | "submit_order";
+      state: string;
+      expiresAt: string;
+      reservedAmountCents?: number;
+    }): Promise<{ actionJobId: string; reservationId: string }> => {
+      const actionJobId = `native_reservation_${input.suffix}_job`;
+      const reservationId = `native_reservation_${input.suffix}`;
+      const reservedAmountCents = input.reservedAmountCents ?? 4_343;
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."action_jobs"(
+           id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+           state, action, quantity, max_unit_price_cents, max_order_total_cents,
+           currency, seller_policy, fulfillment, expected_seller, listing_id,
+           canonical_url, idempotency_key, capability_nonce_hash, expires_at,
+           leased_at, lease_expires_at, intent_revision_id, exact_offer_key_id,
+           offer_snapshot_id, created_at, updated_at
+         )
+         SELECT $1, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+                $2, $3, quantity, max_unit_price_cents, $4, currency,
+                seller_policy, fulfillment, expected_seller, listing_id,
+                canonical_url, $5, capability_nonce_hash, $6, '', '',
+                intent_revision_id, exact_offer_key_id, offer_snapshot_id, $7, $7
+         FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE id = $8`,
+        [
+          actionJobId,
+          input.state,
+          input.action,
+          reservedAmountCents,
+          `reservation-lifecycle-job:${input.suffix}`,
+          input.expiresAt,
+          reservationLifecycleCreatedAt,
+          actionSpendWinner.actionJobId
+        ]
+      );
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."spend_reservations"(
+           id, tenant_id, user_id, mission_id, intent_revision_id,
+           exact_offer_key_id, offer_snapshot_id, action_job_id, idempotency_key,
+           action, quantity, reserved_amount_cents, committed_amount_cents,
+           currency, status, release_reason, expires_at, created_at, updated_at
+         )
+         SELECT $1, tenant_id, user_id, mission_id, intent_revision_id,
+                exact_offer_key_id, offer_snapshot_id, $2, $3, $4, quantity,
+                $5, 0, currency, 'active', '', $6, $7, $7
+         FROM "${NATIVE_SCHEMA}"."spend_reservations" WHERE id = $8`,
+        [
+          reservationId,
+          actionJobId,
+          `reservation-lifecycle-spend:${input.suffix}`,
+          input.action,
+          reservedAmountCents,
+          input.expiresAt,
+          reservationLifecycleCreatedAt,
+          baseReservationId
+        ]
+      );
+      await first!.query(
+        `UPDATE "${NATIVE_SCHEMA}"."action_jobs"
+         SET spend_reservation_id = $1 WHERE id = $2`,
+        [reservationId, actionJobId]
+      );
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."spend_ledger_entries"(
+           id, tenant_id, user_id, reservation_id, action_job_id, entry_type,
+           reserved_delta_cents, spent_delta_cents, quantity_delta, currency,
+           reason_code, correlation_id, metadata_json, created_at
+         )
+         SELECT $1, tenant_id, user_id, $2, $3, 'reserved', $4, 0, quantity,
+                currency, 'action_job_reserved', $3, '{}', $5
+         FROM "${NATIVE_SCHEMA}"."spend_reservations" WHERE id = $2`,
+        [
+          `native_reservation_${input.suffix}_reserved`,
+          reservationId,
+          actionJobId,
+          reservedAmountCents,
+          reservationLifecycleCreatedAt
+        ]
+      );
+      return { actionJobId, reservationId };
+    };
+    const releaseFixture = await createReservationLifecycleFixture({
+      suffix: "release",
+      action: "add_to_cart",
+      state: "confirmed",
+      expiresAt: new Date(reservationLifecycleNow + 300_000).toISOString()
+    });
+    const prepareReleaseFixture = await createReservationLifecycleFixture({
+      suffix: "prepare_release",
+      action: "prepare_checkout",
+      state: "confirmed",
+      expiresAt: new Date(reservationLifecycleNow + 300_000).toISOString()
+    });
+    const cancelledReleaseFixture = await createReservationLifecycleFixture({
+      suffix: "cancelled_release",
+      action: "add_to_cart",
+      state: "cancelled",
+      expiresAt: new Date(reservationLifecycleNow + 300_000).toISOString()
+    });
+    const expiredReleaseFixture = await createReservationLifecycleFixture({
+      suffix: "expired_release",
+      action: "add_to_cart",
+      state: "expired",
+      expiresAt: new Date(reservationLifecycleNow + 300_000).toISOString()
+    });
+    const rejectedReleaseFixture = await createReservationLifecycleFixture({
+      suffix: "rejected_release",
+      action: "add_to_cart",
+      state: "offer_rejected",
+      expiresAt: new Date(reservationLifecycleNow + 300_000).toISOString()
+    });
+    const commitFixture = await createReservationLifecycleFixture({
+      suffix: "commit",
+      action: "submit_order",
+      state: "confirmed",
+      expiresAt: new Date(reservationLifecycleNow + 300_000).toISOString()
+    });
+    const expiryFixture = await createReservationLifecycleFixture({
+      suffix: "expiry",
+      action: "add_to_cart",
+      state: "awaiting_executor",
+      expiresAt: new Date(reservationLifecycleNow - 1_000).toISOString()
+    });
+    const futureExpiryFixture = await createReservationLifecycleFixture({
+      suffix: "future_expiry",
+      action: "add_to_cart",
+      state: "awaiting_executor",
+      expiresAt: new Date(reservationLifecycleNow + 300_000).toISOString()
+    });
+    const possibleMutationExpiryFixture = await createReservationLifecycleFixture({
+      suffix: "possible_mutation_expiry",
+      action: "submit_order",
+      state: "confirmed",
+      expiresAt: new Date(reservationLifecycleNow - 1_000).toISOString()
+    });
+    const alreadyReleasedFixture = await createReservationLifecycleFixture({
+      suffix: "already_released",
+      action: "add_to_cart",
+      state: "cancelled",
+      expiresAt: new Date(reservationLifecycleNow + 300_000).toISOString()
+    });
+    const alreadyCommittedFixture = await createReservationLifecycleFixture({
+      suffix: "already_committed",
+      action: "submit_order",
+      state: "confirmed",
+      expiresAt: new Date(reservationLifecycleNow + 300_000).toISOString()
+    });
+    const reservationLifecyclePrincipal = {
+      tenantId: NATIVE_TENANT,
+      userId: NATIVE_USER
+    };
+    const applyReservationLifecycle = (
+      database: NodePostgresSignalReservationLifecycleApplyDatabase,
+      operation: PostgresSignalReservationLifecycleOperation,
+      payload: PostgresSignalReservationLifecyclePayload
+    ) => database.applyReservationLifecycle(
+      reservationLifecyclePrincipal,
+      operation,
+      buildPostgresSignalReservationLifecycleRequestId(
+        reservationLifecyclePrincipal,
+        operation,
+        payload
+      ),
+      payload
+    );
+    const releasePayload = {
+      ...releaseFixture,
+      releaseReason: "add_to_cart_confirmed_without_order" as const,
+      confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+    } as const;
+    await assert.rejects(
+      signalReservationLifecycleB.applyReservationLifecycle(
+        reservationLifecyclePrincipal,
+        "release_spend_reservation",
+        buildPostgresSignalReservationLifecycleRequestId(
+          reservationLifecyclePrincipal,
+          "release_spend_reservation",
+          releasePayload
+        ),
+        releasePayload
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [
+        NATIVE_PRINCIPAL_C,
+        NATIVE_TENANT,
+        NATIVE_SAME_TENANT_USER,
+        reservationLifecycleCreatedAt
+      ]
+    );
+    try {
+      await assert.rejects(
+        signalReservationLifecycleC.applyReservationLifecycle(
+          reservationLifecyclePrincipal,
+          "release_spend_reservation",
+          buildPostgresSignalReservationLifecycleRequestId(
+            reservationLifecyclePrincipal,
+            "release_spend_reservation",
+            releasePayload
+          ),
+          releasePayload
+        ),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    await assert.rejects(
+      signalReservationLifecycleUnmapped.applyReservationLifecycle(
+        reservationLifecyclePrincipal,
+        "release_spend_reservation",
+        buildPostgresSignalReservationLifecycleRequestId(
+          reservationLifecyclePrincipal,
+          "release_spend_reservation",
+          releasePayload
+        ),
+        releasePayload
+      ),
+      /tenant session principal is not active/
+    );
+    await assert.rejects(
+      signalReservationLifecycleA.applyReservationLifecycle(
+        reservationLifecyclePrincipal,
+        "release_spend_reservation",
+        `reservation_lifecycle_${"f".repeat(32)}`,
+        releasePayload
+      ),
+      /apply request is invalid/
+    );
+    const wrongConfirmationPayload = {
+      ...releasePayload,
+      confirmation: "APPLY_SPEND_RESERVATION_LIFECYCLE_V0"
+    } as unknown as PostgresSignalReservationLifecyclePayload;
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "release_spend_reservation",
+        wrongConfirmationPayload
+      ),
+      /payload shape is invalid/
+    );
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "release_spend_reservation",
+        {
+          ...releasePayload,
+          reservationId: commitFixture.reservationId
+        }
+      ),
+      /ownership is invalid/
+    );
+
+    signalReservationLifecycleDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalReservationLifecycleDirectClient.on("error", () => undefined);
+    await signalReservationLifecycleDirectClient.connect();
+    await signalReservationLifecycleDirectClient.query(
+      `SET ROLE "${signalReservationLifecycleManifest.reservationLifecycleRole.name}"`
+    );
+    await assert.rejects(
+      signalReservationLifecycleDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."spend_reservations" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalReservationLifecycleDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."action_jobs" SET state = 'confirmed'`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalReservationLifecycleDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_SYNC_APPLY_FUNCTION}"(
+           $1, $2, 'start_source_sync', 'source_sync_${"a".repeat(32)}', '{}'
+         )`,
+        [NATIVE_TENANT, NATIVE_USER]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalReservationLifecycleDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_FUNCTION}"(
+           $1, 'user_local', 'release_spend_reservation', $2, $3
+         )`,
+        [
+          NATIVE_TENANT,
+          buildPostgresSignalReservationLifecycleRequestId(
+            reservationLifecyclePrincipal,
+            "release_spend_reservation",
+            releasePayload
+          ),
+          JSON.stringify(releasePayload)
+        ]
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await signalReservationLifecycleDirectClient.end();
+    signalReservationLifecycleDirectClient = null;
+
+    const reservationLifecycleSnapshot = async (fixture: {
+      actionJobId: string;
+      reservationId: string;
+    }) => {
+      const row = (await first!.query<{
+        jobState: string;
+        jobAction: string;
+        reservationStatus: string;
+        releaseReason: string;
+        committedAmountCents: string | number | bigint;
+        ledgerCount: string | number | bigint;
+        actionEventCount: string | number | bigint;
+        auditCount: string | number | bigint;
+        outboxCount: string | number | bigint;
+        fulfilledQuantity: string | number | bigint;
+      }>(
+        `SELECT job.state AS "jobState", job.action AS "jobAction",
+                reservation.status AS "reservationStatus",
+                reservation.release_reason AS "releaseReason",
+                reservation.committed_amount_cents AS "committedAmountCents",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."spend_ledger_entries" ledger
+                 WHERE ledger.reservation_id = reservation.id) AS "ledgerCount",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_events" event
+                 WHERE event.job_id = job.id) AS "actionEventCount",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events" audit
+                 WHERE audit.correlation_id = job.id
+                   AND audit.event_type IN (
+                     'spend_reservation_released', 'spend_committed'
+                   )) AS "auditCount",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events" outbox
+                 WHERE outbox.aggregate_type = 'spend_reservation'
+                   AND outbox.aggregate_id = reservation.id) AS "outboxCount",
+                mission.fulfilled_quantity AS "fulfilledQuantity"
+         FROM "${NATIVE_SCHEMA}"."action_jobs" job
+         JOIN "${NATIVE_SCHEMA}"."spend_reservations" reservation
+           ON reservation.id = job.spend_reservation_id
+         JOIN "${NATIVE_SCHEMA}"."missions" mission ON mission.id = job.mission_id
+         WHERE job.id = $1 AND reservation.id = $2`,
+        [fixture.actionJobId, fixture.reservationId]
+      )).rows[0]!;
+      return {
+        ...row,
+        committedAmountCents: Number(row.committedAmountCents),
+        ledgerCount: Number(row.ledgerCount),
+        actionEventCount: Number(row.actionEventCount),
+        auditCount: Number(row.auditCount),
+        outboxCount: Number(row.outboxCount),
+        fulfilledQuantity: Number(row.fulfilledQuantity)
+      };
+    };
+    const releaseBefore = await reservationLifecycleSnapshot(releaseFixture);
+    const releaseResult = await applyReservationLifecycle(
+      signalReservationLifecycleA,
+      "release_spend_reservation",
+      releasePayload
+    );
+    assert.equal(releaseResult.outcome, "applied");
+    assert.equal(releaseResult.mutationApplied, true);
+    assert.equal(releaseResult.idempotentReplay, false);
+    assert.equal(releaseResult.mutationStatementCount, 4);
+    assert.equal(releaseResult.mutationRowCount, 4);
+    assert.equal(releaseResult.reservationMutated, true);
+    assert.equal(releaseResult.ledgerMutated, true);
+    assert.equal(releaseResult.auditMutated, true);
+    assert.equal(releaseResult.outboxMutated, true);
+    assert.equal(releaseResult.reservation.status, "released");
+    assert.equal(releaseResult.reservation.releaseReason, releasePayload.releaseReason);
+    assert.equal(releaseResult.ledger?.entryType, "released");
+    assert.equal(releaseResult.ledger?.reservedDeltaCents, -4_343);
+    const releaseAfter = await reservationLifecycleSnapshot(releaseFixture);
+    assert.deepEqual(releaseAfter, {
+      ...releaseBefore,
+      reservationStatus: "released",
+      releaseReason: releasePayload.releaseReason,
+      ledgerCount: releaseBefore.ledgerCount + 1,
+      auditCount: releaseBefore.auditCount + 1,
+      outboxCount: releaseBefore.outboxCount + 1
+    });
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."outbox_events"
+       SET delivery_state = 'delivered', delivery_attempts = 1,
+           delivered_at = $2, updated_at = $2
+       WHERE aggregate_type = 'spend_reservation' AND aggregate_id = $1`,
+      [releaseFixture.reservationId, new Date(reservationLifecycleNow + 1_000).toISOString()]
+    );
+    const releaseReplay = await applyReservationLifecycle(
+      signalReservationLifecycleASecond,
+      "release_spend_reservation",
+      releasePayload
+    );
+    assert.equal(releaseReplay.outcome, "already_applied");
+    assert.equal(releaseReplay.mutationApplied, false);
+    assert.equal(releaseReplay.idempotentReplay, true);
+    assert.equal(releaseReplay.mutationStatementCount, 0);
+    assert.deepEqual(await reservationLifecycleSnapshot(releaseFixture), releaseAfter);
+
+    for (const terminalCase of [
+      {
+        fixture: prepareReleaseFixture,
+        releaseReason: "prepare_checkout_confirmed_without_order" as const
+      },
+      {
+        fixture: cancelledReleaseFixture,
+        releaseReason: "cancelled" as const
+      },
+      {
+        fixture: expiredReleaseFixture,
+        releaseReason: "expired" as const
+      },
+      {
+        fixture: rejectedReleaseFixture,
+        releaseReason: "offer_rejected" as const
+      }
+    ]) {
+      const before = await reservationLifecycleSnapshot(terminalCase.fixture);
+      const result = await applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "release_spend_reservation",
+        {
+          ...terminalCase.fixture,
+          releaseReason: terminalCase.releaseReason,
+          confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+        }
+      );
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.reservation.status, "released");
+      assert.equal(result.reservation.releaseReason, terminalCase.releaseReason);
+      assert.deepEqual(await reservationLifecycleSnapshot(terminalCase.fixture), {
+        ...before,
+        reservationStatus: "released",
+        releaseReason: terminalCase.releaseReason,
+        ledgerCount: before.ledgerCount + 1,
+        auditCount: before.auditCount + 1,
+        outboxCount: before.outboxCount + 1
+      });
+    }
+
+    const futureExpiryBefore = await reservationLifecycleSnapshot(
+      futureExpiryFixture
+    );
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "release_spend_reservation",
+        {
+          ...futureExpiryFixture,
+          releaseReason: "reservation_expired",
+          confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+        }
+      ),
+      /not bound to the current terminal action state/
+    );
+    assert.deepEqual(
+      await reservationLifecycleSnapshot(futureExpiryFixture),
+      futureExpiryBefore
+    );
+    const possibleMutationExpiryBefore = await reservationLifecycleSnapshot(
+      possibleMutationExpiryFixture
+    );
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "release_spend_reservation",
+        {
+          ...possibleMutationExpiryFixture,
+          releaseReason: "reservation_expired",
+          confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+        }
+      ),
+      /not bound to the current terminal action state/
+    );
+    assert.deepEqual(
+      await reservationLifecycleSnapshot(possibleMutationExpiryFixture),
+      possibleMutationExpiryBefore
+    );
+
+    const expiryWrongStatePayload = {
+      ...expiryFixture,
+      releaseReason: "cancelled" as const,
+      confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+    } as const;
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "release_spend_reservation",
+        expiryWrongStatePayload
+      ),
+      /not bound to the current terminal action state/
+    );
+    const expiryPayload = {
+      ...expiryFixture,
+      releaseReason: "reservation_expired" as const,
+      confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+    } as const;
+    const expiryResult = await applyReservationLifecycle(
+      signalReservationLifecycleA,
+      "release_spend_reservation",
+      expiryPayload
+    );
+    assert.equal(expiryResult.outcome, "applied");
+    assert.equal(expiryResult.reservation.status, "released");
+    assert.equal(expiryResult.reservation.releaseReason, "reservation_expired");
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "release_spend_reservation",
+        { ...expiryPayload, releaseReason: "expired" }
+      ),
+      /release reason conflicts with the terminal reservation/
+    );
+
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."spend_reservations"
+       SET status = 'released', release_reason = 'cancelled', updated_at = $2
+       WHERE id = $1`,
+      [
+        alreadyReleasedFixture.reservationId,
+        new Date(reservationLifecycleNow + 2).toISOString()
+      ]
+    );
+    const alreadyReleasedBefore = await reservationLifecycleSnapshot(
+      alreadyReleasedFixture
+    );
+    const alreadyReleasedResult = await applyReservationLifecycle(
+      signalReservationLifecycleA,
+      "release_spend_reservation",
+      {
+        ...alreadyReleasedFixture,
+        releaseReason: "cancelled",
+        confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+      }
+    );
+    assert.equal(alreadyReleasedResult.outcome, "already_current");
+    assert.equal(alreadyReleasedResult.mutationApplied, false);
+    assert.equal(alreadyReleasedResult.ledger, null);
+    assert.deepEqual(
+      await reservationLifecycleSnapshot(alreadyReleasedFixture),
+      alreadyReleasedBefore
+    );
+
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."spend_reservations"
+       SET status = 'committed', committed_amount_cents = 4000, updated_at = $2
+       WHERE id = $1`,
+      [
+        alreadyCommittedFixture.reservationId,
+        new Date(reservationLifecycleNow + 3).toISOString()
+      ]
+    );
+    const alreadyCommittedBefore = await reservationLifecycleSnapshot(
+      alreadyCommittedFixture
+    );
+    const alreadyCommittedResult = await applyReservationLifecycle(
+      signalReservationLifecycleA,
+      "commit_spend_reservation",
+      {
+        ...alreadyCommittedFixture,
+        actualAmountCents: 4_000,
+        confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+      }
+    );
+    assert.equal(alreadyCommittedResult.outcome, "already_current");
+    assert.equal(alreadyCommittedResult.mutationApplied, false);
+    assert.equal(alreadyCommittedResult.ledger, null);
+    assert.deepEqual(
+      await reservationLifecycleSnapshot(alreadyCommittedFixture),
+      alreadyCommittedBefore
+    );
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "commit_spend_reservation",
+        {
+          ...alreadyCommittedFixture,
+          actualAmountCents: 4_001,
+          confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+        }
+      ),
+      /committed total conflicts with the terminal reservation/
+    );
+    assert.deepEqual(
+      await reservationLifecycleSnapshot(alreadyCommittedFixture),
+      alreadyCommittedBefore
+    );
+
+    const commitPayload = {
+      ...commitFixture,
+      actualAmountCents: 4_000,
+      confirmation: POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_CONFIRMATION
+    } as const;
+    const commitBeforeValidation = await reservationLifecycleSnapshot(commitFixture);
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "commit_spend_reservation",
+        { ...commitPayload, actualAmountCents: 4_400 }
+      ),
+      /not bound to an active verified submit-order result/
+    );
+    assert.deepEqual(
+      await reservationLifecycleSnapshot(commitFixture),
+      commitBeforeValidation
+    );
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "commit_spend_reservation",
+        commitPayload
+      ),
+      /lacks a verified numeric total/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."action_events"(
+         id, job_id, state, reason_code, message, evidence_json, created_at
+       ) VALUES ($1, $2, 'confirmed', 'native_verified_order',
+                 'Native conflicting order evidence', $3, $4)`,
+      [
+        "native_reservation_commit_event_conflicting",
+        commitFixture.actionJobId,
+        JSON.stringify({ allInTotalCents: 4_000, orderTotalCents: 3_999 }),
+        new Date(reservationLifecycleNow).toISOString()
+      ]
+    );
+    await assert.rejects(
+      applyReservationLifecycle(
+        signalReservationLifecycleA,
+        "commit_spend_reservation",
+        commitPayload
+      ),
+      /total does not match the verified action evidence/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."action_events"(
+         id, job_id, state, reason_code, message, evidence_json, created_at
+       ) VALUES ($1, $2, 'confirmed', 'native_verified_order',
+                 'Native exact verified order evidence', $3, $4)`,
+      [
+        "native_reservation_commit_event_exact",
+        commitFixture.actionJobId,
+        JSON.stringify({ allInTotalCents: 4_000, orderTotalCents: 4_000 }),
+        new Date(reservationLifecycleNow + 1).toISOString()
+      ]
+    );
+    const commitBefore = await reservationLifecycleSnapshot(commitFixture);
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_reservation_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $body$
+       BEGIN
+         IF NEW.aggregate_id = '${commitFixture.reservationId}'
+           AND NEW.event_type = 'spend_committed' THEN
+           RAISE EXCEPTION 'native reservation lifecycle outbox rejection';
+         END IF;
+         RETURN NEW;
+       END
+       $body$;
+       CREATE TRIGGER "yoink_native_reject_reservation_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION
+         "${NATIVE_SCHEMA}"."yoink_native_reject_reservation_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        applyReservationLifecycle(
+          signalReservationLifecycleA,
+          "commit_spend_reservation",
+          commitPayload
+        ),
+        /native reservation lifecycle outbox rejection/
+      );
+      assert.deepEqual(
+        await reservationLifecycleSnapshot(commitFixture),
+        commitBefore
+      );
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_reservation_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS
+           "${NATIVE_SCHEMA}"."yoink_native_reject_reservation_outbox"()`
+      );
+    }
+
+    signalReservationLifecycleLockClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalReservationLifecycleLockClient.on("error", () => undefined);
+    await signalReservationLifecycleLockClient.connect();
+    await signalReservationLifecycleLockClient.query(
+      `SET ROLE "${signalWriterLockManifest.writerLockRole.name}"`
+    );
+    let reservationLifecycleLockTransactionOpen = false;
+    let blockedCommit:
+      ReturnType<NodePostgresSignalReservationLifecycleApplyDatabase["applyReservationLifecycle"]>
+      | null = null;
+    try {
+      await signalReservationLifecycleLockClient.query("BEGIN");
+      reservationLifecycleLockTransactionOpen = true;
+      const spendLock = await signalReservationLifecycleLockClient.query<{
+        resultJson: string;
+      }>(
+        `SELECT result_json AS "resultJson"
+         FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION}"(
+           $1, $2, '', '', '', '00001'
+         )`,
+        [NATIVE_TENANT, NATIVE_USER]
+      );
+      assert.deepEqual(JSON.parse(spendLock.rows[0]!.resultJson), {
+        contractVersion: 1,
+        lockProtocolVersion: "signal_action_constraints_v1",
+        lockMask: "00001",
+        scopeCount: 1,
+        lockScopeOrder: [
+          "source",
+          "retailer_qualification",
+          "settings",
+          "mission_policy",
+          "spend"
+        ],
+        sourceConnectionId: "",
+        retailerId: "",
+        missionId: "",
+        mutationApplied: false,
+        mutationAuthority: false,
+        runtimeAuthority: false
+      });
+      let blockedCommitSettled = false;
+      blockedCommit = applyReservationLifecycle(
+        signalReservationLifecycleASecond,
+        "commit_spend_reservation",
+        commitPayload
+      ).finally(() => { blockedCommitSettled = true; });
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      assert.equal(blockedCommitSettled, false);
+      assert.deepEqual(
+        await reservationLifecycleSnapshot(commitFixture),
+        commitBefore
+      );
+      await signalReservationLifecycleLockClient.query("COMMIT");
+      reservationLifecycleLockTransactionOpen = false;
+      const commitResult = await blockedCommit;
+      blockedCommit = null;
+      assert.equal(commitResult.outcome, "applied");
+      assert.equal(commitResult.mutationApplied, true);
+      assert.equal(commitResult.mutationStatementCount, 4);
+      assert.equal(commitResult.mutationRowCount, 4);
+      assert.equal(commitResult.reservation.status, "committed");
+      assert.equal(commitResult.reservation.committedAmountCents, 4_000);
+      assert.equal(commitResult.ledger?.entryType, "committed");
+      assert.equal(commitResult.ledger?.reservedDeltaCents, -4_343);
+      assert.equal(commitResult.ledger?.spentDeltaCents, 4_000);
+    } finally {
+      if (reservationLifecycleLockTransactionOpen) {
+        await signalReservationLifecycleLockClient.query("ROLLBACK").catch(() => undefined);
+      }
+      if (blockedCommit) await blockedCommit.catch(() => undefined);
+      await signalReservationLifecycleLockClient.end().catch(() => undefined);
+      signalReservationLifecycleLockClient = null;
+    }
+    const commitAfter = await reservationLifecycleSnapshot(commitFixture);
+    assert.deepEqual(commitAfter, {
+      ...commitBefore,
+      reservationStatus: "committed",
+      committedAmountCents: 4_000,
+      ledgerCount: commitBefore.ledgerCount + 1,
+      auditCount: commitBefore.auditCount + 1,
+      outboxCount: commitBefore.outboxCount + 1
+    });
+    const commitReplay = await applyReservationLifecycle(
+      signalReservationLifecycleA,
+      "commit_spend_reservation",
+      commitPayload
+    );
+    assert.equal(commitReplay.outcome, "already_applied");
+    assert.equal(commitReplay.mutationApplied, false);
+    assert.equal(commitReplay.idempotentReplay, true);
+    assert.equal(commitReplay.mutationStatementCount, 0);
+    assert.deepEqual(await reservationLifecycleSnapshot(commitFixture), commitAfter);
+
+    const isolatedFixtureExpiry = new Date(
+      reservationLifecycleNow + 24 * 60 * 60_000
+    ).toISOString();
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."action_jobs"
+       SET expires_at = $1
+       WHERE tenant_id = $2 AND user_id = $3
+         AND id LIKE 'native_reservation_%_job'`,
+      [
+        isolatedFixtureExpiry,
+        NATIVE_TENANT,
+        NATIVE_USER
+      ]
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."spend_reservations"
+       SET expires_at = $1
+       WHERE tenant_id = $2 AND user_id = $3 AND status = 'active'
+         AND id LIKE 'native_reservation_%'`,
+      [
+        isolatedFixtureExpiry,
+        NATIVE_TENANT,
+        NATIVE_USER
+      ]
+    );
+
+    await Promise.all([
+      signalReservationLifecycleA.close(),
+      signalReservationLifecycleASecond.close(),
+      signalReservationLifecycleB.close(),
+      signalReservationLifecycleC.close(),
+      signalReservationLifecycleUnmapped.close()
+    ]);
+    signalReservationLifecycleA = null;
+    signalReservationLifecycleASecond = null;
+    signalReservationLifecycleB = null;
+    signalReservationLifecycleC = null;
+    signalReservationLifecycleUnmapped = null;
+    })();
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -17130,7 +18112,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NodePostgresSignalSourceSyncApplyDatabase | null)?.close(),
       (signalSourceSyncUnmapped as
         NodePostgresSignalSourceSyncApplyDatabase | null)?.close(),
-      (signalSourceSyncDirectClient as Client | null)?.end()
+      (signalSourceSyncDirectClient as Client | null)?.end(),
+      (signalReservationLifecycleA as
+        NodePostgresSignalReservationLifecycleApplyDatabase | null)?.close(),
+      (signalReservationLifecycleASecond as
+        NodePostgresSignalReservationLifecycleApplyDatabase | null)?.close(),
+      (signalReservationLifecycleB as
+        NodePostgresSignalReservationLifecycleApplyDatabase | null)?.close(),
+      (signalReservationLifecycleC as
+        NodePostgresSignalReservationLifecycleApplyDatabase | null)?.close(),
+      (signalReservationLifecycleUnmapped as
+        NodePostgresSignalReservationLifecycleApplyDatabase | null)?.close(),
+      (signalReservationLifecycleDirectClient as Client | null)?.end(),
+      (signalReservationLifecycleLockClient as Client | null)?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

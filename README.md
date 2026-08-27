@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.92.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.93.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,45 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.93.0 adds the nineteenth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the terminal spend-reservation
+lifecycle writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role has
+zero direct/effective table or column grants and may call one strict security-
+definer function. The boundary protects six forced-RLS tenant tables and can
+mutate only `spend_reservations`, append-only `spend_ledger_entries`,
+`audit_events`, and `outbox_events`.
+
+PostgreSQL binds `session_user` to one exact tenant/user, consumes only the
+shared spend lock (`00001`), and accepts two explicit operations under
+`APPLY_SPEND_RESERVATION_LIFECYCLE_V1`. Release is limited to an exact active
+action/reservation graph whose current job is rejected, expired, cancelled, or
+confirmed without an order, plus expiry proven by the database clock only
+before the job could have mutated a cart or order. Commit
+is limited to an active `submit_order` reservation whose job is already
+`confirmed` and whose latest confirmed action evidence contains one
+unambiguous positive total equal to the requested amount and no greater than
+the reserved amount.
+
+An applied request updates one reservation and atomically appends one ledger,
+audit, and outbox record. Request identity covers the authenticated principal,
+operation, exact graph IDs, reason or amount, and confirmation. Immutable
+replay tolerates normal outbox delivery but rejects partial or altered receipt
+graphs. The function cannot change an action job, create action evidence, fill
+checkout, submit an order, fulfill a mission, or complete an inbox message; it
+only records a terminal fact already established by a separately authorized
+executor.
+
+Native PostgreSQL 16 proves wrong, same-tenant-peer, and unmapped principal
+denial, zero direct and cross-boundary SQL, exact graph binding, invalid-state
+and ambiguous-total rejection, database-clock pre-mutation expiry, forced late-failure
+rollback, spend-lock contention, release and commit replay, append-only ledger
+accounting, and zero action or mission mutation. This closes
+`reservationWriterParity`. Catalog import and source provisioning still sit
+outside the shared protocol, so aggregate `writerLockProtocolParity` and
+`sourceWriterParity` remain false. SQLite remains authoritative; use
+`npm run postgres:signal-reservation-lifecycle-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.92.0 adds the eighteenth independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the TrackaLacker source-sync run and

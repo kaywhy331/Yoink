@@ -190,14 +190,15 @@ constraint before activation. Action jobs, spend, inbox completion, and all
 runtime authority remain closed, so complete-handler parity stays six of seven
 and SQLite remains authoritative.
 
-Yoink 0.84 through 0.92 add the reviewed purchase-intent action/spend writer,
+Yoink 0.84 through 0.93 add the reviewed purchase-intent action/spend writer,
 the shared five-domain fixed-order lock protocol, and a bounded writer for
 global pause/resume, guardrail settings, and periodic spend caps, followed by a
 complete Target qualification/settings activation writer, a bounded
 source-trust writer, and the exact Walmart/Amazon/Best Buy qualification and
 shared-catalog promotion writer, an append-only full mission-policy revision
-writer, the no-audit-flood TrackaLacker status/heartbeat writer, and the
-TrackaLacker source-sync run/per-product receipt writer. All are separately
+writer, the no-audit-flood TrackaLacker status/heartbeat writer, the
+TrackaLacker source-sync run/per-product receipt writer, and the terminal
+spend-reservation release/verified-total commit writer. All are separately
 receipted, principal-bound, zero-direct-grant, and inactive. Native
 PostgreSQL proves atomic rollback, immutable material replay, one-writer
 contention, exact retailer evidence/device and Amazon-route revalidation,
@@ -206,10 +207,12 @@ shared-catalog identity and monotonicity, byte-identical policy hashing,
 direct-purchase safety, zero-write unchanged preferences, deterministic status
 identity, monotonic client timestamps, and timestamp-only heartbeat refresh
 without audit/outbox growth, plus fresh-run exclusion, stale-run interruption,
-monotonic sync progress, terminal replay, and active-run-only item upserts.
-Source catalog import, connection provisioning, and reservation writers remain
-on SQLite, so aggregate source, configuration, reservation, and writer-lock
-parity stay false.
+monotonic sync progress, terminal replay, active-run-only item upserts, exact
+action/reservation graph binding, database-clock pre-mutation expiry, verified order-total
+commit, append-only ledger accounting, and spend-lock contention. Source
+catalog import and connection provisioning remain on SQLite. Reservation
+writer parity is now qualified, while aggregate source, configuration, and
+writer-lock parity stay false.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.
