@@ -37,6 +37,7 @@ import { postgresSignalConstraintConfigCapabilityProjection } from "../packages/
 import { postgresSignalActionSpendCapabilityProjection } from "../packages/database/src/postgres-signal-action-spend-apply.js";
 import { postgresSignalTargetQualificationCapabilityProjection } from "../packages/database/src/postgres-signal-target-qualification-apply.js";
 import { postgresSignalSourceTrustCapabilityProjection } from "../packages/database/src/postgres-signal-source-trust-apply.js";
+import { postgresSignalRetailerQualificationCapabilityProjection } from "../packages/database/src/postgres-signal-retailer-qualification-apply.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -142,6 +143,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalActionSpendApply: ReturnType<typeof postgresSignalActionSpendCapabilityProjection>;
         postgresSignalTargetQualificationApply: ReturnType<typeof postgresSignalTargetQualificationCapabilityProjection>;
         postgresSignalSourceTrustApply: ReturnType<typeof postgresSignalSourceTrustCapabilityProjection>;
+        postgresSignalRetailerQualificationApply: ReturnType<typeof postgresSignalRetailerQualificationCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -244,6 +246,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalSourceTrustApply,
       postgresSignalSourceTrustCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalRetailerQualificationApply,
+      postgresSignalRetailerQualificationCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -311,12 +317,14 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Server-bound signal action writer-lock protocol/);
     assert.match(cutoverText, /eleventh independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /source → retailer qualification → settings → mission policy → spend lock order/);
-    assert.match(cutoverText, /Remaining source lifecycle, non-Target retailer-qualification, mission-policy, and reservation writers/);
+    assert.match(cutoverText, /Remaining source lifecycle, mission-policy, and reservation writers/);
     assert.match(cutoverText, /Server-bound bounded configuration writers/);
     assert.match(cutoverText, /Server-bound Target qualification and settings activation/);
     assert.match(cutoverText, /Server-bound source-trust configuration/);
     assert.match(cutoverText, /twelfth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /fourteenth independently inactive NOLOGIN boundary/);
+    assert.match(cutoverText, /Server-bound Walmart, Amazon, and Best Buy qualification/);
+    assert.match(cutoverText, /fifteenth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /global action pause\/resume, guardrail settings, and periodic spend caps/);
     assert.match(cutoverText, /Server-bound reviewed purchase-intent action and spend/);
     assert.match(cutoverText, /tenth independently inactive NOLOGIN boundary/);

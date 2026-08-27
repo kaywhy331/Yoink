@@ -144,6 +144,7 @@ import { postgresSignalConstraintConfigCapabilityProjection } from "../../../pac
 import { postgresSignalActionSpendCapabilityProjection } from "../../../packages/database/src/postgres-signal-action-spend-apply.js";
 import { postgresSignalTargetQualificationCapabilityProjection } from "../../../packages/database/src/postgres-signal-target-qualification-apply.js";
 import { postgresSignalSourceTrustCapabilityProjection } from "../../../packages/database/src/postgres-signal-source-trust-apply.js";
+import { postgresSignalRetailerQualificationCapabilityProjection } from "../../../packages/database/src/postgres-signal-retailer-qualification-apply.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -428,6 +429,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     postgresSignalTargetQualificationCapabilityProjection();
   const postgresSignalSourceTrustApply =
     postgresSignalSourceTrustCapabilityProjection();
+  const postgresSignalRetailerQualificationApply =
+    postgresSignalRetailerQualificationCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -718,6 +721,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresSignalActionSpendApply,
           postgresSignalTargetQualificationApply,
           postgresSignalSourceTrustApply,
+          postgresSignalRetailerQualificationApply,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1585,7 +1589,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalConstraintConfigApply,
             postgresSignalActionSpendApply,
             postgresSignalTargetQualificationApply,
-            postgresSignalSourceTrustApply
+            postgresSignalSourceTrustApply,
+            postgresSignalRetailerQualificationApply
           },
           capabilities: {
             catalog: true,
@@ -1759,6 +1764,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalActionSpendApply,
             postgresSignalTargetQualificationApply,
             postgresSignalSourceTrustApply,
+            postgresSignalRetailerQualificationApply,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

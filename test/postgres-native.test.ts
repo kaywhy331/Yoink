@@ -176,6 +176,13 @@ import {
   buildPostgresSignalSourceTrustApplyManifest,
   verifyPostgresSignalSourceTrustApplyBoundary
 } from "../packages/database/src/postgres-signal-source-trust-apply.js";
+import {
+  NodePostgresSignalRetailerQualificationApplyDatabase,
+  POSTGRES_SIGNAL_RETAILER_QUALIFICATION_APPLY_FUNCTION,
+  applyPostgresSignalRetailerQualificationApplyBoundary,
+  buildPostgresSignalRetailerQualificationApplyManifest,
+  verifyPostgresSignalRetailerQualificationApplyBoundary
+} from "../packages/database/src/postgres-signal-retailer-qualification-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -210,9 +217,18 @@ import type {
   StrategyDefinition
 } from "../packages/contracts/src/index.js";
 import {
+  AMAZON_ADD_ACTIVATION_CONFIRMATION,
+  AMAZON_ADD_ADAPTER_VERSION,
+  AMAZON_OBSERVER_VERSION,
+  BESTBUY_ADD_ACTIVATION_CONFIRMATION,
+  BESTBUY_ADD_ADAPTER_VERSION,
+  BESTBUY_OBSERVER_VERSION,
   TARGET_ADD_ACTIVATION_CONFIRMATION,
   TARGET_ADD_ADAPTER_VERSION,
-  TARGET_OBSERVER_VERSION
+  TARGET_OBSERVER_VERSION,
+  WALMART_ADD_ACTIVATION_CONFIRMATION,
+  WALMART_ADD_ADAPTER_VERSION,
+  WALMART_OBSERVER_VERSION
 } from "../packages/contracts/src/index.js";
 import {
   POSTGRES_TEST_WORKER_FINGERPRINT,
@@ -249,6 +265,7 @@ const NATIVE_CONSTRAINT_CONFIG_APPLY_ROLE_NAMESPACE = "yoink_native_constraint_c
 const NATIVE_ACTION_SPEND_APPLY_ROLE_NAMESPACE = "yoink_native_action_spend";
 const NATIVE_TARGET_QUALIFICATION_APPLY_ROLE_NAMESPACE = "yoink_native_target_qual";
 const NATIVE_SOURCE_TRUST_APPLY_ROLE_NAMESPACE = "yoink_native_source_trust";
+const NATIVE_RETAILER_QUALIFICATION_APPLY_ROLE_NAMESPACE = "yoink_native_retailer_qual";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1084,7 +1101,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, and source trust", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, and non-Target retailer qualification", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1235,6 +1252,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalSourceTrustC: NodePostgresSignalSourceTrustApplyDatabase | null = null;
   let signalSourceTrustUnmapped: NodePostgresSignalSourceTrustApplyDatabase | null = null;
   let signalSourceTrustDirectClient: Client | null = null;
+  let signalRetailerQualificationA: NodePostgresSignalRetailerQualificationApplyDatabase | null = null;
+  let signalRetailerQualificationASecond: NodePostgresSignalRetailerQualificationApplyDatabase | null = null;
+  let signalRetailerQualificationB: NodePostgresSignalRetailerQualificationApplyDatabase | null = null;
+  let signalRetailerQualificationC: NodePostgresSignalRetailerQualificationApplyDatabase | null = null;
+  let signalRetailerQualificationUnmapped: NodePostgresSignalRetailerQualificationApplyDatabase | null = null;
+  let signalRetailerQualificationDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2541,6 +2564,87 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalSourceTrustBoundary
     );
+    const qualifiedSignalRetailerQualificationManifest =
+      buildPostgresSignalRetailerQualificationApplyManifest(
+        qualifiedSignalSourceTrustManifest,
+        NATIVE_RETAILER_QUALIFICATION_APPLY_ROLE_NAMESPACE
+      );
+    const signalRetailerQualificationBoundary =
+      await applyPostgresSignalRetailerQualificationApplyBoundary(
+        importer,
+        qualifiedSignalRetailerQualificationManifest,
+        new Date("2026-08-25T16:54:59.998Z").getTime()
+      );
+    assert.equal(signalRetailerQualificationBoundary.protectedTenantTableCount, 9);
+    assert.equal(signalRetailerQualificationBoundary.forcedRlsTableCount, 9);
+    assert.equal(signalRetailerQualificationBoundary.mutationTableCount, 5);
+    assert.equal(signalRetailerQualificationBoundary.directTableGrantCount, 0);
+    assert.equal(signalRetailerQualificationBoundary.functionGrantCount, 1);
+    assert.equal(signalRetailerQualificationBoundary.membershipCount, 0);
+    assert.equal(signalRetailerQualificationBoundary.activePrincipalCount, 0);
+    assert.equal(signalRetailerQualificationBoundary.metadata.operationCount, 3);
+    assert.deepEqual(
+      signalRetailerQualificationBoundary.metadata.supportedRetailerIds,
+      ["amazon", "bestbuy", "walmart"]
+    );
+    assert.deepEqual(
+      signalRetailerQualificationBoundary.metadata.protectedSharedCatalogTableNames,
+      ["listings", "retailers"]
+    );
+    assert.equal(
+      signalRetailerQualificationBoundary.metadata.sharedCatalogMutationTableCount,
+      2
+    );
+    assert.equal(signalRetailerQualificationBoundary.metadata.totalMutationTableCount, 7);
+    assert.equal(signalRetailerQualificationBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(
+      signalRetailerQualificationBoundary.metadata.retailerQualificationScopeConsumed,
+      true
+    );
+    assert.equal(signalRetailerQualificationBoundary.metadata.settingsScopeConsumed, true);
+    assert.equal(signalRetailerQualificationBoundary.metadata.globalRetailerSerialization, true);
+    assert.equal(signalRetailerQualificationBoundary.metadata.exactPackagedRetailerAllowlist, true);
+    assert.equal(signalRetailerQualificationBoundary.metadata.monotonicSharedCatalogPromotion, true);
+    assert.equal(signalRetailerQualificationBoundary.metadata.currentEvidenceRevalidation, true);
+    assert.equal(
+      signalRetailerQualificationBoundary.metadata.currentDeviceCapabilityRevalidation,
+      true
+    );
+    assert.equal(signalRetailerQualificationBoundary.metadata.currentSettingsRevalidation, true);
+    assert.equal(
+      signalRetailerQualificationBoundary.metadata.nonTargetQualificationWriterParity,
+      true
+    );
+    assert.equal(
+      signalRetailerQualificationBoundary.metadata.sharedCatalogExecutionWriterParity,
+      true
+    );
+    assert.equal(
+      signalRetailerQualificationBoundary.metadata.qualificationSettingsWriterParity,
+      true
+    );
+    assert.equal(signalRetailerQualificationBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalRetailerQualificationBoundary.metadata.sourceWriterParity, false);
+    assert.equal(
+      signalRetailerQualificationBoundary.metadata.retailerQualificationWriterParity,
+      true
+    );
+    assert.equal(signalRetailerQualificationBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalRetailerQualificationBoundary.metadata.reservationWriterParity, false);
+    assert.equal(signalRetailerQualificationBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalRetailerQualificationBoundary.metadata.retailerMutationAuthority, false);
+    assert.equal(signalRetailerQualificationBoundary.metadata.runtimeAuthority, false);
+    assert.match(
+      signalRetailerQualificationBoundary.boundaryCatalogFingerprint,
+      /^[a-f0-9]{64}$/
+    );
+    assert.deepEqual(
+      await verifyPostgresSignalRetailerQualificationApplyBoundary(
+        importer,
+        qualifiedSignalRetailerQualificationManifest
+      ),
+      signalRetailerQualificationBoundary
+    );
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
     const observerWitnessTransparencyEventHash = "3".repeat(64);
@@ -2873,6 +2977,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalTargetQualificationManifest,
       NATIVE_SOURCE_TRUST_APPLY_ROLE_NAMESPACE
     );
+    const signalRetailerQualificationManifest =
+      buildPostgresSignalRetailerQualificationApplyManifest(
+        signalSourceTrustManifest,
+        NATIVE_RETAILER_QUALIFICATION_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -2959,6 +3068,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalSourceTrustManifest.sourceTrustRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalRetailerQualificationManifest.retailerQualificationRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -10556,6 +10669,718 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalSourceTrustC = null;
     signalSourceTrustUnmapped = null;
 
+    await (async () => {
+    const signalRetailerQualificationDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalRetailerQualificationApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalRetailerQualificationManifest, { maxConnections });
+    signalRetailerQualificationA =
+      signalRetailerQualificationDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalRetailerQualificationASecond =
+      signalRetailerQualificationDatabase(NATIVE_PRINCIPAL_A);
+    signalRetailerQualificationB =
+      signalRetailerQualificationDatabase(NATIVE_PRINCIPAL_B);
+    signalRetailerQualificationC =
+      signalRetailerQualificationDatabase(NATIVE_PRINCIPAL_C);
+    signalRetailerQualificationUnmapped =
+      signalRetailerQualificationDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const retailerQualificationNow = Date.now();
+    const retailerQualificationObservedAt =
+      new Date(retailerQualificationNow - 1_000).toISOString();
+    const retailerQualificationExpiresAt =
+      new Date(retailerQualificationNow + 300_000).toISOString();
+    const retailerQualificationDeviceId = "native_retailer_qualification_device";
+    const retailerQualificationFixtures = [
+      {
+        retailerId: "walmart",
+        operation: "activate_walmart_add" as const,
+        observerVersion: WALMART_OBSERVER_VERSION,
+        adapterVersion: WALMART_ADD_ADAPTER_VERSION,
+        confirmation: WALMART_ADD_ACTIVATION_CONFIRMATION,
+        sellerName: "Walmart",
+        skuPrefix: "WAL-NATIVE",
+        canonicalBase: "https://www.walmart.com/ip/",
+        evidenceNamespace: "walmart-add-qualification-evidence-v1",
+        evidenceHashes: ["1".repeat(64), "2".repeat(64)],
+        trialEvidenceHash: "3".repeat(64),
+        listingId: "listing_native_qualification_walmart"
+      },
+      {
+        retailerId: "amazon",
+        operation: "activate_amazon_add" as const,
+        observerVersion: AMAZON_OBSERVER_VERSION,
+        adapterVersion: AMAZON_ADD_ADAPTER_VERSION,
+        confirmation: AMAZON_ADD_ACTIVATION_CONFIRMATION,
+        sellerName: "Amazon.com",
+        skuPrefix: "B0NATIVE",
+        canonicalBase: "https://www.amazon.com/dp/",
+        evidenceNamespace: "amazon-add-qualification-evidence-v1",
+        evidenceHashes: ["4".repeat(64), "5".repeat(64)],
+        trialEvidenceHash: "6".repeat(64),
+        listingId: "listing_native_qualification_amazon"
+      },
+      {
+        retailerId: "bestbuy",
+        operation: "activate_bestbuy_add" as const,
+        observerVersion: BESTBUY_OBSERVER_VERSION,
+        adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
+        confirmation: BESTBUY_ADD_ACTIVATION_CONFIRMATION,
+        sellerName: "Best Buy",
+        skuPrefix: "66789",
+        canonicalBase: "https://www.bestbuy.com/site/native/sku/",
+        evidenceNamespace: "bestbuy-add-qualification-evidence-v1",
+        evidenceHashes: ["7".repeat(64), "8".repeat(64)],
+        trialEvidenceHash: "9".repeat(64),
+        listingId: "listing_native_qualification_bestbuy"
+      }
+    ];
+    const retailerQualificationRetailerIds =
+      retailerQualificationFixtures.map((fixture) => fixture.retailerId);
+    await first.query(
+      `DELETE FROM "${NATIVE_SCHEMA}"."retailer_adapter_qualifications"
+       WHERE user_id = $1 AND retailer_id = ANY($2::text[])`,
+      [
+        NATIVE_USER,
+        retailerQualificationRetailerIds
+      ]
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."retailers"
+       SET execution_supported = 0, updated_at = $2
+       WHERE id = ANY($1::text[])`,
+      [
+        retailerQualificationRetailerIds,
+        retailerQualificationObservedAt
+      ]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."extension_devices"(
+         id, tenant_id, user_id, name, token_hash, extension_version,
+         status, capabilities_json, last_seen_at, created_at, updated_at,
+         credential_generation, credential_issued_at
+       ) VALUES (
+         $1, $2, $3, 'Native non-Target qualification device', $4,
+         '0.89.0', 'active', $5, $6, $6, $6, 1, $6
+       )`,
+      [
+        retailerQualificationDeviceId,
+        NATIVE_TENANT,
+        NATIVE_USER,
+        stableHash("native-retailer-qualification-device-token"),
+        JSON.stringify({
+          walmartAddOnly: true,
+          walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION,
+          amazonAddOnly: true,
+          amazonAddAdapterVersion: AMAZON_ADD_ADAPTER_VERSION,
+          bestBuyAddOnly: true,
+          bestBuyAddAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION
+        }),
+        retailerQualificationObservedAt
+      ]
+    );
+    for (const fixtureEntry of retailerQualificationFixtures) {
+      await first.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."listings"(
+           id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+           execution_supported, msrp_cents, currency, created_at, updated_at
+         ) VALUES (
+           $1, 'variant_cutover_scope', $2, $3, $4, 'in_stock',
+           0, 1299, 'USD', $5, $5
+         )`,
+        [
+          fixtureEntry.listingId,
+          fixtureEntry.retailerId,
+          `${fixtureEntry.skuPrefix}-LISTING`,
+          `${fixtureEntry.canonicalBase}${fixtureEntry.skuPrefix}-LISTING`,
+          retailerQualificationObservedAt
+        ]
+      );
+      for (const [index, evidenceHash] of fixtureEntry.evidenceHashes.entries()) {
+        const retailerSku = `${fixtureEntry.skuPrefix}-${index + 1}`;
+        await first.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."retailer_shadow_observations"(
+             id, tenant_id, user_id, device_id, retailer_id, adapter_version,
+             contract_version, page_kind, retailer_sku, canonical_url,
+             availability, unit_price_cents, currency, seller_name, seller_type,
+             fulfillment, add_control_actionable, security_challenge,
+             interactive_block, observation_state, evidence_hash,
+             observed_at, received_at, purchase_route_ready
+           ) VALUES (
+             $1, $2, $3, $4, $5, $6, 1, 'product', $7, $8,
+             'in_stock', $9, 'USD', $10, 'first_party', 'shipping',
+             1, 0, '', 'actionable_candidate', $11, $12, $12, $13
+           )`,
+          [
+            `native_retailer_qualification_${fixtureEntry.retailerId}_observation_${index + 1}`,
+            NATIVE_TENANT,
+            NATIVE_USER,
+            retailerQualificationDeviceId,
+            fixtureEntry.retailerId,
+            fixtureEntry.observerVersion,
+            retailerSku,
+            `${fixtureEntry.canonicalBase}${retailerSku}`,
+            1299 + index,
+            fixtureEntry.sellerName,
+            evidenceHash,
+            retailerQualificationObservedAt,
+            fixtureEntry.retailerId === "amazon" ? 1 : 0
+          ]
+        );
+      }
+      await first.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."retailer_adapter_trials"(
+           id, tenant_id, user_id, device_id, retailer_id, adapter_version,
+           observer_version, contract_version, trial_kind, shadow_observation_id,
+           retailer_sku, outcome, reason_code, evidence_hash, observed_at, received_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, 1, 'pre_click_rehearsal',
+           $8, $9, 'passed', 'rehearsal_passed', $10, $11, $11
+         )`,
+        [
+          `native_retailer_qualification_${fixtureEntry.retailerId}_trial`,
+          NATIVE_TENANT,
+          NATIVE_USER,
+          retailerQualificationDeviceId,
+          fixtureEntry.retailerId,
+          fixtureEntry.adapterVersion,
+          fixtureEntry.observerVersion,
+          `native_retailer_qualification_${fixtureEntry.retailerId}_observation_1`,
+          `${fixtureEntry.skuPrefix}-1`,
+          fixtureEntry.trialEvidenceHash,
+          retailerQualificationObservedAt
+        ]
+      );
+    }
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."mission_targets"(
+         id, mission_id, listing_id, enabled, max_unit_price_cents,
+         currency, seller_policy, fulfillment, created_at, updated_at
+       ) VALUES (
+         'native_retailer_qualification_walmart_target',
+         'mission_cutover_other', 'listing_native_qualification_walmart',
+         1, 2000, 'USD', 'first_party_only', 'shipping', $1, $1
+       )`,
+      [retailerQualificationObservedAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."signal_incidents"(
+         id, tenant_id, user_id, listing_id, event_type, semantic_key,
+         first_observed_at, last_observed_at, created_at, updated_at
+       ) VALUES (
+         'native_retailer_qualification_walmart_incident', $2, $3,
+         'listing_native_qualification_walmart', 'restock',
+         'native-retailer-qualification-walmart', $1, $1, $1, $1
+       )`,
+      [retailerQualificationObservedAt, NATIVE_TENANT, NATIVE_USER]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."action_jobs"(
+         id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+         state, action, quantity, max_unit_price_cents, max_order_total_cents,
+         currency, seller_policy, fulfillment, expected_seller, listing_id,
+         canonical_url, idempotency_key, capability_nonce_hash, expires_at,
+         created_at, updated_at
+       ) VALUES (
+         'native_retailer_qualification_walmart_job', $2, $3,
+         'mission_cutover_other', 'native_retailer_qualification_walmart_target',
+         'native_retailer_qualification_walmart_incident', 'shadow_ready',
+         'add_to_cart', 1, 2000, 2500, 'USD', 'first_party_only', 'shipping',
+         'Walmart', 'listing_native_qualification_walmart',
+         'https://www.walmart.com/ip/WAL-NATIVE-LISTING',
+         'native-retailer-qualification-walmart-job',
+         'native-retailer-qualification-capability-hash', $4, $1, $1
+       )`,
+      [
+        retailerQualificationObservedAt,
+        NATIVE_TENANT,
+        NATIVE_USER,
+        retailerQualificationExpiresAt
+      ]
+    );
+
+    const retailerPayload = (
+      fixtureEntry: typeof retailerQualificationFixtures[number]
+    ) => ({
+      adapterVersion: fixtureEntry.adapterVersion,
+      confirmation: fixtureEntry.confirmation,
+      evidenceHash: stableHash(
+        fixtureEntry.evidenceNamespace,
+        fixtureEntry.adapterVersion,
+        ...[...fixtureEntry.evidenceHashes, fixtureEntry.trialEvidenceHash].sort()
+      )
+    });
+    const retailerQualificationSnapshot = async (retailerId: string) => {
+      const row = (await first!.query<{
+        retailerExecutionSupported: number;
+        listingExecutionSupported: number;
+        qualificationCount: string | number | bigint;
+        qualificationEvidenceHash: string;
+        jobState: string;
+        promotionEvents: string | number | bigint;
+        qualificationAudits: string | number | bigint;
+        qualificationOutbox: string | number | bigint;
+      }>(
+        `SELECT retailer.execution_supported AS "retailerExecutionSupported",
+                listing.execution_supported AS "listingExecutionSupported",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."retailer_adapter_qualifications" q
+                 WHERE q.tenant_id = $1 AND q.user_id = $2
+                   AND q.retailer_id = $3) AS "qualificationCount",
+                COALESCE((
+                  SELECT q.evidence_hash
+                  FROM "${NATIVE_SCHEMA}"."retailer_adapter_qualifications" q
+                  WHERE q.tenant_id = $1 AND q.user_id = $2
+                    AND q.retailer_id = $3
+                ), '') AS "qualificationEvidenceHash",
+                CASE WHEN $3 = 'walmart' THEN COALESCE((
+                  SELECT job.state FROM "${NATIVE_SCHEMA}"."action_jobs" job
+                  WHERE job.id = 'native_retailer_qualification_walmart_job'
+                ), '') ELSE '' END AS "jobState",
+                CASE WHEN $3 = 'walmart' THEN (
+                  SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_events" event
+                  WHERE event.job_id = 'native_retailer_qualification_walmart_job'
+                    AND event.reason_code = 'walmart_add_v1_activated'
+                ) ELSE 0 END AS "promotionEvents",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events" audit
+                 WHERE audit.tenant_id = $1 AND audit.user_id = $2
+                   AND audit.correlation_id = $3
+                   AND audit.event_type = 'retailer_adapter_qualified')
+                  AS "qualificationAudits",
+                (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events" outbox
+                 WHERE outbox.tenant_id = $1
+                   AND outbox.aggregate_type = 'retailer_qualification'
+                   AND outbox.aggregate_id = $3
+                   AND outbox.event_type = 'retailer_adapter_qualified')
+                  AS "qualificationOutbox"
+         FROM "${NATIVE_SCHEMA}"."retailers" retailer
+         JOIN "${NATIVE_SCHEMA}"."listings" listing
+           ON listing.id = $4
+         WHERE retailer.id = $3`,
+        [
+          NATIVE_TENANT,
+          NATIVE_USER,
+          retailerId,
+          `listing_native_qualification_${retailerId}`
+        ]
+      )).rows[0]!;
+      return {
+        ...row,
+        retailerExecutionSupported: Number(row.retailerExecutionSupported),
+        listingExecutionSupported: Number(row.listingExecutionSupported),
+        qualificationCount: Number(row.qualificationCount),
+        promotionEvents: Number(row.promotionEvents),
+        qualificationAudits: Number(row.qualificationAudits),
+        qualificationOutbox: Number(row.qualificationOutbox)
+      };
+    };
+    const walmartFixture = retailerQualificationFixtures[0]!;
+    const amazonFixture = retailerQualificationFixtures[1]!;
+    const bestBuyFixture = retailerQualificationFixtures[2]!;
+    const walmartPayload = retailerPayload(walmartFixture);
+    const walmartBefore = await retailerQualificationSnapshot("walmart");
+    assert.equal(walmartBefore.retailerExecutionSupported, 0);
+    assert.equal(walmartBefore.listingExecutionSupported, 0);
+    assert.equal(walmartBefore.qualificationCount, 0);
+    assert.equal(walmartBefore.jobState, "shadow_ready");
+    assert.equal(walmartBefore.promotionEvents, 0);
+
+    await assert.rejects(
+      signalRetailerQualificationB.applyRetailerQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_walmart_add",
+        "native_retailer_qualification_wrong_tenant_principal",
+        walmartPayload
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [
+        NATIVE_PRINCIPAL_C,
+        NATIVE_TENANT,
+        NATIVE_SAME_TENANT_USER,
+        retailerQualificationObservedAt
+      ]
+    );
+    try {
+      await assert.rejects(
+        signalRetailerQualificationC.applyRetailerQualification(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          "activate_walmart_add",
+          "native_retailer_qualification_wrong_user_principal",
+          walmartPayload
+        ),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    await assert.rejects(
+      signalRetailerQualificationUnmapped.applyRetailerQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_walmart_add",
+        "native_retailer_qualification_unmapped_principal",
+        walmartPayload
+      ),
+      /tenant session principal is not active/
+    );
+    await assert.rejects(
+      signalRetailerQualificationA.applyRetailerQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_walmart_add",
+        "native_retailer_qualification_wrong_adapter",
+        retailerPayload(amazonFixture)
+      ),
+      /payload shape is invalid/
+    );
+
+    signalRetailerQualificationDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalRetailerQualificationDirectClient.on("error", () => undefined);
+    await signalRetailerQualificationDirectClient.connect();
+    await signalRetailerQualificationDirectClient.query(
+      `SET ROLE "${signalRetailerQualificationManifest.retailerQualificationRole.name}"`
+    );
+    await assert.rejects(
+      signalRetailerQualificationDirectClient.query(
+        `SELECT execution_supported FROM "${NATIVE_SCHEMA}"."retailers" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalRetailerQualificationDirectClient.query(
+        `SELECT user_id FROM "${NATIVE_SCHEMA}"."retailer_adapter_qualifications" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalRetailerQualificationDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_RETAILER_QUALIFICATION_APPLY_FUNCTION}"(
+           $1, $2, 'activate_walmart_add', $3, $4
+         )`,
+        [
+          NATIVE_TENANT,
+          "user_local",
+          "native_retailer_qualification_direct_wrong_principal",
+          JSON.stringify(walmartPayload)
+        ]
+      ),
+      /does not match the expected authenticated principal/
+    );
+
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_retailer_qualification_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $body$
+       BEGIN
+         IF NEW.event_type = 'retailer_adapter_qualified'
+           AND NEW.aggregate_type = 'retailer_qualification'
+           AND NEW.aggregate_id = 'walmart' THEN
+           RAISE EXCEPTION 'native forced retailer qualification outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $body$;
+       CREATE TRIGGER "yoink_native_reject_retailer_qualification_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_retailer_qualification_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        signalRetailerQualificationA.applyRetailerQualification(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          "activate_walmart_add",
+          "native_retailer_qualification_rollback",
+          walmartPayload
+        ),
+        /native forced retailer qualification outbox failure/
+      );
+      assert.deepEqual(
+        await retailerQualificationSnapshot("walmart"),
+        walmartBefore
+      );
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_retailer_qualification_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS
+           "${NATIVE_SCHEMA}"."yoink_native_reject_retailer_qualification_outbox"()`
+      );
+    }
+
+    const retailerSettingsBefore = await readNativeConstraintSettings();
+    let retailerQualificationTransactionOpen = false;
+    let blockedRetailerReplay: ReturnType<
+      NodePostgresSignalRetailerQualificationApplyDatabase["applyRetailerQualification"]
+    > | null = null;
+    let blockedRetailerConfig: ReturnType<
+      NodePostgresSignalConstraintConfigApplyDatabase["applyConstraintConfiguration"]
+    > | null = null;
+    try {
+      await signalRetailerQualificationDirectClient.query("BEGIN");
+      retailerQualificationTransactionOpen = true;
+      const firstRetailerQualification =
+        await signalRetailerQualificationDirectClient.query<{ resultJson: string }>(
+          `SELECT result_json AS "resultJson"
+           FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_RETAILER_QUALIFICATION_APPLY_FUNCTION}"(
+             $1, $2, 'activate_walmart_add', $3, $4
+           )`,
+          [
+            NATIVE_TENANT,
+            NATIVE_USER,
+            "native_retailer_qualification_walmart_apply",
+            JSON.stringify(walmartPayload)
+          ]
+        );
+      const firstRetailerResult = JSON.parse(
+        firstRetailerQualification.rows[0]!.resultJson
+      ) as {
+        requestFingerprint: string;
+        outcome: string;
+        mutationApplied: boolean;
+        mutationStatementCount: number;
+        mutationRowCount: number;
+        qualificationMutated: boolean;
+        settingsMutated: boolean;
+        sharedRetailerMutated: boolean;
+        sharedListingsMutated: number;
+        sharedCatalogMutated: boolean;
+        promotedJobCount: number;
+        actionEventsMutated: number;
+        retailerQualificationWriterParity: boolean;
+        activation: Record<string, unknown>;
+      };
+      assert.match(firstRetailerResult.requestFingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(firstRetailerResult.outcome, "applied");
+      assert.equal(firstRetailerResult.mutationApplied, true);
+      assert.equal(firstRetailerResult.qualificationMutated, true);
+      assert.equal(firstRetailerResult.settingsMutated, false);
+      assert.equal(firstRetailerResult.sharedRetailerMutated, true);
+      assert.ok(firstRetailerResult.sharedListingsMutated >= 1);
+      assert.equal(firstRetailerResult.sharedCatalogMutated, true);
+      assert.equal(firstRetailerResult.promotedJobCount, 1);
+      assert.equal(firstRetailerResult.actionEventsMutated, 1);
+      assert.equal(firstRetailerResult.mutationStatementCount, 7);
+      assert.equal(
+        firstRetailerResult.mutationRowCount,
+        6 + firstRetailerResult.sharedListingsMutated
+      );
+      assert.equal(firstRetailerResult.retailerQualificationWriterParity, true);
+      assert.equal(firstRetailerResult.activation.retailerId, "walmart");
+      assert.equal(firstRetailerResult.activation.evidenceHash, walmartPayload.evidenceHash);
+      assert.equal(firstRetailerResult.activation.observationCount, 2);
+      assert.equal(firstRetailerResult.activation.distinctSkuCount, 2);
+      assert.equal(firstRetailerResult.activation.rehearsalCount, 1);
+      assert.equal(firstRetailerResult.activation.promotedJobs, 1);
+      let retailerReplaySettled = false;
+      let retailerConfigSettled = false;
+      blockedRetailerReplay =
+        signalRetailerQualificationASecond.applyRetailerQualification(
+          { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+          "activate_walmart_add",
+          "native_retailer_qualification_walmart_apply",
+          walmartPayload
+        ).finally(() => { retailerReplaySettled = true; });
+      blockedRetailerConfig = signalConstraintConfigA.applyConstraintConfiguration(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "set_actions_paused",
+        "native_retailer_qualification_blocked_config",
+        {
+          expectedUpdatedAt: retailerSettingsBefore.updatedAt,
+          paused: true,
+          reason: "Native retailer qualification contention"
+        }
+      ).finally(() => { retailerConfigSettled = true; });
+      void blockedRetailerConfig.catch(() => undefined);
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      assert.equal(retailerReplaySettled, false);
+      assert.equal(retailerConfigSettled, false);
+      assert.deepEqual(
+        await retailerQualificationSnapshot("walmart"),
+        walmartBefore
+      );
+      await signalRetailerQualificationDirectClient.query("COMMIT");
+      retailerQualificationTransactionOpen = false;
+      const replay = await blockedRetailerReplay;
+      assert.equal(replay.outcome, "already_applied");
+      assert.equal(replay.mutationApplied, false);
+      assert.equal(replay.idempotentReplay, true);
+      assert.equal(replay.mutationStatementCount, 0);
+      assert.equal(replay.mutationRowCount, 0);
+      assert.equal(replay.sharedRetailerMutated, false);
+      assert.equal(replay.sharedListingsMutated, 0);
+      assert.equal(replay.sharedCatalogMutated, false);
+      assert.equal(replay.promotedJobCount, 1);
+      assert.equal(replay.actionEventsMutated, 0);
+      const pauseResult = await blockedRetailerConfig;
+      assert.equal(pauseResult.outcome, "applied");
+      assert.equal(pauseResult.settingsMutated, true);
+    } finally {
+      if (retailerQualificationTransactionOpen) {
+        await signalRetailerQualificationDirectClient.query("ROLLBACK")
+          .catch(() => undefined);
+      }
+      if (blockedRetailerReplay) {
+        await blockedRetailerReplay.catch(() => undefined);
+      }
+      if (blockedRetailerConfig) {
+        await blockedRetailerConfig.catch(() => undefined);
+      }
+    }
+    const walmartAfter = await retailerQualificationSnapshot("walmart");
+    assert.equal(walmartAfter.retailerExecutionSupported, 1);
+    assert.equal(walmartAfter.listingExecutionSupported, 1);
+    assert.equal(walmartAfter.qualificationCount, 1);
+    assert.equal(walmartAfter.qualificationEvidenceHash, walmartPayload.evidenceHash);
+    assert.equal(walmartAfter.jobState, "awaiting_executor");
+    assert.equal(walmartAfter.promotionEvents, 1);
+    assert.equal(walmartAfter.qualificationAudits, walmartBefore.qualificationAudits + 1);
+    assert.equal(walmartAfter.qualificationOutbox, walmartBefore.qualificationOutbox + 1);
+    await assert.rejects(
+      signalRetailerQualificationA.applyRetailerQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_walmart_add",
+        "native_retailer_qualification_walmart_apply",
+        { ...walmartPayload, evidenceHash: "f".repeat(64) }
+      ),
+      /replay graph changed/
+    );
+    const pausedSettings = await readNativeConstraintSettings();
+    assert.equal(Number(pausedSettings.actionsPaused), 1);
+    const resumeResult =
+      await signalConstraintConfigASecond.applyConstraintConfiguration(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "set_actions_paused",
+        "native_retailer_qualification_resume",
+        {
+          expectedUpdatedAt: pausedSettings.updatedAt,
+          paused: false,
+          reason: ""
+        }
+      );
+    assert.equal(resumeResult.outcome, "applied");
+
+    let globalRetailerLockOpen = false;
+    let blockedAmazonApply: ReturnType<
+      NodePostgresSignalRetailerQualificationApplyDatabase["applyRetailerQualification"]
+    > | null = null;
+    try {
+      await signalRetailerQualificationDirectClient.query("BEGIN");
+      globalRetailerLockOpen = true;
+      await signalRetailerQualificationDirectClient.query(
+        `SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+           'yoink_shared_retailer_execution_v1:amazon', 0
+         ))`
+      );
+      let amazonSettled = false;
+      blockedAmazonApply = signalRetailerQualificationA.applyRetailerQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_amazon_add",
+        "native_retailer_qualification_amazon_apply",
+        retailerPayload(amazonFixture)
+      ).finally(() => { amazonSettled = true; });
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      assert.equal(amazonSettled, false);
+      assert.equal(
+        (await retailerQualificationSnapshot("amazon")).retailerExecutionSupported,
+        0
+      );
+      await signalRetailerQualificationDirectClient.query("COMMIT");
+      globalRetailerLockOpen = false;
+      const amazonResult = await blockedAmazonApply;
+      assert.equal(amazonResult.outcome, "applied");
+      assert.equal(amazonResult.sharedRetailerMutated, true);
+      assert.ok(amazonResult.sharedListingsMutated >= 1);
+      assert.equal(amazonResult.promotedJobCount, 0);
+      assert.equal(amazonResult.activation.offerRouteReadyCount, 2);
+      assert.equal(amazonResult.retailerQualificationWriterParity, true);
+    } finally {
+      if (globalRetailerLockOpen) {
+        await signalRetailerQualificationDirectClient.query("ROLLBACK")
+          .catch(() => undefined);
+      }
+      if (blockedAmazonApply) await blockedAmazonApply.catch(() => undefined);
+    }
+    const amazonAfter = await retailerQualificationSnapshot("amazon");
+    assert.equal(amazonAfter.retailerExecutionSupported, 1);
+    assert.equal(amazonAfter.listingExecutionSupported, 1);
+    assert.equal(amazonAfter.qualificationCount, 1);
+    assert.equal(
+      amazonAfter.qualificationEvidenceHash,
+      retailerPayload(amazonFixture).evidenceHash
+    );
+
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."retailers"
+       SET display_name = 'Tampered Best Buy'
+       WHERE id = 'bestbuy'`
+    );
+    await assert.rejects(
+      signalRetailerQualificationA.applyRetailerQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_bestbuy_add",
+        "native_retailer_qualification_bestbuy_tampered_identity",
+        retailerPayload(bestBuyFixture)
+      ),
+      /shared retailer identity changed/
+    );
+    assert.equal(
+      (await retailerQualificationSnapshot("bestbuy")).qualificationCount,
+      0
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."retailers"
+       SET display_name = 'Best Buy'
+       WHERE id = 'bestbuy'`
+    );
+    const bestBuyResult =
+      await signalRetailerQualificationA.applyRetailerQualification(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "activate_bestbuy_add",
+        "native_retailer_qualification_bestbuy_apply",
+        retailerPayload(bestBuyFixture)
+      );
+    assert.equal(bestBuyResult.outcome, "applied");
+    assert.equal(bestBuyResult.sharedRetailerMutated, true);
+    assert.ok(bestBuyResult.sharedListingsMutated >= 1);
+    assert.equal(bestBuyResult.promotedJobCount, 0);
+    assert.equal(bestBuyResult.activation.retailerId, "bestbuy");
+    assert.equal(bestBuyResult.retailerQualificationWriterParity, true);
+    const bestBuyAfter = await retailerQualificationSnapshot("bestbuy");
+    assert.equal(bestBuyAfter.retailerExecutionSupported, 1);
+    assert.equal(bestBuyAfter.listingExecutionSupported, 1);
+    assert.equal(bestBuyAfter.qualificationCount, 1);
+    assert.equal(
+      bestBuyAfter.qualificationEvidenceHash,
+      retailerPayload(bestBuyFixture).evidenceHash
+    );
+
+    await signalRetailerQualificationDirectClient.end();
+    signalRetailerQualificationDirectClient = null;
+    await Promise.all([
+      signalRetailerQualificationA.close(),
+      signalRetailerQualificationASecond.close(),
+      signalRetailerQualificationB.close(),
+      signalRetailerQualificationC.close(),
+      signalRetailerQualificationUnmapped.close()
+    ]);
+    signalRetailerQualificationA = null;
+    signalRetailerQualificationASecond = null;
+    signalRetailerQualificationB = null;
+    signalRetailerQualificationC = null;
+    signalRetailerQualificationUnmapped = null;
+    })();
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -14359,7 +15184,18 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalSourceTrustB?.close(),
       signalSourceTrustC?.close(),
       signalSourceTrustUnmapped?.close(),
-      signalSourceTrustDirectClient?.end()
+      signalSourceTrustDirectClient?.end(),
+      (signalRetailerQualificationA as
+        NodePostgresSignalRetailerQualificationApplyDatabase | null)?.close(),
+      (signalRetailerQualificationASecond as
+        NodePostgresSignalRetailerQualificationApplyDatabase | null)?.close(),
+      (signalRetailerQualificationB as
+        NodePostgresSignalRetailerQualificationApplyDatabase | null)?.close(),
+      (signalRetailerQualificationC as
+        NodePostgresSignalRetailerQualificationApplyDatabase | null)?.close(),
+      (signalRetailerQualificationUnmapped as
+        NodePostgresSignalRetailerQualificationApplyDatabase | null)?.close(),
+      (signalRetailerQualificationDirectClient as Client | null)?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

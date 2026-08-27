@@ -1,6 +1,43 @@
 # Yoink roadmap
 
-## Shipped through 0.88.0
+## Shipped through 0.89.0
+
+### PostgreSQL non-Target retailer qualification (0.89.0)
+
+- A fifteenth separately receipted hosted-signal qualification role ports the
+  exact packaged activation operations for Walmart, Amazon, and Best Buy. It
+  consumes retailer-qualification then settings scopes (`01100`) and adds a
+  transaction-scoped global advisory lock for the selected retailer
+- The role is independently `NOLOGIN`, `NOINHERIT`, and `NOBYPASSRLS`, owns no
+  application object, inherits no role, has zero direct/effective table or
+  column grants, and can execute one strict security-definer routine. Nine
+  forced-RLS tenant tables and two shared catalog tables are protected; the
+  exact mutation set is five tenant tables plus `retailers` and `listings`
+- PostgreSQL authenticates `session_user`, accepts only the three fixed
+  operation/adapter/confirmation tuples, and revalidates the current 30-day
+  evidence hash, two distinct SKUs, first-party actionable and shipping
+  coverage, one passed no-click rehearsal, the newest active companion's exact
+  capability, and Amazon's ephemeral offer route when selected
+- Shared catalog mutation is monotonic and identity-bound: only the exact
+  packaged retailer and its existing listings can move `execution_supported`
+  from false to true. Arbitrary IDs, inserts, disable, retirement, and any DOM
+  action are outside the function
+- One transaction upserts the user qualification, promotes eligible unexpired
+  first-party shipping quantity-one shadow jobs only when execution is already
+  live and unpaused, and appends deterministic action/audit/outbox receipts.
+  Exact replay is mutation-free; altered or partial graphs abort
+- Native PostgreSQL 16 proves forced late rollback across shared and tenant
+  state, principal/direct denial, exact evidence and capability checks,
+  settings-writer and global-retailer contention, shared-identity tamper
+  rejection, Amazon route validation, job promotion, and all three operations
+- Health and Admin → Operations expose the boundary independently. It closes
+  `nonTargetQualificationWriterParity`,
+  `sharedCatalogExecutionWriterParity`, and
+  `retailerQualificationWriterParity`, but remains qualification-only with
+  `runtimeAuthority: false`. General source lifecycle/status, mission-policy,
+  reservations, production roles, and the SQLite authority switch stay closed
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### PostgreSQL source-trust configuration (0.88.0)
 
@@ -2929,10 +2966,23 @@ contention. `sourceTrustWriterParity` is true, while general source
 lifecycle/status, non-Target retailer qualification, strategy, mission policy,
 reservations, and every runtime role remain closed.
 
+Version 0.89 adds the fifteenth inactive function-only boundary. It accepts
+only exact Walmart, Amazon, or Best Buy activation, consumes retailer-
+qualification and settings scopes plus a retailer-global shared-catalog lock,
+and revalidates the selected retailer's current dossier, evidence hash,
+two-SKU coverage, rehearsal, companion capability, and Amazon offer route.
+Shared capability state changes only monotonically for the fixed retailer and
+its existing listings; eligible shadow-job promotion remains conditional on an
+already-live, unpaused user lane. Native PostgreSQL proves shared/tenant atomic
+rollback, principal/direct denial, replay, settings and retailer contention,
+identity tamper rejection, and all three operations.
+`retailerQualificationWriterParity` is now true, while general source
+lifecycle/status, mission policy, reservations, and every runtime role remain
+closed.
+
 - Complete the remaining PostgreSQL hosted signal-evaluation graph: add the
-  source-lifecycle, non-Target retailer-qualification, strategy,
-  mission-policy, and reservation writers behind the shipped shared fixed-
-  order lock protocol;
+  source-lifecycle, strategy, mission-policy, and reservation writers behind
+  the shipped shared fixed-order lock protocol;
   then add attribution-policy parity, trusted strategy semantic authority as a
   separately qualified boundary, and final inbox composition.
   Compose those pieces with the purchase-intent-only action/spend boundary and
@@ -3391,9 +3441,10 @@ repository alone:
   protocol consumed by both a purchase-intent-only atomic action/spend boundary
   with current constraint revalidation and a bounded pause/guardrail/spend-cap
   configuration writer, plus a complete Target qualification/settings writer
-  with current dossier/device revalidation and bounded job promotion, are
-  implemented, but all PostgreSQL roles remain inactive. Source, non-Target
-  retailer-qualification, strategy, mission-policy, and reservation writer
+  with current dossier/device revalidation and bounded job promotion, plus an
+  exact Walmart/Amazon/Best Buy qualification and monotonic shared-catalog
+  promotion writer, are implemented, but all PostgreSQL roles remain inactive.
+  General source lifecycle, strategy, mission-policy, and reservation writer
   adoption of the protocol,
   attribution-policy parity, separately qualified strategy action semantics,
   and final inbox composition remain on SQLite,

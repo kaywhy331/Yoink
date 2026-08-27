@@ -1,6 +1,6 @@
 {
   "name": "yoink",
-  "version": "0.88.0",
+  "version": "0.89.0",
   "private": true,
   "type": "module",
   "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",
@@ -45,7 +45,8 @@
     "postgres:signal-constraint-config-apply": "npm run build:types && node scripts/postgres-signal-constraint-config-apply.mjs",
     "postgres:signal-action-spend-apply": "npm run build:types && node scripts/postgres-signal-action-spend-apply.mjs",
     "postgres:signal-target-qualification-apply": "npm run build:types && node scripts/postgres-signal-target-qualification-apply.mjs",
-    "postgres:signal-source-trust-apply": "npm run build:types && node scripts/postgres-signal-source-trust-apply.mjs"
+    "postgres:signal-source-trust-apply": "npm run build:types && node scripts/postgres-signal-source-trust-apply.mjs",
+    "postgres:signal-retailer-qualification-apply": "npm run build:types && node scripts/postgres-signal-retailer-qualification-apply.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

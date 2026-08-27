@@ -190,19 +190,20 @@ constraint before activation. Action jobs, spend, inbox completion, and all
 runtime authority remain closed, so complete-handler parity stays six of seven
 and SQLite remains authoritative.
 
-Yoink 0.84 through 0.88 add the reviewed purchase-intent action/spend writer,
+Yoink 0.84 through 0.89 add the reviewed purchase-intent action/spend writer,
 the shared five-domain fixed-order lock protocol, and a bounded writer for
 global pause/resume, guardrail settings, and periodic spend caps, followed by a
-complete Target qualification/settings activation writer, and a bounded
-source-trust writer. All are separately receipted, principal-bound,
+complete Target qualification/settings activation writer, a bounded
+source-trust writer, and the exact Walmart/Amazon/Best Buy qualification and
+shared-catalog promotion writer. All are separately receipted, principal-bound,
 zero-direct-grant, and inactive. Native PostgreSQL proves atomic rollback,
-immutable replay, one-writer contention, exact Target evidence/device
-revalidation and job promotion, source ownership/invariant/optimistic-revision
-checks, and real blocking among configuration, qualification, source, and
-action constraints. General source lifecycle, non-Target retailer
-qualification, strategy, mission-policy, and reservation writers remain on
-SQLite, so aggregate configuration, reservation, and writer-lock parity stay
-false.
+immutable replay, one-writer contention, exact retailer evidence/device and
+Amazon-route revalidation, bounded job promotion, source ownership/invariant/
+optimistic-revision checks, shared-catalog identity and monotonicity, and real
+blocking among configuration, qualification, source, and action constraints.
+General source lifecycle, strategy, mission-policy, and reservation writers
+remain on SQLite, so aggregate configuration, reservation, and writer-lock
+parity stay false.
 
 This is an offline operator interface. Yoink deliberately exposes no HTTP route
 that downloads a database archive.

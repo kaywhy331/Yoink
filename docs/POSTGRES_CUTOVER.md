@@ -1698,11 +1698,12 @@ npm run postgres:signal-action-spend-apply -- plan \
   yoink_action_spend_q_084
 ```
 
-With the current v0.88 CLI, first apply and verify the shared writer-lock and
+With the current v0.89 CLI, first apply and verify the shared writer-lock and
 bounded constraint-configuration successors below. Then apply the action/spend
 boundary once with the qualification connection and explicit acknowledgement;
-the Target qualification/settings and source-trust successors are applied
-afterward as documented in their dedicated sections:
+the Target qualification/settings, source-trust, and non-Target retailer-
+qualification successors are applied afterward as documented in their
+dedicated sections:
 
 ```bash
 YOINK_POSTGRES_SIGNAL_ACTION_SPEND_APPLY_QUALIFICATION_ACK=bounded-signal-action-spend-apply-qualification \
@@ -1741,10 +1742,10 @@ The receipt permanently records `purchaseIntentOnly: true`,
 `attributionPolicyParity: false`, and `runtimeAuthority: false`. Marketplace,
 pickup, retailer DOM mutation, checkout, order submission, and inbox completion
 remain closed. The bounded pause/guardrail/spend-policy writer and complete
-Target qualification/settings activation and bounded source-trust configuration
-now join the fixed-order locking protocol, but general source lifecycle,
-non-Target retailer qualification, strategy, mission-policy, and reservation
-writers must do the same. Attribution must
+Target qualification/settings activation, bounded source-trust configuration,
+and exact Walmart/Amazon/Best Buy qualification now join the fixed-order
+locking protocol, but general source lifecycle, strategy, mission-policy, and
+reservation writers must do the same. Attribution must
 reach policy parity, and final handler composition
 and production principal provisioning must be qualified before activation.
 SQLite remains authoritative and complete handler parity remains six of seven.
@@ -1818,9 +1819,9 @@ The receipt permanently records `lockOnly: true`,
 does not mutate configuration, reservations, actions, inbox state, retailer
 sessions, checkout, or orders. The v0.86 pause/guardrail/spend-policy boundary
 is the first configuration consumer, v0.87 adds the complete Target
-qualification/settings consumer, and v0.88 adds the bounded source-trust
-consumer. General source lifecycle/status, non-Target retailer qualification,
-strategy, mission-policy, and reservation writers must still use the same
+qualification/settings consumer, v0.88 adds the bounded source-trust consumer,
+and v0.89 adds exact Walmart/Amazon/Best Buy qualification. General source
+lifecycle/status, strategy, mission-policy, and reservation writers must still use the same
 scope contract before aggregate parity can become true. There are no runtime
 principals and SQLite remains authoritative.
 
@@ -2070,6 +2071,97 @@ stale-revision rejection, immutable replay, and real contention between an
 uncommitted source writer and an independent shared-lock consumer. General
 source lifecycle/status and SQLite authority remain unchanged.
 
+## Walmart, Amazon, and Best Buy qualification writer seam
+
+Version 0.89 adds the fifteenth independent hosted-signal role. It ports only
+the three packaged `activate_walmart_add`, `activate_amazon_add`, and
+`activate_bestbuy_add` operations. It cannot execute retailer DOM actions,
+configure arbitrary retailers, insert listings, disable or retire catalog
+state, change checkout, or submit an order.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+and can execute one strict security-definer function. The receipt seals nine
+forced-RLS tenant tables, five tenant mutation tables, two protected shared
+catalog tables (`retailers` and `listings`), and a seven-table total mutation
+set. PostgreSQL binds `session_user` to one active tenant/user, consumes the
+retailer-qualification then settings mask `01100`, and takes a transaction-
+scoped global advisory lock for the exact retailer.
+
+Before mutation, PostgreSQL verifies the fixed retailer ID, display name, and
+domain; exact current observer/adapter/confirmation tuple; current 30-day
+evidence hash; at least two distinct SKUs; first-party actionable and shipping
+coverage; one passed no-click rehearsal; and the newest active companion's
+exact adapter capability. Amazon additionally requires a current ephemeral
+offer route. One transaction upserts the user qualification, changes only
+`execution_supported = 0` rows for the exact retailer and its existing
+listings to `1`, conditionally promotes eligible unexpired first-party shipping
+quantity-one shadow jobs when actions are already live and unpaused, and
+appends deterministic action, audit, and outbox receipts. Exact replay is
+mutation-free and validates the immutable graph.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-retailer-qualification-apply -- plan \
+  yoink_cutover_qualification_089 yoink_q_089 yoink_session_q_089 \
+  yoink_queue_q_089 yoink_control_q_089 yoink_notify_q_089 \
+  yoink_execute_q_089 yoink_retain_q_089 yoink_candidate_q_089 \
+  yoink_dispatch_q_089 yoink_reconcile_q_089 yoink_witness_q_089 \
+  yoink_delivery_q_089 yoink_catalog_q_089 yoink_resolution_q_089 \
+  yoink_reference_q_089 yoink_terminal_q_089 yoink_offer_q_089 \
+  yoink_post_q_089 yoink_mission_q_089 yoink_strategy_q_089 \
+  yoink_writer_lock_q_089 yoink_constraint_config_q_089 \
+  yoink_action_spend_q_089 yoink_target_qualification_q_089 \
+  yoink_source_trust_q_089 yoink_retailer_qualification_q_089
+```
+
+After every predecessor through source trust is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_RETAILER_QUALIFICATION_APPLY_QUALIFICATION_ACK=bounded-signal-retailer-qualification-apply-qualification \
+  npm run postgres:signal-retailer-qualification-apply -- apply \
+  yoink_cutover_qualification_089 yoink_q_089 yoink_session_q_089 \
+  yoink_queue_q_089 yoink_control_q_089 yoink_notify_q_089 \
+  yoink_execute_q_089 yoink_retain_q_089 yoink_candidate_q_089 \
+  yoink_dispatch_q_089 yoink_reconcile_q_089 yoink_witness_q_089 \
+  yoink_delivery_q_089 yoink_catalog_q_089 yoink_resolution_q_089 \
+  yoink_reference_q_089 yoink_terminal_q_089 yoink_offer_q_089 \
+  yoink_post_q_089 yoink_mission_q_089 yoink_strategy_q_089 \
+  yoink_writer_lock_q_089 yoink_constraint_config_q_089 \
+  yoink_action_spend_q_089 yoink_target_qualification_q_089 \
+  yoink_source_trust_q_089 yoink_retailer_qualification_q_089
+```
+
+Then independently verify the role, function, tenant/shared table sets,
+immutable receipt, exact grants, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-retailer-qualification-apply -- verify \
+  yoink_cutover_qualification_089 yoink_q_089 yoink_session_q_089 \
+  yoink_queue_q_089 yoink_control_q_089 yoink_notify_q_089 \
+  yoink_execute_q_089 yoink_retain_q_089 yoink_candidate_q_089 \
+  yoink_dispatch_q_089 yoink_reconcile_q_089 yoink_witness_q_089 \
+  yoink_delivery_q_089 yoink_catalog_q_089 yoink_resolution_q_089 \
+  yoink_reference_q_089 yoink_terminal_q_089 yoink_offer_q_089 \
+  yoink_post_q_089 yoink_mission_q_089 yoink_strategy_q_089 \
+  yoink_writer_lock_q_089 yoink_constraint_config_q_089 \
+  yoink_action_spend_q_089 yoink_target_qualification_q_089 \
+  yoink_source_trust_q_089 yoink_retailer_qualification_q_089
+```
+
+The receipt permanently records `nonTargetQualificationWriterParity: true`,
+`sharedCatalogExecutionWriterParity: true`,
+`retailerQualificationWriterParity: true`, and `runtimeAuthority: false`.
+Native PostgreSQL 16 proves forced late rollback across tenant and shared
+state, wrong/same-tenant-peer/unmapped principal denial, zero direct SQL,
+exact and altered replay, settings-writer and retailer-global contention,
+shared-retailer identity tamper rejection, Amazon offer-route validation,
+bounded job promotion, and all three operations. General source lifecycle,
+mission-policy, reservations, production principals, and the SQLite authority
+switch remain closed.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -2173,11 +2265,11 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- port the remaining source-lifecycle, non-Target retailer-qualification,
-  strategy, mission-policy, and reservation writers through the shared fixed-
+- port the remaining source-lifecycle, strategy, mission-policy, and
+  reservation writers through the shared fixed-
   order protocol (global pause, guardrails, spend-policy caps, complete Target
-  qualification/settings activation, and bounded source trust are already
-  qualified);
+  qualification/settings activation, bounded source trust, and exact Walmart/
+  Amazon/Best Buy qualification are already qualified);
   add attribution-policy parity and separately qualified strategy-action
   semantics; then compose the qualified purchase-intent action/spend,
   strategy/purchase-policy evaluation, hosted-delivery recovery, fixed signal-
