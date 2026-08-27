@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.93.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.94.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,49 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.94.0 adds the twentieth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the bounded TrackaLacker
+catalog-import writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role
+has zero direct/effective table or column grants and may call one strict
+security-definer function. The boundary protects fourteen forced-RLS tenant
+tables and five shared-catalog tables (`listing_urls`, `listings`,
+`product_families`, `retailers`, `variants`); its exact mutation set is eleven
+tenant tables plus four of those shared tables — every one except `retailers`,
+which is revalidated only.
+
+PostgreSQL binds `session_user` to one exact tenant/user, consumes only the
+shared source lock (`10000`), and accepts one explicit operation — importing
+one bounded TrackaLacker catalog item of up to 250 listings — under
+`TRACKALACKER_CATALOG_IMPORT_V1`. Every request ID is derived from the
+authenticated principal, operation, and the complete product/listing payload.
+The database revalidates the active user-owned Chrome device, private
+TrackaLacker source, and, when scoped to one, an active sync run, then
+resolves exact product/listing identity across every source and
+shared-catalog reference before accepting or rejecting the whole set.
+
+One transaction creates or reuses a product family/variant, accepts every
+listing candidate, maps each fully-identified listing — registered retailer,
+revalidated canonical URL across thirteen supported retailers — into the
+shared catalog, records an offer observation, attaches a disabled mission
+target when an existing mission already targets the variant, refreshes each
+retailer's current preferred route, marks the source connection connected,
+and, when scoped to an active sync run, upserts one deterministic
+per-product sync-item receipt. Stale or conflicting observation timestamps
+and identities are rejected; the whole operation appends exactly one audit
+and outbox record, and immutable replay returns the original result
+unchanged.
+
+Native PostgreSQL 16 proves wrong, same-tenant-peer, and unmapped principal
+denial, zero direct and cross-boundary SQL, registered-retailer and
+canonical-URL revalidation, complete-set identity conflict rejection,
+stale-observation rejection, device/source/run ownership revalidation, forced
+late-failure rollback, source-lock contention, and immutable audit/outbox
+replay. This closes `catalogImportWriterParity`. Source-connection
+provisioning still sits outside the boundary, so aggregate
+`sourceWriterParity` remains false. SQLite remains authoritative; use
+`npm run postgres:signal-catalog-import-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.93.0 adds the nineteenth independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the terminal spend-reservation

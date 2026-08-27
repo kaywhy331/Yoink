@@ -37,6 +37,7 @@ import { postgresSignalMissionPolicyCapabilityProjection } from "../packages/dat
 import { postgresSignalSourceStatusCapabilityProjection } from "../packages/database/src/postgres-signal-source-status-apply.js";
 import { postgresSignalSourceSyncCapabilityProjection } from "../packages/database/src/postgres-signal-source-sync-apply.js";
 import { postgresSignalReservationLifecycleCapabilityProjection } from "../packages/database/src/postgres-signal-reservation-lifecycle-apply.js";
+import { postgresSignalCatalogImportCapabilityProjection } from "../packages/database/src/postgres-signal-catalog-import-apply.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -150,11 +151,13 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Server-bound Walmart, Amazon, and Best Buy qualification/);
     assert.match(adminScript, /Server-bound mission-policy revision/);
     assert.match(adminScript, /global action pause\/resume, guardrail settings, and periodic spend caps/);
-    assert.match(adminScript, /eighteen independently qualified signal boundaries proven/);
+    assert.match(adminScript, /nineteen independently qualified signal boundaries proven/);
     assert.match(adminScript, /Server-bound TrackaLacker source sync/);
     assert.match(adminScript, /eighteenth independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /Server-bound spend-reservation lifecycle/);
     assert.match(adminScript, /nineteenth independently inactive NOLOGIN boundary/);
+    assert.match(adminScript, /Server-bound TrackaLacker catalog import/);
+    assert.match(adminScript, /twentieth independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /Server-bound reviewed purchase-intent action and spend/);
     assert.match(adminScript, /Strategy-authorized actions, retailer mutation, checkout, order submission, and inbox completion remain closed/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
@@ -205,6 +208,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalSourceSyncCapabilityProjection();
     const postgresSignalReservationLifecycleApply =
       postgresSignalReservationLifecycleCapabilityProjection();
+    const postgresSignalCatalogImportApply =
+      postgresSignalCatalogImportCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -245,6 +250,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalSourceStatusApply,
       postgresSignalSourceSyncApply,
       postgresSignalReservationLifecycleApply,
+      postgresSignalCatalogImportApply,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -546,6 +552,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalReservationLifecycleApply,
       postgresSignalReservationLifecycleApply
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalCatalogImportApply,
+      postgresSignalCatalogImportApply
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -578,7 +588,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalMissionPolicyApply,
       postgresSignalSourceStatusApply,
       postgresSignalSourceSyncApply,
-      postgresSignalReservationLifecycleApply
+      postgresSignalReservationLifecycleApply,
+      postgresSignalCatalogImportApply
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

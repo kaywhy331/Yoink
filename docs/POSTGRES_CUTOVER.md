@@ -2561,6 +2561,123 @@ boundary denial, graph and terminal-state binding, database-clock pre-mutation e
 verified-total rejection and acceptance, late rollback, spend-lock contention,
 immutable replay, append-only accounting, and zero action/mission mutation.
 
+## TrackaLacker catalog-import qualification (0.94.0)
+
+Version 0.94 adds a twentieth independent, inactive hosted-signal boundary
+for `import_trackalacker_catalog_item`. It succeeds the qualified
+spend-reservation boundary and consumes only the shared source lock mask
+`10000`. The operation imports one bounded catalog item — up to 250 listings
+— that TrackaLacker has already reported; it never provisions or
+reconfigures the source connection itself.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application
+object, inherits no role, receives zero direct/effective table or column
+privileges, and can execute one strict security-definer function. Its
+immutable receipt seals fourteen forced-RLS tenant tables plus five
+shared-catalog tables: `listing_urls`, `listings`, `product_families`,
+`retailers`, and `variants`. Eleven tenant tables and four of the shared
+tables may mutate; `retailers` is revalidated only.
+
+Every request carries the device, source connection, optional sync run,
+exact product identity, and up to 250 listing candidates under
+`TRACKALACKER_CATALOG_IMPORT_V1`. PostgreSQL resolves `session_user` to one
+active tenant/user, acquires the source lock, and revalidates the active
+user-owned Chrome device, private TrackaLacker source, and, when a sync ID is
+present, its exact active run. Request identity includes the principal,
+operation, and the complete product/listing payload. Two advisory locks
+serialize the exact source product and each mapped retailer/SKU pair against
+concurrent imports.
+
+Exact identity is resolved across the source product reference, source
+alias, matching shared listing, source listing candidate, and source listing
+reference; a set that resolves to more than one existing variant aborts.
+Every mapped listing (retailer ID, SKU, and canonical URL all present)
+revalidates its retailer's registration and canonical-URL shape against
+thirteen supported retailers before the shared catalog mutates, and
+execution support is derived server-side rather than trusted from the
+payload.
+
+One applied request creates or reuses a product family/variant, upserts
+every listing candidate, maps each mapped listing into the shared catalog
+with its canonical and source-listing URLs, records an offer observation,
+attaches a disabled mission target when an existing mission already targets
+the variant, refreshes each retailer's current preferred route, marks the
+source connection connected, and, when scoped to an active sync run, upserts
+one deterministic per-product sync-item receipt — appending exactly one
+audit and outbox record in the same transaction. Immutable replay returns
+the original result unchanged after ordinary outbox delivery; partial,
+altered, or conflicting receipt graphs abort. The role cannot provision a
+source connection, execute a browser action, fill checkout, submit an order,
+or create or mutate a spend reservation.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-catalog-import-apply -- plan \
+  yoink_cutover_qualification_094 yoink_q_094 yoink_session_q_094 \
+  yoink_queue_q_094 yoink_control_q_094 yoink_notify_q_094 \
+  yoink_execute_q_094 yoink_retain_q_094 yoink_candidate_q_094 \
+  yoink_dispatch_q_094 yoink_reconcile_q_094 yoink_witness_q_094 \
+  yoink_delivery_q_094 yoink_catalog_q_094 yoink_resolution_q_094 \
+  yoink_reference_q_094 yoink_terminal_q_094 yoink_offer_q_094 \
+  yoink_post_q_094 yoink_mission_q_094 yoink_strategy_q_094 \
+  yoink_writer_lock_q_094 yoink_constraint_config_q_094 \
+  yoink_action_spend_q_094 yoink_target_qual_q_094 \
+  yoink_source_trust_q_094 yoink_retailer_qual_q_094 \
+  yoink_mission_policy_q_094 yoink_source_status_q_094 \
+  yoink_source_sync_q_094 yoink_reservation_q_094 yoink_catalog_import_q_094
+```
+
+After every predecessor through reservation lifecycle is verified, apply
+once with the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_CATALOG_IMPORT_APPLY_QUALIFICATION_ACK=bounded-signal-catalog-import-apply-qualification \
+  npm run postgres:signal-catalog-import-apply -- apply \
+  yoink_cutover_qualification_094 yoink_q_094 yoink_session_q_094 \
+  yoink_queue_q_094 yoink_control_q_094 yoink_notify_q_094 \
+  yoink_execute_q_094 yoink_retain_q_094 yoink_candidate_q_094 \
+  yoink_dispatch_q_094 yoink_reconcile_q_094 yoink_witness_q_094 \
+  yoink_delivery_q_094 yoink_catalog_q_094 yoink_resolution_q_094 \
+  yoink_reference_q_094 yoink_terminal_q_094 yoink_offer_q_094 \
+  yoink_post_q_094 yoink_mission_q_094 yoink_strategy_q_094 \
+  yoink_writer_lock_q_094 yoink_constraint_config_q_094 \
+  yoink_action_spend_q_094 yoink_target_qual_q_094 \
+  yoink_source_trust_q_094 yoink_retailer_qual_q_094 \
+  yoink_mission_policy_q_094 yoink_source_status_q_094 \
+  yoink_source_sync_q_094 yoink_reservation_q_094 yoink_catalog_import_q_094
+```
+
+Then independently verify the function, role, protected/mutation table
+sets, exact grants, immutable receipt, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-catalog-import-apply -- verify \
+  yoink_cutover_qualification_094 yoink_q_094 yoink_session_q_094 \
+  yoink_queue_q_094 yoink_control_q_094 yoink_notify_q_094 \
+  yoink_execute_q_094 yoink_retain_q_094 yoink_candidate_q_094 \
+  yoink_dispatch_q_094 yoink_reconcile_q_094 yoink_witness_q_094 \
+  yoink_delivery_q_094 yoink_catalog_q_094 yoink_resolution_q_094 \
+  yoink_reference_q_094 yoink_terminal_q_094 yoink_offer_q_094 \
+  yoink_post_q_094 yoink_mission_q_094 yoink_strategy_q_094 \
+  yoink_writer_lock_q_094 yoink_constraint_config_q_094 \
+  yoink_action_spend_q_094 yoink_target_qual_q_094 \
+  yoink_source_trust_q_094 yoink_retailer_qual_q_094 \
+  yoink_mission_policy_q_094 yoink_source_status_q_094 \
+  yoink_source_sync_q_094 yoink_reservation_q_094 yoink_catalog_import_q_094
+```
+
+The receipt records `catalogImportWriterParity: true` while
+`sourceWriterParity: false`, `connectionProvisioningWriterParity: false`,
+`configurationWriterParity: false`, `writerLockProtocolParity: false`, and
+`runtimeAuthority: false` remain explicit. Native PostgreSQL 16 proves
+principal isolation, direct and cross-boundary denial, registered-retailer
+and canonical-URL revalidation across thirteen retailers, complete-set
+identity conflict rejection, stale-observation rejection,
+device/source/run ownership revalidation, forced late-failure rollback,
+source-lock contention, immutable audit/outbox replay, and zero
+connection-provisioning or reservation mutation.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.

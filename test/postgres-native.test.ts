@@ -223,6 +223,16 @@ import {
   type PostgresSignalReservationLifecycleOperation,
   type PostgresSignalReservationLifecyclePayload
 } from "../packages/database/src/postgres-signal-reservation-lifecycle-apply.js";
+import {
+  NodePostgresSignalCatalogImportApplyDatabase,
+  POSTGRES_SIGNAL_CATALOG_IMPORT_APPLY_CONFIRMATION,
+  POSTGRES_SIGNAL_CATALOG_IMPORT_APPLY_FUNCTION,
+  applyPostgresSignalCatalogImportApplyBoundary,
+  buildPostgresSignalCatalogImportApplyManifest,
+  buildPostgresSignalCatalogImportRequestId,
+  verifyPostgresSignalCatalogImportApplyBoundary,
+  type PostgresSignalCatalogImportPayload
+} from "../packages/database/src/postgres-signal-catalog-import-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -311,6 +321,7 @@ const NATIVE_SOURCE_STATUS_APPLY_ROLE_NAMESPACE = "yoink_native_source_status";
 const NATIVE_SOURCE_SYNC_APPLY_ROLE_NAMESPACE = "yoink_native_source_sync";
 const NATIVE_RESERVATION_LIFECYCLE_APPLY_ROLE_NAMESPACE =
   "yoink_native_reservation";
+const NATIVE_CATALOG_IMPORT_APPLY_ROLE_NAMESPACE = "yoink_native_catalog_import";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1146,7 +1157,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, and terminal reservation lifecycle", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, and bounded TrackaLacker catalog import", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1333,6 +1344,14 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     NodePostgresSignalReservationLifecycleApplyDatabase | null = null;
   let signalReservationLifecycleDirectClient: Client | null = null;
   let signalReservationLifecycleLockClient: Client | null = null;
+  let signalCatalogImportA: NodePostgresSignalCatalogImportApplyDatabase | null = null;
+  let signalCatalogImportASecond:
+    NodePostgresSignalCatalogImportApplyDatabase | null = null;
+  let signalCatalogImportB: NodePostgresSignalCatalogImportApplyDatabase | null = null;
+  let signalCatalogImportUnmapped:
+    NodePostgresSignalCatalogImportApplyDatabase | null = null;
+  let signalCatalogImportDirectClient: Client | null = null;
+  let signalCatalogImportLockClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2983,6 +3002,57 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalReservationLifecycleBoundary
     );
+    const qualifiedSignalCatalogImportManifest =
+      buildPostgresSignalCatalogImportApplyManifest(
+        qualifiedSignalReservationLifecycleManifest,
+        NATIVE_CATALOG_IMPORT_APPLY_ROLE_NAMESPACE
+      );
+    const signalCatalogImportBoundary =
+      await applyPostgresSignalCatalogImportApplyBoundary(
+        importer,
+        qualifiedSignalCatalogImportManifest,
+        new Date("2026-08-25T16:58:00.000Z").getTime()
+      );
+    assert.equal(signalCatalogImportBoundary.protectedTenantTableCount, 14);
+    assert.equal(signalCatalogImportBoundary.forcedRlsTableCount, 14);
+    assert.equal(signalCatalogImportBoundary.mutationTableCount, 11);
+    assert.equal(signalCatalogImportBoundary.directTableGrantCount, 0);
+    assert.equal(signalCatalogImportBoundary.functionGrantCount, 1);
+    assert.equal(signalCatalogImportBoundary.membershipCount, 0);
+    assert.equal(signalCatalogImportBoundary.activePrincipalCount, 0);
+    assert.equal(signalCatalogImportBoundary.metadata.operationCount, 1);
+    assert.equal(signalCatalogImportBoundary.metadata.maximumListingsPerItem, 250);
+    assert.equal(signalCatalogImportBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(signalCatalogImportBoundary.metadata.sourceScopeConsumed, true);
+    assert.equal(signalCatalogImportBoundary.metadata.completeSetIdentityConsensus, true);
+    assert.equal(signalCatalogImportBoundary.metadata.crossTenantCatalogSerialization, true);
+    assert.equal(signalCatalogImportBoundary.metadata.canonicalRetailerUrlRevalidation, true);
+    assert.equal(signalCatalogImportBoundary.metadata.monotonicSourceObservation, true);
+    assert.equal(signalCatalogImportBoundary.metadata.optionalSyncItemCompositionParity, true);
+    assert.equal(signalCatalogImportBoundary.metadata.catalogImportWriterParity, true);
+    assert.equal(signalCatalogImportBoundary.metadata.connectionProvisioningWriterParity, false);
+    assert.equal(signalCatalogImportBoundary.metadata.sourceWriterParity, false);
+    assert.equal(signalCatalogImportBoundary.metadata.reservationWriterParity, true);
+    assert.equal(signalCatalogImportBoundary.metadata.sharedCatalogMutationAuthority, true);
+    assert.equal(signalCatalogImportBoundary.metadata.actionAuthority, false);
+    assert.equal(signalCatalogImportBoundary.metadata.runtimeAuthority, false);
+    assert.deepEqual(signalCatalogImportBoundary.metadata.protectedSharedCatalogTableNames, [
+      "listing_urls", "listings", "product_families", "retailers", "variants"
+    ]);
+    assert.deepEqual(signalCatalogImportBoundary.metadata.sharedCatalogMutationTableNames, [
+      "listing_urls", "listings", "product_families", "variants"
+    ]);
+    assert.equal(signalCatalogImportBoundary.metadata.protectedSharedCatalogTableCount, 5);
+    assert.equal(signalCatalogImportBoundary.metadata.sharedCatalogMutationTableCount, 4);
+    assert.equal(signalCatalogImportBoundary.metadata.totalMutationTableCount, 15);
+    assert.match(signalCatalogImportBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalCatalogImportApplyBoundary(
+        importer,
+        qualifiedSignalCatalogImportManifest
+      ),
+      signalCatalogImportBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -3341,6 +3411,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalSourceSyncManifest,
         NATIVE_RESERVATION_LIFECYCLE_APPLY_ROLE_NAMESPACE
       );
+    const signalCatalogImportManifest =
+      buildPostgresSignalCatalogImportApplyManifest(
+        signalReservationLifecycleManifest,
+        NATIVE_CATALOG_IMPORT_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -3447,6 +3522,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalReservationLifecycleManifest.reservationLifecycleRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalCatalogImportManifest.catalogImportRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -13415,6 +13494,781 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     })();
 
     await (async () => {
+    const catalogImportDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalCatalogImportApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalCatalogImportManifest, { maxConnections });
+    signalCatalogImportA = catalogImportDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalCatalogImportASecond = catalogImportDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalCatalogImportB = catalogImportDatabase(NATIVE_PRINCIPAL_B, 2);
+    signalCatalogImportUnmapped = catalogImportDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const catalogPrincipalA = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const catalogPrincipalB = { tenantId: "tenant_local", userId: "user_local" };
+    const catalogDeviceA = "native_catalog_import_device_a";
+    const catalogDeviceB = "native_catalog_import_device_b";
+    const catalogSourceA = "native_catalog_import_source_a";
+    const catalogSourceB = "native_catalog_import_source_b";
+    const catalogSyncA = "tlsync_native_catalog_import_1234";
+    const fixtureCreatedAt = new Date(Date.now() - 60_000).toISOString();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."extension_devices"(
+         id, tenant_id, user_id, name, token_hash, extension_version,
+         status, capabilities_json, last_seen_at, created_at, updated_at,
+         credential_generation, credential_issued_at
+       ) VALUES
+         ($1, $2, $3, 'Native catalog import A', $4, '0.94.0',
+          'active', '{}', $8, $8, $8, 1, $8),
+         ($5, $6, $7, 'Native catalog import B', $9, '0.94.0',
+          'active', '{}', $8, $8, $8, 1, $8)`,
+      [
+        catalogDeviceA,
+        catalogPrincipalA.tenantId,
+        catalogPrincipalA.userId,
+        stableHash("native_catalog_import_device_a"),
+        catalogDeviceB,
+        catalogPrincipalB.tenantId,
+        catalogPrincipalB.userId,
+        fixtureCreatedAt,
+        stableHash("native_catalog_import_device_b")
+      ]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_connections"(
+         id, tenant_id, user_id, source, name, status, trust_level,
+         auto_create_missions, is_private, last_event_at, created_at, updated_at
+       ) VALUES
+         ($1, $2, $3, 'trackalacker', 'Native catalog import A', 'connected',
+          'informational', 0, 1, '', $7, $7),
+         ($4, $5, $6, 'trackalacker', 'Native catalog import B', 'connected',
+          'informational', 0, 1, '', $7, $7)`,
+      [
+        catalogSourceA,
+        catalogPrincipalA.tenantId,
+        catalogPrincipalA.userId,
+        catalogSourceB,
+        catalogPrincipalB.tenantId,
+        catalogPrincipalB.userId,
+        fixtureCreatedAt
+      ]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_sync_runs"(
+         id, tenant_id, user_id, source_connection_id, device_id, phase,
+         page, pages, discovered, processed, imported, failed, message,
+         started_at, updated_at, completed_at
+       ) VALUES ($1, $2, $3, $4, $5, 'importing',
+                 1, 1, 1, 0, 0, 0, 'Native catalog import', $6, $6, '')`,
+      [catalogSyncA, catalogPrincipalA.tenantId, catalogPrincipalA.userId,
+        catalogSourceA, catalogDeviceA, fixtureCreatedAt]
+    );
+
+    const applyCatalogImport = (
+      database: NodePostgresSignalCatalogImportApplyDatabase,
+      principalValue: typeof catalogPrincipalA,
+      payloadValue: PostgresSignalCatalogImportPayload
+    ) => database.applyCatalogImport(
+      principalValue,
+      "import_trackalacker_catalog_item",
+      buildPostgresSignalCatalogImportRequestId(
+        principalValue,
+        "import_trackalacker_catalog_item",
+        payloadValue
+      ),
+      payloadValue
+    );
+    type CatalogSnapshot = {
+      families: number;
+      variants: number;
+      listings: number;
+      listingUrls: number;
+      productRefs: number;
+      aliases: number;
+      candidates: number;
+      listingRefs: number;
+      preferredRefs: number;
+      observations: number;
+      missionTargets: number;
+      syncItems: number;
+      audits: number;
+      outboxes: number;
+      actions: number;
+    };
+    const catalogSnapshot = async (): Promise<CatalogSnapshot> => {
+      const row = (await first!.query<{
+        families: string | number | bigint;
+        variants: string | number | bigint;
+        listings: string | number | bigint;
+        listingUrls: string | number | bigint;
+        productRefs: string | number | bigint;
+        aliases: string | number | bigint;
+        candidates: string | number | bigint;
+        listingRefs: string | number | bigint;
+        preferredRefs: string | number | bigint;
+        observations: string | number | bigint;
+        missionTargets: string | number | bigint;
+        syncItems: string | number | bigint;
+        audits: string | number | bigint;
+        outboxes: string | number | bigint;
+        actions: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."product_families") AS families,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."variants") AS variants,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."listings") AS listings,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."listing_urls") AS "listingUrls",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_product_refs"
+            WHERE source_connection_id IN ($1, $2)) AS "productRefs",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_product_aliases"
+            WHERE source_connection_id IN ($1, $2)) AS aliases,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_listing_candidates"
+            WHERE source_connection_id IN ($1, $2)) AS candidates,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_listing_refs"
+            WHERE source_connection_id IN ($1, $2)) AS "listingRefs",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_variant_retailer_refs"
+            WHERE source_connection_id IN ($1, $2)) AS "preferredRefs",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."offer_observations"
+            WHERE source_connection_id IN ($1, $2)) AS observations,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."mission_targets") AS "missionTargets",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_sync_run_items"
+            WHERE run_id = $3) AS "syncItems",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE event_type = 'trackalacker_catalog_item_imported'
+              AND tenant_id IN ($4, $5)) AS audits,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE aggregate_type = 'source_catalog_import'
+              AND tenant_id IN ($4, $5)) AS outboxes,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_jobs") AS actions`,
+        [catalogSourceA, catalogSourceB, catalogSyncA,
+          catalogPrincipalA.tenantId, catalogPrincipalB.tenantId]
+      )).rows[0]!;
+      return {
+        families: Number(row.families),
+        variants: Number(row.variants),
+        listings: Number(row.listings),
+        listingUrls: Number(row.listingUrls),
+        productRefs: Number(row.productRefs),
+        aliases: Number(row.aliases),
+        candidates: Number(row.candidates),
+        listingRefs: Number(row.listingRefs),
+        preferredRefs: Number(row.preferredRefs),
+        observations: Number(row.observations),
+        missionTargets: Number(row.missionTargets),
+        syncItems: Number(row.syncItems),
+        audits: Number(row.audits),
+        outboxes: Number(row.outboxes),
+        actions: Number(row.actions)
+      };
+    };
+
+    const observedAt = new Date().toISOString();
+    const initialPayload: PostgresSignalCatalogImportPayload = {
+      deviceId: catalogDeviceA,
+      sourceConnectionId: catalogSourceA,
+      syncId: catalogSyncA,
+      sourceProductId: "catalog-product:alpha",
+      sourceProductSlug: "native-catalog-product-alpha",
+      sourceProductUrl:
+        "https://www.trackalacker.com/products/showcase/native-catalog-product-alpha?view=all",
+      title: "Native catalog product alpha",
+      msrpCents: 4_999,
+      observedAt,
+      listings: [
+        {
+          sourceListingId: "catalog-listing:amazon-alpha",
+          storeName: "Amazon",
+          retailerId: "amazon",
+          retailerSku: "B0CATALOG1",
+          canonicalUrl: "https://www.amazon.com/dp/B0CATALOG1",
+          sourceListingUrl:
+            "https://www.trackalacker.com/listings/native-amazon-alpha?view=all",
+          outboundUrl: "https://www.amazon.com/dp/B0CATALOG1?tag=native-20",
+          availability: "in_stock",
+          unitPriceCents: 4_799
+        },
+        {
+          sourceListingId: "catalog-listing:walmart-alpha",
+          storeName: "Walmart",
+          retailerId: "walmart",
+          retailerSku: "987654321",
+          canonicalUrl: "https://www.walmart.com/ip/987654321",
+          sourceListingUrl:
+            "https://www.trackalacker.com/listings/native-walmart-alpha?view=all",
+          outboundUrl: "https://www.walmart.com/ip/987654321?athbdg=native",
+          availability: "preorder",
+          unitPriceCents: 4_899
+        },
+        {
+          sourceListingId: "catalog-listing:other-alpha",
+          storeName: "Independent shop",
+          retailerId: "",
+          retailerSku: "",
+          canonicalUrl: "",
+          sourceListingUrl:
+            "https://www.trackalacker.com/listings/native-other-alpha?view=all",
+          outboundUrl: "https://shop.example.com/native-alpha?campaign=one",
+          availability: "unknown",
+          unitPriceCents: null
+        }
+      ],
+      confirmation: POSTGRES_SIGNAL_CATALOG_IMPORT_APPLY_CONFIRMATION
+    };
+    const initialRequestId = buildPostgresSignalCatalogImportRequestId(
+      catalogPrincipalA,
+      "import_trackalacker_catalog_item",
+      initialPayload
+    );
+    const catalogBefore = await catalogSnapshot();
+
+    await assert.rejects(
+      signalCatalogImportB.applyCatalogImport(
+        catalogPrincipalA,
+        "import_trackalacker_catalog_item",
+        initialRequestId,
+        initialPayload
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await assert.rejects(
+      signalCatalogImportUnmapped.applyCatalogImport(
+        catalogPrincipalA,
+        "import_trackalacker_catalog_item",
+        initialRequestId,
+        initialPayload
+      ),
+      /principal is not active/
+    );
+    await assert.rejects(
+      applyCatalogImport(signalCatalogImportA, catalogPrincipalA, {
+        ...initialPayload,
+        sourceConnectionId: "native_catalog_import_missing_source",
+        syncId: ""
+      }),
+      /source (?:ownership is invalid|is unavailable)/
+    );
+    await assert.rejects(
+      applyCatalogImport(signalCatalogImportA, catalogPrincipalA, {
+        ...initialPayload,
+        syncId: "",
+        listings: [{
+          ...initialPayload.listings[0]!,
+          canonicalUrl: "https://www.amazon.com/dp/B0DIFFERENT"
+        }]
+      }),
+      /canonical retailer identity is invalid/
+    );
+    await assert.rejects(
+      applyCatalogImport(signalCatalogImportA, catalogPrincipalA, {
+        ...initialPayload,
+        syncId: "",
+        msrpCents: 12.5
+      }),
+      /product price is invalid/
+    );
+    const oversizedListings = Array.from({ length: 251 }, (_, index) => ({
+      sourceListingId: `catalog-oversized:${index}`,
+      storeName: "Unmapped store",
+      retailerId: "",
+      retailerSku: "",
+      canonicalUrl: "",
+      sourceListingUrl: `https://www.trackalacker.com/listings/oversized-${index}`,
+      outboundUrl: "",
+      availability: "unknown" as const,
+      unitPriceCents: null
+    }));
+    await assert.rejects(
+      applyCatalogImport(signalCatalogImportA, catalogPrincipalA, {
+        ...initialPayload,
+        syncId: "",
+        listings: oversizedListings
+      }),
+      /product identity is invalid/
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."extension_devices"
+       SET status = 'disabled' WHERE id = $1`,
+      [catalogDeviceA]
+    );
+    try {
+      await assert.rejects(
+        applyCatalogImport(signalCatalogImportA, catalogPrincipalA, initialPayload),
+        /device is unavailable/
+      );
+    } finally {
+      await first.query(
+        `UPDATE "${NATIVE_SCHEMA}"."extension_devices"
+         SET status = 'active' WHERE id = $1`,
+        [catalogDeviceA]
+      );
+    }
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."source_connections"
+       SET is_private = 0 WHERE id = $1`,
+      [catalogSourceA]
+    );
+    try {
+      await assert.rejects(
+        applyCatalogImport(signalCatalogImportA, catalogPrincipalA, initialPayload),
+        /source is unavailable/
+      );
+    } finally {
+      await first.query(
+        `UPDATE "${NATIVE_SCHEMA}"."source_connections"
+         SET is_private = 1 WHERE id = $1`,
+        [catalogSourceA]
+      );
+    }
+    assert.deepEqual(await catalogSnapshot(), catalogBefore);
+
+    signalCatalogImportDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalCatalogImportDirectClient.on("error", () => undefined);
+    await signalCatalogImportDirectClient.connect();
+    await signalCatalogImportDirectClient.query(
+      `SET ROLE "${signalCatalogImportManifest.catalogImportRole.name}"`
+    );
+    await assert.rejects(
+      signalCatalogImportDirectClient.query(
+        `SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."product_families"`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalCatalogImportDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."source_connections"(id)
+         VALUES ('forbidden_catalog_import_source')`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalCatalogImportDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_RESERVATION_LIFECYCLE_APPLY_FUNCTION}"(
+           $1, $2, 'release_spend_reservation', 'forbidden_cross_boundary', '{}'
+         )`,
+        [catalogPrincipalA.tenantId, catalogPrincipalA.userId]
+      ),
+      /permission denied/
+    );
+
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_catalog_import_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $failure$
+       BEGIN
+         IF NEW.aggregate_type = 'source_catalog_import'
+           AND NEW.aggregate_id = '${initialRequestId}' THEN
+           RAISE EXCEPTION 'native forced catalog-import outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $failure$;
+       CREATE TRIGGER "yoink_native_reject_catalog_import_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION
+         "${NATIVE_SCHEMA}"."yoink_native_reject_catalog_import_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        applyCatalogImport(signalCatalogImportA, catalogPrincipalA, initialPayload),
+        /native forced catalog-import outbox failure/
+      );
+      assert.deepEqual(await catalogSnapshot(), catalogBefore);
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_catalog_import_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS
+           "${NATIVE_SCHEMA}"."yoink_native_reject_catalog_import_outbox"()`
+      );
+    }
+
+    const firstResult = await applyCatalogImport(
+      signalCatalogImportA,
+      catalogPrincipalA,
+      initialPayload
+    );
+    assert.equal(firstResult.outcome, "applied");
+    assert.equal(firstResult.mutationApplied, true);
+    assert.equal(firstResult.idempotentReplay, false);
+    assert.equal(firstResult.familyCreated, true);
+    assert.equal(firstResult.variantCreated, true);
+    assert.equal(firstResult.candidatesAccepted, 3);
+    assert.equal(firstResult.listingsMapped, 2);
+    assert.equal(firstResult.listingsCreated, 2);
+    assert.equal(firstResult.offerObservationsCreated, 2);
+    assert.equal(firstResult.missionTargetsCreated, 0);
+    assert.equal(firstResult.preferredRoutesUpdated, 2);
+    assert.equal(firstResult.sourceProductRefMutated, true);
+    assert.equal(firstResult.sourceAliasMutated, true);
+    assert.equal(firstResult.syncItemMutated, true);
+    assert.equal(firstResult.auditMutated, true);
+    assert.equal(firstResult.outboxMutated, true);
+    assert.equal(firstResult.sharedCatalogMutationAuthority, true);
+    assert.equal(firstResult.actionAuthority, false);
+    assert.equal(firstResult.runtimeAuthority, false);
+    assert.deepEqual(firstResult.syncReceipt, {
+      runId: catalogSyncA,
+      externalProductId: initialPayload.sourceProductId,
+      outcome: "imported",
+      candidatesAccepted: 3,
+      listingsMapped: 2,
+      listingsCreated: 2,
+      updatedAt: (firstResult.syncReceipt as { updatedAt: string }).updatedAt
+    });
+    assert.match(
+      String((firstResult.syncReceipt as { updatedAt: string }).updatedAt),
+      /^\d{4}-\d{2}-\d{2}T/
+    );
+    const catalogAfterFirst = await catalogSnapshot();
+    assert.deepEqual(catalogAfterFirst, {
+      ...catalogBefore,
+      families: catalogBefore.families + 1,
+      variants: catalogBefore.variants + 1,
+      listings: catalogBefore.listings + 2,
+      listingUrls: catalogBefore.listingUrls + 4,
+      productRefs: catalogBefore.productRefs + 1,
+      aliases: catalogBefore.aliases + 1,
+      candidates: catalogBefore.candidates + 3,
+      listingRefs: catalogBefore.listingRefs + 2,
+      preferredRefs: catalogBefore.preferredRefs + 2,
+      observations: catalogBefore.observations + 2,
+      syncItems: catalogBefore.syncItems + 1,
+      audits: catalogBefore.audits + 1,
+      outboxes: catalogBefore.outboxes + 1
+    });
+    const persistedQueryUrls = (await first.query<{
+      sourceUrl: string;
+      outboundUrl: string;
+    }>(
+      `SELECT source_url AS "sourceUrl", outbound_url AS "outboundUrl"
+       FROM "${NATIVE_SCHEMA}"."source_listing_candidates"
+       WHERE source_connection_id = $1 AND external_listing_id = $2`,
+      [catalogSourceA, initialPayload.listings[0]!.sourceListingId]
+    )).rows[0]!;
+    assert.equal(persistedQueryUrls.sourceUrl, initialPayload.listings[0]!.sourceListingUrl);
+    assert.equal(persistedQueryUrls.outboundUrl, initialPayload.listings[0]!.outboundUrl);
+
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."source_sync_runs"
+       SET phase = 'complete', completed_at = $2, updated_at = $2 WHERE id = $1`,
+      [catalogSyncA, new Date().toISOString()]
+    );
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."outbox_events"
+       SET delivery_state = 'delivered', delivery_attempts = 1,
+           delivered_at = $2, updated_at = $2
+       WHERE aggregate_type = 'source_catalog_import' AND aggregate_id = $1`,
+      [initialRequestId, new Date().toISOString()]
+    );
+    const exactReplay = await applyCatalogImport(
+      signalCatalogImportASecond,
+      catalogPrincipalA,
+      initialPayload
+    );
+    assert.equal(exactReplay.outcome, "already_applied");
+    assert.equal(exactReplay.mutationApplied, false);
+    assert.equal(exactReplay.idempotentReplay, true);
+    assert.equal(exactReplay.mutationStatementCount, 0);
+    assert.equal(exactReplay.mutationRowCount, 0);
+    assert.equal(exactReplay.sourceProductRefMutated, false);
+    assert.equal(exactReplay.sourceAliasMutated, false);
+    assert.equal(exactReplay.syncItemMutated, false);
+    assert.equal(exactReplay.auditMutated, false);
+    assert.equal(exactReplay.outboxMutated, false);
+    assert.deepEqual(await catalogSnapshot(), catalogAfterFirst);
+    await assert.rejects(
+      applyCatalogImport(signalCatalogImportA, catalogPrincipalA, {
+        ...initialPayload,
+        observedAt: new Date(Date.parse(observedAt) + 1_000).toISOString()
+      }),
+      /sync run is not active/
+    );
+    await assert.rejects(
+      signalCatalogImportDirectClient.query(
+        `SELECT result_json FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_CATALOG_IMPORT_APPLY_FUNCTION}"(
+           $1, $2, 'import_trackalacker_catalog_item', $3, $4
+         )`,
+        [catalogPrincipalA.tenantId, catalogPrincipalA.userId, initialRequestId,
+          JSON.stringify({ ...initialPayload, title: "Altered replay title" })]
+      ),
+      /request identity is invalid/
+    );
+    assert.deepEqual(await catalogSnapshot(), catalogAfterFirst);
+
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."missions"(
+         id, tenant_id, user_id, variant_id, status, origin,
+         target_quantity, fulfilled_quantity, created_at, updated_at
+       ) VALUES ('native_catalog_import_mission', $1, $2, $3, 'active',
+                 'manual', 1, 0, $4, $4)`,
+      [catalogPrincipalA.tenantId, catalogPrincipalA.userId,
+        firstResult.variantId, new Date().toISOString()]
+    );
+    const secondObservedAt = new Date(Date.parse(observedAt) + 2_000).toISOString();
+    const secondPayload: PostgresSignalCatalogImportPayload = {
+      ...initialPayload,
+      syncId: "",
+      observedAt: secondObservedAt,
+      listings: [
+        initialPayload.listings[0]!,
+        initialPayload.listings[1]!,
+        {
+          sourceListingId: "catalog-listing:bestbuy-alpha",
+          storeName: "Best Buy",
+          retailerId: "bestbuy",
+          retailerSku: "6670797",
+          canonicalUrl: "https://www.bestbuy.com/site/-/6670797.p",
+          sourceListingUrl:
+            "https://www.trackalacker.com/listings/native-bestbuy-alpha?view=all",
+          outboundUrl:
+            "https://www.bestbuy.com/site/-/6670797.p?intl=nosplash",
+          availability: "in_stock",
+          unitPriceCents: 4_699
+        }
+      ]
+    };
+    const secondResult = await applyCatalogImport(
+      signalCatalogImportA,
+      catalogPrincipalA,
+      secondPayload
+    );
+    assert.equal(secondResult.outcome, "applied");
+    assert.equal(secondResult.familyCreated, false);
+    assert.equal(secondResult.variantCreated, false);
+    assert.equal(secondResult.variantId, firstResult.variantId);
+    assert.equal(secondResult.candidatesAccepted, 3);
+    assert.equal(secondResult.listingsMapped, 3);
+    assert.equal(secondResult.listingsCreated, 1);
+    assert.equal(secondResult.offerObservationsCreated, 3);
+    assert.equal(secondResult.missionTargetsCreated, 3);
+    assert.equal(secondResult.preferredRoutesUpdated, 3);
+    assert.equal(secondResult.syncItemMutated, false);
+    assert.equal(secondResult.syncReceipt, null);
+    const attachedTargets = (await first.query<{
+      count: string | number | bigint;
+      minimumEnabled: string | number | bigint;
+      maximumEnabled: string | number | bigint;
+    }>(
+      `SELECT COUNT(*) AS count, MIN(enabled) AS "minimumEnabled",
+              MAX(enabled) AS "maximumEnabled"
+       FROM "${NATIVE_SCHEMA}"."mission_targets"
+       WHERE mission_id = 'native_catalog_import_mission'`
+    )).rows[0]!;
+    assert.equal(Number(attachedTargets.count), 3);
+    assert.equal(Number(attachedTargets.minimumEnabled), 0);
+    assert.equal(Number(attachedTargets.maximumEnabled), 0);
+    await assert.rejects(
+      applyCatalogImport(signalCatalogImportA, catalogPrincipalA, {
+        ...secondPayload,
+        observedAt: new Date(Date.parse(observedAt) - 1_000).toISOString()
+      }),
+      /source product observation is stale/
+    );
+
+    const conflictCreatedAt = new Date().toISOString();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."product_families"(
+         id, title, brand, created_at, updated_at
+       ) VALUES ('native_catalog_conflict_family', 'Native conflict', '', $1, $1)`,
+      [conflictCreatedAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."variants"(
+         id, family_id, title, attributes_json, created_at, updated_at
+       ) VALUES ('native_catalog_conflict_variant', 'native_catalog_conflict_family',
+                 'Native conflict', '{}', $1, $1)`,
+      [conflictCreatedAt]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."listings"(
+         id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+         execution_supported, msrp_cents, currency, created_at, updated_at
+       ) VALUES ('native_catalog_conflict_listing', 'native_catalog_conflict_variant',
+                 'amazon', 'B0CONFLX01', 'https://www.amazon.com/dp/B0CONFLX01',
+                 'in_stock', 0, 4999, 'USD', $1, $1)`,
+      [conflictCreatedAt]
+    );
+    const conflictBefore = await catalogSnapshot();
+    await assert.rejects(
+      applyCatalogImport(signalCatalogImportA, catalogPrincipalA, {
+        ...secondPayload,
+        observedAt: new Date(Date.parse(secondObservedAt) + 1_000).toISOString(),
+        listings: [
+          secondPayload.listings[0]!,
+          {
+            sourceListingId: "catalog-listing:conflict-alpha",
+            storeName: "Amazon",
+            retailerId: "amazon",
+            retailerSku: "B0CONFLX01",
+            canonicalUrl: "https://www.amazon.com/dp/B0CONFLX01",
+            sourceListingUrl:
+              "https://www.trackalacker.com/listings/native-conflict-alpha",
+            outboundUrl: "https://www.amazon.com/dp/B0CONFLX01",
+            availability: "in_stock",
+            unitPriceCents: 4_999
+          }
+        ]
+      }),
+      /exact identities resolve to different variants/
+    );
+    assert.deepEqual(await catalogSnapshot(), conflictBefore);
+
+    const sharedSku = "B0SHAREX01";
+    const sharedObservedAt = new Date(Date.parse(secondObservedAt) + 2_000).toISOString();
+    const sharedPayload = (
+      deviceId: string,
+      sourceConnectionId: string,
+      suffix: "a" | "b"
+    ): PostgresSignalCatalogImportPayload => ({
+      deviceId,
+      sourceConnectionId,
+      syncId: "",
+      sourceProductId: `catalog-product:shared-${suffix}`,
+      sourceProductSlug: `native-shared-catalog-product-${suffix}`,
+      sourceProductUrl:
+        `https://www.trackalacker.com/products/showcase/native-shared-${suffix}`,
+      title: "Native shared catalog product",
+      msrpCents: 3_999,
+      observedAt: sharedObservedAt,
+      listings: [{
+        sourceListingId: `catalog-listing:shared-${suffix}`,
+        storeName: "Amazon",
+        retailerId: "amazon",
+        retailerSku: sharedSku,
+        canonicalUrl: `https://www.amazon.com/dp/${sharedSku}`,
+        sourceListingUrl:
+          `https://www.trackalacker.com/listings/native-shared-${suffix}`,
+        outboundUrl: `https://www.amazon.com/dp/${sharedSku}?tag=native-${suffix}`,
+        availability: "in_stock",
+        unitPriceCents: 3_899
+      }],
+      confirmation: POSTGRES_SIGNAL_CATALOG_IMPORT_APPLY_CONFIRMATION
+    });
+    const sharedPayloadA = sharedPayload(
+      catalogDeviceA,
+      catalogSourceA,
+      "a"
+    );
+    const sharedPayloadB = sharedPayload(
+      catalogDeviceB,
+      catalogSourceB,
+      "b"
+    );
+    const sharedBefore = await catalogSnapshot();
+    signalCatalogImportLockClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalCatalogImportLockClient.on("error", () => undefined);
+    await signalCatalogImportLockClient.connect();
+    let sharedLockTransactionOpen = false;
+    let sharedImportA: ReturnType<typeof applyCatalogImport> | null = null;
+    let sharedImportB: ReturnType<typeof applyCatalogImport> | null = null;
+    try {
+      await signalCatalogImportLockClient.query("BEGIN");
+      sharedLockTransactionOpen = true;
+      await signalCatalogImportLockClient.query(
+        `SELECT pg_catalog.pg_advisory_xact_lock(
+           pg_catalog.hashtextextended($1, 0)
+         )`,
+        [`yoink_signal_catalog_apply_v1:amazon:${sharedSku}`]
+      );
+      let sharedASettled = false;
+      let sharedBSettled = false;
+      sharedImportA = applyCatalogImport(
+        signalCatalogImportASecond,
+        catalogPrincipalA,
+        sharedPayloadA
+      ).finally(() => { sharedASettled = true; });
+      sharedImportB = applyCatalogImport(
+        signalCatalogImportB,
+        catalogPrincipalB,
+        sharedPayloadB
+      ).finally(() => { sharedBSettled = true; });
+      const sharedBlockedWaiterCount = async (): Promise<number> => {
+        const waiters = await first!.query<{ count: string | number | bigint }>(
+          `SELECT COUNT(*) AS count
+           FROM pg_catalog.pg_locks AS lock
+           JOIN pg_catalog.pg_stat_activity AS activity ON activity.pid = lock.pid
+           WHERE lock.locktype = 'advisory' AND lock.granted = FALSE
+             AND activity.application_name = 'yoink_postgres_signal_catalog_import'`
+        );
+        return Number(waiters.rows[0]?.count ?? 0);
+      };
+      const sharedLockPollDeadline = Date.now() + 10_000;
+      while ((await sharedBlockedWaiterCount()) < 2) {
+        if (sharedASettled || sharedBSettled) {
+          throw new Error(
+            "signal catalog-import cross-tenant serialization settled before both sessions blocked"
+          );
+        }
+        if (Date.now() > sharedLockPollDeadline) {
+          throw new Error(
+            "signal catalog-import cross-tenant serialization did not observe both sessions blocked on the shared advisory lock"
+          );
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(sharedASettled, false);
+      assert.equal(sharedBSettled, false);
+      await signalCatalogImportLockClient.query("COMMIT");
+      sharedLockTransactionOpen = false;
+      const [sharedResultA, sharedResultB] = await Promise.all([
+        sharedImportA,
+        sharedImportB
+      ]);
+      sharedImportA = null;
+      sharedImportB = null;
+      assert.equal(sharedResultA.variantId, sharedResultB.variantId);
+      assert.equal(
+        Number(sharedResultA.familyCreated) + Number(sharedResultB.familyCreated),
+        1
+      );
+      assert.equal(
+        Number(sharedResultA.variantCreated) + Number(sharedResultB.variantCreated),
+        1
+      );
+      assert.equal(sharedResultA.listingsCreated + sharedResultB.listingsCreated, 1);
+    } finally {
+      if (sharedLockTransactionOpen) {
+        await signalCatalogImportLockClient.query("ROLLBACK").catch(() => undefined);
+      }
+      if (sharedImportA) await sharedImportA.catch(() => undefined);
+      if (sharedImportB) await sharedImportB.catch(() => undefined);
+      await signalCatalogImportLockClient.end().catch(() => undefined);
+      signalCatalogImportLockClient = null;
+    }
+    const sharedAfter = await catalogSnapshot();
+    assert.equal(sharedAfter.families, sharedBefore.families + 1);
+    assert.equal(sharedAfter.variants, sharedBefore.variants + 1);
+    assert.equal(sharedAfter.listings, sharedBefore.listings + 1);
+    assert.equal(sharedAfter.productRefs, sharedBefore.productRefs + 2);
+    assert.equal(sharedAfter.aliases, sharedBefore.aliases + 2);
+    assert.equal(sharedAfter.candidates, sharedBefore.candidates + 2);
+    assert.equal(sharedAfter.listingRefs, sharedBefore.listingRefs + 2);
+    assert.equal(sharedAfter.observations, sharedBefore.observations + 2);
+    assert.equal(sharedAfter.audits, sharedBefore.audits + 2);
+    assert.equal(sharedAfter.outboxes, sharedBefore.outboxes + 2);
+    assert.equal(sharedAfter.actions, catalogBefore.actions);
+
+    await signalCatalogImportDirectClient.end();
+    signalCatalogImportDirectClient = null;
+    await Promise.all([
+      signalCatalogImportA.close(),
+      signalCatalogImportASecond.close(),
+      signalCatalogImportB.close(),
+      signalCatalogImportUnmapped.close()
+    ]);
+    signalCatalogImportA = null;
+    signalCatalogImportASecond = null;
+    signalCatalogImportB = null;
+    signalCatalogImportUnmapped = null;
+    })();
+
+    await (async () => {
     const reservationLifecycleDatabase = (
       principalRole: string,
       maxConnections: 1 | 2 = 1
@@ -18113,6 +18967,16 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       (signalSourceSyncUnmapped as
         NodePostgresSignalSourceSyncApplyDatabase | null)?.close(),
       (signalSourceSyncDirectClient as Client | null)?.end(),
+      (signalCatalogImportA as
+        NodePostgresSignalCatalogImportApplyDatabase | null)?.close(),
+      (signalCatalogImportASecond as
+        NodePostgresSignalCatalogImportApplyDatabase | null)?.close(),
+      (signalCatalogImportB as
+        NodePostgresSignalCatalogImportApplyDatabase | null)?.close(),
+      (signalCatalogImportUnmapped as
+        NodePostgresSignalCatalogImportApplyDatabase | null)?.close(),
+      (signalCatalogImportDirectClient as Client | null)?.end(),
+      (signalCatalogImportLockClient as Client | null)?.end(),
       (signalReservationLifecycleA as
         NodePostgresSignalReservationLifecycleApplyDatabase | null)?.close(),
       (signalReservationLifecycleASecond as
