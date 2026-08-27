@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.91.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.92.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,42 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.92.0 adds the eighteenth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the TrackaLacker source-sync run and
+per-product receipt writer. Its separate `NOLOGIN`, `NOINHERIT`,
+`NOBYPASSRLS` role has zero direct/effective table or column grants and may call
+one strict security-definer function. The boundary protects six forced-RLS
+tenant tables and can mutate only `source_sync_runs`,
+`source_sync_run_items`, `audit_events`, and `outbox_events`.
+
+PostgreSQL binds `session_user` to one exact tenant/user, consumes only the
+shared source lock (`10000`), and accepts three explicit operations under
+`TRACKALACKER_SOURCE_SYNC_V1`: start a run, advance its full progress snapshot,
+or upsert one imported-product receipt. Every request ID is derived from the
+authenticated principal, operation, and complete payload. The database
+revalidates the private TrackaLacker connection, active user-owned Chrome
+device, and exact run ownership on every call.
+
+Starts require zero counters and enforce one fresh active run per device; a
+run inactive for more than 30 minutes is atomically closed as interrupted
+before its replacement starts. Progress phases and all six counters are
+monotonic, messages are privacy-bounded, and only the first terminal transition
+adds a deterministic audit/outbox pair. Product receipts are accepted only
+while the run is active and retain SQLite's latest-state upsert behavior.
+Exact current progress/item retries write nothing; audited start and terminal
+requests retain immutable replay after later state changes.
+
+Native PostgreSQL 16 proves wrong, same-tenant-peer, and unmapped principal
+denial, active-device/private-source/TrackaLacker/run binding, zero direct and
+cross-boundary SQL, forced late-failure rollback, source-lock contention,
+fresh-run exclusion, stale-run interruption, monotonic progress, terminal
+history, item insert/current/refresh behavior, and zero catalog or action
+creation. This closes `sourceSyncWriterParity`, while catalog import and
+connection provisioning remain separate, so aggregate `sourceWriterParity`
+stays false. SQLite remains authoritative; use
+`npm run postgres:signal-source-sync-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.91.0 adds the seventeenth independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the TrackaLacker push-status and

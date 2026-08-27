@@ -2352,6 +2352,111 @@ binding, zero direct and cross-boundary SQL, source-lock contention,
 deterministic request identity, material/historic replay, no-audit refresh,
 exact-current replay, stale/collision rejection, and zero action creation.
 
+## TrackaLacker source-sync run/item writer seam
+
+Version 0.92 adds the eighteenth independent hosted-signal role. It ports only
+`start_source_sync`, `update_source_sync`, and `record_source_sync_item` for the
+durable run and per-product receipt tables. TrackaLacker catalog import,
+connection provisioning, product/listing/reference mutation, missions,
+strategies, actions, spend, checkout, and orders are outside the function.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application object,
+inherits no role, receives zero direct/effective table or column privileges,
+and can execute one strict security-definer function. Its immutable boundary
+receipt seals six forced-RLS tenant tables. Only `source_sync_runs`,
+`source_sync_run_items`, `audit_events`, and `outbox_events` may mutate.
+PostgreSQL binds `session_user` to one active tenant/user and consumes only the
+shared source mask `10000`.
+
+Every request contains one exact private TrackaLacker connection, active
+user-owned Chrome device, exact sync ID, `TRACKALACKER_SOURCE_SYNC_V1`, and the
+complete operation-specific payload. The request ID binds the authenticated
+principal, operation, and every submitted field. Run ownership is revalidated
+on every progress or item request.
+
+A start requires `starting` with all six counters at zero. The device row and
+source lock serialize competing starts; one run updated in the previous 30
+minutes blocks a replacement. An older active run is atomically marked `error`
+with the packaged interruption reason before the new run, start audit event,
+and outbox event commit. Progress follows the exact packaged phase-transition
+matrix, page/count consistency rules, and monotonic counters. PostgreSQL owns
+the timestamps and rejects unnormalized or credential-shaped messages.
+
+Only the first transition to `complete` or `error` appends the deterministic
+finish audit/outbox pair. Nonterminal progress and same-terminal-phase updates
+remain audit-suppressed. Per-product receipts can be inserted or refreshed only
+while the exact run is active. Exact current retries write nothing. Audited
+start/terminal requests have immutable replay; unaudited progress and item
+upserts intentionally promise latest-state replay only.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-source-sync-apply -- plan \
+  yoink_cutover_qualification_092 yoink_q_092 yoink_session_q_092 \
+  yoink_queue_q_092 yoink_control_q_092 yoink_notify_q_092 \
+  yoink_execute_q_092 yoink_retain_q_092 yoink_candidate_q_092 \
+  yoink_dispatch_q_092 yoink_reconcile_q_092 yoink_witness_q_092 \
+  yoink_delivery_q_092 yoink_catalog_q_092 yoink_resolution_q_092 \
+  yoink_reference_q_092 yoink_terminal_q_092 yoink_offer_q_092 \
+  yoink_post_q_092 yoink_mission_q_092 yoink_strategy_q_092 \
+  yoink_writer_lock_q_092 yoink_constraint_config_q_092 \
+  yoink_action_spend_q_092 yoink_target_qual_q_092 \
+  yoink_source_trust_q_092 yoink_retailer_qual_q_092 \
+  yoink_mission_policy_q_092 yoink_source_status_q_092 \
+  yoink_source_sync_q_092
+```
+
+After every predecessor through source status is verified, apply once with the
+qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_SOURCE_SYNC_APPLY_QUALIFICATION_ACK=bounded-signal-source-sync-apply-qualification \
+  npm run postgres:signal-source-sync-apply -- apply \
+  yoink_cutover_qualification_092 yoink_q_092 yoink_session_q_092 \
+  yoink_queue_q_092 yoink_control_q_092 yoink_notify_q_092 \
+  yoink_execute_q_092 yoink_retain_q_092 yoink_candidate_q_092 \
+  yoink_dispatch_q_092 yoink_reconcile_q_092 yoink_witness_q_092 \
+  yoink_delivery_q_092 yoink_catalog_q_092 yoink_resolution_q_092 \
+  yoink_reference_q_092 yoink_terminal_q_092 yoink_offer_q_092 \
+  yoink_post_q_092 yoink_mission_q_092 yoink_strategy_q_092 \
+  yoink_writer_lock_q_092 yoink_constraint_config_q_092 \
+  yoink_action_spend_q_092 yoink_target_qual_q_092 \
+  yoink_source_trust_q_092 yoink_retailer_qual_q_092 \
+  yoink_mission_policy_q_092 yoink_source_status_q_092 \
+  yoink_source_sync_q_092
+```
+
+Then independently verify the role, function, protected/mutation table sets,
+receipt, exact grants, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-source-sync-apply -- verify \
+  yoink_cutover_qualification_092 yoink_q_092 yoink_session_q_092 \
+  yoink_queue_q_092 yoink_control_q_092 yoink_notify_q_092 \
+  yoink_execute_q_092 yoink_retain_q_092 yoink_candidate_q_092 \
+  yoink_dispatch_q_092 yoink_reconcile_q_092 yoink_witness_q_092 \
+  yoink_delivery_q_092 yoink_catalog_q_092 yoink_resolution_q_092 \
+  yoink_reference_q_092 yoink_terminal_q_092 yoink_offer_q_092 \
+  yoink_post_q_092 yoink_mission_q_092 yoink_strategy_q_092 \
+  yoink_writer_lock_q_092 yoink_constraint_config_q_092 \
+  yoink_action_spend_q_092 yoink_target_qual_q_092 \
+  yoink_source_trust_q_092 yoink_retailer_qual_q_092 \
+  yoink_mission_policy_q_092 yoink_source_status_q_092 \
+  yoink_source_sync_q_092
+```
+
+The receipt permanently records `sourceStatusWriterParity: true` and
+`sourceSyncWriterParity: true`, while `sourceWriterParity: false`,
+`configurationWriterParity: false`, `reservationWriterParity: false`,
+`writerLockProtocolParity: false`, and `runtimeAuthority: false` remain
+explicit. Native PostgreSQL 16 proves late-failure rollback,
+wrong/same-tenant-peer/unmapped denial, active-device/private-source/type/run
+binding, zero direct and cross-boundary SQL, source-lock contention,
+fresh-active exclusion, stale-run interruption, monotonic progress, terminal
+audit/replay, latest-state item insert/current/refresh behavior, and zero
+catalog or action creation.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -2455,11 +2560,12 @@ confirms that the operator intentionally requested an offline, one-shot load.
 
 The admin Operations projection lists these as required, not complete:
 
-- port source sync/import, connection provisioning, and reservation writers
+- port source catalog import, connection provisioning, and reservation writers
   through the shared fixed-order protocol (global pause, guardrails, spend-
   policy caps, complete Target qualification/settings activation, bounded
-  source trust and status, exact Walmart/Amazon/Best Buy qualification, and
-  full mission-policy revision are already qualified);
+  source trust, status, and sync run/item state, exact
+  Walmart/Amazon/Best Buy qualification, and full mission-policy revision are
+  already qualified);
   add attribution-policy parity and separately qualified strategy-action
   semantics; then compose the qualified purchase-intent action/spend,
   strategy/purchase-policy evaluation, hosted-delivery recovery, fixed signal-

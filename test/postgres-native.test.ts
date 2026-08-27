@@ -201,6 +201,17 @@ import {
   verifyPostgresSignalSourceStatusApplyBoundary,
   type PostgresSignalSourceStatusPayload
 } from "../packages/database/src/postgres-signal-source-status-apply.js";
+import {
+  NodePostgresSignalSourceSyncApplyDatabase,
+  POSTGRES_SIGNAL_SOURCE_SYNC_APPLY_CONFIRMATION,
+  POSTGRES_SIGNAL_SOURCE_SYNC_APPLY_FUNCTION,
+  applyPostgresSignalSourceSyncApplyBoundary,
+  buildPostgresSignalSourceSyncApplyManifest,
+  buildPostgresSignalSourceSyncRequestId,
+  verifyPostgresSignalSourceSyncApplyBoundary,
+  type PostgresSignalSourceSyncItemPayload,
+  type PostgresSignalSourceSyncProgressPayload
+} from "../packages/database/src/postgres-signal-source-sync-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -286,6 +297,7 @@ const NATIVE_SOURCE_TRUST_APPLY_ROLE_NAMESPACE = "yoink_native_source_trust";
 const NATIVE_RETAILER_QUALIFICATION_APPLY_ROLE_NAMESPACE = "yoink_native_retailer_qual";
 const NATIVE_MISSION_POLICY_APPLY_ROLE_NAMESPACE = "yoink_native_policy";
 const NATIVE_SOURCE_STATUS_APPLY_ROLE_NAMESPACE = "yoink_native_source_status";
+const NATIVE_SOURCE_SYNC_APPLY_ROLE_NAMESPACE = "yoink_native_source_sync";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1121,7 +1133,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, and no-flood source status", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, and durable source sync", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1290,6 +1302,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalSourceStatusC: NodePostgresSignalSourceStatusApplyDatabase | null = null;
   let signalSourceStatusUnmapped: NodePostgresSignalSourceStatusApplyDatabase | null = null;
   let signalSourceStatusDirectClient: Client | null = null;
+  let signalSourceSyncA: NodePostgresSignalSourceSyncApplyDatabase | null = null;
+  let signalSourceSyncASecond: NodePostgresSignalSourceSyncApplyDatabase | null = null;
+  let signalSourceSyncB: NodePostgresSignalSourceSyncApplyDatabase | null = null;
+  let signalSourceSyncC: NodePostgresSignalSourceSyncApplyDatabase | null = null;
+  let signalSourceSyncUnmapped: NodePostgresSignalSourceSyncApplyDatabase | null = null;
+  let signalSourceSyncDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -2787,6 +2805,62 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalSourceStatusBoundary
     );
+    const qualifiedSignalSourceSyncManifest =
+      buildPostgresSignalSourceSyncApplyManifest(
+        qualifiedSignalSourceStatusManifest,
+        NATIVE_SOURCE_SYNC_APPLY_ROLE_NAMESPACE
+      );
+    const signalSourceSyncBoundary =
+      await applyPostgresSignalSourceSyncApplyBoundary(
+        importer,
+        qualifiedSignalSourceSyncManifest,
+        new Date("2026-08-25T16:56:00.000Z").getTime()
+      );
+    assert.equal(signalSourceSyncBoundary.protectedTenantTableCount, 6);
+    assert.equal(signalSourceSyncBoundary.forcedRlsTableCount, 6);
+    assert.equal(signalSourceSyncBoundary.mutationTableCount, 4);
+    assert.equal(signalSourceSyncBoundary.directTableGrantCount, 0);
+    assert.equal(signalSourceSyncBoundary.functionGrantCount, 1);
+    assert.equal(signalSourceSyncBoundary.membershipCount, 0);
+    assert.equal(signalSourceSyncBoundary.activePrincipalCount, 0);
+    assert.equal(signalSourceSyncBoundary.metadata.operationCount, 3);
+    assert.equal(signalSourceSyncBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(signalSourceSyncBoundary.metadata.sourceScopeConsumed, true);
+    assert.equal(signalSourceSyncBoundary.metadata.deterministicRequestIdentity, true);
+    assert.equal(signalSourceSyncBoundary.metadata.immutableAuditedReplay, true);
+    assert.equal(signalSourceSyncBoundary.metadata.latestStateProgressReplay, true);
+    assert.equal(signalSourceSyncBoundary.metadata.latestStateItemReplay, true);
+    assert.equal(signalSourceSyncBoundary.metadata.monotonicProgressCounters, true);
+    assert.equal(signalSourceSyncBoundary.metadata.boundedActiveRunExclusion, true);
+    assert.equal(signalSourceSyncBoundary.metadata.staleRunInterruptionParity, true);
+    assert.equal(signalSourceSyncBoundary.metadata.terminalAuditParity, true);
+    assert.equal(signalSourceSyncBoundary.metadata.nonTerminalAuditSuppression, true);
+    assert.equal(signalSourceSyncBoundary.metadata.itemReceiptUpsertParity, true);
+    assert.equal(signalSourceSyncBoundary.metadata.databaseOwnedTimestamps, true);
+    assert.equal(signalSourceSyncBoundary.metadata.privacyBoundedMessages, true);
+    assert.equal(signalSourceSyncBoundary.metadata.atomicRunAuditOutbox, true);
+    assert.equal(signalSourceSyncBoundary.metadata.currentSourceOwnershipRevalidation, true);
+    assert.equal(signalSourceSyncBoundary.metadata.currentDeviceOwnershipRevalidation, true);
+    assert.equal(signalSourceSyncBoundary.metadata.currentRunOwnershipRevalidation, true);
+    assert.equal(signalSourceSyncBoundary.metadata.activeDeviceOnly, true);
+    assert.equal(signalSourceSyncBoundary.metadata.activeRunItemOnly, true);
+    assert.equal(signalSourceSyncBoundary.metadata.privateSourceOnly, true);
+    assert.equal(signalSourceSyncBoundary.metadata.trackalackerOnly, true);
+    assert.equal(signalSourceSyncBoundary.metadata.catalogImportExcluded, true);
+    assert.equal(signalSourceSyncBoundary.metadata.sourceStatusWriterParity, true);
+    assert.equal(signalSourceSyncBoundary.metadata.sourceSyncWriterParity, true);
+    assert.equal(signalSourceSyncBoundary.metadata.sourceWriterParity, false);
+    assert.equal(signalSourceSyncBoundary.metadata.sharedCatalogMutationAuthority, false);
+    assert.equal(signalSourceSyncBoundary.metadata.actionAuthority, false);
+    assert.equal(signalSourceSyncBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalSourceSyncBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalSourceSyncApplyBoundary(
+        importer,
+        qualifiedSignalSourceSyncManifest
+      ),
+      signalSourceSyncBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -3135,6 +3209,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalMissionPolicyManifest,
         NATIVE_SOURCE_STATUS_APPLY_ROLE_NAMESPACE
       );
+    const signalSourceSyncManifest =
+      buildPostgresSignalSourceSyncApplyManifest(
+        signalSourceStatusManifest,
+        NATIVE_SOURCE_SYNC_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -3233,6 +3312,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalSourceStatusManifest.sourceStatusRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalSourceSyncManifest.sourceSyncRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -12640,6 +12723,566 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalSourceStatusUnmapped = null;
     })();
 
+    await (async () => {
+    const sourceSyncDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalSourceSyncApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalSourceSyncManifest, { maxConnections });
+    signalSourceSyncA = sourceSyncDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalSourceSyncASecond = sourceSyncDatabase(NATIVE_PRINCIPAL_A);
+    signalSourceSyncB = sourceSyncDatabase(NATIVE_PRINCIPAL_B);
+    signalSourceSyncC = sourceSyncDatabase(NATIVE_PRINCIPAL_C);
+    signalSourceSyncUnmapped = sourceSyncDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const principal = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const sourceSyncDeviceId = "native_source_status_device";
+    const sourceSyncPeerDeviceId = "native_source_status_peer_device";
+    const sourceSyncConnectionId = "native_signal_source_a";
+    const sourceSyncId = "tlsync_native_source_sync_1234";
+    const startPayload: PostgresSignalSourceSyncProgressPayload = {
+      deviceId: sourceSyncDeviceId,
+      sourceConnectionId: sourceSyncConnectionId,
+      syncId: sourceSyncId,
+      phase: "starting",
+      page: 0,
+      pages: 0,
+      discovered: 0,
+      processed: 0,
+      imported: 0,
+      failed: 0,
+      message: "Starting native followed-library sync",
+      confirmation: POSTGRES_SIGNAL_SOURCE_SYNC_APPLY_CONFIRMATION
+    };
+    const applySourceSync = (
+      database: NodePostgresSignalSourceSyncApplyDatabase,
+      operation: "start_source_sync" | "update_source_sync" | "record_source_sync_item",
+      payload: PostgresSignalSourceSyncProgressPayload | PostgresSignalSourceSyncItemPayload
+    ) => database.applySourceSync(
+      principal,
+      operation,
+      buildPostgresSignalSourceSyncRequestId(principal, operation, payload),
+      payload
+    );
+    const sourceSyncSnapshot = async () => {
+      const row = (await first!.query<{
+        runCount: string | number | bigint;
+        itemCount: string | number | bigint;
+        auditCount: string | number | bigint;
+        outboxCount: string | number | bigint;
+        catalogCandidateCount: string | number | bigint;
+        catalogReferenceCount: string | number | bigint;
+        listingCount: string | number | bigint;
+        actionCount: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_sync_runs"
+            WHERE tenant_id = $1 AND user_id = $2
+              AND device_id = $3) AS "runCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_sync_run_items" item
+            JOIN "${NATIVE_SCHEMA}"."source_sync_runs" run ON run.id = item.run_id
+            WHERE run.tenant_id = $1 AND run.user_id = $2
+              AND run.device_id = $3) AS "itemCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE tenant_id = $1 AND user_id = $2
+              AND event_type IN ('source_sync_started', 'source_sync_finished'))
+             AS "auditCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE tenant_id = $1 AND aggregate_type = 'source_sync') AS "outboxCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_listing_candidates")
+             AS "catalogCandidateCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_product_refs")
+             AS "catalogReferenceCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."listings") AS "listingCount",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_jobs") AS "actionCount"`,
+        [NATIVE_TENANT, NATIVE_USER, sourceSyncDeviceId]
+      )).rows[0]!;
+      return Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, Number(value)])
+      ) as Record<keyof typeof row, number>;
+    };
+    const sourceSyncBefore = await sourceSyncSnapshot();
+
+    await assert.rejects(
+      signalSourceSyncB.applySourceSync(
+        principal,
+        "start_source_sync",
+        buildPostgresSignalSourceSyncRequestId(
+          principal,
+          "start_source_sync",
+          startPayload
+        ),
+        startPayload
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER,
+        new Date().toISOString()]
+    );
+    try {
+      const peerPrincipal = {
+        tenantId: NATIVE_TENANT,
+        userId: NATIVE_SAME_TENANT_USER
+      };
+      const peerPayload: PostgresSignalSourceSyncProgressPayload = {
+        ...startPayload,
+        sourceConnectionId: "native_signal_source_c",
+        syncId: "tlsync_native_peer_sync_1234"
+      };
+      await assert.rejects(
+        signalSourceSyncC.applySourceSync(
+          peerPrincipal,
+          "start_source_sync",
+          buildPostgresSignalSourceSyncRequestId(
+            peerPrincipal,
+            "start_source_sync",
+            peerPayload
+          ),
+          peerPayload
+        ),
+        /device ownership is invalid/
+      );
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    await assert.rejects(
+      signalSourceSyncUnmapped.applySourceSync(
+        principal,
+        "start_source_sync",
+        buildPostgresSignalSourceSyncRequestId(
+          principal,
+          "start_source_sync",
+          startPayload
+        ),
+        startPayload
+      ),
+      /tenant session principal is not active/
+    );
+    await assert.rejects(
+      signalSourceSyncA.applySourceSync(
+        principal,
+        "start_source_sync",
+        `source_sync_${"f".repeat(32)}`,
+        startPayload
+      ),
+      /apply request is invalid/
+    );
+    await assert.rejects(
+      applySourceSync(signalSourceSyncA, "start_source_sync", {
+        ...startPayload,
+        deviceId: sourceSyncPeerDeviceId,
+        syncId: "tlsync_native_peer_device_1234"
+      }),
+      /device ownership is invalid/
+    );
+    await assert.rejects(
+      applySourceSync(signalSourceSyncA, "start_source_sync", {
+        ...startPayload,
+        sourceConnectionId: "native_source_status_non_track",
+        syncId: "tlsync_native_non_track_1234"
+      }),
+      /source is not TrackaLacker/
+    );
+    await assert.rejects(
+      applySourceSync(signalSourceSyncA, "start_source_sync", {
+        ...startPayload,
+        sourceConnectionId: "native_source_status_public",
+        syncId: "tlsync_native_public_sync_1234"
+      }),
+      /source is not private/
+    );
+    await assert.rejects(
+      applySourceSync(signalSourceSyncA, "start_source_sync", {
+        ...startPayload,
+        discovered: 1
+      }),
+      /must start with zero counters/
+    );
+    await assert.rejects(
+      applySourceSync(signalSourceSyncA, "start_source_sync", {
+        ...startPayload,
+        message: `Bearer ${"S".repeat(40)}`
+      }),
+      /progress payload is invalid/
+    );
+
+    signalSourceSyncDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalSourceSyncDirectClient.on("error", () => undefined);
+    await signalSourceSyncDirectClient.connect();
+    await signalSourceSyncDirectClient.query(
+      `SET ROLE "${signalSourceSyncManifest.sourceSyncRole.name}"`
+    );
+    await assert.rejects(
+      signalSourceSyncDirectClient.query(
+        `SELECT phase FROM "${NATIVE_SCHEMA}"."source_sync_runs" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceSyncDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."source_sync_run_items"(
+           id, run_id, external_product_id, outcome, candidates_accepted,
+           listings_mapped, listings_created, error_code, created_at, updated_at
+         ) VALUES ('forbidden_sync_item', 'forbidden_run', 'forbidden_product',
+                   'imported', 0, 0, 0, '', $1, $1)`,
+        [new Date().toISOString()]
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceSyncDirectClient.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."action_jobs"
+         WHERE id = 'forbidden_source_sync_action'`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceSyncDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_STATUS_APPLY_FUNCTION}"(
+           $1, $2, 'record_trackalacker_push_status',
+           'forbidden_cross_boundary', '{}'
+         )`,
+        [NATIVE_TENANT, NATIVE_USER]
+      ),
+      /permission denied/
+    );
+
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_source_sync_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $failure$
+       BEGIN
+         IF NEW.aggregate_id = '${sourceSyncId}'
+           AND NEW.event_type = 'source_sync_started' THEN
+           RAISE EXCEPTION 'native forced source-sync outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $failure$;
+       CREATE TRIGGER "yoink_native_reject_source_sync_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION
+         "${NATIVE_SCHEMA}"."yoink_native_reject_source_sync_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        applySourceSync(signalSourceSyncA, "start_source_sync", startPayload),
+        /native forced source-sync outbox failure/
+      );
+      assert.deepEqual(await sourceSyncSnapshot(), sourceSyncBefore);
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_source_sync_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS
+           "${NATIVE_SCHEMA}"."yoink_native_reject_source_sync_outbox"()`
+      );
+    }
+
+    let sourceSyncTransactionOpen = false;
+    let blockedStartReplay: ReturnType<
+      NodePostgresSignalSourceSyncApplyDatabase["applySourceSync"]
+    > | null = null;
+    try {
+      await signalSourceSyncDirectClient.query("BEGIN");
+      sourceSyncTransactionOpen = true;
+      const startRequestId = buildPostgresSignalSourceSyncRequestId(
+        principal,
+        "start_source_sync",
+        startPayload
+      );
+      const startQuery = await signalSourceSyncDirectClient.query<{
+        resultJson: string;
+      }>(
+        `SELECT result_json AS "resultJson"
+         FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_SYNC_APPLY_FUNCTION}"(
+           $1, $2, 'start_source_sync', $3, $4
+         )`,
+        [NATIVE_TENANT, NATIVE_USER, startRequestId, JSON.stringify(startPayload)]
+      );
+      const startResult = JSON.parse(startQuery.rows[0]!.resultJson) as {
+        outcome: string;
+        mutationApplied: boolean;
+        mutationStatementCount: number;
+        mutationRowCount: number;
+        runMutated: boolean;
+        itemMutated: boolean;
+        auditMutated: boolean;
+        outboxMutated: boolean;
+        run: Record<string, unknown>;
+        sourceStatusWriterParity: boolean;
+        sourceSyncWriterParity: boolean;
+        sourceWriterParity: boolean;
+        sharedCatalogMutationAuthority: boolean;
+        actionAuthority: boolean;
+        runtimeAuthority: boolean;
+      };
+      assert.equal(startResult.outcome, "applied");
+      assert.equal(startResult.mutationApplied, true);
+      assert.equal(startResult.mutationStatementCount, 3);
+      assert.equal(startResult.mutationRowCount, 3);
+      assert.equal(startResult.runMutated, true);
+      assert.equal(startResult.itemMutated, false);
+      assert.equal(startResult.auditMutated, true);
+      assert.equal(startResult.outboxMutated, true);
+      assert.equal(startResult.run.phase, "starting");
+      assert.equal(startResult.sourceStatusWriterParity, true);
+      assert.equal(startResult.sourceSyncWriterParity, true);
+      assert.equal(startResult.sourceWriterParity, false);
+      assert.equal(startResult.sharedCatalogMutationAuthority, false);
+      assert.equal(startResult.actionAuthority, false);
+      assert.equal(startResult.runtimeAuthority, false);
+
+      let replaySettled = false;
+      blockedStartReplay = applySourceSync(
+        signalSourceSyncASecond,
+        "start_source_sync",
+        startPayload
+      ).finally(() => { replaySettled = true; });
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      assert.equal(replaySettled, false);
+      assert.deepEqual(await sourceSyncSnapshot(), sourceSyncBefore);
+      await signalSourceSyncDirectClient.query("COMMIT");
+      sourceSyncTransactionOpen = false;
+      const replay = await blockedStartReplay;
+      assert.equal(replay.outcome, "already_applied");
+      assert.equal(replay.mutationApplied, false);
+      assert.equal(replay.idempotentReplay, true);
+      assert.equal(replay.mutationStatementCount, 0);
+      assert.equal(replay.run?.phase, "starting");
+    } finally {
+      if (sourceSyncTransactionOpen) {
+        await signalSourceSyncDirectClient.query("ROLLBACK").catch(() => undefined);
+      }
+      if (blockedStartReplay) await blockedStartReplay.catch(() => undefined);
+    }
+
+    const afterStart = await sourceSyncSnapshot();
+    assert.equal(afterStart.runCount, sourceSyncBefore.runCount + 1);
+    assert.equal(afterStart.itemCount, sourceSyncBefore.itemCount);
+    assert.equal(afterStart.auditCount, sourceSyncBefore.auditCount + 1);
+    assert.equal(afterStart.outboxCount, sourceSyncBefore.outboxCount + 1);
+    assert.equal(afterStart.catalogCandidateCount, sourceSyncBefore.catalogCandidateCount);
+    assert.equal(afterStart.catalogReferenceCount, sourceSyncBefore.catalogReferenceCount);
+    assert.equal(afterStart.listingCount, sourceSyncBefore.listingCount);
+    assert.equal(afterStart.actionCount, sourceSyncBefore.actionCount);
+
+    await assert.rejects(
+      applySourceSync(signalSourceSyncA, "start_source_sync", {
+        ...startPayload,
+        syncId: "tlsync_native_competing_1234"
+      }),
+      /already active/
+    );
+
+    const discoveringPayload: PostgresSignalSourceSyncProgressPayload = {
+      ...startPayload,
+      phase: "discovering",
+      page: 1,
+      pages: 2,
+      discovered: 10_001,
+      message: "Discovered native followed products"
+    };
+    const discoveringResult = await applySourceSync(
+      signalSourceSyncA,
+      "update_source_sync",
+      discoveringPayload
+    );
+    assert.equal(discoveringResult.outcome, "applied");
+    assert.equal(discoveringResult.mutationStatementCount, 1);
+    assert.equal(discoveringResult.auditMutated, false);
+    assert.equal(discoveringResult.outboxMutated, false);
+    assert.equal(discoveringResult.run?.discovered, 10_001);
+    const exactProgressReplay = await applySourceSync(
+      signalSourceSyncA,
+      "update_source_sync",
+      discoveringPayload
+    );
+    assert.equal(exactProgressReplay.outcome, "already_current");
+    assert.equal(exactProgressReplay.mutationApplied, false);
+    await assert.rejects(
+      applySourceSync(signalSourceSyncA, "update_source_sync", {
+        ...discoveringPayload,
+        discovered: 10_000
+      }),
+      /cannot move backwards/
+    );
+
+    const itemPayload: PostgresSignalSourceSyncItemPayload = {
+      deviceId: sourceSyncDeviceId,
+      sourceConnectionId: sourceSyncConnectionId,
+      syncId: sourceSyncId,
+      externalProductId: "native-product:138022",
+      candidatesAccepted: 7,
+      listingsMapped: 4,
+      listingsCreated: 3,
+      confirmation: POSTGRES_SIGNAL_SOURCE_SYNC_APPLY_CONFIRMATION
+    };
+    const itemResult = await applySourceSync(
+      signalSourceSyncA,
+      "record_source_sync_item",
+      itemPayload
+    );
+    assert.equal(itemResult.outcome, "applied");
+    assert.equal(itemResult.mutationStatementCount, 1);
+    assert.equal(itemResult.itemMutated, true);
+    assert.equal(itemResult.auditMutated, false);
+    assert.equal(itemResult.item?.externalProductId, itemPayload.externalProductId);
+    const itemReplay = await applySourceSync(
+      signalSourceSyncA,
+      "record_source_sync_item",
+      itemPayload
+    );
+    assert.equal(itemReplay.outcome, "already_current");
+    assert.equal(itemReplay.mutationApplied, false);
+    const refreshedItemPayload: PostgresSignalSourceSyncItemPayload = {
+      ...itemPayload,
+      candidatesAccepted: 8,
+      listingsMapped: 5
+    };
+    const refreshedItem = await applySourceSync(
+      signalSourceSyncA,
+      "record_source_sync_item",
+      refreshedItemPayload
+    );
+    assert.equal(refreshedItem.outcome, "refreshed");
+    assert.equal(refreshedItem.mutationApplied, true);
+    assert.equal(refreshedItem.item?.candidatesAccepted, 8);
+
+    const completedPayload: PostgresSignalSourceSyncProgressPayload = {
+      ...discoveringPayload,
+      phase: "complete",
+      page: 2,
+      processed: 1,
+      imported: 1,
+      message: "Native followed-library sync complete"
+    };
+    const completedResult = await applySourceSync(
+      signalSourceSyncA,
+      "update_source_sync",
+      completedPayload
+    );
+    assert.equal(completedResult.outcome, "applied");
+    assert.equal(completedResult.mutationStatementCount, 3);
+    assert.equal(completedResult.auditMutated, true);
+    assert.equal(completedResult.outboxMutated, true);
+    assert.equal(completedResult.run?.phase, "complete");
+    assert.match(String(completedResult.run?.completedAt), /^\d{4}-\d{2}-\d{2}T/);
+    const completedReplay = await applySourceSync(
+      signalSourceSyncA,
+      "update_source_sync",
+      completedPayload
+    );
+    assert.equal(completedReplay.outcome, "already_applied");
+    assert.equal(completedReplay.mutationApplied, false);
+    await assert.rejects(
+      applySourceSync(signalSourceSyncA, "record_source_sync_item", refreshedItemPayload),
+      /run is not active/
+    );
+    await assert.rejects(
+      applySourceSync(signalSourceSyncA, "update_source_sync", {
+        ...completedPayload,
+        phase: "importing"
+      }),
+      /phase transition is invalid/
+    );
+
+    const staleSyncId = "tlsync_native_stale_sync_1234";
+    const staleTimestamp = new Date(Date.now() - 31 * 60_000).toISOString();
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_sync_runs"(
+         id, tenant_id, user_id, source_connection_id, device_id, phase,
+         page, pages, discovered, processed, imported, failed, message,
+         started_at, updated_at, completed_at
+       ) VALUES ($1, $2, $3, $4, $5, 'importing',
+                 1, 1, 1, 0, 0, 0, 'Stale native sync', $6, $6, '')`,
+      [staleSyncId, NATIVE_TENANT, NATIVE_USER, sourceSyncConnectionId,
+        sourceSyncDeviceId, staleTimestamp]
+    );
+    const replacementPayload: PostgresSignalSourceSyncProgressPayload = {
+      ...startPayload,
+      syncId: "tlsync_native_replacement_1234",
+      message: "Starting after stale native sync"
+    };
+    const replacementResult = await applySourceSync(
+      signalSourceSyncA,
+      "start_source_sync",
+      replacementPayload
+    );
+    assert.equal(replacementResult.outcome, "applied");
+    assert.equal(replacementResult.mutationStatementCount, 4);
+    assert.equal(replacementResult.interruptedRunMutated, true);
+    const staleRow = (await first.query<{
+      phase: string;
+      message: string;
+      completedAt: string;
+    }>(
+      `SELECT phase, message, completed_at AS "completedAt"
+       FROM "${NATIVE_SCHEMA}"."source_sync_runs" WHERE id = $1`,
+      [staleSyncId]
+    )).rows[0]!;
+    assert.equal(staleRow.phase, "error");
+    assert.equal(staleRow.message, "The previous sync was interrupted before completion.");
+    assert.match(staleRow.completedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."extension_devices"
+       SET status = 'disabled' WHERE id = $1`,
+      [sourceSyncDeviceId]
+    );
+    try {
+      await assert.rejects(
+        applySourceSync(signalSourceSyncA, "update_source_sync", {
+          ...replacementPayload,
+          phase: "discovering",
+          discovered: 1,
+          message: "Should fail while device disabled"
+        }),
+        /device is not active/
+      );
+    } finally {
+      await first.query(
+        `UPDATE "${NATIVE_SCHEMA}"."extension_devices"
+         SET status = 'active' WHERE id = $1`,
+        [sourceSyncDeviceId]
+      );
+    }
+
+    const sourceSyncAfter = await sourceSyncSnapshot();
+    assert.equal(sourceSyncAfter.itemCount, sourceSyncBefore.itemCount + 1);
+    assert.equal(sourceSyncAfter.catalogCandidateCount, sourceSyncBefore.catalogCandidateCount);
+    assert.equal(sourceSyncAfter.catalogReferenceCount, sourceSyncBefore.catalogReferenceCount);
+    assert.equal(sourceSyncAfter.listingCount, sourceSyncBefore.listingCount);
+    assert.equal(sourceSyncAfter.actionCount, sourceSyncBefore.actionCount);
+
+    await signalSourceSyncDirectClient.end();
+    signalSourceSyncDirectClient = null;
+    await Promise.all([
+      signalSourceSyncA.close(),
+      signalSourceSyncASecond.close(),
+      signalSourceSyncB.close(),
+      signalSourceSyncC.close(),
+      signalSourceSyncUnmapped.close()
+    ]);
+    signalSourceSyncA = null;
+    signalSourceSyncASecond = null;
+    signalSourceSyncB = null;
+    signalSourceSyncC = null;
+    signalSourceSyncUnmapped = null;
+    })();
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -16476,7 +17119,18 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NodePostgresSignalSourceStatusApplyDatabase | null)?.close(),
       (signalSourceStatusUnmapped as
         NodePostgresSignalSourceStatusApplyDatabase | null)?.close(),
-      (signalSourceStatusDirectClient as Client | null)?.end()
+      (signalSourceStatusDirectClient as Client | null)?.end(),
+      (signalSourceSyncA as
+        NodePostgresSignalSourceSyncApplyDatabase | null)?.close(),
+      (signalSourceSyncASecond as
+        NodePostgresSignalSourceSyncApplyDatabase | null)?.close(),
+      (signalSourceSyncB as
+        NodePostgresSignalSourceSyncApplyDatabase | null)?.close(),
+      (signalSourceSyncC as
+        NodePostgresSignalSourceSyncApplyDatabase | null)?.close(),
+      (signalSourceSyncUnmapped as
+        NodePostgresSignalSourceSyncApplyDatabase | null)?.close(),
+      (signalSourceSyncDirectClient as Client | null)?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
