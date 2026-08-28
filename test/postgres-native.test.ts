@@ -317,6 +317,18 @@ import {
   type PostgresSignalDeadLetterResetPayload
 } from "../packages/database/src/postgres-signal-dead-letter-reset-apply.js";
 import {
+  NodePostgresSignalNotificationEnsureApplyDatabase,
+  POSTGRES_SIGNAL_NOTIFICATION_ENSURE_APPLY_FUNCTION,
+  POSTGRES_SIGNAL_NOTIFICATION_ENSURE_DELIVERY_STATE,
+  POSTGRES_SIGNAL_NOTIFICATION_ENSURE_REQUIRED_JOB_ACTION,
+  POSTGRES_SIGNAL_NOTIFICATION_ENSURE_REQUIRED_JOB_STATE,
+  applyPostgresSignalNotificationEnsureApplyBoundary,
+  buildPostgresSignalNotificationEnsureApplyManifest,
+  buildPostgresSignalNotificationEnsureRequestId,
+  normalizedPostgresSignalNotificationEnsurePayload,
+  verifyPostgresSignalNotificationEnsureApplyBoundary
+} from "../packages/database/src/postgres-signal-notification-ensure-apply.js";
+import {
   POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_LENGTH,
   POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_ORDER,
   POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CONTRACT_VERSION,
@@ -443,6 +455,8 @@ const NATIVE_INGRESS_ENQUEUE_APPLY_ROLE_NAMESPACE =
   "yoink_native_ingress_enqueue";
 const NATIVE_DEAD_LETTER_RESET_APPLY_ROLE_NAMESPACE =
   "yoink_native_dead_letter_reset";
+const NATIVE_NOTIFICATION_ENSURE_APPLY_ROLE_NAMESPACE =
+  "yoink_native_notification_ensure";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1278,7 +1292,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, durable signal-ingress enqueue writing, bounded operator dead-letter inbox-reset writing, and the complete signal-ingress repository composition", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, durable signal-ingress enqueue writing, bounded operator dead-letter inbox-reset writing, bounded notification-delivery ensure writing, and the complete signal-ingress repository composition", {
   timeout: 2_400_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1517,6 +1531,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalDeadLetterResetC: NodePostgresSignalDeadLetterResetApplyDatabase | null = null;
   let signalDeadLetterResetUnmapped: NodePostgresSignalDeadLetterResetApplyDatabase | null = null;
   let signalDeadLetterResetDirectClient: Client | null = null;
+  let signalNotificationEnsureA: NodePostgresSignalNotificationEnsureApplyDatabase | null = null;
+  let signalNotificationEnsureB: NodePostgresSignalNotificationEnsureApplyDatabase | null = null;
+  let signalNotificationEnsureC: NodePostgresSignalNotificationEnsureApplyDatabase | null = null;
+  let signalNotificationEnsureUnmapped: NodePostgresSignalNotificationEnsureApplyDatabase | null = null;
+  let signalNotificationEnsureDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -4548,6 +4567,138 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalDeadLetterResetBoundary
     );
+
+    // signal-notification-ensure-apply (v1.5.0) chains onto dead-letter-
+    // reset-apply's OWN qualified manifest -- the module's own explicit
+    // predecessor (module header) -- reusing
+    // `qualifiedSignalDeadLetterResetManifest`, built above, rather than
+    // re-deriving a fresh one.
+    const qualifiedSignalNotificationEnsureManifest =
+      buildPostgresSignalNotificationEnsureApplyManifest(
+        qualifiedSignalDeadLetterResetManifest,
+        NATIVE_NOTIFICATION_ENSURE_APPLY_ROLE_NAMESPACE
+      );
+    assert.equal(
+      qualifiedSignalNotificationEnsureManifest.deadLetterResetApplyManifestFingerprint,
+      qualifiedSignalDeadLetterResetManifest.fingerprint
+    );
+    assert.equal(
+      qualifiedSignalNotificationEnsureManifest.predecessorManifest.fingerprint,
+      qualifiedSignalDeadLetterResetManifest.fingerprint
+    );
+    assert.equal(
+      qualifiedSignalNotificationEnsureManifest.predecessorManifest.schemaName,
+      qualifiedSignalDeadLetterResetManifest.schemaName
+    );
+    assert.notEqual(
+      qualifiedSignalNotificationEnsureManifest.notificationEnsureRoleNamespace,
+      qualifiedSignalDeadLetterResetManifest.deadLetterResetRoleNamespace
+    );
+    const signalNotificationEnsureBoundary =
+      await applyPostgresSignalNotificationEnsureApplyBoundary(
+        importer,
+        qualifiedSignalNotificationEnsureManifest,
+        new Date("2026-08-25T16:59:35.000Z").getTime()
+      );
+    assert.equal(signalNotificationEnsureBoundary.protectedTenantTableCount, 2);
+    assert.equal(signalNotificationEnsureBoundary.forcedRlsTableCount, 2);
+    assert.equal(signalNotificationEnsureBoundary.mutationTableCount, 1);
+    assert.equal(signalNotificationEnsureBoundary.directTableGrantCount, 0);
+    assert.equal(signalNotificationEnsureBoundary.functionGrantCount, 1);
+    assert.equal(signalNotificationEnsureBoundary.membershipCount, 0);
+    assert.equal(signalNotificationEnsureBoundary.activePrincipalCount, 0);
+    assert.equal(signalNotificationEnsureBoundary.metadata.contractVersion, 1);
+    assert.equal(signalNotificationEnsureBoundary.metadata.cutoverContractVersion, 3);
+    assert.equal(signalNotificationEnsureBoundary.metadata.deadLetterResetApplyContractVersion, 1);
+    assert.equal(signalNotificationEnsureBoundary.metadata.operationCount, 1);
+    // This boundary's own SQL function reads (and row-locks) `action_jobs`
+    // but only ever mutates `notification_deliveries` -- the exact
+    // `ensureForJob` write set (module header §1/§4).
+    assert.deepEqual(
+      qualifiedSignalNotificationEnsureManifest.notificationEnsureRole.protectedTenantTableNames,
+      ["action_jobs", "notification_deliveries"]
+    );
+    assert.deepEqual(
+      qualifiedSignalNotificationEnsureManifest.notificationEnsureRole.mutationTableNames,
+      ["notification_deliveries"]
+    );
+    assert.equal(qualifiedSignalNotificationEnsureManifest.notificationEnsureRole.login, false);
+    assert.equal(qualifiedSignalNotificationEnsureManifest.notificationEnsureRole.inherit, false);
+    assert.equal(qualifiedSignalNotificationEnsureManifest.notificationEnsureRole.bypassRls, false);
+    assert.equal(qualifiedSignalNotificationEnsureManifest.notificationEnsureRole.directTableAccess, false);
+    assert.equal(
+      signalNotificationEnsureBoundary.metadata.requiredJobAction,
+      POSTGRES_SIGNAL_NOTIFICATION_ENSURE_REQUIRED_JOB_ACTION
+    );
+    assert.equal(signalNotificationEnsureBoundary.metadata.requiredJobAction, "notify");
+    assert.equal(
+      signalNotificationEnsureBoundary.metadata.requiredJobState,
+      POSTGRES_SIGNAL_NOTIFICATION_ENSURE_REQUIRED_JOB_STATE
+    );
+    assert.equal(signalNotificationEnsureBoundary.metadata.requiredJobState, "notify_only");
+    assert.equal(
+      signalNotificationEnsureBoundary.metadata.hardcodedDeliveryState,
+      POSTGRES_SIGNAL_NOTIFICATION_ENSURE_DELIVERY_STATE
+    );
+    assert.equal(signalNotificationEnsureBoundary.metadata.hardcodedDeliveryState, "pending");
+    assert.equal(signalNotificationEnsureBoundary.metadata.serverBoundPrincipalLookup, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.jobOwnershipRevalidated, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.notifyActionPreconditionEnforced, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.notifyOnlyStatePreconditionEnforced, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.deterministicRequestIdentity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.insertOrIgnoreReplayParity, true);
+    // The first honest zero-audit-write claim in this family -- module
+    // header §1/§5: `ensureForJob` never calls `AuditRepository.record` on
+    // either path.
+    assert.equal(signalNotificationEnsureBoundary.metadata.noAuditOrOutboxWrite, true);
+    // The deliberate inverse of attribution-receipt-apply's own
+    // `immutableReceiptReplay` -- this table is LIVE, so the zero-write
+    // replay path echoes the row's CURRENT state, not a creation-time
+    // snapshot (module header §2).
+    assert.equal(signalNotificationEnsureBoundary.metadata.mutableDeliveryStateReplayEcho, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.databaseOwnedTimestamps, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.deterministicDeliveryIdentity, true);
+    // notification_deliveries/action_jobs are not one of the five domains
+    // the shared writer-lock protocol guards -- same posture as
+    // dead-letter-reset-apply's own inbox_messages/hosted_delivery_receipts.
+    assert.equal(signalNotificationEnsureBoundary.metadata.writerLockProtocolConsumed, false);
+    assert.equal(signalNotificationEnsureBoundary.metadata.sqliteValidationParity, true);
+    // World-state carried forward unchanged from dead-letter-reset-apply
+    // (v1.4.0), plus this boundary's own new closure.
+    assert.equal(signalNotificationEnsureBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.sourceStatusWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.sourceSyncWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.catalogImportWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.connectionProvisioningWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.sourceWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.retailerQualificationWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.missionPolicyWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.settingsWriterParity, false);
+    assert.equal(signalNotificationEnsureBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalNotificationEnsureBoundary.metadata.reservationWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.attributionPolicyParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.jobLifecycleWriterParity, true);
+    assert.equal(signalNotificationEnsureBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalNotificationEnsureBoundary.metadata.deadLetterResetWriterParity, true);
+    // Closes `NotificationRepository.ensureForJob` -- named in as many
+    // words as out-of-scope item 1 in
+    // `POSTGRES_SIGNAL_HANDLER_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES`.
+    assert.equal(signalNotificationEnsureBoundary.metadata.notificationEnsureWriterParity, true);
+    // Honestly false -- a single writer module does not, by itself,
+    // complete any composition-level scope (module header, mirroring
+    // dead-letter-reset-apply's own identical discipline).
+    assert.equal(signalNotificationEnsureBoundary.metadata.signalIngressRepositoryParity, false);
+    assert.equal(signalNotificationEnsureBoundary.metadata.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalNotificationEnsureBoundary.metadata.allHandlerRepositoryParity, false);
+    assert.equal(signalNotificationEnsureBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalNotificationEnsureBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalNotificationEnsureApplyBoundary(
+        importer,
+        qualifiedSignalNotificationEnsureManifest
+      ),
+      signalNotificationEnsureBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -4940,6 +5091,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalJobLifecycleManifest,
       NATIVE_DEAD_LETTER_RESET_APPLY_ROLE_NAMESPACE
     );
+    const signalNotificationEnsureManifest = buildPostgresSignalNotificationEnsureApplyManifest(
+      signalDeadLetterResetManifest,
+      NATIVE_NOTIFICATION_ENSURE_APPLY_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -5074,6 +5229,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalDeadLetterResetManifest.deadLetterResetRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalNotificationEnsureManifest.notificationEnsureRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -11014,6 +11173,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     let readNativeConstraintSettings!: () => Promise<NativeConstraintSettingsRow>;
     let actionSpendGraphCounts!: () => Promise<Record<string, number>>;
     let actionSpendWinner!: PostgresSignalActionSpendApplyResult;
+    // Hoisted for the same reason as `actionSpendWinner` above: the
+    // notification-delivery ENSURE writer proof (v1.5.0), much later in
+    // this suite, reuses the notify-only action job the strategy/notify
+    // branch below creates via the qualified action/spend boundary, rather
+    // than minting a fresh one.
+    let strategyActionSpendNotifyJobId: string | undefined;
     await (async () => {
     const actionSpendNow = Date.now();
     const actionSpendMessageId = "inbox_abcdef0123456789abcdef0123456789";
@@ -12575,6 +12740,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         strategyActionSpendNotifyAttestation,
         strategyActionSpendNow
       );
+      strategyActionSpendNotifyJobId = strategyActionSpendNotifyResult.actionJobId;
       assert.equal(strategyActionSpendNotifyResult.actionSpendApplyApplied, true);
       assert.equal(strategyActionSpendNotifyResult.decisionSource, "strategy");
       assert.equal(strategyActionSpendNotifyResult.strategyId, strategyActionSpendNotifyStrategy.id);
@@ -20898,6 +21064,436 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalDeadLetterResetUnmapped = null;
     })();
 
+    await (async () => {
+    // --- v1.5.0: notification-delivery ENSURE writer proof ---
+    // Closes `NotificationRepository.ensureForJob` -- the last write this
+    // repository's own accounting has ever named as genuinely unqualified
+    // (module header §0). Ensures exactly one pending
+    // `notification_deliveries` row for one existing, owned, notify-only
+    // action job. INSERT-or-existing on UNIQUE(job_id): fresh insert is
+    // ONE write, an already-ensured job is a TRUE ZERO-WRITE replay that
+    // echoes the row's CURRENT (mutable) state -- never a stale
+    // creation-time snapshot (`mutableDeliveryStateReplayEcho`). NO
+    // audit/outbox writes on ANY path -- the first honest
+    // `noAuditOrOutboxWrite: true` in this family (module header §1/§2/§5).
+    const notificationEnsureDatabase = (
+      principalRole: string
+    ) => new NodePostgresSignalNotificationEnsureApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalNotificationEnsureManifest, { maxConnections: 1 });
+    signalNotificationEnsureA = notificationEnsureDatabase(NATIVE_PRINCIPAL_A);
+    signalNotificationEnsureB = notificationEnsureDatabase(NATIVE_PRINCIPAL_B);
+    signalNotificationEnsureC = notificationEnsureDatabase(NATIVE_PRINCIPAL_C);
+    signalNotificationEnsureUnmapped = notificationEnsureDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const notificationEnsurePrincipal = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const notificationEnsurePrincipalB = { tenantId: "tenant_local", userId: "user_local" };
+
+    const applyNotificationEnsure = (
+      database: NodePostgresSignalNotificationEnsureApplyDatabase,
+      principalValue: { tenantId: string; userId: string },
+      jobId: string
+    ) => {
+      const payload = normalizedPostgresSignalNotificationEnsurePayload(jobId);
+      return database.ensureNotificationDelivery(
+        principalValue,
+        buildPostgresSignalNotificationEnsureRequestId(principalValue, payload),
+        payload
+      );
+    };
+    const notificationEnsureDeliveryRow = async (jobId: string) => (await first!.query<{
+      id: string;
+      jobId: string;
+      state: string;
+      attempts: number;
+      createdAt: string;
+      updatedAt: string;
+    }>(
+      `SELECT id, job_id AS "jobId", state, (attempts)::int AS attempts,
+              created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM "${NATIVE_SCHEMA}"."notification_deliveries" WHERE job_id = $1`,
+      [jobId]
+    )).rows[0];
+    const notificationEnsureAuditOutboxCounts = async (): Promise<{
+      audits: number;
+      outboxes: number;
+    }> => {
+      const row = (await first!.query<{
+        audits: string | number | bigint;
+        outboxes: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE tenant_id = $1) AS audits,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE tenant_id = $1) AS outboxes`,
+        [NATIVE_TENANT]
+      )).rows[0]!;
+      return { audits: Number(row.audits), outboxes: Number(row.outboxes) };
+    };
+    const cloneNotificationEnsureFixtureJob = async (input: {
+      id: string;
+      state: string;
+      action: string;
+      idempotencyKeySuffix: string;
+      sourceJobId: string;
+    }): Promise<void> => {
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."action_jobs"(
+           id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+           state, action, quantity, max_unit_price_cents, max_order_total_cents,
+           currency, seller_policy, fulfillment, expected_seller, listing_id,
+           canonical_url, attribution_url, attribution_provider, idempotency_key,
+           capability_nonce_hash, expires_at, intent_revision_id,
+           exact_offer_key_id, offer_snapshot_id, created_at, updated_at
+         )
+         SELECT $1, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+                $2, $3, quantity, max_unit_price_cents, max_order_total_cents,
+                currency, seller_policy, fulfillment, expected_seller, listing_id,
+                canonical_url, attribution_url, attribution_provider, $4,
+                capability_nonce_hash, expires_at, intent_revision_id,
+                exact_offer_key_id, offer_snapshot_id, $5, $5
+         FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE id = $6`,
+        [
+          input.id, input.state, input.action,
+          `notification-ensure-${input.idempotencyKeySuffix}-job-key`,
+          new Date().toISOString(), input.sourceJobId
+        ]
+      );
+    };
+
+    // (a0) Job selection: reuse the notify-only action job the qualified
+    // action/spend boundary created earlier in this suite
+    // (`strategyActionSpendNotifyJobId`) -- but only after confirming,
+    // live, that nothing between its creation and this point has moved it
+    // off `notify_only`. `notify_only` carries NO legal outgoing
+    // job-lifecycle transition edges at all (`TRANSITIONS.notify_only ===
+    // []`, asserted in the job-lifecycle section above), and this specific
+    // job id is never referenced by any other UPDATE in this suite
+    // (grep-confirmed). If that invariant ever drifts, clone a fresh
+    // notify-only, notify-action job directly instead of failing the whole
+    // (~20-minute) suite.
+    const notificationEnsureCapturedJobRow = strategyActionSpendNotifyJobId
+      ? (await first!.query<{ action: string; state: string }>(
+          `SELECT action, state FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE id = $1`,
+          [strategyActionSpendNotifyJobId]
+        )).rows[0]
+      : undefined;
+    let notificationEnsureJobId: string;
+    if (
+      notificationEnsureCapturedJobRow?.action === "notify"
+      && notificationEnsureCapturedJobRow?.state === "notify_only"
+    ) {
+      notificationEnsureJobId = strategyActionSpendNotifyJobId!;
+    } else {
+      notificationEnsureJobId = "native_notification_ensure_manufactured_notify_job";
+      await cloneNotificationEnsureFixtureJob({
+        id: notificationEnsureJobId,
+        state: "notify_only",
+        action: "notify",
+        idempotencyKeySuffix: "manufactured",
+        sourceJobId: actionSpendWinner.actionJobId
+      });
+    }
+    assert.equal(await notificationEnsureDeliveryRow(notificationEnsureJobId), undefined);
+
+    // (a) Fresh ensure: full mutation-set assertions, exact row fields, and
+    // a ZERO audit/outbox delta -- module header §1's
+    // `noAuditOrOutboxWrite`, the first honest claim of its kind in this
+    // family.
+    const preNotificationEnsureAuditOutbox = await notificationEnsureAuditOutboxCounts();
+    const notificationEnsureRequestId = buildPostgresSignalNotificationEnsureRequestId(
+      notificationEnsurePrincipal,
+      normalizedPostgresSignalNotificationEnsurePayload(notificationEnsureJobId)
+    );
+    assert.match(notificationEnsureRequestId, /^notification_ensure_[a-f0-9]{32}$/);
+    const freshNotificationEnsureResult = await applyNotificationEnsure(
+      signalNotificationEnsureA, notificationEnsurePrincipal, notificationEnsureJobId
+    );
+    assert.equal(freshNotificationEnsureResult.contractVersion, 1);
+    assert.equal(freshNotificationEnsureResult.operation, "ensure_notification_delivery");
+    assert.equal(freshNotificationEnsureResult.requestId, notificationEnsureRequestId);
+    assert.match(freshNotificationEnsureResult.requestFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(freshNotificationEnsureResult.outcome, "applied");
+    assert.equal(freshNotificationEnsureResult.mutationApplied, true);
+    assert.equal(freshNotificationEnsureResult.idempotentReplay, false);
+    assert.equal(freshNotificationEnsureResult.mutationStatementCount, 1);
+    assert.equal(freshNotificationEnsureResult.mutationRowCount, 1);
+    assert.equal(freshNotificationEnsureResult.notificationDeliveryMutated, true);
+    assert.match(freshNotificationEnsureResult.delivery.id, /^notification_[a-f0-9]{32}$/);
+    assert.equal(freshNotificationEnsureResult.delivery.jobId, notificationEnsureJobId);
+    assert.equal(freshNotificationEnsureResult.delivery.state, "pending");
+    assert.equal(freshNotificationEnsureResult.delivery.attempts, 0);
+    assert.ok(freshNotificationEnsureResult.delivery.createdAt.length > 0);
+    assert.equal(
+      freshNotificationEnsureResult.delivery.updatedAt,
+      freshNotificationEnsureResult.delivery.createdAt
+    );
+    assert.equal(freshNotificationEnsureResult.notificationEnsureWriterParity, true);
+    assert.equal(freshNotificationEnsureResult.deadLetterResetWriterParity, true);
+    assert.equal(freshNotificationEnsureResult.writerLockProtocolParity, false);
+    assert.equal(freshNotificationEnsureResult.signalIngressRepositoryParity, false);
+    assert.equal(freshNotificationEnsureResult.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(freshNotificationEnsureResult.allHandlerRepositoryParity, false);
+    assert.equal(freshNotificationEnsureResult.mutationAuthority, true);
+    assert.equal(freshNotificationEnsureResult.runtimeAuthority, false);
+
+    const freshNotificationEnsureRow = await notificationEnsureDeliveryRow(notificationEnsureJobId);
+    assert.ok(freshNotificationEnsureRow);
+    assert.equal(freshNotificationEnsureRow?.id, freshNotificationEnsureResult.delivery.id);
+    assert.equal(freshNotificationEnsureRow?.state, "pending");
+    assert.equal(freshNotificationEnsureRow?.attempts, 0);
+    assert.equal(freshNotificationEnsureRow?.createdAt, freshNotificationEnsureResult.delivery.createdAt);
+    assert.equal(freshNotificationEnsureRow?.updatedAt, freshNotificationEnsureResult.delivery.updatedAt);
+    assert.deepEqual(await notificationEnsureAuditOutboxCounts(), preNotificationEnsureAuditOutbox);
+
+    // (b) Second ensure, identical request: true zero-write replay, echoing
+    // the (still-unchanged) current row exactly.
+    const secondNotificationEnsureResult = await applyNotificationEnsure(
+      signalNotificationEnsureA, notificationEnsurePrincipal, notificationEnsureJobId
+    );
+    assert.equal(secondNotificationEnsureResult.outcome, "already_applied");
+    assert.equal(secondNotificationEnsureResult.mutationApplied, false);
+    assert.equal(secondNotificationEnsureResult.idempotentReplay, true);
+    assert.equal(secondNotificationEnsureResult.mutationStatementCount, 0);
+    assert.equal(secondNotificationEnsureResult.mutationRowCount, 0);
+    assert.equal(secondNotificationEnsureResult.notificationDeliveryMutated, false);
+    assert.equal(secondNotificationEnsureResult.requestId, freshNotificationEnsureResult.requestId);
+    assert.equal(
+      secondNotificationEnsureResult.requestFingerprint,
+      freshNotificationEnsureResult.requestFingerprint
+    );
+    assert.deepEqual(secondNotificationEnsureResult.delivery, freshNotificationEnsureResult.delivery);
+    assert.deepEqual(await notificationEnsureAuditOutboxCounts(), preNotificationEnsureAuditOutbox);
+
+    // (c) `mutableDeliveryStateReplayEcho`: a superuser mutation standing in
+    // for a genuine leaseNext/acknowledge/recordInteraction call --
+    // notification_deliveries is LIVE, not immutable like
+    // attribution_receipts. A third ensure must still be a true zero-write
+    // replay, but must echo the row's CURRENT (mutated) state, never the
+    // stale 'pending'/0 creation-time snapshot -- the deliberate inverse of
+    // attribution-receipt-apply's own `immutableReceiptReplay`.
+    const mutatedNotificationEnsureUpdatedAt = new Date(Date.now() + 5_000).toISOString();
+    await first!.query(
+      `UPDATE "${NATIVE_SCHEMA}"."notification_deliveries"
+       SET state = 'leased', attempts = 1, updated_at = $2
+       WHERE job_id = $1`,
+      [notificationEnsureJobId, mutatedNotificationEnsureUpdatedAt]
+    );
+    const thirdNotificationEnsureResult = await applyNotificationEnsure(
+      signalNotificationEnsureA, notificationEnsurePrincipal, notificationEnsureJobId
+    );
+    assert.equal(thirdNotificationEnsureResult.outcome, "already_applied");
+    assert.equal(thirdNotificationEnsureResult.mutationApplied, false);
+    assert.equal(thirdNotificationEnsureResult.mutationStatementCount, 0);
+    assert.equal(thirdNotificationEnsureResult.mutationRowCount, 0);
+    assert.equal(thirdNotificationEnsureResult.notificationDeliveryMutated, false);
+    assert.equal(thirdNotificationEnsureResult.requestId, freshNotificationEnsureResult.requestId);
+    assert.equal(thirdNotificationEnsureResult.delivery.id, freshNotificationEnsureResult.delivery.id);
+    assert.equal(thirdNotificationEnsureResult.delivery.jobId, notificationEnsureJobId);
+    assert.equal(thirdNotificationEnsureResult.delivery.state, "leased");
+    assert.equal(thirdNotificationEnsureResult.delivery.attempts, 1);
+    assert.equal(
+      thirdNotificationEnsureResult.delivery.createdAt,
+      freshNotificationEnsureResult.delivery.createdAt
+    );
+    assert.equal(thirdNotificationEnsureResult.delivery.updatedAt, mutatedNotificationEnsureUpdatedAt);
+    assert.deepEqual(await notificationEnsureAuditOutboxCounts(), preNotificationEnsureAuditOutbox);
+
+    // (d) Wrong action -> fail-closed, zero writes. Cloned from the ensured
+    // job's own row (never trusting the TypeScript-side normalizer to
+    // reject a structurally-valid-but-precondition-violating job id), with
+    // `action` overridden away from 'notify'.
+    const wrongActionNotificationEnsureJobId = "native_notification_ensure_wrong_action_job";
+    await cloneNotificationEnsureFixtureJob({
+      id: wrongActionNotificationEnsureJobId,
+      state: "notify_only",
+      action: "add_to_cart",
+      idempotencyKeySuffix: "wrong-action",
+      sourceJobId: notificationEnsureJobId
+    });
+    await assert.rejects(
+      applyNotificationEnsure(
+        signalNotificationEnsureA, notificationEnsurePrincipal, wrongActionNotificationEnsureJobId
+      ),
+      /requires a freshly created notify-only action job/
+    );
+    assert.equal(await notificationEnsureDeliveryRow(wrongActionNotificationEnsureJobId), undefined);
+
+    // (e) Wrong state -> fail-closed, zero writes. Same clone shape,
+    // `action` correct but `state` moved off 'notify_only' -- the
+    // deliberate narrowing module header §2/§5 flags for reviewer
+    // scrutiny (`notifyOnlyStatePreconditionEnforced`), never checked by
+    // SQLite's own `ensureForJob` SQL.
+    const wrongStateNotificationEnsureJobId = "native_notification_ensure_wrong_state_job";
+    await cloneNotificationEnsureFixtureJob({
+      id: wrongStateNotificationEnsureJobId,
+      state: "awaiting_executor",
+      action: "notify",
+      idempotencyKeySuffix: "wrong-state",
+      sourceJobId: notificationEnsureJobId
+    });
+    await assert.rejects(
+      applyNotificationEnsure(
+        signalNotificationEnsureA, notificationEnsurePrincipal, wrongStateNotificationEnsureJobId
+      ),
+      /requires a freshly created notify-only action job/
+    );
+    assert.equal(await notificationEnsureDeliveryRow(wrongStateNotificationEnsureJobId), undefined);
+
+    // (f) Nonexistent job -> fail-closed.
+    await assert.rejects(
+      applyNotificationEnsure(
+        signalNotificationEnsureA,
+        notificationEnsurePrincipal,
+        "native_notification_ensure_missing_job"
+      ),
+      /action job ownership is invalid/
+    );
+
+    // (g) Foreign job: exists, but not owned by the calling (correctly
+    // authenticated) tenant/user.
+    await assert.rejects(
+      applyNotificationEnsure(
+        signalNotificationEnsureB, notificationEnsurePrincipalB, notificationEnsureJobId
+      ),
+      /action job ownership is invalid/
+    );
+    assert.deepEqual(await notificationEnsureAuditOutboxCounts(), preNotificationEnsureAuditOutbox);
+
+    // (h) Denial matrix: wrong principal.
+    await assert.rejects(
+      applyNotificationEnsure(
+        signalNotificationEnsureB, notificationEnsurePrincipal, notificationEnsureJobId
+      ),
+      /does not match the expected authenticated principal/
+    );
+    // Denial matrix: same-tenant peer.
+    await first!.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER, new Date(Date.now() - 5_000).toISOString()]
+    );
+    try {
+      await assert.rejects(
+        applyNotificationEnsure(
+          signalNotificationEnsureC, notificationEnsurePrincipal, notificationEnsureJobId
+        ),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first!.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    // Denial matrix: unmapped principal.
+    await assert.rejects(
+      applyNotificationEnsure(
+        signalNotificationEnsureUnmapped, notificationEnsurePrincipal, notificationEnsureJobId
+      ),
+      /tenant session principal is not active/
+    );
+    // Malformed request id: caught client-side before any round trip.
+    await assert.rejects(
+      signalNotificationEnsureA.ensureNotificationDelivery(
+        notificationEnsurePrincipal,
+        `notification_ensure_${"f".repeat(32)}`,
+        normalizedPostgresSignalNotificationEnsurePayload(notificationEnsureJobId)
+      ),
+      /apply request is invalid/
+    );
+    assert.deepEqual(await notificationEnsureAuditOutboxCounts(), preNotificationEnsureAuditOutbox);
+
+    // (i) Zero direct table SQL for the role, and cross-boundary denial in
+    // both directions.
+    signalNotificationEnsureDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalNotificationEnsureDirectClient.on("error", () => undefined);
+    await signalNotificationEnsureDirectClient.connect();
+    await signalNotificationEnsureDirectClient.query(
+      `SET ROLE "${signalNotificationEnsureManifest.notificationEnsureRole.name}"`
+    );
+    await assert.rejects(
+      signalNotificationEnsureDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."notification_deliveries" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalNotificationEnsureDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalNotificationEnsureDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."notification_deliveries"(id)
+         VALUES ('forbidden_notification_ensure_delivery')`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalNotificationEnsureDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."action_jobs" SET state = 'notify_only'`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalNotificationEnsureDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."audit_events" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalNotificationEnsureDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."outbox_events" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalNotificationEnsureDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_DEAD_LETTER_RESET_APPLY_FUNCTION}"(
+           $1, $2, 'reset_dead_letter_inbox', 'forbidden_cross_boundary', '{}'
+         )`,
+        [notificationEnsurePrincipal.tenantId, notificationEnsurePrincipal.userId]
+      ),
+      /permission denied/
+    );
+    // A sibling role (dead-letter-reset's, this module's own predecessor)
+    // cannot call this boundary's function either.
+    await signalNotificationEnsureDirectClient.query(
+      `SET ROLE "${signalDeadLetterResetManifest.deadLetterResetRole.name}"`
+    );
+    await assert.rejects(
+      signalNotificationEnsureDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_NOTIFICATION_ENSURE_APPLY_FUNCTION}"(
+           $1, $2, 'ensure_notification_delivery', 'forbidden_cross_boundary_reverse', '{}'
+         )`,
+        [notificationEnsurePrincipal.tenantId, notificationEnsurePrincipal.userId]
+      ),
+      /permission denied/
+    );
+    await signalNotificationEnsureDirectClient.end();
+    signalNotificationEnsureDirectClient = null;
+
+    await Promise.all([
+      signalNotificationEnsureA.close(),
+      signalNotificationEnsureB.close(),
+      signalNotificationEnsureC.close(),
+      signalNotificationEnsureUnmapped.close()
+    ]);
+    signalNotificationEnsureA = null;
+    signalNotificationEnsureB = null;
+    signalNotificationEnsureC = null;
+    signalNotificationEnsureUnmapped = null;
+    })();
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -24827,7 +25423,16 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NodePostgresSignalDeadLetterResetApplyDatabase | null)?.close(),
       (signalDeadLetterResetUnmapped as
         NodePostgresSignalDeadLetterResetApplyDatabase | null)?.close(),
-      (signalDeadLetterResetDirectClient as Client | null)?.end()
+      (signalDeadLetterResetDirectClient as Client | null)?.end(),
+      (signalNotificationEnsureA as
+        NodePostgresSignalNotificationEnsureApplyDatabase | null)?.close(),
+      (signalNotificationEnsureB as
+        NodePostgresSignalNotificationEnsureApplyDatabase | null)?.close(),
+      (signalNotificationEnsureC as
+        NodePostgresSignalNotificationEnsureApplyDatabase | null)?.close(),
+      (signalNotificationEnsureUnmapped as
+        NodePostgresSignalNotificationEnsureApplyDatabase | null)?.close(),
+      (signalNotificationEnsureDirectClient as Client | null)?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

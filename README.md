@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.4.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.5.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,63 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.5.0 adds the twenty-seventh independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the bounded notification-delivery
+ensure writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns
+no application object, inherits no role, has zero direct/effective table or
+column grants, and may call one strict security-definer function. The
+boundary protects two tenant tables — `action_jobs` and
+`notification_deliveries` — but its complete mutation set is the second
+alone; `action_jobs` is read and row-locked for ownership, never written.
+
+PostgreSQL binds `session_user` to one exact tenant/user, revalidates the
+qualified operator dead-letter inbox-reset boundary (1.4.0) as its declared
+predecessor, and accepts one explicit `ensure_notification_delivery`
+operation under `NOTIFICATION_ENSURE_V1`. The caller supplies only
+`actionJobId`; the one `action_jobs` row a call may ever touch is locked
+with `SELECT ... FOR UPDATE OF job`, and it must carry `action = 'notify'`
+and `state = 'notify_only'` — anything else fails closed with `55000`. The
+`state` check is a documented, deliberate narrowing beyond SQLite's own
+`ensureForJob` SQL, which never inspects `state` at all: the invariant holds
+because `ensureForJob`'s one real caller, `SignalRepository.createActionJob`,
+always creates the job with `state = 'notify_only'` in the same synchronous
+call that invokes it moments later.
+
+`notification_deliveries` carries `UNIQUE(job_id)`, exactly like SQLite's
+own `INSERT OR IGNORE`: a fresh call inserts one `pending` row with
+database-owned timestamps, while a delivery already ensured for that job is
+a true zero-write success. Because the table is live — `leaseNext`/
+`acknowledge`/`recordInteraction`/`recoverExpired` all advance a delivery
+long after creation — the replay path echoes the row's current live
+`state`/`attempts`/`updated_at` rather than a stale creation-time snapshot,
+the deliberate inverse of the attribution-receipt boundary's
+immutable-replay design. Neither path writes `audit_events` or
+`outbox_events`, matching SQLite's own `ensureForJob` exactly, which never
+calls `AuditRepository.record` on either path — the family's first honest
+zero-audit claim; every other qualified writer in this repository appends
+to the audit trail at least conditionally.
+
+Neither `action_jobs` nor `notification_deliveries` is one of the five
+domains the shared writer-lock protocol guards, so this boundary never
+calls it; per-job serialization comes from the row lock plus
+`UNIQUE(job_id)` + `ON CONFLICT (job_id) DO NOTHING`, the identical backstop
+the attribution-receipt writer uses. Native PostgreSQL 16 proves wrong,
+same-tenant-peer, and unmapped principal denial, zero direct and
+cross-boundary SQL, notify-action/notify-only-state precondition
+enforcement, true INSERT-or-existing idempotency, and the honest zero-audit
+write set. This closes `notificationEnsureWriterParity`, closing
+`NotificationRepository.ensureForJob` — the last unqualified write family
+named anywhere in this repository's own accounting, and the same write the
+final handler-composition rung's own out-of-scope list names as an
+"orphaned third scope no flag in this repository ... has ever promised to
+cover." `hostedDeliveryHandlerRepositoryParity` and
+`allHandlerRepositoryParity` both remain false — only the final handler
+composition itself, binding every qualified writer into the existing
+runtime chain, remains open among write families. SQLite remains
+authoritative; nothing is activated. Use `npm run
+postgres:signal-notification-ensure-apply -- plan ...` and the [PostgreSQL
+cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 1.4.0 adds the twenty-sixth independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the bounded operator dead-letter

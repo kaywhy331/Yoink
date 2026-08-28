@@ -3821,6 +3821,184 @@ hosted-delivery handler composition — binding this writer into the
 existing chain — remain the two other open items; every
 request-repository family and the SQLite authority switch remain closed.
 
+## Notification-delivery ensure qualification (1.5.0)
+
+Version 1.5 adds a twenty-seventh independent, inactive hosted-signal
+boundary for `ensure_notification_delivery`. It revalidates the qualified
+operator dead-letter inbox-reset boundary (1.4.0) as its declared
+predecessor and, like that boundary, does not consume the shared
+five-domain writer-lock protocol — neither `action_jobs` nor
+`notification_deliveries` is one of its five domains. It closes
+`NotificationRepository.ensureForJob`, the write every prior rung deferred
+by name rather than covered: rung-1 (`postgres-signal-evaluation
+-composition.ts`) and rung-2 (`postgres-signal-evaluation-repository
+-composition.ts`) both call it "handler-level, not repository" in their own
+out-of-scope lists, and the final handler-composition rung names it in as
+many words as its own out-of-scope item 1 — "This write is genuinely
+UNQUALIFIED ... an orphaned THIRD scope no flag in this repository ... has
+ever promised to cover." This module is that missing writer, and it is the
+last unqualified write family left in this repository's own accounting;
+only the final handler composition itself remains open.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application
+object, inherits no role, receives zero direct/effective table or column
+privileges, and can execute one strict security-definer function. Its
+receipt seals two tenant tables — `action_jobs` and
+`notification_deliveries` — but its complete mutation set is
+`notification_deliveries` alone; `action_jobs` is read and row-locked for
+ownership only, exactly mirroring how `attribution_receipts` reads and
+locks the same table without writing it.
+
+PostgreSQL binds `session_user` to one exact tenant/user and accepts one
+explicit `ensure_notification_delivery` operation under
+`NOTIFICATION_ENSURE_V1`. The caller supplies only `actionJobId` — the
+entire payload is a single field plus the fixed confirmation literal,
+bounded by the same broad `cleanText(jobId, 160)` shape (`/^[A-Za-z0-9_-]
+{3,160}$/`) the attribution-receipt boundary already uses for the identical
+field. `tenant_id`/`user_id` are never trusted from the caller: both are
+read back from the locked `action_jobs` row. The one row a call may ever
+touch is locked with `SELECT ... FOR UPDATE OF job`, scoped to the
+resolved tenant/user; a missing or unowned row fails closed with `42501`
+before any replay determination.
+
+A fresh ensure requires the locked job's `action` to be exactly `notify`
+and its `state` to be exactly `notify_only` — checked only after the
+replay short-circuit below finds no existing row, so an exact replay is
+never rejected merely because the job has since moved on. SQLite's own
+`ensureForJob` checks only `action !== "notify"` (a silent void return,
+provably dead code in production because the one real caller,
+`SignalRepository.createActionJob`, invokes it only when `effectiveAction
+=== "notify"`); the `state = 'notify_only'` check has no SQL counterpart at
+all — it is derived from the same call-graph invariant and enforced
+defensively, the identical "narrow to the one real call pattern" choice
+every hardcoded literal in this family already makes.
+`notifyActionPreconditionEnforced` and `notifyOnlyStatePreconditionEnforced`
+both record this explicitly.
+
+`notification_deliveries` carries `UNIQUE(job_id)`
+(migrations.ts:553), so a fresh call is a true PostgreSQL `INSERT ...
+ON CONFLICT (job_id) DO NOTHING`, exactly mirroring SQLite's own `INSERT
+OR IGNORE`: one row, `state = 'pending'`, `attempts` implicitly zero,
+database-owned `created_at`/`updated_at`. A delivery already ensured for
+that job is a true zero-write success — but unlike `attribution_receipts`,
+which is immutable once written, `notification_deliveries` is a live
+table: `leaseNext`/`acknowledge`/`recordInteraction`/`recoverExpired` (and
+their already-qualified PostgreSQL counterpart, `postgres-notification
+-recovery.ts`) all advance a delivery's `state`/`attempts`/
+`assigned_device_id` long after `ensureForJob` first creates it. The replay
+path therefore reads back and echoes the row's CURRENT LIVE `state`/
+`attempts`/`updated_at` exactly as they stand at replay time, never a
+hardcoded `'pending'` snapshot — still an honest zero-write success, just
+not a claim of unchanged-since-creation immutability.
+`mutableDeliveryStateReplayEcho: true` records this explicitly, the
+deliberate inverse of `attribution_receipts`' own `immutableReceiptReplay`.
+A concurrent call that loses the race between the replay check and the
+`INSERT` re-reads the winner's row under `UNIQUE(job_id)` and returns the
+identical zero-write success.
+
+Neither path appends to `audit_events` or `outbox_events` — grep-confirmed:
+no `AuditRepository` reference exists anywhere in
+`notification-repository.ts`. `noAuditOrOutboxWrite: true` is the first
+claim of its kind in this family; every other qualified writer here appends
+to `audit_events` at least conditionally. RBAC beyond ownership does not
+apply here — unlike the dead-letter-reset boundary's `worker.manage` check,
+`ensureForJob` itself performs no capability/permission check in SQLite
+beyond the job-ownership `SELECT`, so none is reproduced or omitted here to
+flag.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-notification-ensure-apply -- plan \
+  yoink_cutover_qualification_150 yoink_q_150 yoink_session_q_150 \
+  yoink_queue_q_150 yoink_control_q_150 yoink_notify_q_150 \
+  yoink_execute_q_150 yoink_retain_q_150 yoink_candidate_q_150 \
+  yoink_dispatch_q_150 yoink_reconcile_q_150 yoink_witness_q_150 \
+  yoink_delivery_q_150 yoink_catalog_q_150 yoink_resolution_q_150 \
+  yoink_reference_q_150 yoink_terminal_q_150 yoink_offer_q_150 \
+  yoink_post_q_150 yoink_mission_q_150 yoink_strategy_q_150 \
+  yoink_writer_lock_q_150 yoink_constraint_config_q_150 \
+  yoink_action_spend_q_150 yoink_target_qual_q_150 \
+  yoink_source_trust_q_150 yoink_retailer_qual_q_150 \
+  yoink_mission_policy_q_150 yoink_source_status_q_150 \
+  yoink_source_sync_q_150 yoink_reservation_q_150 yoink_catalog_import_q_150 \
+  yoink_provisioning_q_150 yoink_attribution_policy_q_150 \
+  yoink_attribution_receipt_q_150 yoink_job_lifecycle_q_150 \
+  yoink_ingress_enqueue_q_150 yoink_dead_letter_reset_q_150 \
+  yoink_notification_ensure_q_150
+```
+
+After every predecessor through dead-letter-reset qualification is
+verified, apply once with the qualification connection and explicit
+acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_NOTIFICATION_ENSURE_APPLY_QUALIFICATION_ACK=bounded-signal-notification-ensure-apply-qualification \
+  npm run postgres:signal-notification-ensure-apply -- apply \
+  yoink_cutover_qualification_150 yoink_q_150 yoink_session_q_150 \
+  yoink_queue_q_150 yoink_control_q_150 yoink_notify_q_150 \
+  yoink_execute_q_150 yoink_retain_q_150 yoink_candidate_q_150 \
+  yoink_dispatch_q_150 yoink_reconcile_q_150 yoink_witness_q_150 \
+  yoink_delivery_q_150 yoink_catalog_q_150 yoink_resolution_q_150 \
+  yoink_reference_q_150 yoink_terminal_q_150 yoink_offer_q_150 \
+  yoink_post_q_150 yoink_mission_q_150 yoink_strategy_q_150 \
+  yoink_writer_lock_q_150 yoink_constraint_config_q_150 \
+  yoink_action_spend_q_150 yoink_target_qual_q_150 \
+  yoink_source_trust_q_150 yoink_retailer_qual_q_150 \
+  yoink_mission_policy_q_150 yoink_source_status_q_150 \
+  yoink_source_sync_q_150 yoink_reservation_q_150 yoink_catalog_import_q_150 \
+  yoink_provisioning_q_150 yoink_attribution_policy_q_150 \
+  yoink_attribution_receipt_q_150 yoink_job_lifecycle_q_150 \
+  yoink_ingress_enqueue_q_150 yoink_dead_letter_reset_q_150 \
+  yoink_notification_ensure_q_150
+```
+
+Then independently verify the function, role, protected/mutation table
+sets, exact grants, notify-action/notify-only-state preconditions, and
+INSERT-or-existing idempotency with live mutable-state replay echo:
+
+```bash
+npm run postgres:signal-notification-ensure-apply -- verify \
+  yoink_cutover_qualification_150 yoink_q_150 yoink_session_q_150 \
+  yoink_queue_q_150 yoink_control_q_150 yoink_notify_q_150 \
+  yoink_execute_q_150 yoink_retain_q_150 yoink_candidate_q_150 \
+  yoink_dispatch_q_150 yoink_reconcile_q_150 yoink_witness_q_150 \
+  yoink_delivery_q_150 yoink_catalog_q_150 yoink_resolution_q_150 \
+  yoink_reference_q_150 yoink_terminal_q_150 yoink_offer_q_150 \
+  yoink_post_q_150 yoink_mission_q_150 yoink_strategy_q_150 \
+  yoink_writer_lock_q_150 yoink_constraint_config_q_150 \
+  yoink_action_spend_q_150 yoink_target_qual_q_150 \
+  yoink_source_trust_q_150 yoink_retailer_qual_q_150 \
+  yoink_mission_policy_q_150 yoink_source_status_q_150 \
+  yoink_source_sync_q_150 yoink_reservation_q_150 yoink_catalog_import_q_150 \
+  yoink_provisioning_q_150 yoink_attribution_policy_q_150 \
+  yoink_attribution_receipt_q_150 yoink_job_lifecycle_q_150 \
+  yoink_ingress_enqueue_q_150 yoink_dead_letter_reset_q_150 \
+  yoink_notification_ensure_q_150
+```
+
+If a concurrent script for a sibling boundary is present in the same
+working tree, verify this chain's role-namespace arguments against it
+before applying — every namespace across the full predecessor chain must
+stay pairwise distinct, and `buildPostgresSignalNotificationEnsureApplyManifest`
+fails closed if the trailing `notification_ensure_role_namespace` collides
+with any namespace already recorded on the dead-letter-reset predecessor
+manifest it revalidates.
+
+The receipt records `notificationEnsureWriterParity: true` while
+`hostedDeliveryHandlerRepositoryParity`, `allHandlerRepositoryParity`, and
+`runtimeAuthority` all remain explicit `false`. Native PostgreSQL 16
+proves wrong, same-tenant-peer, and unmapped principal denial, zero direct
+and cross-boundary SQL, notify-action/notify-only-state precondition
+enforcement, true INSERT-or-existing idempotency with live mutable-state
+replay echo, and the honest zero-audit write set. This closes the
+notification-ensure family — the last unqualified write family recorded
+anywhere in this repository's own accounting. Only the final handler
+composition — binding this writer, the operator dead-letter inbox-reset
+writer, and the durable signal-ingress/observer-witness chains into the
+existing runtime — remains open; every request-repository family and the
+SQLite authority switch remain closed.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.

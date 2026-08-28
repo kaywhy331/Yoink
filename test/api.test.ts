@@ -47,6 +47,7 @@ import { postgresSignalEvaluationRepositoryCompositionCapabilityProjection } fro
 import { postgresSignalIngressEnqueueApplyCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-enqueue-apply.js";
 import { postgresSignalIngressCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-composition.js";
 import { postgresSignalDeadLetterResetCapabilityProjection } from "../packages/database/src/postgres-signal-dead-letter-reset-apply.js";
+import { postgresSignalNotificationEnsureCapabilityProjection } from "../packages/database/src/postgres-signal-notification-ensure-apply.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -160,7 +161,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Server-bound Walmart, Amazon, and Best Buy qualification/);
     assert.match(adminScript, /Server-bound mission-policy revision/);
     assert.match(adminScript, /global action pause\/resume, guardrail settings, and periodic spend caps/);
-    assert.match(adminScript, /twenty-five independently qualified signal boundaries proven/);
+    assert.match(adminScript, /twenty-six independently qualified signal boundaries proven/);
     assert.match(adminScript, /Server-bound TrackaLacker source sync/);
     assert.match(adminScript, /eighteenth independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /Server-bound spend-reservation lifecycle/);
@@ -192,6 +193,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /twenty-sixth independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /a legitimately re-dead-lettered message may be reset again/);
     assert.match(adminScript, /closing the dead-letter-reset family while the final handler composition remains open/);
+    assert.match(adminScript, /Server-bound notification-delivery ensure/);
+    assert.match(adminScript, /twenty-seventh independently inactive NOLOGIN boundary/);
+    assert.match(adminScript, /no audit or outbox row is ever written on any path/);
+    assert.match(adminScript, /closing the notification-ensure family while the final handler composition remains open/);
     assert.match(adminScript, /Server-bound attribution-receipt append/);
     assert.match(adminScript, /twenty-third independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /derive-don't-trust affiliate-routing receipt/);
@@ -268,6 +273,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalIngressCompositionCapabilityProjection();
     const postgresSignalDeadLetterResetApply =
       postgresSignalDeadLetterResetCapabilityProjection();
+    const postgresSignalNotificationEnsureApply =
+      postgresSignalNotificationEnsureCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -318,6 +325,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalIngressEnqueueApply,
       postgresSignalIngressComposition,
       postgresSignalDeadLetterResetApply,
+      postgresSignalNotificationEnsureApply,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -659,6 +667,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalDeadLetterResetApply,
       postgresSignalDeadLetterResetApply
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalNotificationEnsureApply,
+      postgresSignalNotificationEnsureApply
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -701,7 +713,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalEvaluationRepositoryComposition,
       postgresSignalIngressEnqueueApply,
       postgresSignalIngressComposition,
-      postgresSignalDeadLetterResetApply
+      postgresSignalDeadLetterResetApply,
+      postgresSignalNotificationEnsureApply
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);
