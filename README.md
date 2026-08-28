@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.2.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.3.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,61 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.3.0 adds the verification-level durable signal-ingress repository
+composition. It is not a twenty-sixth qualification boundary: it creates no
+new PostgreSQL role, function, or receipt table, and grants no new mutation
+authority. It fans in four already-qualified boundaries — the bounded
+durable signal-ingress enqueue writer (1.2.0), the sealed tenant queue-write
+boundary (0.63.0), the hosted-delivery lease/plan boundary, and the complete
+signal-evaluation repository composition (1.1.0) — into one deterministic
+manifest, keyed by SHA-256 fingerprint, arranged as a four-member fan-in
+rather than a linear chain.
+
+Three build-time fingerprint-convergence proofs establish that this is one
+connected graph, not four accidentally-unrelated qualifications, each
+checked in-process with no live database required: the ingress-enqueue
+writer's own declared attribution-receipt predecessor must equal the
+evaluation-repository composition's own embedded copy of that identical
+node; the ingress-enqueue writer's own declared queue-write predecessor must
+equal the tenant queue-write boundary rebuilt directly in this module's own
+chain; and the hosted-delivery lease/plan boundary rebuilt directly here
+must equal the evaluation-repository composition's own embedded copy of
+that identical node — the lease/plan boundary is deliberately bound both
+directly and transitively, a strengthening the convergence proof turns
+honest rather than redundant. Any mismatch fails closed.
+
+This closes `signalIngressRepositoryParity`. The four members' seventeen
+total mutation/plan families — two owned directly by this composition (the
+accept/dedupe enqueue write and the task-wake write) plus the
+evaluation-repository composition's own already-total fifteen, cited by
+import rather than re-listed — are completely covered, with zero unmapped
+families and zero unmapped chain boundaries.
+`hostedDeliveryHandlerRepositoryParity` and `allHandlerRepositoryParity`
+both remain false.
+
+Four write families stay concretely out of scope, recorded in the module's
+own `KNOWN_OUT_OF_SCOPE_WRITES` constant. `NotificationRepository
+.ensureForJob` and `CatalogRepository.upsertListing`'s manual "add to
+library" reference inserts both carry forward unchanged.
+`HostedDeliveryRepository.retryDeadLetterInbox` — the operator-driven
+dead-letter replay path that resets an already-dead-lettered
+`inbox_messages` row back to `accepted` and writes an `audit_events`/
+`outbox_events` pair — is not covered by any bound member; qualifying it is
+left to a later module. The task-kind dispatch mechanism itself — the
+application-layer routing that decides which handler function runs for
+each of the seven background task kinds — has no PostgreSQL
+repository-write surface of its own to qualify.
+
+SQLite remains authoritative; nothing is activated. `noNewRoleCreated`,
+`noNewFunctionCreated`, and `noNewMutationPath` all stay true — this
+composition proves closure, not a fifth qualified writer. Plan without a
+database connection using `npm run postgres:signal-ingress-composition --
+plan`; verify against a live database with `YOINK_POSTGRES_URL=... npm run
+postgres:signal-ingress-composition -- verify` — there is no `apply` step
+and no acknowledgement environment variable, because this module creates
+nothing new to apply — and the [PostgreSQL cutover
+qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 1.2.0 adds the twenty-fifth independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the bounded durable signal-ingress

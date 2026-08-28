@@ -45,6 +45,7 @@ import { postgresSignalAttributionReceiptCapabilityProjection } from "../package
 import { postgresSignalJobLifecycleCapabilityProjection } from "../packages/database/src/postgres-signal-job-lifecycle-apply.js";
 import { postgresSignalEvaluationRepositoryCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-evaluation-repository-composition.js";
 import { postgresSignalIngressEnqueueApplyCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-enqueue-apply.js";
+import { postgresSignalIngressCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-composition.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -183,6 +184,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /twenty-fifth independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /message identity and payload hash are derived and revalidated in the database/);
     assert.match(adminScript, /closing the ingress-enqueue family while the durable-ingress composition remains open/);
+    assert.match(adminScript, /Complete durable signal-ingress composition/);
+    assert.match(adminScript, /now compose into one deterministically verified durable-ingress repository/);
+    assert.match(adminScript, /closing durable signal-ingress repository parity while the final handler composition remains open/);
     assert.match(adminScript, /Server-bound attribution-receipt append/);
     assert.match(adminScript, /twenty-third independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /derive-don't-trust affiliate-routing receipt/);
@@ -255,6 +259,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalEvaluationRepositoryCompositionCapabilityProjection();
     const postgresSignalIngressEnqueueApply =
       postgresSignalIngressEnqueueApplyCapabilityProjection();
+    const postgresSignalIngressComposition =
+      postgresSignalIngressCompositionCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -303,6 +309,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalJobLifecycleApply,
       postgresSignalEvaluationRepositoryComposition,
       postgresSignalIngressEnqueueApply,
+      postgresSignalIngressComposition,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -636,6 +643,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalIngressEnqueueApply,
       postgresSignalIngressEnqueueApply
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalIngressComposition,
+      postgresSignalIngressComposition
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -676,7 +687,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalAttributionReceiptApply,
       postgresSignalJobLifecycleApply,
       postgresSignalEvaluationRepositoryComposition,
-      postgresSignalIngressEnqueueApply
+      postgresSignalIngressEnqueueApply,
+      postgresSignalIngressComposition
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

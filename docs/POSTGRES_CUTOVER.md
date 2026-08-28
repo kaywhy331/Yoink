@@ -3554,6 +3554,123 @@ inbox-reset, hosted-delivery handler composition, and every
 request-repository family remain open; the SQLite authority switch remains
 closed.
 
+## Durable signal-ingress composition qualification (1.3.0)
+
+Version 1.3 adds a third verification-level composition, not a
+twenty-sixth qualification boundary. It creates no PostgreSQL role,
+function, or receipt table, and grants no new mutation authority.
+`buildPostgresSignalIngressCompositionManifest()` takes no arguments: it
+re-derives four already-qualified manifests — the bounded durable
+signal-ingress enqueue writer (1.2.0), the sealed tenant queue-write
+boundary (0.63.0), the hosted-delivery lease/plan boundary, and the
+complete signal-evaluation repository composition (1.1.0) — from their own
+build functions and folds them into one deterministic manifest keyed by
+SHA-256 fingerprint, in the fixed order `ingressEnqueueApply →
+tenantQueueWrite → hostedDeliveryLeaseRecovery →
+evaluationRepositoryComposition`.
+
+Like 1.1.0, this composition is a fan-in, not a linear chain:
+`ingressEnqueueApply` and `tenantQueueWrite` contribute this module's own
+two new families; `hostedDeliveryLeaseRecovery` and
+`evaluationRepositoryComposition` are delegated, their combined
+already-total families cited by import rather than re-listed, to avoid a
+second, driftable copy of tables the 1.1.0 build function already fails
+closed on. `hostedDeliveryLeaseRecovery` is bound both directly — its own
+chain entry, independently live-verified — and transitively, through
+`evaluationRepositoryComposition`'s own embedded copy, a deliberate
+strengthening rather than an oversight.
+
+The build function proves this is one connected graph, not four
+accidentally-unrelated qualifications, with three in-process, build-time
+fingerprint-convergence checks, no live database required:
+
+- shared-ancestry convergence — `ingressEnqueueApply`'s own declared
+  `attributionReceiptApplyManifestFingerprint` must equal
+  `evaluationRepositoryComposition`'s own embedded
+  `attributionReceiptApplyManifest.fingerprint`, proving both chains share
+  one common ancestor;
+- queue-write convergence — `ingressEnqueueApply`'s own declared
+  `queueWriteManifestFingerprint` must equal the tenant queue-write
+  boundary's own fingerprint, rebuilt independently here as this module's
+  own `tenantQueueWrite` chain member; and
+- lease-recovery convergence — the hosted-delivery lease/plan boundary's
+  own fingerprint, rebuilt independently here, must equal
+  `evaluationRepositoryComposition`'s own embedded
+  `hostedDeliveryLeaseRecoveryManifest.fingerprint`.
+
+Any mismatch throws `PostgresSignalIngressCompositionError` before any
+database is touched.
+
+The build function separately enforces exactly-once chain completeness
+(four entries, four distinct boundary keys, four distinct fingerprints, in
+the declared structural order) and coverage accounting: two families owned
+directly by this composition's own members — `signal_ingress_accept_enqueue`
+(the fresh-accept/dedupe write `HostedDeliveryRepository.acceptInbox`
+performs) and `signal_ingress_task_wake` (the `hosted_delivery_recovery`
+task-wake write `BackgroundTaskRepository.enqueueServiceTask` performs) —
+plus the evaluation-repository composition's own already-total fifteen
+delegated families cover the complete seventeen-family durable
+signal-ingress surface, with zero unmapped families and zero unmapped
+chain boundaries.
+
+Four write families are recorded explicitly in
+`POSTGRES_SIGNAL_INGRESS_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES`.
+`NotificationRepository.ensureForJob` and `CatalogRepository.upsertListing`'s
+manual "add to library" reference inserts carry forward unchanged from
+1.1.0. `HostedDeliveryRepository.retryDeadLetterInbox` is newly named here:
+the operator-driven dead-letter replay path, reached only through
+`DurableSignalIngressService.retryDeadLetter` and its operator-authorized
+API route, that `UPDATE`s an already-dead-lettered `inbox_messages` row
+back to `accepted`, inserts an `operator_retry` `hosted_delivery_receipts`
+row, and calls `AuditRepository.record` for an `audit_events`/
+`outbox_events` pair. No bound member qualifies it — `ingressEnqueueApply`
+is INSERT-only and never touches an existing `dead_letter` row, and
+`hostedDeliveryLeaseRecovery`'s own function only ever transitions rows
+forward toward `dead_letter`, never back — so this module leaves it
+explicitly open for a later boundary to close; `retryDeadLetter`'s own
+companion `enqueueServiceTask` call is a different matter and already
+covered, by the identical `signal_ingress_task_wake` family — only the
+inbox-reset/audit half of that method is not. Also newly named: the
+task-kind dispatch mechanism itself — the application-layer routing that
+decides which handler function runs for each of the seven
+`BACKGROUND_TASK_KINDS`, including `DurableSignalIngressProcessor
+.processBatch` for `hosted_delivery_recovery` — pure orchestration code
+with no PostgreSQL repository-write surface of its own to qualify.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-ingress-composition -- plan
+```
+
+Then independently verify the three convergence proofs, the coverage
+accounting, and — by calling all four members' own verify functions,
+deliberately accepting the redundant (idempotent, read-only)
+re-verification this causes for `tenantQueueWrite` (once directly, once
+transitively inside `ingressEnqueueApply`'s own verify) and for
+`hostedDeliveryLeaseRecovery` (once directly, once transitively inside
+`evaluationRepositoryComposition`'s own verify) — every composed
+boundary's live Postgres role, function, and RLS state:
+
+```bash
+YOINK_POSTGRES_URL=... npm run postgres:signal-ingress-composition -- verify
+```
+
+There is no `apply` command and no acknowledgement environment variable,
+the same as 1.1.0's own composition: this module creates no role, function,
+or receipt table, so there is nothing here for an acknowledgement to gate.
+The manifest records `signalIngressRepositoryParity: true`, closing that
+gap, while `hostedDeliveryHandlerRepositoryParity` and
+`allHandlerRepositoryParity` both remain explicit `false`.
+`noNewRoleCreated`, `noNewFunctionCreated`, and `noNewMutationPath` all stay
+`true` — this composition proves closure, not a fifth qualified writer.
+`mutationAuthority: true` reflects the union of the mutation-capable
+composed boundaries' own already-granted authority; `runtimeAuthority:
+false` and `activePrincipalCount: 0` confirm none of it is wired to a live
+principal. Hosted-delivery handler composition, the operator dead-letter
+inbox-reset, notification dispatch, and every request-repository family
+remain open. SQLite remains authoritative.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.

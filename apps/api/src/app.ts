@@ -158,6 +158,7 @@ import { postgresSignalAttributionReceiptCapabilityProjection } from "../../../p
 import { postgresSignalJobLifecycleCapabilityProjection } from "../../../packages/database/src/postgres-signal-job-lifecycle-apply.js";
 import { postgresSignalEvaluationRepositoryCompositionCapabilityProjection } from "../../../packages/database/src/postgres-signal-evaluation-repository-composition.js";
 import { postgresSignalIngressEnqueueApplyCapabilityProjection } from "../../../packages/database/src/postgres-signal-ingress-enqueue-apply.js";
+import { postgresSignalIngressCompositionCapabilityProjection } from "../../../packages/database/src/postgres-signal-ingress-composition.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -468,6 +469,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     postgresSignalEvaluationRepositoryCompositionCapabilityProjection();
   const postgresSignalIngressEnqueueApply =
     postgresSignalIngressEnqueueApplyCapabilityProjection();
+  const postgresSignalIngressComposition =
+    postgresSignalIngressCompositionCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -771,6 +774,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresSignalJobLifecycleApply,
           postgresSignalEvaluationRepositoryComposition,
           postgresSignalIngressEnqueueApply,
+          postgresSignalIngressComposition,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1651,7 +1655,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalAttributionReceiptApply,
             postgresSignalJobLifecycleApply,
             postgresSignalEvaluationRepositoryComposition,
-            postgresSignalIngressEnqueueApply
+            postgresSignalIngressEnqueueApply,
+            postgresSignalIngressComposition
           },
           capabilities: {
             catalog: true,
@@ -1838,6 +1843,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalJobLifecycleApply,
             postgresSignalEvaluationRepositoryComposition,
             postgresSignalIngressEnqueueApply,
+            postgresSignalIngressComposition,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

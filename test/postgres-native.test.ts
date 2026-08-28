@@ -317,6 +317,18 @@ import {
   postgresSignalEvaluationRepositoryCompositionCapabilityProjection,
   verifyPostgresSignalEvaluationRepositoryCompositionBoundary
 } from "../packages/database/src/postgres-signal-evaluation-repository-composition.js";
+import {
+  POSTGRES_SIGNAL_INGRESS_COMPOSITION_CHAIN_LENGTH,
+  POSTGRES_SIGNAL_INGRESS_COMPOSITION_CHAIN_ORDER,
+  POSTGRES_SIGNAL_INGRESS_COMPOSITION_CONTRACT_VERSION,
+  POSTGRES_SIGNAL_INGRESS_COMPOSITION_DELEGATED_BOUNDARIES,
+  POSTGRES_SIGNAL_INGRESS_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES,
+  POSTGRES_SIGNAL_INGRESS_COMPOSITION_OWN_FAMILIES,
+  POSTGRES_SIGNAL_INGRESS_COMPOSITION_OWN_FAMILY_COUNT,
+  buildPostgresSignalIngressCompositionManifest,
+  postgresSignalIngressCompositionCapabilityProjection,
+  verifyPostgresSignalIngressCompositionBoundary
+} from "../packages/database/src/postgres-signal-ingress-composition.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -1253,8 +1265,8 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, and durable signal-ingress enqueue writing", {
-  timeout: 1_200_000
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, durable signal-ingress enqueue writing, and the complete signal-ingress repository composition", {
+  timeout: 2_400_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
   const databaseDir = join(parent, "cluster");
@@ -3165,6 +3177,234 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.deepEqual(
       await verifyPostgresSignalEvaluationRepositoryCompositionBoundary(importer, evaluationRepositoryCompositionManifest),
       evaluationRepositoryCompositionManifest
+    );
+    })();
+    await (async () => {
+    // --- v1.3.0 (rung-3): complete signal-INGRESS-REPOSITORY composition proof ---
+    // buildPostgresSignalIngressCompositionManifest() and
+    // verifyPostgresSignalIngressCompositionBoundary() are, like rung-2's own
+    // composition module immediately above, fully parameterless: this module
+    // composes all four of its own members' zero-arg (DEFAULT namespace,
+    // schema "yoink_cutover") builders directly, offering no predecessor-
+    // manifest or namespace override of its own. The v1.1.0 section
+    // immediately above already stood up rung-1's full eleven-boundary chain,
+    // hostedDeliveryLeaseRecovery, tenantQueueWrite, and rung-2's own
+    // seventeen-family evaluation-repository chain under those exact
+    // defaults, inside this same live Postgres instance, on this same
+    // `importer` connection -- reused here rather than re-imported. What is
+    // still missing, to satisfy this module's own live verify fan-in, is
+    // ingressEnqueueApply -- applied here for the first time, under ITS OWN
+    // zero-arg defaults (which themselves resolve to the identical default
+    // attributionReceiptApply predecessor and default tenantQueueWrite
+    // manifest already live above).
+    await applyPostgresSignalIngressEnqueueApplyBoundary(importer);
+
+    const signalIngressCompositionManifest = buildPostgresSignalIngressCompositionManifest();
+    assert.deepEqual(
+      buildPostgresSignalIngressCompositionManifest(),
+      signalIngressCompositionManifest
+    );
+    assert.equal(
+      signalIngressCompositionManifest.contractVersion,
+      POSTGRES_SIGNAL_INGRESS_COMPOSITION_CONTRACT_VERSION
+    );
+    assert.match(signalIngressCompositionManifest.fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(
+      signalIngressCompositionManifest.schemaName,
+      signalIngressCompositionManifest.ingressEnqueueApplyManifest.schemaName
+    );
+    assert.equal(signalIngressCompositionManifest.schemaName, "yoink_cutover");
+
+    // Chain completeness: four fingerprints, exactly once, in the declared
+    // fan-in order (module header section 6), each matching what the
+    // corresponding member module's own zero-arg builder computes today --
+    // the same manifests this proof (or the v0.98/v1.1.0 sections above)
+    // just applied to the live default-namespaced deployment.
+    assert.equal(signalIngressCompositionManifest.chain.length, POSTGRES_SIGNAL_INGRESS_COMPOSITION_CHAIN_LENGTH);
+    assert.equal(signalIngressCompositionManifest.chainBoundaryCount, 4);
+    assert.deepEqual(
+      signalIngressCompositionManifest.chain.map((entry) => entry.boundary),
+      [...POSTGRES_SIGNAL_INGRESS_COMPOSITION_CHAIN_ORDER]
+    );
+    assert.equal(new Set(signalIngressCompositionManifest.chain.map((entry) => entry.boundary)).size, 4);
+    assert.equal(new Set(signalIngressCompositionManifest.chain.map((entry) => entry.fingerprint)).size, 4);
+    for (const entry of signalIngressCompositionManifest.chain) {
+      assert.match(entry.fingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(typeof entry.contractVersion, "number");
+      if (entry.boundary === "hostedDeliveryLeaseRecovery") {
+        assert.equal(entry.mutationAuthority, false);
+      } else {
+        assert.equal(entry.mutationAuthority, true);
+      }
+    }
+    assert.equal(
+      signalIngressCompositionManifest.chain.find((entry) => entry.boundary === "ingressEnqueueApply")?.fingerprint,
+      buildPostgresSignalIngressEnqueueApplyManifest().fingerprint
+    );
+    assert.equal(
+      signalIngressCompositionManifest.chain.find((entry) => entry.boundary === "tenantQueueWrite")?.fingerprint,
+      buildPostgresTenantQueueWriteManifest(signalIngressCompositionManifest.schemaName).fingerprint
+    );
+    assert.equal(
+      signalIngressCompositionManifest.chain.find((entry) => entry.boundary === "hostedDeliveryLeaseRecovery")
+        ?.fingerprint,
+      buildPostgresHostedDeliveryLeaseRecoveryManifest().fingerprint
+    );
+    assert.equal(
+      signalIngressCompositionManifest.chain.find((entry) => entry.boundary === "evaluationRepositoryComposition")
+        ?.fingerprint,
+      buildPostgresSignalEvaluationRepositoryCompositionManifest().fingerprint
+    );
+
+    // Three convergence proofs (module header section 4) -- one connected
+    // fingerprint graph, not four islands. All three are enforced fail-closed
+    // inside build() itself (in-process, no live database); re-asserted here
+    // from outside, same as the module's own contract test.
+    assert.equal(
+      signalIngressCompositionManifest.ingressEnqueueApplyManifest.attributionReceiptApplyManifestFingerprint,
+      signalIngressCompositionManifest.evaluationRepositoryCompositionManifest.attributionReceiptApplyManifest
+        .fingerprint
+    );
+    assert.equal(
+      buildPostgresSignalIngressEnqueueApplyManifest().attributionReceiptApplyManifestFingerprint,
+      buildPostgresSignalAttributionReceiptApplyManifest().fingerprint
+    );
+    assert.equal(
+      signalIngressCompositionManifest.ingressEnqueueApplyManifest.queueWriteManifestFingerprint,
+      signalIngressCompositionManifest.tenantQueueWriteManifest.fingerprint
+    );
+    assert.equal(
+      signalIngressCompositionManifest.hostedDeliveryLeaseRecoveryManifest.fingerprint,
+      signalIngressCompositionManifest.evaluationRepositoryCompositionManifest.hostedDeliveryLeaseRecoveryManifest
+        .fingerprint
+    );
+    assert.equal(signalIngressCompositionManifest.sharedAncestryConvergenceVerified, true);
+    assert.equal(signalIngressCompositionManifest.queueWriteConvergenceVerified, true);
+    assert.equal(signalIngressCompositionManifest.leaseRecoveryConvergenceVerified, true);
+
+    // Family coverage: two own families + rung-2's own fifteen delegated
+    // families = seventeen total, nothing unmapped either direction.
+    assert.equal(
+      POSTGRES_SIGNAL_INGRESS_COMPOSITION_OWN_FAMILIES.length,
+      POSTGRES_SIGNAL_INGRESS_COMPOSITION_OWN_FAMILY_COUNT
+    );
+    assert.equal(POSTGRES_SIGNAL_INGRESS_COMPOSITION_OWN_FAMILIES.length, 2);
+    assert.equal(signalIngressCompositionManifest.ownFamilyCount, 2);
+    assert.equal(signalIngressCompositionManifest.delegatedFamilyCount, 15);
+    assert.equal(signalIngressCompositionManifest.totalFamilyCount, 17);
+    assert.equal(signalIngressCompositionManifest.unmappedOwnFamilyCount, 0);
+    assert.equal(signalIngressCompositionManifest.unmappedChainBoundaryCount, 0);
+    assert.deepEqual(
+      [...POSTGRES_SIGNAL_INGRESS_COMPOSITION_DELEGATED_BOUNDARIES],
+      ["hostedDeliveryLeaseRecovery", "evaluationRepositoryComposition"]
+    );
+    const signalIngressCompositionCoveredBoundaries = new Set([
+      ...signalIngressCompositionManifest.ownFamilies.map((entry) => entry.boundary),
+      ...signalIngressCompositionManifest.delegatedBoundaries
+    ]);
+    assert.deepEqual(
+      [...signalIngressCompositionCoveredBoundaries].sort(),
+      [...POSTGRES_SIGNAL_INGRESS_COMPOSITION_CHAIN_ORDER].sort()
+    );
+    assert.deepEqual(
+      signalIngressCompositionManifest.ownFamilies.map((entry) => entry.family),
+      ["signal_ingress_accept_enqueue", "signal_ingress_task_wake"]
+    );
+    assert.ok(signalIngressCompositionManifest.knownOutOfScopeWrites.length >= 4);
+    assert.ok(
+      POSTGRES_SIGNAL_INGRESS_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES.some(
+        (entry) => entry.includes("retryDeadLetterInbox")
+      )
+    );
+
+    // Projection flags: the newly-closed flag (signalIngressRepositoryParity)
+    // is true; the still-open handler flags stay false; runtime authority
+    // stays false.
+    assert.equal(signalIngressCompositionManifest.noNewRoleCreated, true);
+    assert.equal(signalIngressCompositionManifest.noNewFunctionCreated, true);
+    assert.equal(signalIngressCompositionManifest.noNewMutationPath, true);
+    assert.equal(signalIngressCompositionManifest.signalEvaluationApplyRepositoryParity, true);
+    assert.equal(signalIngressCompositionManifest.signalEvaluationRepositoryParity, true);
+    assert.equal(signalIngressCompositionManifest.signalIngressRepositoryParity, true);
+    assert.equal(signalIngressCompositionManifest.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalIngressCompositionManifest.allHandlerRepositoryParity, false);
+    assert.equal(signalIngressCompositionManifest.mutationAuthority, true);
+    assert.equal(signalIngressCompositionManifest.activePrincipalCount, 0);
+    assert.equal(signalIngressCompositionManifest.runtimeAuthority, false);
+
+    const signalIngressCompositionCapability = postgresSignalIngressCompositionCapabilityProjection();
+    assert.deepEqual(
+      postgresSignalIngressCompositionCapabilityProjection(),
+      signalIngressCompositionCapability
+    );
+    assert.equal(
+      signalIngressCompositionCapability.contractVersion,
+      POSTGRES_SIGNAL_INGRESS_COMPOSITION_CONTRACT_VERSION
+    );
+    assert.equal(signalIngressCompositionCapability.deterministicManifestImplemented, true);
+    assert.equal(signalIngressCompositionCapability.sharedAncestryConvergenceVerified, true);
+    assert.equal(signalIngressCompositionCapability.queueWriteConvergenceVerified, true);
+    assert.equal(signalIngressCompositionCapability.leaseRecoveryConvergenceVerified, true);
+    assert.equal(signalIngressCompositionCapability.chainBoundaryCount, 4);
+    assert.equal(signalIngressCompositionCapability.ownFamilyCount, 2);
+    assert.equal(signalIngressCompositionCapability.delegatedFamilyCount, 15);
+    assert.equal(signalIngressCompositionCapability.totalFamilyCount, 17);
+    assert.equal(signalIngressCompositionCapability.unmappedOwnFamilyCount, 0);
+    assert.equal(signalIngressCompositionCapability.noNewRoleCreated, true);
+    assert.equal(signalIngressCompositionCapability.noNewFunctionCreated, true);
+    assert.equal(signalIngressCompositionCapability.noNewMutationPath, true);
+    assert.equal(signalIngressCompositionCapability.signalEvaluationApplyRepositoryParity, true);
+    assert.equal(signalIngressCompositionCapability.signalEvaluationRepositoryParity, true);
+    assert.equal(signalIngressCompositionCapability.signalIngressRepositoryParity, true);
+    assert.equal(signalIngressCompositionCapability.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalIngressCompositionCapability.allHandlerRepositoryParity, false);
+    assert.equal(signalIngressCompositionCapability.activePrincipalCount, 0);
+    assert.equal(signalIngressCompositionCapability.activeRuntimeRoleApplied, false);
+    assert.equal(signalIngressCompositionCapability.mutationAuthority, true);
+    assert.equal(signalIngressCompositionCapability.runtimeAuthority, false);
+    assert.equal(signalIngressCompositionCapability.productionReady, false);
+    assert.match(signalIngressCompositionCapability.roleTemplateFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(
+      signalIngressCompositionCapability.roleTemplateFingerprint,
+      signalIngressCompositionManifest.fingerprint
+    );
+
+    // verifyPostgresSignalIngressCompositionBoundary against the live,
+    // freshly-qualified default-namespace deployment must PASS: it re-derives
+    // the manifest (catching any of the three convergence proofs or coverage-
+    // accounting drift) and then calls all FOUR members' own live verify
+    // functions in turn (module header section 6 -- a fan-in, deliberately
+    // re-verifying tenantQueueWrite and hostedDeliveryLeaseRecovery once
+    // transitively too).
+    assert.deepEqual(
+      await verifyPostgresSignalIngressCompositionBoundary(importer, signalIngressCompositionManifest),
+      signalIngressCompositionManifest
+    );
+
+    // Negative proof: tamper this module's own newly-closed member --
+    // ingressEnqueueApply's live SECURITY DEFINER function -- and confirm the
+    // composition verify fails closed, mirroring the ALTER FUNCTION ...
+    // STABLE / VOLATILE receipt-tamper precedent rung-1's and rung-2's own
+    // composition proofs used above. The failure surfaces from the cascaded
+    // verifyPostgresSignalIngressEnqueueApplyBoundary call, not from this
+    // module's own (purely in-process) convergence/coverage checks.
+    await importer.query(
+      `ALTER FUNCTION "${signalIngressCompositionManifest.schemaName}"."${POSTGRES_SIGNAL_INGRESS_ENQUEUE_APPLY_FUNCTION}"(
+         text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresSignalIngressCompositionBoundary(importer, signalIngressCompositionManifest),
+      /qualified security-definer function is incomplete|drifted from its receipt/
+    );
+    await importer.query(
+      `ALTER FUNCTION "${signalIngressCompositionManifest.schemaName}"."${POSTGRES_SIGNAL_INGRESS_ENQUEUE_APPLY_FUNCTION}"(
+         text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.deepEqual(
+      await verifyPostgresSignalIngressCompositionBoundary(importer, signalIngressCompositionManifest),
+      signalIngressCompositionManifest
     );
     })();
     const qualifiedSignalTargetQualificationManifest =
