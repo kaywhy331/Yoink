@@ -51,6 +51,7 @@ import { postgresSignalJobLifecycleCapabilityProjection } from "../packages/data
 import { postgresSignalEvaluationRepositoryCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-evaluation-repository-composition.js";
 import { postgresSignalIngressEnqueueApplyCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-enqueue-apply.js";
 import { postgresSignalIngressCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-composition.js";
+import { postgresSignalDeadLetterResetCapabilityProjection } from "../packages/database/src/postgres-signal-dead-letter-reset-apply.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -170,6 +171,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalEvaluationRepositoryComposition: ReturnType<typeof postgresSignalEvaluationRepositoryCompositionCapabilityProjection>;
         postgresSignalIngressEnqueueApply: ReturnType<typeof postgresSignalIngressEnqueueApplyCapabilityProjection>;
         postgresSignalIngressComposition: ReturnType<typeof postgresSignalIngressCompositionCapabilityProjection>;
+        postgresSignalDeadLetterResetApply: ReturnType<typeof postgresSignalDeadLetterResetCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -328,6 +330,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalIngressComposition,
       postgresSignalIngressCompositionCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalDeadLetterResetApply,
+      postgresSignalDeadLetterResetCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -440,6 +446,10 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Complete durable signal-ingress composition/);
     assert.match(cutoverText, /now compose into one deterministically verified durable-ingress repository/);
     assert.match(cutoverText, /closing durable signal-ingress repository parity while the final handler composition remains open/);
+    assert.match(cutoverText, /Server-bound dead-letter inbox reset/);
+    assert.match(cutoverText, /twenty-sixth independently inactive NOLOGIN boundary/);
+    assert.match(cutoverText, /a legitimately re-dead-lettered message may be reset again/);
+    assert.match(cutoverText, /closing the dead-letter-reset family while the final handler composition remains open/);
     assert.match(cutoverText, /Server-bound attribution-receipt append/);
     assert.match(cutoverText, /twenty-third independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /notification dispatch and post-creation job lifecycle remain open/);

@@ -306,6 +306,17 @@ import {
   type PostgresSignalIngressAcceptPayload
 } from "../packages/database/src/postgres-signal-ingress-enqueue-apply.js";
 import {
+  NodePostgresSignalDeadLetterResetApplyDatabase,
+  POSTGRES_SIGNAL_DEAD_LETTER_RESET_APPLY_FUNCTION,
+  POSTGRES_SIGNAL_DEAD_LETTER_RESET_EVENT_TYPE,
+  applyPostgresSignalDeadLetterResetApplyBoundary,
+  buildPostgresSignalDeadLetterResetApplyManifest,
+  buildPostgresSignalDeadLetterResetRequestId,
+  normalizedPostgresSignalDeadLetterResetPayload,
+  verifyPostgresSignalDeadLetterResetApplyBoundary,
+  type PostgresSignalDeadLetterResetPayload
+} from "../packages/database/src/postgres-signal-dead-letter-reset-apply.js";
+import {
   POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_LENGTH,
   POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_ORDER,
   POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CONTRACT_VERSION,
@@ -430,6 +441,8 @@ const NATIVE_JOB_LIFECYCLE_APPLY_ROLE_NAMESPACE =
   "yoink_native_job_lifecycle";
 const NATIVE_INGRESS_ENQUEUE_APPLY_ROLE_NAMESPACE =
   "yoink_native_ingress_enqueue";
+const NATIVE_DEAD_LETTER_RESET_APPLY_ROLE_NAMESPACE =
+  "yoink_native_dead_letter_reset";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1265,7 +1278,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, durable signal-ingress enqueue writing, and the complete signal-ingress repository composition", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, durable signal-ingress enqueue writing, bounded operator dead-letter inbox-reset writing, and the complete signal-ingress repository composition", {
   timeout: 2_400_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1499,6 +1512,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalIngressEnqueueC: NodePostgresSignalIngressEnqueueApplyDatabase | null = null;
   let signalIngressEnqueueUnmapped: NodePostgresSignalIngressEnqueueApplyDatabase | null = null;
   let signalIngressEnqueueDirectClient: Client | null = null;
+  let signalDeadLetterResetA: NodePostgresSignalDeadLetterResetApplyDatabase | null = null;
+  let signalDeadLetterResetB: NodePostgresSignalDeadLetterResetApplyDatabase | null = null;
+  let signalDeadLetterResetC: NodePostgresSignalDeadLetterResetApplyDatabase | null = null;
+  let signalDeadLetterResetUnmapped: NodePostgresSignalDeadLetterResetApplyDatabase | null = null;
+  let signalDeadLetterResetDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -4411,6 +4429,125 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalIngressEnqueueBoundary
     );
+
+    // signal-dead-letter-reset-apply (v1.4.0) chains onto job-lifecycle-
+    // apply's OWN qualified manifest -- the module's own explicit
+    // predecessor (module header §0/§1) -- reusing
+    // `qualifiedSignalJobLifecycleManifest`, built above, rather than
+    // re-deriving a fresh one.
+    const qualifiedSignalDeadLetterResetManifest =
+      buildPostgresSignalDeadLetterResetApplyManifest(
+        qualifiedSignalJobLifecycleManifest,
+        NATIVE_DEAD_LETTER_RESET_APPLY_ROLE_NAMESPACE
+      );
+    assert.equal(
+      qualifiedSignalDeadLetterResetManifest.jobLifecycleApplyManifestFingerprint,
+      qualifiedSignalJobLifecycleManifest.fingerprint
+    );
+    assert.equal(
+      qualifiedSignalDeadLetterResetManifest.predecessorManifest.fingerprint,
+      qualifiedSignalJobLifecycleManifest.fingerprint
+    );
+    assert.equal(
+      qualifiedSignalDeadLetterResetManifest.predecessorManifest.schemaName,
+      qualifiedSignalJobLifecycleManifest.schemaName
+    );
+    assert.notEqual(
+      qualifiedSignalDeadLetterResetManifest.deadLetterResetRoleNamespace,
+      qualifiedSignalJobLifecycleManifest.jobLifecycleRoleNamespace
+    );
+    const signalDeadLetterResetBoundary =
+      await applyPostgresSignalDeadLetterResetApplyBoundary(
+        importer,
+        qualifiedSignalDeadLetterResetManifest,
+        new Date("2026-08-25T16:59:34.000Z").getTime()
+      );
+    assert.equal(signalDeadLetterResetBoundary.protectedTenantTableCount, 4);
+    assert.equal(signalDeadLetterResetBoundary.forcedRlsTableCount, 4);
+    assert.equal(signalDeadLetterResetBoundary.mutationTableCount, 4);
+    assert.equal(signalDeadLetterResetBoundary.directTableGrantCount, 0);
+    assert.equal(signalDeadLetterResetBoundary.functionGrantCount, 1);
+    assert.equal(signalDeadLetterResetBoundary.membershipCount, 0);
+    assert.equal(signalDeadLetterResetBoundary.activePrincipalCount, 0);
+    assert.equal(signalDeadLetterResetBoundary.metadata.contractVersion, 1);
+    assert.equal(signalDeadLetterResetBoundary.metadata.cutoverContractVersion, 3);
+    assert.equal(signalDeadLetterResetBoundary.metadata.jobLifecycleApplyContractVersion, 1);
+    assert.equal(signalDeadLetterResetBoundary.metadata.operationCount, 1);
+    // This boundary's own SQL function touches exactly the four tables
+    // `retryDeadLetterInbox`'s real transaction writes -- never
+    // `action_jobs`/`background_task*`, both genuinely out of scope.
+    assert.deepEqual(
+      qualifiedSignalDeadLetterResetManifest.deadLetterResetRole.protectedTenantTableNames,
+      ["audit_events", "hosted_delivery_receipts", "inbox_messages", "outbox_events"]
+    );
+    assert.deepEqual(
+      qualifiedSignalDeadLetterResetManifest.deadLetterResetRole.mutationTableNames,
+      ["audit_events", "hosted_delivery_receipts", "inbox_messages", "outbox_events"]
+    );
+    assert.equal(qualifiedSignalDeadLetterResetManifest.deadLetterResetRole.login, false);
+    assert.equal(qualifiedSignalDeadLetterResetManifest.deadLetterResetRole.inherit, false);
+    assert.equal(qualifiedSignalDeadLetterResetManifest.deadLetterResetRole.bypassRls, false);
+    assert.equal(qualifiedSignalDeadLetterResetManifest.deadLetterResetRole.directTableAccess, false);
+    assert.equal(signalDeadLetterResetBoundary.metadata.hardcodedEventType, "signal_event_v1");
+    assert.equal(
+      signalDeadLetterResetBoundary.metadata.hardcodedEventType,
+      POSTGRES_SIGNAL_DEAD_LETTER_RESET_EVENT_TYPE
+    );
+    // Both hardcoded event-type literals -- this boundary's own and
+    // ingress-enqueue-apply's -- must agree: the SAME `inbox_messages` row
+    // this boundary resets is the ONE ingress-enqueue-apply ever creates.
+    assert.equal(POSTGRES_SIGNAL_DEAD_LETTER_RESET_EVENT_TYPE, POSTGRES_SIGNAL_INGRESS_EVENT_TYPE);
+    assert.equal(signalDeadLetterResetBoundary.metadata.serverBoundPrincipalLookup, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.workerManagePermissionRevalidated, false);
+    assert.equal(signalDeadLetterResetBoundary.metadata.inboxOwnershipRevalidated, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.deadLetterStatePreconditionEnforced, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.repeatedResetAfterReDeadLetterAllowed, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.deterministicRequestIdentity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.auditedReplayGraphIdempotency, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.atomicInboxReceiptAuditOutboxMutation, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.databaseOwnedTimestamps, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.deterministicReceiptIdentity, true);
+    // hosted_delivery_receipts/inbox_messages are not one of the five
+    // domains the shared writer-lock protocol guards -- same posture as
+    // ingress-enqueue-apply's own identical two tables.
+    assert.equal(signalDeadLetterResetBoundary.metadata.writerLockProtocolConsumed, false);
+    assert.equal(signalDeadLetterResetBoundary.metadata.sqliteValidationParity, true);
+    // World-state carried forward unchanged from job-lifecycle-apply
+    // (v1.00), plus this boundary's own new closure.
+    assert.equal(signalDeadLetterResetBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.sourceStatusWriterParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.sourceSyncWriterParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.catalogImportWriterParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.connectionProvisioningWriterParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.sourceWriterParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.retailerQualificationWriterParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.missionPolicyWriterParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.settingsWriterParity, false);
+    assert.equal(signalDeadLetterResetBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalDeadLetterResetBoundary.metadata.reservationWriterParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.attributionPolicyParity, true);
+    assert.equal(signalDeadLetterResetBoundary.metadata.jobLifecycleWriterParity, true);
+    // The shared five-domain lock protocol still has non-consuming writer
+    // families, so the protocol-wide aggregate cannot close from this
+    // boundary alone.
+    assert.equal(signalDeadLetterResetBoundary.metadata.writerLockProtocolParity, false);
+    // Closes `HostedDeliveryRepository.retryDeadLetterInbox` -- the third,
+    // and per module header the LAST, out-of-scope write item
+    // `POSTGRES_SIGNAL_INGRESS_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES` names.
+    assert.equal(signalDeadLetterResetBoundary.metadata.deadLetterResetWriterParity, true);
+    // Stays false until a future composition rung binds this module in.
+    assert.equal(signalDeadLetterResetBoundary.metadata.signalIngressRepositoryParity, false);
+    assert.equal(signalDeadLetterResetBoundary.metadata.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalDeadLetterResetBoundary.metadata.allHandlerRepositoryParity, false);
+    assert.equal(signalDeadLetterResetBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalDeadLetterResetBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalDeadLetterResetApplyBoundary(
+        importer,
+        qualifiedSignalDeadLetterResetManifest
+      ),
+      signalDeadLetterResetBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -4799,6 +4936,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_INGRESS_ENQUEUE_APPLY_ROLE_NAMESPACE,
       queueWriteManifest
     );
+    const signalDeadLetterResetManifest = buildPostgresSignalDeadLetterResetApplyManifest(
+      signalJobLifecycleManifest,
+      NATIVE_DEAD_LETTER_RESET_APPLY_ROLE_NAMESPACE
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -4929,6 +5070,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalIngressEnqueueManifest.ingressAcceptRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalDeadLetterResetManifest.deadLetterResetRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -20196,6 +20341,563 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalIngressEnqueueUnmapped = null;
     })();
 
+    await (async () => {
+    // --- v1.4.0: operator dead-letter INBOX-RESET writer proof ---
+    // Closes `HostedDeliveryRepository.retryDeadLetterInbox` -- the third,
+    // and per the module's own header the LAST, unqualified write family
+    // `POSTGRES_SIGNAL_INGRESS_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES` names
+    // (out-of-scope item 3). Resets exactly one dead-lettered
+    // `inbox_messages` row back to `accepted`, appends one
+    // `hosted_delivery_receipts` retry row plus the atomic audit/outbox
+    // pair. `eventType` is a hardcoded SQL literal, never caller input.
+    // Idempotency is an AUDITED-REPLAY-GRAPH, deliberately WITHOUT a
+    // current-row-state match (module header §2) -- proved below by
+    // replaying the very first request again AFTER the same message has
+    // legitimately cycled through a second dead-letter/reset pair.
+    const deadLetterResetDatabase = (
+      principalRole: string
+    ) => new NodePostgresSignalDeadLetterResetApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalDeadLetterResetManifest, { maxConnections: 1 });
+    signalDeadLetterResetA = deadLetterResetDatabase(NATIVE_PRINCIPAL_A);
+    signalDeadLetterResetB = deadLetterResetDatabase(NATIVE_PRINCIPAL_B);
+    signalDeadLetterResetC = deadLetterResetDatabase(NATIVE_PRINCIPAL_C);
+    signalDeadLetterResetUnmapped = deadLetterResetDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const deadLetterResetPrincipal = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const deadLetterResetNow = Date.now();
+
+    // Seeds a dead-lettered (or otherwise-stated) `inbox_messages` row for
+    // the native principal directly via the superuser `first` connection --
+    // this boundary is proved against the raw table shape, not through the
+    // SQLite repository. Column shape matches `inbox_messages`'s own
+    // migration (migrations.ts) exactly, including the lease/error/
+    // processed fields a real `retryInbox`/`recoverExpiredLeases` dead-
+    // letter leaves populated, so the reset's own field-clearing is a
+    // meaningful, non-trivial assertion below.
+    const seedDeadLetterInbox = async (input: {
+      suffix: string;
+      state: string;
+      deliveryAttempts?: number;
+      leaseCapabilityHash?: string;
+      leaseExpiresAt?: string;
+      nextAttemptAt?: string;
+      lastErrorCode?: string;
+      processedAt?: string;
+    }): Promise<{ id: string; receivedAt: string }> => {
+      const id = `native_dead_letter_reset_${input.suffix}_inbox`;
+      const messageKey = `native-dead-letter-reset-message-key-${input.suffix}`;
+      const payloadJson = JSON.stringify({ proof: `native_dead_letter_reset_${input.suffix}` });
+      const payloadHash = stableHash("hosted_delivery_payload_v1", payloadJson);
+      const receivedAt = new Date(deadLetterResetNow - 60_000).toISOString();
+      const updatedAt = new Date(deadLetterResetNow - 5_000).toISOString();
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."inbox_messages"(
+           id, tenant_id, user_id, source, message_key, event_type,
+           payload_hash, payload_json, state, delivery_attempts,
+           lease_capability_hash, lease_expires_at, next_attempt_at,
+           last_error_code, received_at, processed_at, updated_at
+         ) VALUES ($1, $2, $3, 'trackalacker', $4, 'signal_event_v1',
+                   $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+        [
+          id, NATIVE_TENANT, NATIVE_USER, messageKey, payloadHash, payloadJson,
+          input.state, input.deliveryAttempts ?? 0,
+          input.leaseCapabilityHash ?? "", input.leaseExpiresAt ?? "",
+          input.nextAttemptAt ?? "", input.lastErrorCode ?? "",
+          receivedAt, input.processedAt ?? "", updatedAt
+        ]
+      );
+      return { id, receivedAt };
+    };
+    const deadLetterResetInboxRow = async (id: string) => (await first!.query<{
+      state: string;
+      deliveryAttempts: number;
+      leaseCapabilityHash: string;
+      leaseExpiresAt: string;
+      nextAttemptAt: string;
+      lastErrorCode: string;
+      processedAt: string;
+      updatedAt: string;
+      receivedAt: string;
+    }>(
+      `SELECT state, (delivery_attempts)::int AS "deliveryAttempts",
+              lease_capability_hash AS "leaseCapabilityHash",
+              lease_expires_at AS "leaseExpiresAt", next_attempt_at AS "nextAttemptAt",
+              last_error_code AS "lastErrorCode", processed_at AS "processedAt",
+              updated_at AS "updatedAt", received_at AS "receivedAt"
+       FROM "${NATIVE_SCHEMA}"."inbox_messages" WHERE id = $1`,
+      [id]
+    )).rows[0];
+    // Graph counts keyed off the message id (never the caller-chosen
+    // correlationId alone) -- `hosted_delivery_receipts.message_id` directly,
+    // and `audit_events`/`outbox_events` via the replay-wrapper's own
+    // `result.deadLetter.id`, matching how this boundary's own SQL derives
+    // both `audit_id`/`outbox_id` from `request_id`, not from the message.
+    const deadLetterResetGraphCounts = async (messageId: string): Promise<{
+      receipts: number;
+      audits: number;
+      outboxes: number;
+    }> => {
+      const row = (await first!.query<{
+        receipts: string | number | bigint;
+        audits: string | number | bigint;
+        outboxes: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."hosted_delivery_receipts"
+            WHERE message_id = $1 AND direction = 'inbox' AND disposition = 'retry'
+              AND reason_code = 'operator_retry') AS receipts,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE event_type = 'signal_inbox_retried'
+              AND (data_json::jsonb -> 'result' -> 'deadLetter' ->> 'id') = $1) AS audits,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE event_type = 'signal_inbox_retried'
+              AND (payload_json::jsonb -> 'data' -> 'result' -> 'deadLetter' ->> 'id') = $1) AS outboxes`,
+        [messageId]
+      )).rows[0]!;
+      return {
+        receipts: Number(row.receipts),
+        audits: Number(row.audits),
+        outboxes: Number(row.outboxes)
+      };
+    };
+    const applyDeadLetterReset = (
+      database: NodePostgresSignalDeadLetterResetApplyDatabase,
+      payload: PostgresSignalDeadLetterResetPayload
+    ) => database.resetDeadLetterInbox(
+      deadLetterResetPrincipal,
+      buildPostgresSignalDeadLetterResetRequestId(deadLetterResetPrincipal, payload),
+      payload
+    );
+
+    // (a) Fresh reset: full mutation-set assertions. Also the base for the
+    // immutable-replay, receipt-tamper, non-dead-letter-state, and
+    // repeated-reset-after-re-dead-letter proofs below.
+    const freshFixture = await seedDeadLetterInbox({
+      suffix: "fresh",
+      state: "dead_letter",
+      deliveryAttempts: 20,
+      leaseCapabilityHash: "stale-lease-capability-hash",
+      leaseExpiresAt: new Date(deadLetterResetNow - 120_000).toISOString(),
+      nextAttemptAt: new Date(deadLetterResetNow - 90_000).toISOString(),
+      lastErrorCode: "lease_expired",
+      processedAt: new Date(deadLetterResetNow - 200_000).toISOString()
+    });
+    assert.deepEqual(
+      await deadLetterResetGraphCounts(freshFixture.id),
+      { receipts: 0, audits: 0, outboxes: 0 }
+    );
+    const freshCorrelationId = "native_dead_letter_reset_fresh_correlation";
+    const freshPayload = normalizedPostgresSignalDeadLetterResetPayload({
+      inboxMessageId: freshFixture.id,
+      correlationId: freshCorrelationId
+    });
+    const freshRequestId = buildPostgresSignalDeadLetterResetRequestId(
+      deadLetterResetPrincipal, freshPayload
+    );
+    assert.match(freshRequestId, /^dead_letter_reset_[a-f0-9]{32}$/);
+    const freshResult = await applyDeadLetterReset(signalDeadLetterResetA, freshPayload);
+    assert.equal(freshResult.contractVersion, 1);
+    assert.equal(freshResult.operation, "reset_dead_letter_inbox");
+    assert.equal(freshResult.requestId, freshRequestId);
+    assert.match(freshResult.requestFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(freshResult.outcome, "applied");
+    assert.equal(freshResult.mutationApplied, true);
+    assert.equal(freshResult.idempotentReplay, false);
+    assert.equal(freshResult.mutationStatementCount, 4);
+    assert.equal(freshResult.mutationRowCount, 4);
+    assert.equal(freshResult.inboxMutated, true);
+    assert.equal(freshResult.receiptMutated, true);
+    assert.equal(freshResult.auditMutated, true);
+    assert.equal(freshResult.outboxMutated, true);
+    assert.equal(freshResult.deadLetter.id, freshFixture.id);
+    assert.equal(freshResult.deadLetter.eventType, "signal_event_v1");
+    assert.equal(freshResult.deadLetter.attempt, 0);
+    assert.equal(freshResult.deadLetter.lastErrorCode, "");
+    assert.equal(freshResult.deadLetter.receivedAt, freshFixture.receivedAt);
+    assert.ok(freshResult.deadLetter.updatedAt.length > 0);
+    assert.equal(freshResult.deadLetter.privacyClassification, "operational_aggregate");
+    assert.equal(freshResult.deadLetterResetWriterParity, true);
+    assert.equal(freshResult.signalIngressRepositoryParity, false);
+    assert.equal(freshResult.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(freshResult.allHandlerRepositoryParity, false);
+    assert.equal(freshResult.writerLockProtocolParity, false);
+    assert.equal(freshResult.jobLifecycleWriterParity, true);
+    assert.equal(freshResult.mutationAuthority, true);
+    assert.equal(freshResult.runtimeAuthority, false);
+
+    // Exact reset field set -- every mutated column, byte-for-byte.
+    const freshRowAfter = await deadLetterResetInboxRow(freshFixture.id);
+    assert.ok(freshRowAfter);
+    assert.equal(freshRowAfter?.state, "accepted");
+    assert.equal(freshRowAfter?.deliveryAttempts, 0);
+    assert.equal(freshRowAfter?.leaseCapabilityHash, "");
+    assert.equal(freshRowAfter?.leaseExpiresAt, "");
+    assert.equal(freshRowAfter?.nextAttemptAt, "");
+    assert.equal(freshRowAfter?.lastErrorCode, "");
+    assert.equal(freshRowAfter?.processedAt, "");
+    assert.equal(freshRowAfter?.updatedAt, freshResult.deadLetter.updatedAt);
+    assert.equal(freshRowAfter?.receivedAt, freshFixture.receivedAt);
+
+    // Exactly one fresh receipt row, its `receipt_hash` reproducing the
+    // REAL `stableHash` helper byte-for-byte -- not merely a sha256 shape.
+    const freshReceiptRows = (await first!.query<{
+      direction: string;
+      messageId: string;
+      disposition: string;
+      attempt: number;
+      reasonCode: string;
+      receiptHash: string;
+      createdAt: string;
+    }>(
+      `SELECT direction, message_id AS "messageId", disposition, (attempt)::int AS attempt,
+              reason_code AS "reasonCode", receipt_hash AS "receiptHash", created_at AS "createdAt"
+       FROM "${NATIVE_SCHEMA}"."hosted_delivery_receipts"
+       WHERE message_id = $1 AND disposition = 'retry' AND reason_code = 'operator_retry'`,
+      [freshFixture.id]
+    )).rows;
+    assert.equal(freshReceiptRows.length, 1);
+    assert.equal(freshReceiptRows[0]?.direction, "inbox");
+    assert.equal(freshReceiptRows[0]?.attempt, 0);
+    assert.equal(freshReceiptRows[0]?.createdAt, freshResult.deadLetter.updatedAt);
+    const expectedFreshReceiptHash = stableHash(
+      "hosted_delivery_receipt_v1", NATIVE_TENANT, NATIVE_USER, "inbox",
+      freshFixture.id, "retry", 0, "operator_retry", freshResult.deadLetter.updatedAt
+    );
+    assert.equal(freshReceiptRows[0]?.receiptHash, expectedFreshReceiptHash);
+    assert.match(freshReceiptRows[0]?.receiptHash ?? "", /^[a-f0-9]{64}$/);
+
+    // Exactly one fresh audit + one fresh outbox row, atomically.
+    assert.deepEqual(
+      await deadLetterResetGraphCounts(freshFixture.id),
+      { receipts: 1, audits: 1, outboxes: 1 }
+    );
+    const freshAuditRow = (await first!.query<{
+      id: string;
+      correlationId: string;
+      eventType: string;
+      reasonCode: string;
+      message: string;
+      dataJson: string;
+    }>(
+      `SELECT id, correlation_id AS "correlationId", event_type AS "eventType",
+              reason_code AS "reasonCode", message, data_json AS "dataJson"
+       FROM "${NATIVE_SCHEMA}"."audit_events"
+       WHERE correlation_id = $1 AND event_type = 'signal_inbox_retried'`,
+      [freshCorrelationId]
+    )).rows[0]!;
+    assert.ok(freshAuditRow);
+    assert.equal(freshAuditRow.reasonCode, "operator_retry");
+    assert.equal(
+      freshAuditRow.message,
+      "A dead-lettered signal message was reset for bounded worker evaluation."
+    );
+    const freshAuditData = JSON.parse(freshAuditRow.dataJson) as Record<string, unknown>;
+    assert.equal(freshAuditData.contractVersion, 1);
+    assert.equal(freshAuditData.operation, "reset_dead_letter_inbox");
+    assert.equal(freshAuditData.requestId, freshRequestId);
+    assert.equal(freshAuditData.requestFingerprint, freshResult.requestFingerprint);
+    assert.deepEqual(freshAuditData.result, freshResult);
+    const freshOutboxRow = (await first!.query<{
+      aggregateType: string;
+      aggregateId: string;
+      eventType: string;
+      payloadJson: string;
+    }>(
+      `SELECT aggregate_type AS "aggregateType", aggregate_id AS "aggregateId",
+              event_type AS "eventType", payload_json AS "payloadJson"
+       FROM "${NATIVE_SCHEMA}"."outbox_events"
+       WHERE aggregate_id = $1 AND event_type = 'signal_inbox_retried'`,
+      [freshCorrelationId]
+    )).rows[0]!;
+    assert.ok(freshOutboxRow);
+    assert.equal(freshOutboxRow.aggregateType, "hosted_inbox");
+    const freshOutboxPayload = JSON.parse(freshOutboxRow.payloadJson) as Record<string, unknown>;
+    assert.equal(freshOutboxPayload.auditId, freshAuditRow.id);
+    assert.equal(freshOutboxPayload.correlationId, freshCorrelationId);
+    assert.equal(freshOutboxPayload.reasonCode, "operator_retry");
+    assert.equal(
+      freshOutboxPayload.message,
+      "A dead-lettered signal message was reset for bounded worker evaluation."
+    );
+    assert.deepEqual(freshOutboxPayload.data, freshAuditData);
+
+    // (b) Immutable replay: the SAME request returns the ORIGINAL result,
+    // zero further writes.
+    const freshReplayResult = await applyDeadLetterReset(signalDeadLetterResetA, freshPayload);
+    assert.equal(freshReplayResult.outcome, "already_applied");
+    assert.equal(freshReplayResult.mutationApplied, false);
+    assert.equal(freshReplayResult.idempotentReplay, true);
+    assert.equal(freshReplayResult.mutationStatementCount, 0);
+    assert.equal(freshReplayResult.mutationRowCount, 0);
+    assert.equal(freshReplayResult.inboxMutated, false);
+    assert.equal(freshReplayResult.receiptMutated, false);
+    assert.equal(freshReplayResult.auditMutated, false);
+    assert.equal(freshReplayResult.outboxMutated, false);
+    assert.equal(freshReplayResult.requestId, freshResult.requestId);
+    assert.equal(freshReplayResult.requestFingerprint, freshResult.requestFingerprint);
+    assert.deepEqual(freshReplayResult.deadLetter, freshResult.deadLetter);
+    assert.deepEqual(
+      await deadLetterResetGraphCounts(freshFixture.id),
+      { receipts: 1, audits: 1, outboxes: 1 }
+    );
+
+    // (c) Receipt/audit tamper: corrupt the stored audit row backing this
+    // exact request id -- the replay must fail closed (40001) rather than
+    // trust the (now-diverged) stored graph; restoring the original row
+    // makes the SAME replay succeed again, returning the original result.
+    const freshAuditRowForTamper = (await first!.query<{ id: string; message: string }>(
+      `SELECT id, message FROM "${NATIVE_SCHEMA}"."audit_events"
+       WHERE correlation_id = $1 AND event_type = 'signal_inbox_retried'`,
+      [freshCorrelationId]
+    )).rows[0]!;
+    await first!.query(
+      `UPDATE "${NATIVE_SCHEMA}"."audit_events" SET message = $2 WHERE id = $1`,
+      [freshAuditRowForTamper.id, "Tampered dead-letter reset replay message."]
+    );
+    await assert.rejects(
+      applyDeadLetterReset(signalDeadLetterResetA, freshPayload),
+      /replay graph changed/
+    );
+    await first!.query(
+      `UPDATE "${NATIVE_SCHEMA}"."audit_events" SET message = $2 WHERE id = $1`,
+      [freshAuditRowForTamper.id, freshAuditRowForTamper.message]
+    );
+    const freshRestoredReplay = await applyDeadLetterReset(signalDeadLetterResetA, freshPayload);
+    assert.equal(freshRestoredReplay.outcome, "already_applied");
+    assert.deepEqual(freshRestoredReplay.deadLetter, freshResult.deadLetter);
+    assert.deepEqual(
+      await deadLetterResetGraphCounts(freshFixture.id),
+      { receipts: 1, audits: 1, outboxes: 1 }
+    );
+
+    // (d) Non-dead_letter state -> fail-closed, zero writes. Reuses the
+    // SAME message, now sitting in `accepted` after the reset above, with a
+    // brand-new correlationId (a genuinely different request, not a
+    // replay) -- exercises the real `state <> 'dead_letter'` precondition,
+    // mirroring SQLite's own 409 exactly.
+    const notDeadLetterPayload = normalizedPostgresSignalDeadLetterResetPayload({
+      inboxMessageId: freshFixture.id,
+      correlationId: "native_dead_letter_reset_not_dead_correlation"
+    });
+    await assert.rejects(
+      applyDeadLetterReset(signalDeadLetterResetA, notDeadLetterPayload),
+      /requires a dead-lettered inbox message/
+    );
+    assert.deepEqual(
+      await deadLetterResetGraphCounts(freshFixture.id),
+      { receipts: 1, audits: 1, outboxes: 1 }
+    );
+    assert.equal((await deadLetterResetInboxRow(freshFixture.id))?.state, "accepted");
+
+    // (e) Missing message -> fail-closed.
+    const missingPayload = normalizedPostgresSignalDeadLetterResetPayload({
+      inboxMessageId: "native_dead_letter_reset_missing_message",
+      correlationId: "native_dead_letter_reset_missing_correlation"
+    });
+    await assert.rejects(
+      applyDeadLetterReset(signalDeadLetterResetA, missingPayload),
+      /ownership is invalid/
+    );
+
+    // (f) `repeatedResetAfterReDeadLetterAllowed`: the SAME message
+    // legitimately cycles back through `dead_letter` a second time (a
+    // superuser UPDATE standing in for a genuine `retryInbox`/
+    // `recoverExpiredLeases` dead-letter), and is reset again -- its OWN
+    // fresh receipt/audit/outbox, on top of the first reset's.
+    const reDeadLetteredAt = new Date(deadLetterResetNow - 1_000).toISOString();
+    await first!.query(
+      `UPDATE "${NATIVE_SCHEMA}"."inbox_messages"
+       SET state = 'dead_letter', delivery_attempts = 20, lease_capability_hash = '',
+           lease_expires_at = '', next_attempt_at = '', last_error_code = 'poison_fixture_2',
+           processed_at = '', updated_at = $2
+       WHERE id = $1`,
+      [freshFixture.id, reDeadLetteredAt]
+    );
+    const secondCorrelationId = "native_dead_letter_reset_second_correlation";
+    const secondPayload = normalizedPostgresSignalDeadLetterResetPayload({
+      inboxMessageId: freshFixture.id,
+      correlationId: secondCorrelationId
+    });
+    const secondRequestId = buildPostgresSignalDeadLetterResetRequestId(
+      deadLetterResetPrincipal, secondPayload
+    );
+    assert.notEqual(secondRequestId, freshRequestId);
+    const secondResult = await applyDeadLetterReset(signalDeadLetterResetA, secondPayload);
+    assert.equal(secondResult.outcome, "applied");
+    assert.equal(secondResult.mutationApplied, true);
+    assert.equal(secondResult.deadLetter.id, freshFixture.id);
+    assert.equal(secondResult.deadLetter.receivedAt, freshFixture.receivedAt);
+    assert.notEqual(secondResult.deadLetter.updatedAt, freshResult.deadLetter.updatedAt);
+    assert.equal((await deadLetterResetInboxRow(freshFixture.id))?.state, "accepted");
+    assert.deepEqual(
+      await deadLetterResetGraphCounts(freshFixture.id),
+      { receipts: 2, audits: 2, outboxes: 2 }
+    );
+
+    // (g) The ORIGINAL request, replayed again AFTER the message has since
+    // cycled through a second dead-letter/reset pair -- proving
+    // `auditedReplayGraphIdempotency` genuinely never compares against the
+    // CURRENT live row state (module header §2): it still echoes the
+    // FIRST reset's own result, zero further writes, even though the row
+    // has moved on twice since.
+    const freshReplayAfterRecycleResult = await applyDeadLetterReset(
+      signalDeadLetterResetA, freshPayload
+    );
+    assert.equal(freshReplayAfterRecycleResult.outcome, "already_applied");
+    assert.equal(freshReplayAfterRecycleResult.mutationApplied, false);
+    assert.equal(freshReplayAfterRecycleResult.requestId, freshRequestId);
+    assert.deepEqual(freshReplayAfterRecycleResult.deadLetter, freshResult.deadLetter);
+    assert.deepEqual(
+      await deadLetterResetGraphCounts(freshFixture.id),
+      { receipts: 2, audits: 2, outboxes: 2 }
+    );
+
+    // (h) Denial matrix: wrong principal, same-tenant peer, unmapped
+    // principal, malformed request id -- zero writes throughout, on a
+    // dedicated fixture never touched by anything above.
+    const denialFixture = await seedDeadLetterInbox({
+      suffix: "denial", state: "dead_letter", deliveryAttempts: 20, lastErrorCode: "lease_expired"
+    });
+    const denialPayload = normalizedPostgresSignalDeadLetterResetPayload({
+      inboxMessageId: denialFixture.id,
+      correlationId: "native_dead_letter_reset_denial_correlation"
+    });
+    await assert.rejects(
+      applyDeadLetterReset(signalDeadLetterResetB, denialPayload),
+      /does not match the expected authenticated principal/
+    );
+    await first!.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER, new Date(Date.now() - 5_000).toISOString()]
+    );
+    try {
+      await assert.rejects(
+        applyDeadLetterReset(signalDeadLetterResetC, denialPayload),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first!.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    await assert.rejects(
+      applyDeadLetterReset(signalDeadLetterResetUnmapped, denialPayload),
+      /tenant session principal is not active/
+    );
+    await assert.rejects(
+      signalDeadLetterResetA.resetDeadLetterInbox(
+        deadLetterResetPrincipal,
+        `dead_letter_reset_${"f".repeat(32)}`,
+        denialPayload
+      ),
+      /apply request is invalid/
+    );
+    assert.deepEqual(
+      await deadLetterResetGraphCounts(denialFixture.id),
+      { receipts: 0, audits: 0, outboxes: 0 }
+    );
+    assert.equal((await deadLetterResetInboxRow(denialFixture.id))?.state, "dead_letter");
+
+    // (i) Zero direct table SQL for the role, and cross-boundary denial in
+    // both directions.
+    signalDeadLetterResetDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalDeadLetterResetDirectClient.on("error", () => undefined);
+    await signalDeadLetterResetDirectClient.connect();
+    await signalDeadLetterResetDirectClient.query(
+      `SET ROLE "${signalDeadLetterResetManifest.deadLetterResetRole.name}"`
+    );
+    await assert.rejects(
+      signalDeadLetterResetDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."inbox_messages" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalDeadLetterResetDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."hosted_delivery_receipts" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalDeadLetterResetDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."audit_events" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalDeadLetterResetDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."outbox_events" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalDeadLetterResetDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."inbox_messages" SET state = 'accepted'`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalDeadLetterResetDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."hosted_delivery_receipts"(id)
+         VALUES ('forbidden_dead_letter_reset_receipt')`
+      ),
+      /permission denied/
+    );
+    // This role never earned `action_jobs` either -- job-lifecycle-apply's
+    // own exclusive table, never this boundary's.
+    await assert.rejects(
+      signalDeadLetterResetDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalDeadLetterResetDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_JOB_LIFECYCLE_APPLY_FUNCTION}"(
+           $1, $2, 'transition_job', 'forbidden_cross_boundary', '{}'
+         )`,
+        [deadLetterResetPrincipal.tenantId, deadLetterResetPrincipal.userId]
+      ),
+      /permission denied/
+    );
+    // A sibling role (job-lifecycle's) cannot call this boundary's function
+    // either.
+    await signalDeadLetterResetDirectClient.query(
+      `SET ROLE "${signalJobLifecycleManifest.jobLifecycleRole.name}"`
+    );
+    await assert.rejects(
+      signalDeadLetterResetDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_DEAD_LETTER_RESET_APPLY_FUNCTION}"(
+           $1, $2, 'reset_dead_letter_inbox', 'forbidden_cross_boundary_reverse', '{}'
+         )`,
+        [deadLetterResetPrincipal.tenantId, deadLetterResetPrincipal.userId]
+      ),
+      /permission denied/
+    );
+    await signalDeadLetterResetDirectClient.end();
+    signalDeadLetterResetDirectClient = null;
+
+    await Promise.all([
+      signalDeadLetterResetA.close(),
+      signalDeadLetterResetB.close(),
+      signalDeadLetterResetC.close(),
+      signalDeadLetterResetUnmapped.close()
+    ]);
+    signalDeadLetterResetA = null;
+    signalDeadLetterResetB = null;
+    signalDeadLetterResetC = null;
+    signalDeadLetterResetUnmapped = null;
+    })();
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -24116,7 +24818,16 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NodePostgresSignalIngressEnqueueApplyDatabase | null)?.close(),
       (signalIngressEnqueueUnmapped as
         NodePostgresSignalIngressEnqueueApplyDatabase | null)?.close(),
-      (signalIngressEnqueueDirectClient as Client | null)?.end()
+      (signalIngressEnqueueDirectClient as Client | null)?.end(),
+      (signalDeadLetterResetA as
+        NodePostgresSignalDeadLetterResetApplyDatabase | null)?.close(),
+      (signalDeadLetterResetB as
+        NodePostgresSignalDeadLetterResetApplyDatabase | null)?.close(),
+      (signalDeadLetterResetC as
+        NodePostgresSignalDeadLetterResetApplyDatabase | null)?.close(),
+      (signalDeadLetterResetUnmapped as
+        NodePostgresSignalDeadLetterResetApplyDatabase | null)?.close(),
+      (signalDeadLetterResetDirectClient as Client | null)?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

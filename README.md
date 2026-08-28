@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.3.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.4.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,71 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.4.0 adds the twenty-sixth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the bounded operator dead-letter
+inbox-reset writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role
+owns no application object, inherits no role, has zero direct/effective
+table or column grants, and may call one strict security-definer function.
+The boundary protects four forced-RLS tenant tables — `audit_events`,
+`hosted_delivery_receipts`, `inbox_messages`, and `outbox_events` — and all
+four are also its complete mutation set; there is no read-only table
+anywhere in its surface.
+
+PostgreSQL binds `session_user` to one exact tenant/user, revalidates the
+qualified action-job lifecycle boundary (1.0.0) as its declared
+predecessor, and accepts one explicit `reset_dead_letter_inbox` operation
+under `DEAD_LETTER_RESET_V1`. The caller supplies only `inboxMessageId`
+and `correlationId`; `eventType` is never caller input — it is the
+hardcoded `signal_event_v1` literal, matching `retryDeadLetterInbox`'s one
+real caller exactly. The one row a call may ever touch is locked with
+`SELECT ... FOR UPDATE OF inbox`, and its `state` must be exactly
+`dead_letter` — anything else, including a message already reset back to
+`accepted`, fails closed with `55000` once the replay check below finds no
+match.
+
+A fresh reset atomically updates the locked `inbox_messages` row — `state`
+to `accepted`, `delivery_attempts` to zero, and every lease/error field
+(`lease_capability_hash`, `lease_expires_at`, `next_attempt_at`,
+`last_error_code`, `processed_at`) cleared — inserts one
+`hosted_delivery_receipts` row whose `receipt_hash` reproduces SQLite's
+real length-prefixed `stableHash` scheme in SQL byte-for-byte, including
+its trailing-pipe terminator, and appends one `audit_events`/
+`outbox_events` pair; PostgreSQL owns the timestamp. Four statements, four
+rows, one transaction.
+
+Because a dead-lettered message can legitimately cycle back through
+`dead_letter` a second time before an old request happens to be replayed,
+this boundary follows the job-lifecycle-apply and reservation-lifecycle-apply
+audited-replay-graph pattern rather than a live-row idempotency check: a
+replay of the exact same `request_id` echoes the original audited result
+unconditionally, without also requiring the currently live row to still
+show `accepted`. RBAC (`worker.manage`) is deliberately not reproduced in
+SQL, following the same precedent `postgres-hosted-delivery-lease-recovery.ts`
+already established for its own lease/complete/retry functions, and is
+recorded honestly as `workerManagePermissionRevalidated: false` rather than
+silently omitted. Neither `inbox_messages` nor `hosted_delivery_receipts`
+is one of the five domains the shared writer-lock protocol guards, so this
+boundary never calls it; per-row serialization comes entirely from the row
+lock itself.
+
+Native PostgreSQL 16 proves wrong, same-tenant-peer, and unmapped
+principal denial, zero direct and cross-boundary SQL, dead-letter-state
+precondition enforcement, atomic four-table mutation, audited-replay-graph
+idempotency across a legitimate second dead-letter cycle, and
+byte-identical receipt-hash parity with the real SQLite call. This closes
+`deadLetterResetWriterParity`, closing the dead-letter-reset write family
+`postgres-signal-ingress-composition.ts` (1.3.0) named out of scope.
+`NotificationRepository.ensureForJob` and `CatalogRepository.upsertListing`'s
+manual "add to library" reference inserts still carry forward unchanged,
+and the task-kind dispatch mechanism itself remains, as before, without
+any PostgreSQL repository-write surface of its own to qualify.
+`hostedDeliveryHandlerRepositoryParity` and `allHandlerRepositoryParity`
+both remain false — final handler composition binding this writer into
+the existing chain is separate work. SQLite remains authoritative; nothing
+is activated. Use `npm run postgres:signal-dead-letter-reset-apply -- plan
+...` and the [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md)
+runbook.
 
 Version 1.3.0 adds the verification-level durable signal-ingress repository
 composition. It is not a twenty-sixth qualification boundary: it creates no
