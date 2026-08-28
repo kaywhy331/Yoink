@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.95.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.96.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,53 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.96.0 adds the twenty-second independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the bounded attribution-policy
+replacement writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role
+owns no application object, inherits no role, has zero direct/effective
+table or column grants, and may call one strict security-definer function.
+The boundary protects three forced-RLS tenant tables — `attribution_policies`,
+`audit_events`, and `outbox_events` — and all three are in its mutation set.
+
+PostgreSQL binds `session_user` to one exact tenant/user and accepts one
+explicit `replace_attribution_policies` operation under
+`ATTRIBUTION_POLICY_REPLACE_V1`, submitting a complete, alphabetically fixed
+set of all thirteen supported retailers' affiliate-routing policies —
+`amazon`, `bestbuy`, `booksamillion`, `disney`, `fanatics`, `kohls`, `macys`,
+`pbandai`, `pokemoncenter`, `ravensburger`, `riot`, `target`, and `walmart`
+— each restricted to the `canonical`, `howl`, or `amazon_associates`
+provider. Every request ID is derived from the authenticated principal and
+the complete normalized payload.
+
+`attribution_policies` is not one of the five domains the shared writer-lock
+protocol guards (source, retailer qualification, settings, mission policy,
+and spend), so this boundary never calls that function. It instead
+serializes concurrent replacements the ordinary PostgreSQL way: a
+`SELECT ... FOR UPDATE ORDER BY retailer_id` over exactly the thirteen rows
+scoped to the principal's own tenant/user, in the same fixed alphabetical
+order the normalized payload already uses. Provisioning alone creates these
+rows; a request against a principal whose complete set is not already fully
+provisioned fails closed rather than creating any.
+
+An identical submitted set is a true zero-write `unchanged` result — no row,
+audit, or outbox record is touched. A changed set updates only the
+retailers whose fields actually differ and atomically appends exactly one
+audit and one outbox record in the same transaction; PostgreSQL owns every
+timestamp. Replay of an already-receipted request is fingerprint-guarded: it
+re-derives the same deterministic request ID, recomputes the payload's
+SHA-256 fingerprint, and returns the original immutable result unchanged
+only when both match exactly.
+
+Native PostgreSQL 16 proves wrong, same-tenant-peer, and unmapped principal
+denial, zero direct and cross-boundary SQL, complete-set and fixed-order
+enforcement, missing-row fail-closed rejection, row-level lock
+serialization, true zero-write unchanged behavior, and fingerprint-guarded
+immutable replay. This closes `attributionPolicyParity`. Trusted strategy
+semantics, final action/inbox composition, and every request-repository
+family remain open. SQLite remains authoritative; use
+`npm run postgres:signal-attribution-policy-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.95.0 adds the twenty-first independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the bounded source-connection

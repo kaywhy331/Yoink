@@ -246,6 +246,18 @@ import {
   verifyPostgresSignalSourceProvisioningApplyBoundary,
   type PostgresSignalSourceProvisioningPayload
 } from "../packages/database/src/postgres-signal-source-provisioning-apply.js";
+import {
+  NodePostgresSignalAttributionPolicyApplyDatabase,
+  POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_CONFIRMATION,
+  POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_FUNCTION,
+  POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS,
+  applyPostgresSignalAttributionPolicyApplyBoundary,
+  buildPostgresSignalAttributionPolicyApplyManifest,
+  buildPostgresSignalAttributionPolicyReplaceRequestId,
+  normalizedPostgresSignalAttributionPolicyReplacePayload,
+  verifyPostgresSignalAttributionPolicyApplyBoundary,
+  type PostgresSignalAttributionPolicyReplacePayload
+} from "../packages/database/src/postgres-signal-attribution-policy-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -273,6 +285,7 @@ import {
 import type { OperatorAlertWebhookRegistry } from "../packages/engine/src/operator-alert-webhook.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
 import type {
+  AttributionPolicyUpdateInput,
   ListingContext,
   MissionContext,
   PurchaseIntentPolicy,
@@ -337,6 +350,8 @@ const NATIVE_RESERVATION_LIFECYCLE_APPLY_ROLE_NAMESPACE =
 const NATIVE_CATALOG_IMPORT_APPLY_ROLE_NAMESPACE = "yoink_native_catalog_import";
 const NATIVE_SOURCE_PROVISIONING_APPLY_ROLE_NAMESPACE =
   "yoink_native_source_provisioning";
+const NATIVE_ATTRIBUTION_POLICY_APPLY_ROLE_NAMESPACE =
+  "yoink_native_attribution_pol";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1172,7 +1187,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, and source-connection provisioning", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, and complete-set attribution-policy replacement", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1380,6 +1395,17 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalSourceProvisioningUnmapped:
     NodePostgresSignalSourceProvisioningApplyDatabase | null = null;
   let signalSourceProvisioningDirectClient: Client | null = null;
+  let signalAttributionPolicyA:
+    NodePostgresSignalAttributionPolicyApplyDatabase | null = null;
+  let signalAttributionPolicyASecond:
+    NodePostgresSignalAttributionPolicyApplyDatabase | null = null;
+  let signalAttributionPolicyB:
+    NodePostgresSignalAttributionPolicyApplyDatabase | null = null;
+  let signalAttributionPolicyC:
+    NodePostgresSignalAttributionPolicyApplyDatabase | null = null;
+  let signalAttributionPolicyUnmapped:
+    NodePostgresSignalAttributionPolicyApplyDatabase | null = null;
+  let signalAttributionPolicyDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -3173,6 +3199,94 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalSourceProvisioningBoundary
     );
+    const qualifiedSignalAttributionPolicyManifest =
+      buildPostgresSignalAttributionPolicyApplyManifest(
+        qualifiedSignalSourceProvisioningManifest,
+        NATIVE_ATTRIBUTION_POLICY_APPLY_ROLE_NAMESPACE
+      );
+    const signalAttributionPolicyBoundary =
+      await applyPostgresSignalAttributionPolicyApplyBoundary(
+        importer,
+        qualifiedSignalAttributionPolicyManifest,
+        new Date("2026-08-25T16:59:30.000Z").getTime()
+      );
+    assert.equal(signalAttributionPolicyBoundary.protectedTenantTableCount, 3);
+    assert.equal(signalAttributionPolicyBoundary.forcedRlsTableCount, 3);
+    assert.equal(signalAttributionPolicyBoundary.mutationTableCount, 3);
+    assert.equal(signalAttributionPolicyBoundary.directTableGrantCount, 0);
+    assert.equal(signalAttributionPolicyBoundary.functionGrantCount, 1);
+    assert.equal(signalAttributionPolicyBoundary.membershipCount, 0);
+    assert.equal(signalAttributionPolicyBoundary.activePrincipalCount, 0);
+    assert.equal(signalAttributionPolicyBoundary.metadata.operationCount, 1);
+    assert.deepEqual(
+      qualifiedSignalAttributionPolicyManifest.attributionPolicyRole.protectedTenantTableNames,
+      ["attribution_policies", "audit_events", "outbox_events"]
+    );
+    assert.deepEqual(
+      qualifiedSignalAttributionPolicyManifest.attributionPolicyRole.mutationTableNames,
+      qualifiedSignalAttributionPolicyManifest.attributionPolicyRole.protectedTenantTableNames
+    );
+    assert.deepEqual(
+      signalAttributionPolicyBoundary.metadata.supportedRetailers,
+      POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS
+    );
+    assert.equal(signalAttributionPolicyBoundary.metadata.supportedRetailerCount, 13);
+    assert.deepEqual(
+      signalAttributionPolicyBoundary.metadata.providerAllowlist,
+      ["canonical", "howl", "amazon_associates"]
+    );
+    assert.equal(signalAttributionPolicyBoundary.metadata.serverBoundPrincipalLookup, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.provisionedRowExistenceRequired, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.completeRetailerSetRequired, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.fixedRetailerOrderNormalization, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.rowLevelLockSerialization, true);
+    // attribution_policies is not one of the five domains the shared
+    // writer-lock protocol guards, so this boundary never consumes it and
+    // instead serializes concurrent replacements with its own row-level
+    // `FOR UPDATE ORDER BY retailer_id` lock.
+    assert.equal(signalAttributionPolicyBoundary.metadata.writerLockProtocolConsumed, false);
+    assert.equal(signalAttributionPolicyBoundary.metadata.deterministicRequestIdentity, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.immutableAuditedReplay, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.zeroWriteWhenUnchanged, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.missingRowFailsClosed, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.atomicReplaceAuditOutbox, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.databaseOwnedTimestamps, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.sqliteValidationParity, true);
+    // The 22nd writer: closes its own aggregate flag. World-state carried
+    // forward unchanged from source-provisioning-apply (v0.95).
+    assert.equal(signalAttributionPolicyBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.sourceStatusWriterParity, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.sourceSyncWriterParity, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.catalogImportWriterParity, true);
+    assert.equal(
+      signalAttributionPolicyBoundary.metadata.connectionProvisioningWriterParity,
+      true
+    );
+    assert.equal(signalAttributionPolicyBoundary.metadata.sourceWriterParity, true);
+    assert.equal(
+      signalAttributionPolicyBoundary.metadata.retailerQualificationWriterParity,
+      true
+    );
+    assert.equal(signalAttributionPolicyBoundary.metadata.missionPolicyWriterParity, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.settingsWriterParity, false);
+    assert.equal(signalAttributionPolicyBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalAttributionPolicyBoundary.metadata.reservationWriterParity, true);
+    assert.equal(signalAttributionPolicyBoundary.metadata.attributionPolicyParity, true);
+    // The shared five-domain lock protocol still has non-consuming writer
+    // families, so the protocol-wide aggregate cannot close from this
+    // boundary alone.
+    assert.equal(signalAttributionPolicyBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalAttributionPolicyBoundary.metadata.sharedCatalogMutationAuthority, false);
+    assert.equal(signalAttributionPolicyBoundary.metadata.actionAuthority, false);
+    assert.equal(signalAttributionPolicyBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalAttributionPolicyBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalAttributionPolicyApplyBoundary(
+        importer,
+        qualifiedSignalAttributionPolicyManifest
+      ),
+      signalAttributionPolicyBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -3541,6 +3655,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalCatalogImportManifest,
         NATIVE_SOURCE_PROVISIONING_APPLY_ROLE_NAMESPACE
       );
+    const signalAttributionPolicyManifest =
+      buildPostgresSignalAttributionPolicyApplyManifest(
+        signalSourceProvisioningManifest,
+        NATIVE_ATTRIBUTION_POLICY_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -3655,6 +3774,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalSourceProvisioningManifest.sourceProvisioningRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalAttributionPolicyManifest.attributionPolicyRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -14902,6 +15025,740 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     })();
 
     await (async () => {
+    const attributionPolicyDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalAttributionPolicyApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalAttributionPolicyManifest, { maxConnections });
+    signalAttributionPolicyA = attributionPolicyDatabase(NATIVE_PRINCIPAL_A);
+    signalAttributionPolicyASecond = attributionPolicyDatabase(NATIVE_PRINCIPAL_A);
+    signalAttributionPolicyB = attributionPolicyDatabase(NATIVE_PRINCIPAL_B);
+    signalAttributionPolicyC = attributionPolicyDatabase(NATIVE_PRINCIPAL_C);
+    signalAttributionPolicyUnmapped = attributionPolicyDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const attributionPolicyPrincipalA = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const attributionPolicyPrincipalB = { tenantId: "tenant_local", userId: "user_local" };
+
+    const attributionPolicyInputFor = (
+      retailerId: string,
+      overrides: Partial<AttributionPolicyUpdateInput> = {}
+    ): AttributionPolicyUpdateInput => ({
+      retailerId,
+      enabled: false,
+      provider: "canonical",
+      publisherSlug: "",
+      articleBaseUrl: "",
+      associateTag: "",
+      ...overrides
+    });
+    const attributionPolicyInputs = (
+      overrides: Record<string, Partial<AttributionPolicyUpdateInput>> = {}
+    ): AttributionPolicyUpdateInput[] => POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS
+      .map((retailerId) => attributionPolicyInputFor(retailerId, overrides[retailerId]));
+    const attributionPolicyBaselinePayload =
+      normalizedPostgresSignalAttributionPolicyReplacePayload(attributionPolicyInputs());
+
+    const applyAttributionPolicies = (
+      database: NodePostgresSignalAttributionPolicyApplyDatabase,
+      principalValue: { tenantId: string; userId: string },
+      payload: PostgresSignalAttributionPolicyReplacePayload
+    ) => database.replaceAttributionPolicies(
+      principalValue,
+      "replace_attribution_policies",
+      buildPostgresSignalAttributionPolicyReplaceRequestId(principalValue, payload),
+      payload
+    );
+
+    type AttributionPolicyRowSnapshot = {
+      enabled: number;
+      provider: string;
+      publisherSlug: string;
+      articleBaseUrl: string;
+      associateTag: string;
+      updatedAt: string;
+    };
+    const attributionPolicySnapshot = async (
+      tenantId: string,
+      userId: string
+    ): Promise<Record<string, AttributionPolicyRowSnapshot>> => {
+      const result = await first!.query<{
+        retailerId: string; enabled: number; provider: string;
+        publisherSlug: string; articleBaseUrl: string; associateTag: string; updatedAt: string;
+      }>(
+        `SELECT retailer_id AS "retailerId", (enabled)::int AS enabled, provider,
+                publisher_slug AS "publisherSlug", article_base_url AS "articleBaseUrl",
+                associate_tag AS "associateTag", updated_at AS "updatedAt"
+         FROM "${NATIVE_SCHEMA}"."attribution_policies"
+         WHERE tenant_id = $1 AND user_id = $2
+         ORDER BY retailer_id`,
+        [tenantId, userId]
+      );
+      const byRetailer: Record<string, AttributionPolicyRowSnapshot> = {};
+      for (const row of result.rows) {
+        byRetailer[row.retailerId] = {
+          enabled: Number(row.enabled),
+          provider: row.provider,
+          publisherSlug: row.publisherSlug,
+          articleBaseUrl: row.articleBaseUrl,
+          associateTag: row.associateTag,
+          updatedAt: row.updatedAt
+        };
+      }
+      return byRetailer;
+    };
+    const attributionPolicyGraphCounts = async (
+      tenantId: string,
+      userId: string
+    ): Promise<{ policies: number; audits: number; outboxes: number }> => {
+      const row = (await first!.query<{
+        policies: string | number | bigint;
+        audits: string | number | bigint;
+        outboxes: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."attribution_policies"
+            WHERE tenant_id = $1 AND user_id = $2) AS policies,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE tenant_id = $1 AND correlation_id = $2
+              AND event_type = 'attribution_policies_replaced') AS audits,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE tenant_id = $1 AND aggregate_type = 'attribution_policy_set'
+              AND aggregate_id = $2) AS outboxes`,
+        [tenantId, userId]
+      )).rows[0]!;
+      return {
+        policies: Number(row.policies),
+        audits: Number(row.audits),
+        outboxes: Number(row.outboxes)
+      };
+    };
+
+    // Missing-rows fail-closed: NATIVE_PRINCIPAL_A's tenant/user has not been
+    // seeded with the 13 required attribution_policies rows yet -- creation
+    // is provisioning's job, never this boundary's.
+    const attributionPolicyCountsBeforeSeed = await attributionPolicyGraphCounts(
+      attributionPolicyPrincipalA.tenantId,
+      attributionPolicyPrincipalA.userId
+    );
+    assert.equal(attributionPolicyCountsBeforeSeed.policies, 0);
+    assert.equal(attributionPolicyCountsBeforeSeed.audits, 0);
+    assert.equal(attributionPolicyCountsBeforeSeed.outboxes, 0);
+    await assert.rejects(
+      applyAttributionPolicies(
+        signalAttributionPolicyA,
+        attributionPolicyPrincipalA,
+        attributionPolicyBaselinePayload
+      ),
+      /rows are not fully provisioned/
+    );
+    assert.deepEqual(
+      await attributionPolicyGraphCounts(
+        attributionPolicyPrincipalA.tenantId,
+        attributionPolicyPrincipalA.userId
+      ),
+      attributionPolicyCountsBeforeSeed
+    );
+
+    // Seed the exact 13-retailer set for NATIVE_PRINCIPAL_A's tenant/user
+    // directly through the superuser connection, matching the schema's
+    // defaults (enabled=0, provider='canonical') -- this boundary's function
+    // never creates rows itself, only replaces an already-complete set.
+    const attributionPolicySeedTimestamp = "2026-08-25T16:59:45.000Z";
+    for (const retailerId of POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS) {
+      await first.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."attribution_policies"(
+           id, tenant_id, user_id, retailer_id, enabled, provider,
+           publisher_slug, article_base_url, associate_tag, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, 0, 'canonical', '', '', '', $5, $5)`,
+        [
+          `attribution_${retailerId}_native_a`,
+          attributionPolicyPrincipalA.tenantId,
+          attributionPolicyPrincipalA.userId,
+          retailerId,
+          attributionPolicySeedTimestamp
+        ]
+      );
+    }
+    const attributionPolicyAfterSeed = await attributionPolicySnapshot(
+      attributionPolicyPrincipalA.tenantId,
+      attributionPolicyPrincipalA.userId
+    );
+    assert.equal(Object.keys(attributionPolicyAfterSeed).length, 13);
+
+    // Denial matrix: wrong principal.
+    await assert.rejects(
+      applyAttributionPolicies(
+        signalAttributionPolicyB,
+        attributionPolicyPrincipalA,
+        attributionPolicyBaselinePayload
+      ),
+      /does not match the expected authenticated principal/
+    );
+    // Denial matrix: same-tenant peer.
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER,
+        new Date(Date.now() - 5_000).toISOString()]
+    );
+    try {
+      await assert.rejects(
+        applyAttributionPolicies(
+          signalAttributionPolicyC,
+          attributionPolicyPrincipalA,
+          attributionPolicyBaselinePayload
+        ),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    // Denial matrix: unmapped principal.
+    await assert.rejects(
+      applyAttributionPolicies(
+        signalAttributionPolicyUnmapped,
+        attributionPolicyPrincipalA,
+        attributionPolicyBaselinePayload
+      ),
+      /tenant session principal is not active/
+    );
+    // Malformed request id: caught client-side before any round trip.
+    await assert.rejects(
+      signalAttributionPolicyA.replaceAttributionPolicies(
+        attributionPolicyPrincipalA,
+        "replace_attribution_policies",
+        `attribution_policy_replace_${"f".repeat(32)}`,
+        attributionPolicyBaselinePayload
+      ),
+      /apply request is invalid/
+    );
+
+    // Zero direct table SQL for the role, and cross-boundary denial in both
+    // directions.
+    signalAttributionPolicyDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalAttributionPolicyDirectClient.on("error", () => undefined);
+    await signalAttributionPolicyDirectClient.connect();
+    await signalAttributionPolicyDirectClient.query(
+      `SET ROLE "${signalAttributionPolicyManifest.attributionPolicyRole.name}"`
+    );
+    await assert.rejects(
+      signalAttributionPolicyDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."attribution_policies" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalAttributionPolicyDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."audit_events"(id)
+         VALUES ('forbidden_attribution_policy_audit')`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalAttributionPolicyDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."outbox_events" SET delivered_at = ''`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalAttributionPolicyDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_PROVISIONING_APPLY_FUNCTION}"(
+           $1, $2, 'provision_source_connections', 'forbidden_cross_boundary', '{}'
+         )`,
+        [attributionPolicyPrincipalA.tenantId, attributionPolicyPrincipalA.userId]
+      ),
+      /permission denied/
+    );
+    // A sibling role (source-provisioning's) cannot call this boundary's
+    // function either.
+    await signalAttributionPolicyDirectClient.query(
+      `SET ROLE "${signalSourceProvisioningManifest.sourceProvisioningRole.name}"`
+    );
+    await assert.rejects(
+      signalAttributionPolicyDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_FUNCTION}"(
+           $1, $2, 'replace_attribution_policies', 'forbidden_cross_boundary_reverse', '{}'
+         )`,
+        [attributionPolicyPrincipalA.tenantId, attributionPolicyPrincipalA.userId]
+      ),
+      /permission denied/
+    );
+    await signalAttributionPolicyDirectClient.query(
+      `SET ROLE "${signalAttributionPolicyManifest.attributionPolicyRole.name}"`
+    );
+
+    // Atomicity: a forced outbox failure must leave zero partial writes.
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_attribution_policy_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $failure$
+       BEGIN
+         IF NEW.aggregate_type = 'attribution_policy_set' THEN
+           RAISE EXCEPTION 'native forced attribution-policy outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $failure$;
+       CREATE TRIGGER "yoink_native_reject_attribution_policy_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION
+         "${NATIVE_SCHEMA}"."yoink_native_reject_attribution_policy_outbox"()`
+    );
+    const attributionPolicyChangedPayload = normalizedPostgresSignalAttributionPolicyReplacePayload(
+      attributionPolicyInputs({
+        target: { enabled: true },
+        amazon: { associateTag: "race-native-amazon-tag" }
+      })
+    );
+    try {
+      await assert.rejects(
+        applyAttributionPolicies(
+          signalAttributionPolicyA,
+          attributionPolicyPrincipalA,
+          attributionPolicyChangedPayload
+        ),
+        /native forced attribution-policy outbox failure/
+      );
+      assert.deepEqual(
+        await attributionPolicySnapshot(
+          attributionPolicyPrincipalA.tenantId,
+          attributionPolicyPrincipalA.userId
+        ),
+        attributionPolicyAfterSeed
+      );
+      assert.deepEqual(
+        await attributionPolicyGraphCounts(
+          attributionPolicyPrincipalA.tenantId,
+          attributionPolicyPrincipalA.userId
+        ),
+        { policies: 13, audits: 0, outboxes: 0 }
+      );
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_attribution_policy_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS
+           "${NATIVE_SCHEMA}"."yoink_native_reject_attribution_policy_outbox"()`
+      );
+    }
+
+    // First real replace: enable target (canonical, no extra fields needed)
+    // and change amazon's associate tag -- a genuine two-retailer change.
+    const attributionPolicyRequestIdFirst = buildPostgresSignalAttributionPolicyReplaceRequestId(
+      attributionPolicyPrincipalA,
+      attributionPolicyChangedPayload
+    );
+    const firstAttributionPolicyResult = await applyAttributionPolicies(
+      signalAttributionPolicyA,
+      attributionPolicyPrincipalA,
+      attributionPolicyChangedPayload
+    );
+    assert.equal(firstAttributionPolicyResult.contractVersion, 1);
+    assert.equal(firstAttributionPolicyResult.operation, "replace_attribution_policies");
+    assert.equal(firstAttributionPolicyResult.requestId, attributionPolicyRequestIdFirst);
+    assert.match(firstAttributionPolicyResult.requestFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(firstAttributionPolicyResult.outcome, "applied");
+    assert.equal(firstAttributionPolicyResult.mutationApplied, true);
+    assert.equal(firstAttributionPolicyResult.idempotentReplay, false);
+    assert.equal(firstAttributionPolicyResult.mutationStatementCount, 3);
+    assert.equal(firstAttributionPolicyResult.mutationRowCount, 4);
+    assert.equal(firstAttributionPolicyResult.changedRetailerCount, 2);
+    assert.deepEqual([...firstAttributionPolicyResult.changedRetailers].sort(), ["amazon", "target"]);
+    assert.equal(firstAttributionPolicyResult.policiesMutated, true);
+    assert.equal(firstAttributionPolicyResult.auditMutated, true);
+    assert.equal(firstAttributionPolicyResult.outboxMutated, true);
+    assert.equal(firstAttributionPolicyResult.policies.length, 13);
+    const firstTargetPolicy =
+      firstAttributionPolicyResult.policies.find((policy) => policy.retailerId === "target");
+    assert.ok(firstTargetPolicy);
+    assert.equal(firstTargetPolicy?.enabled, true);
+    assert.equal(firstTargetPolicy?.provider, "canonical");
+    const firstAmazonPolicy =
+      firstAttributionPolicyResult.policies.find((policy) => policy.retailerId === "amazon");
+    assert.ok(firstAmazonPolicy);
+    assert.equal(firstAmazonPolicy?.associateTag, "race-native-amazon-tag");
+    assert.equal(firstAttributionPolicyResult.supportedRetailerCount, 13);
+    assert.equal(firstAttributionPolicyResult.attributionPolicyParity, true);
+    assert.equal(firstAttributionPolicyResult.writerLockProtocolParity, false);
+    assert.equal(firstAttributionPolicyResult.mutationAuthority, true);
+    assert.equal(firstAttributionPolicyResult.sharedCatalogMutationAuthority, false);
+    assert.equal(firstAttributionPolicyResult.actionAuthority, false);
+    assert.equal(firstAttributionPolicyResult.runtimeAuthority, false);
+
+    const attributionPolicyAfterFirst = await attributionPolicySnapshot(
+      attributionPolicyPrincipalA.tenantId,
+      attributionPolicyPrincipalA.userId
+    );
+    assert.equal(attributionPolicyAfterFirst.target?.enabled, 1);
+    assert.equal(attributionPolicyAfterFirst.amazon?.associateTag, "race-native-amazon-tag");
+    assert.notEqual(attributionPolicyAfterFirst.target?.updatedAt, attributionPolicySeedTimestamp);
+    assert.notEqual(attributionPolicyAfterFirst.amazon?.updatedAt, attributionPolicySeedTimestamp);
+    // Only the two changed rows were touched -- every other row's
+    // database-owned updated_at is untouched.
+    for (const retailerId of POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS) {
+      if (retailerId === "target" || retailerId === "amazon") continue;
+      assert.equal(
+        attributionPolicyAfterFirst[retailerId]?.updatedAt,
+        attributionPolicySeedTimestamp,
+        `${retailerId} must be untouched`
+      );
+    }
+
+    const attributionPolicyCountsAfterFirst = await attributionPolicyGraphCounts(
+      attributionPolicyPrincipalA.tenantId,
+      attributionPolicyPrincipalA.userId
+    );
+    assert.deepEqual(attributionPolicyCountsAfterFirst, { policies: 13, audits: 1, outboxes: 1 });
+
+    const attributionPolicyAudit = (await first.query<{
+      aggregateType: string;
+      eventType: string;
+      reasonCode: string;
+      message: string;
+      data: Record<string, unknown>;
+      outboxData: Record<string, unknown>;
+    }>(
+      `SELECT outbox.aggregate_type AS "aggregateType",
+              audit.event_type AS "eventType",
+              audit.reason_code AS "reasonCode", audit.message,
+              audit.data_json::jsonb AS data,
+              outbox.payload_json::jsonb->'data' AS "outboxData"
+       FROM "${NATIVE_SCHEMA}"."audit_events" audit
+       JOIN "${NATIVE_SCHEMA}"."outbox_events" outbox
+         ON outbox.payload_json::jsonb->>'auditId' = audit.id
+       WHERE audit.correlation_id = $1
+         AND audit.event_type = 'attribution_policies_replaced'`,
+      [attributionPolicyPrincipalA.userId]
+    )).rows[0]!;
+    assert.equal(attributionPolicyAudit.aggregateType, "attribution_policy_set");
+    assert.equal(attributionPolicyAudit.eventType, "attribution_policies_replaced");
+    assert.equal(attributionPolicyAudit.reasonCode, "saved");
+    assert.equal(
+      attributionPolicyAudit.message,
+      "Affiliate-routing policies were validated and saved for every supported retailer."
+    );
+    assert.equal(attributionPolicyAudit.data.operation, "replace_attribution_policies");
+    assert.deepEqual(attributionPolicyAudit.outboxData, attributionPolicyAudit.data);
+
+    // Identical replay of the now-current payload under a NEW request id:
+    // the PL/pgSQL function only validates the id's *format*, not that it
+    // matches the deterministic derivation, so a caller bypassing the
+    // TypeScript layer can submit any correctly-shaped id -- this recomputes
+    // zero changes and returns a true zero-write "unchanged" success (not a
+    // replay of the earlier "applied" audit).
+    const attributionPolicyFreshRequestId = `attribution_policy_replace_${"1".repeat(32)}`;
+    const attributionPolicyIdenticalReplayRaw = await signalAttributionPolicyDirectClient.query<{
+      resultJson: string;
+    }>(
+      `SELECT result_json AS "resultJson"
+       FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_FUNCTION}"($1, $2, $3, $4, $5)`,
+      [
+        attributionPolicyPrincipalA.tenantId,
+        attributionPolicyPrincipalA.userId,
+        "replace_attribution_policies",
+        attributionPolicyFreshRequestId,
+        JSON.stringify(attributionPolicyChangedPayload)
+      ]
+    );
+    const attributionPolicyIdenticalReplay = JSON.parse(
+      attributionPolicyIdenticalReplayRaw.rows[0]!.resultJson
+    ) as Record<string, unknown>;
+    assert.equal(attributionPolicyIdenticalReplay.outcome, "unchanged");
+    assert.equal(attributionPolicyIdenticalReplay.mutationApplied, false);
+    assert.equal(attributionPolicyIdenticalReplay.idempotentReplay, false);
+    assert.equal(attributionPolicyIdenticalReplay.mutationStatementCount, 0);
+    assert.equal(attributionPolicyIdenticalReplay.mutationRowCount, 0);
+    assert.equal(attributionPolicyIdenticalReplay.changedRetailerCount, 0);
+    assert.equal(attributionPolicyIdenticalReplay.auditMutated, false);
+    assert.equal(attributionPolicyIdenticalReplay.outboxMutated, false);
+    assert.deepEqual(
+      await attributionPolicyGraphCounts(
+        attributionPolicyPrincipalA.tenantId,
+        attributionPolicyPrincipalA.userId
+      ),
+      attributionPolicyCountsAfterFirst
+    );
+
+    // Same request id, altered payload: rejected via the server-computed
+    // requestFingerprint check on replay, never silently returning a
+    // mismatched cached result.
+    const attributionPolicyAlteredPayload = normalizedPostgresSignalAttributionPolicyReplacePayload(
+      attributionPolicyInputs({
+        target: { enabled: true },
+        amazon: { associateTag: "race-native-amazon-tag-altered" }
+      })
+    );
+    await assert.rejects(
+      signalAttributionPolicyDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_FUNCTION}"(
+           $1, $2, $3, $4, $5
+         )`,
+        [
+          attributionPolicyPrincipalA.tenantId,
+          attributionPolicyPrincipalA.userId,
+          "replace_attribution_policies",
+          attributionPolicyRequestIdFirst,
+          JSON.stringify(attributionPolicyAlteredPayload)
+        ]
+      ),
+      /replay graph changed/
+    );
+    assert.deepEqual(
+      await attributionPolicyGraphCounts(
+        attributionPolicyPrincipalA.tenantId,
+        attributionPolicyPrincipalA.userId
+      ),
+      attributionPolicyCountsAfterFirst
+    );
+
+    // Validation failures fail closed, even when submitted directly to the
+    // security-definer function (bypassing the TypeScript-side normalizer
+    // entirely) -- zero writes for each.
+    const attributionPolicyRawPolicies = () => POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS.map(
+      (retailerId) => ({
+        retailerId,
+        enabled: false,
+        provider: "canonical",
+        publisherSlug: "",
+        articleBaseUrl: "",
+        associateTag: ""
+      })
+    );
+    const attributionPolicyRawPayload = (
+      mutate: (policies: ReturnType<typeof attributionPolicyRawPolicies>) => void
+    ) => {
+      const policies = attributionPolicyRawPolicies();
+      mutate(policies);
+      return {
+        policies,
+        confirmation: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_CONFIRMATION
+      };
+    };
+    const attributionPolicyValidationCounts = await attributionPolicyGraphCounts(
+      attributionPolicyPrincipalA.tenantId,
+      attributionPolicyPrincipalA.userId
+    );
+
+    const invalidHowlPayload = attributionPolicyRawPayload((policies) => {
+      const target = policies.find((policy) => policy.retailerId === "target")!;
+      target.enabled = true;
+      target.provider = "howl";
+    });
+    await assert.rejects(
+      signalAttributionPolicyDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_FUNCTION}"(
+           $1, $2, $3, $4, $5
+         )`,
+        [
+          attributionPolicyPrincipalA.tenantId,
+          attributionPolicyPrincipalA.userId,
+          "replace_attribution_policies",
+          `attribution_policy_replace_${"2".repeat(32)}`,
+          JSON.stringify(invalidHowlPayload)
+        ]
+      ),
+      /enabled policy fails validity/
+    );
+
+    const invalidAmazonAssociatesPayload = attributionPolicyRawPayload((policies) => {
+      const walmart = policies.find((policy) => policy.retailerId === "walmart")!;
+      walmart.enabled = true;
+      walmart.provider = "amazon_associates";
+      walmart.associateTag = "validtag123";
+    });
+    await assert.rejects(
+      signalAttributionPolicyDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_FUNCTION}"(
+           $1, $2, $3, $4, $5
+         )`,
+        [
+          attributionPolicyPrincipalA.tenantId,
+          attributionPolicyPrincipalA.userId,
+          "replace_attribution_policies",
+          `attribution_policy_replace_${"3".repeat(32)}`,
+          JSON.stringify(invalidAmazonAssociatesPayload)
+        ]
+      ),
+      /enabled policy fails validity/
+    );
+
+    const shiftedRetailerPayload = attributionPolicyRawPayload((policies) => {
+      // Duplicate the first entry ('amazon') into the second slot
+      // ('bestbuy'), breaking the fixed positional order every entry must
+      // satisfy and dropping 'bestbuy' from the set -- the same failure a
+      // duplicated-and-missing retailer pair triggers.
+      policies[1] = { ...policies[0]! };
+    });
+    await assert.rejects(
+      signalAttributionPolicyDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_FUNCTION}"(
+           $1, $2, $3, $4, $5
+         )`,
+        [
+          attributionPolicyPrincipalA.tenantId,
+          attributionPolicyPrincipalA.userId,
+          "replace_attribution_policies",
+          `attribution_policy_replace_${"4".repeat(32)}`,
+          JSON.stringify(shiftedRetailerPayload)
+        ]
+      ),
+      /entry shape is invalid/
+    );
+
+    assert.deepEqual(
+      await attributionPolicyGraphCounts(
+        attributionPolicyPrincipalA.tenantId,
+        attributionPolicyPrincipalA.userId
+      ),
+      attributionPolicyValidationCounts
+    );
+
+    // Concurrent replace: two sessions for the SAME principal submit
+    // different complete-set payloads near-simultaneously, differing only in
+    // 'macys' (both otherwise restate the current target/amazon state
+    // established above). The row-level `FOR UPDATE ORDER BY retailer_id`
+    // lock (not a fixed sleep) is the deterministic synchronization --
+    // whichever session's transaction acquires the locks second blocks until
+    // the first commits, then re-reads the now-current state and applies its
+    // own full target state on top, so the final row exactly matches
+    // whichever payload committed last, and both calls genuinely mutate (one
+    // audit each).
+    const attributionPolicyRaceOnePayload = normalizedPostgresSignalAttributionPolicyReplacePayload(
+      attributionPolicyInputs({
+        target: { enabled: true },
+        amazon: { associateTag: "race-native-amazon-tag" },
+        macys: { publisherSlug: "race-marker-one" }
+      })
+    );
+    const attributionPolicyRaceTwoPayload = normalizedPostgresSignalAttributionPolicyReplacePayload(
+      attributionPolicyInputs({
+        target: { enabled: true },
+        amazon: { associateTag: "race-native-amazon-tag" },
+        macys: { publisherSlug: "race-marker-two" }
+      })
+    );
+    const [attributionPolicyRaceOneResult, attributionPolicyRaceTwoResult] = await Promise.all([
+      applyAttributionPolicies(
+        signalAttributionPolicyA,
+        attributionPolicyPrincipalA,
+        attributionPolicyRaceOnePayload
+      ),
+      applyAttributionPolicies(
+        signalAttributionPolicyASecond,
+        attributionPolicyPrincipalA,
+        attributionPolicyRaceTwoPayload
+      )
+    ]);
+    assert.equal(attributionPolicyRaceOneResult.outcome, "applied");
+    assert.equal(attributionPolicyRaceTwoResult.outcome, "applied");
+    assert.equal(attributionPolicyRaceOneResult.changedRetailerCount, 1);
+    assert.equal(attributionPolicyRaceTwoResult.changedRetailerCount, 1);
+    assert.deepEqual(attributionPolicyRaceOneResult.changedRetailers, ["macys"]);
+    assert.deepEqual(attributionPolicyRaceTwoResult.changedRetailers, ["macys"]);
+    const attributionPolicyAfterRace = await attributionPolicySnapshot(
+      attributionPolicyPrincipalA.tenantId,
+      attributionPolicyPrincipalA.userId
+    );
+    assert.ok(
+      attributionPolicyAfterRace.macys?.publisherSlug === "race-marker-one"
+        || attributionPolicyAfterRace.macys?.publisherSlug === "race-marker-two",
+      "the final macys row must equal exactly one of the two race payloads"
+    );
+    const attributionPolicyCountsAfterRace = await attributionPolicyGraphCounts(
+      attributionPolicyPrincipalA.tenantId,
+      attributionPolicyPrincipalA.userId
+    );
+    assert.equal(
+      attributionPolicyCountsAfterRace.audits,
+      attributionPolicyCountsAfterFirst.audits + 2
+    );
+    assert.equal(
+      attributionPolicyCountsAfterRace.outboxes,
+      attributionPolicyCountsAfterFirst.outboxes + 2
+    );
+
+    // Legacy SQLite parity: the imported archive's local user (tenant_local/
+    // user_local) already carries all 13 default attribution_policies rows
+    // from YoinkDatabase's local-user bootstrap seed (see
+    // packages/database/src/database.ts's `attributionPolicies` list), so
+    // resubmitting that exact same set is a true zero-write "unchanged"
+    // success against it too -- proving missingRowFailsClosed only fires
+    // when rows are genuinely missing.
+    const legacyAttributionPolicyPayload = normalizedPostgresSignalAttributionPolicyReplacePayload(
+      attributionPolicyInputs({
+        target: { provider: "howl", publisherSlug: "collectwithdodo" },
+        walmart: { provider: "howl", publisherSlug: "collectwithdodo" },
+        bestbuy: { provider: "howl", publisherSlug: "collectwithdodo" },
+        amazon: { provider: "amazon_associates", associateTag: "pokemon-restocks-20" }
+      })
+    );
+    const legacyAttributionPolicyCountsBefore = await attributionPolicyGraphCounts(
+      attributionPolicyPrincipalB.tenantId,
+      attributionPolicyPrincipalB.userId
+    );
+    assert.equal(legacyAttributionPolicyCountsBefore.policies, 13);
+    const legacyAttributionPolicyResult = await applyAttributionPolicies(
+      signalAttributionPolicyB,
+      attributionPolicyPrincipalB,
+      legacyAttributionPolicyPayload
+    );
+    assert.equal(legacyAttributionPolicyResult.outcome, "unchanged");
+    assert.equal(legacyAttributionPolicyResult.mutationApplied, false);
+    assert.equal(legacyAttributionPolicyResult.changedRetailerCount, 0);
+    assert.deepEqual(
+      await attributionPolicyGraphCounts(
+        attributionPolicyPrincipalB.tenantId,
+        attributionPolicyPrincipalB.userId
+      ),
+      legacyAttributionPolicyCountsBefore
+    );
+
+    // Immutable replay: the same request id, called again after unrelated
+    // concurrency and validation activity, must return the original
+    // "applied" audit's result unchanged and write nothing further.
+    const attributionPolicyImmutableReplay = await applyAttributionPolicies(
+      signalAttributionPolicyASecond,
+      attributionPolicyPrincipalA,
+      attributionPolicyChangedPayload
+    );
+    assert.equal(attributionPolicyImmutableReplay.outcome, "already_applied");
+    assert.equal(attributionPolicyImmutableReplay.mutationApplied, false);
+    assert.equal(attributionPolicyImmutableReplay.idempotentReplay, true);
+    assert.equal(attributionPolicyImmutableReplay.mutationStatementCount, 0);
+    assert.equal(attributionPolicyImmutableReplay.mutationRowCount, 0);
+    assert.equal(attributionPolicyImmutableReplay.requestId, attributionPolicyRequestIdFirst);
+    assert.equal(
+      attributionPolicyImmutableReplay.requestFingerprint,
+      firstAttributionPolicyResult.requestFingerprint
+    );
+    assert.deepEqual(attributionPolicyImmutableReplay.policies, firstAttributionPolicyResult.policies);
+
+    await signalAttributionPolicyDirectClient.end();
+    signalAttributionPolicyDirectClient = null;
+    await Promise.all([
+      signalAttributionPolicyA.close(),
+      signalAttributionPolicyASecond.close(),
+      signalAttributionPolicyB.close(),
+      signalAttributionPolicyC.close(),
+      signalAttributionPolicyUnmapped.close()
+    ]);
+    signalAttributionPolicyA = null;
+    signalAttributionPolicyASecond = null;
+    signalAttributionPolicyB = null;
+    signalAttributionPolicyC = null;
+    signalAttributionPolicyUnmapped = null;
+    })();
+
+    await (async () => {
     const reservationLifecycleDatabase = (
       principalRole: string,
       maxConnections: 1 | 2 = 1
@@ -19623,6 +20480,17 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       (signalSourceProvisioningUnmapped as
         NodePostgresSignalSourceProvisioningApplyDatabase | null)?.close(),
       (signalSourceProvisioningDirectClient as Client | null)?.end(),
+      (signalAttributionPolicyA as
+        NodePostgresSignalAttributionPolicyApplyDatabase | null)?.close(),
+      (signalAttributionPolicyASecond as
+        NodePostgresSignalAttributionPolicyApplyDatabase | null)?.close(),
+      (signalAttributionPolicyB as
+        NodePostgresSignalAttributionPolicyApplyDatabase | null)?.close(),
+      (signalAttributionPolicyC as
+        NodePostgresSignalAttributionPolicyApplyDatabase | null)?.close(),
+      (signalAttributionPolicyUnmapped as
+        NodePostgresSignalAttributionPolicyApplyDatabase | null)?.close(),
+      (signalAttributionPolicyDirectClient as Client | null)?.end(),
       (signalReservationLifecycleA as
         NodePostgresSignalReservationLifecycleApplyDatabase | null)?.close(),
       (signalReservationLifecycleASecond as

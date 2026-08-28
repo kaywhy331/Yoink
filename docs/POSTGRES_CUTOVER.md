@@ -2790,6 +2790,119 @@ SQLite-identical connection identity, anchor-then-lock source-scope
 contention, existing-identity conflict rejection, true zero-write unchanged
 behavior, and immutable audit/outbox replay.
 
+## Attribution-policy replacement qualification (0.96.0)
+
+Version 0.96 adds a twenty-second independent, inactive hosted-signal
+boundary for `replace_attribution_policies`. It succeeds the qualified
+source-provisioning boundary but does not consume the shared writer-lock
+protocol; `attribution_policies` is not one of the five domains that
+protocol guards (source, retailer qualification, settings, mission policy,
+spend). The operation replaces the complete, exact set of thirteen
+per-retailer affiliate-routing policies a principal's account already has
+provisioned; it can never create, remove, or reduce that set.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application
+object, inherits no role, receives zero direct/effective table or column
+privileges, and can execute one strict security-definer function. Its
+immutable receipt seals three forced-RLS tenant tables —
+`attribution_policies`, `audit_events`, and `outbox_events` — and all three
+are in its mutation set.
+
+Every request carries the complete, alphabetically fixed set of all
+thirteen supported retailers' policies — `amazon`, `bestbuy`,
+`booksamillion`, `disney`, `fanatics`, `kohls`, `macys`, `pbandai`,
+`pokemoncenter`, `ravensburger`, `riot`, `target`, and `walmart` — each
+restricted to the `canonical`, `howl`, or `amazon_associates` provider,
+under one `ATTRIBUTION_POLICY_REPLACE_V1` confirmation. PostgreSQL resolves
+`session_user` to one active tenant/user and derives the request ID from the
+authenticated principal and the complete normalized payload.
+
+Because the domain sits outside the shared protocol, the function instead
+serializes concurrent replacements with a `SELECT ... FOR UPDATE ORDER BY
+retailer_id` over exactly the thirteen rows scoped to that tenant/user, in
+the same fixed alphabetical order the normalized payload already uses.
+Those rows must already all exist — provisioning alone creates them — so a
+request against an incompletely provisioned principal fails closed rather
+than creating any row.
+
+A submitted set identical to the current one is a true zero-write
+`unchanged` result: no row, audit, or outbox record is touched. A changed
+set updates only the retailers whose fields actually differ and atomically
+appends exactly one audit and one outbox record in the same transaction;
+PostgreSQL owns every timestamp. Immutable replay of an already-receipted
+request is fingerprint-guarded — it recomputes the submitted payload's
+SHA-256 and only returns the original result when the recomputed request ID
+and fingerprint both match exactly; a mismatched replay aborts instead of
+silently returning a stale or different result.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-attribution-policy-apply -- plan \
+  yoink_cutover_qualification_096 yoink_q_096 yoink_session_q_096 \
+  yoink_queue_q_096 yoink_control_q_096 yoink_notify_q_096 \
+  yoink_execute_q_096 yoink_retain_q_096 yoink_candidate_q_096 \
+  yoink_dispatch_q_096 yoink_reconcile_q_096 yoink_witness_q_096 \
+  yoink_delivery_q_096 yoink_catalog_q_096 yoink_resolution_q_096 \
+  yoink_reference_q_096 yoink_terminal_q_096 yoink_offer_q_096 \
+  yoink_post_q_096 yoink_mission_q_096 yoink_strategy_q_096 \
+  yoink_writer_lock_q_096 yoink_constraint_config_q_096 \
+  yoink_action_spend_q_096 yoink_target_qual_q_096 \
+  yoink_source_trust_q_096 yoink_retailer_qual_q_096 \
+  yoink_mission_policy_q_096 yoink_source_status_q_096 \
+  yoink_source_sync_q_096 yoink_reservation_q_096 yoink_catalog_import_q_096 \
+  yoink_provisioning_q_096 yoink_attribution_policy_q_096
+```
+
+After every predecessor through source provisioning is verified, apply once
+with the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_QUALIFICATION_ACK=bounded-signal-attribution-policy-apply-qualification \
+  npm run postgres:signal-attribution-policy-apply -- apply \
+  yoink_cutover_qualification_096 yoink_q_096 yoink_session_q_096 \
+  yoink_queue_q_096 yoink_control_q_096 yoink_notify_q_096 \
+  yoink_execute_q_096 yoink_retain_q_096 yoink_candidate_q_096 \
+  yoink_dispatch_q_096 yoink_reconcile_q_096 yoink_witness_q_096 \
+  yoink_delivery_q_096 yoink_catalog_q_096 yoink_resolution_q_096 \
+  yoink_reference_q_096 yoink_terminal_q_096 yoink_offer_q_096 \
+  yoink_post_q_096 yoink_mission_q_096 yoink_strategy_q_096 \
+  yoink_writer_lock_q_096 yoink_constraint_config_q_096 \
+  yoink_action_spend_q_096 yoink_target_qual_q_096 \
+  yoink_source_trust_q_096 yoink_retailer_qual_q_096 \
+  yoink_mission_policy_q_096 yoink_source_status_q_096 \
+  yoink_source_sync_q_096 yoink_reservation_q_096 yoink_catalog_import_q_096 \
+  yoink_provisioning_q_096 yoink_attribution_policy_q_096
+```
+
+Then independently verify the function, role, protected/mutation table
+sets, exact grants, immutable receipt, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-attribution-policy-apply -- verify \
+  yoink_cutover_qualification_096 yoink_q_096 yoink_session_q_096 \
+  yoink_queue_q_096 yoink_control_q_096 yoink_notify_q_096 \
+  yoink_execute_q_096 yoink_retain_q_096 yoink_candidate_q_096 \
+  yoink_dispatch_q_096 yoink_reconcile_q_096 yoink_witness_q_096 \
+  yoink_delivery_q_096 yoink_catalog_q_096 yoink_resolution_q_096 \
+  yoink_reference_q_096 yoink_terminal_q_096 yoink_offer_q_096 \
+  yoink_post_q_096 yoink_mission_q_096 yoink_strategy_q_096 \
+  yoink_writer_lock_q_096 yoink_constraint_config_q_096 \
+  yoink_action_spend_q_096 yoink_target_qual_q_096 \
+  yoink_source_trust_q_096 yoink_retailer_qual_q_096 \
+  yoink_mission_policy_q_096 yoink_source_status_q_096 \
+  yoink_source_sync_q_096 yoink_reservation_q_096 yoink_catalog_import_q_096 \
+  yoink_provisioning_q_096 yoink_attribution_policy_q_096
+```
+
+The receipt records `attributionPolicyParity: true` while
+`writerLockProtocolParity: false` and `runtimeAuthority: false` remain
+explicit — `attribution_policies` deliberately stays outside the shared
+five-domain protocol. Native PostgreSQL 16 proves principal isolation,
+direct and cross-boundary denial, complete-set and fixed-order enforcement,
+missing-row fail-closed rejection, row-level lock serialization, true
+zero-write unchanged behavior, and fingerprint-guarded immutable replay.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
@@ -2899,8 +3012,8 @@ The admin Operations projection lists these as required, not complete:
   source trust, status, and sync run/item state, exact
   Walmart/Amazon/Best Buy qualification, and full mission-policy revision are
   already qualified);
-  add attribution-policy parity and separately qualified strategy-action
-  semantics; then compose the qualified purchase-intent action/spend,
+  add separately qualified strategy-action semantics; then compose the
+  qualified purchase-intent action/spend,
   strategy/purchase-policy evaluation, hosted-delivery recovery, fixed signal-
   inbox lifecycle, resolution plan, catalog-create, event/resolution-commit,
   source-reference-refresh, terminal-decision, actionable offer/incident,

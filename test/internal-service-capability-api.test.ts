@@ -44,6 +44,7 @@ import { postgresSignalSourceSyncCapabilityProjection } from "../packages/databa
 import { postgresSignalReservationLifecycleCapabilityProjection } from "../packages/database/src/postgres-signal-reservation-lifecycle-apply.js";
 import { postgresSignalCatalogImportCapabilityProjection } from "../packages/database/src/postgres-signal-catalog-import-apply.js";
 import { postgresSignalSourceProvisioningCapabilityProjection } from "../packages/database/src/postgres-signal-source-provisioning-apply.js";
+import { postgresSignalAttributionPolicyCapabilityProjection } from "../packages/database/src/postgres-signal-attribution-policy-apply.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -156,6 +157,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalReservationLifecycleApply: ReturnType<typeof postgresSignalReservationLifecycleCapabilityProjection>;
         postgresSignalCatalogImportApply: ReturnType<typeof postgresSignalCatalogImportCapabilityProjection>;
         postgresSignalSourceProvisioningApply: ReturnType<typeof postgresSignalSourceProvisioningCapabilityProjection>;
+        postgresSignalAttributionPolicyApply: ReturnType<typeof postgresSignalAttributionPolicyCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -286,6 +288,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalSourceProvisioningApply,
       postgresSignalSourceProvisioningCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalAttributionPolicyApply,
+      postgresSignalAttributionPolicyCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -374,6 +380,8 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /twentieth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /Server-bound source-connection provisioning/);
     assert.match(cutoverText, /twenty-first independently inactive NOLOGIN boundary/);
+    assert.match(cutoverText, /Server-bound attribution-policy replacement/);
+    assert.match(cutoverText, /twenty-second independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /latest-state semantics for unaudited progress\/item refreshes/);
     assert.match(cutoverText, /global action pause\/resume, guardrail settings, and periodic spend caps/);
     assert.match(cutoverText, /Server-bound reviewed purchase-intent action and spend/);
