@@ -1750,6 +1750,46 @@ reach policy parity, and final handler composition
 and production principal provisioning must be qualified before activation.
 SQLite remains authoritative and complete handler parity remains six of seven.
 
+### 0.97.0 strategy-semantics evolution
+
+Version 0.97 evolves this same boundary with separately qualified trusted
+strategy action semantics. The current receipt now records
+`purchaseIntentOnly: false`, `strategyDecisionSourceAccepted: true`,
+`strategyExistenceRevalidation: true`, `strategyFailoverToNotifyEnforced: true`,
+and `strategySemanticsContractVersion: 2` — superseding the 0.84
+`purchaseIntentOnly: true` value above. `strategyActionAuthority`,
+`strategyCartActionAuthority`, and `strategyReservationAuthority` remain
+`false`: a `decisionSource: "strategy"` request is revalidated against the
+`strategies` table (existence, ownership, `enabled`, exact attested
+revision — the protected forced-RLS table count grows from 19 to 20) and then
+unconditionally, fail-closed, produces a notify-only action job. SQL has no
+statement that writes a cart action or a spend reservation for a strategy
+source; the nine-table mutation surface is unchanged.
+
+The evolved contract accepts a wider `effectiveAction` from the upstream
+evaluation plan for a strategy decision (`notify`, `add_to_cart`,
+`prepare_checkout`, or `submit_order`, matching what SQLite's own evaluator
+may attest) and a quantity of 1-99, but the fail-closed failover to `notify`
+is unconditional regardless of what was attested. Strategy notifies still
+require the same fresh, `trusted_exact`, first-party, shipping evidence and a
+re-derived numeric unit cap that purchase-intent requires — deliberately
+narrower than SQLite's own notify path. v1's purchase-intent code paths are
+byte-for-byte unchanged, and immutable replay now covers both decision
+sources; a strategy-sourced replay additionally requires the stored
+`spend_reservation_id` to be `NULL`.
+
+This is an additive evolution, not a hard version bump: `contractVersion`
+stays 1. `POSTGRES_SIGNAL_ACTION_SPEND_APPLY_CONTRACT_VERSION` is a pinned
+literal type consumed downstream by the Target-qualification boundary's
+manifest (`actionSpendApplyContractVersion: 1`); bumping it to 2 would ripple
+through that pin and every other consumer, so the hard bump is deliberately
+deferred in favor of the additive `strategySemanticsContractVersion: 2`
+field. Unlike a queue-write-style contract bump, this evolution requires no
+fresh cutover schema or fresh role namespace: the plan/apply/verify commands
+above are unchanged — same script (`npm run
+postgres:signal-action-spend-apply`), same `yoink_action_spend_q_084`
+identifiers, same acknowledgement variable.
+
 ## Shared signal-writer lock qualification seam
 
 Version 0.85 adds the eleventh independent hosted-signal role. It is a
@@ -3011,9 +3051,9 @@ The admin Operations projection lists these as required, not complete:
   policy caps, complete Target qualification/settings activation, bounded
   source trust, status, and sync run/item state, exact
   Walmart/Amazon/Best Buy qualification, and full mission-policy revision are
-  already qualified);
-  add separately qualified strategy-action semantics; then compose the
-  qualified purchase-intent action/spend,
+  already qualified; separately qualified trusted strategy action semantics
+  are now qualified for the action/spend boundary);
+  compose the qualified action/spend,
   strategy/purchase-policy evaluation, hosted-delivery recovery, fixed signal-
   inbox lifecycle, resolution plan, catalog-create, event/resolution-commit,
   source-reference-refresh, terminal-decision, actionable offer/incident,

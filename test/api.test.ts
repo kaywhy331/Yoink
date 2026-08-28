@@ -165,7 +165,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Server-bound attribution-policy replacement/);
     assert.match(adminScript, /twenty-second independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /Server-bound reviewed purchase-intent action and spend/);
-    assert.match(adminScript, /Strategy-authorized actions, retailer mutation, checkout, order submission, and inbox completion remain closed/);
+    assert.match(adminScript, /reviewed purchase intents retain their guarded add\/spend semantics unchanged/);
+    assert.match(adminScript, /strategy-sourced cart actions and spend reservations remain structurally closed/);
+    assert.match(adminScript, /Retailer mutation, checkout, order submission, and inbox completion remain closed/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;

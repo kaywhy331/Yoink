@@ -387,7 +387,10 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Server-bound reviewed purchase-intent action and spend/);
     assert.match(cutoverText, /tenth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /quantity-one add-to-cart job/);
-    assert.match(cutoverText, /Strategy-authorized actions, retailer mutation, checkout, order submission, and inbox completion remain closed/);
+    assert.match(cutoverText, /reviewed purchase intents retain their guarded add\/spend semantics unchanged/);
+    assert.match(cutoverText, /strategy existence\/enabled\/revision revalidation enforced in the database/);
+    assert.match(cutoverText, /strategy-sourced cart actions and spend reservations remain structurally closed/);
+    assert.match(cutoverText, /Retailer mutation, checkout, order submission, and inbox completion remain closed/);
     assert.match(cutoverText, /It consumes the shared writer-lock protocol/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);

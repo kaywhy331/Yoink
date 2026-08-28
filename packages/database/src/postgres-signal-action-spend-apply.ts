@@ -47,6 +47,93 @@ export const POSTGRES_SIGNAL_ACTION_SPEND_APPLY_RECEIPT_TABLE =
 export const POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION =
   "yoink_apply_trackalacker_signal_action_spend";
 
+/**
+ * Contract v2 — separately qualified trusted strategy action semantics.
+ *
+ * SQLite-truth enumeration (derived from the actual embedded runtime, not
+ * re-derived from first principles), used to bound exactly what a
+ * decisionSource = "strategy" request may do here:
+ *
+ * (a) Action kinds a strategy-owned decision may produce, in SQLite:
+ *   - packages/domain/src/strategies.ts:52-55 `actionCappedByMission` caps a
+ *     strategy's own `strategy.action` (notify | add_to_cart |
+ *     prepare_checkout | submit_order) to "notify" whenever the mission is
+ *     disabled or inactive. Otherwise the strategy's configured action passes
+ *     through as `effectiveAction` (strategies.ts:122).
+ *   - packages/database/src/signal-repository.ts:461-471 (`createActionJob`)
+ *     then fails an "add_to_cart" attempt over to "notify" BEFORE any spend
+ *     reservation exists, in *live* execution mode, whenever either:
+ *       (1) the retailer's add lane is not currently qualified
+ *           (`!this.addLaneQualified(listing.retailerId)`,
+ *           reason code `guarded_add_lane_not_qualified`), or
+ *       (2) the match requests more than one unit
+ *           (`evaluation.effectiveQuantity !== 1`,
+ *           reason code `guarded_add_quantity_not_supported` — this is the
+ *           "live legacy multi-unit strategy adds ... fail over to
+ *           notification before reservation" case; only a strategy can
+ *           request quantity > 1, purchase-intent is always exactly 1, see
+ *           strategies.ts:112-121 vs strategies.ts:227/242).
+ *     Only after this failover does SQLite even consider spend/purchase
+ *     policy (signal-repository.ts:472-509), and that policy check is itself
+ *     skipped entirely once effectiveAction is already "notify"
+ *     (signal-repository.ts:472 `if (effectiveAction !== "notify")`).
+ *   - This boundary (v2) is deliberately NARROWER than raw SQLite: it does
+ *     not attempt to replicate "add lane qualified AND quantity === 1 AND
+ *     purchase/spend policy allowed" for a strategy source. Every
+ *     decisionSource = "strategy" request unconditionally produces a
+ *     notify-only action job here, fail-closed in SQL (see the
+ *     `effective_action_value := 'notify'` assignment below, which is the
+ *     ONLY place a strategy-sourced action value is ever set). Strategy
+ *     decisions NEVER receive add-to-cart authority through this function,
+ *     matching the caller's safety constraint even where SQLite would, under
+ *     narrow conditions (lane qualified, quantity 1, policy allowed), have
+ *     permitted an actual cart mutation.
+ *
+ * (b) Revalidation applied to a strategy-sourced request:
+ *   - Strategy existence + ownership: `strategy.id = strategy_id_value` under
+ *     `tenant_id = resolved_tenant_id AND user_id = resolved_user_id`
+ *     (mirrors packages/database/src/postgres-signal-strategy-evaluation-apply.ts:1131-1145).
+ *   - Strategy enabled + at the exact attested revision: `strategy.enabled = 1
+ *     AND strategy.revision = strategy_revision_value` (same precedent file).
+ *   - The mission's current policy revision must be in `decision_mode =
+ *     'strategy'` (shared policy_record check, already present).
+ *   - The mission target must still be active/enabled (kept as a strictly
+ *     MORE conservative check than SQLite, which does not require this for a
+ *     pure notify outcome — see (c) below for why tightening beyond SQLite is
+ *     safe here).
+ *   - The attested effective unit cap must be a bounded positive integer,
+ *     re-derived against the freshly observed signal price
+ *     (`derived_cap_value`) — this boundary additionally requires a numeric
+ *     cap even for notify (SQLite allows a null cap for a pure notify-only
+ *     strategy with no price policy); documented as a scope-narrowing choice.
+ *
+ * (c) Spend/reservation interaction for strategy-sourced notify jobs: NONE.
+ *   SQLite only creates a spend_reservations row when
+ *   `state === "awaiting_executor" && effectiveAction !== "notify"`
+ *   (signal-repository.ts:594) — a notify job's `action_jobs.state` is always
+ *   "notify_only" (signal-repository.ts:489-491), so `state ===
+ *   "awaiting_executor"` is never true for it, and no reservation, no spend
+ *   ledger entry, and no reservation link are ever created. This boundary
+ *   mirrors that precisely: the spend_reservations / spend_ledger_entries
+ *   inserts and the action_jobs.spend_reservation_id link update all remain
+ *   inside the `decisionSource = 'purchase_intent'` branch only; a
+ *   strategy-sourced action_jobs row is written with `spend_reservation_id`
+ *   left NULL, and the immutable-replay check below fails closed if it is
+ *   ever non-NULL for a strategy-sourced job. Because a strategy decision
+ *   never reaches "awaiting_executor" here, the sibling-claim
+ *   (signal-repository.ts:414/activePurchaseJobForMission, only invoked
+ *   `if (purchaseRequested)`), cooldown, remaining-quantity, and periodic
+ *   spend-cap checks that gate the purchase-intent add path do not apply to
+ *   it either — SQLite itself skips all of them for a notify outcome.
+ *
+ * Since every check this boundary keeps for the strategy branch is either a
+ * faithful mirror of a check SQLite already performs, or an ADDITIONAL
+ * restriction (never a relaxation) versus SQLite, this is additive,
+ * authority-preserving evolution: v1's purchase-intent semantics are
+ * unchanged byte-for-byte, and v2 only ever narrows what a strategy decision
+ * may do relative to what SQLite would already allow it to do.
+ */
+
 const MAXIMUM_CLOCK_SKEW_MS = 300_000;
 const MAXIMUM_PLAN_AGE_SECONDS = 30;
 const MAXIMUM_APPLY_PAYLOAD_BYTES = 8_192;
@@ -84,6 +171,7 @@ const PROTECTED_TENANT_TABLES = Object.freeze([
   "source_connections",
   "spend_ledger_entries",
   "spend_reservations",
+  "strategies",
   "user_spend_policies"
 ] as const);
 const MUTATION_TABLES = Object.freeze([
@@ -125,8 +213,8 @@ export interface PostgresSignalActionSpendApplyManifest {
     bypassRls: false;
     directTableAccess: false;
   };
-  protectedTenantTableCount: 19;
-  forcedRlsTableCount: 19;
+  protectedTenantTableCount: 20;
+  forcedRlsTableCount: 20;
   mutationTableCount: 9;
   directTableGrantCount: 0;
   functionGrantCount: 1;
@@ -159,11 +247,18 @@ export interface PostgresSignalActionSpendApplyManifest {
   cooldownRevalidation: true;
   periodicSpendRevalidation: true;
   exactProductBinding: true;
-  purchaseIntentOnly: true;
+  purchaseIntentOnly: false;
   strategyActionAuthority: false;
+  strategySemanticsContractVersion: 2;
+  strategyDecisionSourceAccepted: true;
+  strategyExistenceRevalidation: true;
+  strategyFailoverToNotifyEnforced: true;
+  strategyCartActionAuthority: false;
+  strategyReservationAuthority: false;
+  trustedStrategyActionSemanticsQualified: true;
   firstPartyShippingOnly: true;
-  quantityOneOnly: true;
-  addToCartOnly: true;
+  quantityOneOnly: false;
+  addToCartOnly: false;
   canonicalAttributionOnly: true;
   immutableReplay: true;
   lifecycleAwareReplay: true;
@@ -229,11 +324,18 @@ export interface PostgresSignalActionSpendCapabilityProjection {
   cooldownRevalidation: true;
   periodicSpendRevalidation: true;
   exactProductBinding: true;
-  purchaseIntentOnly: true;
+  purchaseIntentOnly: false;
   strategyActionAuthority: false;
+  strategySemanticsContractVersion: 2;
+  strategyDecisionSourceAccepted: true;
+  strategyExistenceRevalidation: true;
+  strategyFailoverToNotifyEnforced: true;
+  strategyCartActionAuthority: false;
+  strategyReservationAuthority: false;
+  trustedStrategyActionSemanticsQualified: true;
   firstPartyShippingOnly: true;
-  quantityOneOnly: true;
-  addToCartOnly: true;
+  quantityOneOnly: false;
+  addToCartOnly: false;
   canonicalAttributionOnly: true;
   immutableReplay: true;
   lifecycleAwareReplay: true;
@@ -248,8 +350,8 @@ export interface PostgresSignalActionSpendCapabilityProjection {
   attributionPolicyParity: false;
   hostedDeliveryHandlerRepositoryParity: false;
   maximumPlanAgeSeconds: 30;
-  protectedTenantTableCount: 19;
-  forcedRlsTableCount: 19;
+  protectedTenantTableCount: 20;
+  forcedRlsTableCount: 20;
   mutationTableCount: 9;
   directTableGrantCount: 0;
   functionGrantCount: 1;
@@ -281,12 +383,12 @@ export interface PostgresSignalActionSpendApplyPlan {
   policyRevision: number;
   policyHash: string;
   evaluationFingerprint: string;
-  decisionSource: "purchase_intent";
-  strategyId: "";
-  strategyRevision: 0;
-  action: "add_to_cart";
-  initialJobState: "awaiting_executor";
-  quantity: 1;
+  decisionSource: "purchase_intent" | "strategy";
+  strategyId: string;
+  strategyRevision: number;
+  action: "add_to_cart" | "notify";
+  initialJobState: "awaiting_executor" | "notify_only";
+  quantity: number;
   unitPriceCents: number;
   effectiveUnitCapCents: number;
   maximumAllInCents: number;
@@ -470,8 +572,8 @@ export function buildPostgresSignalActionSpendApplyManifest(
       bypassRls: false,
       directTableAccess: false
     },
-    protectedTenantTableCount: 19,
-    forcedRlsTableCount: 19,
+    protectedTenantTableCount: 20,
+    forcedRlsTableCount: 20,
     mutationTableCount: 9,
     directTableGrantCount: 0,
     functionGrantCount: 1,
@@ -504,11 +606,18 @@ export function buildPostgresSignalActionSpendApplyManifest(
     cooldownRevalidation: true,
     periodicSpendRevalidation: true,
     exactProductBinding: true,
-    purchaseIntentOnly: true,
+    purchaseIntentOnly: false,
     strategyActionAuthority: false,
+    strategySemanticsContractVersion: 2,
+    strategyDecisionSourceAccepted: true,
+    strategyExistenceRevalidation: true,
+    strategyFailoverToNotifyEnforced: true,
+    strategyCartActionAuthority: false,
+    strategyReservationAuthority: false,
+    trustedStrategyActionSemanticsQualified: true,
     firstPartyShippingOnly: true,
-    quantityOneOnly: true,
-    addToCartOnly: true,
+    quantityOneOnly: false,
+    addToCartOnly: false,
     canonicalAttributionOnly: true,
     immutableReplay: true,
     lifecycleAwareReplay: true,
@@ -579,11 +688,18 @@ PostgresSignalActionSpendCapabilityProjection {
     cooldownRevalidation: true,
     periodicSpendRevalidation: true,
     exactProductBinding: true,
-    purchaseIntentOnly: true,
+    purchaseIntentOnly: false,
     strategyActionAuthority: false,
+    strategySemanticsContractVersion: 2,
+    strategyDecisionSourceAccepted: true,
+    strategyExistenceRevalidation: true,
+    strategyFailoverToNotifyEnforced: true,
+    strategyCartActionAuthority: false,
+    strategyReservationAuthority: false,
+    trustedStrategyActionSemanticsQualified: true,
     firstPartyShippingOnly: true,
-    quantityOneOnly: true,
-    addToCartOnly: true,
+    quantityOneOnly: false,
+    addToCartOnly: false,
     canonicalAttributionOnly: true,
     immutableReplay: true,
     lifecycleAwareReplay: true,
@@ -598,8 +714,8 @@ PostgresSignalActionSpendCapabilityProjection {
     attributionPolicyParity: false,
     hostedDeliveryHandlerRepositoryParity: false,
     maximumPlanAgeSeconds: 30,
-    protectedTenantTableCount: 19,
-    forcedRlsTableCount: 19,
+    protectedTenantTableCount: 20,
+    forcedRlsTableCount: 20,
     mutationTableCount: 9,
     directTableGrantCount: 0,
     functionGrantCount: 1,
@@ -675,7 +791,7 @@ export function signalActionSpendApplyFunctionSource(
   const actionIdempotencyParts = stableHashInputSql([
     "'postgres_action_idempotency_v1'::text", "resolved_tenant_id", "resolved_user_id",
     "mission_id_value", "policy_revision_id_value", "incident_id_value",
-    "evaluation_fingerprint_value", "'add_to_cart'::text"
+    "evaluation_fingerprint_value", "effective_action_value"
   ]);
   const spendIdempotencyParts = stableHashInputSql([
     "'postgres_spend_idempotency_v1'::text", "action_idempotency_key_value"
@@ -691,8 +807,8 @@ export function signalActionSpendApplyFunctionSource(
     "retailer_id_value", "retailer_sku_value", "incident_id_value", "mission_id_value",
     "mission_target_id_value", "policy_revision_id_value", "policy_revision_value::text",
     "policy_hash_value", "evaluation_fingerprint_value", "decision_source_value",
-    "strategy_id_value", "strategy_revision_value::text", "'add_to_cart'::text",
-    "'awaiting_executor'::text", "'1'::text", "unit_price_cents_value::text",
+    "strategy_id_value", "strategy_revision_value::text", "effective_action_value",
+    "initial_job_state_value", "effective_quantity_value::text", "unit_price_cents_value::text",
     "effective_unit_cap_cents_value::text", "maximum_all_in_cents_value::text",
     "'USD'::text", "seller_name_value", "'first_party'::text", "'shipping'::text",
     "offer_fingerprint_value", "expires_at_value", "exact_offer_key_id_value",
@@ -750,6 +866,16 @@ DECLARE
   decision_source_value TEXT;
   strategy_id_value TEXT;
   strategy_revision_value BIGINT;
+  effective_action_value TEXT;
+  effective_quantity_value BIGINT;
+  initial_job_state_value TEXT;
+  action_event_reason_code_value TEXT;
+  action_event_message_value TEXT;
+  audit_reason_code_value TEXT;
+  audit_message_value TEXT;
+  outbox_message_value TEXT;
+  replay_decision_source_value TEXT;
+  strategy_record RECORD;
   unit_price_cents_value BIGINT;
   effective_unit_cap_cents_value BIGINT;
   maximum_all_in_cents_value BIGINT;
@@ -942,7 +1068,7 @@ BEGIN
     'yoink_signal_action_spend_01_mission_v1:' || resolved_tenant_id || ':' ||
       resolved_user_id || ':' || mission_id_value, 0
   ));
-  SELECT COUNT(*) INTO action_job_count
+  SELECT COUNT(*), MIN(job.decision_source) INTO action_job_count, replay_decision_source_value
   FROM ${relation(manifest.schemaName, "action_jobs")} AS job
   WHERE job.id = action_job_id_value AND job.tenant_id = resolved_tenant_id
     AND job.user_id = resolved_user_id;
@@ -950,7 +1076,7 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend replay identity is ambiguous';
   END IF;
 
-  IF action_job_count = 1 THEN
+  IF action_job_count = 1 AND replay_decision_source_value = 'purchase_intent' THEN
     immutable_replay_value := TRUE;
     SELECT
       job.mission_id, job.mission_target_id, job.incident_id, job.strategy_id,
@@ -1119,6 +1245,166 @@ BEGIN
       OR replay_record.job_created_at <> replay_record.outbox_created_at THEN
       RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend replay graph changed';
     END IF;
+    effective_action_value := 'add_to_cart';
+    initial_job_state_value := 'awaiting_executor';
+    effective_quantity_value := 1;
+  ELSIF action_job_count = 1 AND replay_decision_source_value = 'strategy' THEN
+    -- Contract v2 strategy-sourced replay: mirrors the purchase-intent replay
+    -- block above, but the job's spend_reservation_id is required to be NULL
+    -- (a strategy decision never creates a reservation, see the module-level
+    -- SQLite-truth comment block above), so the reservation/ledger tables are
+    -- not joined at all here rather than joined and required non-null.
+    immutable_replay_value := TRUE;
+    SELECT
+      job.mission_id, job.mission_target_id, job.incident_id, job.strategy_id,
+      job.strategy_revision, job.decision_source, job.action, job.quantity,
+      job.max_unit_price_cents, job.max_order_total_cents, job.currency,
+      job.seller_policy, job.fulfillment, job.expected_seller, job.listing_id,
+      job.canonical_url, job.attribution_url, job.attribution_provider,
+      job.attribution_metadata_json, job.affiliate_mode, job.offer_fingerprint,
+      job.idempotency_key, job.expires_at, job.intent_revision_id,
+      job.exact_offer_key_id, job.offer_snapshot_id, job.spend_reservation_id,
+      job.state AS job_state, job.created_at AS job_created_at,
+      listing.variant_id, listing.retailer_id, listing.retailer_sku,
+      exact_offer.identity_hash, exact_offer.seller_name AS exact_seller_name,
+      exact_offer.seller_type AS exact_seller_type,
+      exact_offer.fulfillment AS exact_fulfillment,
+      snapshot.evidence_hash, snapshot.unit_price_cents AS snapshot_unit_price,
+      snapshot.maximum_all_in_cents AS snapshot_maximum_all_in,
+      snapshot.quantity AS snapshot_quantity, snapshot.currency AS snapshot_currency,
+      snapshot.seller_name AS snapshot_seller_name,
+      snapshot.seller_type AS snapshot_seller_type,
+      snapshot.fulfillment AS snapshot_fulfillment,
+      snapshot.offer_fingerprint AS snapshot_offer_fingerprint,
+      snapshot.observed_at, snapshot.expires_at AS snapshot_expires_at,
+      snapshot.created_at AS snapshot_created_at,
+      action_event.state AS event_state, action_event.reason_code AS event_reason_code,
+      action_event.evidence_json, action_event.created_at AS event_created_at,
+      decision.event_id AS decision_event_id, decision.incident_id AS decision_incident_id,
+      decision.strategy_id AS decision_strategy_id,
+      decision.strategy_revision AS decision_strategy_revision,
+      decision.decision_source AS decision_source_stored, decision.outcome,
+      decision.effective_action, decision.effective_quantity,
+      decision.effective_unit_cap_cents, decision.created_at AS decision_created_at,
+      audit.correlation_id AS audit_correlation_id, audit.event_type AS audit_event_type,
+      audit.reason_code AS audit_reason_code, audit.data_json,
+      audit.created_at AS audit_created_at,
+      outbox.aggregate_type, outbox.aggregate_id, outbox.event_type AS outbox_event_type,
+      outbox.payload_json, outbox.created_at AS outbox_created_at,
+      policy.revision AS policy_revision, policy.policy_hash
+      INTO STRICT replay_record
+    FROM ${relation(manifest.schemaName, "action_jobs")} AS job
+    JOIN ${relation(manifest.schemaName, "listings")} AS listing ON listing.id = job.listing_id
+    JOIN ${relation(manifest.schemaName, "exact_offer_keys")} AS exact_offer
+      ON exact_offer.id = job.exact_offer_key_id AND exact_offer.tenant_id = job.tenant_id
+    JOIN ${relation(manifest.schemaName, "offer_snapshots")} AS snapshot
+      ON snapshot.id = job.offer_snapshot_id AND snapshot.tenant_id = job.tenant_id
+     AND snapshot.user_id = job.user_id
+    JOIN ${relation(manifest.schemaName, "action_events")} AS action_event
+      ON action_event.id = action_event_id_value AND action_event.job_id = job.id
+    JOIN ${relation(manifest.schemaName, "mission_decisions")} AS decision
+      ON decision.id = mission_decision_id_value AND decision.mission_id = job.mission_id
+    JOIN ${relation(manifest.schemaName, "audit_events")} AS audit
+      ON audit.id = audit_id_value AND audit.tenant_id = job.tenant_id
+     AND audit.user_id = job.user_id
+    JOIN ${relation(manifest.schemaName, "outbox_events")} AS outbox
+      ON outbox.id = outbox_id_value AND outbox.tenant_id = job.tenant_id
+    JOIN ${relation(manifest.schemaName, "mission_intent_revisions")} AS policy
+      ON policy.id = job.intent_revision_id AND policy.mission_id = job.mission_id
+    WHERE job.id = action_job_id_value AND job.tenant_id = resolved_tenant_id
+      AND job.user_id = resolved_user_id;
+
+    listing_id_value := replay_record.listing_id;
+    variant_id_value := replay_record.variant_id;
+    retailer_id_value := replay_record.retailer_id;
+    retailer_sku_value := replay_record.retailer_sku;
+    canonical_url_value := replay_record.canonical_url;
+    incident_id_value := replay_record.incident_id;
+    mission_target_id_value := replay_record.mission_target_id;
+    policy_revision_id_value := replay_record.intent_revision_id;
+    policy_revision_value := replay_record.policy_revision;
+    policy_hash_value := replay_record.policy_hash;
+    decision_source_value := replay_record.decision_source;
+    strategy_id_value := COALESCE(replay_record.strategy_id, '');
+    strategy_revision_value := COALESCE(replay_record.strategy_revision, 0);
+    effective_action_value := 'notify';
+    initial_job_state_value := 'notify_only';
+    effective_quantity_value := replay_record.quantity;
+    unit_price_cents_value := replay_record.snapshot_unit_price;
+    effective_unit_cap_cents_value := replay_record.max_unit_price_cents;
+    maximum_all_in_cents_value := replay_record.max_order_total_cents;
+    seller_name_value := replay_record.expected_seller;
+    offer_fingerprint_value := replay_record.offer_fingerprint;
+    observed_at_value := replay_record.observed_at;
+    expires_at_value := replay_record.expires_at;
+    exact_offer_key_id_value := replay_record.exact_offer_key_id;
+    exact_offer_identity_hash_value := replay_record.identity_hash;
+    offer_snapshot_id_value := replay_record.offer_snapshot_id;
+    offer_evidence_hash_value := replay_record.evidence_hash;
+    action_idempotency_key_value := replay_record.idempotency_key;
+    spend_idempotency_key_value := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+      ${spendIdempotencyParts}, 'UTF8'
+    )), 'hex');
+    action_event_evidence_value := replay_record.evidence_json;
+    audit_data_value := replay_record.data_json;
+    outbox_payload_value := replay_record.payload_json;
+    IF replay_record.mission_id <> mission_id_value
+      OR replay_record.decision_source <> 'strategy'
+      OR replay_record.strategy_id IS NULL OR replay_record.strategy_id = ''
+      OR COALESCE(replay_record.strategy_revision, 0) < 1
+      OR replay_record.action <> 'notify' OR replay_record.quantity NOT BETWEEN 1 AND 99
+      OR replay_record.max_unit_price_cents IS NULL
+      OR replay_record.max_order_total_cents IS NULL
+      OR replay_record.currency <> 'USD'
+      OR replay_record.seller_policy <> 'first_party_only'
+      OR replay_record.fulfillment <> 'shipping'
+      OR replay_record.attribution_url <> replay_record.canonical_url
+      OR replay_record.attribution_provider <> 'canonical'
+      OR replay_record.attribution_metadata_json <> '{}'
+      OR replay_record.affiliate_mode <> 'disabled'
+      OR replay_record.spend_reservation_id IS NOT NULL
+      OR replay_record.job_state <> 'notify_only'
+      OR replay_record.exact_seller_name <> replay_record.expected_seller
+      OR replay_record.exact_seller_type <> 'first_party'
+      OR replay_record.exact_fulfillment <> 'shipping'
+      OR replay_record.snapshot_quantity <> 1 OR replay_record.snapshot_currency <> 'USD'
+      OR replay_record.snapshot_seller_name <> replay_record.expected_seller
+      OR replay_record.snapshot_seller_type <> 'first_party'
+      OR replay_record.snapshot_fulfillment <> 'shipping'
+      OR replay_record.snapshot_offer_fingerprint <> replay_record.offer_fingerprint
+      OR replay_record.snapshot_expires_at <> replay_record.expires_at
+      OR replay_record.event_state <> 'notify_only'
+      OR replay_record.event_reason_code <> 'strategy_qualified'
+      OR replay_record.evidence_json::jsonb->>'boundary' <> 'postgres_signal_action_spend_v1'
+      OR replay_record.evidence_json::jsonb->'evaluationAttestation' IS DISTINCT FROM attestation
+      OR replay_record.decision_event_id <> event_id_value
+      OR replay_record.decision_incident_id <> replay_record.incident_id
+      OR COALESCE(replay_record.decision_strategy_id, '') <> COALESCE(replay_record.strategy_id, '')
+      OR COALESCE(replay_record.decision_strategy_revision, 0) <> COALESCE(replay_record.strategy_revision, 0)
+      OR replay_record.decision_source_stored <> replay_record.decision_source
+      OR replay_record.outcome <> 'qualified'
+      OR replay_record.effective_action <> 'notify'
+      OR replay_record.effective_quantity <> replay_record.quantity
+      OR replay_record.audit_correlation_id <> action_job_id_value
+      OR replay_record.audit_event_type <> 'action_job_created'
+      OR replay_record.audit_reason_code <> 'notify_only'
+      OR replay_record.data_json::jsonb->'evaluationAttestation' IS DISTINCT FROM attestation
+      OR replay_record.aggregate_type <> 'action_job'
+      OR replay_record.aggregate_id <> action_job_id_value
+      OR replay_record.outbox_event_type <> 'action_job_created'
+      OR replay_record.payload_json::jsonb->>'auditId' <> audit_id_value
+      OR replay_record.job_created_at <> replay_record.snapshot_created_at
+      OR replay_record.job_created_at <> replay_record.event_created_at
+      OR replay_record.job_created_at <> replay_record.decision_created_at
+      OR replay_record.job_created_at <> replay_record.audit_created_at
+      OR replay_record.job_created_at <> replay_record.outbox_created_at THEN
+      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend replay graph changed';
+    END IF;
+  ELSIF action_job_count = 1 THEN
+    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend replay decision source is unsupported';
+  END IF;
+
+  IF immutable_replay_value THEN
     exact_offer_action_value := 'none';
     offer_snapshot_action_value := 'none';
     action_job_action_value := 'none';
@@ -1147,11 +1433,6 @@ BEGIN
       OR evaluation_plan->>'evaluationState' <> 'matched'
       OR evaluation_plan->>'outcome' <> 'continue_downstream'
       OR evaluation_plan->>'continueDownstream' <> 'true'
-      OR evaluation_plan->>'effectiveAction' <> 'add_to_cart'
-      OR evaluation_plan->>'effectiveQuantity' <> '1'
-      OR evaluation_plan->>'decisionSource' <> 'purchase_intent'
-      OR evaluation_plan->>'strategyId' <> ''
-      OR evaluation_plan->>'strategyRevision' <> '0'
       OR evaluation_plan->>'effectiveUnitCapCents' !~ '^[1-9][0-9]{0,8}$'
       OR evaluation_plan->>'sellerPolicy' <> 'first_party_only'
       OR evaluation_plan->>'fulfillment' <> 'shipping'
@@ -1161,8 +1442,29 @@ BEGIN
       OR evaluation_plan->>'outboxAction' <> 'none'
       OR evaluation_plan->>'strategyEvaluationApplyWillApply' <> 'false'
       OR evaluation_plan->>'actionMutation' <> 'false'
-      OR evaluation_plan->>'spendMutation' <> 'false' THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend requires a current matched add-only evaluation';
+      OR evaluation_plan->>'spendMutation' <> 'false'
+      OR evaluation_plan->>'decisionSource' NOT IN ('purchase_intent', 'strategy')
+      OR (evaluation_plan->>'decisionSource' = 'purchase_intent' AND (
+        evaluation_plan->>'effectiveAction' <> 'add_to_cart'
+        OR evaluation_plan->>'effectiveQuantity' <> '1'
+        OR evaluation_plan->>'strategyId' <> ''
+        OR evaluation_plan->>'strategyRevision' <> '0'
+      ))
+      -- Contract v2 strategy branch: any actionable effectiveAction is
+      -- accepted here (matching how SQLite's evaluator can still hand a
+      -- strategy an "add_to_cart" effectiveAction), but the failover to a
+      -- notify-only action is enforced unconditionally below regardless of
+      -- what is attested — see the SQLite-truth comment block above this
+      -- function. A bound, positive-revision strategy identity and a
+      -- 1-99 quantity are required.
+      OR (evaluation_plan->>'decisionSource' = 'strategy' AND (
+        evaluation_plan->>'effectiveAction' NOT IN
+          ('notify', 'add_to_cart', 'prepare_checkout', 'submit_order')
+        OR evaluation_plan->>'effectiveQuantity' !~ '^([1-9]|[1-9][0-9])$'
+        OR COALESCE(evaluation_plan->>'strategyId', '') = ''
+        OR evaluation_plan->>'strategyRevision' !~ '^[1-9][0-9]*$'
+      )) THEN
+      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend requires a current matched downstream-eligible evaluation';
     END IF;
     listing_id_value := evaluation_plan->>'listingId';
     variant_id_value := evaluation_plan->>'variantId';
@@ -1175,6 +1477,7 @@ BEGIN
     strategy_id_value := evaluation_plan->>'strategyId';
     strategy_revision_value := (evaluation_plan->>'strategyRevision')::bigint;
     effective_unit_cap_cents_value := (evaluation_plan->>'effectiveUnitCapCents')::bigint;
+    effective_quantity_value := (evaluation_plan->>'effectiveQuantity')::bigint;
 
     SELECT signal.source_connection_id, listing.retailer_id
       INTO STRICT source_connection_id_value, retailer_id_value
@@ -1334,181 +1637,241 @@ BEGIN
       OR policy_record.currency <> 'USD'
       OR policy_record.max_all_in_cents IS NULL
       OR policy_record.max_all_in_cents NOT BETWEEN 1 AND 100000000
-      OR policy_record.action_ceiling NOT IN ('add_to_cart', 'prepare_checkout', 'submit_order')
       OR policy_record.decision_mode <> decision_source_value
       OR policy_record.substitution_policy <> 'exact_only'
       OR (policy_record.expires_at <> ''
         AND policy_record.expires_at::timestamptz <= authorization_clock) THEN
       RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend current purchase policy is not actionable';
     END IF;
-    SELECT COUNT(*) INTO matching_target_count
-    FROM pg_catalog.jsonb_array_elements(policy_record.target_policy_json::jsonb) AS target(value)
-    WHERE target.value->>'targetId' = mission_target_id_value
-      AND target.value->>'listingId' = listing_id_value;
-    IF matching_target_count <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend target policy is ambiguous';
-    END IF;
-    SELECT target.value->>'retailerId' AS retailer_id,
-           target.value->'enabled' AS enabled,
-           target.value->'maxUnitPriceCents' AS max_unit_price,
-           target.value->>'sellerPolicy' AS seller_policy,
-           target.value->>'fulfillment' AS fulfillment
-      INTO STRICT target_policy_record
-    FROM pg_catalog.jsonb_array_elements(policy_record.target_policy_json::jsonb) AS target(value)
-    WHERE target.value->>'targetId' = mission_target_id_value
-      AND target.value->>'listingId' = listing_id_value;
-    IF target_policy_record.retailer_id <> retailer_id_value
-      OR target_policy_record.enabled IS DISTINCT FROM 'true'::jsonb
-      OR pg_catalog.jsonb_typeof(target_policy_record.max_unit_price)
-        IS DISTINCT FROM 'number'
-      OR target_policy_record.max_unit_price #>> '{}' !~ '^[1-9][0-9]{0,8}$'
-      OR (target_policy_record.max_unit_price #>> '{}')::bigint < unit_price_cents_value
-      OR mission_record.max_unit_price_cents IS DISTINCT FROM
-        (target_policy_record.max_unit_price #>> '{}')::bigint
-      OR target_policy_record.seller_policy <> 'first_party_only'
-      OR target_policy_record.fulfillment <> 'shipping' THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend exact target bounds are invalid';
-    END IF;
-
-    SELECT settings.actions_paused, settings.execution_mode, settings.affiliate_mode,
-           settings.tax_bps, settings.store_allowances_json
-      INTO STRICT settings_record
-    FROM ${relation(manifest.schemaName, "app_settings")} AS settings
-    WHERE settings.user_id = resolved_user_id FOR UPDATE;
-    IF settings_record.actions_paused <> 0 OR settings_record.execution_mode <> 'live'
-      OR settings_record.affiliate_mode <> 'disabled'
-      OR settings_record.tax_bps NOT BETWEEN 0 AND 10000
-      OR pg_catalog.jsonb_typeof(settings_record.store_allowances_json::jsonb) <> 'object' THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend live canonical execution settings are closed';
-    END IF;
-    IF settings_record.store_allowances_json::jsonb ? retailer_id_value THEN
-      IF pg_catalog.jsonb_typeof(settings_record.store_allowances_json::jsonb->retailer_id_value) <> 'number'
-        OR settings_record.store_allowances_json::jsonb->>retailer_id_value !~ '^(0|[1-9][0-9]{0,8})$' THEN
-        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'signal action/spend store allowance is invalid';
-      END IF;
-      allowance_value := (settings_record.store_allowances_json::jsonb->>retailer_id_value)::bigint;
-    ELSE
-      allowance_value := 0;
-    END IF;
-
-    expected_adapter_version_value := ${adapterVersionSql};
-    SELECT qualification.adapter_version, qualification.highest_action,
-           qualification.status
-      INTO qualification_record
-    FROM ${relation(manifest.schemaName, "retailer_adapter_qualifications")} AS qualification
-    WHERE qualification.tenant_id = resolved_tenant_id
-      AND qualification.user_id = resolved_user_id
-      AND qualification.retailer_id = retailer_id_value
-    FOR UPDATE;
-    IF NOT FOUND THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend retailer add lane has no current qualification';
-    END IF;
-    IF expected_adapter_version_value = ''
-      OR qualification_record.adapter_version <> expected_adapter_version_value
-      OR qualification_record.highest_action <> 'add_to_cart'
-      OR qualification_record.status <> 'qualified' THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend retailer add lane is not currently qualified';
-    END IF;
-
-    SELECT spend.revision, spend.currency, spend.per_order_cap_cents,
-           spend.daily_cap_cents, spend.monthly_cap_cents,
-           spend.order_submission_enabled
-      INTO spend_policy_record
-    FROM ${relation(manifest.schemaName, "user_spend_policies")} AS spend
-    WHERE spend.tenant_id = resolved_tenant_id AND spend.user_id = resolved_user_id
-    FOR UPDATE;
-    IF NOT FOUND THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend user spend policy is unavailable';
-    END IF;
-    IF spend_policy_record.currency <> 'USD' THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend currency is unsupported';
-    END IF;
-
     derived_cap_value := unit_price_cents_value;
-    IF decision_source_value <> 'purchase_intent'
-      OR strategy_id_value <> '' OR strategy_revision_value <> 0
-      OR policy_record.max_signal_age_seconds <> (evaluation_plan->>'maxSignalAgeSeconds')::bigint
-      OR (target_policy_record.max_unit_price #>> '{}')::bigint < unit_price_cents_value THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend requires an exact reviewed purchase-intent authorization';
-    END IF;
-    IF effective_unit_cap_cents_value <> derived_cap_value
-      OR effective_unit_cap_cents_value <> unit_price_cents_value THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend effective unit cap was not rederived';
-    END IF;
 
-    maximum_all_in_cents_value := pg_catalog.ceil(
-      effective_unit_cap_cents_value::numeric * (10000 + settings_record.tax_bps) / 10000
-    )::bigint + allowance_value;
-    IF maximum_all_in_cents_value NOT BETWEEN 1 AND 100000000
-      OR maximum_all_in_cents_value > policy_record.max_all_in_cents
-      OR (spend_policy_record.per_order_cap_cents IS NOT NULL
-        AND maximum_all_in_cents_value > spend_policy_record.per_order_cap_cents) THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend maximum all-in amount exceeds a current cap';
-    END IF;
+    IF decision_source_value = 'purchase_intent' THEN
+      IF policy_record.action_ceiling NOT IN ('add_to_cart', 'prepare_checkout', 'submit_order') THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend current purchase policy is not actionable';
+      END IF;
+      SELECT COUNT(*) INTO matching_target_count
+      FROM pg_catalog.jsonb_array_elements(policy_record.target_policy_json::jsonb) AS target(value)
+      WHERE target.value->>'targetId' = mission_target_id_value
+        AND target.value->>'listingId' = listing_id_value;
+      IF matching_target_count <> 1 THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend target policy is ambiguous';
+      END IF;
+      SELECT target.value->>'retailerId' AS retailer_id,
+             target.value->'enabled' AS enabled,
+             target.value->'maxUnitPriceCents' AS max_unit_price,
+             target.value->>'sellerPolicy' AS seller_policy,
+             target.value->>'fulfillment' AS fulfillment
+        INTO STRICT target_policy_record
+      FROM pg_catalog.jsonb_array_elements(policy_record.target_policy_json::jsonb) AS target(value)
+      WHERE target.value->>'targetId' = mission_target_id_value
+        AND target.value->>'listingId' = listing_id_value;
+      IF target_policy_record.retailer_id <> retailer_id_value
+        OR target_policy_record.enabled IS DISTINCT FROM 'true'::jsonb
+        OR pg_catalog.jsonb_typeof(target_policy_record.max_unit_price)
+          IS DISTINCT FROM 'number'
+        OR target_policy_record.max_unit_price #>> '{}' !~ '^[1-9][0-9]{0,8}$'
+        OR (target_policy_record.max_unit_price #>> '{}')::bigint < unit_price_cents_value
+        OR mission_record.max_unit_price_cents IS DISTINCT FROM
+          (target_policy_record.max_unit_price #>> '{}')::bigint
+        OR target_policy_record.seller_policy <> 'first_party_only'
+        OR target_policy_record.fulfillment <> 'shipping' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend exact target bounds are invalid';
+      END IF;
 
-    PERFORM job.id FROM ${relation(manifest.schemaName, "action_jobs")} AS job
-    WHERE job.mission_id = mission_id_value AND job.tenant_id = resolved_tenant_id
-      AND job.user_id = resolved_user_id FOR UPDATE;
-    SELECT COUNT(*) INTO sibling_claim_count
-    FROM ${relation(manifest.schemaName, "action_jobs")} AS job
-    WHERE job.mission_id = mission_id_value AND job.tenant_id = resolved_tenant_id
-      AND job.user_id = resolved_user_id AND job.action <> 'notify'
-      AND job.state NOT IN ('confirmed', 'expired', 'cancelled', 'offer_rejected', 'notify_only')
-      AND (job.state IN ('manual_review', 'submission_uncertain')
-        OR job.expires_at::timestamptz > authorization_clock);
-    IF sibling_claim_count <> 0 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend mission already has an active purchase claim';
-    END IF;
-    IF policy_record.cooldown_seconds > 0 THEN
-      SELECT MAX(job.created_at::timestamptz) INTO latest_cooldown_action
+      SELECT settings.actions_paused, settings.execution_mode, settings.affiliate_mode,
+             settings.tax_bps, settings.store_allowances_json
+        INTO STRICT settings_record
+      FROM ${relation(manifest.schemaName, "app_settings")} AS settings
+      WHERE settings.user_id = resolved_user_id FOR UPDATE;
+      IF settings_record.actions_paused <> 0 OR settings_record.execution_mode <> 'live'
+        OR settings_record.affiliate_mode <> 'disabled'
+        OR settings_record.tax_bps NOT BETWEEN 0 AND 10000
+        OR pg_catalog.jsonb_typeof(settings_record.store_allowances_json::jsonb) <> 'object' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend live canonical execution settings are closed';
+      END IF;
+      IF settings_record.store_allowances_json::jsonb ? retailer_id_value THEN
+        IF pg_catalog.jsonb_typeof(settings_record.store_allowances_json::jsonb->retailer_id_value) <> 'number'
+          OR settings_record.store_allowances_json::jsonb->>retailer_id_value !~ '^(0|[1-9][0-9]{0,8})$' THEN
+          RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'signal action/spend store allowance is invalid';
+        END IF;
+        allowance_value := (settings_record.store_allowances_json::jsonb->>retailer_id_value)::bigint;
+      ELSE
+        allowance_value := 0;
+      END IF;
+
+      expected_adapter_version_value := ${adapterVersionSql};
+      SELECT qualification.adapter_version, qualification.highest_action,
+             qualification.status
+        INTO qualification_record
+      FROM ${relation(manifest.schemaName, "retailer_adapter_qualifications")} AS qualification
+      WHERE qualification.tenant_id = resolved_tenant_id
+        AND qualification.user_id = resolved_user_id
+        AND qualification.retailer_id = retailer_id_value
+      FOR UPDATE;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend retailer add lane has no current qualification';
+      END IF;
+      IF expected_adapter_version_value = ''
+        OR qualification_record.adapter_version <> expected_adapter_version_value
+        OR qualification_record.highest_action <> 'add_to_cart'
+        OR qualification_record.status <> 'qualified' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend retailer add lane is not currently qualified';
+      END IF;
+
+      SELECT spend.revision, spend.currency, spend.per_order_cap_cents,
+             spend.daily_cap_cents, spend.monthly_cap_cents,
+             spend.order_submission_enabled
+        INTO spend_policy_record
+      FROM ${relation(manifest.schemaName, "user_spend_policies")} AS spend
+      WHERE spend.tenant_id = resolved_tenant_id AND spend.user_id = resolved_user_id
+      FOR UPDATE;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend user spend policy is unavailable';
+      END IF;
+      IF spend_policy_record.currency <> 'USD' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend currency is unsupported';
+      END IF;
+
+      IF strategy_id_value <> '' OR strategy_revision_value <> 0
+        OR policy_record.max_signal_age_seconds <> (evaluation_plan->>'maxSignalAgeSeconds')::bigint
+        OR (target_policy_record.max_unit_price #>> '{}')::bigint < unit_price_cents_value THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend requires an exact reviewed purchase-intent authorization';
+      END IF;
+      IF effective_unit_cap_cents_value <> derived_cap_value
+        OR effective_unit_cap_cents_value <> unit_price_cents_value THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend effective unit cap was not rederived';
+      END IF;
+      effective_action_value := 'add_to_cart';
+      initial_job_state_value := 'awaiting_executor';
+      action_event_reason_code_value := 'purchase_intent_qualified';
+      action_event_message_value := 'The exact first-party shipping offer passed current product, quantity, price, spend, cooldown, claim, and retailer-lane checks.';
+      audit_reason_code_value := 'awaiting_executor';
+      audit_message_value := 'A bounded first-party shipping add-to-cart job and spend reservation were created atomically.';
+      outbox_message_value := audit_message_value;
+
+      maximum_all_in_cents_value := pg_catalog.ceil(
+        effective_unit_cap_cents_value::numeric * (10000 + settings_record.tax_bps) / 10000
+      )::bigint + allowance_value;
+      IF maximum_all_in_cents_value NOT BETWEEN 1 AND 100000000
+        OR maximum_all_in_cents_value > policy_record.max_all_in_cents
+        OR (spend_policy_record.per_order_cap_cents IS NOT NULL
+          AND maximum_all_in_cents_value > spend_policy_record.per_order_cap_cents) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend maximum all-in amount exceeds a current cap';
+      END IF;
+
+      PERFORM job.id FROM ${relation(manifest.schemaName, "action_jobs")} AS job
+      WHERE job.mission_id = mission_id_value AND job.tenant_id = resolved_tenant_id
+        AND job.user_id = resolved_user_id FOR UPDATE;
+      SELECT COUNT(*) INTO sibling_claim_count
       FROM ${relation(manifest.schemaName, "action_jobs")} AS job
       WHERE job.mission_id = mission_id_value AND job.tenant_id = resolved_tenant_id
         AND job.user_id = resolved_user_id AND job.action <> 'notify'
-        AND job.state IN ('confirmed', 'manual_review', 'submission_uncertain');
-      IF latest_cooldown_action IS NOT NULL
-        AND latest_cooldown_action + (policy_record.cooldown_seconds * INTERVAL '1 second')
-          > authorization_clock THEN
-        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend purchase-intent cooldown is active';
+        AND job.state NOT IN ('confirmed', 'expired', 'cancelled', 'offer_rejected', 'notify_only')
+        AND (job.state IN ('manual_review', 'submission_uncertain')
+          OR job.expires_at::timestamptz > authorization_clock);
+      IF sibling_claim_count <> 0 THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend mission already has an active purchase claim';
       END IF;
-    END IF;
+      IF policy_record.cooldown_seconds > 0 THEN
+        SELECT MAX(job.created_at::timestamptz) INTO latest_cooldown_action
+        FROM ${relation(manifest.schemaName, "action_jobs")} AS job
+        WHERE job.mission_id = mission_id_value AND job.tenant_id = resolved_tenant_id
+          AND job.user_id = resolved_user_id AND job.action <> 'notify'
+          AND job.state IN ('confirmed', 'manual_review', 'submission_uncertain');
+        IF latest_cooldown_action IS NOT NULL
+          AND latest_cooldown_action + (policy_record.cooldown_seconds * INTERVAL '1 second')
+            > authorization_clock THEN
+          RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend purchase-intent cooldown is active';
+        END IF;
+      END IF;
 
-    PERFORM reservation.id FROM ${relation(manifest.schemaName, "spend_reservations")} AS reservation
-    WHERE reservation.tenant_id = resolved_tenant_id AND reservation.user_id = resolved_user_id
-      AND reservation.status = 'active' AND reservation.expires_at::timestamptz > authorization_clock
-    FOR UPDATE;
-    SELECT COALESCE(SUM(reservation.quantity), 0),
-           COALESCE(SUM(reservation.reserved_amount_cents), 0)
-      INTO reserved_quantity_value, active_reserved_cents_value
-    FROM ${relation(manifest.schemaName, "spend_reservations")} AS reservation
-    WHERE reservation.tenant_id = resolved_tenant_id AND reservation.user_id = resolved_user_id
-      AND reservation.status = 'active' AND reservation.expires_at::timestamptz > authorization_clock;
-    SELECT COALESCE(SUM(reservation.quantity), 0) INTO reserved_quantity_value
-    FROM ${relation(manifest.schemaName, "spend_reservations")} AS reservation
-    WHERE reservation.tenant_id = resolved_tenant_id AND reservation.user_id = resolved_user_id
-      AND reservation.mission_id = mission_id_value
-      AND reservation.status = 'active' AND reservation.expires_at::timestamptz > authorization_clock;
-    IF mission_record.fulfilled_quantity + reserved_quantity_value + 1 > policy_record.quantity THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend remaining quantity is exhausted';
-    END IF;
-    SELECT COALESCE(SUM(ledger.spent_delta_cents), 0) INTO spent_today_cents_value
-    FROM ${relation(manifest.schemaName, "spend_ledger_entries")} AS ledger
-    WHERE ledger.tenant_id = resolved_tenant_id AND ledger.user_id = resolved_user_id
-      AND ledger.created_at::timestamptz >= pg_catalog.date_trunc('day', authorization_clock AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
-    SELECT COALESCE(SUM(ledger.spent_delta_cents), 0) INTO spent_month_cents_value
-    FROM ${relation(manifest.schemaName, "spend_ledger_entries")} AS ledger
-    WHERE ledger.tenant_id = resolved_tenant_id AND ledger.user_id = resolved_user_id
-      AND ledger.created_at::timestamptz >= pg_catalog.date_trunc('month', authorization_clock AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
-    SELECT COALESCE(SUM(reservation.reserved_amount_cents), 0) INTO active_reserved_cents_value
-    FROM ${relation(manifest.schemaName, "spend_reservations")} AS reservation
-    WHERE reservation.tenant_id = resolved_tenant_id AND reservation.user_id = resolved_user_id
-      AND reservation.status = 'active' AND reservation.expires_at::timestamptz > authorization_clock;
-    IF (spend_policy_record.daily_cap_cents IS NOT NULL
-        AND spent_today_cents_value + active_reserved_cents_value + maximum_all_in_cents_value
-          > spend_policy_record.daily_cap_cents)
-      OR (spend_policy_record.monthly_cap_cents IS NOT NULL
-        AND spent_month_cents_value + active_reserved_cents_value + maximum_all_in_cents_value
-          > spend_policy_record.monthly_cap_cents) THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend periodic spending capacity is exhausted';
+      PERFORM reservation.id FROM ${relation(manifest.schemaName, "spend_reservations")} AS reservation
+      WHERE reservation.tenant_id = resolved_tenant_id AND reservation.user_id = resolved_user_id
+        AND reservation.status = 'active' AND reservation.expires_at::timestamptz > authorization_clock
+      FOR UPDATE;
+      SELECT COALESCE(SUM(reservation.quantity), 0),
+             COALESCE(SUM(reservation.reserved_amount_cents), 0)
+        INTO reserved_quantity_value, active_reserved_cents_value
+      FROM ${relation(manifest.schemaName, "spend_reservations")} AS reservation
+      WHERE reservation.tenant_id = resolved_tenant_id AND reservation.user_id = resolved_user_id
+        AND reservation.status = 'active' AND reservation.expires_at::timestamptz > authorization_clock;
+      SELECT COALESCE(SUM(reservation.quantity), 0) INTO reserved_quantity_value
+      FROM ${relation(manifest.schemaName, "spend_reservations")} AS reservation
+      WHERE reservation.tenant_id = resolved_tenant_id AND reservation.user_id = resolved_user_id
+        AND reservation.mission_id = mission_id_value
+        AND reservation.status = 'active' AND reservation.expires_at::timestamptz > authorization_clock;
+      IF mission_record.fulfilled_quantity + reserved_quantity_value + 1 > policy_record.quantity THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend remaining quantity is exhausted';
+      END IF;
+      SELECT COALESCE(SUM(ledger.spent_delta_cents), 0) INTO spent_today_cents_value
+      FROM ${relation(manifest.schemaName, "spend_ledger_entries")} AS ledger
+      WHERE ledger.tenant_id = resolved_tenant_id AND ledger.user_id = resolved_user_id
+        AND ledger.created_at::timestamptz >= pg_catalog.date_trunc('day', authorization_clock AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+      SELECT COALESCE(SUM(ledger.spent_delta_cents), 0) INTO spent_month_cents_value
+      FROM ${relation(manifest.schemaName, "spend_ledger_entries")} AS ledger
+      WHERE ledger.tenant_id = resolved_tenant_id AND ledger.user_id = resolved_user_id
+        AND ledger.created_at::timestamptz >= pg_catalog.date_trunc('month', authorization_clock AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+      SELECT COALESCE(SUM(reservation.reserved_amount_cents), 0) INTO active_reserved_cents_value
+      FROM ${relation(manifest.schemaName, "spend_reservations")} AS reservation
+      WHERE reservation.tenant_id = resolved_tenant_id AND reservation.user_id = resolved_user_id
+        AND reservation.status = 'active' AND reservation.expires_at::timestamptz > authorization_clock;
+      IF (spend_policy_record.daily_cap_cents IS NOT NULL
+          AND spent_today_cents_value + active_reserved_cents_value + maximum_all_in_cents_value
+            > spend_policy_record.daily_cap_cents)
+        OR (spend_policy_record.monthly_cap_cents IS NOT NULL
+          AND spent_month_cents_value + active_reserved_cents_value + maximum_all_in_cents_value
+            > spend_policy_record.monthly_cap_cents) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend periodic spending capacity is exhausted';
+      END IF;
+    ELSIF decision_source_value = 'strategy' THEN
+      -- Contract v2: a strategy-owned decision is revalidated against the
+      -- strategies table (existence, ownership, enabled, exact attested
+      -- revision) and then unconditionally, fail-closed, produces a
+      -- notify-only action job. None of the purchase-intent-only gates above
+      -- (retailer add-lane qualification, spend policy, sibling claim,
+      -- cooldown, remaining quantity, periodic spend cap) apply — SQLite
+      -- itself never evaluates any of them for a notify outcome (see the
+      -- SQLite-truth comment block above this function, part (c)).
+      IF strategy_id_value = '' OR strategy_revision_value < 1 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'signal action/spend strategy decision requires a bound strategy identity';
+      END IF;
+      SELECT strategy.enabled, strategy.revision
+        INTO STRICT strategy_record
+      FROM ${relation(manifest.schemaName, "strategies")} AS strategy
+      WHERE strategy.id = strategy_id_value AND strategy.tenant_id = resolved_tenant_id
+        AND strategy.user_id = resolved_user_id
+      FOR SHARE;
+      IF strategy_record.enabled <> 1 OR strategy_record.revision <> strategy_revision_value THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend strategy is not currently enabled at the attested revision';
+      END IF;
+      IF effective_unit_cap_cents_value <> derived_cap_value THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend strategy effective unit cap was not rederived';
+      END IF;
+
+      -- Fail-closed failover enforcement: this is the ONLY place a
+      -- strategy-sourced action_jobs.action value is ever assigned in this
+      -- function, and it is unconditionally "notify". A strategy decision
+      -- can never reach the add_to_cart branch above, regardless of what
+      -- effectiveAction the upstream evaluation plan attested.
+      effective_action_value := 'notify';
+      initial_job_state_value := 'notify_only';
+      action_event_reason_code_value := 'strategy_qualified';
+      action_event_message_value := 'This strategy-sourced signal was verified against current strategy, mission, and offer state; strategy decisions are limited to notifications and never receive cart or spend-reservation authority.';
+      audit_reason_code_value := 'notify_only';
+      audit_message_value := 'A bounded first-party shipping notification job was created; strategy-sourced decisions never receive cart or spend-reservation authority.';
+      outbox_message_value := audit_message_value;
+      spend_reservation_action_value := 'none';
+      spend_ledger_action_value := 'none';
+      reservation_link_action_value := 'none';
+      mutation_statement_count := 7;
+      mutation_row_count := 7;
+
+      maximum_all_in_cents_value := effective_unit_cap_cents_value * effective_quantity_value;
+      IF maximum_all_in_cents_value NOT BETWEEN 1 AND 100000000 THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend strategy maximum all-in amount is out of bounds';
+      END IF;
+    ELSE
+      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend decision source is unsupported';
     END IF;
 
     expires_at_value := pg_catalog.to_char(LEAST(
@@ -1615,8 +1978,8 @@ BEGIN
     outbox_payload_value := pg_catalog.jsonb_build_object(
       'auditId', audit_id_value,
       'correlationId', action_job_id_value,
-      'reasonCode', 'awaiting_executor',
-      'message', 'A bounded first-party shipping add-to-cart job and spend reservation were created atomically.',
+      'reasonCode', audit_reason_code_value,
+      'message', outbox_message_value,
       'data', audit_data_value::jsonb
     )::text;
   END IF;
@@ -1642,10 +2005,10 @@ BEGIN
     'decisionSource', decision_source_value,
     'strategyId', strategy_id_value,
     'strategyRevision', strategy_revision_value,
-    'action', 'add_to_cart',
-    'initialJobState', 'awaiting_executor'
+    'action', effective_action_value,
+    'initialJobState', initial_job_state_value
   ) || pg_catalog.jsonb_build_object(
-    'quantity', 1,
+    'quantity', effective_quantity_value,
     'unitPriceCents', unit_price_cents_value,
     'effectiveUnitCapCents', effective_unit_cap_cents_value,
     'maximumAllInCents', maximum_all_in_cents_value,
@@ -1750,7 +2113,8 @@ BEGIN
       action_job_id_value, resolved_tenant_id, resolved_user_id,
       mission_id_value, mission_target_id_value, incident_id_value,
       NULLIF(strategy_id_value, ''), NULLIF(strategy_revision_value, 0),
-      decision_source_value, 'awaiting_executor', 'add_to_cart', 1,
+      decision_source_value, initial_job_state_value, effective_action_value,
+      effective_quantity_value,
       effective_unit_cap_cents_value, maximum_all_in_cents_value, 'USD',
       'first_party_only', 'shipping', seller_name_value, listing_id_value,
       canonical_url_value, canonical_url_value, 'canonical', '{}', 'disabled',
@@ -1766,41 +2130,43 @@ BEGIN
     INSERT INTO ${relation(manifest.schemaName, "action_events")}(
       id, job_id, state, reason_code, message, evidence_json, created_at
     ) VALUES (
-      action_event_id_value, action_job_id_value, 'awaiting_executor',
-      'purchase_intent_qualified',
-      'The exact first-party shipping offer passed current product, quantity, price, spend, cooldown, claim, and retailer-lane checks.',
+      action_event_id_value, action_job_id_value, initial_job_state_value,
+      action_event_reason_code_value,
+      action_event_message_value,
       action_event_evidence_value, authorization_timestamp
     );
-    INSERT INTO ${relation(manifest.schemaName, "spend_reservations")}(
-      id, tenant_id, user_id, mission_id, intent_revision_id,
-      exact_offer_key_id, offer_snapshot_id, action_job_id, idempotency_key,
-      action, quantity, reserved_amount_cents, committed_amount_cents,
-      currency, status, release_reason, expires_at, created_at, updated_at
-    ) VALUES (
-      spend_reservation_id_value, resolved_tenant_id, resolved_user_id,
-      mission_id_value, policy_revision_id_value, exact_offer_key_id_value,
-      offer_snapshot_id_value, action_job_id_value, spend_idempotency_key_value,
-      'add_to_cart', 1, maximum_all_in_cents_value, 0, 'USD', 'active', '',
-      expires_at_value, authorization_timestamp, authorization_timestamp
-    );
-    UPDATE ${relation(manifest.schemaName, "action_jobs")}
-    SET spend_reservation_id = spend_reservation_id_value,
-        updated_at = authorization_timestamp
-    WHERE id = action_job_id_value AND tenant_id = resolved_tenant_id
-      AND user_id = resolved_user_id AND spend_reservation_id IS NULL;
-    IF NOT FOUND THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend reservation link changed';
+    IF decision_source_value = 'purchase_intent' THEN
+      INSERT INTO ${relation(manifest.schemaName, "spend_reservations")}(
+        id, tenant_id, user_id, mission_id, intent_revision_id,
+        exact_offer_key_id, offer_snapshot_id, action_job_id, idempotency_key,
+        action, quantity, reserved_amount_cents, committed_amount_cents,
+        currency, status, release_reason, expires_at, created_at, updated_at
+      ) VALUES (
+        spend_reservation_id_value, resolved_tenant_id, resolved_user_id,
+        mission_id_value, policy_revision_id_value, exact_offer_key_id_value,
+        offer_snapshot_id_value, action_job_id_value, spend_idempotency_key_value,
+        'add_to_cart', 1, maximum_all_in_cents_value, 0, 'USD', 'active', '',
+        expires_at_value, authorization_timestamp, authorization_timestamp
+      );
+      UPDATE ${relation(manifest.schemaName, "action_jobs")}
+      SET spend_reservation_id = spend_reservation_id_value,
+          updated_at = authorization_timestamp
+      WHERE id = action_job_id_value AND tenant_id = resolved_tenant_id
+        AND user_id = resolved_user_id AND spend_reservation_id IS NULL;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend reservation link changed';
+      END IF;
+      INSERT INTO ${relation(manifest.schemaName, "spend_ledger_entries")}(
+        id, tenant_id, user_id, reservation_id, action_job_id, entry_type,
+        reserved_delta_cents, spent_delta_cents, quantity_delta, currency,
+        reason_code, correlation_id, metadata_json, created_at
+      ) VALUES (
+        spend_ledger_id_value, resolved_tenant_id, resolved_user_id,
+        spend_reservation_id_value, action_job_id_value, 'reserved',
+        maximum_all_in_cents_value, 0, 1, 'USD', 'action_job_reserved',
+        action_job_id_value, '{}', authorization_timestamp
+      );
     END IF;
-    INSERT INTO ${relation(manifest.schemaName, "spend_ledger_entries")}(
-      id, tenant_id, user_id, reservation_id, action_job_id, entry_type,
-      reserved_delta_cents, spent_delta_cents, quantity_delta, currency,
-      reason_code, correlation_id, metadata_json, created_at
-    ) VALUES (
-      spend_ledger_id_value, resolved_tenant_id, resolved_user_id,
-      spend_reservation_id_value, action_job_id_value, 'reserved',
-      maximum_all_in_cents_value, 0, 1, 'USD', 'action_job_reserved',
-      action_job_id_value, '{}', authorization_timestamp
-    );
     INSERT INTO ${relation(manifest.schemaName, "mission_decisions")}(
       id, event_id, incident_id, mission_id, strategy_id, strategy_revision,
       decision_source, outcome, reason, effective_action, effective_quantity,
@@ -1809,7 +2175,7 @@ BEGIN
       mission_decision_id_value, event_id_value, incident_id_value,
       mission_id_value, NULLIF(strategy_id_value, ''),
       NULLIF(strategy_revision_value, 0), decision_source_value, 'qualified',
-      attestation->>'reason', 'add_to_cart', 1,
+      attestation->>'reason', effective_action_value, effective_quantity_value,
       effective_unit_cap_cents_value, authorization_timestamp
     );
     INSERT INTO ${relation(manifest.schemaName, "audit_events")}(
@@ -1817,8 +2183,8 @@ BEGIN
       reason_code, message, data_json, created_at
     ) VALUES (
       audit_id_value, resolved_tenant_id, resolved_user_id,
-      action_job_id_value, 'action_job_created', 'awaiting_executor',
-      'A bounded first-party shipping add-to-cart job and spend reservation were created atomically.',
+      action_job_id_value, 'action_job_created', audit_reason_code_value,
+      audit_message_value,
       audit_data_value, authorization_timestamp
     );
     INSERT INTO ${relation(manifest.schemaName, "outbox_events")}(
@@ -1835,7 +2201,7 @@ BEGIN
     'mutationAuthority', TRUE,
     'idempotentReplay', TRUE,
     'actionJobMutated', apply_will_apply,
-    'spendReservationMutated', apply_will_apply
+    'spendReservationMutated', apply_will_apply AND decision_source_value = 'purchase_intent'
   ))::text;
 END
 `;
@@ -1975,12 +2341,12 @@ function parseCommon(record: Record<string, unknown>) {
     policyRevision: exactInteger(record.policyRevision, "policy revision", 1, 2_147_483_647),
     policyHash: exactText(record.policyHash, "policy hash", 64),
     evaluationFingerprint: exactText(record.evaluationFingerprint, "evaluation fingerprint", 64),
-    decisionSource: record.decisionSource as "purchase_intent",
-    strategyId: exactText(record.strategyId, "strategy ID", 120, true) as "",
-    strategyRevision: exactInteger(record.strategyRevision, "strategy revision", 0, 2_147_483_647) as 0,
-    action: record.action as "add_to_cart",
-    initialJobState: record.initialJobState as "awaiting_executor",
-    quantity: exactInteger(record.quantity, "quantity", 1, 1) as 1,
+    decisionSource: record.decisionSource as "purchase_intent" | "strategy",
+    strategyId: exactText(record.strategyId, "strategy ID", 120, true),
+    strategyRevision: exactInteger(record.strategyRevision, "strategy revision", 0, 2_147_483_647),
+    action: record.action as "add_to_cart" | "notify",
+    initialJobState: record.initialJobState as "awaiting_executor" | "notify_only",
+    quantity: exactInteger(record.quantity, "quantity", 1, 99),
     unitPriceCents: exactInteger(record.unitPriceCents, "unit price", 1, 100_000_000),
     effectiveUnitCapCents: exactInteger(record.effectiveUnitCapCents, "effective unit cap", 1, 100_000_000),
     maximumAllInCents: exactInteger(record.maximumAllInCents, "maximum all-in amount", 1, 100_000_000),
@@ -2043,18 +2409,24 @@ function parseCommon(record: Record<string, unknown>) {
     common.actionEventId, common.spendReservationId, common.spendLedgerEntryId,
     common.missionDecisionId, common.auditId, common.outboxId
   ];
+  const decisionSourceConsistent = common.decisionSource === "purchase_intent"
+    ? common.strategyId === "" && common.strategyRevision === 0
+      && common.action === "add_to_cart" && common.initialJobState === "awaiting_executor"
+      && common.quantity === 1 && common.unitPriceCents === common.effectiveUnitCapCents
+    : common.decisionSource === "strategy"
+      ? common.strategyId !== "" && IDENTIFIER.test(common.strategyId)
+        && common.strategyRevision >= 1
+        && common.action === "notify" && common.initialJobState === "notify_only"
+      : false;
   if (!MESSAGE_ID.test(common.messageId)
     || identifiers.some((value) => !IDENTIFIER.test(value))
     || !SHA256.test(common.policyHash) || !SHA256.test(common.evaluationFingerprint)
     || !SHA256.test(common.exactOfferIdentityHash) || !SHA256.test(common.offerEvidenceHash)
     || !SHA256.test(common.actionIdempotencyKey) || !SHA256.test(common.spendIdempotencyKey)
     || !SHA256.test(common.planFingerprint)
-    || common.decisionSource !== "purchase_intent"
-    || common.strategyId !== "" || common.strategyRevision !== 0
-    || common.action !== "add_to_cart" || common.initialJobState !== "awaiting_executor"
+    || !decisionSourceConsistent
     || common.currency !== "USD" || common.sellerType !== "first_party"
     || common.fulfillment !== "shipping"
-    || common.unitPriceCents !== common.effectiveUnitCapCents
     || common.maximumAllInCents < common.unitPriceCents) {
     throw new PostgresSignalActionSpendApplyQualificationError(
       "The PostgreSQL signal action/spend projection is invalid."
@@ -2082,26 +2454,39 @@ function parsePlan(
     )
   };
   const replay = plan.immutableReplay;
-  const mandatoryActions = [
-    plan.actionJobAction, plan.actionEventAction, plan.spendReservationAction,
-    plan.spendLedgerAction, plan.missionDecisionAction, plan.auditAction,
-    plan.outboxAction, plan.actionJobReservationLinkAction
+  // Always mandatory on a fresh apply, regardless of decision source: the
+  // notify-only strategy path still creates an action job, action event,
+  // mission decision, audit event, and outbox event.
+  const alwaysMandatoryActions = [
+    plan.actionJobAction, plan.actionEventAction, plan.missionDecisionAction,
+    plan.auditAction, plan.outboxAction
+  ];
+  // Purchase-intent-only: a strategy-sourced job never creates a spend
+  // reservation, spend ledger entry, or reservation link (see the
+  // SQLite-truth comment block above the function source).
+  const purchaseOnlyActions = [
+    plan.spendReservationAction, plan.spendLedgerAction, plan.actionJobReservationLinkAction
   ];
   const optionalInsertCount = [plan.exactOfferAction, plan.offerSnapshotAction]
     .filter((action) => action === "insert").length;
+  const mandatoryFreshCount = plan.decisionSource === "purchase_intent" ? 8 : 5;
   if (plan.messageId !== messageId || !SHA256.test(plan.payloadHash)
     || Math.abs(Date.parse(plan.authorizedAt) - now) > MAXIMUM_CLOCK_SKEW_MS
     || Date.parse(plan.validUntil) - Date.parse(plan.authorizedAt)
       !== MAXIMUM_PLAN_AGE_SECONDS * 1_000
     || plan.actionSpendApplyWillApply !== !replay
     || (replay && (plan.exactOfferAction !== "none" || plan.offerSnapshotAction !== "none"
-      || mandatoryActions.some((action) => action !== "none")
+      || alwaysMandatoryActions.some((action) => action !== "none")
+      || purchaseOnlyActions.some((action) => action !== "none")
       || plan.mutationStatementCount !== 0 || plan.mutationRowCount !== 0))
     || (!replay && ([plan.exactOfferAction, plan.offerSnapshotAction]
       .some((action) => action === "none")
-      || mandatoryActions.some((action) => action !== "insert")
-      || plan.mutationStatementCount !== 8 + optionalInsertCount
-      || plan.mutationRowCount !== 8 + optionalInsertCount))
+      || alwaysMandatoryActions.some((action) => action !== "insert")
+      || (plan.decisionSource === "purchase_intent"
+        ? purchaseOnlyActions.some((action) => action !== "insert")
+        : purchaseOnlyActions.some((action) => action !== "none"))
+      || plan.mutationStatementCount !== mandatoryFreshCount + optionalInsertCount
+      || plan.mutationRowCount !== mandatoryFreshCount + optionalInsertCount))
     || plan.planFingerprint !== postgresSignalActionSpendPlanFingerprint(principal, plan)) {
     throw new PostgresSignalActionSpendApplyQualificationError(
       "The PostgreSQL signal action/spend plan is inconsistent."
@@ -2144,7 +2529,8 @@ function parseResult(
   }
   if (result.actionSpendApplyApplied !== plan.actionSpendApplyWillApply
     || result.actionJobMutated !== plan.actionSpendApplyWillApply
-    || result.spendReservationMutated !== plan.actionSpendApplyWillApply) {
+    || result.spendReservationMutated !==
+      (plan.actionSpendApplyWillApply && plan.decisionSource === "purchase_intent")) {
     throw new PostgresSignalActionSpendApplyQualificationError(
       "The PostgreSQL signal action/spend mutation result is inconsistent."
     );
@@ -2188,8 +2574,16 @@ function boundarySpec(
       configurationWriterParity: false,
       reservationWriterParity: false,
       fixedOrderConfigurationLocks: true,
-      purchaseIntentOnly: true,
+      purchaseIntentOnly: false,
       strategyActionAuthority: false,
+      strategySemanticsContractVersion: 2,
+      strategyDecisionSourceAccepted: true,
+      strategyExistenceRevalidation: true,
+      strategyFailoverToNotifyEnforced: true,
+      strategyCartActionAuthority: false,
+      strategyReservationAuthority: false,
+      trustedStrategyActionSemanticsQualified: true,
+      strategyRevalidatedTableNames: ["strategies"],
       writerLockProtocolParity: false,
       attributionPolicyParity: false,
       runtimeAuthority: false

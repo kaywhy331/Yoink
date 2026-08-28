@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.96.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.97.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,51 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.97.0 evolves the tenth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane — the reviewed purchase-intent
+action/spend boundary from 0.84 — with separately qualified trusted strategy
+action semantics. This is a contract evolution of the existing reviewed
+boundary, not a new boundary: the same `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS`
+role, the same one strict security-definer function, and the same nine-table
+mutation set now also accept `decisionSource: "strategy"` requests.
+`purchaseIntentOnly` is now false.
+
+The boundary's protected forced-RLS tenant table set grows from 19 to 20 —
+the `strategies` table joins for read-only revalidation — while its mutation
+surface is unchanged; `strategies` is never mutated here. A strategy-sourced
+request revalidates the exact strategy's current existence, ownership,
+`enabled` state, and attested revision, then unconditionally, fail-closed,
+produces a notify-only action job. SQL has no statement that ever writes a
+cart action or a spend reservation for a strategy source: the reservation
+and ledger inserts remain inside the `purchase_intent` branch only, and
+immutable replay fails closed if a strategy-sourced job's
+`spend_reservation_id` is ever non-`NULL`. Strategy action authority — cart
+or spend-reservation — is structurally closed.
+
+Strategy notifies still require the same exact, fresh, `trusted_exact`,
+first-party, shipping evidence and a re-derived numeric unit cap that
+purchase-intent requires — deliberately narrower than SQLite's own notify
+path, which allows a null cap for a pure notify-only strategy. Quantity 1-99
+is now permitted for a strategy job, unlike purchase-intent's fixed quantity
+one, with the informational maximum all-in scaled by that quantity.
+
+`contractVersion` stays 1: the evolution is additive, marked by a new
+`strategySemanticsContractVersion: 2` field rather than a hard version bump.
+`POSTGRES_SIGNAL_ACTION_SPEND_APPLY_CONTRACT_VERSION` is a pinned literal
+type consumed downstream by the Target-qualification boundary's manifest;
+bumping it would ripple through that pin, so the hard bump is deliberately
+deferred. v1's purchase-intent semantics are byte-for-byte unchanged.
+
+Native PostgreSQL 16 proves notify-only job creation for every strategy
+request, zero reservation or ledger writes across every strategy code path,
+fail-closed strategy existence/ownership/enabled/revision revalidation, and
+immutable strategy-sourced replay, alongside untouched purchase-intent
+behavior. This closes the roadmap's separately qualified strategy action
+semantics gap. Final action/inbox composition and every request-repository
+family remain open; SQLite remains authoritative. Use
+`npm run postgres:signal-action-spend-apply -- plan ...` and the [PostgreSQL
+cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.96.0 adds the twenty-second independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the bounded attribution-policy
