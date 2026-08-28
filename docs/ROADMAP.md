@@ -1,6 +1,46 @@
 # Yoink roadmap
 
-## Shipped through 0.97.0
+## Shipped through 0.98.0
+
+### PostgreSQL signal-evaluation apply composition (0.98.0)
+
+- Adds a verification-level composition, not a twelfth qualification
+  boundary: no new PostgreSQL role, function, or receipt table is created,
+  and no new mutation authority is granted. It binds the eleven
+  already-qualified signal-writer manifests — catalog-apply, resolution-
+  apply, source-reference refresh, terminal-decision apply, offer-incident
+  apply, post-incident decision apply, mission-binding apply,
+  strategy-evaluation apply, writer-lock protocol, constraint-config apply,
+  and action-spend apply — into one deterministic manifest, keyed by
+  SHA-256 fingerprint, in their structural predecessor order
+- Proves that the ten SQLite `SignalEngine.process()` evaluation mutation
+  families each map to exactly one of those eleven boundaries, at
+  (call-site, decision-outcome) granularity rather than raw table name,
+  with zero unmapped mutation families and zero unmapped chain boundaries.
+  The two writer-discipline boundaries — writer-lock protocol and
+  constraint-config apply — own no mutation family of their own but remain
+  required chain members
+- Every one of the eleven declared predecessor-manifest fingerprints is
+  compared, in-process, against the predecessor's own independently
+  rebuilt fingerprint; any drift fails closed. A single live-database call
+  to the chain's tip already cascades through every composed boundary's own
+  verify function, so this composition needs no receipt table or role of
+  its own to prove live parity
+- Closes `signalEvaluationApplyRepositoryParity`.
+  `signalEvaluationRepositoryParity`, `signalIngressRepositoryParity`,
+  `hostedDeliveryHandlerRepositoryParity`, and
+  `allHandlerRepositoryParity` remain false. Three write families are
+  concretely recorded as out of scope: attribution receipts
+  (`AttributionRepository.recordReceipt`), notification dispatch
+  (`NotificationRepository.ensureForJob`), and post-creation job lifecycle
+  (`SignalRepository.transitionJob`'s commit/release and
+  fulfilled-quantity branches)
+- Health and Admin → Operations expose nothing new. SQLite remains
+  authoritative; nothing is activated. The CLI supports `plan` and
+  `verify` only — there is no `apply` step, because this composition
+  creates nothing new to apply
+
+See [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
 
 ### PostgreSQL trusted strategy action semantics (0.97.0)
 
@@ -2849,7 +2889,7 @@ application, checkout, or more autonomous behavior.
 
 | Product goal | Current repository truth | Critical gap |
 | --- | --- | --- |
-| Primary backend database | Transactional migration-48 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete zero-unresolved table-scope classification, direct/inherited forced-RLS qualification over all 83 private tables, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; six of seven worker handler families (`notification_recovery`, `execution_recovery`, `operational_telemetry_retention`, `observer_recipe_candidate_evaluation`, `adapter_alert_reconciliation`, and `observer_recipe_witness_refresh`) proven through inactive principal-bound function-only roles with zero direct table grants, plus the final hosted-delivery handler's complete three-table lease-recovery and fixed signal-lifecycle sub-boundaries with exact SHA-256 receipts, a capability-bound maximum-30-second exact catalog-resolution plan, a separate insert-only unknown-product catalog creator, a separate transport-deduplicating event/source-heartbeat/resolution commit, a separate known-product source-reference refresh, a separate terminal occurrence/decision/audit/outbox apply boundary, a separate actionable offer/incident/occurrence apply boundary, a separate post-incident decision boundary, exact existing-or-trusted-created mission binding with complete variant targets and an initial append-only policy, an application-owned fingerprinted strategy/purchase-policy evaluation boundary with terminal decision receipts and zero-write actionable handoff, a shared five-domain lock-only protocol, a bounded pause/guardrail/spend-cap configuration writer that consumes it, an atomic action-job/spend-reservation boundary that consumes it with immutable lifecycle-aware replay, a complete Target qualification/settings activation boundary with current evidence/device revalidation and bounded job promotion, a bounded source-trust writer with private-source ownership, optimistic revision, and trust/auto-mission invariant enforcement, an exact Walmart/Amazon/Best Buy qualification and monotonic catalog-promotion writer, an append-only full mission-policy revision writer with current target/settings safety revalidation, a deterministic no-audit-flood TrackaLacker status/heartbeat writer with monotonic device timestamps, and a durable TrackaLacker source-sync run/item writer with fresh-run exclusion, stale interruption, monotonic progress, and terminal receipts, plus a terminal spend-reservation lifecycle writer with exact graph revalidation, server-clock pre-mutation expiry, unambiguous confirmed-total commit, and append-only accounting, plus a bounded TrackaLacker catalog-import writer with complete-set identity consensus, registered-retailer canonical-URL revalidation, and idempotent per-product audit/outbox receipts, plus a bounded source-connection provisioning writer with anchor-then-lock source-scope ordering, SQLite-identical deterministic connection identity, and existing-identity conflict rejection, plus a bounded attribution-policy replacement writer with complete-set/fixed-order enforcement, missing-row fail-closed rejection, and row-level lock serialization deliberately outside the shared protocol, plus a separately qualified trusted strategy action semantics evolution of that action-job/spend-reservation boundary — fail-closed strategy existence/ownership/enabled/revision revalidation and unconditional notify-only job creation with zero reservation or ledger writes; database-owned clocks, directly tenant/user-owned signal incidents, fail-closed shared-incident mutation, authenticated bounded retention, a two-phase evidence-revalidated quarantine-only candidate compiler, full diagnostic-to-incident lifecycle reconciliation, secretless connector dispatch, and external-transaction-free Ed25519 witness publication with database-revalidated public receipt evidence; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 83 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt and plan-hash parity, idempotent/concurrent execution, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | Final action/inbox composition and every request-repository family remain incomplete; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
+| Primary backend database | Transactional migration-48 SQLite source of truth plus deterministic operator portability; a PostgreSQL 15+ preflight, production-driver-backed one-shot importer, exact schema/data reconciliation, translated relational invariants, complete zero-unresolved table-scope classification, direct/inherited forced-RLS qualification over all 83 private tables, a complete asynchronous tenant queue repository proven through an inactive server-bound writer with 12 table-operation grants, one immutable constraint helper, four restrictive write policies, and atomic deployment attestation before new-work queue SQL; a separate inactive three-table/19-column-grant fleet-control role for principal pagination, deployment status, and worker stopping; six of seven worker handler families (`notification_recovery`, `execution_recovery`, `operational_telemetry_retention`, `observer_recipe_candidate_evaluation`, `adapter_alert_reconciliation`, and `observer_recipe_witness_refresh`) proven through inactive principal-bound function-only roles with zero direct table grants, plus the final hosted-delivery handler's complete three-table lease-recovery and fixed signal-lifecycle sub-boundaries with exact SHA-256 receipts, a capability-bound maximum-30-second exact catalog-resolution plan, a separate insert-only unknown-product catalog creator, a separate transport-deduplicating event/source-heartbeat/resolution commit, a separate known-product source-reference refresh, a separate terminal occurrence/decision/audit/outbox apply boundary, a separate actionable offer/incident/occurrence apply boundary, a separate post-incident decision boundary, exact existing-or-trusted-created mission binding with complete variant targets and an initial append-only policy, an application-owned fingerprinted strategy/purchase-policy evaluation boundary with terminal decision receipts and zero-write actionable handoff, a shared five-domain lock-only protocol, a bounded pause/guardrail/spend-cap configuration writer that consumes it, an atomic action-job/spend-reservation boundary that consumes it with immutable lifecycle-aware replay, a complete Target qualification/settings activation boundary with current evidence/device revalidation and bounded job promotion, a bounded source-trust writer with private-source ownership, optimistic revision, and trust/auto-mission invariant enforcement, an exact Walmart/Amazon/Best Buy qualification and monotonic catalog-promotion writer, an append-only full mission-policy revision writer with current target/settings safety revalidation, a deterministic no-audit-flood TrackaLacker status/heartbeat writer with monotonic device timestamps, and a durable TrackaLacker source-sync run/item writer with fresh-run exclusion, stale interruption, monotonic progress, and terminal receipts, plus a terminal spend-reservation lifecycle writer with exact graph revalidation, server-clock pre-mutation expiry, unambiguous confirmed-total commit, and append-only accounting, plus a bounded TrackaLacker catalog-import writer with complete-set identity consensus, registered-retailer canonical-URL revalidation, and idempotent per-product audit/outbox receipts, plus a bounded source-connection provisioning writer with anchor-then-lock source-scope ordering, SQLite-identical deterministic connection identity, and existing-identity conflict rejection, plus a bounded attribution-policy replacement writer with complete-set/fixed-order enforcement, missing-row fail-closed rejection, and row-level lock serialization deliberately outside the shared protocol, plus a separately qualified trusted strategy action semantics evolution of that action-job/spend-reservation boundary — fail-closed strategy existence/ownership/enabled/revision revalidation and unconditional notify-only job creation with zero reservation or ledger writes, plus a verification-level complete signal-evaluation apply composition that binds those eleven already-qualified boundaries by fingerprint and proves all ten SQLite evaluation mutation families each map to exactly one of them, with zero unmapped families, zero unmapped chain boundaries, and no new role, function, or mutation path; database-owned clocks, directly tenant/user-owned signal incidents, fail-closed shared-incident mutation, authenticated bounded retention, a two-phase evidence-revalidated quarantine-only candidate compiler, full diagnostic-to-incident lifecycle reconciliation, secretless connector dispatch, and external-transaction-free Ed25519 witness publication with database-revalidated public receipt evidence; five inactive least-privilege read-role templates; an empty server-owned tenant-principal registry with a zero-argument binder and 83 restrictive scope policies; native PostgreSQL 16 tenant read/write/control/handler isolation, receipt and plan-hash parity, idempotent/concurrent execution, and three-session lease-contention proofs; and permanently inert cutover authority; recoverable generation-bound Chrome credentials; deny-by-default singular internal-service capabilities; and asynchronous embedded/standalone SQLite worker ports | A broader signal-evaluation repository composition, a durable ingress repository, hosted-delivery handler composition, three concretely out-of-scope write families (attribution receipts, notification dispatch, post-creation job lifecycle), and every request-repository family remain incomplete; there is no production login/principal provisioning, activation of the qualified fleet composition, remaining writer families, deployed multi-process fleet/load/outage proof, production identity/risk provider, backup/PITR service, cryptographic workload identity, signed artifacts, managed secrets, or hosted authority cutover |
 | Admin control plane | Separate permission-gated `/admin`, persisted roles, listing review, reversible local merge/split/compensation, diagnostics and alerts, deployment-reference webhook configuration, connector binding health, rolling delivery SLOs, regional observer-conflict operations, governed dead-letter replay, and retry/dead-letter receipts, bounded service-health telemetry, attested durable-worker schedules/dead letters/heartbeats, payload-free signal dead-letter recovery, retailer/source/affiliate controls, signed step-up enforcement, exact expiring requests, and independent approval for safety expansion | No production IdP/MFA/risk-provider hookup, managed secret provider, email/pager adapters, independent connector monitoring, support break-glass workflow, cross-tenant global curator, or general retailer-configuration rollback |
 | Minimal user application | Separate `/` dashboard with a state-derived five-step setup guide, safe exact-link intake for all supported retailers, contributor-owned plain-language recovery review with reversible answers and visible automatic expiry/hosted-eligibility state, a scoped My data inventory/export, explicit pending-review boundaries, server-authoritative no-purchase-write guided-plan preflight with fresh receipt binding, atomic exact intent revision 1, mission-owned direct decisions without hidden strategies, preflighted cart edits, current-vs-MSRP pricing, exact variant/store cards, revisioned store/seller/fulfillment/unit/all-in limits, action/freshness/expiry/cooldown, spend caps, activity, pause, pairing, source/review status, an explicit managed-install boundary when hosted ZIP delivery is closed, and an authoritative per-plan/per-target readiness explanation that distinguishes packaged, qualified, capable, paused, and runtime-proof states | Production onboarding still depends on Phase 2 IdP and a deployed managed browser release; full account deletion awaits IdP revocation and deletion-specific orchestration on a deployed worker fleet; some style-level retailers report `listing_only`; region/store scope is not verified from every live offer; verified-equivalent substitution is policy-only and non-executable |
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
@@ -3406,16 +3446,28 @@ through it. v1's purchase-intent code paths are byte-for-byte unchanged.
 Final inbox composition and every request-repository family remain unported
 and inactive.
 
-- Complete the remaining PostgreSQL hosted signal-evaluation graph: the
-  status, sync, reservation-creation, terminal-release, verified-total
-  commit, catalog-import, and connection-provisioning writers now consume
-  the shared protocol. Add final inbox composition.
-  Compose those pieces with the action/spend boundary and
-  the qualified strategy/policy evaluation,
-  qualified mission-binding, post-incident, actionable offer/incident,
-  terminal-decision, source-reference refresh, event/resolution commit,
-  catalog-create, delivery-recovery, signal-inbox lifecycle, and resolution-
-  plan sub-boundaries to finish the seventh handler.
+Version 0.98 adds a verification-level composition, not a twelfth boundary:
+no new role, function, or receipt table, and no new mutation authority. It
+binds the eleven already-qualified signal-writer manifests — catalog-apply
+through action-spend-apply, plus writer-lock protocol and constraint-config
+apply — into one deterministic, fingerprint-verified manifest and proves
+that the ten SQLite evaluation mutation families each map to exactly one of
+them, at (call-site, decision-outcome) granularity, with zero unmapped
+families and zero unmapped chain boundaries. A single live-database call to
+the chain's tip already cascades through every composed boundary's own
+verify function. This closes `signalEvaluationApplyRepositoryParity`.
+`signalEvaluationRepositoryParity`, `signalIngressRepositoryParity`,
+`hostedDeliveryHandlerRepositoryParity`, and `allHandlerRepositoryParity`
+remain false, and three write families stay concretely out of scope:
+attribution receipts, notification dispatch, and post-creation job
+lifecycle.
+
+- The eleven-boundary signal-evaluation apply composition is now proven
+  (0.98). A broader signal-evaluation repository composition, a durable
+  ingress repository, and hosted-delivery handler composition (the
+  seventh handler's final inbox completion) remain open, alongside the
+  three concretely out-of-scope write families: attribution receipts,
+  notification dispatch, and post-creation job lifecycle.
   Port every request-repository family over the
   qualified schema; activate the already qualified least-privilege control and
   queue roles through production

@@ -40,6 +40,7 @@ import { postgresSignalReservationLifecycleCapabilityProjection } from "../packa
 import { postgresSignalCatalogImportCapabilityProjection } from "../packages/database/src/postgres-signal-catalog-import-apply.js";
 import { postgresSignalSourceProvisioningCapabilityProjection } from "../packages/database/src/postgres-signal-source-provisioning-apply.js";
 import { postgresSignalAttributionPolicyCapabilityProjection } from "../packages/database/src/postgres-signal-attribution-policy-apply.js";
+import { postgresSignalEvaluationCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-evaluation-composition.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -168,6 +169,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /reviewed purchase intents retain their guarded add\/spend semantics unchanged/);
     assert.match(adminScript, /strategy-sourced cart actions and spend reservations remain structurally closed/);
     assert.match(adminScript, /Retailer mutation, checkout, order submission, and inbox completion remain closed/);
+    assert.match(adminScript, /Complete signal-evaluation apply composition/);
+    assert.match(adminScript, /qualified signal writers now compose into one deterministically verified evaluation-apply closure/);
+    assert.match(adminScript, /closing signal-evaluation apply repository parity/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
@@ -222,6 +226,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalSourceProvisioningCapabilityProjection();
     const postgresSignalAttributionPolicyApply =
       postgresSignalAttributionPolicyCapabilityProjection();
+    const postgresSignalEvaluationComposition =
+      postgresSignalEvaluationCompositionCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -265,6 +271,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalCatalogImportApply,
       postgresSignalSourceProvisioningApply,
       postgresSignalAttributionPolicyApply,
+      postgresSignalEvaluationComposition,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -578,6 +585,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalAttributionPolicyApply,
       postgresSignalAttributionPolicyApply
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalEvaluationComposition,
+      postgresSignalEvaluationComposition
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -613,7 +624,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalReservationLifecycleApply,
       postgresSignalCatalogImportApply,
       postgresSignalSourceProvisioningApply,
-      postgresSignalAttributionPolicyApply
+      postgresSignalAttributionPolicyApply,
+      postgresSignalEvaluationComposition
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

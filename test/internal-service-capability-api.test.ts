@@ -45,6 +45,7 @@ import { postgresSignalReservationLifecycleCapabilityProjection } from "../packa
 import { postgresSignalCatalogImportCapabilityProjection } from "../packages/database/src/postgres-signal-catalog-import-apply.js";
 import { postgresSignalSourceProvisioningCapabilityProjection } from "../packages/database/src/postgres-signal-source-provisioning-apply.js";
 import { postgresSignalAttributionPolicyCapabilityProjection } from "../packages/database/src/postgres-signal-attribution-policy-apply.js";
+import { postgresSignalEvaluationCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-evaluation-composition.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -158,6 +159,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalCatalogImportApply: ReturnType<typeof postgresSignalCatalogImportCapabilityProjection>;
         postgresSignalSourceProvisioningApply: ReturnType<typeof postgresSignalSourceProvisioningCapabilityProjection>;
         postgresSignalAttributionPolicyApply: ReturnType<typeof postgresSignalAttributionPolicyCapabilityProjection>;
+        postgresSignalEvaluationComposition: ReturnType<typeof postgresSignalEvaluationCompositionCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -292,6 +294,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalAttributionPolicyApply,
       postgresSignalAttributionPolicyCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalEvaluationComposition,
+      postgresSignalEvaluationCompositionCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -392,6 +398,10 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /strategy-sourced cart actions and spend reservations remain structurally closed/);
     assert.match(cutoverText, /Retailer mutation, checkout, order submission, and inbox completion remain closed/);
     assert.match(cutoverText, /It consumes the shared writer-lock protocol/);
+    assert.match(cutoverText, /Complete signal-evaluation apply composition/);
+    assert.match(cutoverText, /qualified signal writers now compose into one deterministically verified evaluation-apply closure/);
+    assert.match(cutoverText, /closing signal-evaluation apply repository parity/);
+    assert.match(cutoverText, /final ingress\/handler composition/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);
     assert.match(cutoverText, /3 independent PostgreSQL 16 backend sessions/);

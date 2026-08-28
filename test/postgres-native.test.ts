@@ -156,11 +156,22 @@ import {
 } from "../packages/database/src/postgres-signal-constraint-config-apply.js";
 import {
   NodePostgresSignalActionSpendApplyDatabase,
+  POSTGRES_SIGNAL_ACTION_SPEND_APPLY_CONTRACT_VERSION,
   POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION,
   applyPostgresSignalActionSpendApplyBoundary,
   buildPostgresSignalActionSpendApplyManifest,
+  type PostgresSignalActionSpendApplyResult,
   verifyPostgresSignalActionSpendApplyBoundary
 } from "../packages/database/src/postgres-signal-action-spend-apply.js";
+import {
+  POSTGRES_SIGNAL_EVALUATION_COMPOSITION_CHAIN_LENGTH,
+  POSTGRES_SIGNAL_EVALUATION_COMPOSITION_CHAIN_ORDER,
+  POSTGRES_SIGNAL_EVALUATION_COMPOSITION_CONTRACT_VERSION,
+  POSTGRES_SIGNAL_EVALUATION_COMPOSITION_MUTATION_FAMILY_COUNT,
+  buildPostgresSignalEvaluationCompositionManifest,
+  postgresSignalEvaluationCompositionCapabilityProjection,
+  verifyPostgresSignalEvaluationCompositionBoundary
+} from "../packages/database/src/postgres-signal-evaluation-composition.js";
 import {
   NodePostgresSignalTargetQualificationApplyDatabase,
   POSTGRES_SIGNAL_TARGET_QUALIFICATION_APPLY_FUNCTION,
@@ -1187,7 +1198,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, and complete-set attribution-policy replacement", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, and complete-set attribution-policy replacement", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -2638,6 +2649,204 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalActionSpendBoundary
     );
+    await (async () => {
+    // --- v0.98: complete signal-evaluation APPLY composition proof ---
+    // buildPostgresSignalEvaluationCompositionManifest() and
+    // verifyPostgresSignalEvaluationCompositionBoundary() are parameterless —
+    // unlike every other boundary module composed above, this module offers
+    // no predecessor-manifest or namespace override, so it can only ever
+    // describe the ONE reference deployment every composed builder's own
+    // zero-arg defaults resolve to (schema "yoink_cutover", role namespaces
+    // ending "_qualification"/"_qual"). To prove
+    // verifyPostgresSignalEvaluationCompositionBoundary against a live
+    // database (not just the module's own PGlite contract tests), this
+    // section stands up that complete default-namespaced deployment — base
+    // roles through all eleven composed boundaries — inside the same live
+    // Postgres instance, independent of (and alongside) the
+    // NATIVE_*-namespaced deployment qualified above.
+    const defaultChainImported = await importPostgresCutoverArchive(
+      importer,
+      fixture.archivePath
+    );
+    assert.equal(defaultChainImported.matched, true);
+    await applyPostgresRuntimeReadRoles(importer);
+    await applyPostgresTenantSessionBoundary(importer);
+    await applyPostgresTenantQueueWriteBoundary(importer);
+    await applyPostgresWorkerControlBoundary(importer);
+    await applyPostgresNotificationRecoveryBoundary(importer);
+    await applyPostgresExecutionRecoveryBoundary(importer);
+    await applyPostgresOperationalRetentionBoundary(importer);
+    await applyPostgresObserverCandidateEvaluationBoundary(importer);
+    await applyPostgresOperatorAlertConnectorDispatchBoundary(importer);
+    await applyPostgresOperatorAlertReconciliationBoundary(importer);
+    await applyPostgresObserverWitnessRefreshBoundary(importer);
+    await applyPostgresHostedDeliveryLeaseRecoveryBoundary(importer);
+    await applyPostgresSignalCatalogApplyBoundary(importer);
+    await applyPostgresSignalResolutionApplyBoundary(importer);
+    await applyPostgresSignalSourceReferenceRefreshBoundary(importer);
+    await applyPostgresSignalTerminalDecisionApplyBoundary(importer);
+    await applyPostgresSignalOfferIncidentApplyBoundary(importer);
+    await applyPostgresSignalPostIncidentDecisionApplyBoundary(importer);
+    await applyPostgresSignalMissionBindingApplyBoundary(importer);
+    await applyPostgresSignalStrategyEvaluationApplyBoundary(importer);
+    await applyPostgresSignalWriterLockProtocolBoundary(importer);
+    await applyPostgresSignalConstraintConfigApplyBoundary(importer);
+    await applyPostgresSignalActionSpendApplyBoundary(importer);
+
+    const signalEvaluationCompositionManifest = buildPostgresSignalEvaluationCompositionManifest();
+    assert.deepEqual(
+      buildPostgresSignalEvaluationCompositionManifest(),
+      signalEvaluationCompositionManifest
+    );
+    assert.equal(signalEvaluationCompositionManifest.contractVersion, POSTGRES_SIGNAL_EVALUATION_COMPOSITION_CONTRACT_VERSION);
+    assert.equal(
+      signalEvaluationCompositionManifest.actionSpendApplyContractVersion,
+      POSTGRES_SIGNAL_ACTION_SPEND_APPLY_CONTRACT_VERSION
+    );
+    assert.equal(
+      signalEvaluationCompositionManifest.schemaName,
+      signalEvaluationCompositionManifest.actionSpendApplyManifest.schemaName
+    );
+
+    // Chain completeness: eleven fingerprints, exactly once, in the declared
+    // predecessor order, each matching what the corresponding boundary
+    // module's own zero-arg builder computes today (the same manifests this
+    // proof just applied to the live default-namespaced deployment above).
+    assert.equal(signalEvaluationCompositionManifest.chain.length, POSTGRES_SIGNAL_EVALUATION_COMPOSITION_CHAIN_LENGTH);
+    assert.equal(signalEvaluationCompositionManifest.chainBoundaryCount, 11);
+    assert.deepEqual(
+      signalEvaluationCompositionManifest.chain.map((entry) => entry.boundary),
+      [...POSTGRES_SIGNAL_EVALUATION_COMPOSITION_CHAIN_ORDER]
+    );
+    assert.equal(new Set(signalEvaluationCompositionManifest.chain.map((entry) => entry.boundary)).size, 11);
+    assert.equal(new Set(signalEvaluationCompositionManifest.chain.map((entry) => entry.fingerprint)).size, 11);
+    const signalEvaluationCompositionBoundaryManifestBuilders: ReadonlyArray<
+      readonly [string, () => { readonly fingerprint: string }]
+    > = [
+      ["catalogApply", buildPostgresSignalCatalogApplyManifest],
+      ["resolutionApply", buildPostgresSignalResolutionApplyManifest],
+      ["sourceReferenceRefresh", buildPostgresSignalSourceReferenceRefreshManifest],
+      ["terminalDecisionApply", buildPostgresSignalTerminalDecisionApplyManifest],
+      ["offerIncidentApply", buildPostgresSignalOfferIncidentApplyManifest],
+      ["postIncidentDecisionApply", buildPostgresSignalPostIncidentDecisionApplyManifest],
+      ["missionBindingApply", buildPostgresSignalMissionBindingApplyManifest],
+      ["strategyEvaluationApply", buildPostgresSignalStrategyEvaluationApplyManifest],
+      ["writerLockProtocol", buildPostgresSignalWriterLockProtocolManifest],
+      ["constraintConfigApply", buildPostgresSignalConstraintConfigApplyManifest],
+      ["actionSpendApply", buildPostgresSignalActionSpendApplyManifest]
+    ];
+    for (const [boundary, builder] of signalEvaluationCompositionBoundaryManifestBuilders) {
+      assert.match(builder().fingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(
+        signalEvaluationCompositionManifest.chain.find((entry) => entry.boundary === boundary)?.fingerprint,
+        builder().fingerprint
+      );
+    }
+    for (const entry of signalEvaluationCompositionManifest.chain) {
+      assert.match(entry.fingerprint, /^[a-f0-9]{64}$/);
+      if (entry.boundary === "writerLockProtocol") {
+        assert.equal(entry.mutationAuthority, false);
+      } else {
+        assert.equal(entry.mutationAuthority, true);
+      }
+    }
+
+    // Mutation-family coverage: total, zero unmapped, plus the two
+    // writer-discipline boundaries that own no family of their own.
+    assert.equal(signalEvaluationCompositionManifest.mutationFamilies.length, POSTGRES_SIGNAL_EVALUATION_COMPOSITION_MUTATION_FAMILY_COUNT);
+    assert.equal(signalEvaluationCompositionManifest.mutationFamilies.length, 10);
+    assert.equal(signalEvaluationCompositionManifest.unmappedMutationFamilyCount, 0);
+    assert.equal(signalEvaluationCompositionManifest.unmappedChainBoundaryCount, 0);
+    assert.deepEqual(
+      [...signalEvaluationCompositionManifest.writerDisciplineBoundaries].sort(),
+      ["constraintConfigApply", "writerLockProtocol"]
+    );
+    const signalEvaluationCompositionCoveredBoundaries = new Set([
+      ...signalEvaluationCompositionManifest.mutationFamilies.map((entry) => entry.boundary),
+      ...signalEvaluationCompositionManifest.writerDisciplineBoundaries
+    ]);
+    assert.deepEqual(
+      [...signalEvaluationCompositionCoveredBoundaries].sort(),
+      [...POSTGRES_SIGNAL_EVALUATION_COMPOSITION_CHAIN_ORDER].sort()
+    );
+    assert.ok(signalEvaluationCompositionManifest.knownOutOfScopeWrites.length >= 4);
+
+    // Projection flags: the newly-closed flag is true; every other repository
+    // parity flag stays false; runtime authority stays false.
+    assert.equal(signalEvaluationCompositionManifest.noNewRoleCreated, true);
+    assert.equal(signalEvaluationCompositionManifest.noNewFunctionCreated, true);
+    assert.equal(signalEvaluationCompositionManifest.noNewMutationPath, true);
+    assert.equal(signalEvaluationCompositionManifest.signalEvaluationApplyRepositoryParity, true);
+    assert.equal(signalEvaluationCompositionManifest.signalEvaluationRepositoryParity, false);
+    assert.equal(signalEvaluationCompositionManifest.signalIngressRepositoryParity, false);
+    assert.equal(signalEvaluationCompositionManifest.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalEvaluationCompositionManifest.allHandlerRepositoryParity, false);
+    assert.equal(signalEvaluationCompositionManifest.mutationAuthority, true);
+    assert.equal(signalEvaluationCompositionManifest.activePrincipalCount, 0);
+    assert.equal(signalEvaluationCompositionManifest.runtimeAuthority, false);
+    assert.match(signalEvaluationCompositionManifest.fingerprint, /^[a-f0-9]{64}$/);
+
+    const signalEvaluationCompositionCapability = postgresSignalEvaluationCompositionCapabilityProjection();
+    assert.deepEqual(postgresSignalEvaluationCompositionCapabilityProjection(), signalEvaluationCompositionCapability);
+    assert.equal(signalEvaluationCompositionCapability.chainBoundaryCount, 11);
+    assert.equal(signalEvaluationCompositionCapability.mutationFamilyCount, 10);
+    assert.equal(signalEvaluationCompositionCapability.unmappedMutationFamilyCount, 0);
+    assert.equal(signalEvaluationCompositionCapability.noNewRoleCreated, true);
+    assert.equal(signalEvaluationCompositionCapability.noNewFunctionCreated, true);
+    assert.equal(signalEvaluationCompositionCapability.noNewMutationPath, true);
+    assert.equal(signalEvaluationCompositionCapability.signalEvaluationApplyRepositoryParity, true);
+    assert.equal(signalEvaluationCompositionCapability.signalEvaluationRepositoryParity, false);
+    assert.equal(signalEvaluationCompositionCapability.signalIngressRepositoryParity, false);
+    assert.equal(signalEvaluationCompositionCapability.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(signalEvaluationCompositionCapability.allHandlerRepositoryParity, false);
+    assert.equal(signalEvaluationCompositionCapability.activePrincipalCount, 0);
+    assert.equal(signalEvaluationCompositionCapability.activeRuntimeRoleApplied, false);
+    assert.equal(signalEvaluationCompositionCapability.mutationAuthority, true);
+    assert.equal(signalEvaluationCompositionCapability.runtimeAuthority, false);
+    assert.equal(signalEvaluationCompositionCapability.productionReady, false);
+    assert.equal(
+      signalEvaluationCompositionCapability.roleTemplateFingerprint,
+      signalEvaluationCompositionManifest.fingerprint
+    );
+
+    // verifyPostgresSignalEvaluationCompositionBoundary against the live,
+    // freshly-qualified default-namespace deployment must PASS: it re-derives
+    // the manifest (catching sequence-contract drift) and cascades a single
+    // live call to the chain tip (actionSpendApply), which itself cascades
+    // down through every composed boundary's own live role/function/RLS
+    // inspection.
+    assert.deepEqual(
+      await verifyPostgresSignalEvaluationCompositionBoundary(importer, signalEvaluationCompositionManifest),
+      signalEvaluationCompositionManifest
+    );
+
+    // Negative proof: tamper the chain tip's (actionSpendApply) live
+    // SECURITY DEFINER function and confirm the composition verify fails
+    // closed — mirroring the ALTER FUNCTION ... STABLE / VOLATILE
+    // receipt-tamper precedent used elsewhere in this suite (e.g. the
+    // mission-binding and strategy-evaluation boundary tamper checks below).
+    // The failure surfaces from the cascaded
+    // verifyPostgresSignalActionSpendApplyBoundary call, not from the
+    // composition's own (purely in-process) sequence-contract check.
+    await importer.query(
+      `ALTER FUNCTION "${signalEvaluationCompositionManifest.schemaName}"."${POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresSignalEvaluationCompositionBoundary(importer, signalEvaluationCompositionManifest),
+      /qualified security-definer function is incomplete|drifted from its receipt/
+    );
+    await importer.query(
+      `ALTER FUNCTION "${signalEvaluationCompositionManifest.schemaName}"."${POSTGRES_SIGNAL_ACTION_SPEND_APPLY_FUNCTION}"(
+         text, text, text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.deepEqual(
+      await verifyPostgresSignalEvaluationCompositionBoundary(importer, signalEvaluationCompositionManifest),
+      signalEvaluationCompositionManifest
+    );
+    })();
     const qualifiedSignalTargetQualificationManifest =
       buildPostgresSignalTargetQualificationApplyManifest(
         qualifiedSignalActionSpendManifest,
@@ -9710,6 +9919,23 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     await signalStrategyEvaluationDirectClient.end();
     signalStrategyEvaluationDirectClient = null;
 
+    // Hoisted out of the IIFE below because they are still read much later
+    // in this suite (constraint-config settings reads, and the concurrent
+    // action-spend winner's job/reservation ids).
+    type NativeConstraintSettingsRow = {
+      actionsPaused: string | number;
+      pauseReason: string;
+      executionMode: string;
+      dedupeWindowSeconds: number;
+      affiliateMode: string;
+      taxBps: number;
+      storeAllowancesJson: string;
+      updatedAt: string;
+    };
+    let readNativeConstraintSettings!: () => Promise<NativeConstraintSettingsRow>;
+    let actionSpendGraphCounts!: () => Promise<Record<string, number>>;
+    let actionSpendWinner!: PostgresSignalActionSpendApplyResult;
+    await (async () => {
     const actionSpendNow = Date.now();
     const actionSpendMessageId = "inbox_abcdef0123456789abcdef0123456789";
     const actionSpendObservedAt = new Date(actionSpendNow - 1_000).toISOString();
@@ -9982,17 +10208,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       /tenant session principal is not active/
     );
-    type NativeConstraintSettingsRow = {
-      actionsPaused: string | number;
-      pauseReason: string;
-      executionMode: string;
-      dedupeWindowSeconds: number;
-      affiliateMode: string;
-      taxBps: number;
-      storeAllowancesJson: string;
-      updatedAt: string;
-    };
-    const readNativeConstraintSettings = async (): Promise<NativeConstraintSettingsRow> =>
+    readNativeConstraintSettings = async (): Promise<NativeConstraintSettingsRow> =>
       (await first!.query<NativeConstraintSettingsRow>(
         `SELECT actions_paused AS "actionsPaused", pause_reason AS "pauseReason",
                 execution_mode AS "executionMode",
@@ -10190,7 +10406,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(spendPolicyUnchanged.mutationRowCount, 0);
     assert.equal(spendPolicyUnchanged.auditMutated, false);
     assert.equal(spendPolicyUnchanged.outboxMutated, false);
-    const actionSpendGraphCounts = async (): Promise<Record<string, number>> => {
+    actionSpendGraphCounts = async (): Promise<Record<string, number>> => {
       const row = (await first!.query<Record<string, string | number | bigint>>(
         `SELECT
            (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."exact_offer_keys"
@@ -10495,14 +10711,15 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       firstActionSpendAttempt,
       secondActionSpendAttempt
     ]);
-    const actionSpendWinner = concurrentActionSpend.find(
+    const actionSpendWinnerFound = concurrentActionSpend.find(
       (result) => result.actionSpendApplyApplied
     );
     const actionSpendReplay = concurrentActionSpend.find(
       (result) => !result.actionSpendApplyApplied
     );
-    assert.ok(actionSpendWinner);
+    assert.ok(actionSpendWinnerFound);
     assert.ok(actionSpendReplay);
+    actionSpendWinner = actionSpendWinnerFound;
     assert.equal(actionSpendWinner.initialJobState, "awaiting_executor");
     assert.equal(actionSpendWinner.action, "add_to_cart");
     assert.equal(actionSpendWinner.quantity, 1);
@@ -10646,6 +10863,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     await signalActionSpendDirectClient.end();
     signalActionSpendDirectClient = null;
+    })();
 
     await (async () => {
       // ---- Trusted strategy action semantics (contract v2) ----
@@ -21203,13 +21421,13 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalConstraintConfigB?.close(),
       signalConstraintConfigC?.close(),
       signalConstraintConfigUnmapped?.close(),
-      signalConstraintConfigDirectClient?.end(),
+      (signalConstraintConfigDirectClient as Client | null)?.end(),
       signalActionSpendA?.close(),
       signalActionSpendASecond?.close(),
       signalActionSpendB?.close(),
       signalActionSpendC?.close(),
       signalActionSpendUnmapped?.close(),
-      signalActionSpendDirectClient?.end(),
+      (signalActionSpendDirectClient as Client | null)?.end(),
       signalTargetQualificationA?.close(),
       signalTargetQualificationASecond?.close(),
       signalTargetQualificationB?.close(),

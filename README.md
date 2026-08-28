@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.97.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.98.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,56 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.98.0 adds the verification-level complete signal-evaluation apply
+composition. It is not a twelfth qualification boundary: it creates no new
+PostgreSQL role, function, or receipt table, and grants no new mutation
+authority. It binds the eleven already-qualified signal-writer manifests —
+catalog-apply, resolution-apply, source-reference refresh, terminal-decision
+apply, offer-incident apply, post-incident decision apply, mission-binding
+apply, strategy-evaluation apply, writer-lock protocol, constraint-config
+apply, and action-spend apply — into one deterministic manifest, keyed by
+SHA-256 fingerprint, in their structural predecessor order.
+
+The composition proves, for the first time in one place, that the ten SQLite
+`SignalEngine.process()` evaluation mutation families each map to exactly
+one of those eleven boundaries, at (call-site, decision-outcome) granularity
+rather than raw table name, with zero unmapped mutation families and zero
+unmapped chain boundaries. The two writer-discipline boundaries —
+writer-lock protocol and constraint-config apply — own no mutation family of
+their own but remain required chain members: the first is a lock-only
+advisory primitive with zero mutation tables, and the second's writes are
+operator-driven configuration, consumed only as a read gate during
+evaluation.
+
+Every one of the eleven declared predecessor-manifest fingerprints is
+compared, in-process, against the predecessor's own independently rebuilt
+fingerprint; any drift fails closed with
+`PostgresSignalEvaluationCompositionError`. Because each composed boundary's
+own `verifyPostgresSignalXBoundary` function already cascades to its
+predecessor's verify function, one live-database call to the chain's tip —
+`verifyPostgresSignalActionSpendApplyBoundary` — transitively re-verifies
+all eleven composed boundaries' live Postgres role, function, and RLS state,
+plus the hosted-delivery/witness-refresh foundation beneath them.
+
+This closes `signalEvaluationApplyRepositoryParity`.
+`signalEvaluationRepositoryParity`, `signalIngressRepositoryParity`,
+`hostedDeliveryHandlerRepositoryParity`, and `allHandlerRepositoryParity`
+all remain false. Three write families are concretely out of scope, recorded
+in the module's own constants rather than left implicit:
+`AttributionRepository.recordReceipt`'s `attribution_receipts` writes
+(governed by the attribution-policy boundary's policy table only, not
+per-job receipts), `NotificationRepository.ensureForJob`'s notification/
+outbox delivery handler surface (a different, handler-level composition),
+and `SignalRepository.transitionJob`'s post-creation lifecycle branches
+(spend-ledger commit/release and the `missions.fulfilled_quantity` update,
+which mutate a job after it already exists). SQLite remains authoritative;
+nothing is activated. Plan without a database connection using
+`npm run postgres:signal-evaluation-composition -- plan`; verify against a
+live database with `YOINK_POSTGRES_URL=... npm run
+postgres:signal-evaluation-composition -- verify` — there is no `apply`
+step, because this composition creates nothing new to apply — and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.97.0 evolves the tenth independently receipted piece of the
 inactive PostgreSQL hosted-signal plane — the reviewed purchase-intent

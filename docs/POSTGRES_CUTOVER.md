@@ -2943,6 +2943,84 @@ direct and cross-boundary denial, complete-set and fixed-order enforcement,
 missing-row fail-closed rejection, row-level lock serialization, true
 zero-write unchanged behavior, and fingerprint-guarded immutable replay.
 
+## Signal-evaluation composition qualification (0.98.0)
+
+Version 0.98 adds a verification-level composition, not a twelfth
+qualification boundary. It creates no PostgreSQL role, function, or receipt
+table, and grants no new mutation authority.
+`buildPostgresSignalEvaluationCompositionManifest()` takes no arguments: it
+re-derives all eleven already-qualified boundary manifests — catalog-apply,
+resolution-apply, source-reference refresh, terminal-decision apply,
+offer-incident apply, post-incident decision apply, mission-binding apply,
+strategy-evaluation apply, writer-lock protocol, constraint-config apply,
+and action-spend apply — from their own build functions, at each boundary's
+own established default role namespaces, and folds them into one
+deterministic manifest keyed by SHA-256 fingerprint.
+
+The build function enforces three checks before returning. First, a
+cross-boundary sequence contract: each of the ten later boundaries in the
+chain declares a direct `<predecessor>ManifestFingerprint` field, and every
+one of those ten declared values is compared against the predecessor's own
+independently rebuilt `.fingerprint`; any mismatch throws
+`PostgresSignalEvaluationCompositionError`. Second, exactly-once chain
+completeness: eleven entries, eleven distinct boundary keys, eleven distinct
+fingerprints, in the fixed structural order
+`catalogApply → resolutionApply → sourceReferenceRefresh →
+terminalDecisionApply → offerIncidentApply → postIncidentDecisionApply →
+missionBindingApply → strategyEvaluationApply → writerLockProtocol →
+constraintConfigApply → actionSpendApply`. Third, coverage accounting: the
+ten SQLite `SignalEngine.process()` evaluation mutation families
+(`POSTGRES_SIGNAL_EVALUATION_MUTATION_FAMILIES`, chosen at (SQLite
+call-site, decision-outcome) granularity rather than raw table name) plus
+the two writer-discipline boundaries (writer-lock protocol, lock-only with
+zero mutation tables; constraint-config apply, an operator-driven
+configuration read-gate) must together cover the full eleven-member chain
+with zero unmapped families and zero unmapped boundaries.
+
+Three write families are deliberately out of this composition's scope, and
+are recorded explicitly in
+`POSTGRES_SIGNAL_EVALUATION_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES` rather
+than left implicit: `AttributionRepository.recordReceipt`'s
+`attribution_receipts` writes (the attribution-policy boundary governs
+policy configuration only, never per-job receipts), `NotificationRepository
+.ensureForJob`'s notification/outbox delivery handler surface (a distinct,
+handler-level composition), and `SignalRepository.transitionJob`'s
+post-creation branches — spend-ledger commit/release and the
+`missions.fulfilled_quantity` update — which mutate a job's lifecycle after
+it already exists, outside this composition's initial-job-creation scope.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-evaluation-composition -- plan
+```
+
+Then independently verify the eleven-hop fingerprint chain, the coverage
+accounting, and — via a single cascading call to
+`verifyPostgresSignalActionSpendApplyBoundary` at the chain's tip — every
+composed boundary's live Postgres role, function, and RLS state:
+
+```bash
+YOINK_POSTGRES_URL=... npm run postgres:signal-evaluation-composition -- verify
+```
+
+There is no `apply` command and no acknowledgement environment variable.
+Every other qualification boundary in this document gates its `apply`
+behind an explicit `_ACK` variable because that command creates a role,
+function, or receipt table with real (if inactive) mutation authority that
+a reviewer must consciously accept. This composition never creates any of
+those things — it only re-derives and cross-checks manifests that already
+exist, and re-verifies live state that other boundaries' own `apply`
+commands already created — so there is nothing here for an acknowledgement
+to gate. The manifest records `signalEvaluationApplyRepositoryParity: true`,
+closing that gap, while `signalEvaluationRepositoryParity`,
+`signalIngressRepositoryParity`, `hostedDeliveryHandlerRepositoryParity`,
+and `allHandlerRepositoryParity` all remain explicit `false`.
+`mutationAuthority: true` reflects the union of the ten mutation-capable
+composed boundaries' own already-granted authority; `runtimeAuthority:
+false` and `activePrincipalCount: 0` confirm none of it is wired to a live
+principal. SQLite remains authoritative.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
