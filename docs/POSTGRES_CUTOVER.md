@@ -3021,6 +3021,147 @@ composed boundaries' own already-granted authority; `runtimeAuthority:
 false` and `activePrincipalCount: 0` confirm none of it is wired to a live
 principal. SQLite remains authoritative.
 
+## Attribution-receipt qualification (0.99.0)
+
+Version 0.99 adds a twenty-third independent, inactive hosted-signal
+boundary for `record_attribution_receipt`. It succeeds the qualified
+attribution-policy boundary but, like that boundary, does not consume the
+shared writer-lock protocol; `attribution_receipts` is not one of the five
+domains that protocol guards (source, retailer qualification, settings,
+mission policy, spend). It closes the first of the three write families
+`postgres-signal-evaluation-composition.ts` (0.98.0) recorded as concretely
+out of scope: `AttributionRepository.recordReceipt`'s `attribution_receipts`
+writes.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application
+object, inherits no role, receives zero direct/effective table or column
+privileges, and can execute one strict security-definer function. Its
+immutable receipt seals five forced-RLS tenant tables — `action_jobs`,
+`attribution_policies`, `attribution_receipts`, `audit_events`, and
+`outbox_events` — but only three are in its mutation set:
+`attribution_receipts`, `audit_events`, and `outbox_events`. `action_jobs`
+and `attribution_policies` are read (and, for `action_jobs`, row-locked) but
+never mutated.
+
+Every request carries the exact attribution fields SQLite's
+`AttributionRepository.recordReceipt` snapshots — `actionJobId`, `policyId`,
+`retailerId`, `provider`, `outcome`, `reasonCode`, and `routeUrl` — under one
+`ATTRIBUTION_RECEIPT_RECORD_V1` confirmation. PostgreSQL resolves
+`session_user` to one active tenant/user and derives the request ID from the
+authenticated principal and the complete normalized payload. `provider`,
+`routeUrl`, and `retailerId` are never trusted from the caller: the function
+reads them straight off the locked `action_jobs` row (and its `listings`
+join for `retailerId`) and revalidates the submitted payload against that
+row for exact equality. `canonicalUrlHash` is derived server-side from the
+job's own `canonical_url` column using a SQL translation of SQLite's
+length-prefixed `stableHash` scheme, so no raw canonical URL ever crosses the
+wire. `policyId` is looked up from the currently provisioned
+`attribution_policies` row for the job's retailer and revalidated for
+equality against the submitted value; a request against a retailer with no
+provisioned policy row fails closed.
+
+`attribution_receipts` carries a `UNIQUE(job_id)` constraint, exactly
+mirroring SQLite's own `INSERT OR IGNORE`. This boundary reproduces that
+idempotency exactly rather than the audited-replay-graph check every other
+sibling apply boundary in this family performs on a replayed request: a
+receipt already recorded for a job is an unconditional zero-write success
+that returns the originally stored row, performing no comparison at all
+against the newly submitted payload. The manifest flags this deliberate
+divergence explicitly as `insertOrIgnoreReplayParity`. Because
+`attribution_receipts.policy_id` is `REFERENCES attribution_policies(id) ON
+DELETE SET NULL`, a replayed receipt's stored `policy_id` is returned as
+stored rather than re-validated against a live policy row — a receipt is
+immutable once written, so its `policy_id` column value at replay time is
+not something this function second-guesses.
+
+A fresh insert atomically appends exactly one `attribution_receipts` row
+plus one `audit_events` and one `outbox_events` record, mirroring SQLite's
+`if (inserted.changes === 1) { audit... }` branch exactly: audit and outbox
+rows are appended only on this path, never on a replay. PostgreSQL owns
+every timestamp. Because the domain sits outside the shared protocol, the
+function instead serializes concurrent calls for the same job with
+`SELECT ... FOR UPDATE OF job` on the one locked `action_jobs` row, backstopped
+by `ON CONFLICT (job_id) DO NOTHING` on the receipt insert itself; a
+concurrent loser re-fetches and returns the winner's row as the same
+zero-write success the top-of-function replay path returns.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-attribution-receipt-apply -- plan \
+  yoink_cutover_qualification_099 yoink_q_099 yoink_session_q_099 \
+  yoink_queue_q_099 yoink_control_q_099 yoink_notify_q_099 \
+  yoink_execute_q_099 yoink_retain_q_099 yoink_candidate_q_099 \
+  yoink_dispatch_q_099 yoink_reconcile_q_099 yoink_witness_q_099 \
+  yoink_delivery_q_099 yoink_catalog_q_099 yoink_resolution_q_099 \
+  yoink_reference_q_099 yoink_terminal_q_099 yoink_offer_q_099 \
+  yoink_post_q_099 yoink_mission_q_099 yoink_strategy_q_099 \
+  yoink_writer_lock_q_099 yoink_constraint_config_q_099 \
+  yoink_action_spend_q_099 yoink_target_qual_q_099 \
+  yoink_source_trust_q_099 yoink_retailer_qual_q_099 \
+  yoink_mission_policy_q_099 yoink_source_status_q_099 \
+  yoink_source_sync_q_099 yoink_reservation_q_099 yoink_catalog_import_q_099 \
+  yoink_provisioning_q_099 yoink_attribution_policy_q_099 \
+  yoink_attribution_receipt_q_099
+```
+
+After every predecessor through attribution-policy replacement is verified,
+apply once with the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_APPLY_QUALIFICATION_ACK=bounded-signal-attribution-receipt-apply-qualification \
+  npm run postgres:signal-attribution-receipt-apply -- apply \
+  yoink_cutover_qualification_099 yoink_q_099 yoink_session_q_099 \
+  yoink_queue_q_099 yoink_control_q_099 yoink_notify_q_099 \
+  yoink_execute_q_099 yoink_retain_q_099 yoink_candidate_q_099 \
+  yoink_dispatch_q_099 yoink_reconcile_q_099 yoink_witness_q_099 \
+  yoink_delivery_q_099 yoink_catalog_q_099 yoink_resolution_q_099 \
+  yoink_reference_q_099 yoink_terminal_q_099 yoink_offer_q_099 \
+  yoink_post_q_099 yoink_mission_q_099 yoink_strategy_q_099 \
+  yoink_writer_lock_q_099 yoink_constraint_config_q_099 \
+  yoink_action_spend_q_099 yoink_target_qual_q_099 \
+  yoink_source_trust_q_099 yoink_retailer_qual_q_099 \
+  yoink_mission_policy_q_099 yoink_source_status_q_099 \
+  yoink_source_sync_q_099 yoink_reservation_q_099 yoink_catalog_import_q_099 \
+  yoink_provisioning_q_099 yoink_attribution_policy_q_099 \
+  yoink_attribution_receipt_q_099
+```
+
+Then independently verify the function, role, protected/mutation table
+sets, exact grants, immutable receipt, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-attribution-receipt-apply -- verify \
+  yoink_cutover_qualification_099 yoink_q_099 yoink_session_q_099 \
+  yoink_queue_q_099 yoink_control_q_099 yoink_notify_q_099 \
+  yoink_execute_q_099 yoink_retain_q_099 yoink_candidate_q_099 \
+  yoink_dispatch_q_099 yoink_reconcile_q_099 yoink_witness_q_099 \
+  yoink_delivery_q_099 yoink_catalog_q_099 yoink_resolution_q_099 \
+  yoink_reference_q_099 yoink_terminal_q_099 yoink_offer_q_099 \
+  yoink_post_q_099 yoink_mission_q_099 yoink_strategy_q_099 \
+  yoink_writer_lock_q_099 yoink_constraint_config_q_099 \
+  yoink_action_spend_q_099 yoink_target_qual_q_099 \
+  yoink_source_trust_q_099 yoink_retailer_qual_q_099 \
+  yoink_mission_policy_q_099 yoink_source_status_q_099 \
+  yoink_source_sync_q_099 yoink_reservation_q_099 yoink_catalog_import_q_099 \
+  yoink_provisioning_q_099 yoink_attribution_policy_q_099 \
+  yoink_attribution_receipt_q_099
+```
+
+The receipt records `attributionReceiptWriterParity: true` while
+`writerLockProtocolParity: false` and `runtimeAuthority: false` remain
+explicit — `attribution_receipts` deliberately stays outside the shared
+five-domain protocol, the same as `attribution_policies`. Native PostgreSQL
+16 proves principal isolation, direct and cross-boundary denial,
+job-ownership and attribution-snapshot revalidation, provisioned-policy-row
+enforcement, true INSERT-OR-IGNORE zero-write replay, audited-fresh-insert-
+only receipts, and one winner under concurrent application for the same job.
+Notification dispatch (`NotificationRepository.ensureForJob`) and
+post-creation job-lifecycle (`SignalRepository.transitionJob`'s
+commit/release and fulfilled-quantity branches) remain the two other write
+families the composition module recorded as out of scope; every
+request-repository family and the SQLite authority switch remain closed.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.

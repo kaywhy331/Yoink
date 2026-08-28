@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.98.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.99.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,65 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.99.0 adds the twenty-third independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the bounded attribution-receipt
+writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no
+application object, inherits no role, has zero direct/effective table or
+column grants, and may call one strict security-definer function. The
+boundary protects five forced-RLS tenant tables — `action_jobs`,
+`attribution_policies`, `attribution_receipts`, `audit_events`, and
+`outbox_events` — but its mutation set is only three: `attribution_receipts`,
+`audit_events`, and `outbox_events`.
+
+PostgreSQL binds `session_user` to one exact tenant/user and accepts one
+explicit `record_attribution_receipt` operation under
+`ATTRIBUTION_RECEIPT_RECORD_V1`. Every request ID is derived from the
+authenticated principal and the complete normalized payload. `provider`,
+`routeUrl`, and `retailerId` are never trusted from the caller: they are read
+straight off the locked `action_jobs` row (and its `listings` join for
+`retailerId`) and revalidated for equality against the submitted payload, and
+`canonicalUrlHash` is derived server-side from the job's own `canonical_url`
+column using the same length-prefixed SHA-256 scheme SQLite's `stableHash`
+uses — no raw canonical URL crosses the wire. `policyId` is looked up from
+the current provisioned `attribution_policies` row for the job's retailer
+and revalidated for equality against the submitted value.
+
+`attribution_receipts` carries a `UNIQUE(job_id)` constraint, and this
+boundary mirrors SQLite's own `INSERT OR IGNORE` idempotency exactly rather
+than the audited-replay-graph check most sibling boundaries use: a receipt
+already recorded for a job is an unconditional zero-write success that
+returns the originally stored row, with no comparison against the newly
+submitted payload. `insertOrIgnoreReplayParity` flags this as a deliberate
+divergence from the request-graph replay every other apply boundary in this
+family performs. The `policy_id` foreign key is `ON DELETE SET NULL`, so a
+replayed receipt's stored `policy_id` is returned as-is rather than
+re-validated against a live policy row.
+
+A fresh insert atomically appends exactly one `attribution_receipts` row plus
+one `audit_events` and one `outbox_events` record; PostgreSQL owns the
+timestamp. `attribution_receipts` is not one of the five domains the shared
+writer-lock protocol guards — the same as `attribution_policies` — so this
+boundary never calls it; per-job serialization instead comes from
+`SELECT ... FOR UPDATE OF job` on the locked `action_jobs` row plus the
+`UNIQUE(job_id)` constraint itself.
+
+Native PostgreSQL 16 proves wrong, same-tenant-peer, and unmapped principal
+denial, zero direct and cross-boundary SQL, job-ownership and
+attribution-snapshot revalidation, provisioned-policy-row enforcement, true
+INSERT-OR-IGNORE zero-write replay, audited-fresh-insert-only receipts, and
+one winner under concurrent application for the same job. This closes
+`attributionReceiptWriterParity`, the first of the three write families
+`postgres-signal-evaluation-composition.ts` recorded as out of scope in
+0.98.0. `writerLockProtocolParity` stays false — `attribution_receipts`
+deliberately never joins the shared protocol, just like
+`attribution_policies`. Notification dispatch
+(`NotificationRepository.ensureForJob`) and post-creation job-lifecycle
+(`SignalRepository.transitionJob`'s commit/release and fulfilled-quantity
+branches) remain the two other write families still out of scope. SQLite
+remains authoritative; nothing is activated. Use `npm run
+postgres:signal-attribution-receipt-apply -- plan ...` and the [PostgreSQL
+cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.98.0 adds the verification-level complete signal-evaluation apply
 composition. It is not a twelfth qualification boundary: it creates no new

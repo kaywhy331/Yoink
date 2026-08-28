@@ -269,6 +269,16 @@ import {
   verifyPostgresSignalAttributionPolicyApplyBoundary,
   type PostgresSignalAttributionPolicyReplacePayload
 } from "../packages/database/src/postgres-signal-attribution-policy-apply.js";
+import {
+  NodePostgresSignalAttributionReceiptApplyDatabase,
+  POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_APPLY_FUNCTION,
+  POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_OUTCOMES,
+  applyPostgresSignalAttributionReceiptApplyBoundary,
+  buildPostgresSignalAttributionReceiptApplyManifest,
+  buildPostgresSignalAttributionReceiptRecordRequestId,
+  normalizedPostgresSignalAttributionReceiptRecordPayload,
+  verifyPostgresSignalAttributionReceiptApplyBoundary
+} from "../packages/database/src/postgres-signal-attribution-receipt-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -296,6 +306,7 @@ import {
 import type { OperatorAlertWebhookRegistry } from "../packages/engine/src/operator-alert-webhook.js";
 import type { BackgroundWorkerContext } from "../packages/contracts/src/background-worker.js";
 import type {
+  AttributionPlan,
   AttributionPolicyUpdateInput,
   ListingContext,
   MissionContext,
@@ -363,6 +374,8 @@ const NATIVE_SOURCE_PROVISIONING_APPLY_ROLE_NAMESPACE =
   "yoink_native_source_provisioning";
 const NATIVE_ATTRIBUTION_POLICY_APPLY_ROLE_NAMESPACE =
   "yoink_native_attribution_pol";
+const NATIVE_ATTRIBUTION_RECEIPT_APPLY_ROLE_NAMESPACE =
+  "yoink_native_attribution_rcpt";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1198,7 +1211,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, and complete-set attribution-policy replacement", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, and bounded attribution-receipt writing", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1417,6 +1430,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalAttributionPolicyUnmapped:
     NodePostgresSignalAttributionPolicyApplyDatabase | null = null;
   let signalAttributionPolicyDirectClient: Client | null = null;
+  let signalAttributionReceiptA: NodePostgresSignalAttributionReceiptApplyDatabase | null = null;
+  let signalAttributionReceiptB: NodePostgresSignalAttributionReceiptApplyDatabase | null = null;
+  let signalAttributionReceiptC: NodePostgresSignalAttributionReceiptApplyDatabase | null = null;
+  let signalAttributionReceiptUnmapped: NodePostgresSignalAttributionReceiptApplyDatabase | null = null;
+  let signalAttributionReceiptDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -3504,6 +3522,115 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalAttributionPolicyBoundary
     );
+
+    // attribution-receipt-apply chains onto attribution-policy-apply -- the
+    // newest full-writer sibling at the time this boundary was authored --
+    // not onto catalog-import-apply (a concurrently-authored sibling with
+    // no ordering relationship to this module).
+    const qualifiedSignalAttributionReceiptManifest =
+      buildPostgresSignalAttributionReceiptApplyManifest(
+        qualifiedSignalAttributionPolicyManifest,
+        NATIVE_ATTRIBUTION_RECEIPT_APPLY_ROLE_NAMESPACE
+      );
+    const signalAttributionReceiptBoundary =
+      await applyPostgresSignalAttributionReceiptApplyBoundary(
+        importer,
+        qualifiedSignalAttributionReceiptManifest,
+        new Date("2026-08-25T16:59:31.000Z").getTime()
+      );
+    assert.equal(signalAttributionReceiptBoundary.protectedTenantTableCount, 5);
+    assert.equal(signalAttributionReceiptBoundary.forcedRlsTableCount, 5);
+    assert.equal(signalAttributionReceiptBoundary.mutationTableCount, 3);
+    assert.equal(signalAttributionReceiptBoundary.directTableGrantCount, 0);
+    assert.equal(signalAttributionReceiptBoundary.functionGrantCount, 1);
+    assert.equal(signalAttributionReceiptBoundary.membershipCount, 0);
+    assert.equal(signalAttributionReceiptBoundary.activePrincipalCount, 0);
+    assert.equal(signalAttributionReceiptBoundary.metadata.operationCount, 1);
+    // action_jobs and attribution_policies are read (and, for action_jobs,
+    // row-locked) but never mutated -- present in the protected set, absent
+    // from the mutation set. `listings` is deliberately absent from both: it
+    // carries no tenant_id/user_id columns at all.
+    assert.deepEqual(
+      qualifiedSignalAttributionReceiptManifest.attributionReceiptRole.protectedTenantTableNames,
+      ["action_jobs", "attribution_policies", "attribution_receipts", "audit_events", "outbox_events"]
+    );
+    assert.deepEqual(
+      qualifiedSignalAttributionReceiptManifest.attributionReceiptRole.mutationTableNames,
+      ["attribution_receipts", "audit_events", "outbox_events"]
+    );
+    assert.deepEqual(
+      signalAttributionReceiptBoundary.metadata.supportedRetailers,
+      POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS
+    );
+    assert.equal(signalAttributionReceiptBoundary.metadata.supportedRetailerCount, 13);
+    assert.deepEqual(
+      signalAttributionReceiptBoundary.metadata.providerAllowlist,
+      ["canonical", "howl", "amazon_associates"]
+    );
+    assert.deepEqual(
+      signalAttributionReceiptBoundary.metadata.outcomeAllowlist,
+      POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_OUTCOMES
+    );
+    assert.equal(signalAttributionReceiptBoundary.metadata.serverBoundPrincipalLookup, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.jobOwnershipRevalidated, true);
+    assert.equal(
+      signalAttributionReceiptBoundary.metadata.attributionSnapshotConsistencyRevalidated,
+      true
+    );
+    assert.equal(signalAttributionReceiptBoundary.metadata.provisionedPolicyRowRequired, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.policyIdentityRevalidated, true);
+    // attribution_receipts is not one of the five domains the shared
+    // writer-lock protocol guards -- same as attribution_policies. Per-job
+    // serialization instead comes from `FOR UPDATE OF job` plus
+    // UNIQUE(job_id) + ON CONFLICT DO NOTHING.
+    assert.equal(signalAttributionReceiptBoundary.metadata.writerLockProtocolConsumed, false);
+    assert.equal(signalAttributionReceiptBoundary.metadata.deterministicRequestIdentity, true);
+    // The one deliberate divergence from most siblings' audited-replay-graph
+    // check: an existing receipt for a job is unconditionally a zero-write
+    // success, exactly like SQLite's own `INSERT OR IGNORE` -- never
+    // compared against the newly-submitted payload.
+    assert.equal(signalAttributionReceiptBoundary.metadata.insertOrIgnoreReplayParity, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.auditedOnFreshRecordOnly, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.immutableReceiptReplay, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.databaseOwnedTimestamps, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.databaseDerivedCanonicalUrlHash, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.metadataNeverPersisted, true);
+    // The 23rd writer: closes its own aggregate flag. World-state carried
+    // forward unchanged from attribution-policy-apply (v0.96).
+    assert.equal(signalAttributionReceiptBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.sourceStatusWriterParity, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.sourceSyncWriterParity, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.catalogImportWriterParity, true);
+    assert.equal(
+      signalAttributionReceiptBoundary.metadata.connectionProvisioningWriterParity,
+      true
+    );
+    assert.equal(signalAttributionReceiptBoundary.metadata.sourceWriterParity, true);
+    assert.equal(
+      signalAttributionReceiptBoundary.metadata.retailerQualificationWriterParity,
+      true
+    );
+    assert.equal(signalAttributionReceiptBoundary.metadata.missionPolicyWriterParity, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.settingsWriterParity, false);
+    assert.equal(signalAttributionReceiptBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalAttributionReceiptBoundary.metadata.reservationWriterParity, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.attributionPolicyParity, true);
+    // Closes `AttributionRepository.recordReceipt -> attribution_receipts`,
+    // the out-of-scope write family named in
+    // POSTGRES_SIGNAL_EVALUATION_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES.
+    assert.equal(signalAttributionReceiptBoundary.metadata.attributionReceiptWriterParity, true);
+    assert.equal(signalAttributionReceiptBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalAttributionReceiptBoundary.metadata.sharedCatalogMutationAuthority, false);
+    assert.equal(signalAttributionReceiptBoundary.metadata.actionAuthority, false);
+    assert.equal(signalAttributionReceiptBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalAttributionReceiptBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalAttributionReceiptApplyBoundary(
+        importer,
+        qualifiedSignalAttributionReceiptManifest
+      ),
+      signalAttributionReceiptBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -3877,6 +4004,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalSourceProvisioningManifest,
         NATIVE_ATTRIBUTION_POLICY_APPLY_ROLE_NAMESPACE
       );
+    const signalAttributionReceiptManifest =
+      buildPostgresSignalAttributionReceiptApplyManifest(
+        signalAttributionPolicyManifest,
+        NATIVE_ATTRIBUTION_RECEIPT_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -3995,6 +4127,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalAttributionPolicyManifest.attributionPolicyRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalAttributionReceiptManifest.attributionReceiptRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -17636,6 +17772,521 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalReservationLifecycleUnmapped = null;
     })();
 
+    await (async () => {
+    // --- v0.99: bounded attribution-RECEIPT writer proof ---
+    // Closes `AttributionRepository.recordReceipt -> attribution_receipts`,
+    // the write family `postgres-signal-evaluation-composition.ts` names in
+    // its own POSTGRES_SIGNAL_EVALUATION_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES
+    // as governed only by the attribution-policy-apply POLICY table. One
+    // operation appends exactly one receipt for one already-owned action
+    // job; provider/routeUrl/retailerId are DERIVED from the locked job row
+    // (never trusted from the wire) and revalidated against the submitted
+    // plan; canonical_url_hash is derived server-side, reproducing the real
+    // TypeScript `stableHash` helper byte-for-byte; and a replayed job_id is
+    // a true zero-write INSERT-OR-IGNORE success -- no comparison against
+    // the newly-submitted payload at all.
+    const attributionReceiptDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalAttributionReceiptApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalAttributionReceiptManifest, { maxConnections });
+    signalAttributionReceiptA = attributionReceiptDatabase(NATIVE_PRINCIPAL_A);
+    signalAttributionReceiptB = attributionReceiptDatabase(NATIVE_PRINCIPAL_B);
+    signalAttributionReceiptC = attributionReceiptDatabase(NATIVE_PRINCIPAL_C);
+    signalAttributionReceiptUnmapped = attributionReceiptDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const attributionReceiptPrincipalA = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const attributionReceiptPrincipalB = { tenantId: "tenant_local", userId: "user_local" };
+
+    // Read back -- never assume -- the qualified action job's own
+    // attribution snapshot. `actionSpendWinner` was created earlier in this
+    // suite by the qualified action/spend boundary, which unconditionally
+    // sets `attribution_url = canonical_url` and `attribution_provider =
+    // 'canonical'` (postgres-signal-action-spend-apply.ts). The
+    // attribution-policy section above provisioned+enabled a 'target'
+    // policy row for the same tenant/user. This section fails loudly (via
+    // the asserts immediately below) if either upstream fixture ever
+    // drifts, rather than silently hardcoding stale values.
+    const attributionReceiptJobSnapshot = (await first!.query<{
+      canonicalUrl: string;
+      attributionUrl: string;
+      attributionProvider: string;
+      retailerId: string;
+    }>(
+      `SELECT job.canonical_url AS "canonicalUrl", job.attribution_url AS "attributionUrl",
+              job.attribution_provider AS "attributionProvider",
+              listing.retailer_id AS "retailerId"
+       FROM "${NATIVE_SCHEMA}"."action_jobs" job
+       JOIN "${NATIVE_SCHEMA}"."listings" listing ON listing.id = job.listing_id
+       WHERE job.id = $1`,
+      [actionSpendWinner.actionJobId]
+    )).rows[0]!;
+    assert.equal(attributionReceiptJobSnapshot.retailerId, "target");
+    assert.equal(attributionReceiptJobSnapshot.attributionProvider, "canonical");
+    assert.equal(attributionReceiptJobSnapshot.attributionUrl, attributionReceiptJobSnapshot.canonicalUrl);
+
+    const attributionReceiptTargetPolicyId = (await first!.query<{ id: string }>(
+      `SELECT id FROM "${NATIVE_SCHEMA}"."attribution_policies"
+       WHERE tenant_id = $1 AND user_id = $2 AND retailer_id = 'target'`,
+      [NATIVE_TENANT, NATIVE_USER]
+    )).rows[0]!.id;
+
+    const attributionReceiptPlan = (overrides: Partial<AttributionPlan> = {}): AttributionPlan => ({
+      policyId: attributionReceiptTargetPolicyId,
+      retailerId: "target",
+      provider: "canonical",
+      outcome: "canonical_disabled",
+      reasonCode: "attribution_disabled",
+      routeUrl: attributionReceiptJobSnapshot.canonicalUrl,
+      metadata: {},
+      blocked: false,
+      ...overrides
+    });
+    const applyAttributionReceipt = (
+      database: NodePostgresSignalAttributionReceiptApplyDatabase,
+      principalValue: { tenantId: string; userId: string },
+      jobId: string,
+      plan: AttributionPlan
+    ) => {
+      const payload = normalizedPostgresSignalAttributionReceiptRecordPayload(jobId, plan);
+      return database.recordAttributionReceipt(
+        principalValue,
+        buildPostgresSignalAttributionReceiptRecordRequestId(principalValue, payload),
+        payload
+      );
+    };
+    const attributionReceiptGraphCounts = async (
+      jobId: string
+    ): Promise<{ receipts: number; audits: number; outboxes: number }> => {
+      const row = (await first!.query<{
+        receipts: string | number | bigint;
+        audits: string | number | bigint;
+        outboxes: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."attribution_receipts"
+            WHERE job_id = $1) AS receipts,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE correlation_id = $1
+              AND event_type = 'attribution_route_recorded') AS audits,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE aggregate_type = 'attribution_receipt' AND aggregate_id = $1) AS outboxes`,
+        [jobId]
+      )).rows[0]!;
+      return {
+        receipts: Number(row.receipts),
+        audits: Number(row.audits),
+        outboxes: Number(row.outboxes)
+      };
+    };
+
+    // Fresh receipt for the qualified action job created earlier in the
+    // suite by the action/spend boundary proofs.
+    assert.deepEqual(
+      await attributionReceiptGraphCounts(actionSpendWinner.actionJobId),
+      { receipts: 0, audits: 0, outboxes: 0 }
+    );
+    const firstAttributionReceiptResult = await applyAttributionReceipt(
+      signalAttributionReceiptA,
+      attributionReceiptPrincipalA,
+      actionSpendWinner.actionJobId,
+      attributionReceiptPlan()
+    );
+    assert.equal(firstAttributionReceiptResult.contractVersion, 1);
+    assert.equal(firstAttributionReceiptResult.operation, "record_attribution_receipt");
+    assert.match(firstAttributionReceiptResult.requestId, /^attribution_receipt_record_[a-f0-9]{32}$/);
+    assert.match(firstAttributionReceiptResult.requestFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(firstAttributionReceiptResult.outcome, "applied");
+    assert.equal(firstAttributionReceiptResult.mutationApplied, true);
+    assert.equal(firstAttributionReceiptResult.idempotentReplay, false);
+    assert.equal(firstAttributionReceiptResult.mutationStatementCount, 3);
+    assert.equal(firstAttributionReceiptResult.mutationRowCount, 3);
+    assert.equal(firstAttributionReceiptResult.receiptMutated, true);
+    assert.equal(firstAttributionReceiptResult.auditMutated, true);
+    assert.equal(firstAttributionReceiptResult.outboxMutated, true);
+    assert.match(firstAttributionReceiptResult.receipt.id, /^attribution_receipt_[a-f0-9]{32}$/);
+    assert.equal(firstAttributionReceiptResult.receipt.jobId, actionSpendWinner.actionJobId);
+    assert.equal(firstAttributionReceiptResult.receipt.policyId, attributionReceiptTargetPolicyId);
+    assert.equal(firstAttributionReceiptResult.receipt.retailerId, "target");
+    assert.equal(firstAttributionReceiptResult.receipt.provider, "canonical");
+    assert.equal(firstAttributionReceiptResult.receipt.outcome, "canonical_disabled");
+    assert.equal(firstAttributionReceiptResult.receipt.reasonCode, "attribution_disabled");
+    assert.equal(firstAttributionReceiptResult.receipt.routeUrl, attributionReceiptJobSnapshot.canonicalUrl);
+    // The server-derived canonical_url_hash must equal the REAL TypeScript
+    // stableHash helper's output over the job's own canonical_url -- proving
+    // the PL/pgSQL reproduction agrees with domain/src/ids.ts byte-for-byte,
+    // not merely that both sides independently claim a sha256 shape.
+    assert.equal(
+      firstAttributionReceiptResult.receipt.canonicalUrlHash,
+      stableHash("canonical-attribution-url-v1", attributionReceiptJobSnapshot.canonicalUrl)
+    );
+    assert.equal(typeof firstAttributionReceiptResult.receipt.createdAt, "string");
+    assert.ok(firstAttributionReceiptResult.receipt.createdAt.length > 0);
+    assert.equal(firstAttributionReceiptResult.attributionReceiptWriterParity, true);
+    assert.equal(firstAttributionReceiptResult.writerLockProtocolParity, false);
+    assert.equal(firstAttributionReceiptResult.mutationAuthority, true);
+    assert.equal(firstAttributionReceiptResult.sharedCatalogMutationAuthority, false);
+    assert.equal(firstAttributionReceiptResult.actionAuthority, false);
+    assert.equal(firstAttributionReceiptResult.runtimeAuthority, false);
+    assert.deepEqual(
+      await attributionReceiptGraphCounts(actionSpendWinner.actionJobId),
+      { receipts: 1, audits: 1, outboxes: 1 }
+    );
+
+    const attributionReceiptAudit = (await first!.query<{
+      aggregateType: string;
+      eventType: string;
+      reasonCode: string;
+      message: string;
+      data: Record<string, unknown>;
+      outboxData: Record<string, unknown>;
+    }>(
+      `SELECT outbox.aggregate_type AS "aggregateType",
+              audit.event_type AS "eventType", audit.reason_code AS "reasonCode",
+              audit.message, audit.data_json::jsonb AS data,
+              outbox.payload_json::jsonb->'data' AS "outboxData"
+       FROM "${NATIVE_SCHEMA}"."audit_events" audit
+       JOIN "${NATIVE_SCHEMA}"."outbox_events" outbox
+         ON outbox.payload_json::jsonb->>'auditId' = audit.id
+       WHERE audit.correlation_id = $1
+         AND audit.event_type = 'attribution_route_recorded'`,
+      [actionSpendWinner.actionJobId]
+    )).rows[0]!;
+    assert.equal(attributionReceiptAudit.aggregateType, "attribution_receipt");
+    assert.equal(attributionReceiptAudit.eventType, "attribution_route_recorded");
+    assert.equal(attributionReceiptAudit.reasonCode, "attribution_disabled");
+    assert.equal(
+      attributionReceiptAudit.message,
+      "An immutable attribution-routing receipt was recorded for an action job."
+    );
+    assert.equal(attributionReceiptAudit.data.operation, "record_attribution_receipt");
+    assert.deepEqual(attributionReceiptAudit.outboxData, attributionReceiptAudit.data);
+
+    // Duplicate call, identical payload: a true zero-write stored-state
+    // return, no audit flood.
+    const duplicateAttributionReceiptResult = await applyAttributionReceipt(
+      signalAttributionReceiptA,
+      attributionReceiptPrincipalA,
+      actionSpendWinner.actionJobId,
+      attributionReceiptPlan()
+    );
+    assert.equal(duplicateAttributionReceiptResult.outcome, "already_applied");
+    assert.equal(duplicateAttributionReceiptResult.mutationApplied, false);
+    assert.equal(duplicateAttributionReceiptResult.idempotentReplay, true);
+    assert.equal(duplicateAttributionReceiptResult.mutationStatementCount, 0);
+    assert.equal(duplicateAttributionReceiptResult.mutationRowCount, 0);
+    assert.equal(duplicateAttributionReceiptResult.receiptMutated, false);
+    assert.equal(duplicateAttributionReceiptResult.auditMutated, false);
+    assert.equal(duplicateAttributionReceiptResult.outboxMutated, false);
+    assert.equal(duplicateAttributionReceiptResult.requestId, firstAttributionReceiptResult.requestId);
+    assert.deepEqual(duplicateAttributionReceiptResult.receipt, firstAttributionReceiptResult.receipt);
+    assert.deepEqual(
+      await attributionReceiptGraphCounts(actionSpendWinner.actionJobId),
+      { receipts: 1, audits: 1, outboxes: 1 }
+    );
+
+    // Receipt-tamper proof, mirroring the depth of this suite's other
+    // receipt-tamper checks: unlike every sibling boundary (which re-verifies
+    // an audited replay graph and raises 40001 on drift), this module's
+    // replay check keys ONLY on job_id -- a maximally-diverged payload
+    // (different retailer, provider, outcome, reason code, route URL, and
+    // policy id) submitted for the SAME already-recorded job must still
+    // return the ORIGINAL stored row untouched, with NO comparison against
+    // what was just submitted, and no new audit/outbox row.
+    const tamperedAttributionReceiptResult = await applyAttributionReceipt(
+      signalAttributionReceiptA,
+      attributionReceiptPrincipalA,
+      actionSpendWinner.actionJobId,
+      attributionReceiptPlan({
+        policyId: "attribution_amazon_native_a",
+        retailerId: "amazon",
+        provider: "howl",
+        outcome: "affiliate_route",
+        reasonCode: "howl_route_ready",
+        routeUrl: "https://howl.link/link?tamper=attempt"
+      })
+    );
+    assert.equal(tamperedAttributionReceiptResult.outcome, "already_applied");
+    assert.equal(tamperedAttributionReceiptResult.mutationApplied, false);
+    assert.notEqual(tamperedAttributionReceiptResult.requestId, firstAttributionReceiptResult.requestId);
+    assert.deepEqual(tamperedAttributionReceiptResult.receipt, firstAttributionReceiptResult.receipt);
+    assert.deepEqual(
+      await attributionReceiptGraphCounts(actionSpendWinner.actionJobId),
+      { receipts: 1, audits: 1, outboxes: 1 }
+    );
+
+    // A second, independent qualified job (cloned from actionSpendWinner's
+    // job, carrying the SAME real attribution snapshot) so the mismatch and
+    // nonexistent/foreign-job fail-closed proofs below run against a job
+    // that has never had a receipt recorded.
+    const secondAttributionReceiptJobId = "native_attribution_receipt_second_job";
+    const secondAttributionReceiptCreatedAt = new Date(Date.now() - 2_000).toISOString();
+    await first!.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."action_jobs"(
+         id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+         state, action, quantity, max_unit_price_cents, max_order_total_cents,
+         currency, seller_policy, fulfillment, expected_seller, listing_id,
+         canonical_url, attribution_url, attribution_provider, idempotency_key,
+         capability_nonce_hash, expires_at, intent_revision_id,
+         exact_offer_key_id, offer_snapshot_id, created_at, updated_at
+       )
+       SELECT $1, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+              state, action, quantity, max_unit_price_cents, max_order_total_cents,
+              currency, seller_policy, fulfillment, expected_seller, listing_id,
+              canonical_url, attribution_url, attribution_provider, $2,
+              capability_nonce_hash, expires_at, intent_revision_id,
+              exact_offer_key_id, offer_snapshot_id, $3, $3
+       FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE id = $4`,
+      [
+        secondAttributionReceiptJobId,
+        "attribution-receipt-second-job-key",
+        secondAttributionReceiptCreatedAt,
+        actionSpendWinner.actionJobId
+      ]
+    );
+    assert.deepEqual(
+      await attributionReceiptGraphCounts(secondAttributionReceiptJobId),
+      { receipts: 0, audits: 0, outboxes: 0 }
+    );
+
+    // Plan-field mismatch vs. the job row: fail-closed, zero writes.
+    await assert.rejects(
+      applyAttributionReceipt(
+        signalAttributionReceiptA,
+        attributionReceiptPrincipalA,
+        secondAttributionReceiptJobId,
+        attributionReceiptPlan({ routeUrl: "https://www.target.com/p/mismatched-route/WRONG" })
+      ),
+      /does not match the action job attribution snapshot/
+    );
+    assert.deepEqual(
+      await attributionReceiptGraphCounts(secondAttributionReceiptJobId),
+      { receipts: 0, audits: 0, outboxes: 0 }
+    );
+
+    // Policy-identity mismatch (retailer/provider/routeUrl correct, policyId
+    // stale): fail-closed, zero writes.
+    await assert.rejects(
+      applyAttributionReceipt(
+        signalAttributionReceiptA,
+        attributionReceiptPrincipalA,
+        secondAttributionReceiptJobId,
+        attributionReceiptPlan({ policyId: "attribution_amazon_native_a" })
+      ),
+      /does not match the currently provisioned policy/
+    );
+    assert.deepEqual(
+      await attributionReceiptGraphCounts(secondAttributionReceiptJobId),
+      { receipts: 0, audits: 0, outboxes: 0 }
+    );
+
+    // Nonexistent job: fail-closed.
+    await assert.rejects(
+      applyAttributionReceipt(
+        signalAttributionReceiptA,
+        attributionReceiptPrincipalA,
+        "native_attribution_receipt_missing_job",
+        attributionReceiptPlan()
+      ),
+      /action job ownership is invalid/
+    );
+    // Foreign job: exists, but not owned by the calling (correctly
+    // authenticated) tenant/user.
+    await assert.rejects(
+      applyAttributionReceipt(
+        signalAttributionReceiptB,
+        attributionReceiptPrincipalB,
+        actionSpendWinner.actionJobId,
+        attributionReceiptPlan()
+      ),
+      /action job ownership is invalid/
+    );
+
+    // Fail-closed rejections above left zero writes -- the correct payload
+    // for the same second job now succeeds cleanly, proving the earlier
+    // failures never corrupted state.
+    const secondAttributionReceiptResult = await applyAttributionReceipt(
+      signalAttributionReceiptA,
+      attributionReceiptPrincipalA,
+      secondAttributionReceiptJobId,
+      attributionReceiptPlan()
+    );
+    assert.equal(secondAttributionReceiptResult.outcome, "applied");
+    assert.equal(secondAttributionReceiptResult.receipt.jobId, secondAttributionReceiptJobId);
+    assert.notEqual(secondAttributionReceiptResult.receipt.id, firstAttributionReceiptResult.receipt.id);
+    assert.equal(
+      secondAttributionReceiptResult.receipt.canonicalUrlHash,
+      stableHash("canonical-attribution-url-v1", attributionReceiptJobSnapshot.canonicalUrl)
+    );
+    assert.deepEqual(
+      await attributionReceiptGraphCounts(secondAttributionReceiptJobId),
+      { receipts: 1, audits: 1, outboxes: 1 }
+    );
+
+    // Denial matrix: wrong principal.
+    await assert.rejects(
+      applyAttributionReceipt(
+        signalAttributionReceiptB,
+        attributionReceiptPrincipalA,
+        actionSpendWinner.actionJobId,
+        attributionReceiptPlan()
+      ),
+      /does not match the expected authenticated principal/
+    );
+    // Denial matrix: same-tenant peer.
+    await first!.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER,
+        new Date(Date.now() - 5_000).toISOString()]
+    );
+    try {
+      await assert.rejects(
+        applyAttributionReceipt(
+          signalAttributionReceiptC,
+          attributionReceiptPrincipalA,
+          actionSpendWinner.actionJobId,
+          attributionReceiptPlan()
+        ),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first!.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    // Denial matrix: unmapped principal.
+    await assert.rejects(
+      applyAttributionReceipt(
+        signalAttributionReceiptUnmapped,
+        attributionReceiptPrincipalA,
+        actionSpendWinner.actionJobId,
+        attributionReceiptPlan()
+      ),
+      /tenant session principal is not active/
+    );
+    // Malformed request id: caught client-side before any round trip.
+    await assert.rejects(
+      signalAttributionReceiptA.recordAttributionReceipt(
+        attributionReceiptPrincipalA,
+        `attribution_receipt_record_${"f".repeat(32)}`,
+        normalizedPostgresSignalAttributionReceiptRecordPayload(
+          actionSpendWinner.actionJobId,
+          attributionReceiptPlan()
+        )
+      ),
+      /apply request is invalid/
+    );
+
+    // Zero direct table SQL for the role, and cross-boundary denial in both
+    // directions.
+    signalAttributionReceiptDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalAttributionReceiptDirectClient.on("error", () => undefined);
+    await signalAttributionReceiptDirectClient.connect();
+    await signalAttributionReceiptDirectClient.query(
+      `SET ROLE "${signalAttributionReceiptManifest.attributionReceiptRole.name}"`
+    );
+    await assert.rejects(
+      signalAttributionReceiptDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."attribution_receipts" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalAttributionReceiptDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalAttributionReceiptDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."attribution_policies" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalAttributionReceiptDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."audit_events"(id)
+         VALUES ('forbidden_attribution_receipt_audit')`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalAttributionReceiptDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."outbox_events" SET delivered_at = ''`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalAttributionReceiptDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_FUNCTION}"(
+           $1, $2, 'replace_attribution_policies', 'forbidden_cross_boundary', '{}'
+         )`,
+        [attributionReceiptPrincipalA.tenantId, attributionReceiptPrincipalA.userId]
+      ),
+      /permission denied/
+    );
+    // A sibling role (attribution-policy's) cannot call this boundary's
+    // function either.
+    await signalAttributionReceiptDirectClient.query(
+      `SET ROLE "${signalAttributionPolicyManifest.attributionPolicyRole.name}"`
+    );
+    await assert.rejects(
+      signalAttributionReceiptDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_APPLY_FUNCTION}"(
+           $1, $2, 'record_attribution_receipt', 'forbidden_cross_boundary_reverse', '{}'
+         )`,
+        [attributionReceiptPrincipalA.tenantId, attributionReceiptPrincipalA.userId]
+      ),
+      /permission denied/
+    );
+    await signalAttributionReceiptDirectClient.end();
+    signalAttributionReceiptDirectClient = null;
+
+    // Immutable replay consistency: called again after unrelated denial-
+    // matrix and validation activity, the original request id must return
+    // the original "applied" audit's result unchanged and write nothing
+    // further.
+    const immutableAttributionReceiptReplay = await applyAttributionReceipt(
+      signalAttributionReceiptA,
+      attributionReceiptPrincipalA,
+      actionSpendWinner.actionJobId,
+      attributionReceiptPlan()
+    );
+    assert.equal(immutableAttributionReceiptReplay.outcome, "already_applied");
+    assert.equal(immutableAttributionReceiptReplay.mutationApplied, false);
+    assert.equal(immutableAttributionReceiptReplay.idempotentReplay, true);
+    assert.equal(immutableAttributionReceiptReplay.requestId, firstAttributionReceiptResult.requestId);
+    assert.equal(
+      immutableAttributionReceiptReplay.requestFingerprint,
+      firstAttributionReceiptResult.requestFingerprint
+    );
+    assert.deepEqual(immutableAttributionReceiptReplay.receipt, firstAttributionReceiptResult.receipt);
+    assert.deepEqual(
+      await attributionReceiptGraphCounts(actionSpendWinner.actionJobId),
+      { receipts: 1, audits: 1, outboxes: 1 }
+    );
+
+    await Promise.all([
+      signalAttributionReceiptA.close(),
+      signalAttributionReceiptB.close(),
+      signalAttributionReceiptC.close(),
+      signalAttributionReceiptUnmapped.close()
+    ]);
+    signalAttributionReceiptA = null;
+    signalAttributionReceiptB = null;
+    signalAttributionReceiptC = null;
+    signalAttributionReceiptUnmapped = null;
+    })();
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -21529,7 +22180,16 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       (signalReservationLifecycleUnmapped as
         NodePostgresSignalReservationLifecycleApplyDatabase | null)?.close(),
       (signalReservationLifecycleDirectClient as Client | null)?.end(),
-      (signalReservationLifecycleLockClient as Client | null)?.end()
+      (signalReservationLifecycleLockClient as Client | null)?.end(),
+      (signalAttributionReceiptA as
+        NodePostgresSignalAttributionReceiptApplyDatabase | null)?.close(),
+      (signalAttributionReceiptB as
+        NodePostgresSignalAttributionReceiptApplyDatabase | null)?.close(),
+      (signalAttributionReceiptC as
+        NodePostgresSignalAttributionReceiptApplyDatabase | null)?.close(),
+      (signalAttributionReceiptUnmapped as
+        NodePostgresSignalAttributionReceiptApplyDatabase | null)?.close(),
+      (signalAttributionReceiptDirectClient as Client | null)?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();
