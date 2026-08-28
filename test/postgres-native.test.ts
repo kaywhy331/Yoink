@@ -279,6 +279,19 @@ import {
   normalizedPostgresSignalAttributionReceiptRecordPayload,
   verifyPostgresSignalAttributionReceiptApplyBoundary
 } from "../packages/database/src/postgres-signal-attribution-receipt-apply.js";
+import {
+  NodePostgresSignalJobLifecycleApplyDatabase,
+  POSTGRES_SIGNAL_JOB_LIFECYCLE_APPLY_CONFIRMATION,
+  POSTGRES_SIGNAL_JOB_LIFECYCLE_APPLY_FUNCTION,
+  POSTGRES_SIGNAL_JOB_LIFECYCLE_MUTATION_RISK_STATES,
+  POSTGRES_SIGNAL_JOB_LIFECYCLE_TRANSITIONS,
+  applyPostgresSignalJobLifecycleApplyBoundary,
+  buildPostgresSignalJobLifecycleApplyManifest,
+  buildPostgresSignalJobLifecycleTransitionRequestId,
+  normalizedPostgresSignalJobLifecycleTransitionPayload,
+  verifyPostgresSignalJobLifecycleApplyBoundary,
+  type PostgresSignalJobLifecycleTransitionPayload
+} from "../packages/database/src/postgres-signal-job-lifecycle-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -376,6 +389,8 @@ const NATIVE_ATTRIBUTION_POLICY_APPLY_ROLE_NAMESPACE =
   "yoink_native_attribution_pol";
 const NATIVE_ATTRIBUTION_RECEIPT_APPLY_ROLE_NAMESPACE =
   "yoink_native_attribution_rcpt";
+const NATIVE_JOB_LIFECYCLE_APPLY_ROLE_NAMESPACE =
+  "yoink_native_job_lifecycle";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1211,7 +1226,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, and bounded attribution-receipt writing", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, and bounded post-creation action-job lifecycle writing", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1435,6 +1450,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalAttributionReceiptC: NodePostgresSignalAttributionReceiptApplyDatabase | null = null;
   let signalAttributionReceiptUnmapped: NodePostgresSignalAttributionReceiptApplyDatabase | null = null;
   let signalAttributionReceiptDirectClient: Client | null = null;
+  let signalJobLifecycleA: NodePostgresSignalJobLifecycleApplyDatabase | null = null;
+  let signalJobLifecycleB: NodePostgresSignalJobLifecycleApplyDatabase | null = null;
+  let signalJobLifecycleC: NodePostgresSignalJobLifecycleApplyDatabase | null = null;
+  let signalJobLifecycleUnmapped: NodePostgresSignalJobLifecycleApplyDatabase | null = null;
+  let signalJobLifecycleDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -3631,6 +3651,101 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalAttributionReceiptBoundary
     );
+
+    // job-lifecycle-apply (v1.00) chains onto attribution-policy-apply --
+    // the newest committed full-writer sibling at authoring time, per its
+    // own module header -- NOT onto attribution-receipt-apply, a sibling
+    // with no ordering relationship to this module.
+    const qualifiedSignalJobLifecycleManifest =
+      buildPostgresSignalJobLifecycleApplyManifest(
+        qualifiedSignalAttributionPolicyManifest,
+        NATIVE_JOB_LIFECYCLE_APPLY_ROLE_NAMESPACE
+      );
+    const signalJobLifecycleBoundary =
+      await applyPostgresSignalJobLifecycleApplyBoundary(
+        importer,
+        qualifiedSignalJobLifecycleManifest,
+        new Date("2026-08-25T16:59:32.000Z").getTime()
+      );
+    assert.equal(signalJobLifecycleBoundary.protectedTenantTableCount, 8);
+    assert.equal(signalJobLifecycleBoundary.forcedRlsTableCount, 8);
+    assert.equal(signalJobLifecycleBoundary.mutationTableCount, 6);
+    assert.equal(signalJobLifecycleBoundary.directTableGrantCount, 0);
+    assert.equal(signalJobLifecycleBoundary.functionGrantCount, 1);
+    assert.equal(signalJobLifecycleBoundary.membershipCount, 0);
+    assert.equal(signalJobLifecycleBoundary.activePrincipalCount, 0);
+    assert.equal(signalJobLifecycleBoundary.metadata.operationCount, 1);
+    assert.equal(signalJobLifecycleBoundary.metadata.jobStateCount, 19);
+    assert.equal(signalJobLifecycleBoundary.metadata.legalTransitionCount, 47);
+    assert.equal(signalJobLifecycleBoundary.metadata.mutationRiskStateCount, 8);
+    assert.deepEqual(
+      qualifiedSignalJobLifecycleManifest.jobLifecycleRole.protectedTenantTableNames,
+      [
+        "action_events", "action_jobs", "audit_events", "missions",
+        "outbox_events", "signal_events", "signal_incidents", "signal_occurrences"
+      ]
+    );
+    assert.deepEqual(
+      qualifiedSignalJobLifecycleManifest.jobLifecycleRole.mutationTableNames,
+      [
+        "action_events", "action_jobs", "audit_events",
+        "missions", "outbox_events", "signal_incidents"
+      ]
+    );
+    assert.equal(signalJobLifecycleBoundary.metadata.serverBoundPrincipalLookup, true);
+    // Consumes the SAME shared-lock 'spend' bit as reservation-lifecycle-
+    // apply (v0.93) -- both mutate state hanging off the same action_jobs
+    // row, and missions.fulfilled_quantity feeds the spend capacity math.
+    assert.equal(signalJobLifecycleBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.spendScopeConsumed, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.deterministicRequestIdentity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.immutableTransitionReplay, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.lifecycleAwareOutboxReplay, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.currentJobOwnershipRevalidation, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.expectedCurrentStateRevalidation, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.legalTransitionTableEnforced, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.possibleMutationCancelGuardEnforced, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.crossTenantIncidentGuardEnforced, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.terminalIncidentClosureParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.reviewIncidentLockParity, true);
+    // The 24th writer: closes its own aggregate flag AND the mission-
+    // fulfillment flag reservation-lifecycle-apply's manifest could only
+    // ever carry as false.
+    assert.equal(signalJobLifecycleBoundary.metadata.missionFulfillmentMutation, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.checkoutMutation, false);
+    assert.equal(signalJobLifecycleBoundary.metadata.orderSubmissionMutation, false);
+    assert.equal(signalJobLifecycleBoundary.metadata.spendReservationMutationDeferred, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.deviceCapabilityRevalidation, false);
+    assert.equal(signalJobLifecycleBoundary.metadata.sqliteValidationParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.sourceStatusWriterParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.sourceSyncWriterParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.catalogImportWriterParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.connectionProvisioningWriterParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.sourceWriterParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.retailerQualificationWriterParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.missionPolicyWriterParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.settingsWriterParity, false);
+    assert.equal(signalJobLifecycleBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalJobLifecycleBoundary.metadata.reservationWriterParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.attributionPolicyParity, true);
+    assert.equal(signalJobLifecycleBoundary.metadata.jobLifecycleWriterParity, true);
+    // The shared five-domain lock protocol still has non-consuming writer
+    // families, so the protocol-wide aggregate cannot close from this
+    // boundary alone.
+    assert.equal(signalJobLifecycleBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalJobLifecycleBoundary.metadata.actionAuthority, false);
+    assert.equal(signalJobLifecycleBoundary.metadata.checkoutAuthority, false);
+    assert.equal(signalJobLifecycleBoundary.metadata.orderSubmissionAuthority, false);
+    assert.equal(signalJobLifecycleBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalJobLifecycleBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalJobLifecycleApplyBoundary(
+        importer,
+        qualifiedSignalJobLifecycleManifest
+      ),
+      signalJobLifecycleBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -4009,6 +4124,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalAttributionPolicyManifest,
         NATIVE_ATTRIBUTION_RECEIPT_APPLY_ROLE_NAMESPACE
       );
+    const signalJobLifecycleManifest =
+      buildPostgresSignalJobLifecycleApplyManifest(
+        signalAttributionPolicyManifest,
+        NATIVE_JOB_LIFECYCLE_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -4131,6 +4251,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalAttributionReceiptManifest.attributionReceiptRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalJobLifecycleManifest.jobLifecycleRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -18287,6 +18411,680 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalAttributionReceiptUnmapped = null;
     })();
 
+    await (async () => {
+    // --- v1.00: bounded post-creation action-job LIFECYCLE writer proof ---
+    // Closes SignalRepository.transitionJob's post-creation branches:
+    // action_jobs.state, action_events, signal_incidents close/lock
+    // lifecycle, and missions.fulfilled_quantity/status (submit_order +
+    // confirmed only) plus the atomic audit/outbox pair -- the exact
+    // residual reservation-lifecycle-apply (v0.93) never covers (it owns
+    // only spend_reservations/spend_ledger_entries for the SAME jobs).
+    // Every fixture below is cloned from the qualified purchase-intent job
+    // (`actionSpendWinner`, created earlier in this suite by the action/
+    // spend boundary) via a generic column-introspecting clone helper --
+    // signal_incidents/missions carry Postgres-cutover-only tenant columns
+    // absent from the SQLite migration, so a hand-typed column list would
+    // silently drift. Each fixture gets its OWN fresh incident, so this
+    // section's incident close/lock writes never touch a row any earlier
+    // or later section reads (`actionSpendWinner`'s own job/incident/
+    // mission rows are read here, never mutated).
+    const jobLifecycleNow = Date.now();
+    const jobLifecycleCreatedAt = new Date(jobLifecycleNow - 5_000).toISOString();
+    const jobLifecycleExpiresAt = new Date(jobLifecycleNow + 300_000).toISOString();
+    const jobLifecycleSourceJob = (await first!.query<{
+      incidentId: string;
+      missionId: string;
+    }>(
+      `SELECT incident_id AS "incidentId", mission_id AS "missionId"
+       FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE id = $1`,
+      [actionSpendWinner.actionJobId]
+    )).rows[0]!;
+
+    const jobLifecycleCloneRow = async (
+      table: string,
+      sourceId: string,
+      newId: string,
+      overrides: Record<string, unknown>
+    ): Promise<void> => {
+      const columns = (await first!.query<{ columnName: string }>(
+        `SELECT column_name AS "columnName" FROM information_schema.columns
+         WHERE table_schema = $1 AND table_name = $2 AND is_generated = 'NEVER'
+         ORDER BY ordinal_position`,
+        [NATIVE_SCHEMA, table]
+      )).rows.map((row) => row.columnName).filter((name) => name !== "id");
+      const values: unknown[] = [newId];
+      const selectExprs = ["$1"];
+      for (const column of columns) {
+        if (Object.prototype.hasOwnProperty.call(overrides, column)) {
+          values.push(overrides[column]);
+          selectExprs.push(`$${values.length}`);
+        } else {
+          selectExprs.push(`"${column}"`);
+        }
+      }
+      values.push(sourceId);
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."${table}"(${["id", ...columns].map((c) => `"${c}"`).join(", ")})
+         SELECT ${selectExprs.join(", ")}
+         FROM "${NATIVE_SCHEMA}"."${table}" WHERE id = $${values.length}`,
+        values
+      );
+    };
+    const createJobLifecycleFixture = async (input: {
+      suffix: string;
+      state: string;
+      action: string;
+      quantity?: number;
+    }): Promise<{ actionJobId: string; incidentId: string }> => {
+      const incidentId = `native_job_lifecycle_incident_${input.suffix}`;
+      const actionJobId = `native_job_lifecycle_${input.suffix}_job`;
+      await jobLifecycleCloneRow(
+        "signal_incidents", jobLifecycleSourceJob.incidentId, incidentId,
+        {
+          status: "open",
+          closed_reason: "",
+          created_at: jobLifecycleCreatedAt,
+          updated_at: jobLifecycleCreatedAt
+        }
+      );
+      await jobLifecycleCloneRow(
+        "action_jobs", actionSpendWinner.actionJobId, actionJobId,
+        {
+          incident_id: incidentId,
+          state: input.state,
+          action: input.action,
+          quantity: input.quantity ?? 1,
+          idempotency_key: `job-lifecycle-fixture:${input.suffix}`,
+          leased_at: "",
+          lease_expires_at: "",
+          expires_at: jobLifecycleExpiresAt,
+          created_at: jobLifecycleCreatedAt,
+          updated_at: jobLifecycleCreatedAt
+        }
+      );
+      return { actionJobId, incidentId };
+    };
+
+    const jobLifecycleDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalJobLifecycleApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalJobLifecycleManifest, { maxConnections });
+    signalJobLifecycleA = jobLifecycleDatabase(NATIVE_PRINCIPAL_A);
+    signalJobLifecycleB = jobLifecycleDatabase(NATIVE_PRINCIPAL_B);
+    signalJobLifecycleC = jobLifecycleDatabase(NATIVE_PRINCIPAL_C);
+    signalJobLifecycleUnmapped = jobLifecycleDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const jobLifecyclePrincipal = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const jobLifecyclePayload = (overrides: Partial<{
+      jobId: string;
+      expectedCurrentState: string;
+      nextState: string;
+      reasonCode: string;
+      message: string;
+      evidence: Record<string, unknown>;
+      manualResolution: boolean;
+    }>): PostgresSignalJobLifecycleTransitionPayload =>
+      normalizedPostgresSignalJobLifecycleTransitionPayload({
+        jobId: "",
+        expectedCurrentState: "awaiting_executor",
+        nextState: "leased",
+        reasonCode: "native_job_lifecycle_proof",
+        message: "Native job-lifecycle boundary proof.",
+        evidence: { proof: "native_job_lifecycle" },
+        manualResolution: false,
+        ...overrides
+      } as never);
+    const applyJobLifecycle = (
+      database: NodePostgresSignalJobLifecycleApplyDatabase,
+      payload: PostgresSignalJobLifecycleTransitionPayload
+    ) => database.transitionJob(
+      jobLifecyclePrincipal,
+      "transition_job",
+      buildPostgresSignalJobLifecycleTransitionRequestId(jobLifecyclePrincipal, payload),
+      payload
+    );
+    const jobLifecycleGraphCounts = async (jobId: string): Promise<{
+      actionEvents: number;
+      audits: number;
+      outboxes: number;
+    }> => {
+      const row = (await first!.query<{
+        actionEvents: string | number | bigint;
+        audits: string | number | bigint;
+        outboxes: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."action_events"
+            WHERE job_id = $1) AS "actionEvents",
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE correlation_id = $1 AND event_type = 'action_job_transition') AS audits,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE aggregate_type = 'action_job' AND aggregate_id = $1) AS outboxes`,
+        [jobId]
+      )).rows[0]!;
+      return {
+        actionEvents: Number(row.actionEvents),
+        audits: Number(row.audits),
+        outboxes: Number(row.outboxes)
+      };
+    };
+    const jobLifecycleSpendCounts = async (): Promise<{
+      reservations: number;
+      ledger: number;
+    }> => {
+      const row = (await first!.query<{
+        reservations: string | number | bigint;
+        ledger: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."spend_reservations"
+            WHERE tenant_id = $1 AND user_id = $2) AS reservations,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."spend_ledger_entries"
+            WHERE tenant_id = $1 AND user_id = $2) AS ledger`,
+        [NATIVE_TENANT, NATIVE_USER]
+      )).rows[0]!;
+      return {
+        reservations: Number(row.reservations),
+        ledger: Number(row.ledger)
+      };
+    };
+    const jobLifecycleSpendBefore = await jobLifecycleSpendCounts();
+
+    // (a) Illegal edge -> fail-closed, zero writes. notify_only carries NO
+    // legal outgoing edges at all (TRANSITIONS.notify_only === []), so this
+    // is a maximally strict proof of the database's OWN legal-transition
+    // enforcement -- constructed by hand (bypassing the TypeScript
+    // normalizer, which would otherwise reject this client-side) to prove
+    // the PostgreSQL function independently enforces the 47-edge table.
+    assert.deepEqual(POSTGRES_SIGNAL_JOB_LIFECYCLE_TRANSITIONS.notify_only, []);
+    const notifyFixture = await createJobLifecycleFixture({
+      suffix: "notify", state: "notify_only", action: "notify"
+    });
+    const illegalEdgePayload = {
+      jobId: notifyFixture.actionJobId,
+      expectedCurrentState: "notify_only",
+      nextState: "awaiting_executor",
+      reasonCode: "illegal_edge_attempt",
+      message: "Attempting an illegal edge from a terminal state.",
+      evidence: { proof: "illegal_edge" },
+      manualResolution: false,
+      confirmation: POSTGRES_SIGNAL_JOB_LIFECYCLE_APPLY_CONFIRMATION
+    } as unknown as PostgresSignalJobLifecycleTransitionPayload;
+    const illegalEdgeCountsBefore = await jobLifecycleGraphCounts(notifyFixture.actionJobId);
+    await assert.rejects(
+      signalJobLifecycleA.transitionJob(
+        jobLifecyclePrincipal,
+        "transition_job",
+        buildPostgresSignalJobLifecycleTransitionRequestId(jobLifecyclePrincipal, illegalEdgePayload),
+        illegalEdgePayload
+      ),
+      /not legal from the current state/
+    );
+    assert.deepEqual(
+      await jobLifecycleGraphCounts(notifyFixture.actionJobId),
+      illegalEdgeCountsBefore
+    );
+
+    // (b) expectedCurrentState mismatch -> 55000 fail-closed, zero writes --
+    // the optimistic precondition this writer's payload adds beyond
+    // transitionJob's own literal signature.
+    const mismatchFixture = await createJobLifecycleFixture({
+      suffix: "mismatch", state: "awaiting_executor", action: "add_to_cart"
+    });
+    const mismatchCountsBefore = await jobLifecycleGraphCounts(mismatchFixture.actionJobId);
+    await assert.rejects(
+      applyJobLifecycle(signalJobLifecycleA, jobLifecyclePayload({
+        jobId: mismatchFixture.actionJobId,
+        expectedCurrentState: "leased",
+        nextState: "navigating",
+        reasonCode: "stale_expected_state"
+      })),
+      /current state does not match the expected state/
+    );
+    assert.deepEqual(
+      await jobLifecycleGraphCounts(mismatchFixture.actionJobId),
+      mismatchCountsBefore
+    );
+    // The correct payload for the SAME job now succeeds cleanly, proving
+    // the fail-closed mismatch above never corrupted state -- and exercises
+    // the 'close_terminal' incident branch via a plain add_to_cart cancel
+    // (missions untouched: this branch only writes missions for
+    // submit_order + confirmed).
+    const mismatchFollowupResult = await applyJobLifecycle(signalJobLifecycleA, jobLifecyclePayload({
+      jobId: mismatchFixture.actionJobId,
+      expectedCurrentState: "awaiting_executor",
+      nextState: "cancelled",
+      reasonCode: "mismatch_followup_cancel"
+    }));
+    assert.equal(mismatchFollowupResult.outcome, "applied");
+    assert.equal(mismatchFollowupResult.mutationStatementCount, 5);
+    assert.equal(mismatchFollowupResult.mutationRowCount, 5);
+    assert.equal(mismatchFollowupResult.jobMutated, true);
+    assert.equal(mismatchFollowupResult.actionEventMutated, true);
+    assert.equal(mismatchFollowupResult.incidentMutated, true);
+    assert.equal(mismatchFollowupResult.missionMutated, false);
+    assert.equal(mismatchFollowupResult.auditMutated, true);
+    assert.equal(mismatchFollowupResult.outboxMutated, true);
+    assert.equal(mismatchFollowupResult.job.state, "cancelled");
+    assert.equal(mismatchFollowupResult.incident?.status, "closed");
+    assert.equal(mismatchFollowupResult.incident?.closedReason, "cancelled");
+    assert.equal(mismatchFollowupResult.mission, null);
+
+    // (c) Legal transition, full mutation-set assertions ('plain' branch --
+    // no incident/mission touch at all). Also the base for the immutable-
+    // replay and receipt-tamper proofs below.
+    const plainFixture = await createJobLifecycleFixture({
+      suffix: "plain", state: "awaiting_executor", action: "add_to_cart"
+    });
+    assert.deepEqual(
+      await jobLifecycleGraphCounts(plainFixture.actionJobId),
+      { actionEvents: 0, audits: 0, outboxes: 0 }
+    );
+    const plainPayload = jobLifecyclePayload({
+      jobId: plainFixture.actionJobId,
+      expectedCurrentState: "awaiting_executor",
+      nextState: "leased",
+      reasonCode: "device_lease",
+      message: "A qualified paired Chrome device leased the action job.",
+      evidence: { deviceId: "native_job_lifecycle_device" }
+    });
+    const plainRequestId = buildPostgresSignalJobLifecycleTransitionRequestId(
+      jobLifecyclePrincipal, plainPayload
+    );
+    assert.match(plainRequestId, /^job_lifecycle_transition_[a-f0-9]{32}$/);
+    const plainResult = await applyJobLifecycle(signalJobLifecycleA, plainPayload);
+    assert.equal(plainResult.requestId, plainRequestId);
+    assert.match(plainResult.requestFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(plainResult.outcome, "applied");
+    assert.equal(plainResult.mutationApplied, true);
+    assert.equal(plainResult.idempotentReplay, false);
+    assert.equal(plainResult.mutationStatementCount, 4);
+    assert.equal(plainResult.mutationRowCount, 4);
+    assert.equal(plainResult.jobMutated, true);
+    assert.equal(plainResult.actionEventMutated, true);
+    assert.equal(plainResult.incidentMutated, false);
+    assert.equal(plainResult.missionMutated, false);
+    assert.equal(plainResult.auditMutated, true);
+    assert.equal(plainResult.outboxMutated, true);
+    assert.equal(plainResult.job.state, "leased");
+    assert.equal(plainResult.job.previousState, "awaiting_executor");
+    assert.equal(plainResult.incident, null);
+    assert.equal(plainResult.mission, null);
+    assert.equal(plainResult.jobLifecycleWriterParity, true);
+    assert.equal(plainResult.jobLifecycleMutationAuthority, true);
+    assert.equal(plainResult.writerLockProtocolParity, false);
+    assert.equal(plainResult.actionAuthority, false);
+    assert.equal(plainResult.checkoutAuthority, false);
+    assert.equal(plainResult.orderSubmissionAuthority, false);
+    assert.equal(plainResult.runtimeAuthority, false);
+    assert.deepEqual(
+      await jobLifecycleGraphCounts(plainFixture.actionJobId),
+      { actionEvents: 1, audits: 1, outboxes: 1 }
+    );
+    const plainActionEvent = (await first!.query<{
+      state: string;
+      reasonCode: string;
+      message: string;
+      evidence: Record<string, unknown>;
+    }>(
+      `SELECT state, reason_code AS "reasonCode", message,
+              evidence_json::jsonb AS evidence
+       FROM "${NATIVE_SCHEMA}"."action_events" WHERE job_id = $1`,
+      [plainFixture.actionJobId]
+    )).rows[0]!;
+    assert.equal(plainActionEvent.state, "leased");
+    assert.equal(plainActionEvent.reasonCode, "device_lease");
+    assert.equal(
+      plainActionEvent.message,
+      "A qualified paired Chrome device leased the action job."
+    );
+    assert.deepEqual(plainActionEvent.evidence, { deviceId: "native_job_lifecycle_device" });
+
+    // (d) Immutable replay: the SAME request returns the ORIGINAL result,
+    // zero further writes.
+    const plainReplayResult = await applyJobLifecycle(signalJobLifecycleA, plainPayload);
+    assert.equal(plainReplayResult.outcome, "already_applied");
+    assert.equal(plainReplayResult.mutationApplied, false);
+    assert.equal(plainReplayResult.idempotentReplay, true);
+    assert.equal(plainReplayResult.mutationStatementCount, 0);
+    assert.equal(plainReplayResult.mutationRowCount, 0);
+    assert.equal(plainReplayResult.jobMutated, false);
+    assert.equal(plainReplayResult.actionEventMutated, false);
+    assert.equal(plainReplayResult.incidentMutated, false);
+    assert.equal(plainReplayResult.missionMutated, false);
+    assert.equal(plainReplayResult.auditMutated, false);
+    assert.equal(plainReplayResult.outboxMutated, false);
+    assert.equal(plainReplayResult.requestId, plainResult.requestId);
+    assert.equal(plainReplayResult.requestFingerprint, plainResult.requestFingerprint);
+    assert.deepEqual(plainReplayResult.job, plainResult.job);
+    assert.deepEqual(
+      await jobLifecycleGraphCounts(plainFixture.actionJobId),
+      { actionEvents: 1, audits: 1, outboxes: 1 }
+    );
+
+    // (e) Receipt tamper: corrupt the stored audit row backing this exact
+    // request id -- the replay must fail closed (40001) rather than trust
+    // the (now-diverged) stored graph; restoring the original row makes
+    // the SAME replay succeed again, returning the original result.
+    const plainAuditRow = (await first!.query<{ id: string; message: string }>(
+      `SELECT id, message FROM "${NATIVE_SCHEMA}"."audit_events"
+       WHERE correlation_id = $1 AND event_type = 'action_job_transition'`,
+      [plainFixture.actionJobId]
+    )).rows[0]!;
+    await first!.query(
+      `UPDATE "${NATIVE_SCHEMA}"."audit_events" SET message = $2 WHERE id = $1`,
+      [plainAuditRow.id, "Tampered replay message."]
+    );
+    await assert.rejects(
+      applyJobLifecycle(signalJobLifecycleA, plainPayload),
+      /replay graph changed/
+    );
+    await first!.query(
+      `UPDATE "${NATIVE_SCHEMA}"."audit_events" SET message = $2 WHERE id = $1`,
+      [plainAuditRow.id, plainAuditRow.message]
+    );
+    const plainRestoredReplay = await applyJobLifecycle(signalJobLifecycleA, plainPayload);
+    assert.equal(plainRestoredReplay.outcome, "already_applied");
+    assert.deepEqual(plainRestoredReplay.job, plainResult.job);
+    assert.deepEqual(
+      await jobLifecycleGraphCounts(plainFixture.actionJobId),
+      { actionEvents: 1, audits: 1, outboxes: 1 }
+    );
+
+    // (f) 'lock_review' incident branch (submission_uncertain/manual_review
+    // -- incident LOCKED, not closed; no spend touch).
+    const lockFixture = await createJobLifecycleFixture({
+      suffix: "lock", state: "navigating", action: "add_to_cart"
+    });
+    const lockResult = await applyJobLifecycle(signalJobLifecycleA, jobLifecyclePayload({
+      jobId: lockFixture.actionJobId,
+      expectedCurrentState: "navigating",
+      nextState: "manual_review",
+      reasonCode: "captcha_detected",
+      message: "A security challenge blocked automated navigation."
+    }));
+    assert.equal(lockResult.outcome, "applied");
+    assert.equal(lockResult.mutationStatementCount, 5);
+    assert.equal(lockResult.incidentMutated, true);
+    assert.equal(lockResult.missionMutated, false);
+    assert.equal(lockResult.incident?.status, "locked");
+    assert.equal(lockResult.incident?.closedReason, "manual_review");
+    assert.deepEqual(
+      (await first!.query<{ status: string; closedReason: string }>(
+        `SELECT status, closed_reason AS "closedReason"
+         FROM "${NATIVE_SCHEMA}"."signal_incidents" WHERE id = $1`,
+        [lockFixture.incidentId]
+      )).rows[0],
+      { status: "locked", closedReason: "manual_review" }
+    );
+
+    // (g) Cancel-guard: violation without manualResolution fails closed
+    // (constructed by hand, bypassing the TypeScript normalizer's OWN
+    // identical guard, to prove the database independently enforces it);
+    // the SAME job with manualResolution=true then legally reaches
+    // 'cancelled' via the 'close_terminal' branch.
+    const cancelGuardFixture = await createJobLifecycleFixture({
+      suffix: "cancel_guard", state: "manual_review", action: "add_to_cart"
+    });
+    assert.ok(POSTGRES_SIGNAL_JOB_LIFECYCLE_MUTATION_RISK_STATES.includes("manual_review"));
+    const cancelGuardCountsBefore = await jobLifecycleGraphCounts(cancelGuardFixture.actionJobId);
+    const cancelGuardViolationPayload = {
+      jobId: cancelGuardFixture.actionJobId,
+      expectedCurrentState: "manual_review",
+      nextState: "cancelled",
+      reasonCode: "cancel_without_review",
+      message: "Attempting to cancel without manual resolution.",
+      evidence: { proof: "cancel_guard_violation" },
+      manualResolution: false,
+      confirmation: POSTGRES_SIGNAL_JOB_LIFECYCLE_APPLY_CONFIRMATION
+    } as unknown as PostgresSignalJobLifecycleTransitionPayload;
+    await assert.rejects(
+      signalJobLifecycleA.transitionJob(
+        jobLifecyclePrincipal,
+        "transition_job",
+        buildPostgresSignalJobLifecycleTransitionRequestId(jobLifecyclePrincipal, cancelGuardViolationPayload),
+        cancelGuardViolationPayload
+      ),
+      /requires manual resolution/
+    );
+    assert.deepEqual(
+      await jobLifecycleGraphCounts(cancelGuardFixture.actionJobId),
+      cancelGuardCountsBefore
+    );
+    const cancelGuardResult = await applyJobLifecycle(signalJobLifecycleA, jobLifecyclePayload({
+      jobId: cancelGuardFixture.actionJobId,
+      expectedCurrentState: "manual_review",
+      nextState: "cancelled",
+      reasonCode: "cancel_with_review",
+      manualResolution: true
+    }));
+    assert.equal(cancelGuardResult.outcome, "applied");
+    assert.equal(cancelGuardResult.job.state, "cancelled");
+    assert.equal(cancelGuardResult.incidentMutated, true);
+    assert.equal(cancelGuardResult.missionMutated, false);
+    assert.equal(cancelGuardResult.incident?.status, "closed");
+    assert.equal(cancelGuardResult.incident?.closedReason, "cancelled");
+
+    // (h) 'close_confirmed' branch, submit_order only: incident closed AND
+    // missions.fulfilled_quantity/status committed -- read the mission's
+    // CURRENT numbers first (never hardcoded) so the LEAST()-cap and
+    // 'satisfied' flip are asserted against real, live arithmetic.
+    const missionBeforeRow = (await first!.query<{
+      targetQuantity: number | string;
+      fulfilledQuantity: number | string;
+      status: string;
+    }>(
+      `SELECT target_quantity AS "targetQuantity",
+              fulfilled_quantity AS "fulfilledQuantity", status
+       FROM "${NATIVE_SCHEMA}"."missions" WHERE id = $1`,
+      [jobLifecycleSourceJob.missionId]
+    )).rows[0]!;
+    const missionBefore = {
+      targetQuantity: Number(missionBeforeRow.targetQuantity),
+      fulfilledQuantity: Number(missionBeforeRow.fulfilledQuantity),
+      status: missionBeforeRow.status
+    };
+    const confirmQuantity = Math.max(1, missionBefore.targetQuantity - missionBefore.fulfilledQuantity);
+    const confirmFixture = await createJobLifecycleFixture({
+      suffix: "confirm", state: "checkout_review", action: "submit_order", quantity: confirmQuantity
+    });
+    const confirmResult = await applyJobLifecycle(signalJobLifecycleA, jobLifecyclePayload({
+      jobId: confirmFixture.actionJobId,
+      expectedCurrentState: "checkout_review",
+      nextState: "confirmed",
+      reasonCode: "order_submitted",
+      message: "The order was submitted and confirmed by the retailer."
+    }));
+    assert.equal(confirmResult.outcome, "applied");
+    assert.equal(confirmResult.mutationStatementCount, 6);
+    assert.equal(confirmResult.mutationRowCount, 6);
+    assert.equal(confirmResult.jobMutated, true);
+    assert.equal(confirmResult.incidentMutated, true);
+    assert.equal(confirmResult.missionMutated, true);
+    assert.equal(confirmResult.job.state, "confirmed");
+    assert.equal(confirmResult.incident?.status, "closed");
+    assert.equal(confirmResult.incident?.closedReason, "confirmed");
+    const expectedFulfilled = Math.min(
+      missionBefore.targetQuantity, missionBefore.fulfilledQuantity + confirmQuantity
+    );
+    const expectedMissionStatus =
+      missionBefore.fulfilledQuantity + confirmQuantity >= missionBefore.targetQuantity
+        ? "satisfied" : missionBefore.status;
+    assert.equal(Number(confirmResult.mission?.fulfilledQuantity), expectedFulfilled);
+    assert.equal(confirmResult.mission?.status, expectedMissionStatus);
+    assert.equal(expectedMissionStatus, "satisfied");
+    const missionAfter = (await first!.query<{
+      fulfilledQuantity: number;
+      status: string;
+    }>(
+      `SELECT fulfilled_quantity AS "fulfilledQuantity", status
+       FROM "${NATIVE_SCHEMA}"."missions" WHERE id = $1`,
+      [jobLifecycleSourceJob.missionId]
+    )).rows[0]!;
+    assert.equal(Number(missionAfter.fulfilledQuantity), expectedFulfilled);
+    assert.equal(missionAfter.status, "satisfied");
+
+    // (i) Denial matrix: wrong principal, same-tenant peer, unmapped
+    // principal, malformed request id -- zero writes throughout.
+    const denialFixture = await createJobLifecycleFixture({
+      suffix: "denial", state: "awaiting_executor", action: "add_to_cart"
+    });
+    const denialPayload = jobLifecyclePayload({
+      jobId: denialFixture.actionJobId,
+      expectedCurrentState: "awaiting_executor",
+      nextState: "leased",
+      reasonCode: "denial_matrix_probe"
+    });
+    await assert.rejects(
+      signalJobLifecycleB.transitionJob(
+        jobLifecyclePrincipal,
+        "transition_job",
+        buildPostgresSignalJobLifecycleTransitionRequestId(jobLifecyclePrincipal, denialPayload),
+        denialPayload
+      ),
+      /does not match the expected authenticated principal/
+    );
+    await first!.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER, new Date(Date.now() - 5_000).toISOString()]
+    );
+    try {
+      await assert.rejects(
+        signalJobLifecycleC.transitionJob(
+          jobLifecyclePrincipal,
+          "transition_job",
+          buildPostgresSignalJobLifecycleTransitionRequestId(jobLifecyclePrincipal, denialPayload),
+          denialPayload
+        ),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first!.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    await assert.rejects(
+      signalJobLifecycleUnmapped.transitionJob(
+        jobLifecyclePrincipal,
+        "transition_job",
+        buildPostgresSignalJobLifecycleTransitionRequestId(jobLifecyclePrincipal, denialPayload),
+        denialPayload
+      ),
+      /tenant session principal is not active/
+    );
+    await assert.rejects(
+      signalJobLifecycleA.transitionJob(
+        jobLifecyclePrincipal,
+        "transition_job",
+        `job_lifecycle_transition_${"f".repeat(32)}`,
+        denialPayload
+      ),
+      /apply request is invalid/
+    );
+    assert.deepEqual(
+      await jobLifecycleGraphCounts(denialFixture.actionJobId),
+      { actionEvents: 0, audits: 0, outboxes: 0 }
+    );
+
+    // (j) Zero direct table SQL for the role (including the spend tables
+    // this writer never earned -- reservation-lifecycle-apply owns those
+    // exclusively), and cross-boundary denial in both directions.
+    signalJobLifecycleDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalJobLifecycleDirectClient.on("error", () => undefined);
+    await signalJobLifecycleDirectClient.connect();
+    await signalJobLifecycleDirectClient.query(
+      `SET ROLE "${signalJobLifecycleManifest.jobLifecycleRole.name}"`
+    );
+    await assert.rejects(
+      signalJobLifecycleDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalJobLifecycleDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."signal_incidents" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalJobLifecycleDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."missions" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalJobLifecycleDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."action_events"(id) VALUES ('forbidden_job_lifecycle_event')`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalJobLifecycleDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."outbox_events" SET delivered_at = ''`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalJobLifecycleDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."spend_reservations" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalJobLifecycleDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_FUNCTION}"(
+           $1, $2, 'replace_attribution_policies', 'forbidden_cross_boundary', '{}'
+         )`,
+        [jobLifecyclePrincipal.tenantId, jobLifecyclePrincipal.userId]
+      ),
+      /permission denied/
+    );
+    // A sibling role (attribution-receipt's) cannot call this boundary's
+    // function either.
+    await signalJobLifecycleDirectClient.query(
+      `SET ROLE "${signalAttributionReceiptManifest.attributionReceiptRole.name}"`
+    );
+    await assert.rejects(
+      signalJobLifecycleDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_JOB_LIFECYCLE_APPLY_FUNCTION}"(
+           $1, $2, 'transition_job', 'forbidden_cross_boundary_reverse', '{}'
+         )`,
+        [jobLifecyclePrincipal.tenantId, jobLifecyclePrincipal.userId]
+      ),
+      /permission denied/
+    );
+    await signalJobLifecycleDirectClient.end();
+    signalJobLifecycleDirectClient = null;
+
+    // (k) This writer never touches spend_reservations/spend_ledger_entries
+    // -- the exact same relative-count proof this suite's other new
+    // writers use, since absolute counts would be brittle against fixtures
+    // seeded by earlier sections.
+    assert.deepEqual(await jobLifecycleSpendCounts(), jobLifecycleSpendBefore);
+
+    await Promise.all([
+      signalJobLifecycleA.close(),
+      signalJobLifecycleB.close(),
+      signalJobLifecycleC.close(),
+      signalJobLifecycleUnmapped.close()
+    ]);
+    signalJobLifecycleA = null;
+    signalJobLifecycleB = null;
+    signalJobLifecycleC = null;
+    signalJobLifecycleUnmapped = null;
+    })();
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -22189,7 +22987,16 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NodePostgresSignalAttributionReceiptApplyDatabase | null)?.close(),
       (signalAttributionReceiptUnmapped as
         NodePostgresSignalAttributionReceiptApplyDatabase | null)?.close(),
-      (signalAttributionReceiptDirectClient as Client | null)?.end()
+      (signalAttributionReceiptDirectClient as Client | null)?.end(),
+      (signalJobLifecycleA as
+        NodePostgresSignalJobLifecycleApplyDatabase | null)?.close(),
+      (signalJobLifecycleB as
+        NodePostgresSignalJobLifecycleApplyDatabase | null)?.close(),
+      (signalJobLifecycleC as
+        NodePostgresSignalJobLifecycleApplyDatabase | null)?.close(),
+      (signalJobLifecycleUnmapped as
+        NodePostgresSignalJobLifecycleApplyDatabase | null)?.close(),
+      (signalJobLifecycleDirectClient as Client | null)?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

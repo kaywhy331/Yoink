@@ -42,6 +42,7 @@ import { postgresSignalSourceProvisioningCapabilityProjection } from "../package
 import { postgresSignalAttributionPolicyCapabilityProjection } from "../packages/database/src/postgres-signal-attribution-policy-apply.js";
 import { postgresSignalEvaluationCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-evaluation-composition.js";
 import { postgresSignalAttributionReceiptCapabilityProjection } from "../packages/database/src/postgres-signal-attribution-receipt-apply.js";
+import { postgresSignalJobLifecycleCapabilityProjection } from "../packages/database/src/postgres-signal-job-lifecycle-apply.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -155,7 +156,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Server-bound Walmart, Amazon, and Best Buy qualification/);
     assert.match(adminScript, /Server-bound mission-policy revision/);
     assert.match(adminScript, /global action pause\/resume, guardrail settings, and periodic spend caps/);
-    assert.match(adminScript, /twenty-two independently qualified signal boundaries proven/);
+    assert.match(adminScript, /twenty-three independently qualified signal boundaries proven/);
     assert.match(adminScript, /Server-bound TrackaLacker source sync/);
     assert.match(adminScript, /eighteenth independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /Server-bound spend-reservation lifecycle/);
@@ -177,6 +178,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /twenty-third independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /derive-don't-trust affiliate-routing receipt/);
     assert.match(adminScript, /closes the attribution-receipt family from the evaluation-composition accounting/);
+    assert.match(adminScript, /Server-bound action-job lifecycle/);
+    assert.match(adminScript, /twenty-fourth independently inactive NOLOGIN boundary/);
+    assert.match(adminScript, /complete forty-seven-edge post-creation job state machine/);
+    assert.match(adminScript, /closes the post-creation job-lifecycle family/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
@@ -235,6 +240,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalEvaluationCompositionCapabilityProjection();
     const postgresSignalAttributionReceiptApply =
       postgresSignalAttributionReceiptCapabilityProjection();
+    const postgresSignalJobLifecycleApply =
+      postgresSignalJobLifecycleCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -280,6 +287,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalAttributionPolicyApply,
       postgresSignalEvaluationComposition,
       postgresSignalAttributionReceiptApply,
+      postgresSignalJobLifecycleApply,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -601,6 +609,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalAttributionReceiptApply,
       postgresSignalAttributionReceiptApply
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalJobLifecycleApply,
+      postgresSignalJobLifecycleApply
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -638,7 +650,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalSourceProvisioningApply,
       postgresSignalAttributionPolicyApply,
       postgresSignalEvaluationComposition,
-      postgresSignalAttributionReceiptApply
+      postgresSignalAttributionReceiptApply,
+      postgresSignalJobLifecycleApply
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

@@ -155,6 +155,7 @@ import { postgresSignalSourceProvisioningCapabilityProjection } from "../../../p
 import { postgresSignalAttributionPolicyCapabilityProjection } from "../../../packages/database/src/postgres-signal-attribution-policy-apply.js";
 import { postgresSignalEvaluationCompositionCapabilityProjection } from "../../../packages/database/src/postgres-signal-evaluation-composition.js";
 import { postgresSignalAttributionReceiptCapabilityProjection } from "../../../packages/database/src/postgres-signal-attribution-receipt-apply.js";
+import { postgresSignalJobLifecycleCapabilityProjection } from "../../../packages/database/src/postgres-signal-job-lifecycle-apply.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -459,6 +460,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     postgresSignalEvaluationCompositionCapabilityProjection();
   const postgresSignalAttributionReceiptApply =
     postgresSignalAttributionReceiptCapabilityProjection();
+  const postgresSignalJobLifecycleApply =
+    postgresSignalJobLifecycleCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -759,6 +762,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresSignalAttributionPolicyApply,
           postgresSignalEvaluationComposition,
           postgresSignalAttributionReceiptApply,
+          postgresSignalJobLifecycleApply,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1636,7 +1640,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalSourceProvisioningApply,
             postgresSignalAttributionPolicyApply,
             postgresSignalEvaluationComposition,
-            postgresSignalAttributionReceiptApply
+            postgresSignalAttributionReceiptApply,
+            postgresSignalJobLifecycleApply
           },
           capabilities: {
             catalog: true,
@@ -1820,6 +1825,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalAttributionPolicyApply,
             postgresSignalEvaluationComposition,
             postgresSignalAttributionReceiptApply,
+            postgresSignalJobLifecycleApply,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

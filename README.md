@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.99.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.0.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,79 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.0.0 adds the twenty-fourth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the bounded post-creation action-job
+lifecycle writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns
+no application object, inherits no role, has zero direct/effective table or
+column grants, and may call one strict security-definer function. The
+boundary protects eight forced-RLS tenant tables — `action_events`,
+`action_jobs`, `audit_events`, `missions`, `outbox_events`, `signal_events`,
+`signal_incidents`, and `signal_occurrences` — but its mutation set is six:
+`action_events`, `action_jobs`, `audit_events`, `missions`, `outbox_events`,
+and `signal_incidents`. `signal_events` and `signal_occurrences` are
+read-only, joined only for the same defensive cross-tenant incident guard
+SQLite's `closeIncident` already performs.
+
+PostgreSQL binds `session_user` to one exact tenant/user, revalidates the
+qualified attribution-policy boundary as its declared predecessor, and
+accepts one explicit `transition_job` operation under
+`JOB_LIFECYCLE_TRANSITION_V1`. The complete 47-edge legal state-transition
+table is derived at load time by calling the real `canTransitionJob` for
+every pair over the real 19-state `JOB_STATES` enum — not hand-transcribed —
+behind a startup count guard that throws if the domain source ever drifts
+from 47 edges. Every request also carries a caller-declared
+`expectedCurrentState`: the database locks the job row and its
+incident/mission graph, then fails closed with `55000` on any mismatch, an
+optimistic precondition SQLite's single-writer model never needed. A
+`cancelled` transition out of any of the eight mutation-risk states
+(`adding`, `cart_verified`, `checkout_review`, `submit_authorized`,
+`submitting`, `confirmed`, `manual_review`, `submission_uncertain`) is
+rejected with the same code unless the caller sets `manualResolution`,
+mirroring SQLite's own guard against silently discarding a job that may have
+already mutated a cart.
+
+This boundary owns exactly the residual the v0.93 terminal
+reservation-lifecycle writer leaves: `action_jobs.state`, the
+`action_events` insert, `signal_incidents` close/lock transitions, and — for
+a `confirmed` `submit_order` job only — `missions.fulfilled_quantity`/
+`status`. Every `spend_reservations`/`spend_ledger_entries` write stays
+exclusively the reservation-lifecycle writer's; this function never touches
+either table, and consumes only the shared writer-lock protocol's `spend`
+bit — the same bit the reservation-lifecycle writer consumes, since both
+mutate state hanging off the same job row and `missions.fulfilled_quantity`
+feeds the reservation writer's own capacity math. A fresh transition
+atomically appends exactly one `action_events` row plus the applicable
+incident/mission update and one `audit_events`/`outbox_events` pair;
+PostgreSQL owns every timestamp.
+
+The outcome model is deliberately two-valued — `applied` or
+`already_applied` — narrower than the reservation-lifecycle writer's
+three-outcome model, because `nextState` carries no binding to
+`reasonCode`/`message`/`evidence` the way a release reason implies its own
+state; only an exact replay, matched against the deterministic
+`audit_events`/`outbox_events` row and a recomputed `requestFingerprint`, is
+a mutation-free success, and any other mismatch fails closed.
+`deviceCapabilityRevalidation` is honestly `false`: `transitionJob` itself
+never checks a device or capability token — that lives one layer up, in
+`ExecutionRepository.reconcileJob`, outside this residual's scope.
+
+Native PostgreSQL 16 proves wrong, same-tenant-peer, and unmapped principal
+denial, zero direct and cross-boundary SQL, all 47 legal transitions and
+rejection of every illegal one, the manual-resolution cancel guard,
+expected-state precondition failure, cross-tenant incident-closure denial,
+terminal/lock/confirmed branch semantics including mission fulfillment and
+`satisfied` promotion, and fingerprint-guarded immutable replay. This closes
+`jobLifecycleWriterParity`, the second of the three write families
+`postgres-signal-evaluation-composition.ts` recorded as out of scope in
+0.98.0 — attribution receipts closed first in 0.99.0. `writerLockProtocolParity`
+stays false — none of `action_jobs`, `action_events`, or `signal_incidents`
+sit inside any of the shared protocol's five domains; only `missions` does,
+under the `spend` bit this boundary already consumes. Notification dispatch
+(`NotificationRepository.ensureForJob`) and the operator dead-letter
+inbox-reset remain open. SQLite remains authoritative; nothing is activated.
+Use `npm run postgres:signal-job-lifecycle-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.99.0 adds the twenty-third independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the bounded attribution-receipt

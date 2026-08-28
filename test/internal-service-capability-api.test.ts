@@ -47,6 +47,7 @@ import { postgresSignalSourceProvisioningCapabilityProjection } from "../package
 import { postgresSignalAttributionPolicyCapabilityProjection } from "../packages/database/src/postgres-signal-attribution-policy-apply.js";
 import { postgresSignalEvaluationCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-evaluation-composition.js";
 import { postgresSignalAttributionReceiptCapabilityProjection } from "../packages/database/src/postgres-signal-attribution-receipt-apply.js";
+import { postgresSignalJobLifecycleCapabilityProjection } from "../packages/database/src/postgres-signal-job-lifecycle-apply.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -162,6 +163,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalAttributionPolicyApply: ReturnType<typeof postgresSignalAttributionPolicyCapabilityProjection>;
         postgresSignalEvaluationComposition: ReturnType<typeof postgresSignalEvaluationCompositionCapabilityProjection>;
         postgresSignalAttributionReceiptApply: ReturnType<typeof postgresSignalAttributionReceiptCapabilityProjection>;
+        postgresSignalJobLifecycleApply: ReturnType<typeof postgresSignalJobLifecycleCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -304,6 +306,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalAttributionReceiptApply,
       postgresSignalAttributionReceiptCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalJobLifecycleApply,
+      postgresSignalJobLifecycleCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -410,6 +416,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Server-bound attribution-receipt append/);
     assert.match(cutoverText, /twenty-third independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /notification dispatch and post-creation job lifecycle remain open/);
+    assert.match(cutoverText, /Server-bound action-job lifecycle/);
+    assert.match(cutoverText, /twenty-fourth independently inactive NOLOGIN boundary/);
+    assert.match(cutoverText, /notification dispatch and the operator dead-letter inbox-reset remain open/);
     assert.match(cutoverText, /final ingress\/handler composition/);
     assert.match(cutoverText, /Runtime principals and full repository parity/);
     assert.match(cutoverText, /Native multi-session lease contention/);

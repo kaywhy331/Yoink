@@ -3162,6 +3162,143 @@ commit/release and fulfilled-quantity branches) remain the two other write
 families the composition module recorded as out of scope; every
 request-repository family and the SQLite authority switch remain closed.
 
+## Action-job lifecycle qualification (1.0.0)
+
+Version 1.0 adds a twenty-fourth independent, inactive hosted-signal boundary
+for `transition_job`. It revalidates the qualified attribution-policy
+boundary as its declared predecessor and, unlike that boundary (and the
+attribution-receipt boundary that also succeeds it), DOES consume the shared
+writer-lock protocol — but only its `spend` scope, the same bit the v0.93
+terminal reservation-lifecycle writer consumes, because both mutate state
+hanging off the same locked `action_jobs` row. It closes the second of the
+three write families `postgres-signal-evaluation-composition.ts` (0.98.0)
+recorded as concretely out of scope: `SignalRepository.transitionJob`'s
+post-creation commit/release and fulfilled-quantity branches.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application
+object, inherits no role, receives zero direct/effective table or column
+privileges, and can execute one strict security-definer function. Its
+immutable receipt seals eight forced-RLS tenant tables — `action_events`,
+`action_jobs`, `audit_events`, `missions`, `outbox_events`, `signal_events`,
+`signal_incidents`, and `signal_occurrences` — but only six are in its
+mutation set: `action_events`, `action_jobs`, `audit_events`, `missions`,
+`outbox_events`, and `signal_incidents`. `signal_events` and
+`signal_occurrences` are read-only, joined only for the defensive
+cross-tenant incident guard `closeIncident` already performs in SQLite.
+
+The complete 47-edge legal job-state transition table is derived at module
+load time by calling the real `canTransitionJob` for every pair over the
+real 19-state `JOB_STATES` enum — not hand-transcribed — behind a startup
+count check that throws if the domain source ever drifts from 47 edges.
+Every request carries the caller's `expectedCurrentState` in addition to
+`transitionJob`'s own literal signature: PostgreSQL locks the job row and
+its incident/mission graph under `FOR UPDATE`, and fails closed with `55000`
+on any mismatch between the current row and that expectation, an optimistic
+precondition SQLite's own single-writer model never needed. A `cancelled`
+transition out of any of the eight mutation-risk states (`adding`,
+`cart_verified`, `checkout_review`, `submit_authorized`, `submitting`,
+`confirmed`, `manual_review`, `submission_uncertain`) is rejected with the
+same `55000` code unless the caller sets `manualResolution`, mirroring
+SQLite's own guard against silently discarding a job that may have already
+mutated a cart.
+
+This boundary owns exactly the residual the v0.93 reservation-lifecycle
+writer leaves: `action_jobs.state`/`updated_at`, the `action_events` insert,
+`signal_incidents.status`/`closed_reason` close/lock transitions, and — for
+a `confirmed` `submit_order` job only — `missions.fulfilled_quantity`/
+`status`. Every `spend_reservations`/`spend_ledger_entries` write remains
+exclusively the reservation-lifecycle writer's; this function never names
+either table in a mutating statement. A fresh transition atomically appends
+exactly one `action_events` row plus the applicable incident/mission update
+and one `audit_events`/`outbox_events` pair; PostgreSQL owns every
+timestamp. The outcome model is two-valued — `applied` or `already_applied`
+— narrower than the reservation-lifecycle writer's three-outcome model,
+because `nextState` carries no binding to `reasonCode`/`message`/`evidence`
+the way a release reason implies its own state; only an exact replay,
+matched against the deterministic `audit_events`/`outbox_events` row and a
+recomputed `requestFingerprint`, is a mutation-free success. `deviceCapabilityRevalidation`
+is honestly `false` — `transitionJob` itself never checks a device or
+capability token; that lives one layer up, in `ExecutionRepository.reconcileJob`,
+outside this residual's scope.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-job-lifecycle-apply -- plan \
+  yoink_cutover_qualification_100 yoink_q_100 yoink_session_q_100 \
+  yoink_queue_q_100 yoink_control_q_100 yoink_notify_q_100 \
+  yoink_execute_q_100 yoink_retain_q_100 yoink_candidate_q_100 \
+  yoink_dispatch_q_100 yoink_reconcile_q_100 yoink_witness_q_100 \
+  yoink_delivery_q_100 yoink_catalog_q_100 yoink_resolution_q_100 \
+  yoink_reference_q_100 yoink_terminal_q_100 yoink_offer_q_100 \
+  yoink_post_q_100 yoink_mission_q_100 yoink_strategy_q_100 \
+  yoink_writer_lock_q_100 yoink_constraint_config_q_100 \
+  yoink_action_spend_q_100 yoink_target_qual_q_100 \
+  yoink_source_trust_q_100 yoink_retailer_qual_q_100 \
+  yoink_mission_policy_q_100 yoink_source_status_q_100 \
+  yoink_source_sync_q_100 yoink_reservation_q_100 yoink_catalog_import_q_100 \
+  yoink_provisioning_q_100 yoink_attribution_policy_q_100 \
+  yoink_job_lifecycle_q_100
+```
+
+After every predecessor through attribution-policy replacement is verified,
+apply once with the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_JOB_LIFECYCLE_APPLY_QUALIFICATION_ACK=bounded-signal-job-lifecycle-apply-qualification \
+  npm run postgres:signal-job-lifecycle-apply -- apply \
+  yoink_cutover_qualification_100 yoink_q_100 yoink_session_q_100 \
+  yoink_queue_q_100 yoink_control_q_100 yoink_notify_q_100 \
+  yoink_execute_q_100 yoink_retain_q_100 yoink_candidate_q_100 \
+  yoink_dispatch_q_100 yoink_reconcile_q_100 yoink_witness_q_100 \
+  yoink_delivery_q_100 yoink_catalog_q_100 yoink_resolution_q_100 \
+  yoink_reference_q_100 yoink_terminal_q_100 yoink_offer_q_100 \
+  yoink_post_q_100 yoink_mission_q_100 yoink_strategy_q_100 \
+  yoink_writer_lock_q_100 yoink_constraint_config_q_100 \
+  yoink_action_spend_q_100 yoink_target_qual_q_100 \
+  yoink_source_trust_q_100 yoink_retailer_qual_q_100 \
+  yoink_mission_policy_q_100 yoink_source_status_q_100 \
+  yoink_source_sync_q_100 yoink_reservation_q_100 yoink_catalog_import_q_100 \
+  yoink_provisioning_q_100 yoink_attribution_policy_q_100 \
+  yoink_job_lifecycle_q_100
+```
+
+Then independently verify the function, role, protected/mutation table
+sets, exact grants, immutable replay, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-job-lifecycle-apply -- verify \
+  yoink_cutover_qualification_100 yoink_q_100 yoink_session_q_100 \
+  yoink_queue_q_100 yoink_control_q_100 yoink_notify_q_100 \
+  yoink_execute_q_100 yoink_retain_q_100 yoink_candidate_q_100 \
+  yoink_dispatch_q_100 yoink_reconcile_q_100 yoink_witness_q_100 \
+  yoink_delivery_q_100 yoink_catalog_q_100 yoink_resolution_q_100 \
+  yoink_reference_q_100 yoink_terminal_q_100 yoink_offer_q_100 \
+  yoink_post_q_100 yoink_mission_q_100 yoink_strategy_q_100 \
+  yoink_writer_lock_q_100 yoink_constraint_config_q_100 \
+  yoink_action_spend_q_100 yoink_target_qual_q_100 \
+  yoink_source_trust_q_100 yoink_retailer_qual_q_100 \
+  yoink_mission_policy_q_100 yoink_source_status_q_100 \
+  yoink_source_sync_q_100 yoink_reservation_q_100 yoink_catalog_import_q_100 \
+  yoink_provisioning_q_100 yoink_attribution_policy_q_100 \
+  yoink_job_lifecycle_q_100
+```
+
+The receipt records `jobLifecycleWriterParity: true` while
+`writerLockProtocolParity: false` and `runtimeAuthority: false` remain
+explicit — none of `action_jobs`, `action_events`, or `signal_incidents` sit
+inside any of the shared protocol's five domains; only `missions` does,
+under the `spend` bit this boundary already consumes. Native PostgreSQL 16
+proves principal isolation, direct and cross-boundary denial, all 47 legal
+transitions and rejection of every illegal one, the manual-resolution cancel
+guard, expected-state precondition failure, cross-tenant incident-closure
+denial, terminal/lock/confirmed branch semantics including mission
+fulfillment and `satisfied` promotion, and fingerprint-guarded immutable
+replay. Notification dispatch (`NotificationRepository.ensureForJob`) and
+the operator dead-letter inbox-reset remain the two other write families
+outside this qualification's scope; every request-repository family and the
+SQLite authority switch remain closed.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
