@@ -293,6 +293,19 @@ import {
   type PostgresSignalJobLifecycleTransitionPayload
 } from "../packages/database/src/postgres-signal-job-lifecycle-apply.js";
 import {
+  NodePostgresSignalIngressEnqueueApplyDatabase,
+  POSTGRES_SIGNAL_INGRESS_ENQUEUE_APPLY_CONFIRMATION,
+  POSTGRES_SIGNAL_INGRESS_ENQUEUE_APPLY_FUNCTION,
+  POSTGRES_SIGNAL_INGRESS_EVENT_TYPE,
+  POSTGRES_SIGNAL_INGRESS_SOURCE,
+  applyPostgresSignalIngressEnqueueApplyBoundary,
+  buildPostgresSignalIngressAcceptRequestId,
+  buildPostgresSignalIngressEnqueueApplyManifest,
+  normalizedPostgresSignalIngressAcceptPayload,
+  verifyPostgresSignalIngressEnqueueApplyBoundary,
+  type PostgresSignalIngressAcceptPayload
+} from "../packages/database/src/postgres-signal-ingress-enqueue-apply.js";
+import {
   POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_LENGTH,
   POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_ORDER,
   POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CONTRACT_VERSION,
@@ -403,6 +416,8 @@ const NATIVE_ATTRIBUTION_RECEIPT_APPLY_ROLE_NAMESPACE =
   "yoink_native_attribution_rcpt";
 const NATIVE_JOB_LIFECYCLE_APPLY_ROLE_NAMESPACE =
   "yoink_native_job_lifecycle";
+const NATIVE_INGRESS_ENQUEUE_APPLY_ROLE_NAMESPACE =
+  "yoink_native_ingress_enqueue";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1238,7 +1253,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, and the complete signal-evaluation repository composition", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, and durable signal-ingress enqueue writing", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1467,6 +1482,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   let signalJobLifecycleC: NodePostgresSignalJobLifecycleApplyDatabase | null = null;
   let signalJobLifecycleUnmapped: NodePostgresSignalJobLifecycleApplyDatabase | null = null;
   let signalJobLifecycleDirectClient: Client | null = null;
+  let signalIngressEnqueueA: NodePostgresSignalIngressEnqueueApplyDatabase | null = null;
+  let signalIngressEnqueueB: NodePostgresSignalIngressEnqueueApplyDatabase | null = null;
+  let signalIngressEnqueueC: NodePostgresSignalIngressEnqueueApplyDatabase | null = null;
+  let signalIngressEnqueueUnmapped: NodePostgresSignalIngressEnqueueApplyDatabase | null = null;
+  let signalIngressEnqueueDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -4008,6 +4028,149 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalJobLifecycleBoundary
     );
+
+    // signal-ingress-enqueue-apply (v1.2.0) chains onto attribution-receipt-
+    // apply -- the newest full-writer sibling at the time this boundary was
+    // authored, per its own default predecessor -- NOT onto job-lifecycle-
+    // apply, a sibling with no ordering relationship to this module. It
+    // separately CONSUMES (verify only, via fingerprint) the ALREADY-applied
+    // tenant queue-write boundary (applied early in this suite, above -- see
+    // `queueWriteBoundary`) for the task-enqueue half it deliberately does
+    // not reimplement; see module header §2. The queue-write manifest must
+    // therefore be rebuilt here with the SAME native role namespaces the
+    // early application actually used, not the module's own defaults.
+    const qualifiedNativeIngressEnqueueQueueWriteManifest = buildPostgresTenantQueueWriteManifest(
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE
+    );
+    const qualifiedSignalIngressEnqueueManifest = buildPostgresSignalIngressEnqueueApplyManifest(
+      qualifiedSignalAttributionReceiptManifest,
+      NATIVE_INGRESS_ENQUEUE_APPLY_ROLE_NAMESPACE,
+      qualifiedNativeIngressEnqueueQueueWriteManifest
+    );
+    assert.equal(
+      qualifiedSignalIngressEnqueueManifest.attributionReceiptApplyManifestFingerprint,
+      qualifiedSignalAttributionReceiptManifest.fingerprint
+    );
+    assert.equal(
+      qualifiedSignalIngressEnqueueManifest.predecessorManifest.fingerprint,
+      qualifiedSignalAttributionReceiptManifest.fingerprint
+    );
+    assert.equal(
+      qualifiedSignalIngressEnqueueManifest.predecessorManifest.schemaName,
+      qualifiedSignalAttributionReceiptManifest.schemaName
+    );
+    assert.equal(
+      qualifiedSignalIngressEnqueueManifest.queueWriteManifestFingerprint,
+      qualifiedNativeIngressEnqueueQueueWriteManifest.fingerprint
+    );
+    assert.notEqual(
+      qualifiedSignalIngressEnqueueManifest.ingressAcceptRoleNamespace,
+      qualifiedSignalAttributionReceiptManifest.attributionReceiptRoleNamespace
+    );
+    const signalIngressEnqueueBoundary =
+      await applyPostgresSignalIngressEnqueueApplyBoundary(
+        importer,
+        qualifiedSignalIngressEnqueueManifest,
+        new Date("2026-08-25T16:59:33.000Z").getTime()
+      );
+    assert.equal(signalIngressEnqueueBoundary.protectedTenantTableCount, 2);
+    assert.equal(signalIngressEnqueueBoundary.forcedRlsTableCount, 2);
+    assert.equal(signalIngressEnqueueBoundary.mutationTableCount, 2);
+    assert.equal(signalIngressEnqueueBoundary.directTableGrantCount, 0);
+    assert.equal(signalIngressEnqueueBoundary.functionGrantCount, 1);
+    assert.equal(signalIngressEnqueueBoundary.membershipCount, 0);
+    assert.equal(signalIngressEnqueueBoundary.activePrincipalCount, 0);
+    assert.equal(signalIngressEnqueueBoundary.metadata.contractVersion, 1);
+    assert.equal(signalIngressEnqueueBoundary.metadata.cutoverContractVersion, 3);
+    assert.equal(signalIngressEnqueueBoundary.metadata.attributionReceiptApplyContractVersion, 1);
+    assert.equal(signalIngressEnqueueBoundary.metadata.tenantQueueWriteContractVersion, 3);
+    assert.equal(signalIngressEnqueueBoundary.metadata.operationCount, 1);
+    // This boundary's own SQL function touches exactly the two tables the
+    // initial `acceptInbox` enqueue actually writes -- never any
+    // `background_task*` table (that half is CONSUMED from
+    // postgres-tenant-queue-writes.ts, not reimplemented; see module header
+    // §2).
+    assert.deepEqual(
+      qualifiedSignalIngressEnqueueManifest.ingressAcceptRole.protectedTenantTableNames,
+      ["hosted_delivery_receipts", "inbox_messages"]
+    );
+    assert.deepEqual(
+      qualifiedSignalIngressEnqueueManifest.ingressAcceptRole.mutationTableNames,
+      ["hosted_delivery_receipts", "inbox_messages"]
+    );
+    assert.equal(qualifiedSignalIngressEnqueueManifest.ingressAcceptRole.login, false);
+    assert.equal(qualifiedSignalIngressEnqueueManifest.ingressAcceptRole.inherit, false);
+    assert.equal(qualifiedSignalIngressEnqueueManifest.ingressAcceptRole.bypassRls, false);
+    assert.equal(qualifiedSignalIngressEnqueueManifest.ingressAcceptRole.directTableAccess, false);
+    assert.equal(signalIngressEnqueueBoundary.metadata.hardcodedSource, "trackalacker");
+    assert.equal(signalIngressEnqueueBoundary.metadata.hardcodedEventType, "signal_event_v1");
+    assert.equal(signalIngressEnqueueBoundary.metadata.hardcodedSource, POSTGRES_SIGNAL_INGRESS_SOURCE);
+    assert.equal(signalIngressEnqueueBoundary.metadata.hardcodedEventType, POSTGRES_SIGNAL_INGRESS_EVENT_TYPE);
+    assert.equal(signalIngressEnqueueBoundary.metadata.envelopeKeyCount, 13);
+    assert.equal(
+      signalIngressEnqueueBoundary.metadata.queueWriteManifestFingerprint,
+      qualifiedNativeIngressEnqueueQueueWriteManifest.fingerprint
+    );
+    assert.equal(signalIngressEnqueueBoundary.metadata.serverBoundPrincipalLookup, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.callerScopeHardcoded, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.messageKeyDatabaseDerived, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.payloadHashDatabaseDerived, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.sanitizedEnvelopeAcceptedAsInput, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.conflictingContentFailsClosed, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.receiptLedgerAppendOnly, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.deterministicRequestIdentity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.deterministicReceiptIdentity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.databaseOwnedTimestamps, true);
+    // hosted_delivery_receipts/inbox_messages are not one of the five
+    // domains the shared writer-lock protocol guards -- same posture as
+    // attribution_receipts/attribution_policies. The task-enqueue half IS
+    // consumed, but only via a live verify call against the ALREADY-
+    // qualified tenant queue-writer, never an apply call; see module header
+    // §2.
+    assert.equal(signalIngressEnqueueBoundary.metadata.writerLockProtocolConsumed, false);
+    assert.equal(signalIngressEnqueueBoundary.metadata.queueWriteBoundaryConsumed, true);
+    // World-state carried forward unchanged from attribution-receipt-apply
+    // (v0.99), plus this boundary's own new closure.
+    assert.equal(signalIngressEnqueueBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.sourceStatusWriterParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.sourceSyncWriterParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.catalogImportWriterParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.connectionProvisioningWriterParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.sourceWriterParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.retailerQualificationWriterParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.missionPolicyWriterParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.settingsWriterParity, false);
+    assert.equal(signalIngressEnqueueBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalIngressEnqueueBoundary.metadata.reservationWriterParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.attributionPolicyParity, true);
+    assert.equal(signalIngressEnqueueBoundary.metadata.attributionReceiptWriterParity, true);
+    // Closes `DurableSignalIngressService`'s own enqueue path (the
+    // `HostedDeliveryRepository.acceptInbox` half only), the out-of-scope
+    // write family `POSTGRES_SIGNAL_EVALUATION_REPOSITORY_KNOWN_OUT_OF_SCOPE_WRITES`
+    // names.
+    assert.equal(signalIngressEnqueueBoundary.metadata.ingressEnqueueWriterParity, true);
+    // Stays false until a future composition rung binds this module,
+    // hostedDeliveryLeaseRecovery, and the resolution-plan function
+    // together -- see module header §6.
+    assert.equal(signalIngressEnqueueBoundary.metadata.signalIngressRepositoryParity, false);
+    // The shared five-domain lock protocol still has non-consuming writer
+    // families, so the protocol-wide aggregate cannot close from this
+    // boundary alone.
+    assert.equal(signalIngressEnqueueBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalIngressEnqueueBoundary.metadata.sharedCatalogMutationAuthority, false);
+    assert.equal(signalIngressEnqueueBoundary.metadata.actionAuthority, false);
+    assert.equal(signalIngressEnqueueBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalIngressEnqueueBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalIngressEnqueueApplyBoundary(
+        importer,
+        qualifiedSignalIngressEnqueueManifest
+      ),
+      signalIngressEnqueueBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -4391,6 +4554,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalAttributionPolicyManifest,
         NATIVE_JOB_LIFECYCLE_APPLY_ROLE_NAMESPACE
       );
+    const signalIngressEnqueueManifest = buildPostgresSignalIngressEnqueueApplyManifest(
+      signalAttributionReceiptManifest,
+      NATIVE_INGRESS_ENQUEUE_APPLY_ROLE_NAMESPACE,
+      queueWriteManifest
+    );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -4517,6 +4685,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalJobLifecycleManifest.jobLifecycleRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalIngressEnqueueManifest.ingressAcceptRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -19347,6 +19519,443 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     signalJobLifecycleUnmapped = null;
     })();
 
+    await (async () => {
+    // --- v1.2.0: durable signal-INGRESS-ENQUEUE writer proof ---
+    // Closes `DurableSignalIngressService.acceptTrackalacker`'s own enqueue
+    // path -- `HostedDeliveryRepository.acceptInbox` -> `inbox_messages` +
+    // `hosted_delivery_receipts` -- the write family
+    // `POSTGRES_SIGNAL_EVALUATION_REPOSITORY_KNOWN_OUT_OF_SCOPE_WRITES`
+    // names. `source`/`eventType` are hardcoded SQL literals, never caller
+    // input; `messageKey`/`payloadHash` are database-derived from the
+    // sanitized envelope alone. Conflict (same message key, different
+    // content) is a genuine zero-write, fail-closed rejection; dedupe
+    // (matching content) still appends exactly one fresh append-only
+    // receipt row, unlike attribution-receipt-apply's own full zero-write
+    // duplicate reuse -- see module header §3.
+    const ingressEnqueueDatabase = (
+      principalRole: string
+    ) => new NodePostgresSignalIngressEnqueueApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalIngressEnqueueManifest, { maxConnections: 1 });
+    signalIngressEnqueueA = ingressEnqueueDatabase(NATIVE_PRINCIPAL_A);
+    signalIngressEnqueueB = ingressEnqueueDatabase(NATIVE_PRINCIPAL_B);
+    signalIngressEnqueueC = ingressEnqueueDatabase(NATIVE_PRINCIPAL_C);
+    signalIngressEnqueueUnmapped = ingressEnqueueDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    // `acceptTrackalacker`'s own `owner = currentRequestScope()` binds
+    // messageKey derivation to tenant/user alone -- ANY actorKind (device,
+    // service, user) resolves the identical messageKey for the identical
+    // tenant/user, so a device-scoped caller is exercised here simply by
+    // using the same {tenantId, userId} principal shape every other
+    // functional section in this suite uses; see module header §1/§4.
+    const ingressEnqueuePrincipalA = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const ingressEnqueueNow = Date.now();
+
+    // Reuses the contract test's own envelope-building approach
+    // (`normalizedPostgresSignalIngressAcceptPayload(signal(), now)` over a
+    // `durableSignal`-shaped fixture) rather than hand-assembling JSON --
+    // see postgres-signal-ingress-enqueue-apply.test.ts's own `signal()`.
+    const ingressEnqueueSignal = (
+      sequence: number,
+      overrides: Partial<SignalEventInput> = {}
+    ): SignalEventInput => ({
+      schemaVersion: 1,
+      signalId: `push:trackalacker:native-ingress-${sequence}`,
+      sourceConnectionId: `source_trackalacker_native_${sequence}`,
+      source: "trackalacker",
+      externalEventId: `push:trackalacker:native-ingress-${sequence}`,
+      eventType: "unknown",
+      observedAt: new Date(ingressEnqueueNow).toISOString(),
+      receivedAt: new Date(ingressEnqueueNow + 1_000).toISOString(),
+      test: true,
+      identity: {},
+      offer: {
+        availability: "unknown",
+        currency: "USD",
+        offerId: `NATIVE-INGRESS-OFFER-${sequence}`
+      },
+      evidence: {
+        headline: "Native ingress connectivity test",
+        clickUrl: "https://www.target.com/p/native-ingress/-/A-1011483414?tracking=discard"
+      },
+      parserVersion: "trackalacker-push-v1",
+      ...overrides
+    });
+    const applyIngressAccept = (
+      database: NodePostgresSignalIngressEnqueueApplyDatabase,
+      principalValue: { tenantId: string; userId: string },
+      payload: PostgresSignalIngressAcceptPayload
+    ) => database.acceptSignalIngress(
+      principalValue,
+      buildPostgresSignalIngressAcceptRequestId(principalValue, payload),
+      payload
+    );
+    const ingressEnqueueInboxRow = async (id: string) => (await first!.query<{
+      tenantId: string;
+      userId: string;
+      source: string;
+      messageKey: string;
+      eventType: string;
+      payloadHash: string;
+      payloadJson: string;
+      state: string;
+    }>(
+      `SELECT tenant_id AS "tenantId", user_id AS "userId", source,
+              message_key AS "messageKey", event_type AS "eventType",
+              payload_hash AS "payloadHash", payload_json AS "payloadJson", state
+       FROM "${NATIVE_SCHEMA}"."inbox_messages" WHERE id = $1`,
+      [id]
+    )).rows[0];
+    const ingressEnqueueReceiptRows = async (
+      messageId: string,
+      disposition: "accepted" | "deduped"
+    ) => (await first!.query<{
+      direction: string;
+      disposition: string;
+      attempt: number;
+      reasonCode: string;
+      receiptHash: string;
+    }>(
+      `SELECT direction, disposition, (attempt)::int AS attempt, reason_code AS "reasonCode",
+              receipt_hash AS "receiptHash"
+       FROM "${NATIVE_SCHEMA}"."hosted_delivery_receipts"
+       WHERE message_id = $1 AND disposition = $2`,
+      [messageId, disposition]
+    )).rows;
+
+    // Fresh accept: brand-new inbox row + brand-new append-only receipt row
+    // for a device-scoped principal (see comment above).
+    const firstIngressSignal = ingressEnqueueSignal(1);
+    const firstIngressPayload = normalizedPostgresSignalIngressAcceptPayload(
+      firstIngressSignal, ingressEnqueueNow
+    );
+    const firstIngressResult = await applyIngressAccept(
+      signalIngressEnqueueA, ingressEnqueuePrincipalA, firstIngressPayload
+    );
+    assert.equal(firstIngressResult.contractVersion, 1);
+    assert.equal(firstIngressResult.operation, "accept_signal_ingress");
+    assert.match(firstIngressResult.requestId, /^signal_ingress_accept_[a-f0-9]{32}$/);
+    assert.match(firstIngressResult.requestFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(firstIngressResult.disposition, "accepted");
+    assert.equal(firstIngressResult.inboxMutated, true);
+    assert.equal(firstIngressResult.receiptMutated, true);
+    assert.equal(firstIngressResult.mutationStatementCount, 2);
+    assert.equal(firstIngressResult.mutationRowCount, 2);
+    assert.match(firstIngressResult.receipt.id, /^inbox_[a-f0-9]{32}$/);
+    assert.equal(firstIngressResult.receipt.disposition, "accepted");
+    assert.equal(firstIngressResult.receipt.state, "accepted");
+    assert.match(firstIngressResult.receipt.payloadHash, /^[a-f0-9]{64}$/);
+    assert.ok(firstIngressResult.receipt.receivedAt.length > 0);
+    assert.equal(firstIngressResult.ingressEnqueueWriterParity, true);
+    assert.equal(firstIngressResult.signalIngressRepositoryParity, false);
+    assert.equal(firstIngressResult.writerLockProtocolParity, false);
+    assert.equal(firstIngressResult.queueWriteBoundaryConsumed, true);
+    assert.equal(firstIngressResult.mutationAuthority, true);
+    assert.equal(firstIngressResult.sharedCatalogMutationAuthority, false);
+    assert.equal(firstIngressResult.actionAuthority, false);
+    assert.equal(firstIngressResult.runtimeAuthority, false);
+
+    // Server-derived messageKey/payloadHash must equal the REAL TypeScript
+    // `stableHash` helper's own output, byte-for-byte -- proving the
+    // PL/pgSQL reproduction agrees with domain/src/ids.ts, not merely that
+    // both independently claim a sha256 shape.
+    const expectedFirstIngressMessageKey = `signal:${stableHash(
+      "yoink_durable_signal_ingress_v1",
+      ingressEnqueuePrincipalA.tenantId,
+      ingressEnqueuePrincipalA.userId,
+      firstIngressSignal.sourceConnectionId,
+      firstIngressSignal.signalId
+    )}`;
+    const expectedFirstIngressPayloadHash = stableHash(
+      "hosted_delivery_payload_v1", firstIngressPayload.payloadJson
+    );
+    const firstIngressInboxRow = await ingressEnqueueInboxRow(firstIngressResult.receipt.id);
+    assert.ok(firstIngressInboxRow);
+    assert.equal(firstIngressInboxRow?.tenantId, NATIVE_TENANT);
+    assert.equal(firstIngressInboxRow?.userId, NATIVE_USER);
+    assert.equal(firstIngressInboxRow?.source, "trackalacker");
+    assert.equal(firstIngressInboxRow?.eventType, "signal_event_v1");
+    assert.equal(firstIngressInboxRow?.state, "accepted");
+    assert.equal(firstIngressInboxRow?.messageKey, expectedFirstIngressMessageKey);
+    assert.equal(firstIngressInboxRow?.payloadHash, expectedFirstIngressPayloadHash);
+    assert.equal(firstIngressInboxRow?.payloadHash, firstIngressResult.receipt.payloadHash);
+    assert.equal(firstIngressInboxRow?.payloadJson, firstIngressPayload.payloadJson);
+    const firstIngressReceiptRows = await ingressEnqueueReceiptRows(
+      firstIngressResult.receipt.id, "accepted"
+    );
+    assert.equal(firstIngressReceiptRows.length, 1);
+    assert.equal(firstIngressReceiptRows[0]?.direction, "inbox");
+    assert.equal(firstIngressReceiptRows[0]?.attempt, 0);
+    assert.equal(firstIngressReceiptRows[0]?.reasonCode, "new_message");
+    assert.match(firstIngressReceiptRows[0]?.receiptHash ?? "", /^[a-f0-9]{64}$/);
+
+    // Conflict: same message key (same sourceConnectionId/signalId), but
+    // DIFFERENT content -- a genuine zero-write, fail-closed rejection, the
+    // one deliberate divergence from attribution-receipt-apply's own
+    // tamper-blind, always-succeed replay model; see module header §1/§3.
+    const tamperedIngressPayload = normalizedPostgresSignalIngressAcceptPayload(
+      ingressEnqueueSignal(1, {
+        evidence: {
+          headline: "Tampered native ingress content",
+          clickUrl: "https://www.target.com/p/native-ingress/-/A-1011483414?tracking=discard"
+        }
+      }),
+      ingressEnqueueNow
+    );
+    assert.notEqual(tamperedIngressPayload.payloadJson, firstIngressPayload.payloadJson);
+    await assert.rejects(
+      applyIngressAccept(signalIngressEnqueueA, ingressEnqueuePrincipalA, tamperedIngressPayload),
+      /already used for different content/
+    );
+    // The rejected conflict left the inbox row and receipt ledger exactly as
+    // the fresh accept above left them -- zero writes since.
+    assert.deepEqual(
+      await ingressEnqueueInboxRow(firstIngressResult.receipt.id),
+      firstIngressInboxRow
+    );
+    assert.equal(
+      (await ingressEnqueueReceiptRows(firstIngressResult.receipt.id, "accepted")).length,
+      1
+    );
+
+    // Immutable replay: the EXACT same (principal, payload) pair again --
+    // same deterministic request id, same deterministic receipt id -- is a
+    // true no-op on the ledger too, unlike SQLite's own random-UUID receipt
+    // ids (which would append a second row on every retry); see module
+    // header §3/§7.
+    const replayIngressResult = await applyIngressAccept(
+      signalIngressEnqueueA, ingressEnqueuePrincipalA, firstIngressPayload
+    );
+    assert.equal(replayIngressResult.disposition, "deduped");
+    assert.equal(replayIngressResult.inboxMutated, false);
+    assert.equal(replayIngressResult.receiptMutated, false);
+    assert.equal(replayIngressResult.mutationStatementCount, 1);
+    assert.equal(replayIngressResult.mutationRowCount, 0);
+    assert.equal(replayIngressResult.requestId, firstIngressResult.requestId);
+    assert.equal(replayIngressResult.requestFingerprint, firstIngressResult.requestFingerprint);
+    // The replay's snapshot honestly reports the replay call's OWN
+    // disposition ("deduped" -- exactly what a second SQLite acceptInbox
+    // call reports); every stored identity field still echoes the original.
+    assert.deepEqual(
+      { ...replayIngressResult.receipt, disposition: "accepted" },
+      firstIngressResult.receipt
+    );
+    assert.equal(replayIngressResult.receipt.disposition, "deduped");
+    assert.equal(
+      (await ingressEnqueueReceiptRows(firstIngressResult.receipt.id, "accepted")).length,
+      1
+    );
+
+    // Dedupe with a genuinely NEW ledger row: an inbox row that already
+    // exists (e.g. accepted through a route this test never itself called,
+    // such as a concurrent worker or a prior partial delivery) is found on
+    // the FIRST call this boundary function ever makes for that request id
+    // -- disposition "deduped", inbox untouched, but the append-only ledger
+    // still gets its own fresh receipt row (`receiptMutated: true`), and
+    // the returned snapshot echoes the EXISTING message's own stored
+    // fields, not anything freshly computed; see module header §3.
+    const secondIngressSignal = ingressEnqueueSignal(2);
+    const secondIngressPayload = normalizedPostgresSignalIngressAcceptPayload(
+      secondIngressSignal, ingressEnqueueNow
+    );
+    const secondIngressMessageKey = `signal:${stableHash(
+      "yoink_durable_signal_ingress_v1",
+      ingressEnqueuePrincipalA.tenantId,
+      ingressEnqueuePrincipalA.userId,
+      secondIngressSignal.sourceConnectionId,
+      secondIngressSignal.signalId
+    )}`;
+    const secondIngressPayloadHash = stableHash(
+      "hosted_delivery_payload_v1", secondIngressPayload.payloadJson
+    );
+    const preseededIngressInboxId = "inbox_9999888877776666999988887777aabb";
+    const preseededIngressReceivedAt = new Date(ingressEnqueueNow - 30_000).toISOString();
+    await first!.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."inbox_messages"(
+         id, tenant_id, user_id, source, message_key, event_type,
+         payload_hash, payload_json, state, received_at, updated_at
+       ) VALUES ($1, $2, $3, 'trackalacker', $4, 'signal_event_v1', $5, $6, 'accepted', $7, $7)`,
+      [
+        preseededIngressInboxId, NATIVE_TENANT, NATIVE_USER,
+        secondIngressMessageKey, secondIngressPayloadHash,
+        secondIngressPayload.payloadJson, preseededIngressReceivedAt
+      ]
+    );
+    const dedupeIngressResult = await applyIngressAccept(
+      signalIngressEnqueueA, ingressEnqueuePrincipalA, secondIngressPayload
+    );
+    assert.equal(dedupeIngressResult.disposition, "deduped");
+    assert.equal(dedupeIngressResult.inboxMutated, false);
+    assert.equal(dedupeIngressResult.receiptMutated, true);
+    assert.equal(dedupeIngressResult.mutationStatementCount, 1);
+    assert.equal(dedupeIngressResult.mutationRowCount, 1);
+    assert.equal(dedupeIngressResult.receipt.id, preseededIngressInboxId);
+    assert.equal(dedupeIngressResult.receipt.disposition, "deduped");
+    assert.equal(dedupeIngressResult.receipt.state, "accepted");
+    assert.equal(dedupeIngressResult.receipt.payloadHash, secondIngressPayloadHash);
+    assert.equal(dedupeIngressResult.receipt.receivedAt, preseededIngressReceivedAt);
+    const dedupeIngressInboxRow = await ingressEnqueueInboxRow(preseededIngressInboxId);
+    // Inbox row is genuinely untouched: still exactly what the direct
+    // fixture insert above wrote, byte-for-byte.
+    assert.equal(dedupeIngressInboxRow?.payloadHash, secondIngressPayloadHash);
+    assert.equal(dedupeIngressInboxRow?.payloadJson, secondIngressPayload.payloadJson);
+    const dedupeIngressReceiptRows = await ingressEnqueueReceiptRows(
+      preseededIngressInboxId, "deduped"
+    );
+    assert.equal(dedupeIngressReceiptRows.length, 1);
+    assert.equal(dedupeIngressReceiptRows[0]?.direction, "inbox");
+    assert.equal(dedupeIngressReceiptRows[0]?.attempt, 0);
+    assert.equal(dedupeIngressReceiptRows[0]?.reasonCode, "same_payload");
+    assert.match(dedupeIngressReceiptRows[0]?.receiptHash ?? "", /^[a-f0-9]{64}$/);
+
+    // Oversized envelope: the SQL function's own 65,536-byte ceiling on
+    // `payloadJson` fails closed, exercised by hand-crafting a
+    // `PostgresSignalIngressAcceptPayload` that bypasses the TS normalizer's
+    // OWN (practically unreachable) size guard entirely -- proving the
+    // server-side defense-in-depth ceiling is real, not merely asserted in
+    // source; see module header §7 and the contract test's own comment.
+    const oversizedIngressPayload: PostgresSignalIngressAcceptPayload = {
+      payloadJson: "x".repeat(70_000),
+      confirmation: POSTGRES_SIGNAL_INGRESS_ENQUEUE_APPLY_CONFIRMATION
+    };
+    await assert.rejects(
+      applyIngressAccept(signalIngressEnqueueA, ingressEnqueuePrincipalA, oversizedIngressPayload),
+      /payload shape is invalid/
+    );
+
+    // Denial matrix: wrong principal.
+    await assert.rejects(
+      applyIngressAccept(
+        signalIngressEnqueueB, ingressEnqueuePrincipalA,
+        normalizedPostgresSignalIngressAcceptPayload(ingressEnqueueSignal(3), ingressEnqueueNow)
+      ),
+      /does not match the expected authenticated principal/
+    );
+    // Denial matrix: same-tenant peer.
+    await first!.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER,
+        new Date(Date.now() - 5_000).toISOString()]
+    );
+    try {
+      await assert.rejects(
+        applyIngressAccept(
+          signalIngressEnqueueC, ingressEnqueuePrincipalA,
+          normalizedPostgresSignalIngressAcceptPayload(ingressEnqueueSignal(4), ingressEnqueueNow)
+        ),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first!.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    // Denial matrix: unmapped principal.
+    await assert.rejects(
+      applyIngressAccept(
+        signalIngressEnqueueUnmapped, ingressEnqueuePrincipalA,
+        normalizedPostgresSignalIngressAcceptPayload(ingressEnqueueSignal(5), ingressEnqueueNow)
+      ),
+      /tenant session principal is not active/
+    );
+    // Malformed request id: caught client-side before any round trip.
+    await assert.rejects(
+      signalIngressEnqueueA.acceptSignalIngress(
+        ingressEnqueuePrincipalA,
+        `signal_ingress_accept_${"f".repeat(32)}`,
+        normalizedPostgresSignalIngressAcceptPayload(ingressEnqueueSignal(6), ingressEnqueueNow)
+      ),
+      /accept request is invalid/
+    );
+
+    // Zero direct table SQL for the role, and cross-boundary denial in both
+    // directions.
+    signalIngressEnqueueDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalIngressEnqueueDirectClient.on("error", () => undefined);
+    await signalIngressEnqueueDirectClient.connect();
+    await signalIngressEnqueueDirectClient.query(
+      `SET ROLE "${signalIngressEnqueueManifest.ingressAcceptRole.name}"`
+    );
+    await assert.rejects(
+      signalIngressEnqueueDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."inbox_messages" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalIngressEnqueueDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."hosted_delivery_receipts" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalIngressEnqueueDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."inbox_messages"(id)
+         VALUES ('forbidden_ingress_enqueue_inbox')`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalIngressEnqueueDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."hosted_delivery_receipts" SET reason_code = ''`
+      ),
+      /permission denied/
+    );
+    // The queue-write boundary this module CONSUMES (verify only) grants
+    // this role none of its own access -- consuming a fingerprint is not
+    // consuming a privilege.
+    await assert.rejects(
+      signalIngressEnqueueDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."background_tasks" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalIngressEnqueueDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_APPLY_FUNCTION}"(
+           $1, $2, 'record_attribution_receipt', 'forbidden_cross_boundary', '{}'
+         )`,
+        [ingressEnqueuePrincipalA.tenantId, ingressEnqueuePrincipalA.userId]
+      ),
+      /permission denied/
+    );
+    // A sibling role (attribution-receipt's) cannot call this boundary's
+    // function either.
+    await signalIngressEnqueueDirectClient.query(
+      `SET ROLE "${signalAttributionReceiptManifest.attributionReceiptRole.name}"`
+    );
+    await assert.rejects(
+      signalIngressEnqueueDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_INGRESS_ENQUEUE_APPLY_FUNCTION}"(
+           $1, $2, 'accept_signal_ingress', 'forbidden_cross_boundary_reverse', '{}'
+         )`,
+        [ingressEnqueuePrincipalA.tenantId, ingressEnqueuePrincipalA.userId]
+      ),
+      /permission denied/
+    );
+    await signalIngressEnqueueDirectClient.end();
+    signalIngressEnqueueDirectClient = null;
+
+    await Promise.all([
+      signalIngressEnqueueA.close(),
+      signalIngressEnqueueB.close(),
+      signalIngressEnqueueC.close(),
+      signalIngressEnqueueUnmapped.close()
+    ]);
+    signalIngressEnqueueA = null;
+    signalIngressEnqueueB = null;
+    signalIngressEnqueueC = null;
+    signalIngressEnqueueUnmapped = null;
+    })();
+
     const notificationNow = Date.now();
     const notificationFixture = await insertNotificationRecoveryFixtures(first, notificationNow);
     notificationHandlerDb = new YoinkDatabase();
@@ -23258,7 +23867,16 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NodePostgresSignalJobLifecycleApplyDatabase | null)?.close(),
       (signalJobLifecycleUnmapped as
         NodePostgresSignalJobLifecycleApplyDatabase | null)?.close(),
-      (signalJobLifecycleDirectClient as Client | null)?.end()
+      (signalJobLifecycleDirectClient as Client | null)?.end(),
+      (signalIngressEnqueueA as
+        NodePostgresSignalIngressEnqueueApplyDatabase | null)?.close(),
+      (signalIngressEnqueueB as
+        NodePostgresSignalIngressEnqueueApplyDatabase | null)?.close(),
+      (signalIngressEnqueueC as
+        NodePostgresSignalIngressEnqueueApplyDatabase | null)?.close(),
+      (signalIngressEnqueueUnmapped as
+        NodePostgresSignalIngressEnqueueApplyDatabase | null)?.close(),
+      (signalIngressEnqueueDirectClient as Client | null)?.end()
     ].filter(Boolean) as Array<Promise<void>>);
     notificationHandlerDb?.close();
     executionHandlerDb?.close();

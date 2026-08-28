@@ -44,6 +44,7 @@ import { postgresSignalEvaluationCompositionCapabilityProjection } from "../pack
 import { postgresSignalAttributionReceiptCapabilityProjection } from "../packages/database/src/postgres-signal-attribution-receipt-apply.js";
 import { postgresSignalJobLifecycleCapabilityProjection } from "../packages/database/src/postgres-signal-job-lifecycle-apply.js";
 import { postgresSignalEvaluationRepositoryCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-evaluation-repository-composition.js";
+import { postgresSignalIngressEnqueueApplyCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-enqueue-apply.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -157,7 +158,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Server-bound Walmart, Amazon, and Best Buy qualification/);
     assert.match(adminScript, /Server-bound mission-policy revision/);
     assert.match(adminScript, /global action pause\/resume, guardrail settings, and periodic spend caps/);
-    assert.match(adminScript, /twenty-three independently qualified signal boundaries proven/);
+    assert.match(adminScript, /twenty-four independently qualified signal boundaries proven/);
     assert.match(adminScript, /Server-bound TrackaLacker source sync/);
     assert.match(adminScript, /eighteenth independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /Server-bound spend-reservation lifecycle/);
@@ -178,6 +179,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Complete signal-evaluation repository composition/);
     assert.match(adminScript, /now compose into one deterministically verified complete evaluation repository/);
     assert.match(adminScript, /closing signal-evaluation repository parity while durable ingress and handler composition remain open/);
+    assert.match(adminScript, /Server-bound signal-ingress acceptance/);
+    assert.match(adminScript, /twenty-fifth independently inactive NOLOGIN boundary/);
+    assert.match(adminScript, /message identity and payload hash are derived and revalidated in the database/);
+    assert.match(adminScript, /closing the ingress-enqueue family while the durable-ingress composition remains open/);
     assert.match(adminScript, /Server-bound attribution-receipt append/);
     assert.match(adminScript, /twenty-third independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /derive-don't-trust affiliate-routing receipt/);
@@ -248,6 +253,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalJobLifecycleCapabilityProjection();
     const postgresSignalEvaluationRepositoryComposition =
       postgresSignalEvaluationRepositoryCompositionCapabilityProjection();
+    const postgresSignalIngressEnqueueApply =
+      postgresSignalIngressEnqueueApplyCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -295,6 +302,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalAttributionReceiptApply,
       postgresSignalJobLifecycleApply,
       postgresSignalEvaluationRepositoryComposition,
+      postgresSignalIngressEnqueueApply,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -624,6 +632,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalEvaluationRepositoryComposition,
       postgresSignalEvaluationRepositoryComposition
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalIngressEnqueueApply,
+      postgresSignalIngressEnqueueApply
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -663,7 +675,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalEvaluationComposition,
       postgresSignalAttributionReceiptApply,
       postgresSignalJobLifecycleApply,
-      postgresSignalEvaluationRepositoryComposition
+      postgresSignalEvaluationRepositoryComposition,
+      postgresSignalIngressEnqueueApply
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);

@@ -3390,6 +3390,170 @@ composed boundaries' own already-granted authority; `runtimeAuthority:
 false` and `activePrincipalCount: 0` confirm none of it is wired to a live
 principal. SQLite remains authoritative.
 
+## Signal-ingress acceptance qualification (1.2.0)
+
+Version 1.2 adds a twenty-fifth independent, inactive hosted-signal boundary
+for `accept_signal_ingress`. It revalidates the qualified attribution-receipt
+boundary (0.99.0) as its declared predecessor and, like that boundary, does
+not consume the shared writer-lock protocol — neither `inbox_messages` nor
+`hosted_delivery_receipts` is one of the five domains that protocol guards.
+It closes the write family `postgres-signal-evaluation-repository-composition.ts`
+(1.1.0) newly named out of scope: `DurableSignalIngressService`'s own
+enqueue path, the sole caller of `HostedDeliveryRepository.acceptInbox` a
+durable signal ever reaches.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application
+object, inherits no role, receives zero direct/effective table or column
+privileges, and can execute one strict security-definer function. Its
+receipt seals exactly two forced-RLS tenant tables — `hosted_delivery_receipts`
+and `inbox_messages` — and both are also its complete mutation set; there is
+no read-only table anywhere in its surface.
+
+Every request carries one sanitized, 64KiB-bounded TrackaLacker signal
+envelope — the exact thirteen-key shape (`schemaVersion`, `signalId`,
+`sourceConnectionId`, `source`, `externalEventId`, `eventType`,
+`observedAt`, `receivedAt`, `test`, `identity`, `offer`, `evidence`,
+`parserVersion`) `DurableSignalIngressService`'s own private `durableSignal`
+helper produces — under one `SIGNAL_INGRESS_ACCEPT_V1` confirmation.
+PostgreSQL resolves `session_user` to one active tenant/user and derives the
+request ID from the authenticated principal and the complete normalized
+payload. `source` and `eventType` are never trusted from the caller at all:
+they are the two SQL literals `'trackalacker'`/`'signal_event_v1'`, matching
+`acceptTrackalacker`'s own hardcoded call into `acceptInbox` exactly — never
+the general, multi-caller `acceptInbox` surface a separate, unscoped
+request-repository writer would need. `messageKey` and `payloadHash` are
+likewise never accepted: both are derived server-side from the envelope's
+own fields using a SQL translation of SQLite's length-prefixed `stableHash`
+scheme, reused byte-for-byte from the attribution-receipt boundary's own
+helper of the same name.
+
+`inbox_messages` carries `UNIQUE(tenant_id, user_id, source, message_key)`,
+mirroring SQLite's own lookup exactly. A not-found key atomically inserts
+one `inbox_messages` row plus one `hosted_delivery_receipts` row — never
+`audit_events`/`outbox_events`, mirroring SQLite's own `acceptInbox`, which
+touches neither table on any path. A found key with identical `payload_hash`
+and `event_type` is a dedupe: `inbox_messages` stays completely unmutated
+(`inboxMutated: false`), but a fresh row still appends to the append-only
+`hosted_delivery_receipts` ledger — a deliberate divergence, flagged
+explicitly in the manifest, from the true zero-write `INSERT OR IGNORE`
+replay every other sibling apply boundary in this family reuses;
+reproducing that pattern here would silently drop a real SQLite side
+effect, since `hosted_delivery_receipts` is a genuine append-only
+delivery/audit ledger written from six different disposition sites in
+SQLite, not a "receipt exists, do nothing more" table. A found key with
+different content fails closed before any write at all. Receipt-row
+identity is deterministic — derived from `request_id` and inserted
+`ON CONFLICT (id) DO NOTHING` — so an exact retry is a true no-op on the
+ledger too, strictly more replay-safe than SQLite's own random per-call
+receipt ID.
+
+The companion task-wake half of `acceptTrackalacker` —
+`BackgroundTaskRepository.enqueueServiceTask`'s exact three-table write
+family (`background_task_schedules`, `background_tasks`,
+`background_task_events`) — is already independently qualified,
+table-for-table and privilege-for-privilege, by the sealed tenant
+queue-write boundary (0.63.0). This module does not reimplement it: it
+binds that boundary's manifest fingerprint into its own and calls
+`verifyPostgresTenantQueueWriteBoundary` — never
+`applyPostgresTenantQueueWriteBoundary` — from both its own `apply` and
+`verify` paths. A caller composing the full `acceptTrackalacker` semantics
+is expected to invoke this function first, inspect the returned
+`disposition`, and separately invoke the already-qualified queue-writer for
+the `hosted_delivery_recovery` task exactly when SQLite's own
+`if (!["processed", "dead_letter"].includes(inbox.state))` branch would.
+
+The CLI threads one full chain of namespaces through every predecessor's own
+build function for exact fingerprint parity with the live-qualified roles it
+touches, including a trailing job-lifecycle namespace built and discarded
+purely for namespace-uniqueness parity with the rest of this script family —
+this boundary's own declared predecessor stops at attribution-receipt, not
+job-lifecycle.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-ingress-enqueue-apply -- plan \
+  yoink_cutover_qualification_120 yoink_q_120 yoink_session_q_120 \
+  yoink_queue_q_120 yoink_control_q_120 yoink_notify_q_120 \
+  yoink_execute_q_120 yoink_retain_q_120 yoink_candidate_q_120 \
+  yoink_dispatch_q_120 yoink_reconcile_q_120 yoink_witness_q_120 \
+  yoink_delivery_q_120 yoink_catalog_q_120 yoink_resolution_q_120 \
+  yoink_reference_q_120 yoink_terminal_q_120 yoink_offer_q_120 \
+  yoink_post_q_120 yoink_mission_q_120 yoink_strategy_q_120 \
+  yoink_writer_lock_q_120 yoink_constraint_config_q_120 \
+  yoink_action_spend_q_120 yoink_target_qual_q_120 \
+  yoink_source_trust_q_120 yoink_retailer_qual_q_120 \
+  yoink_mission_policy_q_120 yoink_source_status_q_120 \
+  yoink_source_sync_q_120 yoink_reservation_q_120 yoink_catalog_import_q_120 \
+  yoink_provisioning_q_120 yoink_attribution_policy_q_120 \
+  yoink_attribution_receipt_q_120 yoink_job_lifecycle_q_120 \
+  yoink_ingress_enqueue_q_120
+```
+
+After every predecessor through attribution-receipt qualification is
+verified, apply once with the qualification connection and explicit
+acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_INGRESS_ENQUEUE_APPLY_QUALIFICATION_ACK=bounded-signal-ingress-enqueue-apply-qualification \
+  npm run postgres:signal-ingress-enqueue-apply -- apply \
+  yoink_cutover_qualification_120 yoink_q_120 yoink_session_q_120 \
+  yoink_queue_q_120 yoink_control_q_120 yoink_notify_q_120 \
+  yoink_execute_q_120 yoink_retain_q_120 yoink_candidate_q_120 \
+  yoink_dispatch_q_120 yoink_reconcile_q_120 yoink_witness_q_120 \
+  yoink_delivery_q_120 yoink_catalog_q_120 yoink_resolution_q_120 \
+  yoink_reference_q_120 yoink_terminal_q_120 yoink_offer_q_120 \
+  yoink_post_q_120 yoink_mission_q_120 yoink_strategy_q_120 \
+  yoink_writer_lock_q_120 yoink_constraint_config_q_120 \
+  yoink_action_spend_q_120 yoink_target_qual_q_120 \
+  yoink_source_trust_q_120 yoink_retailer_qual_q_120 \
+  yoink_mission_policy_q_120 yoink_source_status_q_120 \
+  yoink_source_sync_q_120 yoink_reservation_q_120 yoink_catalog_import_q_120 \
+  yoink_provisioning_q_120 yoink_attribution_policy_q_120 \
+  yoink_attribution_receipt_q_120 yoink_job_lifecycle_q_120 \
+  yoink_ingress_enqueue_q_120
+```
+
+Then independently verify the function, role, protected/mutation table
+sets, exact grants, append-only receipt behavior, and the consumed
+queue-write boundary's own fingerprint match:
+
+```bash
+npm run postgres:signal-ingress-enqueue-apply -- verify \
+  yoink_cutover_qualification_120 yoink_q_120 yoink_session_q_120 \
+  yoink_queue_q_120 yoink_control_q_120 yoink_notify_q_120 \
+  yoink_execute_q_120 yoink_retain_q_120 yoink_candidate_q_120 \
+  yoink_dispatch_q_120 yoink_reconcile_q_120 yoink_witness_q_120 \
+  yoink_delivery_q_120 yoink_catalog_q_120 yoink_resolution_q_120 \
+  yoink_reference_q_120 yoink_terminal_q_120 yoink_offer_q_120 \
+  yoink_post_q_120 yoink_mission_q_120 yoink_strategy_q_120 \
+  yoink_writer_lock_q_120 yoink_constraint_config_q_120 \
+  yoink_action_spend_q_120 yoink_target_qual_q_120 \
+  yoink_source_trust_q_120 yoink_retailer_qual_q_120 \
+  yoink_mission_policy_q_120 yoink_source_status_q_120 \
+  yoink_source_sync_q_120 yoink_reservation_q_120 yoink_catalog_import_q_120 \
+  yoink_provisioning_q_120 yoink_attribution_policy_q_120 \
+  yoink_attribution_receipt_q_120 yoink_job_lifecycle_q_120 \
+  yoink_ingress_enqueue_q_120
+```
+
+The receipt records `ingressEnqueueWriterParity: true`, closing the write
+family the signal-evaluation repository composition (1.1.0) newly named out
+of scope, while `signalIngressRepositoryParity`, `writerLockProtocolParity`,
+and `runtimeAuthority` all remain explicit `false`. A future composition
+rung binding this writer, `hostedDeliveryLeaseRecovery`, and the
+resolution-plan function together is required before
+`signalIngressRepositoryParity` can honestly flip. Native PostgreSQL 16
+proves principal isolation, direct and cross-boundary denial, fresh-accept
+two-row atomicity with no audit/outbox write on any path, same-content
+dedupe with a mutation-free inbox and an appended receipt, fail-closed
+conflicting-content rejection, deterministic receipt-row replay safety, and
+the consumed queue-write boundary's own fingerprint match. Notification
+dispatch (`NotificationRepository.ensureForJob`), the operator dead-letter
+inbox-reset, hosted-delivery handler composition, and every
+request-repository family remain open; the SQLite authority switch remains
+closed.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.

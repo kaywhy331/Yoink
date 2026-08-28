@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.1.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.2.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,64 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.2.0 adds the twenty-fifth independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the bounded durable signal-ingress
+enqueue writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns
+no application object, inherits no role, has zero direct/effective table or
+column grants, and may call one strict security-definer function. The
+boundary protects and mutates the same two forced-RLS tenant tables —
+`hosted_delivery_receipts` and `inbox_messages`; there is no read-only table
+anywhere in its surface.
+
+PostgreSQL binds `session_user` to one exact tenant/user, revalidates the
+qualified attribution-receipt boundary (0.99.0) as its declared predecessor,
+and accepts one `accept_signal_ingress` operation carrying a single
+sanitized, 64KiB-bounded TrackaLacker signal envelope — the exact
+thirteen-key shape `DurableSignalIngressService`'s own `durableSignal`
+helper produces. `source` and `eventType` are never caller input: they are
+the SQL literals `'trackalacker'`/`'signal_event_v1'`, matching
+`acceptTrackalacker`'s own hardcoded call into `acceptInbox` exactly.
+`messageKey` and `payloadHash` are both derived database-side from the
+envelope alone — never accepted or cross-checked.
+
+A brand-new message atomically inserts one `inbox_messages` row plus one
+`hosted_delivery_receipts` row — never `audit_events`/`outbox_events`,
+mirroring SQLite's own `acceptInbox`, which touches neither table. A
+duplicate with identical content is an honest one-write dedupe:
+`inbox_messages` stays unmutated but a fresh row still appends to the
+append-only `hosted_delivery_receipts` ledger, a deliberate divergence from
+every zero-write-replay sibling in this family — reproducing that pattern
+here would silently drop a real SQLite side effect. A duplicate key used for
+different content fails closed before any write at all.
+
+The companion task-wake half of `acceptTrackalacker` —
+`BackgroundTaskRepository.enqueueServiceTask`'s exact three-table write
+family — is already independently qualified, table-for-table and
+privilege-for-privilege, by the sealed tenant queue-write boundary (0.63.0).
+This module does not reimplement it: it binds that boundary's manifest
+fingerprint into its own and verifies (never applies) it from both its own
+`apply` and `verify` paths. A caller composing full `acceptTrackalacker`
+semantics is expected to invoke this function first, then separately invoke
+the already-qualified queue-writer when the resulting inbox state calls for
+a `hosted_delivery_recovery` task.
+
+This closes `ingressEnqueueWriterParity`, the write family
+`postgres-signal-evaluation-repository-composition.ts` (1.1.0) newly named
+out of scope. `signalIngressRepositoryParity` stays false — a future
+composition rung binding this writer, `hostedDeliveryLeaseRecovery`, and the
+resolution-plan function together is required before that flag can honestly
+flip. `writerLockProtocolParity` also stays false: neither table sits inside
+any of the shared protocol's five domains. Native PostgreSQL 16 proves
+principal isolation, direct and cross-boundary denial, fresh-accept two-row
+atomicity, same-content dedupe with a mutation-free inbox and an appended
+receipt, fail-closed conflicting-content rejection, and the consumed
+queue-write boundary's own fingerprint match. Notification dispatch, the
+operator dead-letter inbox-reset, hosted-delivery handler composition, and
+the ingress composition rung itself remain open. SQLite remains
+authoritative; nothing is activated. Use `npm run
+postgres:signal-ingress-enqueue-apply -- plan ...` and the [PostgreSQL
+cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 1.1.0 adds the verification-level complete signal-evaluation
 repository composition. It is not a twenty-fifth qualification boundary: it

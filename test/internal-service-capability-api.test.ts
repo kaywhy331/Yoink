@@ -49,6 +49,7 @@ import { postgresSignalEvaluationCompositionCapabilityProjection } from "../pack
 import { postgresSignalAttributionReceiptCapabilityProjection } from "../packages/database/src/postgres-signal-attribution-receipt-apply.js";
 import { postgresSignalJobLifecycleCapabilityProjection } from "../packages/database/src/postgres-signal-job-lifecycle-apply.js";
 import { postgresSignalEvaluationRepositoryCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-evaluation-repository-composition.js";
+import { postgresSignalIngressEnqueueApplyCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-enqueue-apply.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -166,6 +167,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalAttributionReceiptApply: ReturnType<typeof postgresSignalAttributionReceiptCapabilityProjection>;
         postgresSignalJobLifecycleApply: ReturnType<typeof postgresSignalJobLifecycleCapabilityProjection>;
         postgresSignalEvaluationRepositoryComposition: ReturnType<typeof postgresSignalEvaluationRepositoryCompositionCapabilityProjection>;
+        postgresSignalIngressEnqueueApply: ReturnType<typeof postgresSignalIngressEnqueueApplyCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -316,6 +318,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalEvaluationRepositoryComposition,
       postgresSignalEvaluationRepositoryCompositionCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalIngressEnqueueApply,
+      postgresSignalIngressEnqueueApplyCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -422,6 +428,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /Complete signal-evaluation repository composition/);
     assert.match(cutoverText, /now compose into one deterministically verified complete evaluation repository/);
     assert.match(cutoverText, /closing signal-evaluation repository parity while durable ingress and handler composition remain open/);
+    assert.match(cutoverText, /Server-bound signal-ingress acceptance/);
+    assert.match(cutoverText, /twenty-fifth independently inactive NOLOGIN boundary/);
+    assert.match(cutoverText, /closing the ingress-enqueue family while the durable-ingress composition remains open/);
     assert.match(cutoverText, /Server-bound attribution-receipt append/);
     assert.match(cutoverText, /twenty-third independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /notification dispatch and post-creation job lifecycle remain open/);
