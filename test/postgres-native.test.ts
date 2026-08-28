@@ -292,6 +292,18 @@ import {
   verifyPostgresSignalJobLifecycleApplyBoundary,
   type PostgresSignalJobLifecycleTransitionPayload
 } from "../packages/database/src/postgres-signal-job-lifecycle-apply.js";
+import {
+  POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_LENGTH,
+  POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_ORDER,
+  POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CONTRACT_VERSION,
+  POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_DELEGATED_BOUNDARIES,
+  POSTGRES_SIGNAL_EVALUATION_REPOSITORY_KNOWN_OUT_OF_SCOPE_WRITES,
+  POSTGRES_SIGNAL_EVALUATION_REPOSITORY_OWN_FAMILIES,
+  POSTGRES_SIGNAL_EVALUATION_REPOSITORY_OWN_FAMILY_COUNT,
+  buildPostgresSignalEvaluationRepositoryCompositionManifest,
+  postgresSignalEvaluationRepositoryCompositionCapabilityProjection,
+  verifyPostgresSignalEvaluationRepositoryCompositionBoundary
+} from "../packages/database/src/postgres-signal-evaluation-repository-composition.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -1226,7 +1238,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, and bounded post-creation action-job lifecycle writing", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, and the complete signal-evaluation repository composition", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -2883,6 +2895,256 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.deepEqual(
       await verifyPostgresSignalEvaluationCompositionBoundary(importer, signalEvaluationCompositionManifest),
       signalEvaluationCompositionManifest
+    );
+    })();
+    await (async () => {
+    // --- v1.1.0 (rung-2): complete signal-EVALUATION-REPOSITORY composition proof ---
+    // buildPostgresSignalEvaluationRepositoryCompositionManifest() and
+    // verifyPostgresSignalEvaluationRepositoryCompositionBoundary() are,
+    // like rung-1's own evaluation-composition module immediately above,
+    // fully parameterless: this module composes all five of its own
+    // members' zero-arg (DEFAULT namespace, schema "yoink_cutover")
+    // builders directly, offering no predecessor-manifest or namespace
+    // override of its own. The v0.98 section immediately above already
+    // stood up rung-1's full eleven-boundary chain AND
+    // hostedDeliveryLeaseRecovery under those exact defaults, inside this
+    // same live Postgres instance, on this same `importer` connection --
+    // reused here rather than re-imported. What is still missing, to
+    // satisfy this module's own live verify fan-in, is writer-track-B's
+    // remaining nine boundaries (targetQualificationApply down to
+    // attributionPolicyApply) plus its two residual-writer leaves
+    // (attributionReceiptApply, jobLifecycleApply) -- all applied here for
+    // the first time, under THEIR OWN zero-arg defaults, bottom (layered on
+    // the already-live actionSpendApply) to top, exactly mirroring the
+    // module header's own section 3 dependency order (each one's own
+    // default predecessor cascades a live verify of the boundary applied
+    // just before it).
+    await applyPostgresSignalTargetQualificationApplyBoundary(importer);
+    await applyPostgresSignalSourceTrustApplyBoundary(importer);
+    await applyPostgresSignalRetailerQualificationApplyBoundary(importer);
+    await applyPostgresSignalMissionPolicyApplyBoundary(importer);
+    await applyPostgresSignalSourceStatusApplyBoundary(importer);
+    await applyPostgresSignalSourceSyncApplyBoundary(importer);
+    await applyPostgresSignalReservationLifecycleApplyBoundary(importer);
+    await applyPostgresSignalCatalogImportApplyBoundary(importer);
+    await applyPostgresSignalSourceProvisioningApplyBoundary(importer);
+    await applyPostgresSignalAttributionPolicyApplyBoundary(importer);
+    await applyPostgresSignalAttributionReceiptApplyBoundary(importer);
+    await applyPostgresSignalJobLifecycleApplyBoundary(importer);
+
+    const evaluationRepositoryCompositionManifest = buildPostgresSignalEvaluationRepositoryCompositionManifest();
+    assert.deepEqual(
+      buildPostgresSignalEvaluationRepositoryCompositionManifest(),
+      evaluationRepositoryCompositionManifest
+    );
+    assert.equal(
+      evaluationRepositoryCompositionManifest.contractVersion,
+      POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CONTRACT_VERSION
+    );
+    assert.match(evaluationRepositoryCompositionManifest.fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(
+      evaluationRepositoryCompositionManifest.schemaName,
+      evaluationRepositoryCompositionManifest.jobLifecycleApplyManifest.schemaName
+    );
+    assert.equal(evaluationRepositoryCompositionManifest.schemaName, "yoink_cutover");
+
+    // Chain completeness: five boundaries, exactly once, in the declared
+    // structural order, each with a unique fingerprint matching what the
+    // corresponding member module's own zero-arg builder computes today --
+    // the same manifests this proof just applied to the live
+    // default-namespaced deployment above (or, for evaluationApplyComposition
+    // and hostedDeliveryLeaseRecovery, that the v0.98 section applied).
+    assert.equal(
+      evaluationRepositoryCompositionManifest.chain.length,
+      POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_LENGTH
+    );
+    assert.equal(evaluationRepositoryCompositionManifest.chainBoundaryCount, 5);
+    assert.deepEqual(
+      evaluationRepositoryCompositionManifest.chain.map((entry) => entry.boundary),
+      [...POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_ORDER]
+    );
+    assert.equal(new Set(evaluationRepositoryCompositionManifest.chain.map((entry) => entry.boundary)).size, 5);
+    assert.equal(new Set(evaluationRepositoryCompositionManifest.chain.map((entry) => entry.fingerprint)).size, 5);
+    for (const entry of evaluationRepositoryCompositionManifest.chain) {
+      assert.match(entry.fingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(typeof entry.contractVersion, "number");
+      if (entry.boundary === "hostedDeliveryLeaseRecovery") {
+        assert.equal(entry.mutationAuthority, false);
+      } else {
+        assert.equal(entry.mutationAuthority, true);
+      }
+    }
+    assert.equal(
+      evaluationRepositoryCompositionManifest.chain.find((entry) => entry.boundary === "hostedDeliveryLeaseRecovery")
+        ?.fingerprint,
+      buildPostgresHostedDeliveryLeaseRecoveryManifest().fingerprint
+    );
+    assert.equal(
+      evaluationRepositoryCompositionManifest.chain.find((entry) => entry.boundary === "evaluationApplyComposition")
+        ?.fingerprint,
+      buildPostgresSignalEvaluationCompositionManifest().fingerprint
+    );
+    assert.equal(
+      evaluationRepositoryCompositionManifest.chain.find((entry) => entry.boundary === "reservationLifecycleApply")
+        ?.fingerprint,
+      buildPostgresSignalReservationLifecycleApplyManifest().fingerprint
+    );
+    assert.equal(
+      evaluationRepositoryCompositionManifest.chain.find((entry) => entry.boundary === "attributionReceiptApply")
+        ?.fingerprint,
+      buildPostgresSignalAttributionReceiptApplyManifest().fingerprint
+    );
+    assert.equal(
+      evaluationRepositoryCompositionManifest.chain.find((entry) => entry.boundary === "jobLifecycleApply")
+        ?.fingerprint,
+      buildPostgresSignalJobLifecycleApplyManifest().fingerprint
+    );
+
+    // Writer-track convergence proof (module header section 3): writer-
+    // track-B's root (targetQualificationApply's own default predecessor)
+    // is the exact same actionSpendApply node rung-1's own chain terminates
+    // in, and both residual writers' declared predecessor fingerprint is
+    // exactly attributionPolicyApply's own fingerprint today. All three
+    // equalities are enforced fail-closed inside build() itself (in-process,
+    // no live database) -- this re-asserts them from outside, same as the
+    // module's own contract test.
+    assert.equal(
+      buildPostgresSignalTargetQualificationApplyManifest().actionSpendApplyManifestFingerprint,
+      evaluationRepositoryCompositionManifest.evaluationApplyCompositionManifest.actionSpendApplyManifest.fingerprint
+    );
+    assert.equal(
+      buildPostgresSignalAttributionReceiptApplyManifest().attributionPolicyApplyManifestFingerprint,
+      buildPostgresSignalAttributionPolicyApplyManifest().fingerprint
+    );
+    assert.equal(
+      buildPostgresSignalJobLifecycleApplyManifest().attributionPolicyApplyManifestFingerprint,
+      buildPostgresSignalAttributionPolicyApplyManifest().fingerprint
+    );
+    assert.equal(evaluationRepositoryCompositionManifest.writerTrackConvergenceVerified, true);
+
+    // Family coverage: five own families + rung-1's ten delegated families
+    // = fifteen total, nothing unmapped either direction.
+    assert.equal(
+      POSTGRES_SIGNAL_EVALUATION_REPOSITORY_OWN_FAMILIES.length,
+      POSTGRES_SIGNAL_EVALUATION_REPOSITORY_OWN_FAMILY_COUNT
+    );
+    assert.equal(POSTGRES_SIGNAL_EVALUATION_REPOSITORY_OWN_FAMILIES.length, 5);
+    assert.equal(evaluationRepositoryCompositionManifest.ownFamilyCount, 5);
+    assert.equal(evaluationRepositoryCompositionManifest.delegatedFamilyCount, 10);
+    assert.equal(evaluationRepositoryCompositionManifest.totalFamilyCount, 15);
+    assert.equal(evaluationRepositoryCompositionManifest.unmappedOwnFamilyCount, 0);
+    assert.equal(evaluationRepositoryCompositionManifest.unmappedChainBoundaryCount, 0);
+    assert.deepEqual(
+      [...POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_DELEGATED_BOUNDARIES],
+      ["evaluationApplyComposition"]
+    );
+    const evaluationRepositoryCompositionCoveredBoundaries = new Set([
+      ...evaluationRepositoryCompositionManifest.ownFamilies.map((entry) => entry.boundary),
+      ...evaluationRepositoryCompositionManifest.delegatedBoundaries
+    ]);
+    assert.deepEqual(
+      [...evaluationRepositoryCompositionCoveredBoundaries].sort(),
+      [...POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CHAIN_ORDER].sort()
+    );
+    assert.equal(
+      evaluationRepositoryCompositionManifest.ownFamilies.filter((entry) => entry.kind === "plan").length,
+      1
+    );
+    assert.equal(
+      evaluationRepositoryCompositionManifest.ownFamilies.filter((entry) => entry.kind === "mutation").length,
+      4
+    );
+    assert.ok(evaluationRepositoryCompositionManifest.knownOutOfScopeWrites.length >= 3);
+    assert.ok(
+      POSTGRES_SIGNAL_EVALUATION_REPOSITORY_KNOWN_OUT_OF_SCOPE_WRITES.some((entry) => entry.includes("inbox_messages"))
+    );
+
+    // Projection flags: the newly-closed flag is true; the still-open
+    // ingress/handler flags stay false; runtime authority stays false.
+    assert.equal(evaluationRepositoryCompositionManifest.noNewRoleCreated, true);
+    assert.equal(evaluationRepositoryCompositionManifest.noNewFunctionCreated, true);
+    assert.equal(evaluationRepositoryCompositionManifest.noNewMutationPath, true);
+    assert.equal(evaluationRepositoryCompositionManifest.signalEvaluationApplyRepositoryParity, true);
+    assert.equal(evaluationRepositoryCompositionManifest.signalEvaluationRepositoryParity, true);
+    assert.equal(evaluationRepositoryCompositionManifest.signalIngressRepositoryParity, false);
+    assert.equal(evaluationRepositoryCompositionManifest.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(evaluationRepositoryCompositionManifest.allHandlerRepositoryParity, false);
+    assert.equal(evaluationRepositoryCompositionManifest.mutationAuthority, true);
+    assert.equal(evaluationRepositoryCompositionManifest.activePrincipalCount, 0);
+    assert.equal(evaluationRepositoryCompositionManifest.runtimeAuthority, false);
+
+    const evaluationRepositoryCompositionCapability = postgresSignalEvaluationRepositoryCompositionCapabilityProjection();
+    assert.deepEqual(
+      postgresSignalEvaluationRepositoryCompositionCapabilityProjection(),
+      evaluationRepositoryCompositionCapability
+    );
+    assert.equal(
+      evaluationRepositoryCompositionCapability.contractVersion,
+      POSTGRES_SIGNAL_EVALUATION_REPOSITORY_COMPOSITION_CONTRACT_VERSION
+    );
+    assert.equal(evaluationRepositoryCompositionCapability.deterministicManifestImplemented, true);
+    assert.equal(evaluationRepositoryCompositionCapability.writerTrackConvergenceVerified, true);
+    assert.equal(evaluationRepositoryCompositionCapability.chainBoundaryCount, 5);
+    assert.equal(evaluationRepositoryCompositionCapability.ownFamilyCount, 5);
+    assert.equal(evaluationRepositoryCompositionCapability.delegatedFamilyCount, 10);
+    assert.equal(evaluationRepositoryCompositionCapability.totalFamilyCount, 15);
+    assert.equal(evaluationRepositoryCompositionCapability.unmappedOwnFamilyCount, 0);
+    assert.equal(evaluationRepositoryCompositionCapability.noNewRoleCreated, true);
+    assert.equal(evaluationRepositoryCompositionCapability.noNewFunctionCreated, true);
+    assert.equal(evaluationRepositoryCompositionCapability.noNewMutationPath, true);
+    assert.equal(evaluationRepositoryCompositionCapability.signalEvaluationApplyRepositoryParity, true);
+    assert.equal(evaluationRepositoryCompositionCapability.signalEvaluationRepositoryParity, true);
+    assert.equal(evaluationRepositoryCompositionCapability.signalIngressRepositoryParity, false);
+    assert.equal(evaluationRepositoryCompositionCapability.hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(evaluationRepositoryCompositionCapability.allHandlerRepositoryParity, false);
+    assert.equal(evaluationRepositoryCompositionCapability.activePrincipalCount, 0);
+    assert.equal(evaluationRepositoryCompositionCapability.activeRuntimeRoleApplied, false);
+    assert.equal(evaluationRepositoryCompositionCapability.mutationAuthority, true);
+    assert.equal(evaluationRepositoryCompositionCapability.runtimeAuthority, false);
+    assert.equal(evaluationRepositoryCompositionCapability.productionReady, false);
+    assert.match(evaluationRepositoryCompositionCapability.roleTemplateFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(
+      evaluationRepositoryCompositionCapability.roleTemplateFingerprint,
+      evaluationRepositoryCompositionManifest.fingerprint
+    );
+
+    // verifyPostgresSignalEvaluationRepositoryCompositionBoundary against
+    // the live, freshly-qualified default-namespace deployment must PASS:
+    // it re-derives the manifest (catching writer-track convergence or
+    // coverage-accounting drift) and then calls all FIVE members' own live
+    // verify functions in turn (module header section 6 -- a fan-in over a
+    // two-rooted DAG, not rung-1's single-tip linear cascade).
+    assert.deepEqual(
+      await verifyPostgresSignalEvaluationRepositoryCompositionBoundary(importer, evaluationRepositoryCompositionManifest),
+      evaluationRepositoryCompositionManifest
+    );
+
+    // Negative proof: tamper jobLifecycleApply's live SECURITY DEFINER
+    // function -- one of the two residual-writer leaves this composition
+    // fans into -- and confirm the composition verify fails closed,
+    // mirroring the ALTER FUNCTION ... STABLE / VOLATILE receipt-tamper
+    // precedent rung-1's own composition proof used immediately above. The
+    // failure surfaces from the cascaded
+    // verifyPostgresSignalJobLifecycleApplyBoundary call (itself cascading
+    // through verifyPostgresSignalAttributionPolicyApplyBoundary), not from
+    // this module's own (purely in-process) sequence-contract check.
+    await importer.query(
+      `ALTER FUNCTION "${evaluationRepositoryCompositionManifest.schemaName}"."${POSTGRES_SIGNAL_JOB_LIFECYCLE_APPLY_FUNCTION}"(
+         text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresSignalEvaluationRepositoryCompositionBoundary(importer, evaluationRepositoryCompositionManifest),
+      /qualified security-definer function is incomplete|drifted from its receipt/
+    );
+    await importer.query(
+      `ALTER FUNCTION "${evaluationRepositoryCompositionManifest.schemaName}"."${POSTGRES_SIGNAL_JOB_LIFECYCLE_APPLY_FUNCTION}"(
+         text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.deepEqual(
+      await verifyPostgresSignalEvaluationRepositoryCompositionBoundary(importer, evaluationRepositoryCompositionManifest),
+      evaluationRepositoryCompositionManifest
     );
     })();
     const qualifiedSignalTargetQualificationManifest =

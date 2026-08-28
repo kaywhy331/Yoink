@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.0.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.1.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,61 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.1.0 adds the verification-level complete signal-evaluation
+repository composition. It is not a twenty-fifth qualification boundary: it
+creates no new PostgreSQL role, function, or receipt table, and grants no new
+mutation authority. It fans in five already-qualified boundaries — the
+hosted-delivery lease/plan boundary, the eleven-boundary signal-evaluation
+apply composition (0.98.0), the reservation-lifecycle writer, the
+attribution-receipt writer (0.99.0), and the post-creation job-lifecycle
+writer (1.0.0) — into one deterministic manifest, keyed by SHA-256
+fingerprint, arranged as a fan-in DAG rather than rung-1's single linear
+chain.
+
+Two build-time fingerprint-convergence proofs establish that this is one
+connected graph, not two accidentally-unrelated qualification trees:
+`postgres-signal-target-qualification-apply.ts`'s own default predecessor —
+the root of the nine-boundary writer-track that also reaches the
+reservation-lifecycle, attribution-receipt, and job-lifecycle writers — is
+checked against rung-1's own chain-tip `actionSpendApply` fingerprint, and
+the attribution-receipt and job-lifecycle writers' own declared predecessor
+fingerprint is checked against `postgres-signal-attribution-policy-apply.ts`'s
+independently rebuilt fingerprint. Either mismatch fails closed. Together
+with `hostedDeliveryLeaseRecovery`'s own independent witness-refresh lineage
+— the DAG's second root — the five members' fifteen total mutation/plan
+families (five owned directly by this composition, plus rung-1's own ten,
+cited by import rather than re-listed) are completely covered, with zero
+unmapped families and zero unmapped chain boundaries.
+
+This closes `signalEvaluationRepositoryParity`.
+`signalIngressRepositoryParity`, `hostedDeliveryHandlerRepositoryParity`, and
+`allHandlerRepositoryParity` all remain false. Three write families stay
+concretely out of scope, recorded in the module's own
+`POSTGRES_SIGNAL_EVALUATION_REPOSITORY_KNOWN_OUT_OF_SCOPE_WRITES` constant:
+`NotificationRepository.ensureForJob` (a handler/task-kind dispatch concern,
+carried forward from 0.98.0 unchanged), `CatalogRepository.upsertListing`'s
+manual "add to library" reference inserts (a request-repository concern,
+also carried forward unchanged), and — newly named here —
+`DurableSignalIngressService`'s own enqueue path: the
+`HostedDeliveryRepository.acceptInbox` `INSERT INTO inbox_messages` write and
+`BackgroundTaskRepository`'s create/dedupe writes for a newly inbound signal.
+`hostedDeliveryLeaseRecovery`'s own native function only leases, completes,
+or fails an already-enqueued inbox row — no boundary qualified anywhere in
+this repository yet reproduces the initial enqueue itself, which is exactly
+what `signalIngressRepositoryParity` (still false) names.
+
+SQLite remains authoritative; nothing is activated. `noNewRoleCreated`,
+`noNewFunctionCreated`, and `noNewMutationPath` all stay true — this
+composition proves closure, not a sixth qualified writer. Plan without a
+database connection using `npm run
+postgres:signal-evaluation-repository-composition -- plan`; verify against a
+live database with `YOINK_POSTGRES_URL=... npm run
+postgres:signal-evaluation-repository-composition -- verify` — there is no
+`apply` step and no acknowledgement environment variable, the same as
+0.98.0's own composition, because this module creates nothing new to apply
+— and the [PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md)
+runbook.
 
 Version 1.0.0 adds the twenty-fourth independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the bounded post-creation action-job

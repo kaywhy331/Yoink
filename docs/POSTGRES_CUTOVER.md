@@ -3299,6 +3299,97 @@ the operator dead-letter inbox-reset remain the two other write families
 outside this qualification's scope; every request-repository family and the
 SQLite authority switch remain closed.
 
+## Signal-evaluation repository composition qualification (1.1.0)
+
+Version 1.1 adds a second verification-level composition, not a
+twenty-fifth qualification boundary. It creates no PostgreSQL role,
+function, or receipt table, and grants no new mutation authority.
+`buildPostgresSignalEvaluationRepositoryCompositionManifest()` takes no
+arguments: it re-derives five already-qualified manifests — the
+hosted-delivery lease/plan boundary, the eleven-boundary signal-evaluation
+apply composition (0.98.0), the reservation-lifecycle writer (0.93.0), the
+attribution-receipt writer (0.99.0), and the post-creation job-lifecycle
+writer (1.0.0) — from their own build functions and folds them into one
+deterministic manifest keyed by SHA-256 fingerprint, in the fixed order
+`hostedDeliveryLeaseRecovery → evaluationApplyComposition →
+reservationLifecycleApply → attributionReceiptApply → jobLifecycleApply`.
+
+Unlike 0.98's strictly linear eleven-boundary chain, this composition is a
+fan-in over a DAG with two roots — rung-1's own chain (reached through the
+nine-boundary writer-track that also carries the reservation-lifecycle,
+attribution-receipt, and job-lifecycle writers) and
+`hostedDeliveryLeaseRecovery`'s independent witness-refresh lineage — and
+two sibling leaves, the attribution-receipt and job-lifecycle writers, both
+hanging off the attribution-policy boundary. The build function proves this
+is one connected graph rather than two accidentally-unrelated qualification
+trees with two in-process, build-time fingerprint-convergence checks, no
+live database required: `postgres-signal-target-qualification-apply.ts`'s
+own default predecessor fingerprint must equal rung-1's own chain-tip
+`actionSpendApply` fingerprint, and the attribution-receipt and
+job-lifecycle writers' own declared predecessor fingerprint must each equal
+`postgres-signal-attribution-policy-apply.ts`'s independently rebuilt
+fingerprint. Either mismatch throws
+`PostgresSignalEvaluationRepositoryCompositionError`.
+
+The build function separately enforces exactly-once chain completeness
+(five entries, five distinct boundary keys, five distinct fingerprints, in
+the declared structural order) and coverage accounting: five families owned
+directly by this composition's own members (the resolution-plan compute,
+the inbox-lifecycle transition, the spend commit/release settlement, the
+attribution-receipt record, and the post-creation job-lifecycle transition)
+plus rung-1's own ten delegated families — cited by import, never
+re-listed, to avoid a second, driftable copy of a table rung-1's own
+build() already fails closed on — cover the complete fifteen-family
+evaluation-repository surface, with zero unmapped families and zero
+unmapped chain boundaries. The resolution-plan family is the one `kind:
+"plan"` entry: every table reference in
+`yoink_plan_trackalacker_signal_resolution` is a `FROM`/`JOIN`, never an
+`INSERT`/`UPDATE`, so it names zero mutation tables by construction, not
+because it is unresearched.
+
+Three write families are recorded explicitly in
+`POSTGRES_SIGNAL_EVALUATION_REPOSITORY_KNOWN_OUT_OF_SCOPE_WRITES`.
+`NotificationRepository.ensureForJob` and `CatalogRepository.upsertListing`'s
+manual "add to library" reference inserts carry forward unchanged from
+0.98.0. The third is newly named here: `DurableSignalIngressService`'s own
+enqueue path — `HostedDeliveryRepository.acceptInbox`'s `INSERT INTO
+inbox_messages` write and `BackgroundTaskRepository`'s create/dedupe writes
+for a newly inbound signal. `hostedDeliveryLeaseRecovery`'s own
+`yoink_transition_trackalacker_signal_inbox` function only leases,
+completes, or fails an already-enqueued `inbox_messages` row; it never
+inserts the row in the first place, and no boundary qualified anywhere in
+this repository yet reproduces that initial enqueue.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-evaluation-repository-composition -- plan
+```
+
+Then independently verify the writer-track convergence proof, the
+residual-writer predecessor check, the coverage accounting, and — by
+calling all five members' own verify functions, deliberately accepting the
+redundant (idempotent, read-only) re-verification of their shared ancestry
+rather than pruning it — every composed boundary's live Postgres role,
+function, and RLS state:
+
+```bash
+YOINK_POSTGRES_URL=... npm run postgres:signal-evaluation-repository-composition -- verify
+```
+
+There is no `apply` command and no acknowledgement environment variable, the
+same as 0.98's own composition: this module creates no role, function, or
+receipt table, so there is nothing here for an acknowledgement to gate. The
+manifest records `signalEvaluationRepositoryParity: true`, closing that gap,
+while `signalIngressRepositoryParity`, `hostedDeliveryHandlerRepositoryParity`,
+and `allHandlerRepositoryParity` all remain explicit `false`.
+`noNewRoleCreated`, `noNewFunctionCreated`, and `noNewMutationPath` all stay
+`true` — this composition proves closure, not a sixth qualified writer.
+`mutationAuthority: true` reflects the union of the mutation-capable
+composed boundaries' own already-granted authority; `runtimeAuthority:
+false` and `activePrincipalCount: 0` confirm none of it is wired to a live
+principal. SQLite remains authoritative.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.
