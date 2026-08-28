@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 0.94.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 0.95.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,54 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 0.95.0 adds the twenty-first independently receipted piece of the
+inactive PostgreSQL hosted-signal plane: the bounded source-connection
+provisioning writer. Its separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role
+owns no application object, inherits no role, has zero direct/effective
+table or column grants, and may call one strict security-definer function.
+The boundary protects three forced-RLS tenant tables — `audit_events`,
+`outbox_events`, and `source_connections` — and all three are in its
+mutation set.
+
+PostgreSQL binds `session_user` to one exact tenant/user, consumes only the
+shared source lock (`10000`), and accepts one explicit
+`provision_source_connections` operation under
+`SOURCE_CONNECTION_PROVISIONING_V1`. Every request ID is derived from the
+authenticated principal plus the fixed defaults version and confirmation.
+The function provisions exactly the three default connections SQLite's
+`PrincipalRepository` bootstrap creates — TrackaLacker and Browser
+observations at `trusted_exact` with auto-create-missions enabled, and
+Discord at `informational` without it — using the same content-derived
+`ownedIdForUser` identity scheme SQLite uses, so the PostgreSQL and SQLite
+connection IDs match bit-for-bit for the same principal.
+
+Because the shared writer-lock protocol's source scope revalidates
+ownership of a connection that must already exist, the function first
+inserts a deterministic, conflict-safe TrackaLacker anchor row (`ON
+CONFLICT DO NOTHING`) before taking the shared lock against it; PostgreSQL's
+own unique-index semantics serialize concurrent first calls on that anchor,
+and every other mutation happens strictly after the lock succeeds. Each
+connection, whether freshly inserted or already present, is then
+revalidated against its exact expected identity, and a conflicting existing
+row fails closed rather than silently adopting a different one. A call that
+finds all three connections already correctly provisioned is a true
+zero-write `unchanged` result.
+
+Only a call that actually creates at least one connection appends one
+deterministic audit and outbox record; PostgreSQL owns every timestamp, and
+immutable replay of an already-receipted request returns the original
+result unchanged. Native PostgreSQL 16 proves wrong, same-tenant-peer, and
+unmapped principal denial, zero direct and cross-boundary SQL, deterministic
+SQLite-identical connection identity, anchor-then-lock source-scope
+contention, existing-identity conflict rejection, true zero-write unchanged
+behavior, and immutable audit/outbox replay. This closes
+`connectionProvisioningWriterParity` and, with every source-domain writer
+now qualified, aggregate `sourceWriterParity`. `writerLockProtocolParity`
+remains false — eight signal boundaries still sit outside the shared
+protocol — SQLite remains authoritative; use
+`npm run postgres:signal-source-provisioning-apply -- plan ...` and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 0.94.0 adds the twentieth independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the bounded TrackaLacker

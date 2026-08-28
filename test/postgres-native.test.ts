@@ -233,6 +233,19 @@ import {
   verifyPostgresSignalCatalogImportApplyBoundary,
   type PostgresSignalCatalogImportPayload
 } from "../packages/database/src/postgres-signal-catalog-import-apply.js";
+import {
+  NodePostgresSignalSourceProvisioningApplyDatabase,
+  POSTGRES_SIGNAL_SOURCE_PROVISIONING_APPLY_CONFIRMATION,
+  POSTGRES_SIGNAL_SOURCE_PROVISIONING_APPLY_FUNCTION,
+  POSTGRES_SIGNAL_SOURCE_PROVISIONING_DEFAULTS_VERSION,
+  POSTGRES_SIGNAL_SOURCE_PROVISIONING_DEFAULT_SOURCES,
+  applyPostgresSignalSourceProvisioningApplyBoundary,
+  buildPostgresSignalSourceProvisioningApplyManifest,
+  buildPostgresSignalSourceProvisioningRequestId,
+  expectedDefaultSourceConnectionId,
+  verifyPostgresSignalSourceProvisioningApplyBoundary,
+  type PostgresSignalSourceProvisioningPayload
+} from "../packages/database/src/postgres-signal-source-provisioning-apply.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -322,6 +335,8 @@ const NATIVE_SOURCE_SYNC_APPLY_ROLE_NAMESPACE = "yoink_native_source_sync";
 const NATIVE_RESERVATION_LIFECYCLE_APPLY_ROLE_NAMESPACE =
   "yoink_native_reservation";
 const NATIVE_CATALOG_IMPORT_APPLY_ROLE_NAMESPACE = "yoink_native_catalog_import";
+const NATIVE_SOURCE_PROVISIONING_APPLY_ROLE_NAMESPACE =
+  "yoink_native_source_provisioning";
 const NATIVE_PRINCIPAL_A = "yoink_native_principal_a";
 const NATIVE_PRINCIPAL_B = "yoink_native_principal_b";
 const NATIVE_PRINCIPAL_C = "yoink_native_principal_c";
@@ -1157,7 +1172,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, and bounded TrackaLacker catalog import", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent action/spend, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, and source-connection provisioning", {
   timeout: 1_200_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -1352,6 +1367,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     NodePostgresSignalCatalogImportApplyDatabase | null = null;
   let signalCatalogImportDirectClient: Client | null = null;
   let signalCatalogImportLockClient: Client | null = null;
+  let signalSourceProvisioningA:
+    NodePostgresSignalSourceProvisioningApplyDatabase | null = null;
+  let signalSourceProvisioningASecond:
+    NodePostgresSignalSourceProvisioningApplyDatabase | null = null;
+  let signalSourceProvisioningB:
+    NodePostgresSignalSourceProvisioningApplyDatabase | null = null;
+  let signalSourceProvisioningC:
+    NodePostgresSignalSourceProvisioningApplyDatabase | null = null;
+  let signalSourceProvisioningCSecond:
+    NodePostgresSignalSourceProvisioningApplyDatabase | null = null;
+  let signalSourceProvisioningUnmapped:
+    NodePostgresSignalSourceProvisioningApplyDatabase | null = null;
+  let signalSourceProvisioningDirectClient: Client | null = null;
   try {
     await postgres.initialise();
     await postgres.start();
@@ -3053,6 +3081,98 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       signalCatalogImportBoundary
     );
+    const qualifiedSignalSourceProvisioningManifest =
+      buildPostgresSignalSourceProvisioningApplyManifest(
+        qualifiedSignalCatalogImportManifest,
+        NATIVE_SOURCE_PROVISIONING_APPLY_ROLE_NAMESPACE
+      );
+    const signalSourceProvisioningBoundary =
+      await applyPostgresSignalSourceProvisioningApplyBoundary(
+        importer,
+        qualifiedSignalSourceProvisioningManifest,
+        new Date("2026-08-25T16:59:00.000Z").getTime()
+      );
+    assert.equal(signalSourceProvisioningBoundary.protectedTenantTableCount, 3);
+    assert.equal(signalSourceProvisioningBoundary.forcedRlsTableCount, 3);
+    assert.equal(signalSourceProvisioningBoundary.mutationTableCount, 3);
+    assert.equal(signalSourceProvisioningBoundary.directTableGrantCount, 0);
+    assert.equal(signalSourceProvisioningBoundary.functionGrantCount, 1);
+    assert.equal(signalSourceProvisioningBoundary.membershipCount, 0);
+    assert.equal(signalSourceProvisioningBoundary.activePrincipalCount, 0);
+    assert.equal(signalSourceProvisioningBoundary.metadata.operationCount, 1);
+    assert.equal(signalSourceProvisioningBoundary.metadata.defaultSourceConnectionCount, 3);
+    assert.equal(signalSourceProvisioningBoundary.metadata.trustedExactSourceCount, 2);
+    assert.equal(signalSourceProvisioningBoundary.metadata.informationalSourceCount, 1);
+    assert.deepEqual(
+      signalSourceProvisioningBoundary.metadata.defaultSourceConnections,
+      POSTGRES_SIGNAL_SOURCE_PROVISIONING_DEFAULT_SOURCES
+    );
+    assert.equal(
+      signalSourceProvisioningBoundary.metadata.sharedWriterLockProtocolImplemented,
+      true
+    );
+    assert.equal(signalSourceProvisioningBoundary.metadata.writerLockProtocolConsumed, true);
+    assert.equal(signalSourceProvisioningBoundary.metadata.sourceScopeConsumed, true);
+    assert.equal(
+      signalSourceProvisioningBoundary.metadata.deterministicRequestIdentity,
+      true
+    );
+    assert.equal(
+      signalSourceProvisioningBoundary.metadata.deterministicConnectionIdentity,
+      true
+    );
+    assert.equal(signalSourceProvisioningBoundary.metadata.sqliteOwnedIdParity, true);
+    assert.equal(signalSourceProvisioningBoundary.metadata.immutableAuditedReplay, true);
+    assert.equal(
+      signalSourceProvisioningBoundary.metadata.zeroWriteWhenAlreadyProvisioned,
+      true
+    );
+    assert.equal(
+      signalSourceProvisioningBoundary.metadata.existingIdentityConflictFailClosed,
+      true
+    );
+    assert.equal(
+      signalSourceProvisioningBoundary.metadata.atomicProvisioningAuditOutbox,
+      true
+    );
+    assert.equal(signalSourceProvisioningBoundary.metadata.databaseOwnedTimestamps, true);
+    assert.equal(signalSourceProvisioningBoundary.metadata.privateSourceOnly, true);
+    assert.equal(signalSourceProvisioningBoundary.metadata.disconnectedInitialStatus, true);
+    // The 21st writer: closes its own aggregate flag and, transitively, the
+    // "sourceWriterParity" aggregate now that all five source-domain writers
+    // (trust, status, sync, catalog-import, connection-provisioning) are true.
+    assert.equal(signalSourceProvisioningBoundary.metadata.sourceTrustWriterParity, true);
+    assert.equal(signalSourceProvisioningBoundary.metadata.sourceStatusWriterParity, true);
+    assert.equal(signalSourceProvisioningBoundary.metadata.sourceSyncWriterParity, true);
+    assert.equal(signalSourceProvisioningBoundary.metadata.catalogImportWriterParity, true);
+    assert.equal(
+      signalSourceProvisioningBoundary.metadata.connectionProvisioningWriterParity,
+      true
+    );
+    assert.equal(signalSourceProvisioningBoundary.metadata.sourceWriterParity, true);
+    assert.equal(
+      signalSourceProvisioningBoundary.metadata.retailerQualificationWriterParity,
+      true
+    );
+    assert.equal(signalSourceProvisioningBoundary.metadata.missionPolicyWriterParity, true);
+    assert.equal(signalSourceProvisioningBoundary.metadata.settingsWriterParity, false);
+    assert.equal(signalSourceProvisioningBoundary.metadata.configurationWriterParity, false);
+    assert.equal(signalSourceProvisioningBoundary.metadata.reservationWriterParity, true);
+    // The shared five-domain lock protocol still has non-consuming writer
+    // families, so the protocol-wide aggregate cannot close from this
+    // boundary alone.
+    assert.equal(signalSourceProvisioningBoundary.metadata.writerLockProtocolParity, false);
+    assert.equal(signalSourceProvisioningBoundary.metadata.sharedCatalogMutationAuthority, false);
+    assert.equal(signalSourceProvisioningBoundary.metadata.actionAuthority, false);
+    assert.equal(signalSourceProvisioningBoundary.metadata.runtimeAuthority, false);
+    assert.match(signalSourceProvisioningBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      await verifyPostgresSignalSourceProvisioningApplyBoundary(
+        importer,
+        qualifiedSignalSourceProvisioningManifest
+      ),
+      signalSourceProvisioningBoundary
+    );
     })();
     const observerWitnessRootKeyId = "1".repeat(64);
     const observerWitnessManifestHash = "2".repeat(64);
@@ -3416,6 +3536,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         signalReservationLifecycleManifest,
         NATIVE_CATALOG_IMPORT_APPLY_ROLE_NAMESPACE
       );
+    const signalSourceProvisioningManifest =
+      buildPostgresSignalSourceProvisioningApplyManifest(
+        signalCatalogImportManifest,
+        NATIVE_SOURCE_PROVISIONING_APPLY_ROLE_NAMESPACE
+      );
     for (const principalRole of [
       NATIVE_PRINCIPAL_A,
       NATIVE_PRINCIPAL_B,
@@ -3526,6 +3651,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       );
       await first.query(
         `GRANT "${signalCatalogImportManifest.catalogImportRole.name}"
+         TO "${principalRole}"`
+      );
+      await first.query(
+        `GRANT "${signalSourceProvisioningManifest.sourceProvisioningRole.name}"
          TO "${principalRole}"`
       );
     }
@@ -14269,6 +14398,510 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     })();
 
     await (async () => {
+    const sourceProvisioningDatabase = (
+      principalRole: string,
+      maxConnections: 1 | 2 = 1
+    ) => new NodePostgresSignalSourceProvisioningApplyDatabase({
+      connectionString: principalConnection(principalRole),
+      tlsMode: "local-insecure",
+      certificateAuthorityPem: ""
+    }, signalSourceProvisioningManifest, { maxConnections });
+    signalSourceProvisioningA = sourceProvisioningDatabase(NATIVE_PRINCIPAL_A, 2);
+    signalSourceProvisioningASecond = sourceProvisioningDatabase(NATIVE_PRINCIPAL_A);
+    signalSourceProvisioningB = sourceProvisioningDatabase(NATIVE_PRINCIPAL_B);
+    signalSourceProvisioningC = sourceProvisioningDatabase(NATIVE_PRINCIPAL_C);
+    signalSourceProvisioningCSecond = sourceProvisioningDatabase(NATIVE_PRINCIPAL_C);
+    signalSourceProvisioningUnmapped = sourceProvisioningDatabase(NATIVE_PRINCIPAL_UNMAPPED);
+
+    const provisioningPrincipalA = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+    const provisioningPrincipalB = { tenantId: "tenant_local", userId: "user_local" };
+    const provisioningPayload: PostgresSignalSourceProvisioningPayload = {
+      defaultsVersion: POSTGRES_SIGNAL_SOURCE_PROVISIONING_DEFAULTS_VERSION,
+      confirmation: POSTGRES_SIGNAL_SOURCE_PROVISIONING_APPLY_CONFIRMATION
+    };
+    const applyProvisioning = (
+      database: NodePostgresSignalSourceProvisioningApplyDatabase,
+      principalValue: typeof provisioningPrincipalA
+    ) => database.provisionSourceConnections(
+      principalValue,
+      "provision_source_connections",
+      buildPostgresSignalSourceProvisioningRequestId(principalValue, provisioningPayload),
+      provisioningPayload
+    );
+
+    const expectedSourceIds = (userId: string) => ({
+      trackalacker: expectedDefaultSourceConnectionId(userId, "trackalacker"),
+      browser: expectedDefaultSourceConnectionId(userId, "browser"),
+      discord: expectedDefaultSourceConnectionId(userId, "discord")
+    });
+    const provisioningSnapshot = async (userId: string) => {
+      const ids = expectedSourceIds(userId);
+      const row = (await first!.query<{
+        connections: string | number | bigint;
+        audits: string | number | bigint;
+        outboxes: string | number | bigint;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."source_connections"
+            WHERE id IN ($1, $2, $3)) AS connections,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."audit_events"
+            WHERE correlation_id = $4
+              AND event_type = 'source_connections_provisioned') AS audits,
+           (SELECT COUNT(*) FROM "${NATIVE_SCHEMA}"."outbox_events"
+            WHERE event_type = 'source_connections_provisioned'
+              AND payload_json::jsonb->>'correlationId' = $4) AS outboxes`,
+        [ids.trackalacker, ids.browser, ids.discord, userId]
+      )).rows[0]!;
+      return {
+        connections: Number(row.connections),
+        audits: Number(row.audits),
+        outboxes: Number(row.outboxes)
+      };
+    };
+    const provisionedRows = async (userId: string) => {
+      const ids = expectedSourceIds(userId);
+      const result = await first!.query<{
+        id: string;
+        source: string;
+        name: string;
+        status: string;
+        trustLevel: string;
+        autoCreateMissions: number;
+        isPrivate: number;
+        lastEventAt: string;
+      }>(
+        `SELECT id, source, name, status, trust_level AS "trustLevel",
+                (auto_create_missions)::int AS "autoCreateMissions", (is_private)::int AS "isPrivate",
+                last_event_at AS "lastEventAt"
+         FROM "${NATIVE_SCHEMA}"."source_connections"
+         WHERE id IN ($1, $2, $3)
+         ORDER BY source`,
+        [ids.trackalacker, ids.browser, ids.discord]
+      );
+      return result.rows;
+    };
+    const totalConnectionsForUser = async (
+      tenantId: string,
+      userId: string
+    ): Promise<number> => {
+      const row = (await first!.query<{ count: string | number | bigint }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."source_connections"
+         WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId]
+      )).rows[0]!;
+      return Number(row.count);
+    };
+
+    const provisioningBeforeA = await provisioningSnapshot(provisioningPrincipalA.userId);
+    assert.equal(provisioningBeforeA.connections, 0);
+    assert.equal(provisioningBeforeA.audits, 0);
+    assert.equal(provisioningBeforeA.outboxes, 0);
+
+    // Denial matrix: wrong principal.
+    await assert.rejects(
+      applyProvisioning(signalSourceProvisioningB, provisioningPrincipalA),
+      /does not match the expected authenticated principal/
+    );
+    // Denial matrix: same-tenant peer.
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER,
+        new Date(Date.now() - 5_000).toISOString()]
+    );
+    try {
+      await assert.rejects(
+        applyProvisioning(signalSourceProvisioningC, provisioningPrincipalA),
+        /does not match the expected authenticated principal/
+      );
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+    // Denial matrix: unmapped principal.
+    await assert.rejects(
+      applyProvisioning(signalSourceProvisioningUnmapped, provisioningPrincipalA),
+      /tenant session principal is not active/
+    );
+    // Malformed request id: caught client-side before any round trip.
+    await assert.rejects(
+      signalSourceProvisioningA.provisionSourceConnections(
+        provisioningPrincipalA,
+        "provision_source_connections",
+        `source_provisioning_${"f".repeat(32)}`,
+        provisioningPayload
+      ),
+      /apply request is invalid/
+    );
+
+    // Zero direct table SQL for the role, and cross-boundary denial in both
+    // directions.
+    signalSourceProvisioningDirectClient = new Client({
+      connectionString: principalConnection(NATIVE_PRINCIPAL_A)
+    });
+    signalSourceProvisioningDirectClient.on("error", () => undefined);
+    await signalSourceProvisioningDirectClient.connect();
+    await signalSourceProvisioningDirectClient.query(
+      `SET ROLE "${signalSourceProvisioningManifest.sourceProvisioningRole.name}"`
+    );
+    await assert.rejects(
+      signalSourceProvisioningDirectClient.query(
+        `SELECT id FROM "${NATIVE_SCHEMA}"."source_connections" LIMIT 1`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceProvisioningDirectClient.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."audit_events"(id)
+         VALUES ('forbidden_source_provisioning_audit')`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceProvisioningDirectClient.query(
+        `UPDATE "${NATIVE_SCHEMA}"."outbox_events" SET delivered_at = ''`
+      ),
+      /permission denied/
+    );
+    await assert.rejects(
+      signalSourceProvisioningDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_CATALOG_IMPORT_APPLY_FUNCTION}"(
+           $1, $2, 'import_trackalacker_catalog_item', 'forbidden_cross_boundary', '{}'
+         )`,
+        [provisioningPrincipalA.tenantId, provisioningPrincipalA.userId]
+      ),
+      /permission denied/
+    );
+    // A sibling role (catalog-import's) cannot call this boundary's function.
+    await signalSourceProvisioningDirectClient.query(
+      `SET ROLE "${signalCatalogImportManifest.catalogImportRole.name}"`
+    );
+    await assert.rejects(
+      signalSourceProvisioningDirectClient.query(
+        `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_SOURCE_PROVISIONING_APPLY_FUNCTION}"(
+           $1, $2, 'provision_source_connections', 'forbidden_cross_boundary_reverse', '{}'
+         )`,
+        [provisioningPrincipalA.tenantId, provisioningPrincipalA.userId]
+      ),
+      /permission denied/
+    );
+    await signalSourceProvisioningDirectClient.query(
+      `SET ROLE "${signalSourceProvisioningManifest.sourceProvisioningRole.name}"`
+    );
+
+    // Atomicity: a forced outbox failure must leave zero partial writes,
+    // including rolling back the TrackaLacker anchor row that is inserted
+    // before the shared writer-lock protocol is consumed.
+    await first.query(
+      `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_source_provisioning_outbox"()
+       RETURNS trigger LANGUAGE plpgsql AS $failure$
+       BEGIN
+         IF NEW.aggregate_type = 'source_connection_provisioning' THEN
+           RAISE EXCEPTION 'native forced source-provisioning outbox failure';
+         END IF;
+         RETURN NEW;
+       END
+       $failure$;
+       CREATE TRIGGER "yoink_native_reject_source_provisioning_outbox"
+       BEFORE INSERT ON "${NATIVE_SCHEMA}"."outbox_events"
+       FOR EACH ROW EXECUTE FUNCTION
+         "${NATIVE_SCHEMA}"."yoink_native_reject_source_provisioning_outbox"()`
+    );
+    try {
+      await assert.rejects(
+        applyProvisioning(signalSourceProvisioningA, provisioningPrincipalA),
+        /native forced source-provisioning outbox failure/
+      );
+      assert.deepEqual(
+        await provisioningSnapshot(provisioningPrincipalA.userId),
+        provisioningBeforeA
+      );
+    } finally {
+      await first.query(
+        `DROP TRIGGER IF EXISTS "yoink_native_reject_source_provisioning_outbox"
+           ON "${NATIVE_SCHEMA}"."outbox_events";
+         DROP FUNCTION IF EXISTS
+           "${NATIVE_SCHEMA}"."yoink_native_reject_source_provisioning_outbox"()`
+      );
+    }
+
+    // First call for a fresh principal.
+    const expectedIdsA = expectedSourceIds(provisioningPrincipalA.userId);
+    const firstResult = await applyProvisioning(
+      signalSourceProvisioningA,
+      provisioningPrincipalA
+    );
+    assert.equal(firstResult.contractVersion, 1);
+    assert.equal(firstResult.operation, "provision_source_connections");
+    assert.equal(firstResult.outcome, "applied");
+    assert.equal(firstResult.mutationApplied, true);
+    assert.equal(firstResult.idempotentReplay, false);
+    assert.equal(firstResult.mutationStatementCount, 5);
+    assert.equal(firstResult.mutationRowCount, 5);
+    assert.equal(firstResult.connectionsCreated, 3);
+    assert.deepEqual(
+      [...firstResult.createdSources].sort(),
+      ["browser", "discord", "trackalacker"]
+    );
+    assert.equal(firstResult.trackalackerConnectionId, expectedIdsA.trackalacker);
+    assert.equal(firstResult.browserConnectionId, expectedIdsA.browser);
+    assert.equal(firstResult.discordConnectionId, expectedIdsA.discord);
+    assert.equal(firstResult.trackalackerCreated, true);
+    assert.equal(firstResult.browserCreated, true);
+    assert.equal(firstResult.discordCreated, true);
+    assert.equal(firstResult.auditMutated, true);
+    assert.equal(firstResult.outboxMutated, true);
+    assert.equal(firstResult.sourceWriterParity, true);
+    assert.equal(firstResult.connectionProvisioningWriterParity, true);
+    assert.equal(firstResult.mutationAuthority, true);
+    assert.equal(firstResult.sharedCatalogMutationAuthority, false);
+    assert.equal(firstResult.actionAuthority, false);
+    assert.equal(firstResult.runtimeAuthority, false);
+
+    const provisioningAfterFirst = await provisioningSnapshot(provisioningPrincipalA.userId);
+    assert.equal(provisioningAfterFirst.connections, 3);
+    assert.equal(provisioningAfterFirst.audits, 1);
+    assert.equal(provisioningAfterFirst.outboxes, 1);
+
+    const rowsAfterFirst = await provisionedRows(provisioningPrincipalA.userId);
+    assert.equal(rowsAfterFirst.length, 3);
+    const [browserRowA, discordRowA, trackalackerRowA] = rowsAfterFirst;
+    assert.equal(browserRowA!.id, expectedIdsA.browser);
+    assert.equal(browserRowA!.name, "Browser observations");
+    assert.equal(browserRowA!.status, "disconnected");
+    assert.equal(browserRowA!.trustLevel, "trusted_exact");
+    assert.equal(browserRowA!.autoCreateMissions, 1);
+    assert.equal(browserRowA!.isPrivate, 1);
+    assert.equal(browserRowA!.lastEventAt, "");
+    assert.equal(discordRowA!.id, expectedIdsA.discord);
+    assert.equal(discordRowA!.name, "Discord");
+    assert.equal(discordRowA!.status, "disconnected");
+    assert.equal(discordRowA!.trustLevel, "informational");
+    assert.equal(discordRowA!.autoCreateMissions, 0);
+    assert.equal(discordRowA!.isPrivate, 1);
+    assert.equal(trackalackerRowA!.id, expectedIdsA.trackalacker);
+    assert.equal(trackalackerRowA!.name, "TrackaLacker");
+    assert.equal(trackalackerRowA!.status, "disconnected");
+    assert.equal(trackalackerRowA!.trustLevel, "trusted_exact");
+    assert.equal(trackalackerRowA!.autoCreateMissions, 1);
+    assert.equal(trackalackerRowA!.isPrivate, 1);
+
+    const provisioningAudit = (await first.query<{
+      reasonCode: string;
+      message: string;
+      data: Record<string, unknown>;
+      outboxData: Record<string, unknown>;
+    }>(
+      `SELECT audit.reason_code AS "reasonCode", audit.message,
+              audit.data_json::jsonb AS data,
+              outbox.payload_json::jsonb->'data' AS "outboxData"
+       FROM "${NATIVE_SCHEMA}"."audit_events" audit
+       JOIN "${NATIVE_SCHEMA}"."outbox_events" outbox
+         ON outbox.payload_json::jsonb->>'auditId' = audit.id
+       WHERE audit.correlation_id = $1
+         AND audit.event_type = 'source_connections_provisioned'`,
+      [provisioningPrincipalA.userId]
+    )).rows[0]!;
+    assert.equal(provisioningAudit.reasonCode, "source_connections_provisioned");
+    assert.equal(provisioningAudit.message, "Default source connections were provisioned.");
+    assert.equal(provisioningAudit.data.operation, "provision_source_connections");
+    const provisioningAuditResult = provisioningAudit.data.result as Record<string, unknown>;
+    assert.equal(provisioningAuditResult.outcome, "applied");
+    assert.equal(provisioningAuditResult.connectionsCreated, 3);
+    assert.deepEqual(provisioningAudit.outboxData, provisioningAudit.data);
+
+    // Second identical call: zero-write, no-audit-flood.
+    const secondResult = await applyProvisioning(
+      signalSourceProvisioningASecond,
+      provisioningPrincipalA
+    );
+    assert.equal(secondResult.outcome, "already_applied");
+    assert.equal(secondResult.mutationApplied, false);
+    assert.equal(secondResult.idempotentReplay, true);
+    assert.equal(secondResult.mutationStatementCount, 0);
+    assert.equal(secondResult.mutationRowCount, 0);
+    assert.equal(secondResult.connectionsCreated, 0);
+    assert.deepEqual(secondResult.createdSources, []);
+    assert.equal(secondResult.trackalackerCreated, false);
+    assert.equal(secondResult.browserCreated, false);
+    assert.equal(secondResult.discordCreated, false);
+    assert.equal(secondResult.auditMutated, false);
+    assert.equal(secondResult.outboxMutated, false);
+    assert.equal(secondResult.requestFingerprint, firstResult.requestFingerprint);
+    assert.equal(secondResult.trackalackerConnectionId, firstResult.trackalackerConnectionId);
+    assert.equal(secondResult.browserConnectionId, firstResult.browserConnectionId);
+    assert.equal(secondResult.discordConnectionId, firstResult.discordConnectionId);
+    assert.deepEqual(
+      await provisioningSnapshot(provisioningPrincipalA.userId),
+      provisioningAfterFirst
+    );
+
+    // Legacy SQLite parity: the imported archive's local user already owns
+    // the exact three default connections under the deterministic local ids
+    // (source_trackalacker_local, source_browser_local, source_discord_local),
+    // so provisioning is a true zero-write unchanged success against them.
+    const legacyBeforeTotal = await totalConnectionsForUser(
+      provisioningPrincipalB.tenantId,
+      provisioningPrincipalB.userId
+    );
+    assert.ok(legacyBeforeTotal >= 3, "the imported local user carries its three default connections");
+    const legacyResult = await applyProvisioning(
+      signalSourceProvisioningB,
+      provisioningPrincipalB
+    );
+    assert.equal(legacyResult.outcome, "unchanged");
+    assert.equal(legacyResult.mutationApplied, false);
+    assert.equal(legacyResult.connectionsCreated, 0);
+    assert.equal(legacyResult.auditMutated, false);
+    assert.equal(legacyResult.outboxMutated, false);
+    assert.equal(legacyResult.trackalackerConnectionId, "source_trackalacker_local");
+    assert.equal(legacyResult.browserConnectionId, "source_browser_local");
+    assert.equal(legacyResult.discordConnectionId, "source_discord_local");
+    assert.equal(
+      await totalConnectionsForUser(
+        provisioningPrincipalB.tenantId,
+        provisioningPrincipalB.userId
+      ),
+      legacyBeforeTotal
+    );
+
+    // Concurrency race: two distinct backend sessions calling provision for
+    // the SAME fresh principal near-simultaneously. PostgreSQL's own
+    // insert-conflict serialization on the TrackaLacker anchor row (rather
+    // than a fixed sleep) is the deterministic synchronization: whichever
+    // session's anchor insert loses the race blocks until the winner
+    // commits, then observes the winner's audit row and replays.
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"(
+         principal_role, tenant_id, user_id, active, provisioned_at
+       ) VALUES ($1, $2, $3, TRUE, $4)`,
+      [NATIVE_PRINCIPAL_C, NATIVE_TENANT, NATIVE_SAME_TENANT_USER,
+        new Date(Date.now() - 5_000).toISOString()]
+    );
+    try {
+      const racePrincipal = { tenantId: NATIVE_TENANT, userId: NATIVE_SAME_TENANT_USER };
+
+      // Identity conflict fail-closed: a pre-existing browser connection under
+      // a NON-deterministic id already occupies the (user_id, source, name)
+      // identity the deterministic default would claim, so the whole
+      // provisioning transaction fails on the unique identity index with zero
+      // partial writes.
+      const conflictSeedBeforeTotal = await totalConnectionsForUser(
+        racePrincipal.tenantId,
+        racePrincipal.userId
+      );
+      const conflictCreatedAt = new Date(Date.now() - 30_000).toISOString();
+      await first.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."source_connections"(
+           id, tenant_id, user_id, source, name, status, trust_level,
+           auto_create_missions, is_private, last_event_at, created_at, updated_at
+         ) VALUES (
+           'native_source_provisioning_legacy_browser', $1, $2, 'browser',
+           'Browser observations', 'disconnected', 'trusted_exact', 1, 1, '', $3, $3
+         )`,
+        [racePrincipal.tenantId, racePrincipal.userId, conflictCreatedAt]
+      );
+      const conflictBeforeSnapshot = await provisioningSnapshot(racePrincipal.userId);
+      const conflictBeforeTotal = await totalConnectionsForUser(
+        racePrincipal.tenantId,
+        racePrincipal.userId
+      );
+      assert.equal(conflictBeforeSnapshot.connections, 0);
+      assert.equal(conflictBeforeTotal, conflictSeedBeforeTotal + 1);
+      await assert.rejects(
+        applyProvisioning(signalSourceProvisioningC, racePrincipal),
+        /duplicate key value violates unique constraint/
+      );
+      assert.deepEqual(
+        await provisioningSnapshot(racePrincipal.userId),
+        conflictBeforeSnapshot
+      );
+      assert.equal(
+        await totalConnectionsForUser(racePrincipal.tenantId, racePrincipal.userId),
+        conflictBeforeTotal
+      );
+      const conflictRows = await provisionedRows(racePrincipal.userId);
+      assert.equal(conflictRows.length, 0);
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."source_connections"
+         WHERE id = 'native_source_provisioning_legacy_browser'`
+      );
+
+      const raceBefore = await provisioningSnapshot(racePrincipal.userId);
+      assert.equal(raceBefore.connections, 0);
+      const [raceResultOne, raceResultTwo] = await Promise.all([
+        applyProvisioning(signalSourceProvisioningC, racePrincipal),
+        applyProvisioning(signalSourceProvisioningCSecond, racePrincipal)
+      ]);
+      const raceApplied = raceResultOne.outcome === "applied" ? raceResultOne : raceResultTwo;
+      const raceOther = raceResultOne.outcome === "applied" ? raceResultTwo : raceResultOne;
+      assert.equal(raceApplied.mutationApplied, true);
+      assert.equal(raceApplied.connectionsCreated, 3);
+      assert.deepEqual(
+        [...raceApplied.createdSources].sort(),
+        ["browser", "discord", "trackalacker"]
+      );
+      assert.equal(raceOther.mutationApplied, false);
+      assert.equal(raceOther.connectionsCreated, 0);
+      assert.ok(raceOther.outcome === "already_applied" || raceOther.outcome === "unchanged");
+      assert.equal(raceApplied.trackalackerConnectionId, raceOther.trackalackerConnectionId);
+      const raceAfter = await provisioningSnapshot(racePrincipal.userId);
+      assert.equal(raceAfter.connections, 3);
+      assert.equal(raceAfter.audits, 1);
+      assert.equal(raceAfter.outboxes, 1);
+      const raceRows = await provisionedRows(racePrincipal.userId);
+      assert.equal(raceRows.length, 3);
+    } finally {
+      await first.query(
+        `DELETE FROM "${NATIVE_SCHEMA}"."${POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE}"
+         WHERE principal_role = $1`,
+        [NATIVE_PRINCIPAL_C]
+      );
+    }
+
+    // Immutable replay: the same request id, called again after unrelated
+    // principals mutated their own state, returns the original result
+    // unchanged and writes nothing further.
+    const thirdResult = await applyProvisioning(
+      signalSourceProvisioningA,
+      provisioningPrincipalA
+    );
+    assert.equal(thirdResult.outcome, "already_applied");
+    assert.equal(thirdResult.mutationApplied, false);
+    assert.equal(thirdResult.idempotentReplay, true);
+    assert.equal(thirdResult.requestId, firstResult.requestId);
+    assert.equal(thirdResult.requestFingerprint, firstResult.requestFingerprint);
+    assert.equal(thirdResult.trackalackerConnectionId, firstResult.trackalackerConnectionId);
+    assert.equal(thirdResult.browserConnectionId, firstResult.browserConnectionId);
+    assert.equal(thirdResult.discordConnectionId, firstResult.discordConnectionId);
+    assert.deepEqual(
+      await provisioningSnapshot(provisioningPrincipalA.userId),
+      provisioningAfterFirst
+    );
+
+    await signalSourceProvisioningDirectClient.end();
+    signalSourceProvisioningDirectClient = null;
+    await Promise.all([
+      signalSourceProvisioningA.close(),
+      signalSourceProvisioningASecond.close(),
+      signalSourceProvisioningB.close(),
+      signalSourceProvisioningC.close(),
+      signalSourceProvisioningCSecond.close(),
+      signalSourceProvisioningUnmapped.close()
+    ]);
+    signalSourceProvisioningA = null;
+    signalSourceProvisioningASecond = null;
+    signalSourceProvisioningB = null;
+    signalSourceProvisioningC = null;
+    signalSourceProvisioningCSecond = null;
+    signalSourceProvisioningUnmapped = null;
+    })();
+
+    await (async () => {
     const reservationLifecycleDatabase = (
       principalRole: string,
       maxConnections: 1 | 2 = 1
@@ -18977,6 +19610,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NodePostgresSignalCatalogImportApplyDatabase | null)?.close(),
       (signalCatalogImportDirectClient as Client | null)?.end(),
       (signalCatalogImportLockClient as Client | null)?.end(),
+      (signalSourceProvisioningA as
+        NodePostgresSignalSourceProvisioningApplyDatabase | null)?.close(),
+      (signalSourceProvisioningASecond as
+        NodePostgresSignalSourceProvisioningApplyDatabase | null)?.close(),
+      (signalSourceProvisioningB as
+        NodePostgresSignalSourceProvisioningApplyDatabase | null)?.close(),
+      (signalSourceProvisioningC as
+        NodePostgresSignalSourceProvisioningApplyDatabase | null)?.close(),
+      (signalSourceProvisioningCSecond as
+        NodePostgresSignalSourceProvisioningApplyDatabase | null)?.close(),
+      (signalSourceProvisioningUnmapped as
+        NodePostgresSignalSourceProvisioningApplyDatabase | null)?.close(),
+      (signalSourceProvisioningDirectClient as Client | null)?.end(),
       (signalReservationLifecycleA as
         NodePostgresSignalReservationLifecycleApplyDatabase | null)?.close(),
       (signalReservationLifecycleASecond as

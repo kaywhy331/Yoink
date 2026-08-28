@@ -2678,6 +2678,118 @@ device/source/run ownership revalidation, forced late-failure rollback,
 source-lock contention, immutable audit/outbox replay, and zero
 connection-provisioning or reservation mutation.
 
+## Source-connection provisioning qualification (0.95.0)
+
+Version 0.95 adds a twenty-first independent, inactive hosted-signal
+boundary for `provision_source_connections`. It succeeds the qualified
+catalog-import boundary and consumes only the shared source lock mask
+`10000`. The operation provisions exactly the three deterministic default
+source connections SQLite's `PrincipalRepository` bootstrap already creates
+for a new principal; it never reconfigures the trust, status, or sync state
+of an existing connection.
+
+The new `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS` role owns no application
+object, inherits no role, receives zero direct/effective table or column
+privileges, and can execute one strict security-definer function. Its
+immutable receipt seals three forced-RLS tenant tables — `audit_events`,
+`outbox_events`, and `source_connections` — and all three are in its
+mutation set.
+
+Every request carries only the fixed defaults version and
+`SOURCE_CONNECTION_PROVISIONING_V1` confirmation under one
+`provision_source_connections` operation. PostgreSQL resolves `session_user`
+to one active tenant/user and derives each connection's deterministic ID
+with the same content-hashed `ownedIdForUser` scheme SQLite uses, so
+PostgreSQL and SQLite assign byte-identical IDs for the same principal.
+
+Because the shared source lock revalidates ownership of a connection that
+must already exist, the function first inserts a deterministic,
+conflict-safe TrackaLacker anchor row (`ON CONFLICT DO NOTHING`) before
+acquiring the lock against it; PostgreSQL's own unique-index semantics
+serialize concurrent first calls on that anchor, and every other mutation
+happens strictly after the lock succeeds. Each of the three connections —
+TrackaLacker and Browser observations at `trusted_exact` with
+auto-create-missions enabled, and Discord at `informational` without it —
+is then revalidated against its exact expected identity whether newly
+inserted or already present; a conflicting existing row fails closed.
+
+A call that finds all three connections already correctly provisioned is a
+true zero-write `unchanged` result, and only a call that creates at least
+one connection appends one deterministic audit and outbox record in the
+same transaction. Immutable replay of an already-receipted request returns
+the original result unchanged; partial or conflicting receipt graphs abort.
+The role cannot reconfigure an existing connection's trust, status, or sync
+state, execute a browser action, or mutate the shared catalog.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-source-provisioning-apply -- plan \
+  yoink_cutover_qualification_095 yoink_q_095 yoink_session_q_095 \
+  yoink_queue_q_095 yoink_control_q_095 yoink_notify_q_095 \
+  yoink_execute_q_095 yoink_retain_q_095 yoink_candidate_q_095 \
+  yoink_dispatch_q_095 yoink_reconcile_q_095 yoink_witness_q_095 \
+  yoink_delivery_q_095 yoink_catalog_q_095 yoink_resolution_q_095 \
+  yoink_reference_q_095 yoink_terminal_q_095 yoink_offer_q_095 \
+  yoink_post_q_095 yoink_mission_q_095 yoink_strategy_q_095 \
+  yoink_writer_lock_q_095 yoink_constraint_config_q_095 \
+  yoink_action_spend_q_095 yoink_target_qual_q_095 \
+  yoink_source_trust_q_095 yoink_retailer_qual_q_095 \
+  yoink_mission_policy_q_095 yoink_source_status_q_095 \
+  yoink_source_sync_q_095 yoink_reservation_q_095 yoink_catalog_import_q_095 \
+  yoink_provisioning_q_095
+```
+
+After every predecessor through catalog import is verified, apply once
+with the qualification connection and explicit acknowledgement:
+
+```bash
+YOINK_POSTGRES_SIGNAL_SOURCE_PROVISIONING_APPLY_QUALIFICATION_ACK=bounded-signal-source-provisioning-apply-qualification \
+  npm run postgres:signal-source-provisioning-apply -- apply \
+  yoink_cutover_qualification_095 yoink_q_095 yoink_session_q_095 \
+  yoink_queue_q_095 yoink_control_q_095 yoink_notify_q_095 \
+  yoink_execute_q_095 yoink_retain_q_095 yoink_candidate_q_095 \
+  yoink_dispatch_q_095 yoink_reconcile_q_095 yoink_witness_q_095 \
+  yoink_delivery_q_095 yoink_catalog_q_095 yoink_resolution_q_095 \
+  yoink_reference_q_095 yoink_terminal_q_095 yoink_offer_q_095 \
+  yoink_post_q_095 yoink_mission_q_095 yoink_strategy_q_095 \
+  yoink_writer_lock_q_095 yoink_constraint_config_q_095 \
+  yoink_action_spend_q_095 yoink_target_qual_q_095 \
+  yoink_source_trust_q_095 yoink_retailer_qual_q_095 \
+  yoink_mission_policy_q_095 yoink_source_status_q_095 \
+  yoink_source_sync_q_095 yoink_reservation_q_095 yoink_catalog_import_q_095 \
+  yoink_provisioning_q_095
+```
+
+Then independently verify the function, role, protected/mutation table
+sets, exact grants, immutable receipt, and complete predecessor chain:
+
+```bash
+npm run postgres:signal-source-provisioning-apply -- verify \
+  yoink_cutover_qualification_095 yoink_q_095 yoink_session_q_095 \
+  yoink_queue_q_095 yoink_control_q_095 yoink_notify_q_095 \
+  yoink_execute_q_095 yoink_retain_q_095 yoink_candidate_q_095 \
+  yoink_dispatch_q_095 yoink_reconcile_q_095 yoink_witness_q_095 \
+  yoink_delivery_q_095 yoink_catalog_q_095 yoink_resolution_q_095 \
+  yoink_reference_q_095 yoink_terminal_q_095 yoink_offer_q_095 \
+  yoink_post_q_095 yoink_mission_q_095 yoink_strategy_q_095 \
+  yoink_writer_lock_q_095 yoink_constraint_config_q_095 \
+  yoink_action_spend_q_095 yoink_target_qual_q_095 \
+  yoink_source_trust_q_095 yoink_retailer_qual_q_095 \
+  yoink_mission_policy_q_095 yoink_source_status_q_095 \
+  yoink_source_sync_q_095 yoink_reservation_q_095 yoink_catalog_import_q_095 \
+  yoink_provisioning_q_095
+```
+
+The receipt records `connectionProvisioningWriterParity: true` and, with
+every source-domain writer now qualified, aggregate
+`sourceWriterParity: true`, while `writerLockProtocolParity: false` and
+`runtimeAuthority: false` remain explicit. Native PostgreSQL 16 proves
+principal isolation, direct and cross-boundary denial, deterministic
+SQLite-identical connection identity, anchor-then-lock source-scope
+contention, existing-identity conflict rejection, true zero-write unchanged
+behavior, and immutable audit/outbox replay.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.

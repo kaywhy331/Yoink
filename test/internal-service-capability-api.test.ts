@@ -43,6 +43,7 @@ import { postgresSignalSourceStatusCapabilityProjection } from "../packages/data
 import { postgresSignalSourceSyncCapabilityProjection } from "../packages/database/src/postgres-signal-source-sync-apply.js";
 import { postgresSignalReservationLifecycleCapabilityProjection } from "../packages/database/src/postgres-signal-reservation-lifecycle-apply.js";
 import { postgresSignalCatalogImportCapabilityProjection } from "../packages/database/src/postgres-signal-catalog-import-apply.js";
+import { postgresSignalSourceProvisioningCapabilityProjection } from "../packages/database/src/postgres-signal-source-provisioning-apply.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -154,6 +155,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalSourceSyncApply: ReturnType<typeof postgresSignalSourceSyncCapabilityProjection>;
         postgresSignalReservationLifecycleApply: ReturnType<typeof postgresSignalReservationLifecycleCapabilityProjection>;
         postgresSignalCatalogImportApply: ReturnType<typeof postgresSignalCatalogImportCapabilityProjection>;
+        postgresSignalSourceProvisioningApply: ReturnType<typeof postgresSignalSourceProvisioningCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -280,6 +282,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalCatalogImportApply,
       postgresSignalCatalogImportCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalSourceProvisioningApply,
+      postgresSignalSourceProvisioningCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -366,6 +372,8 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /nineteenth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /Server-bound TrackaLacker catalog import/);
     assert.match(cutoverText, /twentieth independently inactive NOLOGIN boundary/);
+    assert.match(cutoverText, /Server-bound source-connection provisioning/);
+    assert.match(cutoverText, /twenty-first independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /latest-state semantics for unaudited progress\/item refreshes/);
     assert.match(cutoverText, /global action pause\/resume, guardrail settings, and periodic spend caps/);
     assert.match(cutoverText, /Server-bound reviewed purchase-intent action and spend/);
