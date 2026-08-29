@@ -516,13 +516,25 @@ test("quick add creates one defaulted plan through server preflight without open
     configurable: true,
     value: async (path: string, options: { method?: string; body?: string } = {}) => {
       if (path === "/api/v1/user/purchase-intents/preflight" && options.method === "POST") {
-        const draft = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
-        preflights.push(draft);
-        const itemSubtotalCapCents = Number(draft.targetQuantity) * Number(draft.maxUnitPriceCents);
+        const requested = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
+        preflights.push(requested);
+        const itemSubtotalCapCents = Number(requested.targetQuantity) * Number(requested.maxUnitPriceCents);
         return { ok: true, status: 200, json: async () => ({ preflight: {
           contractVersion: 1,
           noPurchasePlanSaved: true,
-          cost: { currency: "USD", itemSubtotalCapCents, minimumAllInCents: itemSubtotalCapCents, headroomCents: 0 },
+          draft: {
+            listingId: requested.listingId,
+            targetQuantity: requested.targetQuantity,
+            maxUnitPriceCents: requested.maxUnitPriceCents,
+            maxAllInCents: itemSubtotalCapCents,
+            actionCeiling: requested.actionCeiling,
+            sellerPolicy: requested.sellerPolicy,
+            fulfillment: requested.fulfillment,
+            substitutionPolicy: requested.substitutionPolicy,
+            expiresAt: requested.expiresAt ?? "",
+            cooldownSeconds: requested.cooldownSeconds
+          },
+          cost: { currency: "USD", itemSubtotalCapCents, minimumAllInCents: itemSubtotalCapCents, reviewedAllInCents: itemSubtotalCapCents, headroomCents: 0, autoRaised: false },
           preflightFingerprint: "b".repeat(64),
           preflightedAt: "2026-08-25T18:00:00.000Z",
           validUntil: "2026-08-25T18:05:00.000Z",

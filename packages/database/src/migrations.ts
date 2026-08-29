@@ -3439,5 +3439,12 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
 
       ALTER TABLE app_settings ADD COLUMN purchase_profiles_json TEXT NOT NULL DEFAULT '[]';
     `
+  },
+  {
+    version: 50,
+    name: "profile_linkage",
+    sql: `
+      ALTER TABLE missions ADD COLUMN quick_add_profile_id TEXT NOT NULL DEFAULT '';
+    `
   }
 ]);

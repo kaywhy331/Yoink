@@ -52,6 +52,7 @@ import {
   type SupportedRetailerId,
   type TrackalackerCatalogItemInput,
   type TrackalackerPushStatusInput,
+  type TrackalackerRawFieldSample,
   type TargetAddActivationInput,
   type TargetAddRehearsalInput,
   type TargetShadowObservationInput,
@@ -1288,12 +1289,28 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/catalog") {
           const body = await readJson(request);
+          const syncId = typeof body.syncId === "string" ? body.syncId : "";
+          if (body.rawSample && typeof body.rawSample === "object" && !Array.isArray(body.rawSample)) {
+            audit.record({
+              correlationId: syncId || device.id,
+              aggregateType: "trackalacker_sync",
+              eventType: "trackalacker_sync_sample",
+              reasonCode: "raw_field_sample_captured",
+              message: "Captured a sanitized sample of TrackaLacker's raw followed-product field structure, to diagnose image/MSRP extraction.",
+              data: body.rawSample as TrackalackerRawFieldSample
+            });
+          }
+          const hasItemPayload = Boolean(body.item) || typeof body.sourceProductId === "string";
+          if (!hasItemPayload) {
+            json(response, 202, { item: null, syncReceipt: null });
+            return;
+          }
           const wrappedItem = body.item && typeof body.item === "object" && !Array.isArray(body.item)
             ? body.item as TrackalackerCatalogItemInput
             : body as unknown as TrackalackerCatalogItemInput;
           const item = catalog.upsertTrackalackerItem(wrappedItem);
-          const syncReceipt = typeof body.syncId === "string"
-            ? sourceRuntime.recordSyncItem(device.id, body.syncId, wrappedItem.sourceProductId, item)
+          const syncReceipt = syncId
+            ? sourceRuntime.recordSyncItem(device.id, syncId, wrappedItem.sourceProductId, item)
             : null;
           json(response, 202, {
             item,
@@ -2553,7 +2570,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/purchase-profiles") {
         const body = await readJson(request);
-        json(response, 200, { items: control.savePurchaseProfile(body as unknown as PurchaseProfileInput) });
+        const saved = control.savePurchaseProfile(body as unknown as PurchaseProfileInput);
+        json(response, 200, { items: saved.profiles, propagation: saved.propagation });
         return;
       }
       const purchaseProfileMatch = /^\/api\/v1\/purchase-profiles\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);

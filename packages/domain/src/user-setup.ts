@@ -131,12 +131,12 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
       );
 
   const signalStep = connectedSignals.length
-    ? step("signal", "Connect a product signal", "complete", `${connectedSignals.length} signal source${connectedSignals.length === 1 ? " is" : "s are"} connected.`)
+    ? step("signal", "Connect your product tracking", "complete", `${connectedSignals.length} tracking connection${connectedSignals.length === 1 ? " is" : "s are"} active.`)
     : step(
       "signal",
-      "Connect a product signal",
+      "Connect your product tracking",
       currentDevices.length ? "current" : "waiting",
-      "Sign in to TrackaLacker from the Chrome companion or use supported browser observations. Signals can discover offers but cannot raise your limits.",
+      "Open the Chrome companion and choose Connect to start tracking your followed products. Tracking can discover offers but cannot raise your limits.",
       "connect_signal",
       "Show connection help"
     );
@@ -213,8 +213,8 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
     summary = "This keeps store-page observation and every qualified click inside your own browser.";
   } else if (!connectedSignals.length) {
     level = "needs_signal";
-    headline = "Connect a product signal";
-    summary = "Yoink needs one connected source to learn when an exact product offer changes.";
+    headline = "Connect your product tracking";
+    summary = "Yoink needs one tracking connection to learn when an exact product offer changes.";
   } else if (!productCount) {
     level = pendingCount ? "product_in_review" : "needs_product";
     headline = pendingCount ? "Your product link is in review" : "Add the exact product you want";

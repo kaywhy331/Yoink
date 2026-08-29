@@ -1,6 +1,9 @@
 const FOLLOWED_URL = "https://www.trackalacker.com/products/followed";
 const MAX_DECLARED_PAGES = 100_000;
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_ENRICHMENT_FETCHES = 25;
+const ENRICHMENT_DELAY_MS = 200;
+const SAMPLE_MAX_BYTES = 4_096;
 
 interface FollowedProduct {
   sourceProductId: string;
@@ -9,6 +12,15 @@ interface FollowedProduct {
   title: string;
   imageUrl: string;
   msrpCents: number | null;
+}
+
+// Captured once per sync run, from the first followed product only. TrackaLacker's real
+// field names for image/MSRP are unconfirmed from the repo alone (the extraction below is
+// best-effort guessing); this sink lets the run report back exactly what it saw so a real
+// payload can be inspected via the audit log without ever touching the database schema.
+interface RawFieldSampleSink {
+  listItem: Record<string, unknown> | null;
+  productDetail: Record<string, unknown> | null;
 }
 
 interface CatalogListing {
@@ -52,6 +64,38 @@ function moneyCents(value: unknown): number | null {
   return Number.isFinite(amount) && amount > 0 && amount <= 1_000_000 ? Math.round(amount * 100) : null;
 }
 
+// MSRP candidate fields may hold either whole dollars ("69.99", "69") or cents
+// ("6999"), and we cannot know which without seeing TrackaLacker's real payload
+// (see the sample capture below). Heuristic: a value with a decimal point is always
+// dollars (nobody writes cents with a decimal point), and a value under 10,000 is
+// almost certainly dollars too — a *_cents field for anything over $100 reads >=
+// 10,000 with no decimal, while a plain-dollar MSRP under $10,000 (the overwhelming
+// majority of consumer retail goods) does not. Anything else is assumed to already
+// be expressed in cents.
+function normalizeMoneyToCents(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const text = String(value).replaceAll(",", "").replace("$", "").trim();
+  if (!/^\d+(\.\d+)?$/.test(text)) return null;
+  const amount = Number(text);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const treatAsDollars = text.includes(".") || amount < 10_000;
+  const cents = Math.round(treatAsDollars ? amount * 100 : amount);
+  return cents > 0 && cents <= 100_000_000 ? cents : null;
+}
+
+const MSRP_FIELDS = ["default_price", "msrp", "msrp_cents", "msrpCents", "list_price", "original_price", "retail_price"];
+
+function productMsrpCents(...sources: Array<Record<string, unknown> | undefined>): number | null {
+  for (const record of sources) {
+    if (!record) continue;
+    for (const field of MSRP_FIELDS) {
+      const cents = normalizeMoneyToCents(record[field]);
+      if (cents !== null) return cents;
+    }
+  }
+  return null;
+}
+
 function trackalackerUrl(value: unknown, base = FOLLOWED_URL): string {
   try {
     const url = new URL(String(value ?? ""), base);
@@ -69,25 +113,53 @@ function productSlug(value: unknown): string {
   return /^[a-z0-9](?:[a-z0-9-]{0,198}[a-z0-9])?$/.test(text) ? text : "";
 }
 
+function sanitizeImageCandidate(value: string): string {
+  try {
+    const url = new URL(cleanText(value, 2_048));
+    if (url.protocol !== "https:" || url.username || url.password) return "";
+    url.hash = "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function firstSrcsetUrl(value: string): string {
+  return value.split(",")[0]?.trim().split(/\s+/)[0] ?? "";
+}
+
+// Unwraps a candidate field's value down to a single image URL string, recursing
+// into arrays (first element only — e.g. an `images` gallery array) and objects
+// that carry the URL under a nested key (`{ url }`, `{ src }`, or `{ srcset }`).
+function extractImageValue(candidate: unknown): string {
+  if (typeof candidate === "string") return candidate;
+  if (Array.isArray(candidate)) return extractImageValue(candidate[0]);
+  if (candidate && typeof candidate === "object") {
+    const record = candidate as Record<string, unknown>;
+    if (typeof record.srcset === "string" && record.srcset) return firstSrcsetUrl(record.srcset);
+    if (typeof record.url === "string") return record.url;
+    if (typeof record.src === "string") return record.src;
+  }
+  return "";
+}
+
+const IMAGE_FIELDS = [
+  "image_url", "imageUrl", "image", "photo_url", "primary_image_url", "thumbnail_url", "thumb_url",
+  "img", "picture", "media", "images"
+];
+
 function productImageUrl(...sources: Array<Record<string, unknown> | undefined>): string {
   for (const record of sources) {
     if (!record) continue;
-    for (const field of ["image_url", "imageUrl", "image", "photo_url", "primary_image_url", "thumbnail_url", "thumb_url"]) {
-      const candidate = record[field];
-      const value = typeof candidate === "string"
-        ? candidate
-        : candidate && typeof candidate === "object" && !Array.isArray(candidate)
-          ? String((candidate as Record<string, unknown>).url ?? "")
-          : "";
+    for (const field of IMAGE_FIELDS) {
+      const value = extractImageValue(record[field]);
       if (!value) continue;
-      try {
-        const url = new URL(cleanText(value, 2_048));
-        if (url.protocol !== "https:" || url.username || url.password) continue;
-        url.hash = "";
-        return url.href;
-      } catch {
-        continue;
-      }
+      const safe = sanitizeImageCandidate(value);
+      if (safe) return safe;
+    }
+    if (typeof record.srcset === "string" && record.srcset) {
+      const safe = sanitizeImageCandidate(firstSrcsetUrl(record.srcset));
+      if (safe) return safe;
     }
   }
   return "";
@@ -115,10 +187,18 @@ function reactPropsFor(documentValue: Document, componentName: string): { found:
   }
 }
 
-function parseFollowedPage(documentValue: Document, pageUrl: string): { items: FollowedProduct[]; totalPages: number; signedOut: boolean; challenged: boolean } {
+function parseFollowedPage(
+  documentValue: Document,
+  pageUrl: string,
+  sampleSink?: RawFieldSampleSink
+): { items: FollowedProduct[]; totalPages: number; signedOut: boolean; challenged: boolean } {
   const hydration = reactPropsFor(documentValue, "products/YourProductsApp");
   const props = hydration.value?.searchResultsProps as Record<string, unknown> | undefined;
   const rawResults = Array.isArray(props?.results) ? props.results : [];
+  if (sampleSink && !sampleSink.listItem) {
+    const first = rawResults[0];
+    if (first && typeof first === "object" && !Array.isArray(first)) sampleSink.listItem = first as Record<string, unknown>;
+  }
   const items: FollowedProduct[] = [];
   const seen = new Set<string>();
   for (const raw of rawResults) {
@@ -136,7 +216,7 @@ function parseFollowedPage(documentValue: Document, pageUrl: string): { items: F
       sourceProductUrl,
       title,
       imageUrl: productImageUrl(item),
-      msrpCents: moneyCents(item.default_price)
+      msrpCents: productMsrpCents(item)
     });
   }
   const pagination = props?.pagination as Record<string, unknown> | undefined;
@@ -244,9 +324,16 @@ async function resolveListingIdentity(candidates: string[], expectedRetailer: st
   return { retailerId: expectedRetailer, retailerSku: "", canonicalUrl: "", outboundUrl: candidates[0] ?? "" };
 }
 
-async function parseProductPayload(data: Record<string, unknown>, summary: FollowedProduct): Promise<TrackalackerProductPayload> {
+async function parseProductPayload(
+  data: Record<string, unknown>,
+  summary: FollowedProduct,
+  sampleSink?: RawFieldSampleSink
+): Promise<TrackalackerProductPayload> {
   const product = data.product && typeof data.product === "object" && !Array.isArray(data.product)
     ? data.product as Record<string, unknown> : {};
+  if (sampleSink && !sampleSink.productDetail && Object.keys(product).length) {
+    sampleSink.productDetail = product;
+  }
   const rawListings = Array.isArray(product.listings) ? product.listings : [];
   const listings: CatalogListing[] = [];
   const seen = new Set<string>();
@@ -288,9 +375,111 @@ async function parseProductPayload(data: Record<string, unknown>, summary: Follo
     ...summary,
     title: cleanText(product.name, 300) || summary.title,
     imageUrl: productImageUrl(product) || summary.imageUrl,
+    msrpCents: productMsrpCents(product) ?? summary.msrpCents,
     observedAt: new Date().toISOString(),
     listings
   };
+}
+
+// --- Sanitized raw-sample capture (self-diagnosing extraction) ---------------------
+
+const SENSITIVE_SAMPLE_KEY = /(?:^|_)(?:token|secret|password|auth|cookie|session|csrf|credential|api_?key)(?:$|_)/i;
+
+function sampledPrimitive(value: string | number | boolean | null): string | number | boolean | null {
+  if (typeof value === "string") return value.length > 120 ? `${value.slice(0, 120)}…` : value;
+  return value;
+}
+
+function sanitizedFieldSample(record: Record<string, unknown> | null, depth = 0): Record<string, unknown> {
+  if (!record) return {};
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record).slice(0, 60)) {
+    const safeKey = cleanText(key, 100);
+    if (!safeKey) continue;
+    if (SENSITIVE_SAMPLE_KEY.test(safeKey)) {
+      output[safeKey] = "[stripped]";
+      continue;
+    }
+    if (Array.isArray(value)) {
+      output[safeKey] = `[array:${value.length}]`;
+      continue;
+    }
+    if (value && typeof value === "object") {
+      output[safeKey] = depth < 1 ? sanitizedFieldSample(value as Record<string, unknown>, depth + 1) : "[object]";
+      continue;
+    }
+    output[safeKey] = value === undefined
+      ? null
+      : sampledPrimitive(value as string | number | boolean | null);
+  }
+  return output;
+}
+
+function boundedSample(value: Record<string, unknown>): Record<string, unknown> {
+  const entries = Object.entries(value);
+  const originalCount = entries.length;
+  while (entries.length && JSON.stringify(Object.fromEntries(entries)).length > SAMPLE_MAX_BYTES) {
+    entries.pop();
+  }
+  const bounded = Object.fromEntries(entries);
+  return entries.length === originalCount ? bounded : { ...bounded, truncated: true };
+}
+
+async function sendRawFieldSample(syncId: string, sink: RawFieldSampleSink): Promise<void> {
+  if (!sink.listItem && !sink.productDetail) return;
+  const sample = boundedSample({
+    ...(sink.listItem ? { listItem: sanitizedFieldSample(sink.listItem) } : {}),
+    ...(sink.productDetail ? { productDetail: sanitizedFieldSample(sink.productDetail) } : {})
+  });
+  try {
+    await runtimeMessage({ type: "yoink:trackalacker-sync-sample", syncId, sample });
+  } catch {
+    // Best-effort diagnostics only; must never block or fail the sync.
+  }
+}
+
+// --- Fallback image enrichment (og:image from the product's own page) --------------
+
+function extractOgImage(html: string): string {
+  const metaTagPattern = /<meta\b[^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = metaTagPattern.exec(html))) {
+    const tag = match[0];
+    if (!/\bproperty\s*=\s*["']og:image["']/i.test(tag)) continue;
+    const content = /\bcontent\s*=\s*["']([^"']+)["']/i.exec(tag);
+    if (content?.[1]) return sanitizeImageCandidate(content[1]);
+  }
+  return "";
+}
+
+async function fetchOgImage(productUrl: string): Promise<string> {
+  try {
+    const fetched = await fetchText(productUrl);
+    return extractOgImage(fetched.text);
+  } catch {
+    return "";
+  }
+}
+
+async function enrichMissingImage(
+  product: TrackalackerProductPayload,
+  cache: Map<string, string>,
+  budget: { remaining: number }
+): Promise<string> {
+  if (product.imageUrl) return product.imageUrl;
+  const slug = product.sourceProductSlug;
+  if (slug && cache.has(slug)) return cache.get(slug) ?? "";
+  if (budget.remaining <= 0) return "";
+  budget.remaining -= 1;
+  let image = "";
+  try {
+    image = await fetchOgImage(product.sourceProductUrl);
+  } catch {
+    image = "";
+  }
+  if (slug) cache.set(slug, image);
+  await delay(ENRICHMENT_DELAY_MS);
+  return image;
 }
 
 async function progress(syncId: string, value: Record<string, unknown>): Promise<void> {
@@ -305,11 +494,14 @@ async function runTrackalackerSync(syncId: string): Promise<void> {
     await progress(syncId, { phase: "discovering", processed, imported, failed, message: "Reading followed products from your signed-in TrackaLacker session…" });
     const items: FollowedProduct[] = [];
     const seen = new Set<string>();
+    const sampleSink: RawFieldSampleSink = { listItem: null, productDetail: null };
+    const enrichmentCache = new Map<string, string>();
+    const enrichmentBudget = { remaining: MAX_ENRICHMENT_FETCHES };
     let totalPages = 1;
     for (let page = 1; page <= totalPages; page += 1) {
       const fetched = await fetchText(page === 1 ? FOLLOWED_URL : `${FOLLOWED_URL}?page=${page}`);
       const documentValue = new DOMParser().parseFromString(fetched.text, "text/html");
-      const parsed = parseFollowedPage(documentValue, fetched.url);
+      const parsed = parseFollowedPage(documentValue, fetched.url, sampleSink);
       if (parsed.challenged) throw new Error("Complete TrackaLacker's browser security verification, then retry.");
       if (parsed.signedOut) throw new Error("Sign in to TrackaLacker in this browser, then retry.");
       totalPages = Math.min(MAX_DECLARED_PAGES, Math.max(totalPages, parsed.totalPages));
@@ -331,7 +523,12 @@ async function runTrackalackerSync(syncId: string): Promise<void> {
       });
       await delay(125);
     }
-    if (!items.length) throw new Error("No followed products were found. Confirm your TrackaLacker followed page has products, then retry.");
+    if (!items.length) {
+      // Send whatever the discovery pass captured before failing — "everything got
+      // filtered out" is exactly the scenario the sample exists to diagnose.
+      await sendRawFieldSample(syncId, sampleSink);
+      throw new Error("No followed products were found. Confirm your TrackaLacker followed page has products, then retry.");
+    }
     for (const item of items) {
       await progress(syncId, {
         phase: "importing",
@@ -344,7 +541,14 @@ async function runTrackalackerSync(syncId: string): Promise<void> {
       });
       try {
         const detail = await fetchJson(`${item.sourceProductUrl.replace(/\/$/, "")}.json`);
-        const product = await parseProductPayload(detail.data, item);
+        const product = await parseProductPayload(detail.data, item, sampleSink);
+        if (!product.imageUrl) {
+          try {
+            product.imageUrl = await enrichMissingImage(product, enrichmentCache, enrichmentBudget);
+          } catch {
+            // Enrichment is best-effort only; the item still imports without an image.
+          }
+        }
         const result = await runtimeMessage({ type: "yoink:trackalacker-sync-item", syncId, item: product });
         if (!result.ok) throw new Error(result.message || "Yoink rejected one catalog product.");
         imported += 1;
@@ -354,6 +558,7 @@ async function runTrackalackerSync(syncId: string): Promise<void> {
       processed += 1;
       await delay(125);
     }
+    await sendRawFieldSample(syncId, sampleSink);
     await progress(syncId, {
       phase: "complete",
       discovered: items.length,
@@ -387,6 +592,18 @@ export function startTrackalackerSync(syncIdValue: string): { ok: boolean; syncI
 }
 
 Object.defineProperty(globalThis, "YoinkTrackalackerSync", {
-  value: Object.freeze({ startTrackalackerSync }),
+  value: Object.freeze({
+    startTrackalackerSync,
+    // Exposed for direct unit testing of the extraction/sanitization logic only;
+    // not part of the message-passing contract with the background service worker.
+    productImageUrl,
+    productMsrpCents,
+    normalizeMoneyToCents,
+    sanitizedFieldSample,
+    boundedSample,
+    extractOgImage,
+    enrichMissingImage,
+    parseFollowedPage
+  }),
   configurable: true
 });

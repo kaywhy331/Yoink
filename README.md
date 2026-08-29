@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.6.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.7.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,31 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.7.0 is a consumer-surface release driven by first-hand usage
+feedback. Quick add no longer fails when tax and store-fee reserves exceed the
+item price: the no-write preflight now returns the auto-raised reviewed total
+(item price plus reserves, flagged `autoRaised`) instead of rejecting, while
+the create step keeps strict enforcement of the fingerprint-bound reviewed
+value. Quick-add profiles gain MSRP and MSRP-offset-percent price modes
+(±90%, resolved per listing, falling back to guided setup when a listing has
+no recorded MSRP), a single default profile that the bare Quick-add button
+uses, and live propagation: migration 50 links each quick-added purchase plan
+to its profile, and saving a profile re-derives every linked plan's caps
+through the existing audited safety validation, reporting skipped plans. The
+user surface drops all operator vocabulary — the Signal connections card,
+signal/TrackaLacker copy in the hero, toasts, and the server-generated setup
+guide now speak in product-tracking terms — and purchase plans render as one
+dense summary row with full detail behind a native disclosure. Cart-action
+copy honestly reads "Add to cart" (quantity is a declared field). The
+TrackaLacker catalog sync becomes self-diagnosing for product media: each run
+captures one sanitized raw-field sample into the audit log, image and MSRP
+extraction cover the real hydration-payload candidates with a documented
+dollars-versus-cents heuristic, and products still missing an image get a
+bounded, cached og:image page-fallback fetch (25 per run). Sync remains a
+full pass, so one run backfills the existing catalog. Checkout automation
+remains deliberately unshipped: no execution lane above add-to-cart is
+qualified, so no checkout control is offered.
 
 Version 1.6.0 adds the fourth verification-level composition — and the final
 rung of the hosted-signal plane's qualification ladder: the signal-handler

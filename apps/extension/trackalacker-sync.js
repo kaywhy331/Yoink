@@ -26,6 +26,9 @@ var YoinkTrackalackerSyncModule = (() => {
   var FOLLOWED_URL = "https://www.trackalacker.com/products/followed";
   var MAX_DECLARED_PAGES = 1e5;
   var FETCH_TIMEOUT_MS = 15e3;
+  var MAX_ENRICHMENT_FETCHES = 25;
+  var ENRICHMENT_DELAY_MS = 200;
+  var SAMPLE_MAX_BYTES = 4096;
   var runningSyncId = "";
   function cleanText(value, maximum = 300) {
     return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
@@ -38,6 +41,27 @@ var YoinkTrackalackerSyncModule = (() => {
     if (value === null || value === void 0 || value === "") return null;
     const amount = Number(String(value).replaceAll(",", "").replace("$", "").trim());
     return Number.isFinite(amount) && amount > 0 && amount <= 1e6 ? Math.round(amount * 100) : null;
+  }
+  function normalizeMoneyToCents(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const text = String(value).replaceAll(",", "").replace("$", "").trim();
+    if (!/^\d+(\.\d+)?$/.test(text)) return null;
+    const amount = Number(text);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+    const treatAsDollars = text.includes(".") || amount < 1e4;
+    const cents = Math.round(treatAsDollars ? amount * 100 : amount);
+    return cents > 0 && cents <= 1e8 ? cents : null;
+  }
+  var MSRP_FIELDS = ["default_price", "msrp", "msrp_cents", "msrpCents", "list_price", "original_price", "retail_price"];
+  function productMsrpCents(...sources) {
+    for (const record of sources) {
+      if (!record) continue;
+      for (const field of MSRP_FIELDS) {
+        const cents = normalizeMoneyToCents(record[field]);
+        if (cents !== null) return cents;
+      }
+    }
+    return null;
   }
   function trackalackerUrl(value, base = FOLLOWED_URL) {
     try {
@@ -54,21 +78,55 @@ var YoinkTrackalackerSyncModule = (() => {
     const text = cleanText(value, 240).toLowerCase();
     return /^[a-z0-9](?:[a-z0-9-]{0,198}[a-z0-9])?$/.test(text) ? text : "";
   }
+  function sanitizeImageCandidate(value) {
+    try {
+      const url = new URL(cleanText(value, 2048));
+      if (url.protocol !== "https:" || url.username || url.password) return "";
+      url.hash = "";
+      return url.href;
+    } catch {
+      return "";
+    }
+  }
+  function firstSrcsetUrl(value) {
+    return value.split(",")[0]?.trim().split(/\s+/)[0] ?? "";
+  }
+  function extractImageValue(candidate) {
+    if (typeof candidate === "string") return candidate;
+    if (Array.isArray(candidate)) return extractImageValue(candidate[0]);
+    if (candidate && typeof candidate === "object") {
+      const record = candidate;
+      if (typeof record.srcset === "string" && record.srcset) return firstSrcsetUrl(record.srcset);
+      if (typeof record.url === "string") return record.url;
+      if (typeof record.src === "string") return record.src;
+    }
+    return "";
+  }
+  var IMAGE_FIELDS = [
+    "image_url",
+    "imageUrl",
+    "image",
+    "photo_url",
+    "primary_image_url",
+    "thumbnail_url",
+    "thumb_url",
+    "img",
+    "picture",
+    "media",
+    "images"
+  ];
   function productImageUrl(...sources) {
     for (const record of sources) {
       if (!record) continue;
-      for (const field of ["image_url", "imageUrl", "image", "photo_url", "primary_image_url", "thumbnail_url", "thumb_url"]) {
-        const candidate = record[field];
-        const value = typeof candidate === "string" ? candidate : candidate && typeof candidate === "object" && !Array.isArray(candidate) ? String(candidate.url ?? "") : "";
+      for (const field of IMAGE_FIELDS) {
+        const value = extractImageValue(record[field]);
         if (!value) continue;
-        try {
-          const url = new URL(cleanText(value, 2048));
-          if (url.protocol !== "https:" || url.username || url.password) continue;
-          url.hash = "";
-          return url.href;
-        } catch {
-          continue;
-        }
+        const safe = sanitizeImageCandidate(value);
+        if (safe) return safe;
+      }
+      if (typeof record.srcset === "string" && record.srcset) {
+        const safe = sanitizeImageCandidate(firstSrcsetUrl(record.srcset));
+        if (safe) return safe;
       }
     }
     return "";
@@ -92,10 +150,14 @@ var YoinkTrackalackerSyncModule = (() => {
       return { found: true, value: null };
     }
   }
-  function parseFollowedPage(documentValue, pageUrl) {
+  function parseFollowedPage(documentValue, pageUrl, sampleSink) {
     const hydration = reactPropsFor(documentValue, "products/YourProductsApp");
     const props = hydration.value?.searchResultsProps;
     const rawResults = Array.isArray(props?.results) ? props.results : [];
+    if (sampleSink && !sampleSink.listItem) {
+      const first = rawResults[0];
+      if (first && typeof first === "object" && !Array.isArray(first)) sampleSink.listItem = first;
+    }
     const items = [];
     const seen = /* @__PURE__ */ new Set();
     for (const raw of rawResults) {
@@ -113,7 +175,7 @@ var YoinkTrackalackerSyncModule = (() => {
         sourceProductUrl,
         title,
         imageUrl: productImageUrl(item),
-        msrpCents: moneyCents(item.default_price)
+        msrpCents: productMsrpCents(item)
       });
     }
     const pagination = props?.pagination;
@@ -212,8 +274,11 @@ var YoinkTrackalackerSyncModule = (() => {
     }
     return { retailerId: expectedRetailer, retailerSku: "", canonicalUrl: "", outboundUrl: candidates[0] ?? "" };
   }
-  async function parseProductPayload(data, summary) {
+  async function parseProductPayload(data, summary, sampleSink) {
     const product = data.product && typeof data.product === "object" && !Array.isArray(data.product) ? data.product : {};
+    if (sampleSink && !sampleSink.productDetail && Object.keys(product).length) {
+      sampleSink.productDetail = product;
+    }
     const rawListings = Array.isArray(product.listings) ? product.listings : [];
     const listings = [];
     const seen = /* @__PURE__ */ new Set();
@@ -251,9 +316,92 @@ var YoinkTrackalackerSyncModule = (() => {
       ...summary,
       title: cleanText(product.name, 300) || summary.title,
       imageUrl: productImageUrl(product) || summary.imageUrl,
+      msrpCents: productMsrpCents(product) ?? summary.msrpCents,
       observedAt: (/* @__PURE__ */ new Date()).toISOString(),
       listings
     };
+  }
+  var SENSITIVE_SAMPLE_KEY = /(?:^|_)(?:token|secret|password|auth|cookie|session|csrf|credential|api_?key)(?:$|_)/i;
+  function sampledPrimitive(value) {
+    if (typeof value === "string") return value.length > 120 ? `${value.slice(0, 120)}\u2026` : value;
+    return value;
+  }
+  function sanitizedFieldSample(record, depth = 0) {
+    if (!record) return {};
+    const output = {};
+    for (const [key, value] of Object.entries(record).slice(0, 60)) {
+      const safeKey = cleanText(key, 100);
+      if (!safeKey) continue;
+      if (SENSITIVE_SAMPLE_KEY.test(safeKey)) {
+        output[safeKey] = "[stripped]";
+        continue;
+      }
+      if (Array.isArray(value)) {
+        output[safeKey] = `[array:${value.length}]`;
+        continue;
+      }
+      if (value && typeof value === "object") {
+        output[safeKey] = depth < 1 ? sanitizedFieldSample(value, depth + 1) : "[object]";
+        continue;
+      }
+      output[safeKey] = value === void 0 ? null : sampledPrimitive(value);
+    }
+    return output;
+  }
+  function boundedSample(value) {
+    const entries = Object.entries(value);
+    const originalCount = entries.length;
+    while (entries.length && JSON.stringify(Object.fromEntries(entries)).length > SAMPLE_MAX_BYTES) {
+      entries.pop();
+    }
+    const bounded = Object.fromEntries(entries);
+    return entries.length === originalCount ? bounded : { ...bounded, truncated: true };
+  }
+  async function sendRawFieldSample(syncId, sink) {
+    if (!sink.listItem && !sink.productDetail) return;
+    const sample = boundedSample({
+      ...sink.listItem ? { listItem: sanitizedFieldSample(sink.listItem) } : {},
+      ...sink.productDetail ? { productDetail: sanitizedFieldSample(sink.productDetail) } : {}
+    });
+    try {
+      await runtimeMessage({ type: "yoink:trackalacker-sync-sample", syncId, sample });
+    } catch {
+    }
+  }
+  function extractOgImage(html) {
+    const metaTagPattern = /<meta\b[^>]*>/gi;
+    let match;
+    while (match = metaTagPattern.exec(html)) {
+      const tag = match[0];
+      if (!/\bproperty\s*=\s*["']og:image["']/i.test(tag)) continue;
+      const content = /\bcontent\s*=\s*["']([^"']+)["']/i.exec(tag);
+      if (content?.[1]) return sanitizeImageCandidate(content[1]);
+    }
+    return "";
+  }
+  async function fetchOgImage(productUrl) {
+    try {
+      const fetched = await fetchText(productUrl);
+      return extractOgImage(fetched.text);
+    } catch {
+      return "";
+    }
+  }
+  async function enrichMissingImage(product, cache, budget) {
+    if (product.imageUrl) return product.imageUrl;
+    const slug = product.sourceProductSlug;
+    if (slug && cache.has(slug)) return cache.get(slug) ?? "";
+    if (budget.remaining <= 0) return "";
+    budget.remaining -= 1;
+    let image = "";
+    try {
+      image = await fetchOgImage(product.sourceProductUrl);
+    } catch {
+      image = "";
+    }
+    if (slug) cache.set(slug, image);
+    await delay(ENRICHMENT_DELAY_MS);
+    return image;
   }
   async function progress(syncId, value) {
     await runtimeMessage({ type: "yoink:trackalacker-sync-progress", syncId, ...value });
@@ -266,11 +414,14 @@ var YoinkTrackalackerSyncModule = (() => {
       await progress(syncId, { phase: "discovering", processed, imported, failed, message: "Reading followed products from your signed-in TrackaLacker session\u2026" });
       const items = [];
       const seen = /* @__PURE__ */ new Set();
+      const sampleSink = { listItem: null, productDetail: null };
+      const enrichmentCache = /* @__PURE__ */ new Map();
+      const enrichmentBudget = { remaining: MAX_ENRICHMENT_FETCHES };
       let totalPages = 1;
       for (let page = 1; page <= totalPages; page += 1) {
         const fetched = await fetchText(page === 1 ? FOLLOWED_URL : `${FOLLOWED_URL}?page=${page}`);
         const documentValue = new DOMParser().parseFromString(fetched.text, "text/html");
-        const parsed = parseFollowedPage(documentValue, fetched.url);
+        const parsed = parseFollowedPage(documentValue, fetched.url, sampleSink);
         if (parsed.challenged) throw new Error("Complete TrackaLacker's browser security verification, then retry.");
         if (parsed.signedOut) throw new Error("Sign in to TrackaLacker in this browser, then retry.");
         totalPages = Math.min(MAX_DECLARED_PAGES, Math.max(totalPages, parsed.totalPages));
@@ -292,7 +443,10 @@ var YoinkTrackalackerSyncModule = (() => {
         });
         await delay(125);
       }
-      if (!items.length) throw new Error("No followed products were found. Confirm your TrackaLacker followed page has products, then retry.");
+      if (!items.length) {
+        await sendRawFieldSample(syncId, sampleSink);
+        throw new Error("No followed products were found. Confirm your TrackaLacker followed page has products, then retry.");
+      }
       for (const item of items) {
         await progress(syncId, {
           phase: "importing",
@@ -305,7 +459,13 @@ var YoinkTrackalackerSyncModule = (() => {
         });
         try {
           const detail = await fetchJson(`${item.sourceProductUrl.replace(/\/$/, "")}.json`);
-          const product = await parseProductPayload(detail.data, item);
+          const product = await parseProductPayload(detail.data, item, sampleSink);
+          if (!product.imageUrl) {
+            try {
+              product.imageUrl = await enrichMissingImage(product, enrichmentCache, enrichmentBudget);
+            } catch {
+            }
+          }
           const result = await runtimeMessage({ type: "yoink:trackalacker-sync-item", syncId, item: product });
           if (!result.ok) throw new Error(result.message || "Yoink rejected one catalog product.");
           imported += 1;
@@ -315,6 +475,7 @@ var YoinkTrackalackerSyncModule = (() => {
         processed += 1;
         await delay(125);
       }
+      await sendRawFieldSample(syncId, sampleSink);
       await progress(syncId, {
         phase: "complete",
         discovered: items.length,
@@ -346,7 +507,19 @@ var YoinkTrackalackerSyncModule = (() => {
     return { ok: true, syncId, alreadyRunning: false };
   }
   Object.defineProperty(globalThis, "YoinkTrackalackerSync", {
-    value: Object.freeze({ startTrackalackerSync }),
+    value: Object.freeze({
+      startTrackalackerSync,
+      // Exposed for direct unit testing of the extraction/sanitization logic only;
+      // not part of the message-passing contract with the background service worker.
+      productImageUrl,
+      productMsrpCents,
+      normalizeMoneyToCents,
+      sanitizedFieldSample,
+      boundedSample,
+      extractOgImage,
+      enrichMissingImage,
+      parseFollowedPage
+    }),
     configurable: true
   });
   return __toCommonJS(trackalacker_sync_exports);

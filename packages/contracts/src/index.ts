@@ -969,6 +969,12 @@ export interface TrackalackerCatalogItemInput {
   listings: TrackalackerCatalogListingInput[];
 }
 
+// A bounded, key-truncated-values sample of the first followed product's raw field
+// structure, captured once per sync run so an operator can see TrackaLacker's real
+// field names for image/MSRP without a schema change. Values are pre-sanitized by the
+// extension and re-sanitized by the audit pipeline before persistence.
+export type TrackalackerRawFieldSample = Record<string, unknown>;
+
 export type SourceSyncPhase = "starting" | "discovering" | "importing" | "complete" | "error";
 
 export interface SourceSyncProgressInput {
@@ -1150,6 +1156,7 @@ export const PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS = 300;
 
 export interface PurchaseIntentCreateInputV1 extends PurchaseIntentDraftInput {
   contractVersion: 1;
+  quickAddProfileId?: string;
   confirmation: "CREATE_EXACT_PURCHASE_PLAN";
 }
 
@@ -1157,6 +1164,7 @@ export interface PurchaseIntentCreateInputV2 extends PurchaseIntentDraftInput {
   contractVersion: 2;
   preflightFingerprint: string;
   preflightedAt: string;
+  quickAddProfileId?: string;
   confirmation: "CREATE_EXACT_PURCHASE_PLAN";
 }
 
@@ -1194,13 +1202,17 @@ export interface AppSettingsUpdateInput {
   storeAllowancesCents: Record<string, number>;
 }
 
+export type PurchaseProfilePriceMode = "store_price" | "fixed_cap" | "msrp" | "msrp_offset_percent";
+
 export interface PurchaseProfile {
   id: string;
   name: string;
   targetQuantity: number;
   actionCeiling: "notify" | "add_to_cart";
-  priceMode: "store_price" | "fixed_cap";
+  priceMode: PurchaseProfilePriceMode;
   maxUnitPriceCents: number | null;
+  msrpOffsetPercent: number | null;
+  isDefault: boolean;
   cooldownSeconds: number;
   createdAt: string;
   updatedAt: string;
@@ -1211,9 +1223,35 @@ export interface PurchaseProfileInput {
   name: string;
   targetQuantity: number;
   actionCeiling: "notify" | "add_to_cart";
-  priceMode: "store_price" | "fixed_cap";
+  priceMode: PurchaseProfilePriceMode;
   maxUnitPriceCents?: number | null;
+  msrpOffsetPercent?: number | null;
+  isDefault?: boolean;
   cooldownSeconds?: number;
+}
+
+export const PURCHASE_PROFILE_PROPAGATION_SKIP_REASONS = [
+  "msrp_unavailable",
+  "price_unavailable",
+  "no_enabled_target"
+] as const;
+export type PurchaseProfilePropagationSkipReason = (typeof PURCHASE_PROFILE_PROPAGATION_SKIP_REASONS)[number];
+
+export interface PurchaseProfilePropagationSkip {
+  missionId: string;
+  title: string;
+  reasonCode: PurchaseProfilePropagationSkipReason;
+}
+
+export interface PurchaseProfilePropagationSummary {
+  matchedMissionCount: number;
+  updatedMissionCount: number;
+  skipped: PurchaseProfilePropagationSkip[];
+}
+
+export interface PurchaseProfileSaveResult {
+  profiles: PurchaseProfile[];
+  propagation: PurchaseProfilePropagationSummary;
 }
 
 export type AttributionProvider = "canonical" | "howl" | "amazon_associates";

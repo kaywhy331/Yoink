@@ -168,20 +168,18 @@ function renderSetupGuide() {
 }
 
 function renderOverview() {
-  const { settings, counts, sources, permissions, spend } = state.overview;
+  const { settings, counts, permissions, spend } = state.overview;
   const paused = settings.actionsPaused === true;
   $("#modePill").textContent = `${settings.executionMode} mode`;
   for (const button of [$("#pauseButton"), $("#preferencePauseButton")]) {
     button.textContent = paused ? "Resume qualified actions" : "Pause all actions";
   }
   $("#actionStateCopy").textContent = paused
-    ? "Purchase actions are paused. Product signals and notifications continue."
+    ? "Purchase actions are paused. Price tracking and notifications continue."
     : "Qualified add-only actions may run within each purchase plan’s limits.";
   $("#adminLink").hidden = !permissions.includes("admin.read");
-  const connectedSources = (sources || []).filter((source) => source.status === "connected").length;
   $("#heroState").innerHTML = `
     <div class="state-row"><span><i class="dot ${paused ? "warn" : "good"}"></i>Actions</span><strong>${paused ? "Paused" : "Enabled"}</strong></div>
-    <div class="state-row"><span><i class="dot ${connectedSources ? "good" : "warn"}"></i>Signal sources</span><strong>${connectedSources} connected</strong></div>
     <div class="state-row"><span><i class="dot ${Number(spend?.activeReservationCount || 0) ? "warn" : "good"}"></i>Reserved capacity</span><strong>${escapeHtml(money(spend?.activeReservedCents || 0))}</strong></div>
     <div class="state-row"><span><i class="dot good"></i>Checkout</span><strong>Manual only</strong></div>`;
   const metricRows = [
@@ -191,7 +189,6 @@ function renderOverview() {
     [counts.pendingCatalogProposals, "Suggestions in review"]
   ];
   $("#metrics").innerHTML = metricRows.map(([value, label]) => `<article class="metric"><strong>${Number(value || 0).toLocaleString()}</strong><span>${escapeHtml(label)}</span></article>`).join("");
-  $("#sourceList").innerHTML = (sources || []).map((source) => `<div class="mini-row"><span>${escapeHtml(source.name)}</span><strong>${escapeHtml(source.status)}</strong></div>`).join("") || '<div class="mini-row"><span>No sources configured</span></div>';
   const companionLink = $("#companionDownloadLink");
   const configuredCompanionUrl = state.overview?.setup?.companion?.downloadUrl;
   const companionUrl = configuredCompanionUrl === undefined
@@ -471,9 +468,36 @@ function productCardMarkup(group, missionByVariant) {
 }
 
 function profileSummary(profile) {
-  const price = profile.priceMode === "fixed_cap" ? `cap ${money(profile.maxUnitPriceCents)}` : "store price cap";
-  const action = profile.actionCeiling === "add_to_cart" ? "may add to cart" : "notify only";
-  return `qty ${Number(profile.targetQuantity)} · ${price} · ${action}`;
+  const price = profile.priceMode === "fixed_cap" ? `cap ${money(profile.maxUnitPriceCents)}`
+    : profile.priceMode === "msrp" ? "MSRP cap"
+    : profile.priceMode === "msrp_offset_percent" ? `MSRP ${Number(profile.msrpOffsetPercent) > 0 ? "+" : ""}${Number(profile.msrpOffsetPercent || 0)}%`
+    : "store price cap";
+  const action = profile.actionCeiling === "add_to_cart" ? "add to cart" : "notify only";
+  return `qty ${Number(profile.targetQuantity)} · ${price} · ${action}${profile.isDefault ? " · default" : ""}`;
+}
+
+// Resolves the per-item price cap for a quick add from a listing's known prices
+// and the chosen profile's price mode. Mirrors the server's own price-mode
+// resolution used when a profile is later applied to existing plans.
+function resolveProfileMaxUnitPriceCents(product, profile) {
+  if (!profile) {
+    const price = listingEffectivePrice(product);
+    return price?.cents ?? null;
+  }
+  if (profile.priceMode === "fixed_cap") {
+    const cents = Number(profile.maxUnitPriceCents);
+    return Number.isFinite(cents) && cents > 0 ? cents : null;
+  }
+  if (profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent") {
+    const msrp = Number(product.msrpCents);
+    if (!Number.isFinite(msrp) || msrp <= 0) return null;
+    if (profile.priceMode === "msrp") return msrp;
+    const percent = Number(profile.msrpOffsetPercent ?? 0);
+    const cents = Math.round(msrp * (100 + percent) / 100);
+    return Number.isFinite(cents) && cents > 0 ? cents : null;
+  }
+  const price = listingEffectivePrice(product);
+  return price?.cents ?? null;
 }
 
 function closeQuickMenu() {
@@ -485,7 +509,7 @@ function closeQuickMenu() {
 function openQuickMenu(anchor, listingId) {
   const menu = $("#quickAddMenu");
   menu.innerHTML = [
-    `<button data-quick-add="${escapeHtml(listingId)}" type="button"><strong>Default</strong><small>qty 1 · store price cap · notify only</small></button>`,
+    `<button data-quick-add="${escapeHtml(listingId)}" type="button"><strong>System default</strong><small>qty 1 · store price cap · notify only</small></button>`,
     ...state.profiles.map((profile) => `<button data-quick-add="${escapeHtml(listingId)}" data-profile-id="${escapeHtml(profile.id)}" type="button"><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(profileSummary(profile))}</small></button>`),
     `<button data-track-listing="${escapeHtml(listingId)}" type="button"><strong>Custom setup…</strong><small>Review every limit before creating the plan</small></button>`
   ].join("");
@@ -503,12 +527,15 @@ async function quickAdd(listingId, profileId = "") {
   if (!product) throw new Error("That exact product is no longer in the current catalog view. Refresh and try again.");
   const existing = state.plans.find((plan) => plan.variantId === product.variantId);
   if (existing) return openPlan(existing.id);
-  const profile = profileId ? state.profiles.find((candidate) => candidate.id === profileId) : null;
+  const profile = profileId
+    ? state.profiles.find((candidate) => candidate.id === profileId)
+    : state.profiles.find((candidate) => candidate.isDefault === true) || null;
   if (profileId && !profile) throw new Error("That quick-add profile is no longer available.");
-  const price = listingEffectivePrice(product);
-  const maxUnitPriceCents = profile?.priceMode === "fixed_cap" ? Number(profile.maxUnitPriceCents) : price?.cents;
+  const maxUnitPriceCents = resolveProfileMaxUnitPriceCents(product, profile);
   if (!maxUnitPriceCents) {
-    toast(`No ${product.retailerName} price is recorded yet, so choose your own caps.`);
+    toast(profile && (profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent")
+      ? `No MSRP is recorded for ${product.title} yet, so choose your own caps.`
+      : `No ${product.retailerName} price is recorded yet, so choose your own caps.`);
     return openSetup(listingId);
   }
   const targetQuantity = Number(profile?.targetQuantity ?? 1);
@@ -517,7 +544,10 @@ async function quickAdd(listingId, profileId = "") {
     : "notify";
   state.quickAddBusy = true;
   try {
-    let draft = {
+    // The item price is the only figure a quick-add profile sets directly; the
+    // server always auto-raises the reviewed total to cover taxes and store-fee
+    // reserves during this no-write preview, so a single round trip is enough.
+    const draft = {
       contractVersion: 2,
       listingId,
       targetQuantity,
@@ -531,15 +561,13 @@ async function quickAdd(listingId, profileId = "") {
       cooldownSeconds: Number(profile?.cooldownSeconds ?? 0),
       confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN"
     };
-    let { preflight } = await api("/api/v1/user/purchase-intents/preflight", { method: "POST", body: JSON.stringify(draft) });
-    if (Number(preflight?.cost?.minimumAllInCents) > draft.maxAllInCents) {
-      draft = { ...draft, maxAllInCents: Number(preflight.cost.minimumAllInCents) };
-      ({ preflight } = await api("/api/v1/user/purchase-intents/preflight", { method: "POST", body: JSON.stringify(draft) }));
-    }
+    const { preflight } = await api("/api/v1/user/purchase-intents/preflight", { method: "POST", body: JSON.stringify(draft) });
     await api("/api/v1/user/purchase-intents", {
       method: "POST",
       body: JSON.stringify({
-        ...draft,
+        ...preflight.draft,
+        contractVersion: 2,
+        quickAddProfileId: profile?.id || "",
         confirmation: "CREATE_EXACT_PURCHASE_PLAN",
         preflightFingerprint: preflight.preflightFingerprint,
         preflightedAt: preflight.preflightedAt
@@ -548,7 +576,7 @@ async function quickAdd(listingId, profileId = "") {
     await refresh();
     toast(actionCeiling === "add_to_cart"
       ? `${product.title} added with ${profile ? `the “${profile.name}” profile` : "your default"} — cart automation obeys your saved limits; checkout stays manual.`
-      : `${product.title} added with ${profile ? `the “${profile.name}” profile` : "your default"} — you'll be notified on a fresh exact offer (cap ${money(draft.maxUnitPriceCents, product.currency)}).`);
+      : `${product.title} added with ${profile ? `the “${profile.name}” profile` : "your default"} — you'll be notified on a fresh exact offer (cap ${money(preflight.draft.maxUnitPriceCents, product.currency)}).`);
   } catch (error) {
     if (error.code === "purchase_intent_exists") {
       await refresh();
@@ -639,15 +667,22 @@ function renderPlans() {
     const current = plan.primaryCurrentPriceCents ? money(plan.primaryCurrentPriceCents) : "not seen yet";
     const maximum = plan.primaryMaxUnitPriceCents ? money(plan.primaryMaxUnitPriceCents) : "not set";
     const fulfillment = words(plan.primaryFulfillment || "not selected");
-    const action = plan.actionCeiling === "add_to_cart" ? "May add one to cart" : "Notifications only";
+    const action = plan.actionCeiling === "add_to_cart" ? "Add to cart" : "Notify me only";
     const decision = plan.decisionMode === "purchase_intent" ? "This reviewed plan decides" : "Advanced defaults decide";
     return `<article class="plan-card">
-      <div><div class="card-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(plan.status)}</span></div>
-      <p><strong>${escapeHtml(store)}</strong>${plan.primaryRetailerSku ? ` · exact item ${escapeHtml(plan.primaryRetailerSku)}` : ""} · last seen ${escapeHtml(current)} · maximum ${escapeHtml(maximum)}</p>
-      <p>Quantity ${Number(plan.targetQuantity || 1)} · ${escapeHtml(fulfillment)} · ${escapeHtml(action)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p>
-      <p>${escapeHtml(decision)} when a fresh exact offer arrives. Guarded cart attempts always add exactly one item.</p>
-      ${automationReadinessMarkup(plan.automationReadiness)}</div>
-      <button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Review or change</button>
+      <div class="plan-row">
+        <div class="plan-summary">
+          <div class="plan-summary-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(plan.status)}</span></div>
+          <p class="plan-line"><strong>${escapeHtml(store)}</strong> · cap ${escapeHtml(maximum)} · qty ${Number(plan.targetQuantity || 1)} · ${escapeHtml(action)}</p>
+        </div>
+        <button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Review or change</button>
+      </div>
+      <details class="plan-details">
+        <summary>Details</summary>
+        <p>${plan.primaryRetailerSku ? `Exact item ${escapeHtml(plan.primaryRetailerSku)} · ` : ""}last seen ${escapeHtml(current)} · ${escapeHtml(fulfillment)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p>
+        <p>${escapeHtml(decision)} when a fresh exact offer arrives. Guarded cart attempts always add exactly one item.</p>
+        ${automationReadinessMarkup(plan.automationReadiness)}
+      </details>
     </article>`;
   }).join("") : '<div class="empty">You have no purchase plans. Choose “Set up purchase” from the Products tab and review the exact limits before creating one.</div>';
 }
@@ -789,8 +824,11 @@ function renderSetupPreflight(mode, headline, copy, preflight = null) {
     <div><small>Tax + store reserve</small><b>${escapeHtml(money(Number(cost.taxReserveCents || 0) + Number(cost.storeReserveCents || 0), currency))}</b></div>
     <div><small>Room within your limit</small><b>${escapeHtml(money(cost.headroomCents, currency))}</b></div>
   </div>` : "";
+  const autoRaisedNote = cost?.autoRaised
+    ? `<p class="boundary-note good">Your maximum total was automatically raised to ${escapeHtml(money(cost.reviewedAllInCents, currency))} to cover taxes and store fees — the item price above stays your real cap.</p>`
+    : "";
   element.innerHTML = `<div><span>${mode === "ready" ? "Server checked" : mode === "error" ? "Needs attention" : "Server check"}</span><strong>${escapeHtml(headline)}</strong></div>
-    <p>${escapeHtml(copy)}</p>${costs}`;
+    <p>${escapeHtml(copy)}</p>${costs}${autoRaisedNote}`;
 }
 
 function updateSetupCreateState() {
@@ -876,7 +914,7 @@ function syncSetupAction() {
         ? "This store has a packaged runner, but its separate guarded-add qualification is not active. You may save the plan now; monitoring continues while every retailer click stays closed."
         : minimum
         ? totalTooLow
-          ? `Your current maximum total is below the ${money(minimum.required)} tax and store-fee safety bound. Raise it only if that remains an amount you accept, or choose notifications.`
+          ? `Your current maximum total is below the ${money(minimum.required)} tax and store-fee safety bound. Yoink will automatically raise it to that amount when you save, or choose notifications instead.`
           : `Your reviewed total covers the current ${money(minimum.required)} tax and store-fee safety bound. Each guarded attempt adds exactly one item, and Chrome still requires fresh exact-offer verification.`
         : "Enter the item price and quantity to calculate the minimum safe total for a cart action."
       : "This store has a packaged add mapping, but this plan currently authorizes notifications only."
@@ -890,7 +928,7 @@ function renderSetupReview() {
   const quantity = Math.max(1, Number(form.elements.targetQuantity.value || 1));
   const unit = setupAmount("maxUnitPrice", "Maximum item price");
   const allIn = setupAmount("maxAllIn", "Maximum total");
-  const action = form.elements.actionCeiling.value === "add_to_cart" ? "Add one to cart" : "Notify me only";
+  const action = form.elements.actionCeiling.value === "add_to_cart" ? "Add to cart" : "Notify me only";
   const automaticMinimum = setupAutomaticMinimum();
   const expiry = form.elements.expiresAt.value
     ? new Date(form.elements.expiresAt.value).toLocaleString()
@@ -963,7 +1001,7 @@ async function openPlan(id) {
   form.elements.expiresAt.value = localDateTime(policy.expiresAt);
   $("#planModeTitle").textContent = directPlan
     ? "This reviewed plan decides directly; advanced strategies are optional."
-    : "This source-created plan currently uses advanced defaults.";
+    : "This plan currently uses advanced defaults.";
   $("#planModeCopy").textContent = directPlan
     ? "Checkout stays manual. These limits can authorize only qualified add-only actions and never authorize checkout or order submission."
     : "Saving here converts it to a reviewed direct plan in notification mode unless you explicitly choose and satisfy guarded cart requirements. Checkout stays manual.";
@@ -1190,7 +1228,7 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.setupAction === "pair_companion") await createPairingCode(true);
     if (button.dataset.setupAction === "connect_signal") {
       setTab("preferences");
-      toast("Open the Yoink Chrome companion, sign in to TrackaLacker, then choose Connect.");
+      toast("Open the Yoink Chrome companion and choose Connect to start tracking your stores.");
     }
     if (button.dataset.setupAction === "add_product") openProductLinkDialog();
     if (button.dataset.setupAction === "choose_product") {
@@ -1289,7 +1327,10 @@ $("#setupForm").addEventListener("submit", async (event) => {
   try {
     if (!state.setupPreflight) throw new Error("Wait for the current server check before creating this purchase plan.");
     if (form.elements.reviewed.checked !== true) throw new Error("Review and confirm the current server-checked plan first.");
-    const draft = setupDraftPayload("CREATE_EXACT_PURCHASE_PLAN");
+    // Resubmit the server's own just-validated draft rather than re-reading the
+    // form: this is what carries any automatic tax/store-fee reserve raise, and
+    // keeps the create request exactly what the preflight fingerprint was bound to.
+    const draft = { ...state.setupPreflight.draft, contractVersion: 2, confirmation: "CREATE_EXACT_PURCHASE_PLAN" };
     button.disabled = true;
     button.textContent = "Creating safely…";
     await api("/api/v1/user/purchase-intents", {
@@ -1403,8 +1444,12 @@ function beginProfileEdit(profileId) {
   form.elements.targetQuantity.value = profile.targetQuantity;
   form.elements.priceMode.value = profile.priceMode;
   form.elements.maxUnitPrice.value = profile.priceMode === "fixed_cap" ? moneyInput(profile.maxUnitPriceCents) : "";
+  form.elements.msrpOffsetPercent.value = profile.priceMode === "msrp_offset_percent" && profile.msrpOffsetPercent !== null
+    ? String(profile.msrpOffsetPercent)
+    : "";
   form.elements.actionCeiling.value = profile.actionCeiling;
   form.elements.cooldownMinutes.value = Math.round(Number(profile.cooldownSeconds || 0) / 60);
+  form.elements.isDefault.checked = profile.isDefault === true;
   syncProfilePriceMode();
   $("#saveProfileButton").textContent = "Save changes";
   $("#resetProfileButton").hidden = false;
@@ -1423,9 +1468,11 @@ function resetProfileForm() {
 
 function syncProfilePriceMode() {
   const form = $("#profileForm");
-  const fixed = form.elements.priceMode.value === "fixed_cap";
-  form.elements.maxUnitPrice.disabled = !fixed;
-  if (!fixed) form.elements.maxUnitPrice.value = "";
+  const mode = form.elements.priceMode.value;
+  form.elements.maxUnitPrice.disabled = mode !== "fixed_cap";
+  if (mode !== "fixed_cap") form.elements.maxUnitPrice.value = "";
+  form.elements.msrpOffsetPercent.disabled = mode !== "msrp_offset_percent";
+  if (mode !== "msrp_offset_percent") form.elements.msrpOffsetPercent.value = "";
 }
 
 $("#profileForm").elements.priceMode.addEventListener("change", syncProfilePriceMode);
@@ -1441,7 +1488,18 @@ $("#profileForm").addEventListener("submit", async (event) => {
     if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 43_200) {
       throw new Error("The wait between attempts must be from zero through 43,200 minutes.");
     }
-    const priceMode = form.elements.priceMode.value === "fixed_cap" ? "fixed_cap" : "store_price";
+    const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent"].includes(form.elements.priceMode.value)
+      ? form.elements.priceMode.value
+      : "store_price";
+    let msrpOffsetPercent = null;
+    if (priceMode === "msrp_offset_percent") {
+      const raw = form.elements.msrpOffsetPercent.value.trim();
+      const parsed = Number(raw);
+      if (!raw || !Number.isInteger(parsed) || parsed < -90 || parsed > 90) {
+        throw new Error("The MSRP offset percent must be a whole number from -90 through 90.");
+      }
+      msrpOffsetPercent = parsed;
+    }
     const result = await api("/api/v1/user/purchase-profiles", {
       method: "POST",
       body: JSON.stringify({
@@ -1451,6 +1509,8 @@ $("#profileForm").addEventListener("submit", async (event) => {
         actionCeiling: form.elements.actionCeiling.value === "add_to_cart" ? "add_to_cart" : "notify",
         priceMode,
         maxUnitPriceCents: priceMode === "fixed_cap" ? centsInput(form.elements.maxUnitPrice.value, "The fixed maximum item price") : null,
+        msrpOffsetPercent,
+        isDefault: form.elements.isDefault.checked === true,
         cooldownSeconds: cooldownMinutes * 60
       })
     });
@@ -1458,7 +1518,17 @@ $("#profileForm").addEventListener("submit", async (event) => {
     resetProfileForm();
     renderProfiles();
     renderProducts();
-    toast("Quick-add profile saved.");
+    const propagation = result.propagation || {};
+    const updatedCount = Number(propagation.updatedMissionCount || 0);
+    const skippedCount = Array.isArray(propagation.skipped) ? propagation.skipped.length : 0;
+    if (updatedCount || skippedCount) {
+      const parts = [];
+      if (updatedCount) parts.push(`${updatedCount} linked purchase plan${updatedCount === 1 ? "" : "s"} updated`);
+      if (skippedCount) parts.push(`${skippedCount} kept its prior limits (price not yet known)`);
+      toast(`Quick-add profile saved. ${parts.join("; ")}.`);
+    } else {
+      toast("Quick-add profile saved.");
+    }
   } catch (error) { toast(error.message || "The profile could not be saved.", true); }
 });
 

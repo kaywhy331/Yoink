@@ -1,6 +1,31 @@
 # Yoink roadmap
 
-## Shipped through 1.6.0
+## Shipped through 1.7.0
+
+### Consumer storefront refinement (1.7.0)
+
+- Quick add auto-reserves taxes and store fees: preflight returns the raised
+  reviewed total (`cost.autoRaised`) instead of rejecting when the item-price
+  cap sits below the all-in minimum; create-side enforcement is unchanged
+- Quick-add profiles: MSRP and MSRP±percent price modes, one default profile
+  consumed by the bare Quick-add button, and audited live propagation of
+  profile edits to every linked purchase plan (migration 50,
+  `missions.quick_add_profile_id`; cutover `defaultExpressionCount` 284→285)
+- User surface speaks shopper language only: Signal connections card removed,
+  signal/TrackaLacker vocabulary rewritten across the page and the
+  server-generated setup guide, purchase plans compacted to one summary row
+  with detail behind disclosure, "Add to cart" copy honors the declared
+  quantity field
+- Self-diagnosing catalog media pipeline: per-run sanitized raw-field sample
+  into the audit log, broadened image/MSRP extraction against the real
+  TrackaLacker hydration payload, bounded og:image fallback (25/run), full-pass
+  sync backfills the existing catalog
+- Checkout tier investigated and deliberately not exposed: qualification
+  hardcodes `highestAction: "add_to_cart"`, the `prepare_checkout` and
+  `submit_order` mutation lanes are closed for all four retailers, and no
+  executor path exists above add-to-cart — a dead control would violate the
+  no-improvisation rule; checkout-lane qualification is its own future
+  workstream
 
 ### PostgreSQL signal-handler composition (1.6.0)
 

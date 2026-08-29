@@ -13,6 +13,9 @@ import {
   type MissionUpdateInput,
   type PurchaseProfile,
   type PurchaseProfileInput,
+  type PurchaseProfilePropagationSkip,
+  type PurchaseProfilePropagationSummary,
+  type PurchaseProfileSaveResult,
   type SellerPolicy,
   type StrategyDefinition
 } from "../../contracts/src/index.js";
@@ -57,6 +60,7 @@ interface MissionCreationConfiguration {
   selectedSellerPolicy: SellerPolicy | "inherit";
   selectedFulfillment: Fulfillment | "inherit";
   initialPolicy: PurchaseIntentPolicyUpdateInput;
+  quickAddProfileId?: string;
 }
 
 interface ConfiguredMissionListing {
@@ -81,6 +85,7 @@ interface ValidatedConfiguredMission {
     minimumAllInCents: number;
     reviewedAllInCents: number;
     headroomCents: number;
+    autoRaised: boolean;
   };
 }
 
@@ -324,18 +329,28 @@ export class ControlRepository {
       throw new Error("Profile quantity must be 1 through 99.");
     }
     const actionCeiling = input?.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify";
-    const priceMode = input?.priceMode === "fixed_cap" ? "fixed_cap" : "store_price";
+    const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent"].includes(String(input?.priceMode))
+      ? (input?.priceMode as PurchaseProfile["priceMode"])
+      : "store_price";
     let maxUnitPriceCents: number | null = null;
+    let msrpOffsetPercent: number | null = null;
     if (priceMode === "fixed_cap") {
       maxUnitPriceCents = Number(input?.maxUnitPriceCents);
       if (!Number.isSafeInteger(maxUnitPriceCents) || maxUnitPriceCents < 1 || maxUnitPriceCents > 100_000_000) {
         throw new Error("A fixed-cap profile needs a positive maximum item price.");
       }
     }
+    if (priceMode === "msrp_offset_percent") {
+      msrpOffsetPercent = Number(input?.msrpOffsetPercent);
+      if (!Number.isInteger(msrpOffsetPercent) || msrpOffsetPercent < -90 || msrpOffsetPercent > 90) {
+        throw new Error("An MSRP-offset profile needs a whole-number percent from -90 through 90.");
+      }
+    }
     const cooldownSeconds = Number(input?.cooldownSeconds ?? 0);
     if (!Number.isInteger(cooldownSeconds) || cooldownSeconds < 0 || cooldownSeconds > 2_592_000) {
       throw new Error("The profile wait between attempts must be from zero through 30 days.");
     }
+    const isDefault = input?.isDefault === true;
     const timestamp = nowIso(now);
     const current = id ? existing.find((profile) => profile.id === id) : undefined;
     if (id && !current) throw new Error("That purchase profile no longer exists.");
@@ -346,13 +361,15 @@ export class ControlRepository {
       actionCeiling,
       priceMode,
       maxUnitPriceCents,
+      msrpOffsetPercent,
+      isDefault,
       cooldownSeconds,
       createdAt: current?.createdAt ?? timestamp,
       updatedAt: timestamp
     };
   }
 
-  savePurchaseProfile(input: PurchaseProfileInput, now = Date.now()): PurchaseProfile[] {
+  savePurchaseProfile(input: PurchaseProfileInput, now = Date.now()): PurchaseProfileSaveResult {
     return this.db.transaction(() => {
       const existing = this.listPurchaseProfiles();
       const profile = this.validatePurchaseProfile(input, existing, now);
@@ -360,9 +377,12 @@ export class ControlRepository {
       if (created && existing.length >= 12) {
         throw new Error("Up to 12 purchase profiles are supported; remove one first.");
       }
-      const next = created
+      let next = created
         ? [...existing, profile]
         : existing.map((candidate) => (candidate.id === profile.id ? profile : candidate));
+      if (profile.isDefault) {
+        next = next.map((candidate) => (candidate.id === profile.id ? candidate : { ...candidate, isDefault: false }));
+      }
       this.db.run(
         "UPDATE app_settings SET purchase_profiles_json = ?, updated_at = ? WHERE user_id = ?",
         JSON.stringify(next),
@@ -379,7 +399,10 @@ export class ControlRepository {
           : "A reusable quick-add purchase profile was updated.",
         data: { profile }
       }, now);
-      return next;
+      const propagation = created
+        ? { matchedMissionCount: 0, updatedMissionCount: 0, skipped: [] }
+        : this.propagatePurchaseProfile(profile, now);
+      return { profiles: next, propagation };
     });
   }
 
@@ -396,16 +419,141 @@ export class ControlRepository {
         nowIso(now),
         currentRequestScope().userId
       );
+      const unlinked = this.db.run(
+        "UPDATE missions SET quick_add_profile_id = '', updated_at = ? WHERE tenant_id = ? AND user_id = ? AND quick_add_profile_id = ?",
+        nowIso(now),
+        currentRequestScope().tenantId,
+        currentRequestScope().userId,
+        profileId
+      );
       this.auditEvents.record({
         correlationId: currentRequestScope().userId,
         aggregateType: "user_settings",
         eventType: "purchase_profile_deleted",
         reasonCode: "deleted",
         message: "A reusable quick-add purchase profile was removed.",
-        data: { profileId, name: target.name }
+        data: { profileId, name: target.name, unlinkedMissionCount: Number(unlinked.changes ?? 0) }
       }, now);
       return next;
     });
+  }
+
+  private resolveProfileUnitPriceCents(
+    profile: PurchaseProfile,
+    listing: { msrpCents: number | null; currentPriceCents: number | null }
+  ): number | null {
+    if (profile.priceMode === "fixed_cap") {
+      return Number.isSafeInteger(profile.maxUnitPriceCents) && Number(profile.maxUnitPriceCents) > 0
+        ? Number(profile.maxUnitPriceCents)
+        : null;
+    }
+    if (profile.priceMode === "msrp") {
+      return Number.isSafeInteger(listing.msrpCents) && Number(listing.msrpCents) > 0 ? Number(listing.msrpCents) : null;
+    }
+    if (profile.priceMode === "msrp_offset_percent") {
+      if (!Number.isSafeInteger(listing.msrpCents) || Number(listing.msrpCents) <= 0) return null;
+      const percent = Number.isInteger(profile.msrpOffsetPercent) ? Number(profile.msrpOffsetPercent) : 0;
+      const cents = Math.round(Number(listing.msrpCents) * (100 + percent) / 100);
+      return Number.isSafeInteger(cents) && cents > 0 ? cents : null;
+    }
+    return Number.isSafeInteger(listing.currentPriceCents) && Number(listing.currentPriceCents) > 0
+      ? Number(listing.currentPriceCents)
+      : null;
+  }
+
+  private propagatePurchaseProfile(profile: PurchaseProfile, now: number): PurchaseProfilePropagationSummary {
+    const scope = currentRequestScope();
+    const missions = this.db.all<{ id: string; title: string; targetQuantity: number }>(
+      `SELECT m.id, v.title, m.target_quantity AS targetQuantity
+       FROM missions m JOIN variants v ON v.id = m.variant_id
+       WHERE m.tenant_id = ? AND m.user_id = ? AND m.quick_add_profile_id = ?`,
+      scope.tenantId,
+      scope.userId,
+      profile.id
+    );
+    if (!missions.length) return { matchedMissionCount: 0, updatedMissionCount: 0, skipped: [] };
+    const settings = this.settings();
+    const skipped: PurchaseProfilePropagationSkip[] = [];
+    let updatedMissionCount = 0;
+    for (const mission of missions) {
+      const targets = this.db.all<{
+        id: string;
+        retailerId: string;
+        executionSupported: number;
+        msrpCents: number | null;
+        currentPriceCents: number | null;
+      }>(
+        `SELECT mt.id, l.retailer_id AS retailerId, l.execution_supported AS executionSupported,
+                l.msrp_cents AS msrpCents,
+                (SELECT oo.unit_price_cents FROM offer_observations oo
+                 WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
+                 ORDER BY oo.observed_at DESC LIMIT 1) AS currentPriceCents
+         FROM mission_targets mt JOIN listings l ON l.id = mt.listing_id
+         WHERE mt.mission_id = ? AND mt.enabled = 1`,
+        mission.id
+      );
+      if (!targets.length) {
+        skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "no_enabled_target" });
+        continue;
+      }
+      const resolved: Array<{ id: string; retailerId: string; executionSupported: boolean; maxUnitPriceCents: number }> = [];
+      let missingReason: "msrp_unavailable" | "price_unavailable" | null = null;
+      for (const target of targets) {
+        const unit = this.resolveProfileUnitPriceCents(profile, {
+          msrpCents: target.msrpCents === null ? null : Number(target.msrpCents),
+          currentPriceCents: target.currentPriceCents === null ? null : Number(target.currentPriceCents)
+        });
+        if (unit === null) {
+          missingReason = profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent"
+            ? "msrp_unavailable"
+            : "price_unavailable";
+          break;
+        }
+        resolved.push({
+          id: target.id,
+          retailerId: target.retailerId,
+          executionSupported: Number(target.executionSupported) === 1,
+          maxUnitPriceCents: unit
+        });
+      }
+      if (missingReason) {
+        skipped.push({ missionId: mission.id, title: mission.title, reasonCode: missingReason });
+        continue;
+      }
+      const executable = resolved.every((target) => target.executionSupported);
+      const actionCeiling = profile.actionCeiling === "add_to_cart" && executable ? "add_to_cart" : "notify";
+      const taxBps = actionCeiling === "add_to_cart" ? Math.max(0, settings.taxBps) : 0;
+      const requiredAllInCents = Math.max(...resolved.map((target) => {
+        const itemTotal = target.maxUnitPriceCents * Number(mission.targetQuantity);
+        const storeReserve = actionCeiling === "add_to_cart"
+          ? Math.max(0, Number(settings.storeAllowancesCents[target.retailerId] ?? 0))
+          : 0;
+        return Math.ceil(itemTotal * (10_000 + taxBps) / 10_000) + storeReserve;
+      }));
+      if (!Number.isSafeInteger(requiredAllInCents) || requiredAllInCents <= 0) {
+        skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "no_enabled_target" });
+        continue;
+      }
+      const timestamp = nowIso(now);
+      for (const target of resolved) {
+        this.db.run(
+          "UPDATE mission_targets SET max_unit_price_cents = ?, updated_at = ? WHERE id = ? AND mission_id = ?",
+          target.maxUnitPriceCents,
+          timestamp,
+          target.id,
+          mission.id
+        );
+      }
+      this.purchasePolicies.revise(mission.id, {
+        maxAllInCents: requiredAllInCents,
+        actionCeiling,
+        decisionMode: "purchase_intent",
+        cooldownSeconds: profile.cooldownSeconds,
+        changeReason: `Quick-add profile "${profile.name}" was updated; this plan's limits were automatically re-derived.`
+      }, now);
+      updatedMissionCount += 1;
+    }
+    return { matchedMissionCount: missions.length, updatedMissionCount, skipped };
   }
 
   listStrategies(): StrategyDefinition[] {
@@ -505,7 +653,11 @@ export class ControlRepository {
     });
   }
 
-  private validateConfiguredMissionDraft(input: PurchaseIntentDraftInput, now: number): ValidatedConfiguredMission {
+  private validateConfiguredMissionDraft(
+    input: PurchaseIntentDraftInput,
+    now: number,
+    mode: "preview" | "create" = "create"
+  ): ValidatedConfiguredMission {
     const listingId = cleanText(input?.listingId, 120);
     const row = this.db.get<{
       variantId: string;
@@ -547,7 +699,7 @@ export class ControlRepository {
       throw new PurchaseSafetyError("purchase_intent_invalid", 400, "The maximum all-in total must be a positive number of cents.");
     }
     const itemSubtotalCapCents = maxUnitPriceCents * targetQuantity;
-    if (!Number.isSafeInteger(itemSubtotalCapCents) || itemSubtotalCapCents > maxAllInCents) {
+    if (!Number.isSafeInteger(itemSubtotalCapCents)) {
       throw new PurchaseSafetyError(
         "purchase_intent_invalid",
         400,
@@ -589,13 +741,24 @@ export class ControlRepository {
       ? Math.max(0, Number(settings.storeAllowancesCents[listing.retailerId] ?? 0))
       : 0;
     const minimumAllInCents = itemSubtotalCapCents + taxReserveCents + storeReserveCents;
-    if (!Number.isSafeInteger(minimumAllInCents) || maxAllInCents < minimumAllInCents) {
+    if (!Number.isSafeInteger(minimumAllInCents)) {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "The computed maximum total is invalid.");
+    }
+    const tooLow = maxAllInCents < minimumAllInCents;
+    if (mode === "create" && tooLow) {
       throw new PurchaseSafetyError(
         "purchase_intent_all_in_bound_too_low",
         400,
         `Automatic cart actions need a maximum total of at least $${(minimumAllInCents / 100).toFixed(2)} under the current tax and store-fee safety reserve. Choose notifications only or raise the reviewed total.`
       );
     }
+    // In preview mode a too-low reviewed total is never fatal: the item price is the
+    // only figure the user actually sets, and tax/store-fee reserves are always
+    // layered on top automatically. The raised total is echoed back in both the
+    // draft and the cost breakdown so the client can resubmit it verbatim for
+    // creation, and the preflight fingerprint below binds to this raised value.
+    const autoRaised = mode === "preview" && tooLow;
+    const reviewedAllInCents = autoRaised ? minimumAllInCents : maxAllInCents;
     return {
       listingId,
       listing,
@@ -603,7 +766,7 @@ export class ControlRepository {
         listingId,
         targetQuantity,
         maxUnitPriceCents,
-        maxAllInCents,
+        maxAllInCents: reviewedAllInCents,
         actionCeiling: input.actionCeiling,
         sellerPolicy: "first_party_only",
         fulfillment: input.fulfillment,
@@ -617,8 +780,9 @@ export class ControlRepository {
         taxReserveCents,
         storeReserveCents,
         minimumAllInCents,
-        reviewedAllInCents: maxAllInCents,
-        headroomCents: maxAllInCents - minimumAllInCents
+        reviewedAllInCents,
+        headroomCents: reviewedAllInCents - minimumAllInCents,
+        autoRaised
       }
     };
   }
@@ -630,7 +794,7 @@ export class ControlRepository {
     if (input?.confirmation !== "PREFLIGHT_EXACT_PURCHASE_PLAN") {
       throw new PurchaseSafetyError("purchase_intent_preflight_confirmation_required", 400, "Request an explicit no-write purchase-plan preview.");
     }
-    const validated = this.validateConfiguredMissionDraft(input, now);
+    const validated = this.validateConfiguredMissionDraft(input, now, "preview");
     const existing = this.db.get<{ id: string }>(
       "SELECT id FROM missions WHERE user_id = ? AND variant_id = ?",
       currentRequestScope().userId,
@@ -693,8 +857,9 @@ export class ControlRepository {
         throw new PurchaseSafetyError("purchase_intent_preflight_stale", 409, "Your plan preview expired. Run the server check again before creating this plan.");
       }
     }
-    const validated = this.validateConfiguredMissionDraft(input, now);
+    const validated = this.validateConfiguredMissionDraft(input, now, "create");
     const { listingId, listing, draft } = validated;
+    const quickAddProfileId = cleanText(input.quickAddProfileId, 120);
 
     return this.db.transaction(() => {
       const result = this.ensureMissionInternal(listing.variantId, listingId, "user_guided", now, {
@@ -703,6 +868,7 @@ export class ControlRepository {
         selectedMaxUnitPriceCents: draft.maxUnitPriceCents,
         selectedSellerPolicy: "first_party_only",
         selectedFulfillment: draft.fulfillment,
+        quickAddProfileId,
         initialPolicy: {
           maxAllInCents: draft.maxAllInCents,
           actionCeiling: draft.actionCeiling,
@@ -746,14 +912,15 @@ export class ControlRepository {
         this.db.run(
           `INSERT INTO missions(
              id, tenant_id, user_id, variant_id, status, origin,
-             target_quantity, fulfilled_quantity, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, 'active', ?, ?, 0, ?, ?)`,
+             target_quantity, fulfilled_quantity, quick_add_profile_id, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, 'active', ?, ?, 0, ?, ?, ?)`,
           mission.id,
           currentRequestScope().tenantId,
           currentRequestScope().userId,
           variantId,
           cleanText(origin, 60),
           creation?.targetQuantity ?? 1,
+          cleanText(creation?.quickAddProfileId ?? "", 120),
           timestamp,
           timestamp
         );

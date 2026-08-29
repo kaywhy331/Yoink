@@ -848,6 +848,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       minimumAllInCents: 6999,
       reviewedAllInCents: 6999,
       headroomCents: 0,
+      autoRaised: false,
       currency: "USD"
     });
     assert.equal(preflight.automationReadiness.configuredAction, "notify");

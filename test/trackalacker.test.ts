@@ -516,3 +516,106 @@ test("paired Chrome can report sanitized push status, import catalog, and delive
     db.close();
   }
 });
+
+test("the catalog sync route persists a sanitized raw-field sample as an audit event without requiring a catalog item", async () => {
+  const db = new YoinkDatabase();
+  const devices = new DeviceRepository(db);
+  const pairing = devices.createPairingCode();
+  const paired = devices.pair({ pairingCode: pairing.code, name: "Desktop - Windows - Chrome" });
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "trackalacker-sample-test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as AddressInfo;
+  const root = `http://127.0.0.1:${address.port}`;
+  const headers = {
+    "Content-Type": "application/json",
+    Origin: `chrome-extension://${"a".repeat(32)}`,
+    Authorization: `Bearer ${paired.token}`
+  };
+  try {
+    const response = await fetch(`${root}/api/v1/devices/self/sources/trackalacker/catalog`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        syncId: "tlsync_sample00000000001",
+        rawSample: {
+          listItem: {
+            heroImage: "https://cdn.example.com/etb.jpg",
+            priceInCents: 6999,
+            session_token: "MUST_NOT_BE_STORED"
+          }
+        }
+      })
+    });
+    assert.equal(response.status, 202);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.item, null);
+    assert.equal(body.syncReceipt, null);
+
+    const event = db.get<{ eventType: string; reasonCode: string; dataJson: string }>(
+      "SELECT event_type AS eventType, reason_code AS reasonCode, data_json AS dataJson FROM audit_events WHERE event_type = 'trackalacker_sync_sample'"
+    );
+    assert.ok(event);
+    assert.equal(event?.reasonCode, "raw_field_sample_captured");
+    const data = JSON.parse(String(event?.dataJson ?? "{}")) as Record<string, unknown>;
+    const listItem = (data.listItem ?? {}) as Record<string, unknown>;
+    assert.equal(listItem.heroImage, "https://cdn.example.com/etb.jpg");
+    assert.equal(listItem.priceInCents, 6999);
+    assert.equal(JSON.stringify(data).includes("MUST_NOT_BE_STORED"), false);
+
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM listings")?.count, 0);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM variants")?.count, 0);
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});
+
+test("a catalog submission can carry both the accepted item and the sanitized raw-field sample in one call", async () => {
+  const db = new YoinkDatabase();
+  const devices = new DeviceRepository(db);
+  const pairing = devices.createPairingCode();
+  const paired = devices.pair({ pairingCode: pairing.code, name: "Desktop - Windows - Chrome" });
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "trackalacker-sample-combined-test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as AddressInfo;
+  const root = `http://127.0.0.1:${address.port}`;
+  const headers = {
+    "Content-Type": "application/json",
+    Origin: `chrome-extension://${"a".repeat(32)}`,
+    Authorization: `Bearer ${paired.token}`
+  };
+  try {
+    const response = await fetch(`${root}/api/v1/devices/self/sources/trackalacker/catalog`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        item: {
+          sourceProductId: "138099",
+          sourceProductSlug: "riftbound-deck",
+          sourceProductUrl: "https://www.trackalacker.com/products/showcase/riftbound-deck",
+          title: "Riftbound Deck",
+          imageUrl: "https://cdn.example.com/riftbound.jpg",
+          msrpCents: 2186,
+          observedAt: new Date().toISOString(),
+          listings: []
+        },
+        rawSample: { listItem: { image_url: "https://cdn.example.com/riftbound.jpg", default_price: "21.86" } }
+      })
+    });
+    assert.equal(response.status, 202);
+    const body = await response.json() as Record<string, unknown>;
+    assert.ok(body.item);
+    const event = db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'trackalacker_sync_sample'"
+    );
+    assert.equal(event?.count, 1);
+    assert.equal(db.get<{ image_url: string }>("SELECT image_url FROM variants LIMIT 1")?.image_url, "https://cdn.example.com/riftbound.jpg");
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});

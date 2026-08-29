@@ -2310,6 +2310,19 @@ async function acceptTrackalackerSyncItem(message, sender) {
   }, 15_000);
 }
 
+async function recordTrackalackerSyncSample(message, sender) {
+  if (!senderIsTrackalacker(sender)) throw new Error("A signed-in TrackaLacker tab is required.");
+  const current = await readTrackalackerSyncState();
+  if (!current.syncId || String(message?.syncId || "") !== current.syncId) return { recorded: false };
+  const device = await storedDevice();
+  if (!device?.token) throw new Error("The paired Chrome device is unavailable.");
+  return request("/devices/self/sources/trackalacker/catalog", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({ syncId: current.syncId, rawSample: message.sample })
+  }, 15_000);
+}
+
 async function startTrackalackerSync() {
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this Chrome companion before syncing TrackaLacker.");
@@ -3739,7 +3752,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const contentOperation = [
     "yoink:resolve-trackalacker-listing",
     "yoink:trackalacker-sync-progress",
-    "yoink:trackalacker-sync-item"
+    "yoink:trackalacker-sync-item",
+    "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
   const pageOperation = inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || contentOperation;
   const operation = message?.type === "yoink:check-health"
@@ -3776,6 +3790,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     ? recordTrackalackerSyncProgress(message, sender)
                     : message?.type === "yoink:trackalacker-sync-item"
                       ? acceptTrackalackerSyncItem(message, sender)
+                      : message?.type === "yoink:trackalacker-sync-sample"
+                        ? recordTrackalackerSyncSample(message, sender)
             : null;
   if (!operation) return false;
   operation.then((result) => sendResponse(pageOperation ? { ok: true, ...result } : { ok: true, state: result })).catch((error) => {
