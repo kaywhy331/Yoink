@@ -91,13 +91,14 @@ export function evaluateStrategies(
       ? "first_party_only"
       : "allow_third_party";
     if (!sellerMatches(strategy, signal, effectiveSellerPolicy)) continue;
-    const effectiveFulfillment = mission.fulfillment === "inherit" ? strategy.fulfillment : mission.fulfillment;
-    if (
-      !["either", "manual", "unknown"].includes(effectiveFulfillment)
-      && signal.offer.fulfillment !== "unknown"
-      && signal.offer.fulfillment !== "either"
-      && signal.offer.fulfillment !== effectiveFulfillment
-    ) continue;
+    const configuredFulfillment = mission.fulfillment === "inherit" ? strategy.fulfillment : mission.fulfillment;
+    // Pickup is never inferred from an ambiguous or inherited configuration.
+    // Legacy `either`/`unknown` policies retain a safe, deterministic shipping
+    // default; only an exact saved pickup value can authorize pickup evidence.
+    const effectiveFulfillment = configuredFulfillment === "pickup"
+      ? "pickup"
+      : configuredFulfillment === "manual" ? "manual" : "shipping";
+    if (effectiveFulfillment !== "manual" && signal.offer.fulfillment !== effectiveFulfillment) continue;
     const observedAt = new Date(signal.observedAt).getTime();
     if (!Number.isFinite(observedAt) || now - observedAt > strategy.maxSignalAgeSeconds * 1_000 || observedAt > now + 30_000) {
       sawStaleCandidate = true;
@@ -204,7 +205,9 @@ export function evaluatePurchaseIntent(
   if (sellerPolicy === "first_party_only" && signal.offer.sellerType !== "first_party") {
     return rejected("The exact purchase plan requires the retailer itself to be explicitly verified as seller.");
   }
-  const fulfillment = target.fulfillment === "inherit" ? "unknown" : target.fulfillment;
+  const fulfillment = target.fulfillment === "pickup"
+    ? "pickup"
+    : target.fulfillment === "manual" ? "manual" : "shipping";
   if (["shipping", "pickup"].includes(fulfillment) && signal.offer.fulfillment !== fulfillment) {
     return rejected("The observed fulfillment does not match the exact purchase plan.");
   }

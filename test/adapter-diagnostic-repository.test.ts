@@ -378,6 +378,38 @@ test("a transient layout failure recovered by retry is retained without opening 
   }
 });
 
+test("a constrained semantic recovery retains bounded landmarks without opening repair work", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const repository = new AdapterDiagnosticRepository(db);
+    const stored = repository.record(device.id, diagnostic({
+      outcome: "passed",
+      failureStage: "complete",
+      reasonCode: "semantic_layout_recovered",
+      layout: layout({
+        addControlCount: 0,
+        genericAddIntentCount: 1,
+        scopedControlCount: 1,
+        priceCandidateCount: 0,
+        genericPriceCandidateCount: 1,
+        canonicalOfferInputCount: 1,
+        canonicalOfferDistinctCount: 1,
+        repairLandmarks: [
+          { field: "unitPrice", elementKind: "div", attribute: "data-testid", value: "commerce-amount" },
+          { field: "addControl", elementKind: "input", attribute: "data-button-state", value: "primary-cart-action" }
+        ]
+      })
+    }), NOW + 2_000);
+    assert.equal(stored.outcome, "passed");
+    assert.equal(stored.reasonCode, "semantic_layout_recovered");
+    assert.equal(stored.layout.repairLandmarks?.length, 2);
+    assert.equal(repository.listRepairQueue().length, 0);
+  } finally {
+    db.close();
+  }
+});
+
 test("a later successful inspection closes zero-content runtime incidents for every affected exact SKU", () => {
   const db = new YoinkDatabase();
   try {

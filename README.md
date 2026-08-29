@@ -4,16 +4,32 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.7.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.8.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
 records every decision in SQLite. Target, Walmart, Amazon, and Best Buy now have
 separate, exact-version add-to-cart lanes. Each lane requires its own current evidence,
 no-click rehearsal, and explicit local activation; upgrading never activates a
-new lane. Every lane is restricted to first-party shipping offers, quantity one.
+new lane. Every lane is restricted to first-party offers, quantity one, and the
+exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.8.0 makes Shipping the deterministic fulfillment default throughout
+mission evaluation, persistence, qualification, and browser execution. Pickup
+is eligible only when the user explicitly saved Pickup and the live exact
+first-party offer proves it is currently available; an unavailable or
+mismatched choice stops before any click and never falls back across modes.
+Target add v4 recognizes current fulfillment tiles, prioritizes Shipping, uses
+an eligible Delivery tile only as the non-Pickup remote fallback, and rebinds
+the exact Add control after an authorized tile selection. Walmart add v5,
+Amazon add v7, and Best Buy add v5 apply the same exact-choice boundary.
+All four adapters can recover from constrained selector drift only when one
+unique SKU, seller, price, fulfillment path, and Add control remain provable;
+ambiguity fails closed and emits a privacy-bounded diagnostic. The version
+bumps retire prior qualifications, requiring fresh evidence, no-click
+rehearsal, and explicit activation before live actions resume.
 
 Version 1.7.0 is a consumer-surface release driven by first-hand usage
 feedback. Quick add no longer fails when tax and store-fee reserves exceed the
@@ -1056,19 +1072,20 @@ PostgreSQL authenticates `session_user`, requires the complete v0.83
 predecessor graph, and locks the inbox message, mission, target, policy,
 settings, source, retailer qualification, and spend policy in fixed order. It
 revalidates the exact product and active target, remaining quantity and sibling
-claims, fulfilled quantity, cooldown, fresh trusted first-party shipping
-evidence, the exact current add-only adapter, quantity one, and per-order,
-daily, and monthly limits. A valid first application atomically appends the
+claims, fulfilled quantity, cooldown, fresh trusted first-party evidence that
+matches the saved Shipping or Pickup choice, the exact current add-only adapter,
+quantity one, and per-order, daily, and monthly limits. A valid first application atomically appends the
 exact offer/snapshot, action job and initial event, active reservation and
 reserved ledger entry, qualified mission decision, audit event, and outbox
 event across nine mutation tables. Complete immutable replay writes nothing
 and tolerates only normal action/outbox lifecycle changes; partial or altered
 graphs fail closed.
 
-The qualification is intentionally purchase-intent-only. Strategy-authorized
-actions, marketplace and pickup offers, noncanonical attribution, retailer DOM
-mutation, checkout, order submission, and inbox completion are structurally
-closed. The role remains inactive and SQLite remains authoritative. Existing
+Action authority is intentionally purchase-intent-only; strategy-sourced
+decisions remain notification-only. Marketplace offers, ambiguous or mismatched
+fulfillment, noncanonical attribution, retailer DOM mutation, checkout, order
+submission, and inbox completion are structurally closed. The role remains
+inactive and SQLite remains authoritative. Existing
 configuration/reservation writers still need the same lock protocol,
 attribution-policy parity is incomplete, and final hosted-handler composition,
 production principals, repository parity, and cutover drills remain required.
@@ -2574,7 +2591,7 @@ page memory and are discarded; only readiness and a reason code are persisted.
 These observations never authorize mutation by themselves.
 
 Walmart Collectibles Draw uses a separate `walmart-draw-observer-v1` contract,
-not the normal Walmart product observer or `walmart-add-v3` qualification
+not the normal Walmart product observer or `walmart-add-v5` qualification
 dossier. From the exact `/shop/collectibles/draw` hub it records at most 24
 normalized cards and reconstructs canonical item URLs server-side. Draw cards
 are matched to private missions only by exact Walmart item ID. They are never
@@ -2617,27 +2634,39 @@ errors are retried; permanent client rejection is dropped. Exact retry
 idempotency on ingestion prevents an ambiguous response from incrementing an
 incident twice. This adds no page permission or retailer mutation capability.
 
-Target's qualified `target-add-v1` runner requires:
+The four action stores now use constrained local layout recovery. Packaged
+selectors remain primary; a semantic Add control or price is accepted only when
+it has one unique privacy-bounded landmark and the existing exact product,
+seller, fulfillment, quantity, price-cap, offer-scope, and offer-token checks
+all pass. Duplicate candidates fail closed. Remote observer recipes remain
+read-only shadow evidence and cannot supply click targets.
+
+Target's qualified `target-add-v4` runner requires:
 
 - live execution mode, Actions unpaused, an online paired device, and a current
   adapter qualification;
 - an immutable exact TCIN job with unit/total caps;
-- quantity one, Target as seller, and shipping fulfillment;
+- quantity one, Target as seller, and exact Shipping or explicitly configured Pickup fulfillment;
 - a provably empty cart;
-- immediate live SKU, stock, seller, price, and fulfillment revalidation;
+- exact binding to Target's current fulfillment tiles and TCIN-scoped Add control;
+- guarded selection of available Shipping, or available same-day Delivery when
+  Shipping is unavailable, followed by immediate live SKU, stock, seller, price,
+  and fulfillment revalidation;
 - a durable `adding` receipt before one click;
 - exact cart-line verification afterward.
 
-Walmart's separately gated `walmart-add-v3` runner applies the same immutable
+Walmart's separately gated `walmart-add-v5` runner applies the same immutable
 job, empty-cart, at-most-once, cart-proof, and recovery boundaries. In addition,
-shipping must be explicit in the live buy box, Walmart must be the seller, and
+the live buy box must exactly match Shipping or explicitly configured Pickup,
+Walmart must be the seller, and
 virtual queues, memberships, location prompts, authentication, MFA, or security
 challenges stop the job before mutation.
 
-Amazon's separately gated `amazon-add-v5` runner requires an exact ASIN,
-Amazon.com as both first-party seller identity and shipping offer, quantity one,
+Amazon's separately gated `amazon-add-v7` runner requires an exact ASIN,
+Amazon.com as first-party seller and an exact Shipping or explicitly configured
+Pickup offer, quantity one,
 a provably empty Amazon cart, and a unique offer token scoped with the price,
-seller evidence, shipping evidence, and Add control. Observer v6 binds the
+seller evidence, shipping evidence, and Add control. Observer v7 binds the
 nearest exact product form before considering bounded local fallbacks, including
 when Amazon deeply nests the Add control. Canonical `offerListingID` checkout
 fields take precedence when they agree; `offeringID.1` is used only when the
@@ -2652,12 +2681,13 @@ token stays inside the isolated page runner and must be unchanged at the final
 pre-click check. Only the Add-to-Cart control can be clicked; Buy Now navigation
 is never used. The resulting cart must contain one exact ASIN at quantity one.
 
-Best Buy's separately gated `bestbuy-add-v3` runner requires an exact numeric
+Best Buy's separately gated `bestbuy-add-v5` runner requires an exact numeric
 SKU from a current or legacy product URL, explicit visible `Sold by Best Buy`
 evidence in the same bounded offer scope as one Add-to-Cart control and price,
-selected shipping, and quantity one. `Sold & shipped by` marketplace offers,
-pickup-selected offers, high-demand queues, location/account/security blocks,
-and ambiguous or conflicting SKU evidence stop before mutation. Observer v5
+an exact Shipping or explicitly configured Pickup selection, and quantity one.
+`Sold & shipped by` marketplace offers, mismatched fulfillment, high-demand
+queues, location/account/security blocks, and ambiguous or conflicting SKU
+evidence stop before mutation. Observer v6
 recognizes current Best Buy test/automation attributes and safely reports when
 a native Add-intent control exists outside the known selector set, allowing the
 sanitized repair queue to distinguish selector drift from a genuinely missing
@@ -2665,7 +2695,7 @@ control. It also binds a seller name represented by bounded accessibility
 metadata inside the exact seller element. Explicit in-store-only products are
 manual/local evidence with unknown global availability rather than false
 out-of-stock evidence. Migration 28 retires inherited Best Buy
-qualification, requiring fresh v5 evidence and a v3 rehearsal before explicit
+qualification, requiring fresh v6 evidence and a v5 rehearsal before explicit
 activation. Its empty-cart, at-most-once receipt, immediate offer revalidation,
 and exact single-line cart proof match the other guarded lanes. A historical
 repair group is superseded only by a strictly newer packaged adapter's later
@@ -2674,9 +2704,11 @@ non-failure result for that same exact SKU.
 A generic retailer-mutation capability cannot authorize Target, Walmart,
 Amazon, Best Buy, or any future lane.
 
-Pickup add, prepare-checkout, and submit-order are displayed as twelve
-independent future qualification lanes. They have no packaged runner or
-activation endpoint. Prepare/submit strategies remain non-leasable rehearsal
+Prepare-checkout and submit-order are displayed as eight independent future
+qualification lanes. They have no packaged runner or activation endpoint.
+Pickup is part of each exact add-only contract, but is never inferred: only an
+explicit saved Pickup target can bind a live available Pickup offer; all legacy
+or ambiguous fulfillment settings default to Shipping. Prepare/submit strategies remain non-leasable rehearsal
 records even when add-only execution is live; destination/payment fingerprints,
 final-total proof, confirmation evidence, and uncertain-submit recovery remain
 mandatory future submit prerequisites.

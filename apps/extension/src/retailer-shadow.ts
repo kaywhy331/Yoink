@@ -36,7 +36,7 @@ function boundedDiagnosticLayout(
   layout: RetailerAdapterLayoutEvidence,
   reasonCode: string
 ): RetailerAdapterLayoutEvidence {
-  if (REPAIR_SELECTOR_MISS_REASONS.has(reasonCode)) return layout;
+  if (REPAIR_SELECTOR_MISS_REASONS.has(reasonCode) || reasonCode === "semantic_layout_recovered") return layout;
   const {
     repairLandmarks: _repairLandmarks,
     genericAvailabilityCandidateCount: _availabilityCandidates,
@@ -82,7 +82,7 @@ export function collectRetailerShadowObservation(
   documentValue: Document,
   urlValue: string,
   retailerId: SupportedRetailerId,
-  requiredFulfillment: Fulfillment = "either"
+  requiredFulfillment: Fulfillment = "shipping"
 ): RetailerShadowObservationInput {
   if (!documentValue || !SUPPORTED.has(retailerId)) throw new Error("A supported retailer page is required.");
   const exactRetailer = retailerId as Exclude<SupportedRetailerId, "target">;
@@ -139,14 +139,25 @@ function observationDiagnosticState(
       reasonCode: "selected_offer_binding_unresolved"
     };
   }
+  const semanticControlRecovered = layout.addControlCount === 0
+    && (layout.genericAddIntentCount ?? 0) === 1
+    && layout.scopedControlCount === 1
+    && observation.addControlActionable
+    && hasRepairField(layout, "addControl");
+  const semanticPriceRecovered = layout.priceCandidateCount === 0
+    && (layout.genericPriceCandidateCount ?? 0) === 1
+    && observation.unitPriceCents !== null
+    && hasRepairField(layout, "unitPrice");
   if (layout.addControlCount === 0) {
-    if ((layout.genericAddIntentCount ?? 0) > 0) {
+    if (!semanticControlRecovered && (layout.genericAddIntentCount ?? 0) > 0) {
       return { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_selector_miss" };
     }
     if ((layout.genericAvailabilityCandidateCount ?? 0) === 1 && hasRepairField(layout, "availability")) {
       return { outcome: "failed", failureStage: "availability_binding", reasonCode: "availability_selector_miss" };
     }
-    return { outcome: "rejected", failureStage: "add_control", reasonCode: "add_control_missing" };
+    if (!semanticControlRecovered) {
+      return { outcome: "rejected", failureStage: "add_control", reasonCode: "add_control_missing" };
+    }
   }
   if (layout.addControlCount > 1 && layout.scopedControlCount !== 1) {
     return { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_ambiguous" };
@@ -166,7 +177,7 @@ function observationDiagnosticState(
     if (primaryOfferCount === 0) return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_missing" };
     if (primaryOfferCount !== 1) return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_ambiguous" };
   }
-  if (layout.priceCandidateCount === 0 || observation.unitPriceCents === null) {
+  if ((!semanticPriceRecovered && layout.priceCandidateCount === 0) || observation.unitPriceCents === null) {
     return (layout.genericPriceCandidateCount ?? 0) === 1 && hasRepairField(layout, "unitPrice")
       ? { outcome: "failed", failureStage: "price_binding", reasonCode: "price_selector_miss" }
       : { outcome: "failed", failureStage: "price_binding", reasonCode: "price_binding_missing" };
@@ -191,14 +202,18 @@ function observationDiagnosticState(
       reasonCode: observation.routeReasonCode || "route_binding_failed"
     };
   }
-  return { outcome: "passed", failureStage: "complete", reasonCode: "verified" };
+  return {
+    outcome: "passed",
+    failureStage: "complete",
+    reasonCode: semanticControlRecovered || semanticPriceRecovered ? "semantic_layout_recovered" : "verified"
+  };
 }
 
 export function collectRetailerShadowAttempt(
   documentValue: Document,
   urlValue: string,
   retailerId: SupportedRetailerId,
-  requiredFulfillment: Fulfillment = "either",
+  requiredFulfillment: Fulfillment = "shipping",
   attemptCount = 1,
   domChanged = false
 ): { observation: ReturnType<typeof collectRetailerShadowObservation>; diagnostic: RetailerAdapterDiagnosticInput } {

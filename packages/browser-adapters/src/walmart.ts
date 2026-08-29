@@ -81,7 +81,7 @@ export function walmartAddControl(
   expectedSku: string,
   requiredFulfillment: Fulfillment
 ): Element | null {
-  if (requiredFulfillment !== "shipping" && requiredFulfillment !== "either") return null;
+  if (requiredFulfillment !== "shipping" && requiredFulfillment !== "pickup") return null;
   if (retailerInteractiveBlock(document, urlValue)) return null;
   return retailerAddControl(document, urlValue, "walmart", expectedSku, requiredFulfillment);
 }

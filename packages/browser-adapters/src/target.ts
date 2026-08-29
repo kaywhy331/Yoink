@@ -15,6 +15,14 @@ export interface TargetMissionIdentity {
   fulfillment: Fulfillment;
 }
 
+export interface TargetAddBinding {
+  control: Element | null;
+  fulfillmentControl: Element | null;
+  fulfillment: "shipping" | "pickup" | "unknown";
+  selectionRequired: boolean;
+  offerRoot: Element | null;
+}
+
 export type FingerprintSigner = (values: string[]) => Promise<string>;
 
 const MARKETPLACE_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+(?!target\b)|sold\s+by\s+(?!target\b)|target\s*plus|marketplace\s+seller/i;
@@ -26,11 +34,14 @@ function text(value: Element | Document | null | undefined, maximum = 2_000): st
 
 function visible(element: Element | null): element is Element {
   if (!element) return false;
+  const view = element.ownerDocument.defaultView;
   let current: Element | null = element;
   while (current) {
     if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") return false;
     const style = String(current.getAttribute("style") || "").replace(/\s+/g, "").toLocaleLowerCase("en-US");
     if (/(?:^|;)display:none(?:;|$)|(?:^|;)visibility:hidden(?:;|$)/.test(style)) return false;
+    const computed = view?.getComputedStyle?.(current);
+    if (computed?.display === "none" || computed?.visibility === "hidden") return false;
     current = current.parentElement;
   }
   return true;
@@ -99,6 +110,27 @@ function readPrice(root: ParentNode, selectors: string[]): number | null {
   return null;
 }
 
+function adaptiveTargetPrice(root: ParentNode, selectors: string[]): number | null {
+  const packaged = readPrice(root, selectors);
+  if (packaged !== null) return packaged;
+  const candidates = [...root.querySelectorAll("[data-test], [data-testid], [itemprop], [aria-label]")]
+    .slice(0, 500)
+    .filter((element) => visible(element) && !recommendationControl(element))
+    .filter((element) => /(?:price|amount)/i.test([
+      element.getAttribute("data-test"),
+      element.getAttribute("data-testid"),
+      element.getAttribute("itemprop"),
+      element.getAttribute("aria-label")
+    ].filter(Boolean).join(" ")))
+    .map((element) => ({
+      element,
+      price: [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)]
+        .map(parseUsPrice).find((value) => value !== null) ?? null
+    }))
+    .filter((entry): entry is { element: Element; price: number } => entry.price !== null);
+  return candidates.length === 1 && candidates[0] ? candidates[0].price : null;
+}
+
 export function targetSecurityChallenge(document: Document): boolean {
   return Boolean(queryVisible(document, [
     "iframe[src*='captcha' i]",
@@ -115,6 +147,7 @@ export function targetInteractiveBlock(document: Document): LiveOfferObservation
   const dialogText = text(dialog, 10_000);
   if (dialog && /choose|select|set/.test(dialogText.toLocaleLowerCase("en-US")) && /pickup store|my store|location/.test(dialogText.toLocaleLowerCase("en-US"))) return "location";
   if (dialog && /target circle 360|membership|free trial/i.test(dialogText)) return "membership";
+  if (dialog && /something went wrong|please try again in a bit|loading screen/i.test(dialogText)) return "unknown";
   if (queryVisible(document, ["form[action*='login' i] input[type='password']", "input[autocomplete='current-password']"])) return "auth";
   if (/you(?:’|')?re in line|virtual queue|waiting room/i.test(visibleText)) return "queue";
   if (targetSecurityChallenge(document)) return "unknown";
@@ -134,11 +167,66 @@ export function targetPageKind(urlValue: string): LiveOfferObservation["pageKind
   }
 }
 
-function controlFulfillment(control: Element, document: Document): "shipping" | "pickup" | "unknown" {
-  const own = `${control.getAttribute("data-test") || ""} ${control.getAttribute("data-fulfillment") || ""} ${text(control, 300)}`;
-  if (/ship it|shipping|delivery/i.test(own)) return "shipping";
-  if (/pick it up|pickup|pick-up/i.test(own)) return "pickup";
-  const selected = [...document.querySelectorAll("[aria-selected='true'], [data-selected='true'], input:checked")]
+const TARGET_FULFILLMENT_ROOT_SELECTOR = [
+  "[data-test='@web/AddToCart/FulfillmentSection'][aria-label='Fulfillment']",
+  "[data-test='module-product-detail-fulfillment-v1'][aria-label='Fulfillment']",
+  "[data-module-type='ProductDetailFulfillment'] [aria-label='Fulfillment']",
+  "[aria-label='Fulfillment']"
+].join(", ");
+const TARGET_FULFILLMENT_TILE_SELECTOR = [
+  "button[data-test='fulfillment-cell-pickup']",
+  "button[data-test='fulfillment-cell-delivery']",
+  "button[data-test='fulfillment-cell-shipping']",
+  "button#PICKUP",
+  "button#DELIVERY",
+  "button#SHIPPING",
+  "button[aria-label]"
+].join(", ");
+const TARGET_FULFILLMENT_UNAVAILABLE_PATTERN = /\b(?:not available|unavailable|out of stock|sold out|loading|check availability|choose (?:a |your )?(?:store|location|address)|select (?:a |your )?(?:store|location|address)|set (?:a |your )?(?:store|location|address))\b/i;
+const TARGET_FULFILLMENT_AVAILABLE_PATTERN = /\b(?:arrives?|ready|available|get it|same[ -]?day|today|tomorrow|within|deliver(?:ed|y) by)\b/i;
+
+function fulfillmentKind(element: Element): "shipping" | "pickup" | "unknown" {
+  const marker = [
+    element.getAttribute("data-test"),
+    element.getAttribute("data-fulfillment"),
+    element.getAttribute("id")
+  ].filter(Boolean).join(" ");
+  if (/shipping|shipit|delivery|same[ -]?day/i.test(marker)) return "shipping";
+  if (/pickup|pick-up/i.test(marker)) return "pickup";
+  const label = `${element.getAttribute("aria-label") || ""} ${text(element, 300)}`;
+  if (/^\s*(?:ship it|shipping|delivery|same[ -]?day delivery)\b/i.test(label)) return "shipping";
+  if (/^\s*(?:pick it up|pickup|pick-up)\b/i.test(label)) return "pickup";
+  return "unknown";
+}
+
+function fulfillmentTileSelected(element: Element): boolean {
+  const ariaLabel = String(element.getAttribute("aria-label") || "");
+  return element.getAttribute("aria-selected") === "true"
+    || element.getAttribute("aria-checked") === "true"
+    || element.getAttribute("aria-pressed") === "true"
+    || element.getAttribute("data-selected") === "true"
+    || (/\bselected\b/i.test(ariaLabel) && !/\bunselected\b/i.test(ariaLabel))
+    || /(?:^|[_\s-])(?:is-)?active(?:[_\s-]|$)/i.test(String(element.getAttribute("class") || ""));
+}
+
+function fulfillmentTileAvailable(element: Element): boolean {
+  if (!visible(element) || element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true") return false;
+  const evidence = `${element.getAttribute("aria-label") || ""} ${text(element, 500)}`;
+  if (TARGET_FULFILLMENT_UNAVAILABLE_PATTERN.test(evidence)) return false;
+  return fulfillmentTileSelected(element) || TARGET_FULFILLMENT_AVAILABLE_PATTERN.test(evidence);
+}
+
+function controlFulfillment(control: Element, root: Element | Document): "shipping" | "pickup" | "unknown" {
+  const own = fulfillmentKind(control);
+  const selectedTiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)]
+    .filter((element) => visible(element) && fulfillmentKind(element) !== "unknown" && fulfillmentTileSelected(element));
+  if (selectedTiles.length === 1 && selectedTiles[0]) {
+    const selected = fulfillmentKind(selectedTiles[0]);
+    return own !== "unknown" && own !== selected ? "unknown" : selected;
+  }
+  if (selectedTiles.length > 1) return "unknown";
+  if (own !== "unknown") return own;
+  const selected = [...root.querySelectorAll("[aria-selected='true'], [data-selected='true'], input:checked")]
     .filter((element) => visible(element))
     .map((element) => text(element.closest("label, [role='tab'], [data-test*='fulfillment' i]") || element, 500));
   const shipping = selected.some((value) => /ship it|shipping|delivery/i.test(value));
@@ -146,26 +234,96 @@ function controlFulfillment(control: Element, document: Document): "shipping" | 
   return shipping === pickup ? "unknown" : shipping ? "shipping" : "pickup";
 }
 
+function recommendationControl(candidate: Element): boolean {
+  return Boolean(candidate.closest([
+    "[data-test*='recommend' i]",
+    "[data-testid*='carousel' i]",
+    "[aria-label*='similar items' i]",
+    "[data-test*='productCard' i]",
+    "[data-strategy-id]",
+    "[data-module-type*='Recommended' i]"
+  ].join(", ")));
+}
+
+function exactAddControls(root: ParentNode, sku: string): Element[] {
+  if (!/^\d{6,}$/.test(sku)) return [];
+  return [...root.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`)]
+    .filter((candidate) => visible(candidate) && !recommendationControl(candidate));
+}
+
 function addControls(document: Document, sku: string): Element[] {
-  const exact = /^\d{6,}$/.test(sku) ? document.getElementById(`addToCartButtonOrTextIdFor${sku}`) : null;
   const candidates = [
-    exact,
-    ...document.querySelectorAll("button[data-test='shipItButton'], button[data-test='orderPickupButton'], button[data-test*='addToCart' i]")
-  ].filter((value): value is Element => Boolean(value));
+    ...exactAddControls(document, sku),
+    ...document.querySelectorAll("button[data-test='shipItButton'], button[data-test='shippingButton'], button[data-test='orderPickupButton'], button[data-test*='addToCart' i]")
+  ];
   return [...new Set(candidates)].filter((candidate) => {
     if (!visible(candidate)) return false;
-    if (candidate.closest("[data-test*='recommend' i], [data-testid*='carousel' i], [aria-label*='similar items' i]")) return false;
+    if (recommendationControl(candidate)) return false;
+    const idSku = candidate.getAttribute("id")?.match(/^addToCartButtonOrTextIdFor(\d{6,})$/)?.[1];
+    if (idSku && idSku !== sku) return false;
     const scopedSku = candidate.closest("[data-tcin]")?.getAttribute("data-tcin");
-    return !scopedSku || scopedSku === sku;
+    return idSku === sku || scopedSku === sku;
   });
 }
 
-function selectedAddControl(document: Document, sku: string, required: Fulfillment): { control: Element | null; fulfillment: "shipping" | "pickup" | "unknown" } {
+function emptyTargetAddBinding(): TargetAddBinding {
+  return { control: null, fulfillmentControl: null, fulfillment: "unknown", selectionRequired: false, offerRoot: null };
+}
+
+function modernTargetAddBinding(document: Document, sku: string, required: Fulfillment): TargetAddBinding | null {
+  const roots = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))]
+    .filter((root) => visible(root) && !recommendationControl(root));
+  if (roots.length === 0) return null;
+  const scoped = roots.map((root) => ({ root, controls: exactAddControls(root, sku) }))
+    .filter((entry) => entry.controls.length === 1 && entry.controls[0]);
+  if (scoped.length !== 1 || !scoped[0]?.controls[0]) return emptyTargetAddBinding();
+  const { root } = scoped[0];
+  const control = scoped[0].controls[0];
+  const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)]
+    .filter(visible)
+    .map((fulfillmentControl) => ({
+      fulfillmentControl,
+      fulfillment: fulfillmentKind(fulfillmentControl),
+      selected: fulfillmentTileSelected(fulfillmentControl),
+      available: fulfillmentTileAvailable(fulfillmentControl)
+    }))
+    .filter((entry) => entry.fulfillment !== "unknown");
+  const selected = tiles.filter((entry) => entry.selected);
+  if (selected.length !== 1 || !selected[0]) return emptyTargetAddBinding();
+  const selectedEntry = selected[0];
+  required = required === "pickup" ? "pickup" : "shipping";
+  const alreadySelected = selectedEntry.fulfillment === required && selectedEntry.available;
+  if (alreadySelected) {
+    return { control, fulfillmentControl: selectedEntry.fulfillmentControl, fulfillment: required, selectionRequired: false, offerRoot: root };
+  }
+  const available = tiles.filter((entry) => entry.fulfillment === required && entry.available);
+  if (available.length === 0) return emptyTargetAddBinding();
+  const preferred = required === "shipping"
+    ? available.find((entry) => /shipping/i.test(String(entry.fulfillmentControl.getAttribute("data-test") || entry.fulfillmentControl.getAttribute("id") || ""))) ?? available[0]
+    : available[0];
+  return preferred
+    ? { control, fulfillmentControl: preferred.fulfillmentControl, fulfillment: required, selectionRequired: true, offerRoot: root }
+    : emptyTargetAddBinding();
+}
+
+function legacyTargetAddBinding(document: Document, sku: string, required: Fulfillment): TargetAddBinding {
+  required = required === "pickup" ? "pickup" : "shipping";
   const candidates = addControls(document, sku).map((control) => ({ control, fulfillment: controlFulfillment(control, document) }));
-  const matching = candidates.find((entry) => required === "either"
-    ? entry.fulfillment === "shipping" || entry.fulfillment === "pickup"
-    : entry.fulfillment === required);
-  return matching ?? candidates[0] ?? { control: null, fulfillment: "unknown" };
+  const matching = candidates.find((entry) => entry.fulfillment === required);
+  return matching
+    ? { ...matching, fulfillmentControl: null, selectionRequired: false, offerRoot: null }
+    : emptyTargetAddBinding();
+}
+
+export function targetAddBinding(
+  document: Document,
+  urlValue: string,
+  expectedSku: string,
+  requiredFulfillment: Fulfillment
+): TargetAddBinding {
+  if (extractTargetSku(urlValue) !== expectedSku) return emptyTargetAddBinding();
+  return modernTargetAddBinding(document, expectedSku, requiredFulfillment)
+    ?? legacyTargetAddBinding(document, expectedSku, requiredFulfillment);
 }
 
 export function targetAddControl(
@@ -174,16 +332,15 @@ export function targetAddControl(
   expectedSku: string,
   requiredFulfillment: Fulfillment
 ): Element | null {
-  if (extractTargetSku(urlValue) !== expectedSku) return null;
-  const selected = selectedAddControl(document, expectedSku, requiredFulfillment);
-  return actionable(selected.control) ? selected.control : null;
+  const binding = targetAddBinding(document, urlValue, expectedSku, requiredFulfillment);
+  return !binding.selectionRequired && actionable(binding.control) ? binding.control : null;
 }
 
 function closestOfferContainer(anchor: Element | null): Element | null {
   let current = anchor?.parentElement ?? null;
   for (let depth = 0; depth < 12 && current; depth += 1) {
     const scopedText = text(current, 60_000);
-    const price = readPrice(current, [
+    const price = adaptiveTargetPrice(current, [
       "[data-test='product-price']",
       "[data-test*='current-price' i]",
       "meta[itemprop='price']",
@@ -222,11 +379,12 @@ export function observeTargetOffer(
 ): LiveOfferObservation {
   const pageSku = extractTargetSku(urlValue);
   const selected = pageSku === expectedSku
-    ? selectedAddControl(document, expectedSku, requiredFulfillment)
-    : { control: null, fulfillment: "unknown" as const };
+    ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment)
+    : emptyTargetAddBinding();
   const seller = sellerEvidence(document, selected.control);
-  const priceRoot = selected.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || document;
-  const unitPriceCents = readPrice(priceRoot, [
+  const priceRoot = selected.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main")
+    || selected.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || document;
+  const unitPriceCents = adaptiveTargetPrice(priceRoot, [
     "[data-test='product-price']",
     "[data-test*='current-price' i]",
     "meta[itemprop='price']",
@@ -256,11 +414,11 @@ export function observeTargetSelectedOfferScope(
   document: Document,
   urlValue: string,
   expectedSku: string,
-  requiredFulfillment: Fulfillment = "either"
+  requiredFulfillment: Fulfillment = "shipping"
 ) {
   const pageSku = extractTargetSku(urlValue);
   if (!pageSku || pageSku !== expectedSku) throw new Error("The exact Target listing identity is unavailable.");
-  const selected = selectedAddControl(document, expectedSku, requiredFulfillment);
+  const selected = targetAddBinding(document, urlValue, expectedSku, requiredFulfillment);
   return selectedOfferScope(
     document,
     "target",

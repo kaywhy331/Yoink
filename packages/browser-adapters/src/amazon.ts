@@ -86,7 +86,7 @@ export function amazonAddBinding(
   expectedAsin: string,
   requiredFulfillment: Fulfillment
 ): { control: Element; offerListingId: string } | null {
-  if (requiredFulfillment !== "shipping" && requiredFulfillment !== "either") return null;
+  if (requiredFulfillment !== "shipping" && requiredFulfillment !== "pickup") return null;
   if (amazonInteractiveBlock(documentValue, urlValue)) return null;
   return amazonOfferBinding(documentValue, urlValue, expectedAsin, requiredFulfillment);
 }

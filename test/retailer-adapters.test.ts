@@ -102,6 +102,77 @@ test("one exact selector-class failure can expose all five privacy-bounded read-
   }
 });
 
+test("all three generic action stores report constrained semantic layout recovery", () => {
+  const cases = [
+    {
+      retailerId: "walmart" as const,
+      url: "https://www.walmart.com/ip/fixture/17354421975",
+      sku: "17354421975",
+      document: fixture("walmart-first-party.html", "https://www.walmart.com/ip/fixture/17354421975"),
+      priceSelector: "[data-automation-id='product-price']",
+      controlSelector: "button[data-automation-id='atc']"
+    },
+    {
+      retailerId: "amazon" as const,
+      url: "https://www.amazon.com/dp/B0GYTRYV7P",
+      sku: "B0GYTRYV7P",
+      document: fixture("amazon-first-party.html", "https://www.amazon.com/dp/B0GYTRYV7P"),
+      priceSelector: "#corePrice_feature_div",
+      controlSelector: "#add-to-cart-button"
+    },
+    {
+      retailerId: "bestbuy" as const,
+      url: "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149",
+      sku: "6588149",
+      document: fixture(
+        "bestbuy-first-party.html",
+        "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149"
+      ),
+      priceSelector: "[data-testid='customer-price']",
+      controlSelector: "[data-testid='buy-box'] button"
+    }
+  ];
+
+  for (const entry of cases) {
+    const price = entry.document.querySelector(entry.priceSelector);
+    assert.ok(price, entry.retailerId);
+    for (const attribute of ["id", "class", "data-automation-id", "data-testid", "itemprop"]) {
+      price.removeAttribute(attribute);
+    }
+    price.setAttribute("data-testid", "commerce-amount");
+    price.querySelector(".a-offscreen")?.removeAttribute("class");
+
+    const control = entry.document.querySelector(entry.controlSelector);
+    assert.ok(control, entry.retailerId);
+    const semantic = entry.retailerId === "bestbuy" ? entry.document.createElement("div") : control;
+    if (entry.retailerId === "bestbuy") {
+      semantic.setAttribute("role", "button");
+      semantic.textContent = "Add to cart";
+      control.replaceWith(semantic);
+    } else {
+      for (const attribute of ["id", "name", "data-automation-id", "data-testid", "class"]) {
+        semantic.removeAttribute(attribute);
+      }
+    }
+    semantic.setAttribute("data-button-state", "primary-cart-action");
+
+    const attempt = collectRetailerShadowAttempt(entry.document, entry.url, entry.retailerId, "shipping");
+    assert.equal(attempt.observation.retailerSku, entry.sku, entry.retailerId);
+    assert.equal(attempt.observation.addControlActionable, true, entry.retailerId);
+    assert.notEqual(attempt.observation.unitPriceCents, null, entry.retailerId);
+    assert.equal(attempt.diagnostic.outcome, "passed", entry.retailerId);
+    assert.equal(attempt.diagnostic.failureStage, "complete", entry.retailerId);
+    assert.equal(attempt.diagnostic.reasonCode, "semantic_layout_recovered", entry.retailerId);
+    assert.equal(attempt.diagnostic.layout.addControlCount, 0, entry.retailerId);
+    assert.equal(attempt.diagnostic.layout.priceCandidateCount, 0, entry.retailerId);
+    assert.equal(attempt.diagnostic.layout.genericAddIntentCount, 1, entry.retailerId);
+    assert.equal(attempt.diagnostic.layout.scopedControlCount, 1, entry.retailerId);
+    assert.equal(attempt.diagnostic.layout.genericPriceCandidateCount, 1, entry.retailerId);
+    assert.ok(attempt.diagnostic.layout.repairLandmarks?.some((landmark) => landmark.field === "addControl"), entry.retailerId);
+    assert.ok(attempt.diagnostic.layout.repairLandmarks?.some((landmark) => landmark.field === "unitPrice"), entry.retailerId);
+  }
+});
+
 test("retailer URL identity extraction is exact and rejects foreign origins", () => {
   assert.equal(extractRetailerSku("walmart", "https://www.walmart.com/ip/example/17354421975"), "17354421975");
   assert.equal(extractRetailerSku("amazon", "https://www.amazon.com/dp/B0GYTRYV7P"), "B0GYTRYV7P");
@@ -468,7 +539,7 @@ test("Walmart binds price, seller, fulfillment, and control to the exact page SK
     url,
     "walmart",
     "20009805270",
-    "either",
+    "pickup",
     NOW
   );
   assert.deepEqual({
@@ -484,6 +555,11 @@ test("Walmart binds price, seller, fulfillment, and control to the exact page SK
     fulfillment: "pickup",
     actionable: true
   });
+  const defaulted = observeRetailerOffer(
+    fixture("walmart-cross-offer.html", url), url, "walmart", "20009805270", "either", NOW
+  );
+  assert.equal(defaulted.fulfillment, "unknown");
+  assert.equal(defaulted.addControlActionable, false);
 });
 
 test("Amazon observer binds ASIN, seller, price, and keeps offer IDs ephemeral", () => {
@@ -785,7 +861,7 @@ test("Best Buy observer binds exact first-party shipping and rejects marketplace
   assert.equal(sellerMissing.addControlActionable, false);
 });
 
-test("Best Buy observer recognizes modern fulfillment and accessible seller controls while retaining shipping-only boundaries", () => {
+test("Best Buy observer recognizes modern fulfillment while keeping pickup an explicit opt-in", () => {
   const shippingUrl = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const shippingDocument = fixture("bestbuy-modern-first-party.html", shippingUrl);
   const shipping = observeRetailerOffer(shippingDocument, shippingUrl, "bestbuy", "6670797", "shipping", NOW);
@@ -809,7 +885,7 @@ test("Best Buy observer recognizes modern fulfillment and accessible seller cont
   const pickupDocument = fixture("bestbuy-modern-pickup-only.html", pickupUrl);
   assert.equal(retailerAddControl(pickupDocument, pickupUrl, "bestbuy", "6528565", "shipping"), null);
   assert.ok(retailerAddControl(pickupDocument, pickupUrl, "bestbuy", "6528565", "pickup"));
-  const pickup = observeRetailerOffer(pickupDocument, pickupUrl, "bestbuy", "6528565", "either", NOW);
+  const pickup = observeRetailerOffer(pickupDocument, pickupUrl, "bestbuy", "6528565", "pickup", NOW);
   assert.deepEqual({
     price: pickup.unitPriceCents,
     seller: pickup.sellerName,
@@ -823,7 +899,7 @@ test("Best Buy observer recognizes modern fulfillment and accessible seller cont
     fulfillment: "pickup",
     actionable: true
   });
-  const pickupAttempt = collectRetailerShadowAttempt(pickupDocument, pickupUrl, "bestbuy", "either");
+  const pickupAttempt = collectRetailerShadowAttempt(pickupDocument, pickupUrl, "bestbuy", "pickup");
   assert.equal(pickupAttempt.diagnostic.outcome, "passed");
   assert.equal(pickupAttempt.diagnostic.failureStage, "complete");
 
@@ -841,7 +917,7 @@ test("Best Buy observer recognizes modern fulfillment and accessible seller cont
   assert.equal(selectorMiss.diagnostic.reasonCode, "add_control_selector_miss");
 });
 
-test("Best Buy v5 classifies the supplied preorder, high-demand, and pickup-selected layouts without widening mutation scope", () => {
+test("Best Buy v6 classifies the supplied preorder, high-demand, and pickup-selected layouts without widening mutation scope", () => {
   const preorderUrl = "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-reality-fracture-play-booster-box-30-packs/JJ8VP7Z65T/sku/6678193";
   const preorderDocument = fixture("bestbuy-reality-fracture-preorder.html", preorderUrl);
   const preorder = observeRetailerOffer(preorderDocument, preorderUrl, "bestbuy", "6678193", "either", NOW);
@@ -890,7 +966,7 @@ test("Best Buy v5 classifies the supplied preorder, high-demand, and pickup-sele
   ] as const;
   for (const [sku, fixtureName, url, price] of pickupCases) {
     const document = fixture(fixtureName, url);
-    const observation = observeRetailerOffer(document, url, "bestbuy", sku, "either", NOW);
+    const observation = observeRetailerOffer(document, url, "bestbuy", sku, "pickup", NOW);
     assert.deepEqual({
       price: observation.unitPriceCents,
       seller: observation.sellerName,
@@ -938,6 +1014,9 @@ test("generic observers classify auth, MFA, membership, queue, and challenge as 
   const challenge = page(`<iframe src="https://security.example/captcha"></iframe>`);
   assert.equal(retailerSecurityChallenge(challenge), true);
   assert.equal(retailerInteractiveBlock(challenge, "https://www.walmart.com/ip/example/17354421975"), "unknown");
+  const currentWalmartChallenge = page(`<main><h1>Robot or human?</h1><button>Activate and hold the button to confirm</button></main>`);
+  assert.equal(retailerSecurityChallenge(currentWalmartChallenge), true);
+  assert.equal(retailerInteractiveBlock(currentWalmartChallenge, "https://www.walmart.com/ip/example/17354421975"), "unknown");
   const accessDenied = new JSDOM(`<title>Access Denied - Macy's</title><body>Reference number 123</body>`).window.document;
   assert.equal(retailerSecurityChallenge(accessDenied), true);
   const cloudflare = new JSDOM(`<title>Just a moment...</title><body>Checking your browser</body>`).window.document;

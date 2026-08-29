@@ -17,6 +17,8 @@ import {
   observeTargetCheckout,
   observeTargetOffer,
   parseUsPrice,
+  targetAddBinding,
+  targetAddControl,
   targetInteractiveBlock,
   targetPageKind,
   targetSecurityChallenge
@@ -107,6 +109,58 @@ test("a marketplace recommendation cannot poison first-party evidence in the exa
   assert.equal(observation.addControlActionable, true);
 });
 
+test("Target modern fulfillment tiles bind an available shipping path without trusting recommendation duplicates", () => {
+  const document = fixture("product-modern-pickup-selected.html");
+  const candidate = observeTargetOffer(document, PRODUCT_URL, "1011483414", "shipping", NOW);
+  assert.deepEqual({
+    availability: candidate.availability,
+    price: candidate.unitPriceCents,
+    seller: candidate.sellerName,
+    fulfillment: candidate.fulfillment,
+    actionable: candidate.addControlActionable
+  }, {
+    availability: "in_stock",
+    price: 539,
+    seller: "Target",
+    fulfillment: "shipping",
+    actionable: true
+  });
+  const binding = targetAddBinding(document, PRODUCT_URL, "1011483414", "shipping");
+  assert.equal(binding.control?.closest("[aria-label='Fulfillment']") !== null, true);
+  assert.equal(binding.fulfillmentControl?.getAttribute("data-test"), "fulfillment-cell-shipping");
+  assert.equal(binding.selectionRequired, true);
+  assert.equal(targetAddControl(document, PRODUCT_URL, "1011483414", "shipping"), null);
+
+  const selected = observeTargetOffer(document, PRODUCT_URL, "1011483414", "either", NOW);
+  assert.equal(selected.fulfillment, "shipping");
+  const explicitPickup = observeTargetOffer(document, PRODUCT_URL, "1011483414", "pickup", NOW);
+  assert.equal(explicitPickup.fulfillment, "pickup");
+});
+
+test("Target uses available Delivery only as a remote fallback and rejects Check availability", () => {
+  const document = fixture("product-modern-pickup-selected.html");
+  const shipping = document.querySelector("[data-test='fulfillment-cell-shipping']");
+  if (shipping) {
+    shipping.setAttribute("aria-label", "shipping - unselected - 3 of 3 - Not available");
+    shipping.textContent = "Shipping Not available";
+  }
+  const unavailable = observeTargetOffer(document, PRODUCT_URL, "1011483414", "shipping", NOW);
+  assert.equal(unavailable.fulfillment, "unknown");
+  assert.equal(unavailable.addControlActionable, false);
+
+  const delivery = document.querySelector("[data-test='fulfillment-cell-delivery']");
+  if (delivery) {
+    delivery.setAttribute("aria-label", "delivery - unselected - 2 of 3 - Get it today");
+    delivery.textContent = "Delivery Get it today";
+  }
+  const available = observeTargetOffer(document, PRODUCT_URL, "1011483414", "shipping", NOW);
+  const binding = targetAddBinding(document, PRODUCT_URL, "1011483414", "shipping");
+  assert.equal(available.fulfillment, "shipping");
+  assert.equal(available.addControlActionable, true);
+  assert.equal(binding.fulfillmentControl, delivery);
+  assert.equal(binding.selectionRequired, true);
+});
+
 test("Target observation classifies authentication, MFA, location, membership, queue, and challenge as manual", () => {
   const page = (markup: string) => new JSDOM(`<body><main>${markup}</main></body>`, { url: PRODUCT_URL }).window.document;
   assert.equal(targetInteractiveBlock(page(`<form action="/login"><input type="password" autocomplete="current-password"></form>`)), "auth");
@@ -117,6 +171,7 @@ test("Target observation classifies authentication, MFA, location, membership, q
   const challenge = page(`<iframe src="https://security.example/captcha"></iframe>`);
   assert.equal(targetSecurityChallenge(challenge), true);
   assert.equal(targetInteractiveBlock(challenge), "unknown");
+  assert.equal(targetInteractiveBlock(page(`<div role="dialog"><h2>Loading screen</h2><p>Something went wrong. Please try again in a bit.</p></div>`)), "unknown");
   assert.equal(targetInteractiveBlock(page(`<button aria-label="sign in to favorite this product">Favorite</button>`)), "");
 });
 

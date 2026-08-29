@@ -182,7 +182,7 @@ function sellerAllowed(job: BrowserActionContract, sellerName: string, sellerTyp
 
 function fulfillmentAllowed(required: Fulfillment, observed: Fulfillment): observed is "shipping" | "pickup" {
   if (!(["shipping", "pickup"] as Fulfillment[]).includes(observed)) return false;
-  return required === "either" || required === observed;
+  return required === observed;
 }
 
 function validJob(job: BrowserActionContract, now: number): string {
@@ -192,6 +192,7 @@ function validJob(job: BrowserActionContract, now: number): string {
   if (!Number.isInteger(job.quantity) || job.quantity < 1 || job.quantity > 99) return "quantity_invalid";
   if (!Number.isSafeInteger(job.maxUnitPriceCents) || job.maxUnitPriceCents <= 0) return "unit_cap_invalid";
   if (!Number.isSafeInteger(job.maxOrderTotalCents) || job.maxOrderTotalCents <= 0) return "total_cap_invalid";
+  if (job.fulfillment !== "shipping" && job.fulfillment !== "pickup") return "fulfillment_not_supported";
   const expiresAt = new Date(job.expiresAt).getTime();
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return "job_expired";
   return "";

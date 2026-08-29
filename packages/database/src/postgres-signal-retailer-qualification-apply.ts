@@ -514,7 +514,7 @@ BEGIN
       'A fresh shadow job entered the guarded Walmart add-only executor after explicit activation.';
     audit_reason_code_value := 'explicit_walmart_add_v1_activation';
     audit_message_value :=
-      'Walmart add v1 was explicitly enabled for Walmart-sold shipping offers, add-to-cart only, quantity one.';
+      'Walmart add v5 was explicitly enabled for Walmart-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.';
   ELSIF operation_name = 'activate_amazon_add' THEN
     retailer_id_value := 'amazon';
     display_name_value := 'Amazon';
@@ -531,7 +531,7 @@ BEGIN
       'A fresh shadow job entered the guarded Amazon add-only executor after explicit activation.';
     audit_reason_code_value := 'explicit_amazon_add_v1_activation';
     audit_message_value :=
-      'Amazon add v4 was explicitly enabled for Amazon.com-sold shipping offers, add-to-cart only, quantity one.';
+      'Amazon add v7 was explicitly enabled for Amazon.com-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.';
   ELSE
     retailer_id_value := 'bestbuy';
     display_name_value := 'Best Buy';
@@ -548,7 +548,7 @@ BEGIN
       'A fresh shadow job entered the guarded Best Buy add-only executor after explicit activation.';
     audit_reason_code_value := 'explicit_bestbuy_add_v1_activation';
     audit_message_value :=
-      'Best Buy add v1 was explicitly enabled for Best Buy-sold selected-shipping offers, add-to-cart only, quantity one.';
+      'Best Buy add v5 was explicitly enabled for Best Buy-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.';
   END IF;
 
   BEGIN
@@ -969,7 +969,7 @@ BEGIN
         AND job.action = 'add_to_cart'
         AND job.quantity = 1
         AND job.seller_policy = 'first_party_only'
-        AND job.fulfillment = 'shipping'
+        AND job.fulfillment IN ('shipping', 'pickup')
       ORDER BY job.created_at, job.id
       FOR UPDATE OF job
     LOOP

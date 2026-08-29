@@ -31,7 +31,7 @@ test("the browser bundle executes the shared Target observer and returns only th
   runInContext(source, context);
   const result = runInContext("YoinkTargetShadow.collectTargetShadowObservation(document, location.href)", context) as Record<string, unknown>;
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
-    adapterVersion: "target-observer-v1",
+    adapterVersion: "target-observer-v3",
     contractVersion: 1,
     observedAt: result.observedAt,
     pageKind: "product",
@@ -56,6 +56,39 @@ test("the browser bundle executes the shared Target observer and returns only th
   assert.equal("url" in result, false);
   assert.equal("pageText" in result, false);
   assert.doesNotMatch(source, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
+});
+
+test("the Target shadow reports an actionable remote path when modern Target defaults to pickup", () => {
+  const html = readFileSync(join(ROOT, "test", "fixtures", "target", "product-modern-pickup-selected.html"), "utf8");
+  const dom = new JSDOM(html, { url: PRODUCT_URL });
+  const source = readFileSync(join(ROOT, "apps", "extension", "target-shadow.js"), "utf8");
+  const context = createContext({
+    document: dom.window.document,
+    location: dom.window.location,
+    URL: dom.window.URL,
+    Date,
+    Set,
+    Object,
+    String,
+    Number,
+    RegExp,
+    Array,
+    Boolean,
+    Math
+  });
+  runInContext(source, context);
+  const result = runInContext("YoinkTargetShadow.collectTargetShadowObservation(document, location.href)", context) as Record<string, unknown>;
+  assert.equal(result.availability, "in_stock");
+  assert.equal(result.fulfillment, "shipping");
+  assert.equal(result.addControlActionable, true);
+  assert.match(
+    dom.window.document.querySelector("[data-test='fulfillment-cell-pickup']")?.getAttribute("aria-label") ?? "",
+    /pickup - selected -/
+  );
+  assert.match(
+    dom.window.document.querySelector("[data-test='fulfillment-cell-shipping']")?.getAttribute("aria-label") ?? "",
+    /shipping - unselected -/
+  );
 });
 
 test("the browser bundle fails closed outside an exact Target product URL", () => {

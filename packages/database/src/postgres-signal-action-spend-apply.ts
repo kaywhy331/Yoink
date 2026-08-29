@@ -256,7 +256,7 @@ export interface PostgresSignalActionSpendApplyManifest {
   strategyCartActionAuthority: false;
   strategyReservationAuthority: false;
   trustedStrategyActionSemanticsQualified: true;
-  firstPartyShippingOnly: true;
+  exactFirstPartyFulfillmentOnly: true;
   quantityOneOnly: false;
   addToCartOnly: false;
   canonicalAttributionOnly: true;
@@ -333,7 +333,7 @@ export interface PostgresSignalActionSpendCapabilityProjection {
   strategyCartActionAuthority: false;
   strategyReservationAuthority: false;
   trustedStrategyActionSemanticsQualified: true;
-  firstPartyShippingOnly: true;
+  exactFirstPartyFulfillmentOnly: true;
   quantityOneOnly: false;
   addToCartOnly: false;
   canonicalAttributionOnly: true;
@@ -395,7 +395,7 @@ export interface PostgresSignalActionSpendApplyPlan {
   currency: "USD";
   sellerName: string;
   sellerType: "first_party";
-  fulfillment: "shipping";
+  fulfillment: "shipping" | "pickup";
   offerFingerprint: string;
   expiresAt: string;
   exactOfferKeyId: string;
@@ -615,7 +615,7 @@ export function buildPostgresSignalActionSpendApplyManifest(
     strategyCartActionAuthority: false,
     strategyReservationAuthority: false,
     trustedStrategyActionSemanticsQualified: true,
-    firstPartyShippingOnly: true,
+    exactFirstPartyFulfillmentOnly: true,
     quantityOneOnly: false,
     addToCartOnly: false,
     canonicalAttributionOnly: true,
@@ -697,7 +697,7 @@ PostgresSignalActionSpendCapabilityProjection {
     strategyCartActionAuthority: false,
     strategyReservationAuthority: false,
     trustedStrategyActionSemanticsQualified: true,
-    firstPartyShippingOnly: true,
+    exactFirstPartyFulfillmentOnly: true,
     quantityOneOnly: false,
     addToCartOnly: false,
     canonicalAttributionOnly: true,
@@ -779,7 +779,7 @@ export function signalActionSpendApplyFunctionSource(
   const exactOfferHashParts = stableHashInputSql([
     "'postgres_exact_offer_key_v1'::text", "resolved_tenant_id", "listing_id_value",
     "variant_id_value", "retailer_id_value", "retailer_sku_value", "seller_name_value",
-    "'first_party'::text", "'shipping'::text", "offer_fingerprint_value"
+    "'first_party'::text", "fulfillment_value", "offer_fingerprint_value"
   ]);
   const snapshotHashParts = stableHashInputSql([
     "'postgres_offer_snapshot_v1'::text", "resolved_tenant_id", "resolved_user_id",
@@ -810,7 +810,7 @@ export function signalActionSpendApplyFunctionSource(
     "strategy_id_value", "strategy_revision_value::text", "effective_action_value",
     "initial_job_state_value", "effective_quantity_value::text", "unit_price_cents_value::text",
     "effective_unit_cap_cents_value::text", "maximum_all_in_cents_value::text",
-    "'USD'::text", "seller_name_value", "'first_party'::text", "'shipping'::text",
+    "'USD'::text", "seller_name_value", "'first_party'::text", "fulfillment_value",
     "offer_fingerprint_value", "expires_at_value", "exact_offer_key_id_value",
     "exact_offer_identity_hash_value", "offer_snapshot_id_value", "offer_evidence_hash_value",
     "action_job_id_value", "action_idempotency_key_value", "action_event_id_value",
@@ -880,6 +880,7 @@ DECLARE
   effective_unit_cap_cents_value BIGINT;
   maximum_all_in_cents_value BIGINT;
   seller_name_value TEXT;
+  fulfillment_value TEXT;
   offer_fingerprint_value TEXT;
   observed_at_value TEXT;
   expires_at_value TEXT;
@@ -1169,6 +1170,7 @@ BEGIN
     effective_unit_cap_cents_value := replay_record.max_unit_price_cents;
     maximum_all_in_cents_value := replay_record.max_order_total_cents;
     seller_name_value := replay_record.expected_seller;
+    fulfillment_value := replay_record.fulfillment;
     offer_fingerprint_value := replay_record.offer_fingerprint;
     observed_at_value := replay_record.observed_at;
     expires_at_value := replay_record.expires_at;
@@ -1187,7 +1189,7 @@ BEGIN
       OR replay_record.max_order_total_cents IS NULL
       OR replay_record.currency <> 'USD'
       OR replay_record.seller_policy <> 'first_party_only'
-      OR replay_record.fulfillment <> 'shipping'
+      OR replay_record.fulfillment NOT IN ('shipping', 'pickup')
       OR replay_record.attribution_url <> replay_record.canonical_url
       OR replay_record.attribution_provider <> 'canonical'
       OR replay_record.attribution_metadata_json <> '{}'
@@ -1195,13 +1197,13 @@ BEGIN
       OR replay_record.spend_reservation_id <> spend_reservation_id_value
       OR replay_record.exact_seller_name <> replay_record.expected_seller
       OR replay_record.exact_seller_type <> 'first_party'
-      OR replay_record.exact_fulfillment <> 'shipping'
+      OR replay_record.exact_fulfillment <> replay_record.fulfillment
       OR replay_record.snapshot_unit_price <> replay_record.max_unit_price_cents
       OR replay_record.snapshot_maximum_all_in <> replay_record.max_order_total_cents
       OR replay_record.snapshot_quantity <> 1 OR replay_record.snapshot_currency <> 'USD'
       OR replay_record.snapshot_seller_name <> replay_record.expected_seller
       OR replay_record.snapshot_seller_type <> 'first_party'
-      OR replay_record.snapshot_fulfillment <> 'shipping'
+      OR replay_record.snapshot_fulfillment <> replay_record.fulfillment
       OR replay_record.snapshot_offer_fingerprint <> replay_record.offer_fingerprint
       OR replay_record.snapshot_expires_at <> replay_record.expires_at
       OR replay_record.reservation_action <> 'add_to_cart'
@@ -1334,6 +1336,7 @@ BEGIN
     effective_unit_cap_cents_value := replay_record.max_unit_price_cents;
     maximum_all_in_cents_value := replay_record.max_order_total_cents;
     seller_name_value := replay_record.expected_seller;
+    fulfillment_value := replay_record.fulfillment;
     offer_fingerprint_value := replay_record.offer_fingerprint;
     observed_at_value := replay_record.observed_at;
     expires_at_value := replay_record.expires_at;
@@ -1357,7 +1360,7 @@ BEGIN
       OR replay_record.max_order_total_cents IS NULL
       OR replay_record.currency <> 'USD'
       OR replay_record.seller_policy <> 'first_party_only'
-      OR replay_record.fulfillment <> 'shipping'
+      OR replay_record.fulfillment NOT IN ('shipping', 'pickup')
       OR replay_record.attribution_url <> replay_record.canonical_url
       OR replay_record.attribution_provider <> 'canonical'
       OR replay_record.attribution_metadata_json <> '{}'
@@ -1366,11 +1369,11 @@ BEGIN
       OR replay_record.job_state <> 'notify_only'
       OR replay_record.exact_seller_name <> replay_record.expected_seller
       OR replay_record.exact_seller_type <> 'first_party'
-      OR replay_record.exact_fulfillment <> 'shipping'
+      OR replay_record.exact_fulfillment <> replay_record.fulfillment
       OR replay_record.snapshot_quantity <> 1 OR replay_record.snapshot_currency <> 'USD'
       OR replay_record.snapshot_seller_name <> replay_record.expected_seller
       OR replay_record.snapshot_seller_type <> 'first_party'
-      OR replay_record.snapshot_fulfillment <> 'shipping'
+      OR replay_record.snapshot_fulfillment <> replay_record.fulfillment
       OR replay_record.snapshot_offer_fingerprint <> replay_record.offer_fingerprint
       OR replay_record.snapshot_expires_at <> replay_record.expires_at
       OR replay_record.event_state <> 'notify_only'
@@ -1435,7 +1438,7 @@ BEGIN
       OR evaluation_plan->>'continueDownstream' <> 'true'
       OR evaluation_plan->>'effectiveUnitCapCents' !~ '^[1-9][0-9]{0,8}$'
       OR evaluation_plan->>'sellerPolicy' <> 'first_party_only'
-      OR evaluation_plan->>'fulfillment' <> 'shipping'
+      OR evaluation_plan->>'fulfillment' NOT IN ('shipping', 'pickup')
       OR evaluation_plan->>'sourceActionRestricted' <> 'false'
       OR evaluation_plan->>'decisionAction' <> 'none'
       OR evaluation_plan->>'auditAction' <> 'none'
@@ -1569,10 +1572,11 @@ BEGIN
       OR event_record.offer_json::jsonb->>'availability' NOT IN ('in_stock', 'preorder')
       OR event_record.offer_json::jsonb->>'currency' <> 'USD'
       OR event_record.offer_json::jsonb->>'sellerType' <> 'first_party'
-      OR event_record.offer_json::jsonb->>'fulfillment' <> 'shipping'
+      OR event_record.offer_json::jsonb->>'fulfillment' NOT IN ('shipping', 'pickup')
+      OR event_record.offer_json::jsonb->>'fulfillment' <> evaluation_plan->>'fulfillment'
       OR COALESCE(event_record.offer_json::jsonb->>'sellerName', '') = ''
       OR COALESCE(event_record.offer_json::jsonb->>'offerFingerprint', '') = '' THEN
-      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend exact first-party shipping offer is invalid';
+      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend exact first-party fulfillment offer is invalid';
     END IF;
     IF event_record.retailer_id <> retailer_id_value THEN
       RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend retailer changed after writer locking';
@@ -1581,6 +1585,7 @@ BEGIN
     canonical_url_value := event_record.canonical_url;
     unit_price_cents_value := (event_record.offer_json::jsonb->>'unitPriceCents')::bigint;
     seller_name_value := event_record.offer_json::jsonb->>'sellerName';
+    fulfillment_value := event_record.offer_json::jsonb->>'fulfillment';
     offer_fingerprint_value := event_record.offer_json::jsonb->>'offerFingerprint';
     observed_at_value := event_record.observed_at;
     IF event_record.unit_price_cents IS DISTINCT FROM unit_price_cents_value
@@ -1674,7 +1679,8 @@ BEGIN
         OR mission_record.max_unit_price_cents IS DISTINCT FROM
           (target_policy_record.max_unit_price #>> '{}')::bigint
         OR target_policy_record.seller_policy <> 'first_party_only'
-        OR target_policy_record.fulfillment <> 'shipping' THEN
+        OR target_policy_record.fulfillment <> fulfillment_value
+        OR mission_record.fulfillment <> fulfillment_value THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend exact target bounds are invalid';
       END IF;
 
@@ -1744,9 +1750,9 @@ BEGIN
       effective_action_value := 'add_to_cart';
       initial_job_state_value := 'awaiting_executor';
       action_event_reason_code_value := 'purchase_intent_qualified';
-      action_event_message_value := 'The exact first-party shipping offer passed current product, quantity, price, spend, cooldown, claim, and retailer-lane checks.';
+      action_event_message_value := 'The exact first-party offer matched the saved fulfillment choice and passed current product, quantity, price, spend, cooldown, claim, and retailer-lane checks.';
       audit_reason_code_value := 'awaiting_executor';
-      audit_message_value := 'A bounded first-party shipping add-to-cart job and spend reservation were created atomically.';
+      audit_message_value := 'A bounded first-party exact-fulfillment add-to-cart job and spend reservation were created atomically.';
       outbox_message_value := audit_message_value;
 
       maximum_all_in_cents_value := pg_catalog.ceil(
@@ -1858,7 +1864,7 @@ BEGIN
       action_event_reason_code_value := 'strategy_qualified';
       action_event_message_value := 'This strategy-sourced signal was verified against current strategy, mission, and offer state; strategy decisions are limited to notifications and never receive cart or spend-reservation authority.';
       audit_reason_code_value := 'notify_only';
-      audit_message_value := 'A bounded first-party shipping notification job was created; strategy-sourced decisions never receive cart or spend-reservation authority.';
+      audit_message_value := 'A bounded first-party exact-fulfillment notification job was created; strategy-sourced decisions never receive cart or spend-reservation authority.';
       outbox_message_value := audit_message_value;
       spend_reservation_action_value := 'none';
       spend_ledger_action_value := 'none';
@@ -1916,7 +1922,7 @@ BEGIN
         OR exact_offer_record.seller_name <> seller_name_value
         OR exact_offer_record.seller_key <> pg_catalog.lower(pg_catalog.btrim(seller_name_value))
         OR exact_offer_record.seller_type <> 'first_party'
-        OR exact_offer_record.fulfillment <> 'shipping'
+        OR exact_offer_record.fulfillment <> fulfillment_value
         OR exact_offer_record.region_scope <> '' OR exact_offer_record.store_scope <> '' THEN
         RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend exact-offer identity changed';
       END IF;
@@ -2015,7 +2021,7 @@ BEGIN
     'currency', 'USD',
     'sellerName', seller_name_value,
     'sellerType', 'first_party',
-    'fulfillment', 'shipping',
+    'fulfillment', fulfillment_value,
     'offerFingerprint', offer_fingerprint_value,
     'expiresAt', expires_at_value,
     'exactOfferKeyId', exact_offer_key_id_value,
@@ -2078,7 +2084,7 @@ BEGIN
         exact_offer_key_id_value, resolved_tenant_id, listing_id_value,
         retailer_id_value, retailer_sku_value, '', '{}', 'new', seller_name_value,
         pg_catalog.lower(pg_catalog.btrim(seller_name_value)), 'first_party',
-        'shipping', '', '', exact_offer_identity_hash_value, authorization_timestamp
+        fulfillment_value, '', '', exact_offer_identity_hash_value, authorization_timestamp
       );
     END IF;
     IF offer_snapshot_action_value = 'insert' THEN
@@ -2095,7 +2101,7 @@ BEGIN
         listing_id_value, event_record.observation_id, incident_id_value,
         event_record.offer_json::jsonb->>'availability', unit_price_cents_value,
         1, unit_price_cents_value, maximum_all_in_cents_value, 'USD',
-        seller_name_value, 'first_party', 'shipping', offer_fingerprint_value,
+        seller_name_value, 'first_party', fulfillment_value, offer_fingerprint_value,
         offer_evidence_hash_value, observed_at_value, expires_at_value,
         authorization_timestamp
       );
@@ -2116,7 +2122,7 @@ BEGIN
       decision_source_value, initial_job_state_value, effective_action_value,
       effective_quantity_value,
       effective_unit_cap_cents_value, maximum_all_in_cents_value, 'USD',
-      'first_party_only', 'shipping', seller_name_value, listing_id_value,
+      'first_party_only', fulfillment_value, seller_name_value, listing_id_value,
       canonical_url_value, canonical_url_value, 'canonical', '{}', 'disabled',
       offer_fingerprint_value, action_idempotency_key_value,
       pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
@@ -2353,7 +2359,7 @@ function parseCommon(record: Record<string, unknown>) {
     currency: record.currency as "USD",
     sellerName: exactText(record.sellerName, "seller name", 160),
     sellerType: record.sellerType as "first_party",
-    fulfillment: record.fulfillment as "shipping",
+    fulfillment: record.fulfillment as "shipping" | "pickup",
     offerFingerprint: exactText(record.offerFingerprint, "offer fingerprint", 256),
     expiresAt: exactTimestamp(record.expiresAt, "expiry timestamp"),
     exactOfferKeyId: exactText(record.exactOfferKeyId, "exact offer key ID", 160),
@@ -2426,7 +2432,7 @@ function parseCommon(record: Record<string, unknown>) {
     || !SHA256.test(common.planFingerprint)
     || !decisionSourceConsistent
     || common.currency !== "USD" || common.sellerType !== "first_party"
-    || common.fulfillment !== "shipping"
+    || !["shipping", "pickup"].includes(common.fulfillment)
     || common.maximumAllInCents < common.unitPriceCents) {
     throw new PostgresSignalActionSpendApplyQualificationError(
       "The PostgreSQL signal action/spend projection is invalid."

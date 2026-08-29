@@ -12,7 +12,7 @@ export function collectTargetShadowObservation(
   if (!documentValue) throw new Error("The current Target page is unavailable.");
   const retailerSku = extractTargetSku(urlValue);
   if (!retailerSku) throw new Error("Open an exact Target product page before inspecting it.");
-  const observation = observeTargetOffer(documentValue, urlValue, retailerSku, "either");
+  const observation = observeTargetOffer(documentValue, urlValue, retailerSku, "shipping");
   if (observation.pageKind !== "product" || observation.retailerId !== "target" || observation.retailerSku !== retailerSku) {
     throw new Error("The exact Target product page could not be verified.");
   }
@@ -35,7 +35,7 @@ export function collectTargetShadowObservation(
     addControlActionable: observation.addControlActionable,
     securityChallenge: observation.securityChallenge,
     interactiveBlock: observation.interactiveBlock,
-    selectedOffer: observeTargetSelectedOfferScope(documentValue, urlValue, retailerSku, "either")
+    selectedOffer: observeTargetSelectedOfferScope(documentValue, urlValue, retailerSku, "shipping")
   });
 }
 

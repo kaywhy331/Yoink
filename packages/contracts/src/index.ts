@@ -27,12 +27,14 @@ export type PricePolicyKind = (typeof PRICE_POLICY_KINDS)[number];
 export type SellerPolicy = "first_party_only" | "allow_third_party";
 export type SellerType = "first_party" | "third_party" | "unknown";
 export type Fulfillment = "shipping" | "pickup" | "either" | "manual" | "unknown";
+export const ACTION_FULFILLMENTS = ["shipping", "pickup"] as const;
+export type ActionFulfillment = (typeof ACTION_FULFILLMENTS)[number];
 export type Availability = "in_stock" | "preorder" | "out_of_stock" | "unknown";
-export const TARGET_OBSERVER_VERSION = "target-observer-v1";
-export const WALMART_OBSERVER_VERSION = "walmart-observer-v4";
+export const TARGET_OBSERVER_VERSION = "target-observer-v3";
+export const WALMART_OBSERVER_VERSION = "walmart-observer-v5";
 export const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
-export const AMAZON_OBSERVER_VERSION = "amazon-observer-v6";
-export const BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v5";
+export const AMAZON_OBSERVER_VERSION = "amazon-observer-v7";
+export const BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v6";
 export const DISNEY_OBSERVER_VERSION = "disney-observer-v1";
 export const RAVENSBURGER_OBSERVER_VERSION = "ravensburger-observer-v1";
 export const RIOT_OBSERVER_VERSION = "riot-observer-v1";
@@ -59,14 +61,14 @@ export const RETAILER_OBSERVER_VERSIONS = {
 } as const;
 export type SupportedRetailerId = keyof typeof RETAILER_OBSERVER_VERSIONS;
 export type RetailerObserverVersion = (typeof RETAILER_OBSERVER_VERSIONS)[SupportedRetailerId];
-export const TARGET_ADD_ADAPTER_VERSION = "target-add-v1";
-export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V1";
-export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v3";
-export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V3";
-export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v5";
-export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V5";
-export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v3";
-export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V3";
+export const TARGET_ADD_ADAPTER_VERSION = "target-add-v4";
+export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V4";
+export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v5";
+export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V5";
+export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v7";
+export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V7";
+export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v5";
+export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V5";
 
 export const RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS = ["observe", "rehearse_add", "live_add"] as const;
 export type RetailerAdapterDiagnosticOperation = (typeof RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS)[number];
@@ -92,6 +94,7 @@ export type RetailerAdapterDiagnosticStage = (typeof RETAILER_ADAPTER_DIAGNOSTIC
 export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "verified",
   "dom_hydration_recovered",
+  "semantic_layout_recovered",
   "observer_bundle_injection_failed",
   "observer_execution_failed",
   "observer_top_frame_missing",
@@ -163,6 +166,7 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "authorization_missing",
   "authorization_expired",
   "add_control_changed",
+  "fulfillment_selection_failed",
   "offer_binding_changed",
   "click_failed",
   "offer_unverified",
@@ -1141,7 +1145,7 @@ export interface PurchaseIntentDraftInput {
   maxAllInCents: number;
   actionCeiling: "notify" | "add_to_cart";
   sellerPolicy: "first_party_only";
-  fulfillment: "shipping" | "pickup" | "either" | "manual";
+  fulfillment: "shipping" | "pickup" | "manual";
   substitutionPolicy: "exact_only";
   expiresAt?: string;
   cooldownSeconds: number;

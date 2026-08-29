@@ -581,6 +581,8 @@ function config(retailerId: SupportedRetailerId): RetailerObserverConfig | null 
   return retailerId === "target" ? null : CONFIGS[retailerId];
 }
 
+const SEMANTIC_ACTION_RECOVERY_RETAILERS = new Set(["walmart", "amazon", "bestbuy"]);
+
 function hostAllowed(url: URL, domains: string[]): boolean {
   return url.protocol === "https:" && !url.username && !url.password
     && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
@@ -645,7 +647,7 @@ export function retailerSecurityChallenge(document: Document): boolean {
     "#challenge-running",
     "#challenge-stage",
     "[class*='cf-chl-' i]"
-  ])) || /verify you are human|unusual traffic|security challenge|additional security check is required|protected and accelerated by imperva|enter the characters you see|checking your browser|performing security verification|enable javascript and cookies to continue|sorry, you have been blocked/i.test(text(document.body, 80_000));
+  ])) || /verify you are human|robot or human|activate and hold the button|unusual traffic|security challenge|additional security check is required|protected and accelerated by imperva|enter the characters you see|checking your browser|performing security verification|enable javascript and cookies to continue|sorry, you have been blocked/i.test(text(document.body, 80_000));
 }
 
 function retailerUnavailableShell(document: Document): boolean {
@@ -739,7 +741,13 @@ function fulfillmentEvidence(root: Element | Document, control: Element | null, 
 
 const ADD_CONTROL_INTENT = /\b(?:add|pre[ -]?order)(?:\s+(?:item\s+)?to)?\s+(?:cart|bag)\b|\batc\b/i;
 const GENERIC_ADD_CONTROL_INTENT = /\b(?:add|pre[ -]?order)(?:\s+(?:item\s+)?to)?\s+(?:cart|bag)\b|\bpre[ -]?order(?:\s+now)?\b|\batc\b/i;
-const MERCHANDISING_CONTROL_SCOPE = "[data-testid*='recommend' i], [data-automation-id*='recommend' i], [aria-label*='similar' i], [aria-label*='sponsored' i], [class*='carousel' i], [class*='related-products' i]";
+const MERCHANDISING_CONTROL_SCOPE = [
+  "nav", "header", "footer",
+  "[data-testid*='recommend' i]", "[data-automation-id*='recommend' i]",
+  "[data-feature-name*='recommend' i]", "[data-feature-name*='bundle' i]",
+  "[aria-label*='similar' i]", "[aria-label*='sponsored' i]",
+  "[aria-label*='add all' i]", "[class*='carousel' i]", "[class*='related-products' i]"
+].join(", ");
 
 function controlIntent(element: Element): string {
   return [
@@ -759,12 +767,26 @@ function merchandisingControl(element: Element): boolean {
   return Boolean(element.closest(MERCHANDISING_CONTROL_SCOPE));
 }
 
-function candidateControls(root: ParentNode, retailer: RetailerObserverConfig): Element[] {
-  const candidates = retailer.addSelectors.flatMap((selector) => [...root.querySelectorAll(selector)]);
+function packagedCandidateControls(root: ParentNode, retailer: RetailerObserverConfig): Element[] {
+  const packaged = retailer.addSelectors.flatMap((selector) => [...root.querySelectorAll(selector)]);
   const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
-  return [...new Set(candidates)].filter((element) => visible(element)
+  return [...new Set(packaged)].filter((element) => visible(element)
     && intentPattern.test(controlIntent(element))
     && !merchandisingControl(element));
+}
+
+function candidateControls(root: ParentNode, retailer: RetailerObserverConfig): Element[] {
+  const packagedMatches = packagedCandidateControls(root, retailer);
+  // Selector drift is recoverable only from a semantic commerce control. The
+  // retailer-specific offer binders below must still prove exact identity,
+  // price, seller, fulfillment, quantity, uniqueness, and offer scope before
+  // this control can become actionable.
+  if (packagedMatches.length > 0) return packagedMatches;
+  if (!SEMANTIC_ACTION_RECOVERY_RETAILERS.has(retailer.retailerId)) return [];
+  const semanticMatches = genericAddIntentControls(root);
+  if (semanticMatches.length !== 1 || !semanticMatches[0]) return [];
+  const document = root.nodeType === 9 ? root as Document : (root as Element).ownerDocument;
+  return stableRepairLandmark(document, semanticMatches[0], "addControl") ? semanticMatches : [];
 }
 
 function genericAddIntentControls(root: ParentNode): Element[] {
@@ -845,26 +867,28 @@ function repairSemanticMatches(
   return GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element));
 }
 
-function fieldRepairEvidence(
-  document: Document,
+function repairFieldCandidates(
   root: Element | Document,
   retailer: RetailerObserverConfig,
   field: RetailerAdapterRepairLandmark["field"]
-): { candidateCount: number; landmarks: RetailerAdapterRepairLandmark[] } {
-  const elements = (field === "addControl"
+): Element[] {
+  const elements = field === "addControl"
     ? genericAddIntentControls(root)
     : [...root.querySelectorAll(REPAIR_STRUCTURAL_SELECTOR)]
       .slice(0, 500)
-      .filter((element) => visible(element) && !merchandisingControl(element)))
+      .filter((element) => visible(element) && !merchandisingControl(element));
+  return [...new Set(elements)]
     .filter((element) => repairLandmarkElement(element, field) !== null)
     .filter((element) => repairSemanticMatches(field, element, retailer));
-  const candidates = [...new Set(elements)];
-  if (candidates.length !== 1 || !candidates[0]) {
-    return { candidateCount: boundedCount(candidates.length), landmarks: [] };
-  }
-  const element = candidates[0];
+}
+
+function stableRepairLandmark(
+  document: Document,
+  element: Element,
+  field: RetailerAdapterRepairLandmark["field"]
+): RetailerAdapterRepairLandmark | null {
   const elementKind = repairLandmarkElement(element, field);
-  if (!elementKind) return { candidateCount: 1, landmarks: [] };
+  if (!elementKind) return null;
   for (const attribute of REPAIR_LANDMARK_ATTRIBUTES) {
     const value = String(element.getAttribute(attribute) ?? "").trim();
     if (!REPAIR_LANDMARK_VALUE.test(value)
@@ -872,17 +896,40 @@ function fieldRepairEvidence(
       || !repairLandmarkTokensAllowed(field, value)
       || /\d{4,}|[a-f0-9]{12,}/i.test(value)) continue;
     const landmark: RetailerAdapterRepairLandmark = { field, elementKind, attribute, value };
-    const selector = repairLandmarkSelector(landmark);
-    let exact = false;
     try {
-      const matches = [...document.querySelectorAll(selector)];
-      exact = matches.length === 1 && matches[0] === element;
+      const matches = [...document.querySelectorAll(repairLandmarkSelector(landmark))];
+      if (matches.length === 1 && matches[0] === element) return landmark;
     } catch {
-      exact = false;
+      // An invalid selector can never become recovery evidence.
     }
-    if (exact) return { candidateCount: 1, landmarks: [landmark] };
   }
-  return { candidateCount: 1, landmarks: [] };
+  return null;
+}
+
+function adaptiveReadPrice(root: Element | Document, retailer: RetailerObserverConfig): number | null {
+  const packaged = readPrice(root, retailer.priceSelectors);
+  if (packaged !== null) return packaged;
+  if (!SEMANTIC_ACTION_RECOVERY_RETAILERS.has(retailer.retailerId)) return null;
+  const candidates = repairFieldCandidates(root, retailer, "unitPrice");
+  if (candidates.length !== 1 || !candidates[0]) return null;
+  const document = root.nodeType === 9 ? root as Document : (root as Element).ownerDocument;
+  if (!stableRepairLandmark(document, candidates[0], "unitPrice")) return null;
+  return parseRetailerPriceElement(candidates[0]);
+}
+
+function fieldRepairEvidence(
+  document: Document,
+  root: Element | Document,
+  retailer: RetailerObserverConfig,
+  field: RetailerAdapterRepairLandmark["field"]
+): { candidateCount: number; landmarks: RetailerAdapterRepairLandmark[] } {
+  const candidates = repairFieldCandidates(root, retailer, field);
+  if (candidates.length !== 1 || !candidates[0]) {
+    return { candidateCount: boundedCount(candidates.length), landmarks: [] };
+  }
+  const element = candidates[0];
+  const landmark = stableRepairLandmark(document, element, field);
+  return { candidateCount: 1, landmarks: landmark ? [landmark] : [] };
 }
 
 function repairLandmarkEvidence(
@@ -1151,6 +1198,7 @@ function amazonLayoutEvidence(
 ): RetailerAdapterLayoutEvidence {
   const retailer = CONFIGS.amazon;
   const pageSku = extractRetailerSku("amazon", urlValue);
+  const packagedControls = packagedCandidateControls(document, retailer);
   const controls = candidateControls(document, retailer);
   const control = controls.length === 1 ? controls[0] ?? null : null;
   const selected = pageSku === expectedSku
@@ -1191,12 +1239,12 @@ function amazonLayoutEvidence(
     retailer,
     pageSku !== expectedSku || securityChallenge || Boolean(interactiveBlock)
   );
-  const repairLandmarks = controls.length <= 1 ? eligibleRepairLandmarks(repairEvidence, {
-    availability: controls.length === 0 && genericAddIntentCount === 0,
+  const repairLandmarks = packagedControls.length <= 1 ? eligibleRepairLandmarks(repairEvidence, {
+    availability: packagedControls.length === 0 && genericAddIntentCount === 0,
     unitPrice: currentPrice === null,
     seller: currentSeller.sellerType === "unknown",
     fulfillment: selected.fulfillment === "unknown",
-    addControl: controls.length === 0 && genericAddIntentCount > 0
+    addControl: packagedControls.length === 0 && genericAddIntentCount > 0
   }) : [];
   return {
     schemaVersion: 1,
@@ -1204,7 +1252,7 @@ function amazonLayoutEvidence(
     scopeKind: amazonScopeKind(control),
     sellerShape,
     fulfillmentShape: fulfillmentShape(evidenceRoot),
-    addControlCount: boundedCount(controls.length),
+    addControlCount: boundedCount(packagedControls.length),
     genericAddIntentCount,
     ...repairCandidateCounts(repairEvidence, repairLandmarks),
     scopedControlCount: boundedCount(scopedControlCount),
@@ -1235,6 +1283,7 @@ export function retailerAdapterLayoutEvidence(
   if (retailerId === "amazon") return amazonLayoutEvidence(document, urlValue, expectedSku);
   const retailer = CONFIGS[retailerId];
   const pageSku = extractRetailerSku(retailerId, urlValue);
+  const packagedControls = packagedCandidateControls(document, retailer);
   const controls = candidateControls(document, retailer);
   const control = controls.length === 1 ? controls[0] ?? null : null;
   const selected = pageSku === expectedSku
@@ -1260,12 +1309,12 @@ export function retailerAdapterLayoutEvidence(
     retailer,
     pageSku !== expectedSku || securityChallenge || Boolean(interactiveBlock)
   );
-  const repairLandmarks = controls.length <= 1 ? eligibleRepairLandmarks(repairEvidence, {
-    availability: controls.length === 0 && genericAddIntentCount === 0,
+  const repairLandmarks = packagedControls.length <= 1 ? eligibleRepairLandmarks(repairEvidence, {
+    availability: packagedControls.length === 0 && genericAddIntentCount === 0,
     unitPrice: currentPrice === null,
     seller: currentSeller.sellerType === "unknown",
     fulfillment: selected.fulfillment === "unknown",
-    addControl: controls.length === 0 && genericAddIntentCount > 0
+    addControl: packagedControls.length === 0 && genericAddIntentCount > 0
   }) : [];
   return {
     schemaVersion: 1,
@@ -1275,7 +1324,7 @@ export function retailerAdapterLayoutEvidence(
         : control ? "other" : "none",
     sellerShape,
     fulfillmentShape: fulfillmentShape(root),
-    addControlCount: boundedCount(controls.length),
+    addControlCount: boundedCount(packagedControls.length),
     genericAddIntentCount,
     ...repairCandidateCounts(repairEvidence, repairLandmarks),
     scopedControlCount: selected.control ? 1 : 0,
@@ -1301,6 +1350,15 @@ function amazonSellerBound(root: Element, retailer: RetailerObserverConfig): boo
 }
 
 function amazonFulfillment(root: Element): "shipping" | "pickup" | "unknown" {
+  const selectedEvidence = [...root.querySelectorAll(
+    "[aria-selected='true'], [aria-checked='true'], [data-selected='true'], [data-state='selected'], input:checked"
+  )].filter(visible).map((element) => observableText(
+    element.closest("label, [role='tab'], [role='radio'], [data-testid*='fulfillment' i], [data-feature-name*='delivery' i]") || element,
+    2_000
+  )).join(" ");
+  const selectedShipping = /\bshipping\b|\bdeliver(?:y|ies|ed|ing)?\b/i.test(selectedEvidence);
+  const selectedPickup = /\bpick[ -]?up\b|\blocker\b/i.test(selectedEvidence);
+  if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
   const evidence = observableText(root, 30_000);
   const shipping = /\bships?\s+from\b|\bshipper\b|\bshipping\b|\bdeliver(?:y|ies|ed|ing)?\b/i.test(evidence);
   const pickup = /\bpick[ -]?up\b/i.test(evidence);
@@ -1337,7 +1395,7 @@ function amazonOfferScope(
     const controls = candidateControls(root, retailer);
     const asins = amazonAsinEvidence(root);
     const offers = amazonOfferIds(root);
-    const price = readPrice(root, retailer.priceSelectors);
+    const price = adaptiveReadPrice(root, retailer);
     const fulfillment = amazonFulfillment(root);
     if (controls.length === 1 && controls[0] === control
       && asins.size === 1 && asins.has(expectedSku)
@@ -1360,12 +1418,11 @@ function selectedAmazonControl(
   expectedSku: string,
   requiredFulfillment: Fulfillment
 ): SelectedRetailerControl {
+  const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
   const scoped = candidateControls(document, retailer)
     .map((control) => amazonOfferScope(control, retailer, expectedSku))
     .filter((candidate): candidate is AmazonScopedControl => Boolean(candidate));
-  const matching = scoped.filter((candidate) => requiredFulfillment === "either"
-    ? ["shipping", "pickup"].includes(candidate.fulfillment)
-    : candidate.fulfillment === requiredFulfillment);
+  const matching = scoped.filter((candidate) => candidate.fulfillment === expectedFulfillment);
   return matching.length === 1 && matching[0]
     ? matching[0]
     : { control: null, fulfillment: "unknown", offerRoot: null };
@@ -1405,7 +1462,7 @@ function walmartOfferScope(
   for (let depth = 0; depth < 14 && current; depth += 1) {
     if (["MAIN", "BODY", "HTML"].includes(current.tagName)) break;
     const controls = candidateControls(current, retailer);
-    const price = readPrice(current, retailer.priceSelectors);
+    const price = adaptiveReadPrice(current, retailer);
     const fulfillment = fulfillmentEvidence(current, control, retailer);
     if (controls.length === 1 && controls[0] === control && price !== null
       && fulfillment !== "unknown" && walmartSellerBound(current, retailer)) {
@@ -1430,16 +1487,15 @@ function selectedWalmartControl(
   expectedSku: string,
   requiredFulfillment: Fulfillment
 ): SelectedRetailerControl {
+  const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
   const scoped = candidateControls(document, retailer)
     .map((control) => walmartOfferScope(control, retailer, expectedSku))
     .filter((candidate): candidate is WalmartScopedControl => Boolean(candidate));
   const exact = scoped.filter((candidate) => candidate.identityBound);
   const primary = scoped.filter((candidate) => candidate.primaryScope);
   const pool = exact.length > 0 ? exact : primary.length > 0 ? primary : scoped;
-  const matching = pool.filter((candidate) => requiredFulfillment === "either"
-    ? ["shipping", "pickup"].includes(candidate.fulfillment)
-    : candidate.fulfillment === requiredFulfillment);
-  const selected = matching.length === 1 ? matching[0] : pool.length === 1 ? pool[0] : null;
+  const matching = pool.filter((candidate) => candidate.fulfillment === expectedFulfillment);
+  const selected = matching.length === 1 ? matching[0] : null;
   return selected || { control: null, fulfillment: "unknown", offerRoot: null };
 }
 
@@ -1533,7 +1589,7 @@ function bestBuyOfferScope(
   for (const root of roots) {
     const controls = candidateControls(root, retailer);
     if (controls.length !== 1 || controls[0] !== control) continue;
-    if (readPrice(root, retailer.priceSelectors) === null || !bestBuySellerBound(root, retailer)) continue;
+    if (adaptiveReadPrice(root, retailer) === null || !bestBuySellerBound(root, retailer)) continue;
     const fulfillment = bestBuyFulfillment(root, control);
     if (fulfillment === "unknown" || !bestBuyQuantityOne(root)) continue;
     const skus = bestBuySkuEvidence(root);
@@ -1549,12 +1605,11 @@ function selectedBestBuyControl(
   expectedSku: string,
   requiredFulfillment: Fulfillment
 ): SelectedRetailerControl {
+  const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
   const scoped = candidateControls(document, retailer)
     .map((control) => bestBuyOfferScope(control, retailer, expectedSku))
     .filter((candidate): candidate is BestBuyScopedControl => Boolean(candidate));
-  const matching = scoped.filter((candidate) => requiredFulfillment === "either"
-    ? candidate.fulfillment === "shipping" || candidate.fulfillment === "pickup"
-    : candidate.fulfillment === requiredFulfillment);
+  const matching = scoped.filter((candidate) => candidate.fulfillment === expectedFulfillment);
   return matching.length === 1 && matching[0]
     ? matching[0]
     : { control: null, fulfillment: "unknown", offerRoot: null };
@@ -1566,6 +1621,7 @@ function selectedControl(
   requiredFulfillment: Fulfillment,
   expectedSku = ""
 ): SelectedRetailerControl {
+  const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
   if (retailer.retailerId === "walmart" && CONFIGS.walmart.skuPattern.test(expectedSku)) {
     return selectedWalmartControl(document, retailer, expectedSku, requiredFulfillment);
   }
@@ -1577,9 +1633,7 @@ function selectedControl(
   }
   const candidates = candidateControls(document, retailer)
     .map((control) => ({ control, fulfillment: fulfillmentEvidence(document, control, retailer) }));
-  const matching = candidates.filter((candidate) => requiredFulfillment === "either"
-    ? ["shipping", "pickup"].includes(candidate.fulfillment)
-    : candidate.fulfillment === requiredFulfillment);
+  const matching = candidates.filter((candidate) => candidate.fulfillment === expectedFulfillment);
   const selected = matching.length === 1 && matching[0]
     ? matching[0]
     : { control: null, fulfillment: "unknown" as const };
@@ -1596,9 +1650,8 @@ export function retailerAddControl(
   const retailer = CONFIGS[retailerId];
   if (extractRetailerSku(retailerId, urlValue) !== expectedSku) return null;
   const selected = selectedControl(document, retailer, requiredFulfillment, expectedSku);
-  const fulfillmentAllowed = requiredFulfillment === "either"
-    ? selected.fulfillment === "shipping" || selected.fulfillment === "pickup"
-    : selected.fulfillment === requiredFulfillment;
+  const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
+  const fulfillmentAllowed = selected.fulfillment === expectedFulfillment;
   return fulfillmentAllowed && actionable(selected.control) ? selected.control : null;
 }
 
@@ -1625,7 +1678,7 @@ export function observeRetailerOffer(
   urlValue: string,
   retailerId: Exclude<SupportedRetailerId, "target">,
   expectedSku: string,
-  requiredFulfillment: Fulfillment = "either",
+  requiredFulfillment: Fulfillment = "shipping",
   observedAt = new Date().toISOString()
 ): LiveOfferObservation {
   const retailer = CONFIGS[retailerId];
@@ -1644,7 +1697,7 @@ export function observeRetailerOffer(
     || selected.control?.closest("form, [data-testid*='buy-box' i], [data-automation-id*='buy-box' i], #buybox, main")
     || null;
   const unitPriceCents = (!blocked || retainBoundManualEvidence) && priceRoot
-    ? readPrice(priceRoot, retailer.priceSelectors) ?? readPrice(document, retailer.priceSelectors)
+    ? adaptiveReadPrice(priceRoot, retailer) ?? adaptiveReadPrice(document, retailer)
     : null;
   const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
   const canAdd = selectedControlActionable && !blocked;
@@ -1676,7 +1729,7 @@ export function observeRetailerSelectedOfferScope(
   urlValue: string,
   retailerId: Exclude<SupportedRetailerId, "target">,
   expectedSku: string,
-  requiredFulfillment: Fulfillment = "either"
+  requiredFulfillment: Fulfillment = "shipping"
 ) {
   const pageSku = extractRetailerSku(retailerId, urlValue);
   if (!pageSku || pageSku !== expectedSku) throw new Error("The exact retailer listing identity is unavailable.");

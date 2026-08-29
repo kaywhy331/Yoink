@@ -26,6 +26,28 @@ function product(name = "amazon-first-party.html", url = PRODUCT_URL): Document 
   return new JSDOM(readFileSync(join(RETAILER_FIXTURES, name), "utf8"), { url }).window.document;
 }
 
+function semanticDriftProduct(): Document {
+  const document = product();
+  const price = document.querySelector("#corePrice_feature_div");
+  price?.removeAttribute("id");
+  price?.setAttribute("data-testid", "commerce-amount");
+  price?.querySelector(".a-offscreen")?.removeAttribute("class");
+  const control = document.querySelector("#add-to-cart-button");
+  control?.removeAttribute("id");
+  control?.removeAttribute("name");
+  control?.setAttribute("data-button-state", "primary-cart-action");
+  return document;
+}
+
+function pickupProduct(): Document {
+  const document = product();
+  document.querySelector("form")?.insertAdjacentHTML(
+    "beforeend",
+    "<div data-feature-name='delivery-option' role='radio' aria-selected='true'>Pickup at Amazon Locker</div>"
+  );
+  return document;
+}
+
 function job(overrides: Partial<AmazonAddJob> = {}): AmazonAddJob {
   const base: BrowserActionContract = {
     contractVersion: 1,
@@ -101,7 +123,32 @@ test("Amazon add consumes authorization once and revalidates the same ephemeral 
   });
 });
 
-test("Amazon add v5 rejects marketplace, pickup, multi-quantity, checkout, and ambiguous canonical offers", () => {
+test("Amazon safely self-heals unique control and price selector drift", () => {
+  const document = semanticDriftProduct();
+  const control = document.querySelector("[data-button-state='primary-cart-action']");
+  assert.ok(control);
+  let clicks = 0;
+  control.addEventListener("click", (event) => {
+    event.preventDefault();
+    clicks += 1;
+  });
+  const rehearsal = rehearseAmazonAdd(document, PRODUCT_URL, job(), NOW);
+  assert.equal(rehearsal.ok, true);
+  assert.equal(clicks, 0);
+  const prepared = prepareAmazonAdd(document, PRODUCT_URL, job(), NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  const committed = commitAmazonAdd(document, PRODUCT_URL, job(), prepared.authorizationId, NOW + 100);
+  assert.equal(committed.ok, true);
+  assert.equal(clicks, 1);
+
+  const ambiguous = semanticDriftProduct();
+  const duplicate = ambiguous.querySelector("[data-button-state='primary-cart-action']")?.cloneNode(true);
+  if (duplicate) ambiguous.querySelector("form")?.append(duplicate);
+  assert.equal(prepareAmazonAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
+});
+
+test("Amazon add v7 rejects ambiguity and permits pickup only for an exact selected pickup offer", () => {
   assert.equal(prepareAmazonAdd(product("amazon-marketplace.html"), PRODUCT_URL, job(), NOW).reason, "third_party_seller");
   const separatedMarketplaceUrl = "https://www.amazon.com/dp/B081J5PW5J";
   assert.equal(prepareAmazonAdd(
@@ -118,7 +165,22 @@ test("Amazon add v5 rejects marketplace, pickup, multi-quantity, checkout, and a
   assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
-  assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ fulfillment: "pickup" }), NOW).reason, "fulfillment_not_supported");
+  assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ fulfillment: "either" }), NOW).reason, "fulfillment_not_supported");
+  assert.equal(prepareAmazonAdd(product(), PRODUCT_URL, job({ fulfillment: "pickup" }), NOW).ok, false);
+
+  const pickup = pickupProduct();
+  let pickupClicks = 0;
+  pickup.querySelector("#add-to-cart-button")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    pickupClicks += 1;
+  });
+  const pickupJob = job({ fulfillment: "pickup" });
+  const pickupPreparation = prepareAmazonAdd(pickup, PRODUCT_URL, pickupJob, NOW);
+  assert.equal(pickupPreparation.ok, true);
+  if (pickupPreparation.ok) {
+    assert.equal(commitAmazonAdd(pickup, PRODUCT_URL, pickupJob, pickupPreparation.authorizationId, NOW + 100).ok, true);
+  }
+  assert.equal(pickupClicks, 1);
 
   const ambiguous = product();
   ambiguous.querySelector("form")?.insertAdjacentHTML("beforeend", "<input name='offerListingID' value='SECOND_OFFER'>");

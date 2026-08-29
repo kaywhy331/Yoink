@@ -87,7 +87,7 @@ export function bestBuyAddControl(
   expectedSku: string,
   requiredFulfillment: Fulfillment
 ): Element | null {
-  if (requiredFulfillment !== "shipping" && requiredFulfillment !== "either") return null;
+  if (requiredFulfillment !== "shipping" && requiredFulfillment !== "pickup") return null;
   if (bestBuyInteractiveBlock(documentValue, urlValue)) return null;
   return retailerAddControl(documentValue, urlValue, "bestbuy", expectedSku, requiredFulfillment);
 }

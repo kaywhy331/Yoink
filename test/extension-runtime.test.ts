@@ -256,7 +256,7 @@ const selectedOffer = (childOfferKey: string, selectionState = "exact") => ({
 });
 
 const OBSERVATION = {
-  adapterVersion: "target-observer-v1",
+  adapterVersion: "target-observer-v3",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -276,7 +276,7 @@ const OBSERVATION = {
   cookie: "DO_NOT_SEND"
 };
 const AMAZON_OBSERVATION = {
-  adapterVersion: "amazon-observer-v6",
+  adapterVersion: "amazon-observer-v7",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -297,7 +297,7 @@ const AMAZON_OBSERVATION = {
   selectedOffer: selectedOffer("B0GYTRYV7P")
 };
 const WALMART_OBSERVATION = {
-  adapterVersion: "walmart-observer-v4",
+  adapterVersion: "walmart-observer-v5",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -315,7 +315,7 @@ const WALMART_OBSERVATION = {
   selectedOffer: selectedOffer("17354421975")
 };
 const BESTBUY_OBSERVATION = {
-  adapterVersion: "bestbuy-observer-v5",
+  adapterVersion: "bestbuy-observer-v6",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -500,6 +500,7 @@ interface HarnessOptions {
   trackalackerPush?: boolean;
   visibleTrackalackerFallback?: boolean;
   amazonHydrationRetry?: boolean;
+  amazonSemanticRecovery?: boolean;
   observerRepairLandmark?: boolean;
   observerFiveFieldRepairLandmarks?: boolean;
   deviceCredentialRotationDue?: boolean;
@@ -558,7 +559,7 @@ function harness(options: HarnessOptions = {}) {
         fulfillment: "shipping"
       } : null,
       runnerJob: {
-        adapterVersion: "target-add-v1",
+        adapterVersion: "target-add-v4",
         contractVersion: 1,
         jobId: "job_target_fixture",
         retailerId: "target",
@@ -922,6 +923,30 @@ function harness(options: HarnessOptions = {}) {
             };
             return [{ frameId: 0, result: { ok: true, observation, diagnostic } }];
           }
+          if (options.amazonSemanticRecovery) {
+            return [{ frameId: 0, result: {
+              ok: true,
+              observation: AMAZON_OBSERVATION,
+              diagnostic: {
+                ...diagnosticFor(AMAZON_OBSERVATION),
+                outcome: "passed",
+                failureStage: "complete",
+                reasonCode: "semantic_layout_recovered",
+                layout: {
+                  ...diagnosticFor(AMAZON_OBSERVATION).layout,
+                  addControlCount: 0,
+                  genericAddIntentCount: 1,
+                  scopedControlCount: 1,
+                  priceCandidateCount: 0,
+                  genericPriceCandidateCount: 1,
+                  repairLandmarks: [
+                    { field: "unitPrice", elementKind: "div", attribute: "data-testid", value: "commerce-amount" },
+                    { field: "addControl", elementKind: "input", attribute: "data-button-state", value: "primary-cart-action" }
+                  ]
+                }
+              }
+            } }];
+          }
           amazonObservationAttempts += 1;
           if (options.amazonHydrationRetry && amazonObservationAttempts === 1) {
             const observation = {
@@ -1254,7 +1279,7 @@ function harness(options: HarnessOptions = {}) {
     if (url.endsWith("/devices/self/jobs/next")) {
       const leasedJob = options.amazonJob ? {
         contractVersion: 1,
-        adapterVersion: "amazon-add-v5",
+        adapterVersion: "amazon-add-v7",
         id: "job_amazon_fixture",
         capabilityToken: "A".repeat(43),
         action: "add_to_cart",
@@ -1271,7 +1296,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.walmartJob ? {
         contractVersion: 1,
-        adapterVersion: "walmart-add-v3",
+        adapterVersion: "walmart-add-v5",
         id: "job_walmart_fixture",
         capabilityToken: "W".repeat(43),
         action: "add_to_cart",
@@ -1288,7 +1313,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.bestBuyJob ? {
         contractVersion: 1,
-        adapterVersion: "bestbuy-add-v3",
+        adapterVersion: "bestbuy-add-v5",
         id: "job_bestbuy_fixture",
         capabilityToken: "B".repeat(43),
         action: "add_to_cart",
@@ -1305,7 +1330,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : {
         contractVersion: 1,
-        adapterVersion: "target-add-v1",
+        adapterVersion: "target-add-v4",
         id: "job_target_fixture",
         capabilityToken: "C".repeat(43),
         action: "add_to_cart",
@@ -1544,7 +1569,7 @@ test("the service worker records one sanitized Amazon exact-offer observation", 
   assert.ok(post);
   const body = JSON.parse(String(post.options.body)) as Record<string, unknown>;
   assert.equal(body.retailerSku, "B0GYTRYV7P");
-  assert.equal(body.adapterVersion, "amazon-observer-v6");
+  assert.equal(body.adapterVersion, "amazon-observer-v7");
   assert.equal(body.purchaseRouteReady, true);
   assert.equal("url" in body, false);
   assert.equal("cookie" in body, false);
@@ -1626,7 +1651,7 @@ for (const [failure, reasonCode] of [
     const body = JSON.parse(String(diagnosticPosts[0]?.options.body)) as Record<string, unknown>;
     assert.equal(body.retailerId, "amazon");
     assert.equal(body.retailerSku, "B0GYTRYV7P");
-    assert.equal(body.adapterVersion, "amazon-observer-v6");
+    assert.equal(body.adapterVersion, "amazon-observer-v7");
     assert.equal(body.operation, "observe");
     assert.equal(body.outcome, "failed");
     assert.equal(body.failureStage, "runner");
@@ -2166,7 +2191,24 @@ test("the service worker retries one hydrating Amazon layout and reports a recov
   assert.equal(JSON.stringify(diagnostic).includes("offerListingID"), false);
 });
 
-test("the service worker captures observer-v4 evidence and rehearses Walmart add-v3 without clicking", async () => {
+test("the service worker accepts and reports constrained semantic layout recovery without retrying", async () => {
+  const runtime = harness({ activeUrl: AMAZON_PRODUCT_URL, amazonSemanticRecovery: true });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  const diagnosticPosts = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/amazon"));
+  assert.equal(diagnosticPosts.length, 1);
+  const diagnostic = JSON.parse(String(diagnosticPosts[0]?.options.body)) as Record<string, unknown>;
+  assert.equal(diagnostic.outcome, "passed");
+  assert.equal(diagnostic.failureStage, "complete");
+  assert.equal(diagnostic.reasonCode, "semantic_layout_recovered");
+  assert.equal(diagnostic.attemptCount, 1);
+  const layout = diagnostic.layout as Record<string, unknown>;
+  assert.equal(layout.addControlCount, 0);
+  assert.equal(layout.scopedControlCount, 1);
+  assert.equal((layout.repairLandmarks as unknown[]).length, 2);
+});
+
+test("the service worker captures observer-v5 evidence and rehearses Walmart add-v5 without clicking", async () => {
   const runtime = harness({ activeUrl: WALMART_PRODUCT_URL });
   const inspection = await runtime.send({ type: "yoink:inspect-retailer" });
   assert.equal(inspection.ok, true);
@@ -2179,20 +2221,20 @@ test("the service worker captures observer-v4 evidence and rehearses Walmart add
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/walmart"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "walmart-observer-v4");
+  assert.equal(observationBody.adapterVersion, "walmart-observer-v5");
   assert.equal(observationBody.retailerSku, "17354421975");
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/walmart-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "walmart-add-v3");
-  assert.equal(trialBody.observerVersion, "walmart-observer-v4");
+  assert.equal(trialBody.adapterVersion, "walmart-add-v5");
+  assert.equal(trialBody.observerVersion, "walmart-observer-v5");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("4499"), false);
   assert.equal(JSON.stringify(trialBody).includes(WALMART_PRODUCT_URL), false);
   assert.equal(JSON.stringify(trialBody).includes(TOKEN), false);
 });
 
-test("the service worker rehearses Amazon add-v5 without persisting its offer token", async () => {
+test("the service worker rehearses Amazon add-v7 without persisting its offer token", async () => {
   const runtime = harness({ activeUrl: AMAZON_PRODUCT_URL });
   const rehearsal = await runtime.send({ type: "yoink:rehearse-amazon" });
   assert.equal(rehearsal.ok, true);
@@ -2202,8 +2244,8 @@ test("the service worker rehearses Amazon add-v5 without persisting its offer to
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/amazon-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "amazon-add-v5");
-  assert.equal(trialBody.observerVersion, "amazon-observer-v6");
+  assert.equal(trialBody.adapterVersion, "amazon-add-v7");
+  assert.equal(trialBody.observerVersion, "amazon-observer-v7");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("offerListing"), false);
   assert.equal(JSON.stringify(trialBody).includes(TOKEN), false);
@@ -2216,7 +2258,7 @@ test("the service worker rehearses Amazon add-v5 without persisting its offer to
   assert.equal(JSON.stringify(rehearsalDiagnostic).includes("offerListing"), false);
 });
 
-test("the service worker captures observer-v5 evidence and rehearses Best Buy add-v3 without clicking", async () => {
+test("the service worker captures observer-v6 evidence and rehearses Best Buy add-v5 without clicking", async () => {
   const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL });
   const rehearsal = await runtime.send({ type: "yoink:rehearse-bestbuy" });
   assert.equal(rehearsal.ok, true);
@@ -2226,13 +2268,13 @@ test("the service worker captures observer-v5 evidence and rehearses Best Buy ad
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/bestbuy"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v5");
+  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v6");
   assert.equal(observationBody.retailerSku, "6588149");
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v3");
-  assert.equal(trialBody.observerVersion, "bestbuy-observer-v5");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v5");
+  assert.equal(trialBody.observerVersion, "bestbuy-observer-v6");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("699"), false);
   assert.equal(JSON.stringify(trialBody).includes(BESTBUY_PRODUCT_URL), false);

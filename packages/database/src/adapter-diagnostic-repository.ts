@@ -273,10 +273,14 @@ function normalizeLayout(value: unknown, retailerId: SupportedRetailerId): Retai
     boundedCount(input[field] ?? 0, field)
   ])) as Record<(typeof REPAIR_COUNT_FIELDS)[keyof typeof REPAIR_COUNT_FIELDS], number>;
   const repairLandmarks = normalizeRepairLandmarks(input.repairLandmarks);
+  const semanticControlBinding = counts.addControlCount === 0
+    && genericAddIntentCount === 1
+    && counts.scopedControlCount === 1
+    && repairLandmarks.some((landmark) => landmark.field === "addControl");
   if (counts.exactSkuInputCount > counts.explicitSkuInputCount
     || counts.canonicalOfferDistinctCount > counts.canonicalOfferInputCount
     || counts.alternateOfferDistinctCount > counts.alternateOfferInputCount
-    || counts.scopedControlCount > counts.addControlCount) {
+    || (counts.scopedControlCount > counts.addControlCount && !semanticControlBinding)) {
     throw new Error("Adapter diagnostic layout counts are inconsistent.");
   }
   if (retailerId !== "amazon" && (
@@ -418,6 +422,7 @@ export class AdapterDiagnosticRepository {
     const repairEvidenceAllowed = input.operation === "observe" && (
       (input.outcome === "failed" && REPAIR_SELECTOR_MISS_REASONS.has(reasonCode))
       || (input.outcome === "recovered" && reasonCode === "dom_hydration_recovered")
+      || (input.outcome === "passed" && reasonCode === "semantic_layout_recovered")
     );
     if ((layout.repairLandmarks?.length ?? 0) > 0 && !repairEvidenceAllowed) {
       throw new Error("Adapter diagnostic repair landmarks require one selector-miss or recovered observer result.");

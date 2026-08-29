@@ -133,6 +133,9 @@ test("notification plans remain mapping-independent and explain an offline compa
 test("readiness distinguishes unsafe policy, missing runner, test mode, pause, expiry, and legacy decisions", () => {
   assert.equal(buildPurchaseAutomationReadiness(
     plan({ targets: [{ ...TARGET, fulfillment: "pickup" }] }), context()
+  ).state, "guarded_add_armed");
+  assert.equal(buildPurchaseAutomationReadiness(
+    plan({ targets: [{ ...TARGET, fulfillment: "either" }] }), context()
   ).state, "guarded_add_policy_incomplete");
 
   assert.equal(buildPurchaseAutomationReadiness(plan(), context({

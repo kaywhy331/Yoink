@@ -21,7 +21,7 @@ version `2` with the explicit confirmation
 - quantity from 1 through 99;
 - positive integer item and all-in caps;
 - first-party seller and exact-item substitution;
-- fulfillment and the shipping-only guarded-add boundary;
+- Shipping as the default, with Pickup allowed only as an explicit exact choice;
 - packaged add-runner availability when an add is requested;
 - cooldown and future expiry bounds;
 - the current tax and retailer reserve required by an add plan; and

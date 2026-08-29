@@ -188,14 +188,14 @@
               <div><small>Seller</small><strong>The retailer itself</strong></div>
               <div><small>Substitutions</small><strong>Exact item only</strong></div>
             </div>
-            <label><span>How should it be available?</span><select name="fulfillment"><option value="shipping">Shipping</option><option value="pickup">Pickup</option><option value="either">Shipping or pickup</option><option value="manual">I will choose manually</option></select></label>
+            <label><span>How should it be available?</span><select name="fulfillment"><option value="shipping">Shipping (default)</option><option value="pickup">Pickup (explicit opt-in)</option><option value="manual">I will choose manually</option></select></label>
           </fieldset>
 
           <fieldset class="setup-section">
             <legend><span>3</span> When this exact offer matches</legend>
             <div class="action-choices">
               <label class="action-choice"><input name="actionCeiling" type="radio" value="notify" checked><span><strong>Tell me when it matches</strong><small>No store button is clicked.</small></span></label>
-              <label class="action-choice" id="addChoice"><input name="actionCeiling" type="radio" value="add_to_cart"><span><strong>Add to cart</strong><small>Only a qualified first-party shipping offer. Checkout stays manual.</small></span></label>
+              <label class="action-choice" id="addChoice"><input name="actionCeiling" type="radio" value="add_to_cart"><span><strong>Add to cart</strong><small>Only a qualified first-party offer matching your exact Shipping or Pickup choice. Checkout stays manual.</small></span></label>
             </div>
             <p class="boundary-note" id="setupExecutionNote"></p>
           </fieldset>

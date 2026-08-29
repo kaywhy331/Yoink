@@ -295,16 +295,16 @@ export class ExecutionRepository {
            AND (
              ? = 1 AND l.retailer_id = 'target' AND aj.action = 'add_to_cart'
                AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
-               AND aj.fulfillment = 'shipping'
+               AND aj.fulfillment IN ('shipping', 'pickup')
              OR ? = 1 AND l.retailer_id = 'walmart' AND aj.action = 'add_to_cart'
                AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
-               AND aj.fulfillment = 'shipping'
+               AND aj.fulfillment IN ('shipping', 'pickup')
              OR ? = 1 AND l.retailer_id = 'amazon' AND aj.action = 'add_to_cart'
                AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
-               AND aj.fulfillment = 'shipping'
+               AND aj.fulfillment IN ('shipping', 'pickup')
              OR ? = 1 AND l.retailer_id = 'bestbuy' AND aj.action = 'add_to_cart'
                AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
-               AND aj.fulfillment = 'shipping'
+               AND aj.fulfillment IN ('shipping', 'pickup')
            )
          ORDER BY aj.created_at LIMIT 1`,
         currentRequestScope().userId,
@@ -322,25 +322,25 @@ export class ExecutionRepository {
           && candidate.action === "add_to_cart"
           && Number(candidate.quantity) === 1
           && candidate.seller_policy === "first_party_only"
-          && candidate.fulfillment === "shipping"
+          && ["shipping", "pickup"].includes(candidate.fulfillment)
         : candidate.retailer_id === "walmart"
           ? walmartAddCapable
             && candidate.action === "add_to_cart"
             && Number(candidate.quantity) === 1
             && candidate.seller_policy === "first_party_only"
-            && candidate.fulfillment === "shipping"
+            && ["shipping", "pickup"].includes(candidate.fulfillment)
           : candidate.retailer_id === "amazon"
             ? amazonAddCapable
               && candidate.action === "add_to_cart"
               && Number(candidate.quantity) === 1
               && candidate.seller_policy === "first_party_only"
-              && candidate.fulfillment === "shipping"
+              && ["shipping", "pickup"].includes(candidate.fulfillment)
             : candidate.retailer_id === "bestbuy"
               ? bestBuyAddCapable
                 && candidate.action === "add_to_cart"
                 && Number(candidate.quantity) === 1
                 && candidate.seller_policy === "first_party_only"
-                && candidate.fulfillment === "shipping"
+                && ["shipping", "pickup"].includes(candidate.fulfillment)
               : false;
       if (!deviceCanAttempt) return { job: null, reason: "device_unavailable" };
 

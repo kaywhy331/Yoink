@@ -30,6 +30,22 @@ function product(): Document {
   return fixture("bestbuy-first-party.html", PRODUCT_URL);
 }
 
+function semanticDriftProduct(): Document {
+  const document = product();
+  const price = document.querySelector("[data-testid='customer-price']");
+  price?.setAttribute("data-testid", "commerce-amount");
+  const packaged = document.querySelector("[data-testid='buy-box'] button");
+  if (packaged) {
+    const semantic = document.createElement("div");
+    semantic.setAttribute("role", "button");
+    semantic.setAttribute("tabindex", "0");
+    semantic.setAttribute("data-button-state", "primary-cart-action");
+    semantic.textContent = "Add to cart";
+    packaged.replaceWith(semantic);
+  }
+  return document;
+}
+
 function job(overrides: Partial<BestBuyAddJob> = {}): BestBuyAddJob {
   const base: BrowserActionContract = {
     contractVersion: 1,
@@ -98,16 +114,48 @@ test("Best Buy add consumes its authorization before one click and revalidates t
   });
 });
 
-test("Best Buy v3 accepts only Best Buy-sold, selected-shipping, quantity-one add jobs", () => {
+test("Best Buy safely self-heals unique control and price selector drift", () => {
+  const document = semanticDriftProduct();
+  const control = document.querySelector("[data-button-state='primary-cart-action']");
+  assert.ok(control);
+  let clicks = 0;
+  control.addEventListener("click", () => { clicks += 1; });
+  const rehearsal = rehearseBestBuyAdd(document, PRODUCT_URL, job(), NOW);
+  assert.equal(rehearsal.ok, true);
+  assert.equal(clicks, 0);
+  const prepared = prepareBestBuyAdd(document, PRODUCT_URL, job(), NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  const committed = commitBestBuyAdd(document, PRODUCT_URL, job(), prepared.authorizationId, NOW + 100);
+  assert.equal(committed.ok, true);
+  assert.equal(clicks, 1);
+
+  const ambiguous = semanticDriftProduct();
+  const duplicate = ambiguous.querySelector("[data-button-state='primary-cart-action']")?.cloneNode(true);
+  if (duplicate) ambiguous.querySelector("[data-testid='buy-box']")?.append(duplicate);
+  assert.equal(prepareBestBuyAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
+});
+
+test("Best Buy v5 requires an exact selected Shipping or explicit Pickup offer", () => {
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
-  assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ fulfillment: "pickup" }), NOW).reason, "fulfillment_not_supported");
+  assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ fulfillment: "either" }), NOW).reason, "fulfillment_not_supported");
+  assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ fulfillment: "pickup" }), NOW).ok, false);
 
   const marketplace = fixture("bestbuy-marketplace.html", MARKETPLACE_URL);
   const marketplaceJob = job({ canonicalUrl: MARKETPLACE_URL, retailerSku: "12716513", expectedSeller: "Shopville Inc", maxUnitPriceCents: 26799, maxOrderTotalCents: 26799 });
   assert.equal(prepareBestBuyAdd(marketplace, MARKETPLACE_URL, marketplaceJob, NOW).reason, "third_party_seller");
-  assert.equal(prepareBestBuyAdd(fixture("bestbuy-pickup-selected.html", PRODUCT_URL), PRODUCT_URL, job(), NOW).reason, "out_of_stock");
+  const pickup = fixture("bestbuy-pickup-selected.html", PRODUCT_URL);
+  let pickupClicks = 0;
+  pickup.querySelector("button")?.addEventListener("click", () => { pickupClicks += 1; });
+  const pickupJob = job({ fulfillment: "pickup" });
+  const pickupPreparation = prepareBestBuyAdd(pickup, PRODUCT_URL, pickupJob, NOW);
+  assert.equal(pickupPreparation.ok, true);
+  if (pickupPreparation.ok) {
+    assert.equal(commitBestBuyAdd(pickup, PRODUCT_URL, pickupJob, pickupPreparation.authorizationId, NOW + 100).ok, true);
+  }
+  assert.equal(pickupClicks, 1);
 
   const preorderUrl = "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-reality-fracture-play-booster-box-30-packs/JJ8VP7Z65T/sku/6678193";
   const preorderJob = job({
@@ -122,7 +170,7 @@ test("Best Buy v3 accepts only Best Buy-sold, selected-shipping, quantity-one ad
   );
 });
 
-test("Best Buy v3 reaches the no-click boundary on the modern fulfillment layout", () => {
+test("Best Buy v5 reaches the no-click boundary on the modern fulfillment layout", () => {
   const url = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const document = fixture("bestbuy-modern-first-party.html", url);
   let clicks = 0;

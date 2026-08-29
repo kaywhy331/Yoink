@@ -4,16 +4,15 @@ import { TARGET_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { MutationLaneRepository } from "../packages/database/src/mutation-lane-repository.js";
 
-test("pickup, prepare-checkout, and submit-order stay independently closed for every retailer", () => {
+test("pickup stays inside exact add-only authorization while checkout and submit remain closed", () => {
   const db = new YoinkDatabase();
   try {
     const repository = new MutationLaneRepository(db);
     const initial = repository.readiness();
     assert.equal(initial.policyVersion, "advanced-mutation-gates-v1");
     assert.equal(initial.mutationAuthorized, false);
-    assert.equal(initial.lanes.length, 12);
+    assert.equal(initial.lanes.length, 8);
     assert.equal(initial.lanes.every((lane) => lane.status === "closed" && lane.packagedAdapterVersion === "" && lane.mutationAuthorized === false), true);
-    assert.equal(initial.lanes.filter((lane) => lane.lane === "pickup_add").length, 4);
     assert.equal(initial.lanes.filter((lane) => lane.lane === "prepare_checkout").length, 4);
     assert.equal(initial.lanes.filter((lane) => lane.lane === "submit_order").length, 4);
     assert.equal(initial.lanes.filter((lane) => lane.lane === "submit_order")

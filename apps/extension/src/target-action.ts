@@ -8,7 +8,7 @@ import {
 import {
   observeTargetCart,
   observeTargetOffer,
-  targetAddControl,
+  targetAddBinding,
   targetInteractiveBlock,
   targetPageKind,
   targetSecurityChallenge
@@ -24,6 +24,9 @@ interface PendingAuthorization {
   jobId: string;
   createdAt: number;
   control: Element;
+  fulfillmentControl: Element | null;
+  selectionRequired: boolean;
+  offerRoot: Element | null;
   proof: LiveOfferProof;
 }
 
@@ -40,6 +43,7 @@ export type TargetAddCommit =
   | { ok: false; reason: string; clicked: false };
 
 const AUTHORIZATION_MAX_AGE_MS = 10_000;
+const FULFILLMENT_SELECTION_MAX_WAIT_MS = 5_000;
 let sequence = 0;
 let pending: PendingAuthorization | null = null;
 
@@ -48,7 +52,7 @@ function targetJobReason(job: TargetAddJob): string {
   if (job?.retailerId !== "target" || job?.action !== "add_to_cart") return "unsupported_action";
   if (job?.quantity !== 1) return "quantity_not_supported";
   if (job?.sellerPolicy !== "first_party_only") return "seller_policy_not_supported";
-  if (job?.fulfillment !== "shipping") return "fulfillment_not_supported";
+  if (job?.fulfillment !== "shipping" && job?.fulfillment !== "pickup") return "fulfillment_not_supported";
   return "";
 }
 
@@ -81,10 +85,22 @@ export function prepareTargetAdd(
   );
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return verified;
-  const control = targetAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment);
-  if (!control) return { ok: false, reason: "add_control_unavailable" };
+  const binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment);
+  if (!binding.control || binding.fulfillment !== job.fulfillment
+    || (binding.selectionRequired && !binding.fulfillmentControl)) {
+    return { ok: false, reason: "add_control_unavailable" };
+  }
   const id = authorizationId(now);
-  pending = { id, jobId: job.jobId, createdAt: now, control, proof: verified.proof };
+  pending = {
+    id,
+    jobId: job.jobId,
+    createdAt: now,
+    control: binding.control,
+    fulfillmentControl: binding.fulfillmentControl,
+    selectionRequired: binding.selectionRequired,
+    offerRoot: binding.offerRoot,
+    proof: verified.proof
+  };
   return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
 }
 
@@ -100,13 +116,28 @@ export function rehearseTargetAdd(
   return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
 }
 
-export function commitTargetAdd(
+async function waitForSelectedFulfillmentBinding(
+  documentValue: Document,
+  urlValue: string,
+  job: TargetAddJob
+) {
+  const deadline = Date.now() + FULFILLMENT_SELECTION_MAX_WAIT_MS;
+  while (Date.now() <= deadline) {
+    if (targetSecurityChallenge(documentValue) || targetInteractiveBlock(documentValue)) return null;
+    const binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment);
+    if (binding.control && binding.fulfillment === job.fulfillment && !binding.selectionRequired) return binding;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return null;
+}
+
+export async function commitTargetAdd(
   documentValue: Document,
   urlValue: string,
   job: TargetAddJob,
   value: string,
   now = Date.now()
-): TargetAddCommit {
+): Promise<TargetAddCommit> {
   const authorization = pending;
   pending = null;
   if (!authorization || authorization.id !== value || authorization.jobId !== job.jobId) {
@@ -117,6 +148,32 @@ export function commitTargetAdd(
   }
   const invalid = targetJobReason(job);
   if (invalid) return { ok: false, reason: invalid, clicked: false };
+  const beforeSelection = observeTargetOffer(
+    documentValue,
+    urlValue,
+    job.retailerSku,
+    job.fulfillment,
+    new Date(now).toISOString()
+  );
+  const initiallyVerified = verifyLiveOffer(job, beforeSelection, now);
+  if (!initiallyVerified.ok) return { ...initiallyVerified, clicked: false };
+  let binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment);
+  if (!binding.control || binding.control !== authorization.control
+    || binding.fulfillmentControl !== authorization.fulfillmentControl
+    || binding.selectionRequired !== authorization.selectionRequired
+    || binding.offerRoot !== authorization.offerRoot) {
+    return { ok: false, reason: "add_control_changed", clicked: false };
+  }
+  if (binding.selectionRequired) {
+    try {
+      (binding.fulfillmentControl as HTMLElement).click();
+    } catch {
+      return { ok: false, reason: "fulfillment_selection_failed", clicked: false };
+    }
+    const selected = await waitForSelectedFulfillmentBinding(documentValue, urlValue, job);
+    if (!selected) return { ok: false, reason: "fulfillment_selection_failed", clicked: false };
+    binding = selected;
+  }
   const observation = observeTargetOffer(
     documentValue,
     urlValue,
@@ -126,8 +183,8 @@ export function commitTargetAdd(
   );
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ...verified, clicked: false };
-  const control = targetAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment);
-  if (!control || control !== authorization.control) return { ok: false, reason: "add_control_changed", clicked: false };
+  const control = binding.control;
+  if (!control) return { ok: false, reason: "add_control_unavailable", clicked: false };
   try {
     (control as HTMLElement).click();
     return { ok: true, reason: "clicked", clicked: true, proof: verified.proof };

@@ -1,6 +1,24 @@
 # Yoink roadmap
 
-## Shipped through 1.7.0
+## Shipped through 1.8.0
+
+### Exact fulfillment and self-healing retailer layouts (1.8.0)
+
+- Shipping is the deterministic default for omitted, inherited, legacy
+  `either`, and ambiguous mission configuration; Pickup requires an exact user
+  opt-in and matching live availability, with no cross-mode fallback
+- Target add v4 understands modern fulfillment tiles, prioritizes Shipping,
+  treats an eligible Delivery tile as the remote non-Pickup fallback, and
+  safely selects/rebinds Pickup only for an exact Pickup job
+- Walmart add v5, Amazon add v7, and Best Buy add v5 enforce the same exact
+  Shipping-or-explicit-Pickup action contract across their supported layouts
+- All four stores use packaged mappings first and constrained semantic recovery
+  second; recovery succeeds only for a unique exact identity, first-party
+  seller, price, fulfillment path, and Add control, while ambiguity fails
+  closed with a privacy-bounded diagnostic
+- Qualification and observer versions advance with the new contracts, so prior
+  activation is retired and each store requires fresh evidence, no-click
+  rehearsal, and explicit activation
 
 ### Consumer storefront refinement (1.7.0)
 
@@ -3035,7 +3053,7 @@ quantity limits, queue lifecycle, cancellation, and order reconciliation.
   order if selected. The observer collects no address, payment, account,
   membership, session, cookie, offer token, or entry status and is structurally
   unable to call the entry endpoint. Draw evidence never qualifies
-  `walmart-add-v3`
+  `walmart-add-v5`
 
 ### Reversible local catalog identity governance (0.21.0)
 
@@ -3175,22 +3193,27 @@ quantity limits, queue lifecycle, cancellation, and order reconciliation.
   access-control responses cannot poison community stock projections
 - Amazon exact-ASIN offer binding and no-click route rehearsal; raw offer IDs
   never leave page memory
-- Qualified `target-add-v1`: Target-sold shipping, quantity one, add-to-cart only
-- Qualified `walmart-add-v3`: Walmart-sold explicit shipping, quantity one,
+- Constrained action-store layout recovery uses packaged selectors first and
+  accepts only one uniquely landmarked semantic control/price after exact
+  identity, seller, fulfillment, quantity, price, and offer-scope validation;
+  ambiguity fails closed and remote recipes remain read-only
+- Qualified `target-add-v4`: Target-sold exact Shipping or explicit Pickup,
+  modern tile binding, guarded selection/revalidation, quantity one, add-to-cart only
+- Qualified `walmart-add-v5`: Walmart-sold exact Shipping or explicit Pickup, quantity one,
   add-to-cart only, activated from its completed live dossier and rehearsal
 - Empty-cart preflight, immediate exact offer revalidation, durable pre-click
   receipt, at-most-once click, exact cart proof, lease recovery, and manual locks
 - Walmart virtual-queue and interactive-block restraint, independent capability,
-  v4 evidence dossier, exact-SKU offer scoping, split-price normalization,
+  v5 evidence dossier, exact-SKU offer scoping, split-price normalization,
   no-click rehearsal receipt, and explicit activation flow
 - Separate Walmart Draw v1 discovery ledger, exact-item mission matching,
   closing-time projection, and immediate sanitized runtime-failure reporting;
   drawing entry and contingent-order authorization remain closed
-- Qualification-ready `amazon-add-v5`: Amazon.com-sold explicit shipping,
+- Qualification-ready `amazon-add-v7`: Amazon.com-sold exact Shipping or explicit Pickup,
   quantity one, add-to-cart only; live activation remains evidence-gated
 - Amazon exact-offer scope requires price, seller, fulfillment, ASIN, unique
   offer token, and Add control to agree; the token is rechecked immediately
-  before one click and is never persisted or returned. Observer v6 checks the
+  before one click and is never persisted or returned. Observer v7 checks the
   exact nearest product form first, supports both combined `Shipper / Seller`
   and separate `Ships from` / `Sold by` fields, and retains Amazon-fulfilled
   third-party sellers as non-executable marketplace evidence. Non-rendered CSS
@@ -3200,10 +3223,10 @@ quantity limits, queue lifecycle, cancellation, and order reconciliation.
   while explicit checkout ASIN inputs take precedence over variation swatches
 - Bounded Amazon hydration retries plus authenticated adapter diagnostics for
   observations, no-click rehearsals, and guarded live verification
-- Qualification-ready `bestbuy-add-v3`: explicit Best Buy-sold, selected
-  shipping, exact-SKU, quantity-one add-to-cart only; live activation remains
+- Qualification-ready `bestbuy-add-v5`: explicit Best Buy-sold, exact selected
+  Shipping or Pickup, exact-SKU, quantity-one add-to-cart only; live activation remains
   evidence-gated
-- Best Buy observer v5 supports current `/product/.../sku/<SKU>`, compact
+- Best Buy observer v6 supports current `/product/.../sku/<SKU>`, compact
   `/product/.../<SKU>`, legacy `/site/.../<SKU>.p`, and consistent `skuId`
   identities while rejecting opaque product tokens and conflicting SKU
   evidence. Current `data-testid`, `data-test-id`, automation, native-button,
@@ -3212,12 +3235,12 @@ quantity limits, queue lifecycle, cancellation, and order reconciliation.
   explicit in-store-only pages are manual/local unknown evidence rather than
   false global out-of-stock assertions. High-demand gates preserve bounded
   read-only offer evidence while queues and mutation remain closed
-- Best Buy current/legacy scoped-offer coverage, marketplace and pickup
-  rejection, high-demand/interactive-block restraint, empty-cart preflight,
+- Best Buy current/legacy scoped-offer coverage, marketplace and fulfillment-
+  mismatch rejection, high-demand/interactive-block restraint, empty-cart preflight,
   no-click rehearsal, at-most-once click, exact cart proof, independent
   capability, bounded hydration retries, and sanitized adapter diagnostics
 - Migration 19 retires every prior Best Buy qualification and closes inherited
-  execution support for the v4/v3 boundary; new evidence, rehearsal, hash
+  execution support; current v6/v5 evidence, rehearsal, hash
   review, and explicit activation are required
 - An older exact-SKU repair incident closes only when a strictly newer packaged
   adapter later returns a deliberate pass, recovery, or manual rejection for
@@ -3353,7 +3376,7 @@ application, checkout, or more autonomous behavior.
 | Community inventory | Consent, nonce-bound exact selected-offer assertions, location-aware keys, fail-closed variant quarantine, short TTLs, one latest eligible vote per contributor, current-vote conflict recovery, median/range price projection, deletion, and user-scoped export exist inside one tenant | No production shared evidence plane, cross-account pseudonyms, contributor reputation/Sybil defense, account/device-risk eligibility, complete retention/deletion propagation, abuse operations, or meaningful live quorum |
 | Autonomous correction | Sanitized failure groups feed deduplicated redacted operator alerts and durable reconciliation that can run embedded or in the standalone SQLite worker; field-specific stable-attribute landmarks cover all five fixed read-only observer fields; a signing-free seventh worker family compiles mature compatible fields per layout into idempotent unsigned quarantine candidates only; a fixed packaged structured-page oracle supplies value-free per-field trial-v2 receipts and may place exact oracle-agreed missing-field values into a `not_applied` provenance quarantine under trial v3; contributors can explicitly confirm/reject/revoke those values in a separate owner-scoped review ledger; evidence/reviews expire after 90 inactive days through bounded signing-free cleanup with aggregate receipts; generated promotion uses latest-per-contributor/SKU/layout/stage oracle evidence, distinct tenant users/devices, a deterministic 25% canary, a 24-hour burn-in, and a multi-contributor regression auto-kill; known packaged conflicts immediately kill distribution; externally eligible trial snapshots now feed a seven-day, account/SKU/layout/stage-deduplicated regional conflict SLO that can disable read-only distribution only; observer recipes use offline-root manifests, rotation/revocation, rollback pins, local transparency receipts, a fail-closed signed external-witness integration, and durable receipt refresh without standalone signing keys | The production identity/risk provider is not deployed, so local users cannot claim reputable public eligibility; generated candidates are not auto-promoted and reviewed recovery evidence cannot fill stored observations; public reputation/Sybil operations, governed field-application projections, longer external monitoring, and the independently operated witness/public consistency monitor remain incomplete |
 | Automatic verification | Four packaged add runners revalidate exact browser state and two are qualified; community evidence cannot publish unresolved selections | Community truth is advisory, recipe truth is not independent, style-level child identity and offer-verified locality remain incomplete, and no checkout/final-total verifier is packaged |
-| Automatic purchasing | Reviewed plans can directly request guarded quantity-one attempts without a strategy and now expose an authoritative armed/blocked explanation; live legacy multi-unit strategy adds and all unqualified-lane matches fail over to notification before reservation; Target and Walmart can perform first-party shipping add-to-cart behind current intent/snapshot/reservation checks, while Amazon and Best Buy remain separately gated | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
+| Automatic purchasing | Reviewed plans can directly request guarded quantity-one attempts without a strategy and now expose an authoritative armed/blocked explanation; Shipping is the deterministic default, Pickup requires an exact saved opt-in plus live availability, and fulfillment mismatch fails closed; live legacy multi-unit strategy adds and all unqualified-lane matches fail over to notification before reservation; all four first-party add runners are packaged behind current intent/snapshot/reservation and separate qualification checks | No checkout-review runner, submit-order runner, destination/payment fingerprinting, committed-order recovery, or live spend-commit path |
 | Contingent-order drawings | Exact Walmart Draw cards, deadlines, limits, scan failures, and private plan matches are observed without mutation | No independently authorized drawing-entry capability, frozen terms/fee snapshot, payment/address fingerprint proof, entry/selection reconciliation, or legal/security approval |
 
 ### Target trust-domain layout
@@ -4304,7 +4327,8 @@ Standardize fixtures, diagnostics, recovery, live evidence, and no-click
 qualification per retailer. Each retailer/action/version must independently
 prove exact identity, allowed seller, fulfillment, price, empty-cart preflight,
 at most one Add click, exact cart result, uncertain recovery, and explicit
-activation. Marketplace and pickup remain separate lanes.
+activation. Marketplace remains closed; Pickup is exact opt-in fulfillment
+inside each add-only lane and never a fallback from Shipping.
 
 ##### Phase 6B — prepare-checkout review
 
@@ -4355,17 +4379,16 @@ cannot be canceled or changed. Until all gates exist, entry stays manual.
 These are deliberately closed until each adapter has current live evidence,
 no-click rehearsal receipts, recovery tests, and explicit activation:
 
-1. Bring a current Amazon-v5-capable companion online and explicitly activate
-   the already complete live v5 evidence dossier. Activation still requires the
+1. Bring a current Amazon-v7-capable companion online and explicitly activate
+   the already complete live v7 evidence dossier. Activation still requires the
    user's review and cannot be forged by a migration or server process.
-2. Complete Best Buy's live v3 add-lane/v5 observer evidence dossier and
+2. Complete Best Buy's live v5 add-lane/v6 observer evidence dossier and
    explicitly activate the
-   implemented first-party shipping lane.
-3. Pickup as a separately qualified fulfillment lane.
-4. Prepare-checkout review per retailer.
-5. Submit-order only after user-approved destination/payment fingerprints,
+   implemented exact-fulfillment add lane.
+3. Prepare-checkout review per retailer.
+4. Submit-order only after user-approved destination/payment fingerprints,
    total verification, confirmation evidence, and uncertain-submit recovery.
-6. Keep Walmart Draw entry manual until the separate Phase 6D contingent-order
+5. Keep Walmart Draw entry manual until the separate Phase 6D contingent-order
    consent, fee, terms, idempotency, and reconciliation gates are complete.
 
 No generic mutation flag will authorize these lanes.

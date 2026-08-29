@@ -254,13 +254,19 @@ test("guided dashboard setup does not create a plan before review and submits ex
     const quantity = form.elements.namedItem("targetQuantity") as HTMLInputElement;
     const maxUnit = form.elements.namedItem("maxUnitPrice") as HTMLInputElement;
     const maxAllIn = form.elements.namedItem("maxAllIn") as HTMLInputElement;
+    const fulfillment = form.elements.namedItem("fulfillment") as HTMLSelectElement;
     const add = form.querySelector('input[value="add_to_cart"]') as HTMLInputElement;
     const reviewed = form.elements.namedItem("reviewed") as HTMLInputElement;
+    assert.equal(fulfillment.value, "shipping");
+    assert.deepEqual([...fulfillment.options].map((option) => option.value), ["shipping", "pickup", "manual"]);
     quantity.value = "2";
     maxUnit.value = "10.00";
     maxAllIn.value = "20.00";
+    fulfillment.value = "pickup";
     add.checked = true;
     add.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    assert.equal(fulfillment.value, "pickup");
+    assert.equal(fulfillment.disabled, false);
     assert.equal(reviewed.disabled, true);
     assert.equal(reviewed.checked, false);
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -273,7 +279,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
       maxAllInCents: 2000,
       actionCeiling: "add_to_cart",
       sellerPolicy: "first_party_only",
-      fulfillment: "shipping",
+      fulfillment: "pickup",
       substitutionPolicy: "exact_only",
       expiresAt: "",
       cooldownSeconds: 900,
@@ -293,7 +299,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
       maxAllInCents: 2000,
       actionCeiling: "add_to_cart",
       sellerPolicy: "first_party_only",
-      fulfillment: "shipping",
+      fulfillment: "pickup",
       substitutionPolicy: "exact_only",
       expiresAt: "",
       cooldownSeconds: 900,

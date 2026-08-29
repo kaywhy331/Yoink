@@ -206,7 +206,7 @@ export class QualificationRepository {
       || shadow.sellerName !== "Target"
       || shadow.fulfillment !== "shipping"
     )) {
-      throw new Error("Target add v1 rehearsals require a Target-sold shipping offer.");
+      throw new Error("Target add v4 rehearsals require a Target-sold shipping offer.");
     }
     const existing = this.db.get<TrialRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
@@ -363,7 +363,7 @@ export class QualificationRepository {
       || shadow.sellerName !== "Walmart"
       || shadow.fulfillment !== "shipping"
     )) {
-      throw new Error("Walmart add v1 rehearsals require a Walmart-sold shipping offer.");
+      throw new Error("Walmart add v5 rehearsals require a Walmart-sold shipping offer.");
     }
     const existing = this.db.get<TrialRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
@@ -522,7 +522,7 @@ export class QualificationRepository {
       || shadow.fulfillment !== "shipping"
       || shadow.purchaseRouteReady !== 1
     )) {
-      throw new Error("Amazon add v4 rehearsals require an Amazon.com-sold shipping offer with an exact ephemeral offer binding.");
+      throw new Error("Amazon add v7 rehearsals require an Amazon.com-sold shipping offer with an exact ephemeral offer binding.");
     }
     const existing = this.db.get<TrialRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
@@ -679,7 +679,7 @@ export class QualificationRepository {
       || shadow.sellerName !== "Best Buy"
       || shadow.fulfillment !== "shipping"
     )) {
-      throw new Error("Best Buy add v1 rehearsals require an explicitly Best Buy-sold, selected-shipping offer.");
+      throw new Error("Best Buy add v5 rehearsals require an explicitly Best Buy-sold, selected-shipping offer.");
     }
     const existing = this.db.get<TrialRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
@@ -851,7 +851,7 @@ export class QualificationRepository {
       || new Date(device.last_seen_at).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
       || capabilities.targetAddOnly !== true
       || capabilities.targetAddAdapterVersion !== TARGET_ADD_ADAPTER_VERSION) {
-      throw new Error("A recently connected Chrome companion with Target add v1 is required.");
+      throw new Error("A recently connected Chrome companion with Target add v4 is required.");
     }
 
     const promotedJobs = this.db.transaction(() => {
@@ -885,7 +885,7 @@ export class QualificationRepository {
         `SELECT aj.id FROM action_jobs aj JOIN listings l ON l.id = aj.listing_id
          WHERE aj.user_id = ? AND aj.state = 'shadow_ready' AND aj.expires_at > ?
            AND l.retailer_id = 'target' AND aj.action = 'add_to_cart' AND aj.quantity = 1
-           AND aj.seller_policy = 'first_party_only' AND aj.fulfillment = 'shipping'
+           AND aj.seller_policy = 'first_party_only' AND aj.fulfillment IN ('shipping', 'pickup')
          ORDER BY aj.created_at, aj.id`,
         currentRequestScope().userId,
         timestamp
@@ -906,7 +906,7 @@ export class QualificationRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_adapter_qualified",
         reasonCode: "explicit_target_add_v1_activation",
-        message: "Target add v1 was explicitly enabled for Target-sold shipping offers, add-to-cart only, quantity one.",
+        message: "Target add v4 was explicitly enabled for Target-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.",
         data: {
           retailerId: "target",
           adapterVersion: TARGET_ADD_ADAPTER_VERSION,
@@ -951,7 +951,7 @@ export class QualificationRepository {
       || new Date(device.last_seen_at).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
       || capabilities.walmartAddOnly !== true
       || capabilities.walmartAddAdapterVersion !== WALMART_ADD_ADAPTER_VERSION) {
-      throw new Error("A recently connected Chrome companion with Walmart add v1 is required.");
+      throw new Error("A recently connected Chrome companion with Walmart add v5 is required.");
     }
 
     const promotedJobs = this.db.transaction(() => {
@@ -986,7 +986,7 @@ export class QualificationRepository {
           `SELECT aj.id FROM action_jobs aj JOIN listings l ON l.id = aj.listing_id
            WHERE aj.user_id = ? AND aj.state = 'shadow_ready' AND aj.expires_at > ?
              AND l.retailer_id = 'walmart' AND aj.action = 'add_to_cart' AND aj.quantity = 1
-             AND aj.seller_policy = 'first_party_only' AND aj.fulfillment = 'shipping'
+             AND aj.seller_policy = 'first_party_only' AND aj.fulfillment IN ('shipping', 'pickup')
            ORDER BY aj.created_at, aj.id`,
           currentRequestScope().userId,
           timestamp
@@ -1007,7 +1007,7 @@ export class QualificationRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_adapter_qualified",
         reasonCode: "explicit_walmart_add_v1_activation",
-        message: "Walmart add v1 was explicitly enabled for Walmart-sold shipping offers, add-to-cart only, quantity one.",
+        message: "Walmart add v5 was explicitly enabled for Walmart-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.",
         data: {
           retailerId: "walmart",
           adapterVersion: WALMART_ADD_ADAPTER_VERSION,
@@ -1087,7 +1087,7 @@ export class QualificationRepository {
           `SELECT aj.id FROM action_jobs aj JOIN listings l ON l.id = aj.listing_id
            WHERE aj.user_id = ? AND aj.state = 'shadow_ready' AND aj.expires_at > ?
              AND l.retailer_id = 'amazon' AND aj.action = 'add_to_cart' AND aj.quantity = 1
-             AND aj.seller_policy = 'first_party_only' AND aj.fulfillment = 'shipping'
+             AND aj.seller_policy = 'first_party_only' AND aj.fulfillment IN ('shipping', 'pickup')
            ORDER BY aj.created_at, aj.id`,
           currentRequestScope().userId,
           timestamp
@@ -1108,7 +1108,7 @@ export class QualificationRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_adapter_qualified",
         reasonCode: "explicit_amazon_add_v1_activation",
-        message: "Amazon add v4 was explicitly enabled for Amazon.com-sold shipping offers, add-to-cart only, quantity one.",
+        message: "Amazon add v7 was explicitly enabled for Amazon.com-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.",
         data: {
           retailerId: "amazon",
           adapterVersion: AMAZON_ADD_ADAPTER_VERSION,
@@ -1153,7 +1153,7 @@ export class QualificationRepository {
       || new Date(device.last_seen_at).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
       || capabilities.bestBuyAddOnly !== true
       || capabilities.bestBuyAddAdapterVersion !== BESTBUY_ADD_ADAPTER_VERSION) {
-      throw new Error("A recently connected Chrome companion with Best Buy add v1 is required.");
+      throw new Error("A recently connected Chrome companion with Best Buy add v5 is required.");
     }
 
     const promotedJobs = this.db.transaction(() => {
@@ -1188,7 +1188,7 @@ export class QualificationRepository {
           `SELECT aj.id FROM action_jobs aj JOIN listings l ON l.id = aj.listing_id
            WHERE aj.user_id = ? AND aj.state = 'shadow_ready' AND aj.expires_at > ?
              AND l.retailer_id = 'bestbuy' AND aj.action = 'add_to_cart' AND aj.quantity = 1
-             AND aj.seller_policy = 'first_party_only' AND aj.fulfillment = 'shipping'
+             AND aj.seller_policy = 'first_party_only' AND aj.fulfillment IN ('shipping', 'pickup')
            ORDER BY aj.created_at, aj.id`,
           currentRequestScope().userId,
           timestamp
@@ -1209,7 +1209,7 @@ export class QualificationRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_adapter_qualified",
         reasonCode: "explicit_bestbuy_add_v1_activation",
-        message: "Best Buy add v1 was explicitly enabled for Best Buy-sold selected-shipping offers, add-to-cart only, quantity one.",
+        message: "Best Buy add v5 was explicitly enabled for Best Buy-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.",
         data: {
           retailerId: "bestbuy",
           adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,

@@ -77,7 +77,10 @@ function targetStrategy(): StrategyDefinition {
   };
 }
 
-function targetSignal(externalEventId = "target-execution-event-1"): SignalEventInput {
+function targetSignal(
+  externalEventId = "target-execution-event-1",
+  fulfillment: "shipping" | "pickup" = "shipping"
+): SignalEventInput {
   return {
     ...signal(),
     externalEventId,
@@ -92,7 +95,8 @@ function targetSignal(externalEventId = "target-execution-event-1"): SignalEvent
     offer: {
       ...signal().offer,
       sellerName: "Target",
-      sellerType: "first_party"
+      sellerType: "first_party",
+      fulfillment
     }
   };
 }
@@ -113,7 +117,11 @@ function qualifyAddLane(db: YoinkDatabase, retailerId: string, adapterVersion: s
   );
 }
 
-function targetExecution(db: YoinkDatabase, directPlan = false): { execution: ExecutionRepository; deviceId: string; token: string } {
+function targetExecution(
+  db: YoinkDatabase,
+  directPlan = false,
+  fulfillment: "shipping" | "pickup" = "shipping"
+): { execution: ExecutionRepository; deviceId: string; token: string } {
   const listing = new CatalogRepository(db).upsertListing({
     sourceConnectionId: "source_trackalacker_local",
     source: "trackalacker",
@@ -138,7 +146,7 @@ function targetExecution(db: YoinkDatabase, directPlan = false): { execution: Ex
       maxAllInCents: 10_000,
       actionCeiling: "add_to_cart",
       sellerPolicy: "first_party_only",
-      fulfillment: "shipping",
+      fulfillment,
       substitutionPolicy: "exact_only",
       cooldownSeconds: 0,
       confirmation: "CREATE_EXACT_PURCHASE_PLAN"
@@ -149,7 +157,10 @@ function targetExecution(db: YoinkDatabase, directPlan = false): { execution: Ex
   }
   qualifyAddLane(db, "target", TARGET_ADD_ADAPTER_VERSION);
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
-  const processed = new SignalEngine(db).process(targetSignal(directPlan ? "target-direct-execution-event-1" : undefined), NOW);
+  const processed = new SignalEngine(db).process(targetSignal(
+    directPlan ? `target-direct-${fulfillment}-execution-event-1` : undefined,
+    fulfillment
+  ), NOW);
   assert.equal(processed.actionJobState, "awaiting_executor");
   if (directPlan) {
     assert.equal(db.get<{ decision_source: string }>(
@@ -484,6 +495,22 @@ test("a reviewed direct Target plan leases through the same guarded execution co
     assert.equal(lease.job.retailerSku, "1011483414");
     assert.equal(lease.job.action, "add_to_cart");
     assert.equal(lease.job.quantity, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("an explicit pickup Target plan creates and leases only an exact pickup job", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db, true, "pickup");
+    const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
+    assert.equal(lease.reason, "leased");
+    assert.ok(lease.job);
+    assert.equal(lease.job.fulfillment, "pickup");
+    assert.equal(db.get<{ fulfillment: string }>(
+      "SELECT fulfillment FROM action_jobs WHERE id = ?", lease.job.id
+    )?.fulfillment, "pickup");
   } finally {
     db.close();
   }

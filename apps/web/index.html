@@ -359,7 +359,7 @@
       </section>
       <section class="panel companion-panel qualification-panel">
         <p class="eyebrow">Controlled qualification</p>
-        <div class="panel-heading"><div><h2>Target add-only qualification</h2><p>The initial adapter is intentionally narrow: Target-sold, shipping, quantity one, add-to-cart only. Marketplace, pickup, checkout, and order submission stay closed.</p></div><span class="mode-chip" id="targetQualificationGate">GATE CLOSED</span></div>
+        <div class="panel-heading"><div><h2>Target add-only qualification</h2><p>The adapter is intentionally narrow: Target-sold offers matching exact Shipping or explicit Pickup, quantity one, add-to-cart only. Marketplace, fulfillment mismatch, checkout, and order submission stay closed.</p></div><span class="mode-chip" id="targetQualificationGate">GATE CLOSED</span></div>
         <div id="targetQualificationSummary" class="qualification-summary"></div>
         <div class="qualification-actions">
           <button class="button primary" id="activateTargetAddButton" type="button" disabled>Enable guarded Target adds</button>
@@ -369,7 +369,7 @@
       </section>
       <section class="panel companion-panel qualification-panel">
         <p class="eyebrow">Controlled qualification</p>
-        <div class="panel-heading"><div><h2>Walmart add-only qualification</h2><p>This separate adapter is limited to Walmart-sold, explicitly verified shipping, quantity one, add-to-cart only. Marketplace, pickup, checkout, virtual queues, and order submission stay closed.</p></div><span class="mode-chip" id="walmartQualificationGate">GATE CLOSED</span></div>
+        <div class="panel-heading"><div><h2>Walmart add-only qualification</h2><p>This separate adapter is limited to Walmart-sold offers matching exact Shipping or explicit Pickup, quantity one, add-to-cart only. Marketplace, fulfillment mismatch, checkout, virtual queues, and order submission stay closed.</p></div><span class="mode-chip" id="walmartQualificationGate">GATE CLOSED</span></div>
         <div id="walmartQualificationSummary" class="qualification-summary"></div>
         <div class="qualification-actions">
           <button class="button primary" id="activateWalmartAddButton" type="button" disabled>Enable guarded Walmart adds</button>
@@ -379,7 +379,7 @@
       </section>
       <section class="panel companion-panel qualification-panel">
         <p class="eyebrow">Controlled qualification</p>
-        <div class="panel-heading"><div><h2>Amazon add-only qualification</h2><p>This adapter is limited to Amazon.com-sold offers with an exact ephemeral offer binding, explicitly verified shipping, quantity one, and add-to-cart only. Marketplace, pickup, Buy Now, checkout, queues, and order submission stay closed.</p></div><span class="mode-chip" id="amazonQualificationGate">GATE CLOSED</span></div>
+        <div class="panel-heading"><div><h2>Amazon add-only qualification</h2><p>This adapter is limited to Amazon.com-sold offers with an exact ephemeral offer binding and exact Shipping or explicit Pickup, quantity one, and add-to-cart only. Marketplace, fulfillment mismatch, Buy Now, checkout, queues, and order submission stay closed.</p></div><span class="mode-chip" id="amazonQualificationGate">GATE CLOSED</span></div>
         <div id="amazonQualificationSummary" class="qualification-summary"></div>
         <div class="qualification-actions">
           <button class="button primary" id="activateAmazonAddButton" type="button" disabled>Enable guarded Amazon adds</button>
@@ -389,7 +389,7 @@
       </section>
       <section class="panel companion-panel qualification-panel">
         <p class="eyebrow">Controlled qualification</p>
-        <div class="panel-heading"><div><h2>Best Buy add-only qualification</h2><p>This adapter is limited to offers explicitly labeled Sold by Best Buy, with shipping selected, quantity one, and add-to-cart only. Marketplace, pickup, high-demand queues, checkout, and order submission stay closed.</p></div><span class="mode-chip" id="bestbuyQualificationGate">GATE CLOSED</span></div>
+        <div class="panel-heading"><div><h2>Best Buy add-only qualification</h2><p>This adapter is limited to offers explicitly labeled Sold by Best Buy with exact Shipping or explicit Pickup selected, quantity one, and add-to-cart only. Marketplace, fulfillment mismatch, high-demand queues, checkout, and order submission stay closed.</p></div><span class="mode-chip" id="bestbuyQualificationGate">GATE CLOSED</span></div>
         <div id="bestbuyQualificationSummary" class="qualification-summary"></div>
         <div class="qualification-actions">
           <button class="button primary" id="activateBestBuyAddButton" type="button" disabled>Enable guarded Best Buy adds</button>
@@ -399,7 +399,7 @@
       </section>
       <section class="panel companion-panel qualification-panel">
         <p class="eyebrow">Independent future gates</p>
-        <div class="panel-heading"><div><h2>Pickup, checkout review, and order submission</h2><p>These are twelve separate per-retailer lanes—not extensions of add-only qualification. The matrix records prerequisites and live pickup evidence, but no packaged runner or activation endpoint exists.</p></div><span class="mode-chip">ALL CLOSED</span></div>
+        <div class="panel-heading"><div><h2>Checkout review and order submission</h2><p>These are eight separate per-retailer lanes—not extensions of add-only qualification. Pickup is exact opt-in fulfillment within the add-only lanes; checkout and submit have no packaged runner or activation endpoint.</p></div><span class="mode-chip">ALL CLOSED</span></div>
         <div class="retailer-readiness-grid" id="futureMutationLaneList"></div>
         <p class="fine-print">Prepare-checkout and submit-order strategies remain durable rehearsal records even in live mode. They cannot be leased to Chrome. Remote observer recipes are permanently unable to authorize or implement mutation.</p>
       </section>
@@ -462,7 +462,7 @@
         <label class="wide"><span>Allowed seller names (comma separated; blank = any seller allowed by policy)</span><input name="allowedSellers" placeholder="Amazon.com, Target"></label>
         <label><span>Action</span><select name="action"><option value="notify">Notify</option><option value="add_to_cart">Add to cart</option><option value="prepare_checkout">Prepare checkout</option><option value="submit_order">Submit order</option></select></label>
         <label><span>Quantity</span><select name="quantity"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option value="max">Max allowed</option></select></label>
-        <label><span>Fulfillment</span><select name="fulfillment"><option value="shipping">Shipping</option><option value="pickup">Pickup</option><option value="either">Either</option><option value="manual">Manual review</option></select></label>
+        <label><span>Fulfillment</span><select name="fulfillment"><option value="shipping">Shipping (default)</option><option value="pickup">Pickup (explicit opt-in)</option><option value="manual">Manual review</option></select></label>
         <label><span>Maximum signal age</span><div class="money-input"><input name="maxSignalAgeSeconds" type="number" min="10" max="3600" value="120"><span>sec</span></div></label>
         <fieldset class="wide selection-field"><legend>Sources (none selected = all)</legend><div class="choice-grid" id="strategySourceOptions"></div></fieldset>
         <fieldset class="wide selection-field"><legend>Stores (none selected = all)</legend><div class="choice-grid" id="strategyRetailerOptions">

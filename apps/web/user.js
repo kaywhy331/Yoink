@@ -899,8 +899,8 @@ async function requestSetupPreflight(revision) {
 function syncSetupAction() {
   const form = $("#setupForm");
   const adding = form.elements.actionCeiling.value === "add_to_cart";
-  if (adding) form.elements.fulfillment.value = "shipping";
-  form.elements.fulfillment.disabled = adding;
+  if (adding && form.elements.fulfillment.value !== "pickup") form.elements.fulfillment.value = "shipping";
+  form.elements.fulfillment.disabled = false;
   const note = $("#setupExecutionNote");
   const minimum = setupAutomaticMinimum();
   const reviewedTotal = setupAmount("maxAllIn", "Maximum total");
@@ -1012,7 +1012,7 @@ async function openPlan(id) {
       <label class="check"><input data-field="enabled" type="checkbox" ${target.enabled ? "checked" : ""}><span>Use store</span></label>
       <label><span>Maximum price</span><input data-field="maxPrice" inputmode="decimal" placeholder="Strategy limit" value="${target.maxUnitPriceCents ? (target.maxUnitPriceCents / 100).toFixed(2) : ""}"></label>
       <label><span>Seller</span><select data-field="sellerPolicy"><option value="inherit" ${target.sellerPolicy === "inherit" ? "selected" : ""}>Use default</option><option value="first_party_only" ${target.sellerPolicy === "first_party_only" ? "selected" : ""}>Store only</option><option value="allow_third_party" ${target.sellerPolicy === "allow_third_party" ? "selected" : ""}>Marketplace allowed</option></select></label>
-      <label><span>Fulfillment</span><select data-field="fulfillment"><option value="inherit" ${target.fulfillment === "inherit" ? "selected" : ""}>Use default</option><option value="shipping" ${target.fulfillment === "shipping" ? "selected" : ""}>Shipping</option><option value="pickup" ${target.fulfillment === "pickup" ? "selected" : ""}>Pickup</option><option value="either" ${target.fulfillment === "either" ? "selected" : ""}>Either</option><option value="manual" ${target.fulfillment === "manual" ? "selected" : ""}>Manual only</option></select></label>
+      <label><span>Fulfillment</span><select data-field="fulfillment"><option value="shipping" ${target.fulfillment !== "pickup" && target.fulfillment !== "manual" ? "selected" : ""}>Shipping (default)</option><option value="pickup" ${target.fulfillment === "pickup" ? "selected" : ""}>Pickup (explicit opt-in)</option><option value="manual" ${target.fulfillment === "manual" ? "selected" : ""}>Manual only</option></select></label>
     </div>
   </article>`).join("");
   syncPlanAction();
@@ -1058,7 +1058,9 @@ function syncPlanAction(normalizeTargets = false) {
     $$("[data-target-id]", form).forEach((card) => {
       if ($("[data-field=enabled]", card).checked) {
         $("[data-field=sellerPolicy]", card).value = "first_party_only";
-        $("[data-field=fulfillment]", card).value = "shipping";
+        if ($("[data-field=fulfillment]", card).value !== "pickup") {
+          $("[data-field=fulfillment]", card).value = "shipping";
+        }
       }
     });
   }
@@ -1067,7 +1069,7 @@ function syncPlanAction(normalizeTargets = false) {
   const unsafe = enabled.find((target) => !target.executionSupported
     || target.maxUnitPriceCents === null
     || target.sellerPolicy !== "first_party_only"
-    || target.fulfillment !== "shipping");
+    || !["shipping", "pickup"].includes(target.fulfillment));
   const minimum = planAutomaticMinimum(form, targets);
   const reviewedTotal = (() => {
     try { return centsInput(form.elements.maxAllIn.value, "The all-in cap"); } catch { return null; }
@@ -1081,7 +1083,7 @@ function syncPlanAction(normalizeTargets = false) {
     : !enabled.length
       ? "Enable one exact store before choosing a cart action."
       : unsafe
-        ? "Every enabled cart store needs a qualified add mapping, a maximum item price, Store only seller, and Shipping."
+        ? "Every enabled cart store needs a qualified add mapping, a maximum item price, Store only seller, and an exact Shipping or Pickup choice."
         : minimum === null
           ? "Enter a valid quantity and maximum item price for every enabled store."
           : totalTooLow
@@ -1386,8 +1388,8 @@ $("#planForm").addEventListener("submit", async (event) => {
       if (enabled.some((target) => !target.executionSupported
         || target.maxUnitPriceCents === null
         || target.sellerPolicy !== "first_party_only"
-        || target.fulfillment !== "shipping")) {
-        throw new Error("Every enabled cart store needs a qualified add mapping, a maximum item price, Store only seller, and Shipping.");
+        || !["shipping", "pickup"].includes(target.fulfillment))) {
+        throw new Error("Every enabled cart store needs a qualified add mapping, a maximum item price, Store only seller, and an exact Shipping or Pickup choice.");
       }
       const minimum = planAutomaticMinimum(form, drafts);
       if (minimum === null || maxAllInCents === null || maxAllInCents < minimum) {

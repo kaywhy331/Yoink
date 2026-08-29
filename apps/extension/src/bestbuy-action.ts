@@ -48,7 +48,7 @@ function bestBuyJobReason(job: BestBuyAddJob): string {
   if (job?.retailerId !== "bestbuy" || job?.action !== "add_to_cart") return "unsupported_action";
   if (job?.quantity !== 1) return "quantity_not_supported";
   if (job?.sellerPolicy !== "first_party_only") return "seller_policy_not_supported";
-  if (job?.fulfillment !== "shipping") return "fulfillment_not_supported";
+  if (job?.fulfillment !== "shipping" && job?.fulfillment !== "pickup") return "fulfillment_not_supported";
   return "";
 }
 

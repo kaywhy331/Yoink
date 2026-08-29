@@ -400,7 +400,7 @@ Hosted services may collect signals, coordinate private missions, distribute
 signed observer-only recipes, and enqueue bounded jobs. They may not click a
 retailer page. Downloaded recipes are read-only CSS selector data interpreted by
 packaged code; they cannot navigate, submit forms, execute scripts, or authorize
-mutation. Pickup, prepare-checkout, and submit-order remain separately closed in
-the future-lane matrix until exact packaged runners, live evidence, rehearsals,
-recovery coverage, security review, and explicit activation exist for each
-retailer.
+mutation. Pickup is exact opt-in fulfillment inside the qualified add-only
+lanes. Prepare-checkout and submit-order remain separately closed in the future-
+lane matrix until exact packaged runners, live evidence, rehearsals, recovery
+coverage, security review, and explicit activation exist for each retailer.

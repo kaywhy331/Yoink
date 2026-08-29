@@ -508,7 +508,7 @@ BEGIN
       OR replay_record.correlation_id <> 'target'
       OR replay_record.event_type <> 'retailer_adapter_qualified'
       OR replay_record.reason_code <> 'explicit_target_add_v1_activation'
-      OR replay_record.message <> 'Target add v1 was explicitly enabled for Target-sold shipping offers, add-to-cart only, quantity one.'
+      OR replay_record.message <> 'Target add v4 was explicitly enabled for Target-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.'
       OR replay_record.audit_data->>'contractVersion' <> '1'
       OR replay_record.audit_data->>'operation' <> operation_name
       OR replay_record.audit_data->>'requestId' <> request_id
@@ -688,7 +688,7 @@ BEGIN
   IF pg_catalog.jsonb_typeof(device_capabilities) IS DISTINCT FROM 'object'
     OR device_capabilities->'targetAddOnly' IS DISTINCT FROM 'true'::jsonb
     OR device_capabilities->>'targetAddAdapterVersion' <> '${TARGET_ADD_ADAPTER_VERSION}' THEN
-    RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'signal Target qualification requires Target add v1 capability';
+    RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'signal Target qualification requires Target add v4 capability';
   END IF;
 
   SELECT qualification.updated_at
@@ -753,7 +753,7 @@ BEGIN
       AND job.action = 'add_to_cart'
       AND job.quantity = 1
       AND job.seller_policy = 'first_party_only'
-      AND job.fulfillment = 'shipping'
+      AND job.fulfillment IN ('shipping', 'pickup')
     ORDER BY job.created_at, job.id
     FOR UPDATE OF job
   LOOP
@@ -827,7 +827,7 @@ BEGIN
     'auditId', audit_id_value,
     'correlationId', 'target',
     'reasonCode', 'explicit_target_add_v1_activation',
-    'message', 'Target add v1 was explicitly enabled for Target-sold shipping offers, add-to-cart only, quantity one.',
+    'message', 'Target add v4 was explicitly enabled for Target-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.',
     'data', audit_data_value
   );
   INSERT INTO ${relation(manifest.schemaName, "audit_events")}(
@@ -836,7 +836,7 @@ BEGIN
   ) VALUES (
     audit_id_value, resolved_tenant_id, resolved_user_id, 'target',
     'retailer_adapter_qualified', 'explicit_target_add_v1_activation',
-    'Target add v1 was explicitly enabled for Target-sold shipping offers, add-to-cart only, quantity one.',
+    'Target add v4 was explicitly enabled for Target-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.',
     audit_data_value::text, updated_timestamp
   );
   mutation_statement_count_value := mutation_statement_count_value + 1;

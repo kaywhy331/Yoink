@@ -159,6 +159,10 @@ function guardedRetailer(value: string): GuardedRetailerId | null {
   return Object.prototype.hasOwnProperty.call(RETAILER_LANES, value) ? value as GuardedRetailerId : null;
 }
 
+function exactActionFulfillment(value: string): value is "shipping" | "pickup" {
+  return value === "shipping" || value === "pickup";
+}
+
 function deviceCapabilities(device: Record<string, unknown>): Record<string, unknown> {
   return device.capabilities && typeof device.capabilities === "object" && !Array.isArray(device.capabilities)
     ? device.capabilities as Record<string, unknown>
@@ -252,7 +256,7 @@ export function buildPurchaseAutomationReadiness(
       && Number.isSafeInteger(Number(target.maxUnitPriceCents))
       && Number(target.maxUnitPriceCents) > 0
       && target.sellerPolicy === "first_party_only"
-      && target.fulfillment === "shipping"
+      && exactActionFulfillment(target.fulfillment)
   );
 
   const targetReadiness: PurchaseAutomationTargetReadiness[] = enabledTargets.map((target) => {
@@ -260,7 +264,7 @@ export function buildPurchaseAutomationReadiness(
     const reviewedPolicy = Number.isSafeInteger(Number(target.maxUnitPriceCents))
       && Number(target.maxUnitPriceCents) > 0
       && target.sellerPolicy === "first_party_only"
-      && target.fulfillment === "shipping";
+      && exactActionFulfillment(target.fulfillment);
     const packagedMapping = target.executionSupported === true && retailerId !== null;
     const laneQualified = retailerId !== null && context.qualifications[retailerId] === true;
     const companionCapable = onlineCurrentDevices.some((device) => deviceSupportsRetailer(device, target.retailerId));
@@ -274,7 +278,7 @@ export function buildPurchaseAutomationReadiness(
       summary = "Yoink can monitor this exact item, but this store has no packaged add-only runner.";
     } else if (!reviewedPolicy) {
       reasonCode = "policy_incomplete";
-      summary = "Set a maximum item price, Store only seller, and Shipping before this target can be armed.";
+      summary = "Set a maximum item price, Store only seller, and an exact Shipping or Pickup choice before this target can be armed.";
     } else if (!laneQualified) {
       reasonCode = "lane_not_qualified";
       summary = `${targetLabel(target)} add-only execution has not completed its separate safety qualification.`;
@@ -378,8 +382,8 @@ export function buildPurchaseAutomationReadiness(
     ...baseChecks,
     check("policy", "Guarded store limits", policyTargetsSafe ? "pass" : "attention",
       policyTargetsSafe
-        ? "Every enabled target has a reviewed item cap, Store only seller, Shipping, and exact-item substitution."
-        : "Every enabled cart target needs a reviewed item cap, Store only seller, Shipping, and the exact item."),
+        ? "Every enabled target has a reviewed item cap, Store only seller, an exact Shipping or Pickup choice, and exact-item substitution."
+        : "Every enabled cart target needs a reviewed item cap, Store only seller, an exact Shipping or Pickup choice, and the exact item."),
     check("lane", "Qualified store lane", targetReadiness.some((target) => target.laneQualified && target.packagedMapping)
       ? "pass" : "attention",
     targetReadiness.some((target) => target.laneQualified && target.packagedMapping)
@@ -395,7 +399,7 @@ export function buildPurchaseAutomationReadiness(
         ? "The control plane is in test mode; no retailer click can run."
         : context.actionsPaused ? "Global guarded actions are paused." : "Guarded actions are enabled."),
     check("runtime", "Fresh offer verification", "runtime",
-      "At action time Chrome must re-bind the exact item, price, first-party seller, shipping offer, quantity one, and usable add control. Checkout remains manual.")
+      "At action time Chrome must re-bind the exact item, price, first-party seller, saved Shipping or Pickup choice, quantity one, and usable add control. Checkout remains manual.")
   ];
 
   if (!policyTargetsSafe) {
@@ -452,6 +456,6 @@ export function buildPurchaseAutomationReadiness(
   }
   return result("guarded_add_armed", "ready", "add_to_cart", "guarded_add", readyForMonitoring,
     "Guarded add is armed",
-    `Yoink may add exactly one item at ${joinedStores(laneTargets)} only after a fresh exact first-party shipping offer passes every live check. Checkout stays manual.`,
+    `Yoink may add exactly one item at ${joinedStores(laneTargets)} only after a fresh exact first-party offer matches each target's saved Shipping or Pickup choice. Checkout stays manual.`,
     "wait_for_offer", "Wait for an exact match", addChecks, targetReadiness);
 }

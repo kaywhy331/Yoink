@@ -70,6 +70,24 @@ test("live verification binds exact listing, seller, price, fulfillment, and act
   for (const [change, reason] of failures) assert.equal(verifyLiveOffer(job(), offer(change), NOW).reason, reason);
 });
 
+test("pickup requires an exact pickup job while ambiguous jobs fail closed", () => {
+  assert.equal(verifyLiveOffer(
+    job({ fulfillment: "pickup" }),
+    offer({ fulfillment: "pickup" }),
+    NOW
+  ).ok, true);
+  assert.equal(verifyLiveOffer(
+    job({ fulfillment: "pickup" }),
+    offer({ fulfillment: "shipping" }),
+    NOW
+  ).reason, "fulfillment_unverified");
+  assert.equal(verifyLiveOffer(
+    job({ fulfillment: "either" }),
+    offer({ fulfillment: "pickup" }),
+    NOW
+  ).reason, "fulfillment_not_supported");
+});
+
 test("third-party permission still binds a named live marketplace seller", () => {
   const thirdPartyJob = job({ sellerPolicy: "allow_third_party", expectedSeller: "Sold by Acme Collectibles" });
   assert.equal(verifyLiveOffer(thirdPartyJob, offer({ sellerName: "Acme Collectibles", sellerType: "third_party" }), NOW).ok, true);

@@ -775,7 +775,7 @@ BEGIN
         WHERE listing.execution_supported <> 1
           OR target.max_unit_price_cents IS NULL
           OR target.seller_policy <> 'first_party_only'
-          OR target.fulfillment <> 'shipping'
+          OR target.fulfillment NOT IN ('shipping', 'pickup')
       )
       INTO enabled_target_count, unsafe_direct_target_count
     FROM ${relation(manifest.schemaName, "mission_targets")} AS target

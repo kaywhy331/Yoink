@@ -811,7 +811,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional coverage for a future marketplace-capable adapter; target-add-v1 rejects it.",
+        detail: "Optional coverage for a future marketplace-capable adapter; target-add-v4 rejects it.",
         required: 1,
         requiredForQualification: false
       },
@@ -825,7 +825,7 @@ export class ShadowObservationRepository {
       {
         id: "pickup_actionable",
         label: "Pickup fulfillment",
-        detail: "Optional coverage for a future pickup-capable adapter; target-add-v1 rejects it.",
+        detail: "Optional coverage for a future pickup-capable adapter; target-add-v4 rejects it.",
         required: 1,
         requiredForQualification: false
       },
@@ -889,7 +889,7 @@ export class ShadowObservationRepository {
     const firstMissingLive = checks.find((check) => check.requiredForQualification
       && check.id !== "pre_click_rehearsal" && !check.met);
     const nextStep = mutationAuthorized
-      ? "Guarded Target add-to-cart execution is active for Target-sold shipping offers, quantity one."
+      ? "Guarded Target add-to-cart execution is active for Target-sold offers matching the saved Shipping or Pickup choice, quantity one."
       : addToCartQualified
         ? "Target add-to-cart is qualified but globally paused. Use Actions paused to resume it."
       : !liveEvidenceReady
@@ -965,7 +965,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional coverage for a future marketplace-capable adapter; walmart-add-v3 rejects it.",
+        detail: "Optional coverage for a future marketplace-capable adapter; walmart-add-v5 rejects it.",
         required: 1,
         requiredForQualification: false
       },
@@ -979,7 +979,7 @@ export class ShadowObservationRepository {
       {
         id: "pickup_actionable",
         label: "Pickup fulfillment",
-        detail: "Optional coverage for a future pickup-capable adapter; walmart-add-v3 rejects it.",
+        detail: "Optional coverage for a future pickup-capable adapter; walmart-add-v5 rejects it.",
         required: 1,
         requiredForQualification: false
       },
@@ -1043,7 +1043,7 @@ export class ShadowObservationRepository {
     const firstMissingLive = checks.find((check) => check.requiredForQualification
       && check.id !== "pre_click_rehearsal" && !check.met);
     const nextStep = mutationAuthorized
-      ? "Guarded Walmart add-to-cart execution is active for Walmart-sold shipping offers, quantity one."
+      ? "Guarded Walmart add-to-cart execution is active for Walmart-sold offers matching the saved Shipping or Pickup choice, quantity one."
       : addToCartQualified
         ? "Walmart add-to-cart is qualified but globally paused. Resume Actions to enable it."
         : !liveEvidenceReady
@@ -1120,7 +1120,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional fail-closed coverage; amazon-add-v5 rejects marketplace sellers.",
+        detail: "Optional fail-closed coverage; amazon-add-v7 rejects marketplace sellers.",
         required: 1,
         requiredForQualification: false
       },
@@ -1198,7 +1198,7 @@ export class ShadowObservationRepository {
     const firstMissingLive = checks.find((check) => check.requiredForQualification
       && check.id !== "pre_click_rehearsal" && !check.met);
     const nextStep = mutationAuthorized
-      ? "Guarded Amazon add-to-cart execution is active for Amazon.com-sold shipping offers, quantity one."
+      ? "Guarded Amazon add-to-cart execution is active for Amazon.com-sold offers matching the saved Shipping or Pickup choice, quantity one."
       : addToCartQualified
         ? "Amazon add-to-cart is qualified but globally paused. Resume Actions to enable it."
         : !liveEvidenceReady
@@ -1274,7 +1274,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional fail-closed coverage; bestbuy-add-v3 rejects every marketplace seller.",
+        detail: "Optional fail-closed coverage; bestbuy-add-v5 rejects every marketplace seller.",
         required: 1,
         requiredForQualification: false
       },
@@ -1288,7 +1288,7 @@ export class ShadowObservationRepository {
       {
         id: "pickup_actionable",
         label: "Pickup fulfillment",
-        detail: "Optional fail-closed coverage; bestbuy-add-v3 rejects pickup.",
+        detail: "Optional fail-closed coverage; bestbuy-add-v5 rejects pickup.",
         required: 1,
         requiredForQualification: false
       },
@@ -1352,7 +1352,7 @@ export class ShadowObservationRepository {
     const firstMissingLive = checks.find((check) => check.requiredForQualification
       && check.id !== "pre_click_rehearsal" && !check.met);
     const nextStep = mutationAuthorized
-      ? "Guarded Best Buy add-to-cart execution is active for Best Buy-sold, selected-shipping offers, quantity one."
+      ? "Guarded Best Buy add-to-cart execution is active for Best Buy-sold offers matching the saved Shipping or Pickup choice, quantity one."
       : addToCartQualified
         ? "Best Buy add-to-cart is qualified but globally paused. Resume Actions to enable it."
         : !liveEvidenceReady

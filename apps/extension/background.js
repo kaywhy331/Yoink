@@ -74,11 +74,11 @@ const RETAILER_ORIGINS = {
   pbandai: ["https://*.p-bandai.com/*"],
   pokemoncenter: ["https://*.pokemoncenter.com/*"]
 };
-const TARGET_OBSERVER_VERSION = "target-observer-v1";
+const TARGET_OBSERVER_VERSION = "target-observer-v3";
 const RETAILER_OBSERVER_VERSIONS = {
-  walmart: "walmart-observer-v4",
-  amazon: "amazon-observer-v6",
-  bestbuy: "bestbuy-observer-v5",
+  walmart: "walmart-observer-v5",
+  amazon: "amazon-observer-v7",
+  bestbuy: "bestbuy-observer-v6",
   disney: "disney-observer-v1",
   ravensburger: "ravensburger-observer-v1",
   riot: "riot-observer-v1",
@@ -108,11 +108,11 @@ const SUPPORTED_RETAILER_DOMAINS = Object.freeze([
   "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
   "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
 ]);
-const TARGET_ADD_ADAPTER_VERSION = "target-add-v1";
-const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v3";
+const TARGET_ADD_ADAPTER_VERSION = "target-add-v4";
+const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v5";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
-const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v5";
-const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v3";
+const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v7";
+const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v5";
 const TARGET_CART_URL = "https://www.target.com/cart";
 const WALMART_CART_URL = "https://www.walmart.com/cart";
 const AMAZON_CART_URL = "https://www.amazon.com/gp/cart/view.html";
@@ -714,7 +714,7 @@ const OBSERVER_RUNTIME_FAILURE_REASONS = new Set([
   "observer_contract_invalid"
 ]);
 const DIAGNOSTIC_REASON_CODES = new Set([
-  "verified", "dom_hydration_recovered",
+  "verified", "dom_hydration_recovered", "semantic_layout_recovered",
   ...OBSERVER_RUNTIME_FAILURE_REASONS,
   "product_identity_missing", "security_challenge",
   "interactive_auth", "interactive_mfa", "interactive_location", "interactive_membership",
@@ -736,7 +736,7 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   "product_page_unverified", "manual_action_required", "preorder_not_supported", "out_of_stock", "add_control_unavailable",
   "currency_mismatch", "seller_unverified", "third_party_seller", "signal_seller_mismatch",
   "price_unavailable", "over_unit_cap", "fulfillment_unverified", "authorization_missing",
-  "authorization_expired", "add_control_changed", "offer_binding_changed", "click_failed",
+  "authorization_expired", "add_control_changed", "fulfillment_selection_failed", "offer_binding_changed", "click_failed",
   "offer_unverified", "click_uncertain", "cart_page_unverified", "cart_unverified",
   "foreign_cart_line", "verified_empty", "cart_evidence_stale", "offer_proof_mismatch",
   "quantity_unavailable", "clicked"
@@ -837,6 +837,7 @@ function retailerDiagnosticPayload(value, retailerId, overrides = {}) {
   const repairEvidenceAllowed = operation === "observe" && (
     (outcome === "failed" && DIAGNOSTIC_REPAIR_SELECTOR_MISS_REASONS.has(reasonCode))
     || (outcome === "recovered" && reasonCode === "dom_hydration_recovered")
+    || (outcome === "passed" && reasonCode === "semantic_layout_recovered")
   );
   if (repairLandmarks.length && !repairEvidenceAllowed) {
     throw new Error("The retailer diagnostic repair landmark is outside a selector-miss result.");
@@ -1058,14 +1059,14 @@ function runnerFailureStage(reasonCode) {
   if (["add_control_unavailable", "add_control_changed"].includes(reasonCode)) return "add_control";
   if (reasonCode === "seller_unverified") return "seller_binding";
   if (reasonCode === "price_unavailable") return "price_binding";
-  if (reasonCode === "fulfillment_unverified") return "fulfillment_binding";
+  if (["fulfillment_unverified", "fulfillment_selection_failed"].includes(reasonCode)) return "fulfillment_binding";
   if (["listing_mismatch", "product_page_unverified"].includes(reasonCode)) return "page_identity";
   if (reasonCode === "manual_action_required") return "interactive_block";
   if (EXPECTED_LIVE_REJECTIONS.has(reasonCode)) return "policy";
   return "runner";
 }
 
-async function recordTabOperationDiagnostic(tabId, retailerId, operation, outcome, failureStage, reasonCode) {
+async function recordTabOperationDiagnostic(tabId, retailerId, operation, outcome, failureStage, reasonCode, requiredFulfillment = "shipping") {
   if (retailerId === "target" || !["walmart", "amazon", "bestbuy"].includes(retailerId)) return null;
   const device = await storedDevice();
   if (!device?.token) throw new Error("The paired Chrome device is unavailable for adapter diagnostics.");
@@ -1077,14 +1078,14 @@ async function recordTabOperationDiagnostic(tabId, retailerId, operation, outcom
   const injections = await chrome.scripting.executeScript({
     target: { tabId },
     world: "ISOLATED",
-    args: [retailerId],
-    func: (exactRetailerId) => {
+    args: [retailerId, requiredFulfillment === "pickup" ? "pickup" : "shipping"],
+    func: (exactRetailerId, exactFulfillment) => {
       try {
         const observer = globalThis.YoinkRetailerShadow;
         if (!observer || typeof observer.collectRetailerShadowAttempt !== "function") {
           return { ok: false, message: "The retailer shadow observer is unavailable." };
         }
-        return { ok: true, diagnostic: observer.collectRetailerShadowAttempt(document, location.href, exactRetailerId, "either").diagnostic };
+        return { ok: true, diagnostic: observer.collectRetailerShadowAttempt(document, location.href, exactRetailerId, exactFulfillment).diagnostic };
       } catch (error) {
         return { ok: false, message: error instanceof Error ? error.message : "The retailer diagnostic could not be collected." };
       }
@@ -2641,7 +2642,7 @@ async function inspectRetailerTab() {
             if (!observer || typeof observer.collectRetailerShadowAttempt !== "function") {
               return { ok: false, reasonCode: "observer_runtime_unavailable" };
             }
-            return { ok: true, ...observer.collectRetailerShadowAttempt(document, location.href, retailerId, "either", currentAttempt, changed) };
+            return { ok: true, ...observer.collectRetailerShadowAttempt(document, location.href, retailerId, "shipping", currentAttempt, changed) };
           } catch {
             return { ok: false, reasonCode: "observer_collection_failed" };
           }
@@ -2844,7 +2845,7 @@ function targetRehearsalJob(observation) {
     || observation.fulfillment !== "shipping"
     || observation.sellerType !== "first_party"
     || observation.sellerName !== "Target") {
-    throw new Error("Open an in-stock, Target-sold product with shipping available before running the no-click rehearsal.");
+    throw new Error("Open an in-stock, Target-sold product with Shipping available or same-day Delivery already available before running the no-click rehearsal.");
   }
   return {
     adapterVersion: TARGET_ADD_ADAPTER_VERSION,
@@ -3222,7 +3223,7 @@ function normalizedLeaseJob(value) {
     || job.maxOrderTotalCents <= 0
     || job.currency !== "USD"
     || job.sellerPolicy !== "first_party_only"
-    || job.fulfillment !== "shipping"
+    || !["shipping", "pickup"].includes(job.fulfillment)
     || !Number.isFinite(new Date(expiresAt).getTime())
     || new Date(expiresAt).getTime() <= Date.now()) {
     throw new Error("Yoink returned an unsupported retailer add job.");
@@ -3446,13 +3447,14 @@ async function executeLeasedRetailerJob(lease) {
         "live_add",
         EXPECTED_LIVE_REJECTIONS.has(reasonCode) ? "rejected" : "failed",
         runnerFailureStage(reasonCode),
-        reasonCode
+        reasonCode,
+        active.runnerJob.fulfillment
       );
       await reportJob(active, "offer_rejected", prepared?.reason || "offer_unverified", `The live ${lane.name} offer did not satisfy the immutable action contract.`);
       await clearActiveJob();
       return;
     }
-    await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "passed", "complete", "verified");
+    await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "passed", "complete", "verified", active.runnerJob.fulfillment);
     active.proof = prepared.proof;
     active.authorizationId = prepared.authorizationId;
     await saveActiveJob(active);
@@ -3464,7 +3466,7 @@ async function executeLeasedRetailerJob(lease) {
     await saveActiveJob(active);
     if (!committed?.ok || committed?.clicked !== true) {
       const reasonCode = safeReasonCode(committed?.reason || "click_uncertain");
-      await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "failed", runnerFailureStage(reasonCode), reasonCode);
+      await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "failed", runnerFailureStage(reasonCode), reasonCode, active.runnerJob.fulfillment);
       await reportJob(active, "manual_review", committed?.reason || "click_uncertain", "The Add boundary did not return a confirmed click result; automatic retry is locked.");
       await clearActiveJob();
       return;

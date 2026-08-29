@@ -44,8 +44,12 @@ fulfillment, unavailable, and SKU-diversity coverage visible. The dossier is a
 readiness projection: it cannot write an adapter qualification, change global
 execution settings, advertise browser mutation capability, or lease a job.
 
-Yoink 0.5 adds `target-add-v1`, an independently versioned add-only runner. Its
-initial qualified scope is Target-sold shipping offers, quantity one. Activation
+Yoink 0.5 introduced `target-add-v1`, an independently versioned add-only runner.
+The current `target-add-v4` contract binds Target's fulfillment-tile UI and can
+guardedly select the exact saved fulfillment: Shipping by default (including an
+available same-day Delivery fallback) or Pickup only after explicit user opt-in.
+It rebinds and revalidates the single Add control, and unavailable or mismatched
+tiles fail closed. Its qualified scope remains Target-sold offers, quantity one. Activation
 requires two exact live TCINs, a first-party shipping candidate, a current
 no-click production-runner rehearsal, a recently connected capable companion,
 and an explicit local confirmation. Activation writes the versioned evidence
@@ -1059,6 +1063,25 @@ every request repository, deployed fleet/load/outage proof, and backup/cutover d
 gated, so SQLite retains runtime authority. See
 [Data portability and recovery](DATA_PORTABILITY.md) and
 [PostgreSQL cutover qualification](POSTGRES_CUTOVER.md).
+
+## Constrained action-store layout recovery
+
+The current action contracts are `target-add-v4`, `walmart-add-v5`,
+`amazon-add-v7`, and `bestbuy-add-v5`, paired with observer versions 3, 5, 7,
+and 6 respectively. Packaged selectors remain authoritative when present.
+When they drift, local packaged code may recover only one unique semantic Add
+control and one unique price landmark, after the existing exact identity,
+seller, fulfillment, quantity, price, offer-scope, and offer-token invariants
+all agree. Target's current accessibility-labeled fulfillment tiles follow the
+same uniqueness and availability boundary. Duplicate candidates fail closed.
+Remote/community observer recipes are still read-only shadow evidence and can
+never provide a mutation target.
+
+Across all four action stores, an omitted, inherited, legacy `either`, or
+otherwise ambiguous action preference normalizes to Shipping. Pickup can enter
+an action job only from an exact saved Pickup preference, and the live adapter
+must prove an available Pickup-bound Add control; it never falls back across
+fulfillment modes.
 
 ## Signal identity
 

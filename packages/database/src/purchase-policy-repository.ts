@@ -258,12 +258,12 @@ export class PurchasePolicyRepository {
         const unsafeTarget = enabledTargets.find((target) => !target.executionSupported
           || target.maxUnitPriceCents === null
           || target.sellerPolicy !== "first_party_only"
-          || target.fulfillment !== "shipping");
+          || !["shipping", "pickup"].includes(target.fulfillment));
         if (unsafeTarget) {
           throw new PurchaseSafetyError(
             "intent_purchase_target_unsafe",
             409,
-            "Every enabled cart target must have a packaged mapping, a reviewed item cap, the retailer itself as seller, and shipping selected."
+            "Every enabled cart target must have a packaged mapping, a reviewed item cap, the retailer itself as seller, and an exact Shipping or Pickup choice."
           );
         }
         const settings = this.db.get<{ taxBps: number; allowances: string }>(

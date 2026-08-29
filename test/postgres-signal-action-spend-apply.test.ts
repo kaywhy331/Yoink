@@ -73,7 +73,7 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   assert.equal(manifest.strategyCartActionAuthority, false);
   assert.equal(manifest.strategyReservationAuthority, false);
   assert.equal(manifest.trustedStrategyActionSemanticsQualified, true);
-  assert.equal(manifest.firstPartyShippingOnly, true);
+  assert.equal(manifest.exactFirstPartyFulfillmentOnly, true);
   // A strategy decision may request up to 99 units (only its resulting
   // action is always forced to "notify"), so the boundary is no longer
   // exclusively quantity-1 or exclusively add-to-cart.
@@ -103,6 +103,9 @@ test("the action/spend boundary is deterministic, least privilege, bounded, and 
   assert.match(source, /periodic spending capacity is exhausted/);
   assert.match(source, /mission already has an active purchase claim/);
   assert.match(source, /retailer add lane is not currently qualified/);
+  assert.match(source, /fulfillment NOT IN \('shipping', 'pickup'\)/);
+  assert.match(source, /target_policy_record\.fulfillment <> fulfillment_value/);
+  assert.match(source, /mission_record\.fulfillment <> fulfillment_value/);
   assert.match(
     source,
     /octet_length\(\(attestation->>'missionId'\)\).*\|\| \(attestation->>'missionId'\) \|\| '\|'/
@@ -294,6 +297,13 @@ test("the action/spend fingerprint seals every identity, bound, and mutation", (
       actionSpendApplyWillApply: false,
       mutationStatementCount: 0,
       mutationRowCount: 0
+    }),
+    first
+  );
+  assert.notEqual(
+    postgresSignalActionSpendPlanFingerprint(principal, {
+      ...plan,
+      fulfillment: "pickup"
     }),
     first
   );

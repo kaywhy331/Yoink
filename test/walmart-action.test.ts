@@ -26,6 +26,24 @@ function product(): Document {
   return new JSDOM(readFileSync(join(RETAILER_FIXTURES, "walmart-first-party.html"), "utf8"), { url: PRODUCT_URL }).window.document;
 }
 
+function semanticDriftProduct(): Document {
+  const document = product();
+  const price = document.querySelector("[data-automation-id='product-price']");
+  price?.removeAttribute("data-automation-id");
+  price?.setAttribute("data-testid", "commerce-amount");
+  const control = document.querySelector("button[data-automation-id='atc']");
+  control?.removeAttribute("data-automation-id");
+  control?.setAttribute("data-button-state", "primary-cart-action");
+  return document;
+}
+
+function pickupProduct(): Document {
+  const document = product();
+  const fulfillment = document.querySelector("[aria-selected='true']");
+  if (fulfillment) fulfillment.textContent = "Pickup at your selected store — ready today";
+  return document;
+}
+
 function job(overrides: Partial<WalmartAddJob> = {}): WalmartAddJob {
   const base: BrowserActionContract = {
     contractVersion: 1,
@@ -94,11 +112,44 @@ test("Walmart add consumes its authorization before one click and revalidates th
   });
 });
 
-test("Walmart v3 accepts only first-party shipping quantity-one add jobs", () => {
+test("Walmart safely self-heals unique control and price selector drift", () => {
+  const document = semanticDriftProduct();
+  const control = document.querySelector("[data-button-state='primary-cart-action']");
+  assert.ok(control);
+  let clicks = 0;
+  control.addEventListener("click", () => { clicks += 1; });
+  const rehearsal = rehearseWalmartAdd(document, PRODUCT_URL, job(), NOW);
+  assert.equal(rehearsal.ok, true);
+  assert.equal(clicks, 0);
+  const prepared = prepareWalmartAdd(document, PRODUCT_URL, job(), NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  const committed = commitWalmartAdd(document, PRODUCT_URL, job(), prepared.authorizationId, NOW + 100);
+  assert.equal(committed.ok, true);
+  assert.equal(clicks, 1);
+
+  const ambiguous = semanticDriftProduct();
+  const duplicate = ambiguous.querySelector("[data-button-state='primary-cart-action']")?.cloneNode(true);
+  if (duplicate) ambiguous.querySelector("[data-testid='buy-box']")?.append(duplicate);
+  assert.equal(prepareWalmartAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
+});
+
+test("Walmart v5 accepts exact shipping or explicit pickup quantity-one jobs", () => {
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
-  assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ fulfillment: "pickup" }), NOW).reason, "fulfillment_not_supported");
+  assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ fulfillment: "either" }), NOW).reason, "fulfillment_not_supported");
+  assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ fulfillment: "pickup" }), NOW).ok, false);
+
+  const pickup = pickupProduct();
+  let clicks = 0;
+  pickup.querySelector("button")?.addEventListener("click", () => { clicks += 1; });
+  const pickupJob = job({ fulfillment: "pickup" });
+  const prepared = prepareWalmartAdd(pickup, PRODUCT_URL, pickupJob, NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  assert.equal(commitWalmartAdd(pickup, PRODUCT_URL, pickupJob, prepared.authorizationId, NOW + 100).ok, true);
+  assert.equal(clicks, 1);
 });
 
 test("Walmart cart preflight requires emptiness and post-add proof requires one exact line", () => {

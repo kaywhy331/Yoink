@@ -716,10 +716,13 @@ export class ControlRepository {
       throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Guided purchase plans require the retailer itself and the exact selected item.");
     }
     if (!["shipping", "pickup", "either", "manual"].includes(String(input?.fulfillment))) {
-      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Choose shipping, pickup, either, or manual fulfillment.");
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Choose Shipping, Pickup, or manual fulfillment.");
     }
-    if (input.actionCeiling === "add_to_cart" && input.fulfillment !== "shipping") {
-      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Automatic cart actions currently require an explicitly selected shipping offer.");
+    const fulfillment = input.fulfillment === "pickup"
+      ? "pickup"
+      : input.fulfillment === "manual" ? "manual" : "shipping";
+    if (input.actionCeiling === "add_to_cart" && !["shipping", "pickup"].includes(fulfillment)) {
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Automatic cart actions require an exact Shipping or Pickup choice.");
     }
     if (input.actionCeiling === "add_to_cart" && !listing.executionSupported) {
       throw new PurchaseSafetyError("purchase_intent_execution_unavailable", 409, "This store is monitor-only until its add-to-cart mapping is separately qualified.");
@@ -769,7 +772,7 @@ export class ControlRepository {
         maxAllInCents: reviewedAllInCents,
         actionCeiling: input.actionCeiling,
         sellerPolicy: "first_party_only",
-        fulfillment: input.fulfillment,
+        fulfillment,
         substitutionPolicy: "exact_only",
         expiresAt,
         cooldownSeconds

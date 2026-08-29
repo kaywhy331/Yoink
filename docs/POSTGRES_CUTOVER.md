@@ -1675,8 +1675,9 @@ and spend policy.
 The transaction revalidates the exact active target, current policy and source
 trust, remaining and fulfilled quantity, sibling claims, cooldown, current
 retailer add-only qualification, and per-order/daily/monthly capacity. It
-accepts only fresh first-party shipping evidence, quantity one,
-`add_to_cart`, canonical attribution, and the exact reviewed unit/all-in caps.
+accepts only fresh first-party evidence that exactly matches the saved Shipping
+or Pickup choice, quantity one, `add_to_cart`, canonical attribution, and the
+exact reviewed unit/all-in caps.
 A valid first application appends an offer/snapshot, action job and initial
 event, active reservation and reserved ledger entry, qualified mission
 decision, audit event, and outbox event across nine mutation tables. Complete
@@ -1944,7 +1945,7 @@ SQLite remains authoritative.
 
 Version 0.87 adds the thirteenth independent hosted-signal role. It ports the
 complete Target add-only activation transaction, not retailer DOM execution.
-The operation can only qualify `target-add-v1`, set the current user's control
+The operation can only qualify `target-add-v4`, set the current user's control
 state to live and unpaused, promote already-created eligible Target shadow jobs,
 and append the existing receipts. Walmart, Amazon, and Best Buy remain outside
 this boundary because their SQLite activation also changes shared retailer and
@@ -1959,10 +1960,10 @@ qualification then settings mask `01100`.
 
 Before the first mutation, PostgreSQL holds the evidence/trial append boundary
 stable and recomputes the exact current 30-day Target qualification hash from
-`target-observer-v1` observations and passed `target-add-v1` rehearsals. It
+`target-observer-v3` observations and passed `target-add-v4` rehearsals. It
 requires at least one Target-sold actionable observation, one shipping
 actionable observation, two distinct TCINs, one passed no-click rehearsal, the
-latest active companion's exact Target add-v1 capability, and the expected
+latest active companion's exact Target add-v4 capability, and the expected
 settings timestamp. One transaction then upserts qualification, enables live
 unpaused settings, promotes only unexpired `shadow_ready` first-party shipping
 quantity-one add jobs, and appends deterministic action-event, audit, and
@@ -2224,9 +2225,9 @@ The request must contain the exact mission ID, current revision and
 mission, complete ordered target/listing graph, variant and USD identity,
 current tax, and store allowances, then reconstructs byte-identical target JSON
 and policy hashing. Direct `purchase_intent` + `add_to_cart` preferences also
-require at least one enabled execution-supported first-party shipping target,
-a reviewed unit-price cap, and an all-in cap sufficient for quantity, tax, and
-the current store allowance.
+require at least one enabled execution-supported first-party target with exact
+Shipping or Pickup, a reviewed unit-price cap, and an all-in cap sufficient for
+quantity, tax, and the current store allowance.
 
 A changed policy appends exactly one revision and one deterministic
 audit/outbox pair. An unchanged policy is a true zero-write success. Exact
