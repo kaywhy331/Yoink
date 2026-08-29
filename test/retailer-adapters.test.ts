@@ -917,7 +917,7 @@ test("Best Buy observer recognizes modern fulfillment while keeping pickup an ex
   assert.equal(selectorMiss.diagnostic.reasonCode, "add_control_selector_miss");
 });
 
-test("Best Buy v7 distinguishes passive demand badges from real gates and preserves pickup opt-in", () => {
+test("Best Buy v8 distinguishes passive demand badges from real gates and preserves pickup opt-in", () => {
   const preorderUrl = "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-reality-fracture-play-booster-box-30-packs/JJ8VP7Z65T/sku/6678193";
   const preorderDocument = fixture("bestbuy-reality-fracture-preorder.html", preorderUrl);
   const preorder = observeRetailerOffer(preorderDocument, preorderUrl, "bestbuy", "6678193", "either", NOW);
@@ -987,7 +987,7 @@ test("Best Buy v7 distinguishes passive demand badges from real gates and preser
   }
 });
 
-test("Best Buy v7 binds one primary action when the same exact offer also renders a sticky duplicate", () => {
+test("Best Buy v8 binds one primary action when the same exact offer also renders a sticky duplicate", () => {
   const demandUrl = "https://www.bestbuy.com/product/riftbound-league-of-legends-trading-card-game-unleashed-champion-deck-vex/J3GWY59Q5Z/sku/6669286";
   const passiveDemand = fixture("bestbuy-passive-demand-badge.html", demandUrl);
   const demandObservation = observeRetailerOffer(passiveDemand, demandUrl, "bestbuy", "6669286", "shipping", NOW);
@@ -1042,6 +1042,45 @@ test("Best Buy v7 binds one primary action when the same exact offer also render
     "6588149",
     "shipping"
   ), null);
+});
+
+test("Best Buy v8 recovers one exact split-shell action without admitting page-level ambiguity", () => {
+  const url = "https://www.bestbuy.com/product/2026-topps-flagship-football-mega-box/J3ZPGXX9RP/sku/6685081";
+  const document = fixture("bestbuy-single-split-shell.html", url);
+  const observation = observeRetailerOffer(document, url, "bestbuy", "6685081", "shipping", NOW);
+  assert.deepEqual({
+    price: observation.unitPriceCents,
+    seller: observation.sellerName,
+    sellerType: observation.sellerType,
+    fulfillment: observation.fulfillment,
+    actionable: observation.addControlActionable
+  }, {
+    price: 4999,
+    seller: "Best Buy",
+    sellerType: "first_party",
+    fulfillment: "shipping",
+    actionable: true
+  });
+  const layout = retailerAdapterLayoutEvidence(document, url, "bestbuy", "6685081");
+  assert.equal(layout.addControlCount, 1);
+  assert.equal(layout.genericAddIntentCount, 1);
+  assert.equal(layout.priceCandidateCount, 6);
+  assert.equal(layout.scopedControlCount, 1);
+  assert.ok(retailerAddControl(document, url, "bestbuy", "6685081", "shipping"));
+
+  const ambiguousPrice = fixture("bestbuy-single-split-shell.html", url);
+  const prices = ambiguousPrice.querySelectorAll("[data-testid='customer-price']");
+  if (prices[prices.length - 1]) prices[prices.length - 1]!.textContent = "$59.99";
+  assert.equal(retailerAddControl(ambiguousPrice, url, "bestbuy", "6685081", "shipping"), null);
+
+  const competingSku = fixture("bestbuy-single-split-shell.html", url);
+  competingSku.querySelector("main")?.insertAdjacentHTML("beforeend", "<p>SKU: 6685082</p>");
+  assert.equal(retailerAddControl(competingSku, url, "bestbuy", "6685081", "shipping"), null);
+
+  const ambiguousAction = fixture("bestbuy-single-split-shell.html", url);
+  const duplicate = ambiguousAction.querySelector(".add-to-cart-button")?.cloneNode(true);
+  if (duplicate) ambiguousAction.querySelector("[data-testid='product-action']")?.append(duplicate);
+  assert.equal(retailerAddControl(ambiguousAction, url, "bestbuy", "6685081", "shipping"), null);
 });
 
 test("Best Buy in-store-only products remain manual unknown evidence rather than global out-of-stock", () => {

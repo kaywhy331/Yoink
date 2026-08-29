@@ -1,6 +1,16 @@
 # Yoink roadmap
 
-## Shipped through 1.9.0
+## Shipped through 1.9.1
+
+### Best Buy single-control split-shell recovery (1.9.1)
+
+- Best Buy observer v8 binds SKU 6685081's one Add control to sibling price,
+  seller, and selected-Shipping regions only after exact page identity and
+  quantity-one checks agree
+- Six repeated renderings of one price remain one value; distinct prices,
+  competing SKU evidence, and duplicate primary actions fail closed
+- Best Buy add v7 and migration 52 require fresh observation, no-click
+  rehearsal, and explicit activation before the expanded layout can act
 
 ### Domain-aware qualification and affiliate navigation (1.9.0)
 
@@ -3239,10 +3249,10 @@ quantity limits, queue lifecycle, cancellation, and order reconciliation.
   while explicit checkout ASIN inputs take precedence over variation swatches
 - Bounded Amazon hydration retries plus authenticated adapter diagnostics for
   observations, no-click rehearsals, and guarded live verification
-- Qualification-ready `bestbuy-add-v6`: explicit Best Buy-sold, exact selected
+- Qualification-ready `bestbuy-add-v7`: explicit Best Buy-sold, exact selected
   Shipping or Pickup, exact-SKU, quantity-one add-to-cart only; live activation remains
   evidence-gated
-- Best Buy observer v7 supports current `/product/.../sku/<SKU>`, compact
+- Best Buy observer v8 supports current `/product/.../sku/<SKU>`, compact
   `/product/.../<SKU>`, legacy `/site/.../<SKU>.p`, and consistent `skuId`
   identities while rejecting opaque product tokens and conflicting SKU
   evidence. Current `data-testid`, `data-test-id`, automation, native-button,

@@ -1316,7 +1316,7 @@ var YoinkAmazonActionModule = (() => {
   }
   function recoveredBestBuyOfferScope(document, retailer, expectedSku) {
     const controls = candidateControls(document, retailer).filter((control2) => !control2.closest(BESTBUY_MERCHANDISING_SCOPE));
-    if (controls.length < 2 || controls.length > 4) return null;
+    if (controls.length < 1 || controls.length > 4) return null;
     const nonSecondary = controls.filter((control2) => !control2.closest(BESTBUY_SECONDARY_ACTION_SCOPE));
     const primary = nonSecondary.filter((control2) => Boolean(control2.closest(BESTBUY_PRIMARY_SCOPE)));
     const pool = primary.length > 0 ? primary : nonSecondary;
@@ -1328,7 +1328,9 @@ var YoinkAmazonActionModule = (() => {
       if (bestBuyBoundPrice(root, retailer) !== null && bestBuySellerUnambiguous(root, retailer) && bestBuyQuantityOne(root)) {
         const fulfillment = bestBuyFulfillment(root, control);
         const skus = bestBuySkuEvidence(root);
-        if (fulfillment !== "unknown" && skus.size === 1 && skus.has(expectedSku)) {
+        const identityBound = skus.size === 1 && skus.has(expectedSku);
+        const exactPageOnlyControl = controls.length === 1 && skus.size === 0;
+        if (fulfillment !== "unknown" && (identityBound || exactPageOnlyControl)) {
           return { control, fulfillment, offerRoot: root };
         }
       }

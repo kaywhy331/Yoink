@@ -1621,7 +1621,7 @@ function recoveredBestBuyOfferScope(
 ): BestBuyScopedControl | null {
   const controls = candidateControls(document, retailer)
     .filter((control) => !control.closest(BESTBUY_MERCHANDISING_SCOPE));
-  if (controls.length < 2 || controls.length > 4) return null;
+  if (controls.length < 1 || controls.length > 4) return null;
   const nonSecondary = controls.filter((control) => !control.closest(BESTBUY_SECONDARY_ACTION_SCOPE));
   const primary = nonSecondary.filter((control) => Boolean(control.closest(BESTBUY_PRIMARY_SCOPE)));
   const pool = primary.length > 0 ? primary : nonSecondary;
@@ -1635,9 +1635,15 @@ function recoveredBestBuyOfferScope(
       && bestBuyQuantityOne(root)) {
       const fulfillment = bestBuyFulfillment(root, control);
       const skus = bestBuySkuEvidence(root);
+      // A split Best Buy shell can place its only Add control, price, seller,
+      // and fulfillment in sibling regions under <main> without repeating the
+      // SKU in that commerce region. Exact URL identity plus one page-wide
+      // action is sufficient only when no competing SKU is present. Layouts
+      // with duplicate actions retain the stronger explicit-SKU requirement.
+      const identityBound = skus.size === 1 && skus.has(expectedSku);
+      const exactPageOnlyControl = controls.length === 1 && skus.size === 0;
       if (fulfillment !== "unknown"
-        && skus.size === 1
-        && skus.has(expectedSku)) {
+        && (identityBound || exactPageOnlyControl)) {
         return { control, fulfillment, offerRoot: root };
       }
     }

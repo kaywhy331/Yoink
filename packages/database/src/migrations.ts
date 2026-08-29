@@ -3457,5 +3457,16 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE retailer_id = 'bestbuy';
     `
+  },
+  {
+    version: 52,
+    name: "bestbuy_v8_v7_split_shell_requalification_boundary",
+    sql: `
+      UPDATE retailers SET execution_supported = 0 WHERE id = 'bestbuy';
+      UPDATE listings SET execution_supported = 0 WHERE retailer_id = 'bestbuy';
+      UPDATE retailer_adapter_qualifications
+        SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE retailer_id = 'bestbuy';
+    `
   }
 ]);

@@ -51,7 +51,7 @@ var YoinkRetailerShadowModule = (() => {
   var WALMART_OBSERVER_VERSION = "walmart-observer-v5";
   var WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
   var AMAZON_OBSERVER_VERSION = "amazon-observer-v7";
-  var BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v7";
+  var BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v8";
   var DISNEY_OBSERVER_VERSION = "disney-observer-v1";
   var RAVENSBURGER_OBSERVER_VERSION = "ravensburger-observer-v1";
   var RIOT_OBSERVER_VERSION = "riot-observer-v1";
@@ -1534,7 +1534,7 @@ var YoinkRetailerShadowModule = (() => {
   }
   function recoveredBestBuyOfferScope(document, retailer, expectedSku) {
     const controls = candidateControls(document, retailer).filter((control2) => !control2.closest(BESTBUY_MERCHANDISING_SCOPE));
-    if (controls.length < 2 || controls.length > 4) return null;
+    if (controls.length < 1 || controls.length > 4) return null;
     const nonSecondary = controls.filter((control2) => !control2.closest(BESTBUY_SECONDARY_ACTION_SCOPE));
     const primary = nonSecondary.filter((control2) => Boolean(control2.closest(BESTBUY_PRIMARY_SCOPE)));
     const pool = primary.length > 0 ? primary : nonSecondary;
@@ -1546,7 +1546,9 @@ var YoinkRetailerShadowModule = (() => {
       if (bestBuyBoundPrice(root, retailer) !== null && bestBuySellerUnambiguous(root, retailer) && bestBuyQuantityOne(root)) {
         const fulfillment = bestBuyFulfillment(root, control);
         const skus = bestBuySkuEvidence(root);
-        if (fulfillment !== "unknown" && skus.size === 1 && skus.has(expectedSku)) {
+        const identityBound = skus.size === 1 && skus.has(expectedSku);
+        const exactPageOnlyControl = controls.length === 1 && skus.size === 0;
+        if (fulfillment !== "unknown" && (identityBound || exactPageOnlyControl)) {
           return { control, fulfillment, offerRoot: root };
         }
       }

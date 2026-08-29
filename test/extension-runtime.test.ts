@@ -315,7 +315,7 @@ const WALMART_OBSERVATION = {
   selectedOffer: selectedOffer("17354421975")
 };
 const BESTBUY_OBSERVATION = {
-  adapterVersion: "bestbuy-observer-v7",
+  adapterVersion: "bestbuy-observer-v8",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -1313,7 +1313,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.bestBuyJob ? {
         contractVersion: 1,
-        adapterVersion: "bestbuy-add-v6",
+        adapterVersion: "bestbuy-add-v7",
         id: "job_bestbuy_fixture",
         capabilityToken: "B".repeat(43),
         action: "add_to_cart",
@@ -2299,7 +2299,7 @@ test("the service worker rehearses Amazon add-v7 without persisting its offer to
   assert.equal(JSON.stringify(rehearsalDiagnostic).includes("offerListing"), false);
 });
 
-test("the service worker captures observer-v7 evidence and rehearses Best Buy add-v6 without clicking", async () => {
+test("the service worker captures observer-v8 evidence and rehearses Best Buy add-v7 without clicking", async () => {
   const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL });
   const rehearsal = await runtime.send({ type: "yoink:rehearse-bestbuy" });
   assert.equal(rehearsal.ok, true);
@@ -2309,13 +2309,13 @@ test("the service worker captures observer-v7 evidence and rehearses Best Buy ad
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/bestbuy"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v7");
+  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v8");
   assert.equal(observationBody.retailerSku, "6588149");
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v6");
-  assert.equal(trialBody.observerVersion, "bestbuy-observer-v7");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v7");
+  assert.equal(trialBody.observerVersion, "bestbuy-observer-v8");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("699"), false);
   assert.equal(JSON.stringify(trialBody).includes(BESTBUY_PRODUCT_URL), false);

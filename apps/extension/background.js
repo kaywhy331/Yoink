@@ -78,7 +78,7 @@ const TARGET_OBSERVER_VERSION = "target-observer-v3";
 const RETAILER_OBSERVER_VERSIONS = {
   walmart: "walmart-observer-v5",
   amazon: "amazon-observer-v7",
-  bestbuy: "bestbuy-observer-v7",
+  bestbuy: "bestbuy-observer-v8",
   disney: "disney-observer-v1",
   ravensburger: "ravensburger-observer-v1",
   riot: "riot-observer-v1",
@@ -112,7 +112,7 @@ const TARGET_ADD_ADAPTER_VERSION = "target-add-v4";
 const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v5";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v7";
-const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v6";
+const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v7";
 const TARGET_CART_URL = "https://www.target.com/cart";
 const WALMART_CART_URL = "https://www.walmart.com/cart";
 const AMAZON_CART_URL = "https://www.amazon.com/gp/cart/view.html";

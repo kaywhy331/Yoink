@@ -136,7 +136,7 @@ test("Best Buy safely self-heals unique control and price selector drift", () =>
   assert.equal(prepareBestBuyAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Best Buy v6 requires an exact selected Shipping or explicit Pickup offer", () => {
+test("Best Buy v7 requires an exact selected Shipping or explicit Pickup offer", () => {
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
@@ -170,7 +170,7 @@ test("Best Buy v6 requires an exact selected Shipping or explicit Pickup offer",
   );
 });
 
-test("Best Buy v6 reaches the no-click boundary on the modern fulfillment layout", () => {
+test("Best Buy v7 reaches the no-click boundary on the modern fulfillment layout", () => {
   const url = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const document = fixture("bestbuy-modern-first-party.html", url);
   let clicks = 0;
@@ -186,7 +186,7 @@ test("Best Buy v6 reaches the no-click boundary on the modern fulfillment layout
   assert.equal(clicks, 0);
 });
 
-test("Best Buy v6 uses the primary action when one exact offer also renders a sticky duplicate", () => {
+test("Best Buy v7 uses the primary action when one exact offer also renders a sticky duplicate", () => {
   const url = "https://www.bestbuy.com/product/riftbound-origins-ahri-playmat/J3GWY596JF/sku/6677244";
   const document = fixture("bestbuy-primary-and-sticky-add.html", url);
   const primary = document.querySelector("[data-testid='purchase-controls'] button");
@@ -211,6 +211,28 @@ test("Best Buy v6 uses the primary action when one exact offer also renders a st
   assert.equal(commitBestBuyAdd(document, url, exactJob, prepared.authorizationId, NOW + 100).ok, true);
   assert.equal(primaryClicks, 1);
   assert.equal(stickyClicks, 0);
+});
+
+test("Best Buy v7 rehearses and commits one exact split-shell action", () => {
+  const url = "https://www.bestbuy.com/product/2026-topps-flagship-football-mega-box/J3ZPGXX9RP/sku/6685081";
+  const document = fixture("bestbuy-single-split-shell.html", url);
+  const control = document.querySelector(".add-to-cart-button");
+  let clicks = 0;
+  control?.addEventListener("click", () => { clicks += 1; });
+  const exactJob = job({
+    retailerSku: "6685081",
+    canonicalUrl: url,
+    maxUnitPriceCents: 5999,
+    maxOrderTotalCents: 5999
+  });
+  const rehearsal = rehearseBestBuyAdd(document, url, exactJob, NOW);
+  assert.equal(rehearsal.ok, true);
+  assert.equal(clicks, 0);
+  const prepared = prepareBestBuyAdd(document, url, exactJob, NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  assert.equal(commitBestBuyAdd(document, url, exactJob, prepared.authorizationId, NOW + 100).ok, true);
+  assert.equal(clicks, 1);
 });
 
 test("Best Buy cart preflight requires emptiness and post-add proof requires one exact line", () => {
