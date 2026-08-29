@@ -24,11 +24,41 @@ const state = {
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const HOWL_PUBLISHER_SLUG = "collectwithdodo";
+const HOWL_RETAILER_DOMAINS = Object.freeze([
+  "target.com", "walmart.com", "amazon.com", "bestbuy.com", "disneystore.com",
+  "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
+  "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
+]);
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", "\"": "&quot;"
   })[character]);
+}
+
+function howlAffiliateUrl(value, articleName = "") {
+  try {
+    const destination = new URL(String(value || ""));
+    const host = destination.hostname.toLocaleLowerCase("en-US");
+    if (destination.protocol !== "https:" || destination.username || destination.password
+      || !HOWL_RETAILER_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`))) return "";
+    const articleUrl = new URL(location.pathname || "/", location.origin);
+    articleUrl.search = "";
+    articleUrl.hash = "";
+    const route = new URL("https://howl.link/link");
+    route.searchParams.set("url", destination.href);
+    route.searchParams.set("publisher_slug", HOWL_PUBLISHER_SLUG);
+    route.searchParams.set(
+      "article_name",
+      String(articleName || document.title || "Yoink product dashboard").replace(/\s+/g, " ").trim().slice(0, 100)
+        || "Yoink product dashboard"
+    );
+    route.searchParams.set("article_url", articleUrl.href);
+    return route.href;
+  } catch {
+    return "";
+  }
 }
 
 function money(cents, currency = "USD") {
@@ -462,7 +492,7 @@ function productCardMarkup(group, missionByVariant) {
     ${storeArea}
     <div class="card-actions">
       ${plan ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit purchase plan</button>` : quickAddMarkup(primary, group)}
-      ${primary ? `<a class="canonical" href="${escapeHtml(primary.canonicalUrl)}" target="_blank" rel="noreferrer">View at ${escapeHtml(primary.retailerName)} ↗</a>` : ""}
+      ${primary ? `<a class="canonical" href="${escapeHtml(howlAffiliateUrl(primary.canonicalUrl, group.title))}" target="_blank" rel="noopener noreferrer sponsored">View at ${escapeHtml(primary.retailerName)} ↗</a>` : ""}
     </div>
   </article>`;
 }
@@ -607,7 +637,7 @@ function openProductDetail(variantId) {
           ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit plan</button>`
           : `<button class="button primary" data-quick-add="${escapeHtml(listing.listingId)}" type="button">Quick add</button>
              <button class="button quiet" data-track-listing="${escapeHtml(listing.listingId)}" type="button">Custom setup</button>`}
-        <a class="canonical" href="${escapeHtml(listing.canonicalUrl)}" target="_blank" rel="noreferrer">View ↗</a>
+        <a class="canonical" href="${escapeHtml(howlAffiliateUrl(listing.canonicalUrl, group.title))}" target="_blank" rel="noopener noreferrer sponsored">View ↗</a>
       </div>
     </div>`;
   }).join("");
@@ -635,13 +665,13 @@ function renderWalmartDraws() {
   const draws = state.overview.walmartDraws || {};
   const latest = draws.latestScan || null;
   const items = Array.isArray(draws.items) ? draws.items : [];
-  $("#walmartDrawSummary").innerHTML = `<article class="plan-card"><div><div class="card-top"><h3>Read-only drawing observer</h3><span class="tag ${latest?.outcome === "passed" ? "good" : "warn"}">${escapeHtml(latest ? String(latest.outcome).replaceAll("_", " ") : "not scanned")}</span></div><p>${latest ? `${Number(latest.observedCardCount || 0)} of ${Number(latest.expectedCardCount || 0)} cards recorded ${relative(latest.observedAt)}.` : "Open the Walmart Draw hub and choose Inspect current drawings in the Chrome companion."} No entry was submitted, and Yoink does not collect drawing account, address, payment, or entry state.</p></div><a class="canonical" href="https://www.walmart.com/shop/collectibles/draw" target="_blank" rel="noreferrer">Open drawing hub ↗</a></article>`;
+  $("#walmartDrawSummary").innerHTML = `<article class="plan-card"><div><div class="card-top"><h3>Read-only drawing observer</h3><span class="tag ${latest?.outcome === "passed" ? "good" : "warn"}">${escapeHtml(latest ? String(latest.outcome).replaceAll("_", " ") : "not scanned")}</span></div><p>${latest ? `${Number(latest.observedCardCount || 0)} of ${Number(latest.expectedCardCount || 0)} cards recorded ${relative(latest.observedAt)}.` : "Open the Walmart Draw hub and choose Inspect current drawings in the Chrome companion."} No entry was submitted, and Yoink does not collect drawing account, address, payment, or entry state.</p></div><a class="canonical" href="${escapeHtml(howlAffiliateUrl("https://www.walmart.com/shop/collectibles/draw", "Walmart Collectibles Draw"))}" target="_blank" rel="noopener noreferrer sponsored">Open drawing hub ↗</a></article>`;
   $("#walmartDrawList").innerHTML = items.length ? items.map((item) => `<article class="product-card">
     <div class="card-top"><span class="store">Walmart</span><span class="tag ${item.drawState === "active" ? "good" : "warn"}">${escapeHtml(String(item.drawState || "unknown"))}</span></div>
     <h3>${escapeHtml(item.title)}</h3>
     <p>Exact Walmart item ${escapeHtml(item.retailerSku)} · ${escapeHtml(item.sellerName || "seller unknown")}</p>
     <div class="tags"><span class="tag">${escapeHtml(money(item.unitPriceCents, item.currency))}</span><span class="tag">${item.closesAt ? `Closes ${escapeHtml(relative(item.closesAt))}` : "Closing time unknown"}</span><span class="tag ${item.tracked ? "good" : ""}">${item.tracked ? "Matches your plan" : "Not tracked"}</span></div>
-    <div class="card-actions"><a class="canonical" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">View exact item ↗</a><span class="tag warn">Manual entry only</span></div>
+    <div class="card-actions"><a class="canonical" href="${escapeHtml(howlAffiliateUrl(item.canonicalUrl, item.title))}" target="_blank" rel="noopener noreferrer sponsored">View exact item ↗</a><span class="tag warn">Manual entry only</span></div>
   </article>`).join("") : '<div class="empty">No open drawings are currently recorded. Run one explicit inspection from the Walmart Draw hub; expired drawings disappear from this view.</div>';
 }
 
@@ -691,7 +721,7 @@ function renderActions() {
   $("#actionList").innerHTML = state.actions.length ? state.actions.map((action) => `<article class="action-card">
     <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${action.state === "confirmed" ? "good" : "warn"}">${escapeHtml(String(action.state).replaceAll("_", " "))}</span></div>
     <p>${escapeHtml(action.retailerId)} · ${escapeHtml(action.retailerSku)} · ${escapeHtml(String(action.action).replaceAll("_", " "))} · ${action.decisionSource === "purchase_intent" ? "reviewed plan" : "advanced default"} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}${action.spendReservationStatus ? ` · reservation ${escapeHtml(action.spendReservationStatus)}` : ""}</p></div>
-    <a class="canonical" href="${escapeHtml(action.canonicalUrl)}" target="_blank" rel="noreferrer">Store page ↗</a>
+    <a class="canonical" href="${escapeHtml(howlAffiliateUrl(action.canonicalUrl, action.title))}" target="_blank" rel="noopener noreferrer sponsored">Store page ↗</a>
   </article>`).join("") : '<div class="empty">No purchase or notification actions have been recorded yet.</div>';
 }
 
@@ -1007,7 +1037,7 @@ async function openPlan(id) {
     : "Saving here converts it to a reviewed direct plan in notification mode unless you explicitly choose and satisfy guarded cart requirements. Checkout stays manual.";
   $("#planDialogTitle").textContent = mission.title;
   $("#targetEditors").innerHTML = mission.targets.map((target) => `<article class="target-editor" data-target-id="${escapeHtml(target.id)}" data-retailer-id="${escapeHtml(target.retailerId)}" data-execution-supported="${target.executionSupported === true}">
-    <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div><a class="canonical" href="${escapeHtml(target.canonicalUrl)}" target="_blank" rel="noreferrer">View ↗</a></div>
+    <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div><a class="canonical" href="${escapeHtml(howlAffiliateUrl(target.canonicalUrl, mission.title))}" target="_blank" rel="noopener noreferrer sponsored">View ↗</a></div>
     <div class="target-fields">
       <label class="check"><input data-field="enabled" type="checkbox" ${target.enabled ? "checked" : ""}><span>Use store</span></label>
       <label><span>Maximum price</span><input data-field="maxPrice" inputmode="decimal" placeholder="Strategy limit" value="${target.maxUnitPriceCents ? (target.maxUnitPriceCents / 100).toFixed(2) : ""}"></label>
@@ -1136,7 +1166,7 @@ async function checkProductLink() {
       <h3>${escapeHtml(preview.retailerSku)}</h3>
       <p>${escapeHtml(preview.capabilityLabel)}</p>
       <p><strong>Not accepted from this link:</strong> stock status, price, seller, fulfillment, or permission to purchase.</p>
-      <a class="canonical" href="${escapeHtml(preview.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(preview.canonicalUrl)} ↗</a>`;
+      <a class="canonical" href="${escapeHtml(howlAffiliateUrl(preview.canonicalUrl, `${preview.retailerName} product preview`))}" target="_blank" rel="noopener noreferrer sponsored">${escapeHtml(preview.canonicalUrl)} ↗</a>`;
     $("#productLinkConfirm").hidden = false;
     $("#productLinkConfirm").querySelector("input").focus();
   } finally {

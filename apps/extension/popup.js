@@ -90,14 +90,10 @@ function render(state) {
   $("#pairCard").hidden = !connected || paired;
   $("#forget").hidden = !paired;
   const targetAccess = state?.targetShadowAccess === true;
-  $("#targetAccess").textContent = targetAccess ? "Target page access enabled" : "Target page access not granted";
-  $("#inspectTarget").textContent = targetAccess ? "Inspect current Target page" : "Enable and inspect Target";
-  $("#inspectTarget").disabled = !connected || !paired;
-  $("#rehearseTarget").disabled = !connected || !paired;
-  $("#rehearseWalmart").disabled = !connected || !paired;
-  $("#rehearseAmazon").disabled = !connected || !paired;
-  $("#rehearseBestBuy").disabled = !connected || !paired;
-  $("#inspectRetailer").disabled = !connected || !paired;
+  $("#targetAccess").textContent = targetAccess
+    ? "Auto-detects the active store · Target access enabled"
+    : "Auto-detects the active store · Target access on demand";
+  $("#inspectAndQualify").disabled = !connected || !paired;
   $("#inspectWalmartDraw").disabled = !connected || !paired;
   $("#shareCommunity").disabled = !connected || !paired;
   $("#removeTarget").hidden = !targetAccess;
@@ -144,16 +140,6 @@ function render(state) {
   $("#forget").textContent = PRODUCTION_PROFILE ? "Forget pairing" : "Forget local pairing";
 }
 
-function renderTargetObservation(observation) {
-  const price = Number.isSafeInteger(observation?.unitPriceCents)
-    ? new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(observation.unitPriceCents / 100)
-    : "price not observed";
-  const state = observation?.observationState === "actionable_candidate"
-    ? "Complete candidate evidence"
-    : observation?.observationState === "manual_block" ? "Manual browser step detected" : "Not currently actionable";
-  $("#targetMessage").textContent = `${state}: TCIN ${observation?.retailerSku || "unknown"} · ${price} · ${observation?.sellerName || "seller unknown"} · ${observation?.fulfillment || "fulfillment unknown"}.`;
-}
-
 function retailerFromUrl(value) {
   try {
     const host = new URL(String(value || "")).hostname.toLocaleLowerCase("en-US");
@@ -181,6 +167,7 @@ function renderRetailerObservation(observation) {
     ? new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(observation.unitPriceCents / 100)
     : "price not observed";
   const retailerNames = {
+    target: "Target", walmart: "Walmart", amazon: "Amazon",
     bestbuy: "Best Buy", disney: "Disney Store", ravensburger: "Ravensburger",
     riot: "Riot Games Merch", booksamillion: "Books-A-Million", fanatics: "Fanatics",
     kohls: "Kohl's", macys: "Macy's", pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center"
@@ -203,7 +190,8 @@ function renderRetailerObservation(observation) {
     boundaries.push("select Shipping to qualify");
   }
   const boundary = boundaries.length ? ` · ${boundaries.join(" · ")}` : "";
-  $("#retailerMessage").textContent = `${retailer}: ${evidence} · ${observation?.retailerSku || "unknown SKU"} · ${price} · ${observation?.sellerName || "seller unknown"} · ${observation?.fulfillment || "fulfillment unknown"}${route}${boundary}.`;
+  const identityLabel = observation?.retailerId === "target" ? "TCIN" : "SKU";
+  $("#retailerMessage").textContent = `${retailer}: ${evidence} · ${identityLabel} ${observation?.retailerSku || "unknown"} · ${price} · ${observation?.sellerName || "seller unknown"} · ${observation?.fulfillment || "fulfillment unknown"}${route}${boundary}.`;
 }
 
 function renderWalmartDrawScan(scan) {
@@ -247,62 +235,30 @@ $("#forget").addEventListener("click", async () => {
   const response = await chrome.runtime.sendMessage({ type: "yoink:forget-device" });
   if (response?.ok) render(response.state);
 });
-$("#inspectTarget").addEventListener("click", async () => {
-  const button = $("#inspectTarget");
+$("#inspectAndQualify").addEventListener("click", async () => {
+  const button = $("#inspectAndQualify");
   button.disabled = true;
-  $("#targetMessage").textContent = "Requesting Target page access…";
-  try {
-    const granted = await chrome.permissions.request({ origins: TARGET_ORIGINS });
-    if (!granted) throw new Error("Target access was not granted.");
-    $("#targetMessage").textContent = "Inspecting the active Target product page once…";
-    const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-target" });
-    if (!response?.ok) throw new Error(response?.message || "Target inspection failed.");
-    render(response.state);
-    renderTargetObservation(response.observation);
-  } catch (error) {
-    $("#targetMessage").textContent = error.message || "The Target page could not be inspected.";
-    await check();
-  } finally {
-    button.disabled = false;
-  }
-});
-$("#rehearseTarget").addEventListener("click", async () => {
-  const button = $("#rehearseTarget");
-  button.disabled = true;
-  $("#targetMessage").textContent = "Running the production verifier to its no-click boundary…";
-  try {
-    const granted = await chrome.permissions.request({ origins: TARGET_ORIGINS });
-    if (!granted) throw new Error("Target access was not granted.");
-    const response = await chrome.runtime.sendMessage({ type: "yoink:rehearse-target" });
-    if (!response?.ok) throw new Error(response?.message || "Target rehearsal failed.");
-    render(response.state);
-    renderTargetObservation(response.observation);
-    $("#targetMessage").textContent = response.rehearsal?.ok
-      ? "Safe rehearsal passed. The exact offer reached the final pre-click boundary, and no click occurred."
-      : `Safe rehearsal stopped before click: ${String(response.rehearsal?.reason || "offer not verified").replaceAll("_", " ")}.`;
-  } catch (error) {
-    $("#targetMessage").textContent = error.message || "The Target rehearsal could not run.";
-    await check();
-  } finally {
-    button.disabled = false;
-  }
-});
-$("#inspectRetailer").addEventListener("click", async () => {
-  const button = $("#inspectRetailer");
-  button.disabled = true;
-  $("#retailerMessage").textContent = "Checking the active retailer product page…";
+  $("#retailerMessage").textContent = "Detecting the active store and checking its exact product offer once…";
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const retailerId = retailerFromUrl(tabs[0]?.url);
     if (!retailerId) throw new Error("Open an exact supported retailer product page first.");
     const granted = await chrome.permissions.request({ origins: RETAILER_ORIGINS[retailerId] });
-    if (!granted) throw new Error("Read-only retailer page access was not granted.");
-    const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-retailer" });
-    if (!response?.ok) throw new Error(response?.message || "Retailer inspection failed.");
+    if (!granted) throw new Error("Retailer page access was not granted.");
+    const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-and-qualify" });
+    if (!response?.ok) throw new Error(response?.message || "Store inspection failed.");
     render(response.state);
     renderRetailerObservation(response.observation);
+    const observationSummary = $("#retailerMessage").textContent;
+    if (response.workflow === "qualification") {
+      $("#retailerMessage").textContent = response.rehearsal?.ok
+        ? `${observationSummary} Qualification passed: the exact offer reached the final pre-click boundary, and no click occurred.`
+        : `${observationSummary} Qualification stopped safely: ${response.message || String(response.rehearsal?.reason || "offer not verified").replaceAll("_", " ")}`;
+    } else {
+      $("#retailerMessage").textContent = `${observationSummary} This store is read-only, so inspection completed without a qualification rehearsal.`;
+    }
   } catch (error) {
-    $("#retailerMessage").textContent = error.message || "The retailer page could not be inspected.";
+    $("#retailerMessage").textContent = error.message || "The store page could not be inspected.";
     await check();
   } finally {
     button.disabled = false;
@@ -346,83 +302,13 @@ $("#shareCommunity").addEventListener("click", async () => {
     const response = await chrome.runtime.sendMessage({ type: "yoink:contribute-retailer" });
     if (!response?.ok) throw new Error(response?.message || "The evidence was not shared.");
     render(response.state);
-    if (retailerId === "target") renderTargetObservation(response.observation);
-    else renderRetailerObservation(response.observation);
+    renderRetailerObservation(response.observation);
     const disposition = response.receipt?.disposition === "deduped" ? "Deduplicated"
       : response.receipt?.disposition === "quarantined" ? "Held for review" : "Accepted";
     const selectionState = String(response.assertion?.selectedOffer?.selectionState || "unresolved").replaceAll("_", " ");
     $("#communityMessage").textContent = `${disposition}: one sanitized, read-only ${selectionState} assertion was recorded. No page text, account data, or offer token was sent.`;
   } catch (error) {
     $("#communityMessage").textContent = error.message || "The evidence could not be shared.";
-    await check();
-  } finally {
-    button.disabled = false;
-  }
-});
-$("#rehearseWalmart").addEventListener("click", async () => {
-  const button = $("#rehearseWalmart");
-  button.disabled = true;
-  $("#retailerMessage").textContent = "Running the Walmart production verifier to its no-click boundary…";
-  try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (retailerFromUrl(tabs[0]?.url) !== "walmart") throw new Error("Open an exact Walmart product page first.");
-    const granted = await chrome.permissions.request({ origins: RETAILER_ORIGINS.walmart });
-    if (!granted) throw new Error("Walmart page access was not granted.");
-    const response = await chrome.runtime.sendMessage({ type: "yoink:rehearse-walmart" });
-    if (!response?.ok) throw new Error(response?.message || "Walmart rehearsal failed.");
-    render(response.state);
-    renderRetailerObservation(response.observation);
-    $("#retailerMessage").textContent = response.rehearsal?.ok
-      ? "Walmart rehearsal passed. The exact shipping offer reached the final pre-click boundary, and no click occurred."
-      : `Walmart rehearsal stopped before click: ${String(response.rehearsal?.reason || "offer not verified").replaceAll("_", " ")}.`;
-  } catch (error) {
-    $("#retailerMessage").textContent = error.message || "The Walmart rehearsal could not run.";
-    await check();
-  } finally {
-    button.disabled = false;
-  }
-});
-$("#rehearseAmazon").addEventListener("click", async () => {
-  const button = $("#rehearseAmazon");
-  button.disabled = true;
-  $("#retailerMessage").textContent = "Running the Amazon production verifier to its no-click boundary…";
-  try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (retailerFromUrl(tabs[0]?.url) !== "amazon") throw new Error("Open an exact Amazon product page first.");
-    const granted = await chrome.permissions.request({ origins: RETAILER_ORIGINS.amazon });
-    if (!granted) throw new Error("Amazon page access was not granted.");
-    const response = await chrome.runtime.sendMessage({ type: "yoink:rehearse-amazon" });
-    if (!response?.ok) throw new Error(response?.message || "Amazon rehearsal failed.");
-    render(response.state);
-    renderRetailerObservation(response.observation);
-    $("#retailerMessage").textContent = response.rehearsal?.ok
-      ? "Amazon rehearsal passed. The exact first-party shipping offer reached the final pre-click boundary, and no click occurred."
-      : `Amazon rehearsal stopped before click: ${String(response.rehearsal?.reason || "offer not verified").replaceAll("_", " ")}.`;
-  } catch (error) {
-    $("#retailerMessage").textContent = error.message || "The Amazon rehearsal could not run.";
-    await check();
-  } finally {
-    button.disabled = false;
-  }
-});
-$("#rehearseBestBuy").addEventListener("click", async () => {
-  const button = $("#rehearseBestBuy");
-  button.disabled = true;
-  $("#retailerMessage").textContent = "Running the Best Buy production verifier to its no-click boundary…";
-  try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (retailerFromUrl(tabs[0]?.url) !== "bestbuy") throw new Error("Open an exact Best Buy product page first.");
-    const granted = await chrome.permissions.request({ origins: RETAILER_ORIGINS.bestbuy });
-    if (!granted) throw new Error("Best Buy page access was not granted.");
-    const response = await chrome.runtime.sendMessage({ type: "yoink:rehearse-bestbuy" });
-    if (!response?.ok) throw new Error(response?.message || "Best Buy rehearsal failed.");
-    render(response.state);
-    renderRetailerObservation(response.observation);
-    $("#retailerMessage").textContent = response.rehearsal?.ok
-      ? "Best Buy rehearsal passed. The exact Best Buy-sold, selected-shipping offer reached the final pre-click boundary, and no click occurred."
-      : `Best Buy rehearsal stopped before click: ${String(response.rehearsal?.reason || "offer not verified").replaceAll("_", " ")}.`;
-  } catch (error) {
-    $("#retailerMessage").textContent = error.message || "The Best Buy rehearsal could not run.";
     await check();
   } finally {
     button.disabled = false;
@@ -465,7 +351,7 @@ $("#syncTrackalacker").addEventListener("click", async () => {
 });
 $("#removeTarget").addEventListener("click", async () => {
   await chrome.permissions.remove({ origins: TARGET_ORIGINS });
-  $("#targetMessage").textContent = "Read-only Target access removed.";
+  $("#retailerMessage").textContent = "Target page access removed. It can be requested again from the unified button while a Target product page is active.";
   await check();
 });
 $("#checkUpdate").addEventListener("click", async () => {

@@ -166,6 +166,11 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
     await eventually(() => assert.equal((browser.document.querySelector("#productLinkPreview") as HTMLElement).hidden, false));
     assert.match(browser.document.querySelector("#productLinkPreview")?.textContent ?? "", /Amazon.*B0DCGQ6CJD/s);
     assert.match(browser.document.querySelector("#productLinkPreview")?.textContent ?? "", /Not accepted.*stock status, price, seller, fulfillment, or permission to purchase/s);
+    const previewOutbound = new URL((browser.document.querySelector("#productLinkPreview a.canonical") as HTMLAnchorElement).href);
+    assert.equal(previewOutbound.origin, "https://howl.link");
+    assert.equal(previewOutbound.searchParams.get("url"), "https://www.amazon.com/dp/B0DCGQ6CJD");
+    assert.equal(previewOutbound.searchParams.get("publisher_slug"), "collectwithdodo");
+    assert.equal(previewOutbound.searchParams.get("article_name"), "Amazon product preview");
     const confirmed = form.elements.namedItem("confirmed") as HTMLInputElement;
     confirmed.checked = true;
     confirmed.dispatchEvent(new browser.Event("input", { bubbles: true }));

@@ -78,7 +78,7 @@ const TARGET_OBSERVER_VERSION = "target-observer-v3";
 const RETAILER_OBSERVER_VERSIONS = {
   walmart: "walmart-observer-v5",
   amazon: "amazon-observer-v7",
-  bestbuy: "bestbuy-observer-v6",
+  bestbuy: "bestbuy-observer-v7",
   disney: "disney-observer-v1",
   ravensburger: "ravensburger-observer-v1",
   riot: "riot-observer-v1",
@@ -112,7 +112,7 @@ const TARGET_ADD_ADAPTER_VERSION = "target-add-v4";
 const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v5";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v7";
-const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v5";
+const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v6";
 const TARGET_CART_URL = "https://www.target.com/cart";
 const WALMART_CART_URL = "https://www.walmart.com/cart";
 const AMAZON_CART_URL = "https://www.amazon.com/gp/cart/view.html";
@@ -2866,8 +2866,8 @@ function targetRehearsalJob(observation) {
   };
 }
 
-async function rehearseTargetTab() {
-  const inspection = await inspectTargetTab();
+async function rehearseTargetTab(existingInspection = null) {
+  const inspection = existingInspection || await inspectTargetTab();
   const observation = inspection.observation;
   const job = targetRehearsalJob(observation);
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -2933,8 +2933,8 @@ function walmartRehearsalJob(observation) {
   };
 }
 
-async function rehearseWalmartTab() {
-  const inspection = await inspectRetailerTab();
+async function rehearseWalmartTab(existingInspection = null) {
+  const inspection = existingInspection || await inspectRetailerTab();
   const observation = inspection.observation;
   const job = walmartRehearsalJob(observation);
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -3003,8 +3003,8 @@ function amazonRehearsalJob(observation) {
   };
 }
 
-async function rehearseAmazonTab() {
-  const inspection = await inspectRetailerTab();
+async function rehearseAmazonTab(existingInspection = null) {
+  const inspection = existingInspection || await inspectRetailerTab();
   const observation = inspection.observation;
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Amazon.");
@@ -3120,8 +3120,8 @@ function bestBuyRehearsalJob(observation) {
   };
 }
 
-async function rehearseBestBuyTab() {
-  const inspection = await inspectRetailerTab();
+async function rehearseBestBuyTab(existingInspection = null) {
+  const inspection = existingInspection || await inspectRetailerTab();
   const observation = inspection.observation;
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Best Buy.");
@@ -3195,6 +3195,51 @@ async function rehearseBestBuyTab() {
     observation,
     rehearsal: { ok: passed, reason: reasonCode, trialId: payload.trial?.id || "" }
   };
+}
+
+async function inspectAndQualifyActiveTab() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const identity = canonicalRetailerIdentity(tabs[0]?.url);
+  if (!identity) throw new Error("Open an exact supported retailer product page first.");
+  const guardedRehearsals = {
+    target: rehearseTargetTab,
+    walmart: rehearseWalmartTab,
+    amazon: rehearseAmazonTab,
+    bestbuy: rehearseBestBuyTab
+  };
+  const inspection = identity.retailerId === "target"
+    ? await inspectTargetTab()
+    : await inspectRetailerTab();
+  const rehearsal = guardedRehearsals[identity.retailerId];
+  if (!rehearsal) {
+    return {
+      ...inspection,
+      retailerId: identity.retailerId,
+      workflow: "inspection",
+      qualificationAvailable: false
+    };
+  }
+  try {
+    return {
+      ...await rehearsal(inspection),
+      retailerId: identity.retailerId,
+      workflow: "qualification",
+      qualificationAvailable: true
+    };
+  } catch (error) {
+    return {
+      ...inspection,
+      retailerId: identity.retailerId,
+      workflow: "qualification",
+      qualificationAvailable: true,
+      rehearsal: {
+        ok: false,
+        reason: safeReasonCode(inspection.diagnostic?.reasonCode || "offer_not_actionable"),
+        trialId: ""
+      },
+      message: error instanceof Error ? error.message : "The current offer did not qualify."
+    };
+  }
 }
 
 function normalizedLeaseJob(value) {
@@ -3740,6 +3785,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const inspectAndQualify = message?.type === "yoink:inspect-and-qualify";
   const inspection = message?.type === "yoink:inspect-target";
   const walmartDrawInspection = message?.type === "yoink:inspect-walmart-draw";
   const retailerInspection = message?.type === "yoink:inspect-retailer";
@@ -3757,13 +3803,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     "yoink:trackalacker-sync-item",
     "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
-  const pageOperation = inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || contentOperation;
+  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : message?.type === "yoink:pair-device"
       ? pairDevice(message.code)
       : message?.type === "yoink:forget-device"
         ? forgetDevice()
+        : inspectAndQualify
+          ? inspectAndQualifyActiveTab()
         : inspection
           ? inspectTargetTab()
           : walmartDrawInspection

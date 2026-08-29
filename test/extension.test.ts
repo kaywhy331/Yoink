@@ -82,6 +82,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /pendingCredential/);
   assert.match(background, /walmartDrawReadOnly: true/);
   assert.match(background, /yoink:inspect-walmart-draw/);
+  assert.match(background, /yoink:inspect-and-qualify/);
   assert.match(background, /devices\/self\/walmart-draw\/scans/);
   assert.doesNotMatch(background, /draw\.www\.walmart\.com|\/draw\/enter/);
   assert.match(background, /Ed25519/);
@@ -109,11 +110,14 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(popup, /chrome\.permissions\.remove/);
   assert.match(popup, /Share current page evidence once|yoink:contribute-retailer/);
   assert.match(popup, /yoink:inspect-walmart-draw/);
+  assert.match(popup, /yoink:inspect-and-qualify/);
   assert.match(popup, /preorder read-only/);
   assert.match(popup, /high-demand gate closed/);
   assert.match(popup, /POPUP_RUNTIME_CONFIG\.appOrigin/);
   assert.doesNotMatch(popup, /http:\/\/127\.0\.0\.1:32991/);
   assert.doesNotMatch(popupHtml, /Checking local app/);
+  assert.match(popupHtml, /id="inspectAndQualify"/);
+  assert.doesNotMatch(popupHtml, /id="(?:inspectTarget|rehearseTarget|inspectRetailer|rehearseWalmart|rehearseAmazon|rehearseBestBuy)"/);
   assert.ok(popupHtml.indexOf('src="runtime-config.js"') < popupHtml.indexOf('src="popup.js"'));
   assert.match(runtimeConfig, /profile: "local"/);
   assert.match(runtimeConfig, /localPackageUpdates: true/);

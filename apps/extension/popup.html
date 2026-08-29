@@ -32,12 +32,10 @@
       <button id="syncTrackalacker" class="wide stacked" type="button">Sync followed library</button>
     </section>
     <section class="shadow-card" aria-labelledby="retailerTitle">
-      <div class="shadow-heading"><div><strong id="retailerTitle">Retailer evidence</strong><p>Four guarded lanes · nine additional read-only stores</p></div><span class="read-only">BOUNDED</span></div>
-      <p id="retailerMessage">Open an exact retailer product page to capture a sanitized, non-mutating offer observation.</p>
-      <button id="inspectRetailer" class="primary wide" type="button">Inspect current store page</button>
-      <button id="rehearseWalmart" class="wide stacked" type="button">Run Walmart qualification rehearsal</button>
-      <button id="rehearseAmazon" class="wide stacked" type="button">Run Amazon qualification rehearsal</button>
-      <button id="rehearseBestBuy" class="wide stacked" type="button">Run Best Buy qualification rehearsal</button>
+      <div class="shadow-heading"><div><strong id="retailerTitle">Inspect and qualify</strong><p id="targetAccess">Auto-detects the active store · Target access on demand</p></div><span class="read-only">ADAPTIVE</span></div>
+      <p id="retailerMessage">Open an exact retailer product page. Yoink will detect the store, inspect once, and run its no-click qualification when that store has a guarded lane.</p>
+      <button id="inspectAndQualify" class="primary wide" type="button">Inspect and qualify current product</button>
+      <button id="removeTarget" class="text-button" type="button" hidden>Remove Target access</button>
     </section>
     <section class="shadow-card" aria-labelledby="walmartDrawTitle">
       <div class="shadow-heading"><div><strong id="walmartDrawTitle">Walmart Collectibles Draw</strong><p>Exact drawing discovery · manual entry only</p></div><span class="read-only">READ ONLY</span></div>
@@ -48,13 +46,6 @@
       <div class="shadow-heading"><div><strong id="communityTitle">Community evidence</strong><p>Explicit opt-in · read-only · advisory</p></div><span class="read-only">PRIVATE PILOT</span></div>
       <p id="communityMessage">Enable one store in Yoink first. This button shares one server-validated stock assertion; sharing never runs automatically.</p>
       <button id="shareCommunity" class="primary wide" type="button">Share current page evidence once</button>
-    </section>
-    <section class="shadow-card" aria-labelledby="targetTitle">
-      <div class="shadow-heading"><div><strong id="targetTitle">Target safety check</strong><p id="targetAccess">Target page access not granted</p></div><span class="read-only">GUARDED</span></div>
-      <p id="targetMessage">Open an exact Target product page, then inspect its visible offer once.</p>
-      <button id="inspectTarget" class="primary wide" type="button">Enable and inspect Target</button>
-      <button id="rehearseTarget" class="wide stacked" type="button">Run safe qualification rehearsal</button>
-      <button id="removeTarget" class="text-button" type="button" hidden>Remove Target access</button>
     </section>
     <section class="shadow-card" aria-labelledby="updateTitle">
       <div class="shadow-heading"><div><strong id="updateTitle">Companion updates</strong><p id="updateVersions">Checking versions…</p></div><span class="read-only" id="updateChannel">LOCAL</span></div>

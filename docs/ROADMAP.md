@@ -1,6 +1,22 @@
 # Yoink roadmap
 
-## Shipped through 1.8.0
+## Shipped through 1.9.0
+
+### Domain-aware qualification and affiliate navigation (1.9.0)
+
+- One companion action detects the active exact retailer URL, captures one
+  observation, and dispatches the guarded Target, Walmart, Amazon, or Best Buy
+  no-click verifier; the nine other supported stores complete a read-only
+  inspection through that same action
+- Best Buy observer v7 treats a passive demand badge as offer context rather
+  than a queue, while a real demand dialog remains closed; a primary plus
+  sticky Add layout is recoverable only with one exact SKU, price, seller
+  class, selected fulfillment, and non-sticky primary action
+- Best Buy add v6 and migration 51 retire earlier Best Buy activation so the
+  widened layout coverage cannot inherit mutation authority
+- Every user-dashboard retailer destination is a disclosed Howl ClickMate URL
+  carrying the exact destination, `collectwithdodo` publisher slug, readable
+  article name, and canonical dashboard URL
 
 ### Exact fulfillment and self-healing retailer layouts (1.8.0)
 
@@ -3223,10 +3239,10 @@ quantity limits, queue lifecycle, cancellation, and order reconciliation.
   while explicit checkout ASIN inputs take precedence over variation swatches
 - Bounded Amazon hydration retries plus authenticated adapter diagnostics for
   observations, no-click rehearsals, and guarded live verification
-- Qualification-ready `bestbuy-add-v5`: explicit Best Buy-sold, exact selected
+- Qualification-ready `bestbuy-add-v6`: explicit Best Buy-sold, exact selected
   Shipping or Pickup, exact-SKU, quantity-one add-to-cart only; live activation remains
   evidence-gated
-- Best Buy observer v6 supports current `/product/.../sku/<SKU>`, compact
+- Best Buy observer v7 supports current `/product/.../sku/<SKU>`, compact
   `/product/.../<SKU>`, legacy `/site/.../<SKU>.p`, and consistent `skuId`
   identities while rejecting opaque product tokens and conflicting SKU
   evidence. Current `data-testid`, `data-test-id`, automation, native-button,
@@ -3239,8 +3255,8 @@ quantity limits, queue lifecycle, cancellation, and order reconciliation.
   mismatch rejection, high-demand/interactive-block restraint, empty-cart preflight,
   no-click rehearsal, at-most-once click, exact cart proof, independent
   capability, bounded hydration retries, and sanitized adapter diagnostics
-- Migration 19 retires every prior Best Buy qualification and closes inherited
-  execution support; current v6/v5 evidence, rehearsal, hash
+- Migration 51 retires every prior Best Buy qualification and closes inherited
+  execution support; current v7/v6 evidence, rehearsal, hash
   review, and explicit activation are required
 - An older exact-SKU repair incident closes only when a strictly newer packaged
   adapter later returns a deliberate pass, recovery, or manual rejection for

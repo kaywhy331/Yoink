@@ -1135,7 +1135,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v7",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v5"
+          bestBuyAddAdapterVersion: "bestbuy-add-v6"
         }
       })
     });
@@ -1174,7 +1174,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v7",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v5"
+          bestBuyAddAdapterVersion: "bestbuy-add-v6"
         }
       })
     });
@@ -1194,7 +1194,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         observedAt: new Date().toISOString(),
         retailerId: "bestbuy",
         retailerSku: "6612619",
-        adapterVersion: "bestbuy-observer-v6",
+        adapterVersion: "bestbuy-observer-v7",
         operation: "observe",
         outcome: "failed",
         failureStage: "add_control",
@@ -1635,7 +1635,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           Authorization: `Bearer ${paired.token}`
         },
         body: JSON.stringify({
-          adapterVersion: "bestbuy-observer-v6",
+          adapterVersion: "bestbuy-observer-v7",
           contractVersion: 1,
           observedAt: new Date().toISOString(),
           pageKind: "product",
@@ -1663,8 +1663,8 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v5",
-        observerVersion: "bestbuy-observer-v6",
+        adapterVersion: "bestbuy-add-v6",
+        observerVersion: "bestbuy-observer-v7",
         contractVersion: 1,
         shadowObservationId: bestBuyShadowIds[0],
         observedAt: new Date().toISOString(),
@@ -1681,9 +1681,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v5",
+        adapterVersion: "bestbuy-add-v6",
         evidenceHash: bestBuyReadySnapshot.bestBuyQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_BESTBUY_ADD_V5"
+        confirmation: "ENABLE_BESTBUY_ADD_V6"
       })
     });
     assert.equal(bestBuyActivation.status, 200);

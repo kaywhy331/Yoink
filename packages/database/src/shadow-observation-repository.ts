@@ -1274,7 +1274,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional fail-closed coverage; bestbuy-add-v5 rejects every marketplace seller.",
+        detail: "Optional fail-closed coverage; bestbuy-add-v6 rejects every marketplace seller.",
         required: 1,
         requiredForQualification: false
       },
@@ -1288,7 +1288,7 @@ export class ShadowObservationRepository {
       {
         id: "pickup_actionable",
         label: "Pickup fulfillment",
-        detail: "Optional fail-closed coverage; bestbuy-add-v5 rejects pickup.",
+        detail: "Optional fail-closed coverage; bestbuy-add-v6 rejects pickup.",
         required: 1,
         requiredForQualification: false
       },

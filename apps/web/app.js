@@ -1811,7 +1811,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_BESTBUY_ADD_V5"
+          confirmation: "ENABLE_BESTBUY_ADD_V6"
         })
       });
       await refresh();

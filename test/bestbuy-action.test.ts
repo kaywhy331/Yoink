@@ -136,7 +136,7 @@ test("Best Buy safely self-heals unique control and price selector drift", () =>
   assert.equal(prepareBestBuyAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Best Buy v5 requires an exact selected Shipping or explicit Pickup offer", () => {
+test("Best Buy v6 requires an exact selected Shipping or explicit Pickup offer", () => {
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
@@ -170,7 +170,7 @@ test("Best Buy v5 requires an exact selected Shipping or explicit Pickup offer",
   );
 });
 
-test("Best Buy v5 reaches the no-click boundary on the modern fulfillment layout", () => {
+test("Best Buy v6 reaches the no-click boundary on the modern fulfillment layout", () => {
   const url = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const document = fixture("bestbuy-modern-first-party.html", url);
   let clicks = 0;
@@ -184,6 +184,33 @@ test("Best Buy v5 reaches the no-click boundary on the modern fulfillment layout
   assert.equal(result.ok, true);
   assert.equal(result.ok && result.wouldClick, true);
   assert.equal(clicks, 0);
+});
+
+test("Best Buy v6 uses the primary action when one exact offer also renders a sticky duplicate", () => {
+  const url = "https://www.bestbuy.com/product/riftbound-origins-ahri-playmat/J3GWY596JF/sku/6677244";
+  const document = fixture("bestbuy-primary-and-sticky-add.html", url);
+  const primary = document.querySelector("[data-testid='purchase-controls'] button");
+  const sticky = document.querySelector("[data-testid='sticky-product-action'] button");
+  let primaryClicks = 0;
+  let stickyClicks = 0;
+  primary?.addEventListener("click", () => { primaryClicks += 1; });
+  sticky?.addEventListener("click", () => { stickyClicks += 1; });
+  const exactJob = job({
+    retailerSku: "6677244",
+    canonicalUrl: url,
+    maxUnitPriceCents: 2499,
+    maxOrderTotalCents: 2499
+  });
+  const rehearsal = rehearseBestBuyAdd(document, url, exactJob, NOW);
+  assert.equal(rehearsal.ok, true);
+  assert.equal(primaryClicks, 0);
+  assert.equal(stickyClicks, 0);
+  const prepared = prepareBestBuyAdd(document, url, exactJob, NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  assert.equal(commitBestBuyAdd(document, url, exactJob, prepared.authorizationId, NOW + 100).ok, true);
+  assert.equal(primaryClicks, 1);
+  assert.equal(stickyClicks, 0);
 });
 
 test("Best Buy cart preflight requires emptiness and post-add proof requires one exact line", () => {

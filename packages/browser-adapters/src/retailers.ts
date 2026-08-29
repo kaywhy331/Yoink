@@ -681,7 +681,19 @@ export function retailerInteractiveBlock(document: Document, urlValue: string): 
     || /\bjoin (?:walmart\+|prime)\b.{0,80}\b(?:to|in order to)\b.{0,80}\b(?:add|buy|purchase|continue)\b/i.test(page)) return "membership";
   if (/you(?:’|')?re in line|virtual queue|waiting room|place in line/i.test(page)
     || (() => { try { return new URL(urlValue).pathname === "/qp"; } catch { return false; } })()) return "queue";
-  if (bestBuyPage && /\b(?:high[ -]demand product|this item is (?:currently )?in high demand|due to high demand)\b/i.test(page)) {
+  const bestBuyDemandGate = bestBuyPage ? queryVisible(document, [
+    "[role='dialog']",
+    "dialog[open]",
+    "[data-testid*='high-demand-gate' i]",
+    "[data-testid*='demand-gate' i]",
+    "[data-automation-id*='high-demand-gate' i]",
+    "[class*='high-demand-gate' i]"
+  ]) : null;
+  const bestBuyDemandGateText = observableText(bestBuyDemandGate, 12_000);
+  if (bestBuyDemandGate
+    && /\b(?:high[ -]demand product|this item is (?:currently )?in high demand|due to high demand)\b/i.test(bestBuyDemandGateText)
+    && (bestBuyDemandGate.matches("[role='dialog'], dialog[open]")
+      || /\b(?:continue|verify|access|try again|temporarily unavailable|reserve)\b/i.test(bestBuyDemandGateText))) {
     return "high_demand";
   }
   if (retailerSecurityChallenge(document)) return "unknown";
@@ -1505,20 +1517,29 @@ function bestBuySkuEvidence(root: Element): Set<string> {
     const candidate = String(value || "").trim();
     if (CONFIGS.bestbuy.skuPattern.test(candidate)) skus.add(candidate);
   };
-  for (const element of [root, ...root.querySelectorAll(
+  const productElements = [root, ...root.querySelectorAll(
     "[data-sku-id], [data-sku], [data-product-id], input[name*='sku' i]"
-  )]) {
+  )].filter((element) => !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+  for (const element of productElements) {
     add(element.getAttribute("data-sku-id"));
     add(element.getAttribute("data-sku"));
     add(element.getAttribute("data-product-id"));
     if (element.tagName === "INPUT") add((element as HTMLInputElement).value);
   }
-  for (const anchor of root.querySelectorAll("a[href]")) {
+  for (const anchor of [...root.querySelectorAll("a[href]")]
+    .filter((element) => !element.closest(BESTBUY_MERCHANDISING_SCOPE))) {
     let href = "";
     try { href = new URL(anchor.getAttribute("href") || "", root.ownerDocument.baseURI || "https://www.bestbuy.com").href; } catch { href = ""; }
     add(extractRetailerSku("bestbuy", href));
   }
-  for (const match of observableText(root, 40_000).matchAll(/\bSKU\s*:?\s*(\d{5,20})\b/gi)) add(match[1]);
+  const textCandidates = [root, ...root.querySelectorAll(
+    "[data-testid*='sku' i], [class*='sku' i], p, span, dt, dd"
+  )].filter((element) => visible(element)
+    && !element.closest(BESTBUY_MERCHANDISING_SCOPE)
+    && element.childElementCount <= 8);
+  for (const element of textCandidates.slice(0, 500)) {
+    for (const match of observableText(element, 1_000).matchAll(/\bSKU\s*:?\s*(\d{5,20})\b/gi)) add(match[1]);
+  }
   return skus;
 }
 
@@ -1542,13 +1563,6 @@ function bestBuyFulfillment(root: Element, control: Element): "shipping" | "pick
       observableText(scope, 2_000)
     ].filter(Boolean).join(" ");
   };
-  const selected = [...root.querySelectorAll(
-    "[aria-selected='true'], [aria-checked='true'], [data-selected='true'], [data-state='selected'], input:checked"
-  )].filter(visible).map(evidenceFor);
-  const selectedShipping = selected.some((value) => CONFIGS.bestbuy.shippingPattern.test(value));
-  const selectedPickup = selected.some((value) => CONFIGS.bestbuy.pickupPattern.test(value));
-  if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
-
   const directScope = control.closest(
     "[data-fulfillment], [data-fulfillment-type], [data-testid*='shipping' i], [data-testid*='pickup' i], [class*='shipping-option' i], [class*='pickup-option' i]"
   );
@@ -1558,7 +1572,78 @@ function bestBuyFulfillment(root: Element, control: Element): "shipping" | "pick
     const pickup = CONFIGS.bestbuy.pickupPattern.test(evidence);
     if (shipping !== pickup) return shipping ? "shipping" : "pickup";
   }
+  const selected = [...root.querySelectorAll(
+    "[aria-selected='true'], [aria-checked='true'], [data-selected='true'], [data-state='selected'], input:checked"
+  )].filter(visible).map(evidenceFor);
+  const selectedShipping = selected.some((value) => CONFIGS.bestbuy.shippingPattern.test(value));
+  const selectedPickup = selected.some((value) => CONFIGS.bestbuy.pickupPattern.test(value));
+  if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
   return "unknown";
+}
+
+const BESTBUY_SECONDARY_ACTION_SCOPE = [
+  "[data-testid*='sticky' i]",
+  "[data-automation-id*='sticky' i]",
+  "[class*='sticky' i]",
+  "[class*='floating' i]",
+  "[class*='mobile-drawer' i]"
+].join(", ");
+
+function bestBuyBoundPrice(root: Element, retailer: RetailerObserverConfig): number | null {
+  for (const selector of retailer.priceSelectors) {
+    const prices = new Set(
+      [...root.querySelectorAll(selector)]
+        .filter((element) => (element.tagName === "META" || visible(element))
+          && !element.closest(BESTBUY_MERCHANDISING_SCOPE))
+        .map(parseRetailerPriceElement)
+        .filter((price): price is number => price !== null)
+    );
+    if (prices.size > 0) return prices.size === 1 ? [...prices][0] ?? null : null;
+  }
+  return null;
+}
+
+function bestBuySellerUnambiguous(root: Element, retailer: RetailerObserverConfig): boolean {
+  const evidence = [...root.querySelectorAll(retailer.sellerSelectors.join(", "))]
+    .filter((element) => visible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE))
+    .map((element) => sellerElementText(element, 2_000))
+    .join(" ");
+  const scoped = evidence || observableText(root, 30_000);
+  const firstParty = retailer.firstPartyPattern.test(scoped);
+  const marketplace = retailer.marketplacePattern.test(scoped);
+  return firstParty !== marketplace;
+}
+
+function recoveredBestBuyOfferScope(
+  document: Document,
+  retailer: RetailerObserverConfig,
+  expectedSku: string
+): BestBuyScopedControl | null {
+  const controls = candidateControls(document, retailer)
+    .filter((control) => !control.closest(BESTBUY_MERCHANDISING_SCOPE));
+  if (controls.length < 2 || controls.length > 4) return null;
+  const nonSecondary = controls.filter((control) => !control.closest(BESTBUY_SECONDARY_ACTION_SCOPE));
+  const primary = nonSecondary.filter((control) => Boolean(control.closest(BESTBUY_PRIMARY_SCOPE)));
+  const pool = primary.length > 0 ? primary : nonSecondary;
+  if (pool.length !== 1 || !pool[0]) return null;
+  const control = pool[0];
+  let root = control.parentElement;
+  for (let depth = 0; depth < 18 && root; depth += 1) {
+    if (["BODY", "HTML"].includes(root.tagName)) break;
+    if (bestBuyBoundPrice(root, retailer) !== null
+      && bestBuySellerUnambiguous(root, retailer)
+      && bestBuyQuantityOne(root)) {
+      const fulfillment = bestBuyFulfillment(root, control);
+      const skus = bestBuySkuEvidence(root);
+      if (fulfillment !== "unknown"
+        && skus.size === 1
+        && skus.has(expectedSku)) {
+        return { control, fulfillment, offerRoot: root };
+      }
+    }
+    root = root.parentElement;
+  }
+  return null;
 }
 
 function bestBuyQuantityOne(root: Element): boolean {
@@ -1609,7 +1694,11 @@ function selectedBestBuyControl(
   const scoped = candidateControls(document, retailer)
     .map((control) => bestBuyOfferScope(control, retailer, expectedSku))
     .filter((candidate): candidate is BestBuyScopedControl => Boolean(candidate));
-  const matching = scoped.filter((candidate) => candidate.fulfillment === expectedFulfillment);
+  const recovered = scoped.length === 0
+    ? recoveredBestBuyOfferScope(document, retailer, expectedSku)
+    : null;
+  const matching = [...scoped, ...(recovered ? [recovered] : [])]
+    .filter((candidate) => candidate.fulfillment === expectedFulfillment);
   return matching.length === 1 && matching[0]
     ? matching[0]
     : { control: null, fulfillment: "unknown", offerRoot: null };

@@ -3446,5 +3446,16 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
     sql: `
       ALTER TABLE missions ADD COLUMN quick_add_profile_id TEXT NOT NULL DEFAULT '';
     `
+  },
+  {
+    version: 51,
+    name: "bestbuy_v7_v6_requalification_boundary",
+    sql: `
+      UPDATE retailers SET execution_supported = 0 WHERE id = 'bestbuy';
+      UPDATE listings SET execution_supported = 0 WHERE retailer_id = 'bestbuy';
+      UPDATE retailer_adapter_qualifications
+        SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE retailer_id = 'bestbuy';
+    `
   }
 ]);

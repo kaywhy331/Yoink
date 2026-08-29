@@ -143,6 +143,59 @@ test("a file database reopens idempotently", () => {
   }
 });
 
+test("migration 51 retires prior Best Buy qualification after the v7 observer and v6 action change", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-bestbuy-v6-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new YoinkDatabase(filePath);
+    legacy.run("DELETE FROM schema_migrations WHERE version = 51");
+    legacy.run("UPDATE retailers SET execution_supported = 1 WHERE id = 'bestbuy'");
+    legacy.exec(`
+      INSERT INTO product_families(id, title, brand, created_at, updated_at)
+        VALUES ('family_bestbuy_v6_fixture', 'Best Buy v6 fixture', '', '2026-08-29T00:00:00.000Z', '2026-08-29T00:00:00.000Z');
+      INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+        VALUES ('variant_bestbuy_v6_fixture', 'family_bestbuy_v6_fixture', 'Best Buy v6 fixture', '{}', '2026-08-29T00:00:00.000Z', '2026-08-29T00:00:00.000Z');
+      INSERT INTO listings(
+        id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+        execution_supported, currency, created_at, updated_at
+      ) VALUES (
+        'listing_bestbuy_v6_fixture', 'variant_bestbuy_v6_fixture', 'bestbuy', '6677244',
+        'https://www.bestbuy.com/site/-/6677244.p', 'in_stock', 1, 'USD',
+        '2026-08-29T00:00:00.000Z', '2026-08-29T00:00:00.000Z'
+      );
+      INSERT OR REPLACE INTO retailer_adapter_qualifications(
+        tenant_id, user_id, retailer_id, adapter_version, highest_action,
+        status, evidence_hash, qualified_at, updated_at
+      ) VALUES (
+        'tenant_local', 'user_local', 'bestbuy', 'bestbuy-add-v5', 'add_to_cart',
+        'qualified', 'bestbuy-v5-evidence', '2026-08-29T00:00:00.000Z', '2026-08-29T00:00:00.000Z'
+      );
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ name: string }>(
+        "SELECT name FROM schema_migrations WHERE version = 51"
+      )?.name, "bestbuy_v7_v6_requalification_boundary");
+      assert.equal(upgraded.get<{ execution_supported: number }>(
+        "SELECT execution_supported FROM retailers WHERE id = 'bestbuy'"
+      )?.execution_supported, 0);
+      assert.equal(upgraded.get<{ execution_supported: number }>(
+        "SELECT execution_supported FROM listings WHERE id = 'listing_bestbuy_v6_fixture'"
+      )?.execution_supported, 0);
+      assert.equal(upgraded.get<{ status: string }>(
+        "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'bestbuy'"
+      )?.status, "retired");
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("an existing 0.2 database upgrades transactionally to shadow observations and add rehearsals", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-db-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");

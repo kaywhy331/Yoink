@@ -230,6 +230,14 @@ test("guided dashboard setup does not create a plan before review and submits ex
   try {
     browser.eval(`${script}\n//# sourceURL=user-dashboard-test.js`);
     await eventually(() => assert.ok(browser.document.querySelector("[data-quick-add]")));
+    const outbound = new URL((browser.document.querySelector("#productList a.canonical") as HTMLAnchorElement).href);
+    assert.equal(outbound.origin, "https://howl.link");
+    assert.equal(outbound.pathname, "/link");
+    assert.equal(outbound.searchParams.get("url"), product.canonicalUrl);
+    assert.equal(outbound.searchParams.get("publisher_slug"), "collectwithdodo");
+    assert.equal(outbound.searchParams.get("article_name"), product.title);
+    assert.equal(outbound.searchParams.get("article_url"), "http://127.0.0.1:32991/");
+    assert.match((browser.document.querySelector("#productList a.canonical") as HTMLAnchorElement).rel, /\bsponsored\b/);
     assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /12 records/);
     assert.equal((browser.document.querySelector("#privacyExportLink") as HTMLAnchorElement).pathname, "/api/v1/user/privacy/export");
     assert.equal(posts.length, 0);
@@ -317,6 +325,10 @@ test("guided dashboard setup does not create a plan before review and submits ex
     (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
     const editDialog = browser.document.querySelector("#planDialog") as HTMLDialogElement;
     await eventually(() => assert.equal(editDialog.hasAttribute("open"), true));
+    const targetOutbound = new URL((browser.document.querySelector("#targetEditors a.canonical") as HTMLAnchorElement).href);
+    assert.equal(targetOutbound.origin, "https://howl.link");
+    assert.equal(targetOutbound.searchParams.get("url"), product.canonicalUrl);
+    assert.equal(targetOutbound.searchParams.get("publisher_slug"), "collectwithdodo");
     assert.match(browser.document.querySelector("#planExecutionNote")?.textContent ?? "", /safety bound/);
     const editForm = browser.document.querySelector("#planForm") as HTMLFormElement;
     editForm.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));

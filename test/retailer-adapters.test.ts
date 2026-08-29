@@ -917,7 +917,7 @@ test("Best Buy observer recognizes modern fulfillment while keeping pickup an ex
   assert.equal(selectorMiss.diagnostic.reasonCode, "add_control_selector_miss");
 });
 
-test("Best Buy v6 classifies the supplied preorder, high-demand, and pickup-selected layouts without widening mutation scope", () => {
+test("Best Buy v7 distinguishes passive demand badges from real gates and preserves pickup opt-in", () => {
   const preorderUrl = "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-reality-fracture-play-booster-box-30-packs/JJ8VP7Z65T/sku/6678193";
   const preorderDocument = fixture("bestbuy-reality-fracture-preorder.html", preorderUrl);
   const preorder = observeRetailerOffer(preorderDocument, preorderUrl, "bestbuy", "6678193", "either", NOW);
@@ -952,13 +952,22 @@ test("Best Buy v6 classifies the supplied preorder, high-demand, and pickup-sele
     price: 1449,
     seller: "Best Buy",
     fulfillment: "shipping",
-    actionable: false,
-    block: "high_demand"
+    actionable: true,
+    block: ""
   });
   const highDemandAttempt = collectRetailerShadowAttempt(highDemandDocument, highDemandUrl, "bestbuy", "either");
-  assert.equal(highDemandAttempt.diagnostic.outcome, "rejected");
-  assert.equal(highDemandAttempt.diagnostic.failureStage, "interactive_block");
-  assert.equal(highDemandAttempt.diagnostic.reasonCode, "interactive_high_demand");
+  assert.equal(highDemandAttempt.diagnostic.outcome, "passed");
+  assert.equal(highDemandAttempt.diagnostic.failureStage, "complete");
+
+  const gatedUrl = "https://www.bestbuy.com/product/riftbound-league-of-legends-trading-card-game-unleashed-champion-deck-vex/J3GWY59Q5Z/sku/6669286";
+  const gatedDocument = fixture("bestbuy-demand-gate.html", gatedUrl);
+  const gated = observeRetailerOffer(gatedDocument, gatedUrl, "bestbuy", "6669286", "shipping", NOW);
+  assert.equal(gated.interactiveBlock, "high_demand");
+  assert.equal(gated.addControlActionable, false);
+  const gatedAttempt = collectRetailerShadowAttempt(gatedDocument, gatedUrl, "bestbuy", "shipping");
+  assert.equal(gatedAttempt.diagnostic.outcome, "rejected");
+  assert.equal(gatedAttempt.diagnostic.failureStage, "interactive_block");
+  assert.equal(gatedAttempt.diagnostic.reasonCode, "interactive_high_demand");
 
   const pickupCases = [
     ["6612619", "bestbuy-pikachu-pickup-selected.html", "https://www.bestbuy.com/product/ultra-pro-pikachu-playmat-for-pokemon/J79X4L6RHZ/sku/6612619", 1949],
@@ -976,6 +985,63 @@ test("Best Buy v6 classifies the supplied preorder, high-demand, and pickup-sele
     assert.equal(retailerAddControl(document, url, "bestbuy", sku, "shipping"), null, sku);
     assert.ok(retailerAddControl(document, url, "bestbuy", sku, "pickup"), sku);
   }
+});
+
+test("Best Buy v7 binds one primary action when the same exact offer also renders a sticky duplicate", () => {
+  const demandUrl = "https://www.bestbuy.com/product/riftbound-league-of-legends-trading-card-game-unleashed-champion-deck-vex/J3GWY59Q5Z/sku/6669286";
+  const passiveDemand = fixture("bestbuy-passive-demand-badge.html", demandUrl);
+  const demandObservation = observeRetailerOffer(passiveDemand, demandUrl, "bestbuy", "6669286", "shipping", NOW);
+  assert.deepEqual({
+    price: demandObservation.unitPriceCents,
+    seller: demandObservation.sellerName,
+    fulfillment: demandObservation.fulfillment,
+    actionable: demandObservation.addControlActionable,
+    block: demandObservation.interactiveBlock
+  }, {
+    price: 1999,
+    seller: "Best Buy",
+    fulfillment: "shipping",
+    actionable: true,
+    block: ""
+  });
+
+  const duplicateUrl = "https://www.bestbuy.com/product/riftbound-origins-ahri-playmat/J3GWY596JF/sku/6677244";
+  const duplicateDocument = fixture("bestbuy-primary-and-sticky-add.html", duplicateUrl);
+  const duplicateObservation = observeRetailerOffer(
+    duplicateDocument,
+    duplicateUrl,
+    "bestbuy",
+    "6677244",
+    "shipping",
+    NOW
+  );
+  assert.deepEqual({
+    price: duplicateObservation.unitPriceCents,
+    seller: duplicateObservation.sellerName,
+    fulfillment: duplicateObservation.fulfillment,
+    actionable: duplicateObservation.addControlActionable
+  }, {
+    price: 2499,
+    seller: "Best Buy",
+    fulfillment: "shipping",
+    actionable: true
+  });
+  const layout = retailerAdapterLayoutEvidence(duplicateDocument, duplicateUrl, "bestbuy", "6677244");
+  assert.equal(layout.addControlCount, 2);
+  assert.equal(layout.genericAddIntentCount, 2);
+  assert.equal(layout.scopedControlCount, 1);
+  assert.ok(retailerAddControl(duplicateDocument, duplicateUrl, "bestbuy", "6677244", "shipping"));
+
+  const unsafeDuplicate = fixture("bestbuy-first-party.html", "https://www.bestbuy.com/product/example/J2FPJKS4SK/sku/6588149");
+  const duplicateControl = unsafeDuplicate.querySelector("[data-testid='buy-box'] button")?.cloneNode(true);
+  if (duplicateControl) unsafeDuplicate.querySelector("[data-testid='buy-box']")?.append(duplicateControl);
+  assert.equal(retailerAddControl(
+    unsafeDuplicate,
+    "https://www.bestbuy.com/product/example/J2FPJKS4SK/sku/6588149",
+    "bestbuy",
+    "6588149",
+    "shipping"
+  ), null);
 });
 
 test("Best Buy in-store-only products remain manual unknown evidence rather than global out-of-stock", () => {
