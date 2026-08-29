@@ -352,7 +352,20 @@ import {
   postgresSignalIngressCompositionCapabilityProjection,
   verifyPostgresSignalIngressCompositionBoundary
 } from "../packages/database/src/postgres-signal-ingress-composition.js";
+import {
+  POSTGRES_SIGNAL_HANDLER_COMPOSITION_CHAIN_LENGTH,
+  POSTGRES_SIGNAL_HANDLER_COMPOSITION_CHAIN_ORDER,
+  POSTGRES_SIGNAL_HANDLER_COMPOSITION_CONTRACT_VERSION,
+  POSTGRES_SIGNAL_HANDLER_COMPOSITION_DELEGATED_BOUNDARIES,
+  POSTGRES_SIGNAL_HANDLER_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES,
+  POSTGRES_SIGNAL_HANDLER_COMPOSITION_OWN_FAMILIES,
+  POSTGRES_SIGNAL_HANDLER_COMPOSITION_OWN_FAMILY_COUNT,
+  buildPostgresSignalHandlerCompositionManifest,
+  postgresSignalHandlerCompositionCapabilityProjection,
+  verifyPostgresSignalHandlerCompositionBoundary
+} from "../packages/database/src/postgres-signal-handler-composition.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { BACKGROUND_TASK_KINDS } from "../packages/domain/src/background-task.js";
 import { stableHash } from "../packages/domain/src/ids.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
 import {
@@ -1292,7 +1305,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
   };
 }
 
-test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, durable signal-ingress enqueue writing, bounded operator dead-letter inbox-reset writing, bounded notification-delivery ensure writing, and the complete signal-ingress repository composition", {
+test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, durable signal-ingress enqueue writing, bounded operator dead-letter inbox-reset writing, bounded notification-delivery ensure writing, the complete signal-ingress repository composition, and the complete signal-handler repository composition", {
   timeout: 2_400_000
 }, async () => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
@@ -25170,6 +25183,376 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       /no longer matches its verified receipt/
     );
+
+    await (async () => {
+    // --- v1.6.0 (rung-4, FINAL): complete signal-HANDLER composition proof ---
+    // buildPostgresSignalHandlerCompositionManifest() and
+    // verifyPostgresSignalHandlerCompositionBoundary() are, like every
+    // composition rung before them, fully parameterless: this module
+    // composes all four of its own members' zero-arg (DEFAULT namespace,
+    // schema "yoink_cutover") builders directly, offering no predecessor-
+    // manifest or namespace override of its own. observerWitnessRefresh's
+    // own zero-arg default chain (the six-handler-family lineage) and
+    // signalIngressComposition's own zero-arg default chain (rung-1 through
+    // rung-3's full nineteen-boundary fan-in) are BOTH already fully live,
+    // inside this same live Postgres instance/schema, from the
+    // v0.98/v1.1.0/v1.3.0 sections far above -- reused here rather than
+    // re-applied. Those sections ran on the now-closed `importer` connection
+    // (closed once the early buildup flow finished); this section runs on
+    // `first`, the connection reopened for everything after -- a different
+    // client object, the identical live database/schema, so every zero-arg
+    // default manifest already live under `importer` is still live here.
+    // What is still missing, to satisfy this module's own live verify
+    // fan-in, are this rung's own two new members -- deadLetterResetApply
+    // and notificationEnsureApply -- neither of which has ever been applied
+    // under ITS OWN zero-arg defaults before now (only their custom-role-
+    // namespaced siblings, applied immediately above in the v1.4.0/v1.5.0
+    // sections under NATIVE_DEAD_LETTER_RESET_APPLY_ROLE_NAMESPACE/
+    // NATIVE_NOTIFICATION_ENSURE_APPLY_ROLE_NAMESPACE, are live). Applied
+    // here for the first time, under THEIR OWN zero-arg defaults, bottom to
+    // top (deadLetterResetApply's own default predecessor is
+    // jobLifecycleApply's own zero-arg default manifest, already live from
+    // the v1.1.0 section; notificationEnsureApply's own default predecessor
+    // is deadLetterResetApply, applied immediately below).
+    await applyPostgresSignalDeadLetterResetApplyBoundary(first);
+    await applyPostgresSignalNotificationEnsureApplyBoundary(first);
+
+    const signalHandlerCompositionManifest = buildPostgresSignalHandlerCompositionManifest();
+    assert.deepEqual(
+      buildPostgresSignalHandlerCompositionManifest(),
+      signalHandlerCompositionManifest
+    );
+    assert.equal(
+      signalHandlerCompositionManifest.contractVersion,
+      POSTGRES_SIGNAL_HANDLER_COMPOSITION_CONTRACT_VERSION
+    );
+    assert.match(signalHandlerCompositionManifest.fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(
+      signalHandlerCompositionManifest.schemaName,
+      signalHandlerCompositionManifest.observerWitnessRefreshManifest.schemaName
+    );
+    assert.equal(
+      signalHandlerCompositionManifest.schemaName,
+      signalHandlerCompositionManifest.signalIngressCompositionManifest.schemaName
+    );
+    assert.equal(
+      signalHandlerCompositionManifest.schemaName,
+      signalHandlerCompositionManifest.deadLetterResetApplyManifest.schemaName
+    );
+    assert.equal(
+      signalHandlerCompositionManifest.schemaName,
+      signalHandlerCompositionManifest.notificationEnsureApplyManifest.schemaName
+    );
+    assert.equal(signalHandlerCompositionManifest.schemaName, "yoink_cutover");
+
+    // Chain completeness: four fingerprints, exactly once, in the declared
+    // fan-in order (module header section 8), each matching what the
+    // corresponding member module's own zero-arg builder computes today --
+    // the same manifests this proof (or the sections above) just applied to
+    // the live default-namespaced deployment.
+    assert.equal(signalHandlerCompositionManifest.chain.length, POSTGRES_SIGNAL_HANDLER_COMPOSITION_CHAIN_LENGTH);
+    assert.equal(signalHandlerCompositionManifest.chainBoundaryCount, 4);
+    assert.deepEqual(
+      signalHandlerCompositionManifest.chain.map((entry) => entry.boundary),
+      [...POSTGRES_SIGNAL_HANDLER_COMPOSITION_CHAIN_ORDER]
+    );
+    assert.equal(new Set(signalHandlerCompositionManifest.chain.map((entry) => entry.boundary)).size, 4);
+    assert.equal(new Set(signalHandlerCompositionManifest.chain.map((entry) => entry.fingerprint)).size, 4);
+    for (const entry of signalHandlerCompositionManifest.chain) {
+      assert.match(entry.fingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(typeof entry.contractVersion, "number");
+      // observerWitnessRefresh is the one chain member whose own capability
+      // projection declares mutationAuthority: false (a design choice of
+      // that module -- two-phase external I/O plus a receipt write, not
+      // reinterpreted here). The other three declare it true.
+      if (entry.boundary === "observerWitnessRefresh") {
+        assert.equal(entry.mutationAuthority, false);
+      } else {
+        assert.equal(entry.mutationAuthority, true);
+      }
+    }
+    assert.equal(
+      signalHandlerCompositionManifest.chain.find((entry) => entry.boundary === "observerWitnessRefresh")
+        ?.fingerprint,
+      buildPostgresObserverWitnessRefreshManifest().fingerprint
+    );
+    assert.equal(
+      signalHandlerCompositionManifest.chain.find((entry) => entry.boundary === "signalIngressComposition")
+        ?.fingerprint,
+      buildPostgresSignalIngressCompositionManifest().fingerprint
+    );
+    assert.equal(
+      signalHandlerCompositionManifest.chain.find((entry) => entry.boundary === "deadLetterResetApply")?.fingerprint,
+      buildPostgresSignalDeadLetterResetApplyManifest().fingerprint
+    );
+    assert.equal(
+      signalHandlerCompositionManifest.chain.find((entry) => entry.boundary === "notificationEnsureApply")
+        ?.fingerprint,
+      buildPostgresSignalNotificationEnsureApplyManifest().fingerprint
+    );
+
+    // Convergence proof A (module header section 5): the six-handler-family
+    // chain's tip, bound directly here, is the identical node reachable
+    // transitively through signalIngressComposition -> hostedDeliveryLease
+    // Recovery. Enforced fail-closed inside build() itself (in-process, no
+    // live database) -- re-asserted here from outside, same as the module's
+    // own contract test, plus one extra from-scratch rebuild.
+    assert.equal(
+      signalHandlerCompositionManifest.observerWitnessRefreshManifest.fingerprint,
+      signalHandlerCompositionManifest.signalIngressCompositionManifest.hostedDeliveryLeaseRecoveryManifest
+        .witnessRefreshManifestFingerprint
+    );
+    assert.equal(
+      buildPostgresObserverWitnessRefreshManifest().fingerprint,
+      buildPostgresSignalIngressCompositionManifest().hostedDeliveryLeaseRecoveryManifest
+        .witnessRefreshManifestFingerprint
+    );
+    // Convergence proof B: deadLetterResetApply's own declared predecessor
+    // is the identical jobLifecycleApply node rung-2 (embedded fully inside
+    // rung-3, inside signalIngressComposition) already binds.
+    assert.equal(
+      signalHandlerCompositionManifest.deadLetterResetApplyManifest.jobLifecycleApplyManifestFingerprint,
+      signalHandlerCompositionManifest.signalIngressCompositionManifest.evaluationRepositoryCompositionManifest
+        .jobLifecycleApplyManifest.fingerprint
+    );
+    assert.equal(
+      buildPostgresSignalDeadLetterResetApplyManifest().jobLifecycleApplyManifestFingerprint,
+      buildPostgresSignalJobLifecycleApplyManifest().fingerprint
+    );
+    // Convergence proof C: notificationEnsureApply's own declared
+    // predecessor is the identical deadLetterResetApply node this
+    // composition binds directly as its third member.
+    assert.equal(
+      signalHandlerCompositionManifest.notificationEnsureApplyManifest.deadLetterResetApplyManifestFingerprint,
+      signalHandlerCompositionManifest.deadLetterResetApplyManifest.fingerprint
+    );
+    assert.equal(
+      buildPostgresSignalNotificationEnsureApplyManifest().deadLetterResetApplyManifestFingerprint,
+      buildPostgresSignalDeadLetterResetApplyManifest().fingerprint
+    );
+    assert.equal(signalHandlerCompositionManifest.witnessRefreshConvergenceVerified, true);
+    assert.equal(signalHandlerCompositionManifest.deadLetterResetAncestryConvergenceVerified, true);
+    assert.equal(signalHandlerCompositionManifest.notificationEnsureAncestryConvergenceVerified, true);
+
+    // Task-kind coverage (module header sections 2 and 6) -- a SEPARATE axis
+    // from the mutation-family coverage below: the REAL BACKGROUND_TASK_KINDS
+    // constant, never a copied literal list, mapped exactly once each.
+    assert.equal(signalHandlerCompositionManifest.taskKindCount, BACKGROUND_TASK_KINDS.length);
+    assert.equal(signalHandlerCompositionManifest.unmappedTaskKindCount, 0);
+    assert.equal(signalHandlerCompositionManifest.taskKindMapping.length, BACKGROUND_TASK_KINDS.length);
+    assert.deepEqual(
+      [...signalHandlerCompositionManifest.taskKindMapping.map((row) => row.taskKind)].sort(),
+      [...BACKGROUND_TASK_KINDS].sort()
+    );
+    assert.equal(
+      new Set(signalHandlerCompositionManifest.taskKindMapping.map((row) => row.taskKind)).size,
+      BACKGROUND_TASK_KINDS.length
+    );
+    const handlerCompositionChainKeys = new Set(POSTGRES_SIGNAL_HANDLER_COMPOSITION_CHAIN_ORDER);
+    for (const row of signalHandlerCompositionManifest.taskKindMapping) {
+      assert.ok(handlerCompositionChainKeys.has(row.boundary));
+      assert.ok(row.sqliteSource.length > 0);
+      assert.ok(row.qualifiedModule.length > 0);
+      // Neither residual is BACKGROUND_TASK_KINDS dispatch at all (module
+      // header section 4) -- deadLetterResetApply is reached only via the
+      // operator HTTP route, notificationEnsureApply only inline during
+      // signal evaluation.
+      assert.notEqual(row.boundary, "deadLetterResetApply");
+      assert.notEqual(row.boundary, "notificationEnsureApply");
+    }
+    const handlerCompositionHostedDeliveryRow = signalHandlerCompositionManifest.taskKindMapping.find(
+      (row) => row.taskKind === "hosted_delivery_recovery"
+    );
+    assert.equal(handlerCompositionHostedDeliveryRow?.boundary, "signalIngressComposition");
+    const handlerCompositionOtherRows = signalHandlerCompositionManifest.taskKindMapping.filter(
+      (row) => row.taskKind !== "hosted_delivery_recovery"
+    );
+    assert.equal(handlerCompositionOtherRows.length, 6);
+    for (const row of handlerCompositionOtherRows) {
+      assert.equal(row.boundary, "observerWitnessRefresh");
+    }
+    // Each row claiming observerWitnessRefresh is corroborated against that
+    // member's own LIVE-built qualifiedHandlerTaskKinds; the
+    // hosted_delivery_recovery row is corroborated against
+    // hostedDeliveryLeaseRecoveryManifest's own boundaryHandlerTaskKinds --
+    // both re-derived from the manifest this proof just built, not assumed.
+    const handlerCompositionWitnessRefreshTaskKinds = new Set<string>(
+      signalHandlerCompositionManifest.observerWitnessRefreshManifest.qualifiedHandlerTaskKinds
+    );
+    for (const row of handlerCompositionOtherRows) {
+      assert.ok(handlerCompositionWitnessRefreshTaskKinds.has(row.taskKind));
+    }
+    assert.deepEqual(
+      [
+        ...signalHandlerCompositionManifest.signalIngressCompositionManifest.hostedDeliveryLeaseRecoveryManifest
+          .boundaryHandlerTaskKinds
+      ],
+      ["hosted_delivery_recovery"]
+    );
+
+    // Family coverage (a SEPARATE axis, module header section 8): two own
+    // families + two delegated boundaries -- observerWitnessRefresh and
+    // signalIngressComposition own no NEW family row here, their combined,
+    // already-total families are cited by import, never re-listed.
+    assert.equal(
+      POSTGRES_SIGNAL_HANDLER_COMPOSITION_OWN_FAMILIES.length,
+      POSTGRES_SIGNAL_HANDLER_COMPOSITION_OWN_FAMILY_COUNT
+    );
+    assert.equal(POSTGRES_SIGNAL_HANDLER_COMPOSITION_OWN_FAMILIES.length, 2);
+    assert.equal(signalHandlerCompositionManifest.ownFamilyCount, 2);
+    assert.equal(signalHandlerCompositionManifest.unmappedOwnFamilyCount, 0);
+    assert.equal(signalHandlerCompositionManifest.unmappedChainBoundaryCount, 0);
+    assert.deepEqual(
+      [...POSTGRES_SIGNAL_HANDLER_COMPOSITION_DELEGATED_BOUNDARIES].sort(),
+      ["observerWitnessRefresh", "signalIngressComposition"].sort()
+    );
+    const handlerCompositionCoveredBoundaries = new Set([
+      ...signalHandlerCompositionManifest.ownFamilies.map((entry) => entry.boundary),
+      ...signalHandlerCompositionManifest.delegatedBoundaries
+    ]);
+    assert.deepEqual(
+      [...handlerCompositionCoveredBoundaries].sort(),
+      [...POSTGRES_SIGNAL_HANDLER_COMPOSITION_CHAIN_ORDER].sort()
+    );
+    assert.deepEqual(
+      signalHandlerCompositionManifest.ownFamilies.map((entry) => entry.family),
+      ["signal_dead_letter_inbox_reset", "signal_notification_delivery_ensure"]
+    );
+    assert.deepEqual(
+      signalHandlerCompositionManifest.ownFamilies.find((entry) => entry.family === "signal_dead_letter_inbox_reset")
+        ?.sqliteTables,
+      ["inbox_messages", "hosted_delivery_receipts", "audit_events", "outbox_events"]
+    );
+    assert.deepEqual(
+      signalHandlerCompositionManifest.ownFamilies.find(
+        (entry) => entry.family === "signal_notification_delivery_ensure"
+      )?.sqliteTables,
+      ["notification_deliveries"]
+    );
+    assert.ok(signalHandlerCompositionManifest.knownOutOfScopeWrites.length >= 2);
+    // ensureForJob is no longer out of scope: the notification-ensure writer
+    // qualified it and this composition binds that writer as its fourth
+    // member.
+    assert.ok(!POSTGRES_SIGNAL_HANDLER_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES.some(
+      (entry) => entry.includes("ensureForJob")
+    ));
+    assert.ok(POSTGRES_SIGNAL_HANDLER_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES.some(
+      (entry) => entry.includes("upsertListing")
+    ));
+    assert.ok(POSTGRES_SIGNAL_HANDLER_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES.some(
+      (entry) => entry.includes("DISPATCH mechanism")
+    ));
+
+    // Projection flags: the two newly-closed flags
+    // (hostedDeliveryHandlerRepositoryParity, allHandlerRepositoryParity)
+    // are true; every bound member still declares them false at its OWN
+    // level -- only this composition, by binding the six-handler-family
+    // chain, the hosted-delivery/ingress chain, and the dead-letter-reset/
+    // notification-ensure residuals together, can honestly flip them.
+    assert.equal(signalHandlerCompositionManifest.noNewRoleCreated, true);
+    assert.equal(signalHandlerCompositionManifest.noNewFunctionCreated, true);
+    assert.equal(signalHandlerCompositionManifest.noNewMutationPath, true);
+    assert.equal(signalHandlerCompositionManifest.signalEvaluationApplyRepositoryParity, true);
+    assert.equal(signalHandlerCompositionManifest.signalEvaluationRepositoryParity, true);
+    assert.equal(signalHandlerCompositionManifest.signalIngressRepositoryParity, true);
+    assert.equal(signalHandlerCompositionManifest.hostedDeliveryHandlerRepositoryParity, true);
+    assert.equal(signalHandlerCompositionManifest.allHandlerRepositoryParity, true);
+    assert.equal(buildPostgresObserverWitnessRefreshManifest().allHandlerRepositoryParity, false);
+    assert.equal(buildPostgresSignalIngressCompositionManifest().hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(buildPostgresSignalIngressCompositionManifest().allHandlerRepositoryParity, false);
+    assert.equal(buildPostgresSignalDeadLetterResetApplyManifest().hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(buildPostgresSignalDeadLetterResetApplyManifest().allHandlerRepositoryParity, false);
+    assert.equal(buildPostgresSignalNotificationEnsureApplyManifest().hostedDeliveryHandlerRepositoryParity, false);
+    assert.equal(buildPostgresSignalNotificationEnsureApplyManifest().allHandlerRepositoryParity, false);
+    assert.equal(signalHandlerCompositionManifest.mutationAuthority, true);
+    assert.equal(signalHandlerCompositionManifest.activePrincipalCount, 0);
+    assert.equal(signalHandlerCompositionManifest.runtimeAuthority, false);
+
+    const signalHandlerCompositionCapability = postgresSignalHandlerCompositionCapabilityProjection();
+    assert.deepEqual(
+      postgresSignalHandlerCompositionCapabilityProjection(),
+      signalHandlerCompositionCapability
+    );
+    assert.equal(
+      signalHandlerCompositionCapability.contractVersion,
+      POSTGRES_SIGNAL_HANDLER_COMPOSITION_CONTRACT_VERSION
+    );
+    assert.equal(signalHandlerCompositionCapability.deterministicManifestImplemented, true);
+    assert.equal(signalHandlerCompositionCapability.witnessRefreshConvergenceVerified, true);
+    assert.equal(signalHandlerCompositionCapability.deadLetterResetAncestryConvergenceVerified, true);
+    assert.equal(signalHandlerCompositionCapability.chainBoundaryCount, 4);
+    assert.equal(signalHandlerCompositionCapability.taskKindCount, BACKGROUND_TASK_KINDS.length);
+    assert.equal(signalHandlerCompositionCapability.unmappedTaskKindCount, 0);
+    assert.equal(signalHandlerCompositionCapability.ownFamilyCount, 2);
+    assert.equal(signalHandlerCompositionCapability.unmappedOwnFamilyCount, 0);
+    assert.equal(signalHandlerCompositionCapability.noNewRoleCreated, true);
+    assert.equal(signalHandlerCompositionCapability.noNewFunctionCreated, true);
+    assert.equal(signalHandlerCompositionCapability.noNewMutationPath, true);
+    assert.equal(signalHandlerCompositionCapability.signalEvaluationApplyRepositoryParity, true);
+    assert.equal(signalHandlerCompositionCapability.signalEvaluationRepositoryParity, true);
+    assert.equal(signalHandlerCompositionCapability.signalIngressRepositoryParity, true);
+    assert.equal(signalHandlerCompositionCapability.hostedDeliveryHandlerRepositoryParity, true);
+    assert.equal(signalHandlerCompositionCapability.allHandlerRepositoryParity, true);
+    assert.equal(signalHandlerCompositionCapability.activePrincipalCount, 0);
+    assert.equal(signalHandlerCompositionCapability.activeRuntimeRoleApplied, false);
+    assert.equal(signalHandlerCompositionCapability.mutationAuthority, true);
+    assert.equal(signalHandlerCompositionCapability.runtimeAuthority, false);
+    assert.equal(signalHandlerCompositionCapability.productionReady, false);
+    assert.match(signalHandlerCompositionCapability.roleTemplateFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(
+      signalHandlerCompositionCapability.roleTemplateFingerprint,
+      signalHandlerCompositionManifest.fingerprint
+    );
+
+    // verifyPostgresSignalHandlerCompositionBoundary against the live,
+    // freshly-qualified default-namespace deployment must PASS: it
+    // re-derives the manifest (catching any of the three convergence proofs,
+    // the task-kind coverage, or the family coverage accounting drift) and
+    // then calls all FOUR members' own live verify functions in turn (module
+    // header section 8 -- a fan-in, deliberately re-verifying the shared
+    // eight-module handler-family ancestry once directly via
+    // observerWitnessRefresh and once more transitively inside
+    // signalIngressComposition's own cascade).
+    assert.deepEqual(
+      await verifyPostgresSignalHandlerCompositionBoundary(first, signalHandlerCompositionManifest),
+      signalHandlerCompositionManifest
+    );
+    // Idempotent re-verify: this composition performs no writes of its own
+    // (every member it fans into is itself a read-only re-derivation against
+    // an already-applied catalog), so calling it again immediately must
+    // return byte-identical state with no observable side effect.
+    assert.deepEqual(
+      await verifyPostgresSignalHandlerCompositionBoundary(first, signalHandlerCompositionManifest),
+      signalHandlerCompositionManifest
+    );
+
+    // Negative proof: tamper this module's own last-newly-applied member --
+    // notificationEnsureApply's live SECURITY DEFINER function -- and
+    // confirm the composition verify fails closed, mirroring the ALTER
+    // FUNCTION ... STABLE / VOLATILE receipt-tamper precedent every prior
+    // composition rung's own proof used above. The failure surfaces from the
+    // cascaded verifyPostgresSignalNotificationEnsureApplyBoundary call, not
+    // from this module's own (purely in-process) convergence/coverage
+    // checks.
+    await first.query(
+      `ALTER FUNCTION "${signalHandlerCompositionManifest.schemaName}"."${POSTGRES_SIGNAL_NOTIFICATION_ENSURE_APPLY_FUNCTION}"(
+         text, text, text, text, text
+       ) STABLE`
+    );
+    await assert.rejects(
+      verifyPostgresSignalHandlerCompositionBoundary(first, signalHandlerCompositionManifest),
+      /qualified security-definer function is incomplete|drifted from its receipt/
+    );
+    await first.query(
+      `ALTER FUNCTION "${signalHandlerCompositionManifest.schemaName}"."${POSTGRES_SIGNAL_NOTIFICATION_ENSURE_APPLY_FUNCTION}"(
+         text, text, text, text, text
+       ) VOLATILE`
+    );
+    assert.deepEqual(
+      await verifyPostgresSignalHandlerCompositionBoundary(first, signalHandlerCompositionManifest),
+      signalHandlerCompositionManifest
+    );
+    })();
   } finally {
     await locker?.query("ROLLBACK").catch(() => undefined);
     await Promise.allSettled([

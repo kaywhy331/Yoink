@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.5.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.6.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -14,6 +14,63 @@ no-click rehearsal, and explicit local activation; upgrading never activates a
 new lane. Every lane is restricted to first-party shipping offers, quantity one.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.6.0 adds the fourth verification-level composition — and the final
+rung of the hosted-signal plane's qualification ladder: the signal-handler
+repository composition. It is not a twenty-eighth qualification boundary: it
+creates no new PostgreSQL role, function, or receipt table, and grants no new
+mutation authority. It fans in four already-qualified boundaries — the
+observer-witness-refresh boundary (0.71.0, the tip of an eight-module,
+six-handler-family chain reaching back through worker-control), the durable
+signal-ingress repository composition (1.3.0), the bounded operator
+dead-letter inbox-reset writer (1.4.0), and the bounded notification-delivery
+ensure writer (1.5.0) — into one deterministic manifest, keyed by SHA-256
+fingerprint, in that fixed structural order.
+
+Three build-time fingerprint-convergence proofs establish that this is one
+connected graph, not four accidentally-unrelated qualifications, each checked
+in-process with no live database required: the observer-witness-refresh
+boundary, rebuilt directly here, must equal the ingress composition's own
+embedded copy of that identical node; the dead-letter-reset writer's own
+declared job-lifecycle predecessor must equal the ingress composition's own
+embedded copy of that identical node; and the notification-ensure writer's own
+declared dead-letter-reset predecessor must equal this module's own directly
+bound dead-letter-reset member's fingerprint. Any mismatch fails closed.
+
+This closes `hostedDeliveryHandlerRepositoryParity` and the aggregate
+`allHandlerRepositoryParity` — completing the in-repo hosted-signal plane's
+qualified-inactive composition ladder: every handler repository family is now
+either independently qualified or composition-verified, with runtime
+authority still gated off. It also proves, for the first time in one place
+and on a separate accounting axis from mutation families, that all seven
+`BACKGROUND_TASK_KINDS` entries each map to exactly one qualified PostgreSQL
+module — six through the observer-witness-refresh chain's tip, and
+`hosted_delivery_recovery` through the ingress composition — verified against
+the real exported constant, never a copied list.
+
+Two write families own this composition's own two new mutation-family rows,
+both already closed by name: the operator-driven dead-letter inbox-reset
+(1.4.0) and the notification-delivery ensure write (1.5.0). The
+observer-witness-refresh and durable signal-ingress composition boundaries
+are delegated on that axis, their own already-total families cited by import
+rather than re-listed. Two write families remain concretely out of scope,
+recorded in the module's own `KNOWN_OUT_OF_SCOPE_WRITES` constant:
+`CatalogRepository.upsertListing`'s manual "add to library" reference
+inserts, carried forward unchanged; and the task-kind dispatch mechanism
+itself — pure application-layer routing with no PostgreSQL repository-write
+surface of its own, precisely the mechanism this module's own two closed
+flags now attest is fully wired. `NotificationRepository.ensureForJob`, the
+last item on every prior out-of-scope list, is gone.
+
+SQLite remains authoritative; nothing is activated. `noNewRoleCreated`,
+`noNewFunctionCreated`, and `noNewMutationPath` all stay true — this
+composition proves closure, not a twenty-eighth qualified writer. Plan
+without a database connection using `npm run
+postgres:signal-handler-composition -- plan`; verify against a live database
+with `YOINK_POSTGRES_URL=... npm run postgres:signal-handler-composition --
+verify` — there is no `apply` step and no acknowledgement environment
+variable, because this module creates nothing new to apply — and the
+[PostgreSQL cutover qualification](docs/POSTGRES_CUTOVER.md) runbook.
 
 Version 1.5.0 adds the twenty-seventh independently receipted piece of the
 inactive PostgreSQL hosted-signal plane: the bounded notification-delivery

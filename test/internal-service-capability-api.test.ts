@@ -53,6 +53,7 @@ import { postgresSignalIngressEnqueueApplyCapabilityProjection } from "../packag
 import { postgresSignalIngressCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-composition.js";
 import { postgresSignalDeadLetterResetCapabilityProjection } from "../packages/database/src/postgres-signal-dead-letter-reset-apply.js";
 import { postgresSignalNotificationEnsureCapabilityProjection } from "../packages/database/src/postgres-signal-notification-ensure-apply.js";
+import { postgresSignalHandlerCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-handler-composition.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -174,6 +175,7 @@ test("health and the admin Access workspace expose only safe workload capability
         postgresSignalIngressComposition: ReturnType<typeof postgresSignalIngressCompositionCapabilityProjection>;
         postgresSignalDeadLetterResetApply: ReturnType<typeof postgresSignalDeadLetterResetCapabilityProjection>;
         postgresSignalNotificationEnsureApply: ReturnType<typeof postgresSignalNotificationEnsureCapabilityProjection>;
+        postgresSignalHandlerComposition: ReturnType<typeof postgresSignalHandlerCompositionCapabilityProjection>;
       };
       capabilities: Record<string, unknown>;
     };
@@ -340,6 +342,10 @@ test("health and the admin Access workspace expose only safe workload capability
       snapshot.dataPlane.postgresSignalNotificationEnsureApply,
       postgresSignalNotificationEnsureCapabilityProjection()
     );
+    assert.deepEqual(
+      snapshot.dataPlane.postgresSignalHandlerComposition,
+      postgresSignalHandlerCompositionCapabilityProjection()
+    );
     assert.equal(rawActorIds.some((actorId) => JSON.stringify(snapshot).includes(actorId)), false);
 
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
@@ -460,6 +466,9 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /twenty-seventh independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /no audit or outbox row is ever written on any path/);
     assert.match(cutoverText, /closing the notification-ensure family while the final handler composition remains open/);
+    assert.match(cutoverText, /Complete signal-handler composition/);
+    assert.match(cutoverText, /now compose into one deterministically verified complete PostgreSQL owner/);
+    assert.match(cutoverText, /the handler repository composition completes the hosted-signal plane's handler families/);
     assert.match(cutoverText, /Server-bound attribution-receipt append/);
     assert.match(cutoverText, /twenty-third independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /notification dispatch and post-creation job lifecycle remain open/);

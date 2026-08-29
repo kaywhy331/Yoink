@@ -161,6 +161,7 @@ import { postgresSignalIngressEnqueueApplyCapabilityProjection } from "../../../
 import { postgresSignalIngressCompositionCapabilityProjection } from "../../../packages/database/src/postgres-signal-ingress-composition.js";
 import { postgresSignalDeadLetterResetCapabilityProjection } from "../../../packages/database/src/postgres-signal-dead-letter-reset-apply.js";
 import { postgresSignalNotificationEnsureCapabilityProjection } from "../../../packages/database/src/postgres-signal-notification-ensure-apply.js";
+import { postgresSignalHandlerCompositionCapabilityProjection } from "../../../packages/database/src/postgres-signal-handler-composition.js";
 import {
   PrincipalRepository,
   type HostedPrincipalInput
@@ -477,6 +478,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     postgresSignalDeadLetterResetCapabilityProjection();
   const postgresSignalNotificationEnsureApply =
     postgresSignalNotificationEnsureCapabilityProjection();
+  const postgresSignalHandlerComposition =
+    postgresSignalHandlerCompositionCapabilityProjection();
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -783,6 +786,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           postgresSignalIngressComposition,
           postgresSignalDeadLetterResetApply,
           postgresSignalNotificationEnsureApply,
+          postgresSignalHandlerComposition,
           durableBackgroundTasks: true,
           durableSignalIngress: true,
           signalEvaluationOutsideDeviceRequest: true,
@@ -1666,7 +1670,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalIngressEnqueueApply,
             postgresSignalIngressComposition,
             postgresSignalDeadLetterResetApply,
-            postgresSignalNotificationEnsureApply
+            postgresSignalNotificationEnsureApply,
+            postgresSignalHandlerComposition
           },
           capabilities: {
             catalog: true,
@@ -1856,6 +1861,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             postgresSignalIngressComposition,
             postgresSignalDeadLetterResetApply,
             postgresSignalNotificationEnsureApply,
+            postgresSignalHandlerComposition,
             localExtensionUpdates: localExtensionReleaseEnabled,
             retailerMutation: false,
             reason: qualifiedAddRetailers.length

@@ -3999,6 +3999,156 @@ writer, and the durable signal-ingress/observer-witness chains into the
 existing runtime — remains open; every request-repository family and the
 SQLite authority switch remain closed.
 
+## Signal-handler repository composition qualification (1.6.0)
+
+Version 1.6 adds a fourth verification-level composition — the final rung
+of the hosted-signal plane. It creates no PostgreSQL role, function, or
+receipt table, and grants no new mutation authority; it is not a
+twenty-eighth qualification boundary.
+`buildPostgresSignalHandlerCompositionManifest()` takes no arguments: it
+re-derives four already-qualified manifests — the observer-witness-refresh
+boundary (0.71.0, the tip of the six-handler-family chain reaching back
+through worker-control), the durable signal-ingress repository composition
+(1.3.0), the bounded operator dead-letter inbox-reset writer (1.4.0), and
+the bounded notification-delivery ensure writer (1.5.0) — from their own
+build functions and folds them into one deterministic manifest keyed by
+SHA-256 fingerprint, in the fixed order `observerWitnessRefresh →
+signalIngressComposition → deadLetterResetApply → notificationEnsureApply`.
+
+Like 1.1.0 and 1.3.0, this is a fan-in, not a linear chain.
+`observerWitnessRefresh` is not, as rung-2's own header once described it, a
+second disconnected DAG root: reading every successive `previous =
+build...Manifest(...)` default end to end shows it is the linear
+continuation of an eight-module handler-family chain —
+`postgres-worker-control.ts → postgres-notification-recovery.ts →
+postgres-execution-recovery.ts → postgres-operational-retention.ts →
+postgres-observer-repair-candidate-evaluation.ts →
+postgres-operator-alert-connector-dispatch.ts →
+postgres-operator-alert-reconciliation.ts →
+postgres-observer-witness-refresh.ts` — that terminates one hop before
+`postgres-hosted-delivery-lease-recovery.ts`, itself embedded (through
+`signalIngressComposition`) as this module's second member.
+`observerWitnessRefresh`'s own fingerprint is bound both directly, as this
+module's own first chain member, and transitively, through
+`signalIngressComposition`'s own embedded
+`hostedDeliveryLeaseRecoveryManifest.witnessRefreshManifestFingerprint` —
+the same "bound both ways" strengthening rung-3's own header documents for
+`hostedDeliveryLeaseRecovery`.
+
+Three build-time fingerprint-convergence checks, no live database required,
+prove this is one connected graph rather than four accidentally-unrelated
+qualifications, fail-closed with `PostgresSignalHandlerCompositionError` on
+any drift:
+
+- witness-refresh convergence — an independently-rebuilt
+  `buildPostgresObserverWitnessRefreshManifest().fingerprint` must equal
+  `signalIngressComposition.hostedDeliveryLeaseRecoveryManifest.
+  witnessRefreshManifestFingerprint`;
+- dead-letter-reset ancestry convergence —
+  `deadLetterResetApply.jobLifecycleApplyManifestFingerprint` must equal
+  `signalIngressComposition.evaluationRepositoryCompositionManifest.
+  jobLifecycleApplyManifest.fingerprint`, the identical `jobLifecycleApply`
+  node rung-2 embeds fully inside rung-3; and
+- notification-ensure ancestry convergence —
+  `notificationEnsureApply.deadLetterResetApplyManifestFingerprint` must
+  equal this module's own directly-bound `deadLetterResetApply.fingerprint`.
+
+Before ever claiming completeness, the build function also re-affirms every
+lower rung's own already-proven flags —
+`signalIngressComposition.signalIngressRepositoryParity`,
+`.signalEvaluationRepositoryParity`, and
+`.signalEvaluationApplyRepositoryParity`, plus
+`observerWitnessRefresh.witnessRefreshRepositoryParity`,
+`deadLetterResetApply.deadLetterResetWriterParity`, and
+`notificationEnsureApply.notificationEnsureWriterParity` — and fails closed
+if any is not `true`.
+
+The build function separately proves total coverage on two distinct axes.
+The mutation-family axis: two families are owned directly by this
+composition's own members — `signal_dead_letter_inbox_reset`
+(`deadLetterResetApply`, closing
+`HostedDeliveryRepository.retryDeadLetterInbox`'s inbox-reset/audit write,
+the operator-driven dead-letter replay path) and
+`signal_notification_delivery_ensure` (`notificationEnsureApply`, closing
+`NotificationRepository.ensureForJob`) — while `observerWitnessRefresh` and
+`signalIngressComposition` are delegated, their combined already-total
+families cited by import rather than re-listed. The task-kind axis is new
+to this rung: every one of the seven real `BACKGROUND_TASK_KINDS` entries —
+never a copied literal list — maps exactly once to the qualified PostgreSQL
+module that reproduces its dispatch, cross-checked against each claimed
+boundary's own live-built, self-declared coverage field
+(`observerWitnessRefresh.qualifiedHandlerTaskKinds` for the six
+non-hosted-delivery kinds,
+`signalIngressComposition.hostedDeliveryLeaseRecoveryManifest.
+boundaryHandlerTaskKinds` for `hosted_delivery_recovery` alone) rather than
+trusted as a hand-written table. `unmappedTaskKindCount: 0` and
+`unmappedOwnFamilyCount: 0` both fail closed otherwise.
+
+This closes `hostedDeliveryHandlerRepositoryParity` and, with it, the
+aggregate `allHandlerRepositoryParity` — completing the in-repo
+hosted-signal plane: every handler repository family, across both the
+seven-task-kind dispatch axis and the mutation-family axis, is now either
+independently qualified or composition-verified. These two flags being
+`true` here directly contradicts the `false` still frozen into
+`postgres-hosted-delivery-lease-recovery.ts`'s and
+`postgres-observer-witness-refresh.ts`'s own manifests, neither edited by
+this module — the identical pattern every earlier rung in this repository
+has followed: a composition's flags describe what binding proves, not a
+retroactive edit of an older, narrower-scoped module's own view.
+`signalEvaluationApplyRepositoryParity`, `signalEvaluationRepositoryParity`,
+and `signalIngressRepositoryParity` all continue to read `true`, re-affirmed
+rather than newly closed.
+
+Two write families remain concretely out of scope, recorded in
+`POSTGRES_SIGNAL_HANDLER_COMPOSITION_KNOWN_OUT_OF_SCOPE_WRITES`:
+`CatalogRepository.upsertListing`'s manual "add to library" reference
+inserts, carried forward unchanged since rung-1; and the task-kind dispatch
+mechanism itself (`BackgroundWorkerRuntime.executeCycle` and
+`BackgroundMaintenanceHandler.executeScoped`) — pure application-layer
+routing code with no PostgreSQL repository-write surface of its own,
+precisely the mechanism this module's own two closed flags now attest is
+fully wired, not itself a thing that could ever be qualified.
+`NotificationRepository.ensureForJob`, the last item on every prior
+out-of-scope list, is gone: `notificationEnsureApply` closes it, and this
+composition binds that writer as its fourth member.
+
+Plan without a database connection:
+
+```bash
+npm run postgres:signal-handler-composition -- plan
+```
+
+Then independently verify the three convergence proofs, the lower-rung flag
+re-affirmations, the task-kind and mutation-family coverage accounting, and
+— by calling all four members' own verify functions, deliberately accepting
+the resulting redundant (idempotent, read-only) re-verification of the
+eight-module handler-family chain (once directly through
+`observerWitnessRefresh`, once more transitively inside
+`signalIngressComposition`'s own cascade through
+`hostedDeliveryLeaseRecovery`) rather than pruning it, the identical choice
+rung-2's and rung-3's own headers document and defend — every composed
+boundary's live Postgres role, function, and RLS state:
+
+```bash
+YOINK_POSTGRES_URL=... npm run postgres:signal-handler-composition -- verify
+```
+
+There is no `apply` command and no acknowledgement environment variable,
+the same as every prior composition: this module creates no role, function,
+or receipt table, so there is nothing here for an acknowledgement to gate.
+`noNewRoleCreated`, `noNewFunctionCreated`, and `noNewMutationPath` all stay
+`true` — this composition proves closure, not a twenty-eighth qualified
+writer. `mutationAuthority: true` reflects the union of the
+mutation-capable composed boundaries' own already-granted authority
+(`observerWitnessRefresh` itself carries `mutationAuthority: false` on its
+own capability projection — a design choice of that module, not
+reinterpreted here); `runtimeAuthority: false` and `activePrincipalCount: 0`
+confirm none of it is wired to a live principal. SQLite remains
+authoritative; nothing is activated. Every request-repository family and
+the SQLite authority switch remain the only structural gaps left in the
+in-repo hosted-signal plane's own accounting — everything else now traces
+to a qualified, fingerprint-verified PostgreSQL boundary.
+
 ## Requirements
 
 - A private PostgreSQL 15+ database reachable only from the operator host.

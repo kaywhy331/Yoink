@@ -48,6 +48,7 @@ import { postgresSignalIngressEnqueueApplyCapabilityProjection } from "../packag
 import { postgresSignalIngressCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-ingress-composition.js";
 import { postgresSignalDeadLetterResetCapabilityProjection } from "../packages/database/src/postgres-signal-dead-letter-reset-apply.js";
 import { postgresSignalNotificationEnsureCapabilityProjection } from "../packages/database/src/postgres-signal-notification-ensure-apply.js";
+import { postgresSignalHandlerCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-handler-composition.js";
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -197,6 +198,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /twenty-seventh independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /no audit or outbox row is ever written on any path/);
     assert.match(adminScript, /closing the notification-ensure family while the final handler composition remains open/);
+    assert.match(adminScript, /Complete signal-handler composition/);
+    assert.match(adminScript, /now compose into one deterministically verified complete PostgreSQL owner/);
+    assert.match(adminScript, /the handler repository composition completes the hosted-signal plane's handler families/);
     assert.match(adminScript, /Server-bound attribution-receipt append/);
     assert.match(adminScript, /twenty-third independently inactive NOLOGIN boundary/);
     assert.match(adminScript, /derive-don't-trust affiliate-routing receipt/);
@@ -275,6 +279,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalDeadLetterResetCapabilityProjection();
     const postgresSignalNotificationEnsureApply =
       postgresSignalNotificationEnsureCapabilityProjection();
+    const postgresSignalHandlerComposition =
+      postgresSignalHandlerCompositionCapabilityProjection();
     assert.deepEqual(health, {
       status: "ready",
       version: "0.1.0-test",
@@ -326,6 +332,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalIngressComposition,
       postgresSignalDeadLetterResetApply,
       postgresSignalNotificationEnsureApply,
+      postgresSignalHandlerComposition,
       durableBackgroundTasks: true,
       durableSignalIngress: true,
       signalEvaluationOutsideDeviceRequest: true,
@@ -671,6 +678,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       snapshot.capabilities.postgresSignalNotificationEnsureApply,
       postgresSignalNotificationEnsureApply
     );
+    assert.deepEqual(
+      snapshot.capabilities.postgresSignalHandlerComposition,
+      postgresSignalHandlerComposition
+    );
     assert.deepEqual(snapshot.dataPlane, {
       activeStorageEngine: "sqlite",
       postgresCutover,
@@ -714,7 +725,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       postgresSignalIngressEnqueueApply,
       postgresSignalIngressComposition,
       postgresSignalDeadLetterResetApply,
-      postgresSignalNotificationEnsureApply
+      postgresSignalNotificationEnsureApply,
+      postgresSignalHandlerComposition
     });
     assert.equal(snapshot.capabilities.reversibleCatalogIdentityGovernance, true);
     assert.equal(snapshot.capabilities.hostedGlobalCatalogAuthority, false);
