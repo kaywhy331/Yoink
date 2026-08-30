@@ -107,18 +107,20 @@ or entry.
 The rehearsal runs the production offer verifier to its final click boundary,
 then discards the authorization without clicking. After explicit activation in
 Yoink, the background runner checks only the local job queue. For one qualified
-Target, Walmart, Amazon, or Best Buy job it proves the cart is empty, revalidates exact SKU,
-first-party seller, explicit shipping, stock, and price, writes the add receipt,
-clicks at most once, and verifies the exact cart line. Walmart queues and other
+Target, Walmart, Amazon, or Best Buy job it binds up to 25 existing
+SKU-and-quantity lines, revalidates exact SKU, first-party seller, the saved
+Shipping or Pickup choice, stock, and price, writes the add receipt,
+clicks at most once, and verifies that only the authorized SKU increased by one
+while every baseline quantity stayed unchanged. Walmart queues and other
 interactive blocks stop before mutation. Amazon additionally requires one
 unique offer token bound to the exact ASIN and control; it rechecks that token
 without persisting or returning it. Buy Now remains disabled. Ambiguous
 post-click results lock for review. Best Buy additionally requires an explicit
-`Sold by Best Buy` label in the exact selected-shipping offer scope; marketplace,
-pickup-selected, and high-demand queue layouts remain closed. Observer v4 can
+`Sold by Best Buy` label in the exact selected-fulfillment offer scope;
+marketplace and high-demand queue layouts remain closed. Observer v8 can
 read a bounded accessibility label inside that exact seller element, while an
 explicit in-store-only product becomes manual/local evidence with unknown
-global availability. The paired add runner is v3, and upgrading retires every
+global availability. The paired add runner is v8, and upgrading retires every
 earlier Best Buy qualification.
 
 The popup overflow can also offer **Share evidence** after the user enables

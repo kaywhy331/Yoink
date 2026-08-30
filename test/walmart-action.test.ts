@@ -7,7 +7,7 @@ import type { BrowserActionContract } from "../packages/browser-safety/src/index
 import { WALMART_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
 import {
   commitWalmartAdd,
-  inspectWalmartEmptyCart,
+  inspectWalmartCartBaseline,
   prepareWalmartAdd,
   rehearseWalmartAdd,
   type WalmartAddJob,
@@ -134,7 +134,7 @@ test("Walmart safely self-heals unique control and price selector drift", () => 
   assert.equal(prepareWalmartAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Walmart v5 accepts exact shipping or explicit pickup quantity-one jobs", () => {
+test("Walmart v6 accepts exact shipping or explicit pickup quantity-one jobs", () => {
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
@@ -152,14 +152,20 @@ test("Walmart v5 accepts exact shipping or explicit pickup quantity-one jobs", (
   assert.equal(clicks, 1);
 });
 
-test("Walmart cart preflight requires emptiness and post-add proof requires one exact line", () => {
+test("Walmart cart preflight captures a bounded baseline and post-add proof requires an exact delta", () => {
   const empty = new JSDOM("<body><main><h1>Your cart is empty</h1></main></body>", { url: CART_URL }).window.document;
-  assert.deepEqual(inspectWalmartEmptyCart(empty, CART_URL), { ok: true, reason: "verified_empty" });
+  const baseline = inspectWalmartCartBaseline(empty, CART_URL, NOW);
+  assert.equal(baseline.ok, true);
+  if (!baseline.ok) return;
+  assert.deepEqual(baseline.proof.lines, []);
   const cart = new JSDOM(readFileSync(join(WALMART_FIXTURES, "cart.html"), "utf8"), { url: CART_URL }).window.document;
-  assert.deepEqual(inspectWalmartEmptyCart(cart, CART_URL), { ok: false, reason: "foreign_cart_line" });
+  const existing = inspectWalmartCartBaseline(cart, CART_URL, NOW);
+  assert.equal(existing.ok, true);
+  if (!existing.ok) return;
+  assert.equal(existing.proof.lineCount, 1);
   const prepared = prepareWalmartAdd(product(), PRODUCT_URL, job(), NOW);
   assert.equal(prepared.ok, true);
   if (!prepared.ok) return;
-  const verified = verifyWalmartAddedCart(cart, CART_URL, job(), prepared.proof, NOW + 500);
+  const verified = verifyWalmartAddedCart(cart, CART_URL, job(), prepared.proof, baseline.proof, NOW + 500);
   assert.equal(verified.ok, true);
 });

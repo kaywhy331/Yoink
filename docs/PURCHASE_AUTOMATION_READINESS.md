@@ -55,15 +55,20 @@ following from a fresh exact page:
 
 1. exact retailer and item identity;
 2. first-party seller;
-3. explicit shipping fulfillment;
+3. exact saved Shipping or explicitly selected Pickup fulfillment;
 4. numeric price within both item and all-in bounds;
 5. quantity exactly one;
-6. an empty-cart preflight and one unambiguous usable Add control;
+6. a complete bounded cart baseline and one unambiguous usable Add control;
 7. current intent, offer snapshot, spend reservation, qualification, adapter,
    device, expiry, and one-use capability.
 
 Any mismatch stops before mutation. Checkout, payment, drawing entry, Buy Now,
 and order submission remain closed.
+
+After a click, Yoink accepts success only when every baseline SKU quantity is
+unchanged and the authorized SKU increased by exactly one. This permits several
+qualified items to accumulate for one manual retailer checkout without allowing
+one job to alter or silently absorb another cart line.
 
 ## Quantity semantics
 

@@ -3468,5 +3468,20 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE retailer_id = 'bestbuy';
     `
+  },
+  {
+    version: 53,
+    name: "multi_item_cart_delta_requalification_boundary",
+    sql: `
+      UPDATE retailers
+        SET execution_supported = 0
+        WHERE id IN ('target', 'walmart', 'amazon', 'bestbuy');
+      UPDATE listings
+        SET execution_supported = 0
+        WHERE retailer_id IN ('target', 'walmart', 'amazon', 'bestbuy');
+      UPDATE retailer_adapter_qualifications
+        SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE retailer_id IN ('target', 'walmart', 'amazon', 'bestbuy');
+    `
   }
 ]);

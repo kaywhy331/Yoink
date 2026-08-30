@@ -1,7 +1,9 @@
 import {
+  captureCartBaseline,
+  verifyCartAddDelta,
   verifyLiveOffer,
-  verifySingleJobCart,
   type BrowserActionContract,
+  type CartBaselineProof,
   type CartProof,
   type LiveOfferProof
 } from "../../../packages/browser-safety/src/index.js";
@@ -153,16 +155,20 @@ function amazonCartUrl(value: string): boolean {
   return amazonPageKind(value) === "cart";
 }
 
-export function inspectAmazonEmptyCart(documentValue: Document, urlValue: string): { ok: boolean; reason: string } {
-  if (!amazonCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
+export function inspectAmazonCartBaseline(
+  documentValue: Document,
+  urlValue: string,
+  now = Date.now()
+) {
+  if (!amazonCartUrl(urlValue)) return { ok: false as const, reason: "cart_page_unverified" };
   if (amazonSecurityChallenge(documentValue) || amazonInteractiveBlock(documentValue, urlValue)) {
-    return { ok: false, reason: "manual_action_required" };
+    return { ok: false as const, reason: "manual_action_required" };
   }
-  const cart = observeAmazonCart(documentValue);
-  if (!cart.complete || !cart.independentlyCounted) return { ok: false, reason: "cart_unverified" };
-  return cart.lines.length === 0
-    ? { ok: true, reason: "verified_empty" }
-    : { ok: false, reason: "foreign_cart_line" };
+  return captureCartBaseline(
+    "amazon",
+    observeAmazonCart(documentValue, new Date(now).toISOString()),
+    now
+  );
 }
 
 export function verifyAmazonAddedCart(
@@ -170,20 +176,21 @@ export function verifyAmazonAddedCart(
   urlValue: string,
   job: AmazonAddJob,
   proof: LiveOfferProof,
+  baseline: CartBaselineProof,
   now = Date.now()
 ): { ok: true; reason: "verified"; proof: CartProof } | { ok: false; reason: string } {
   if (!amazonCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
   if (amazonSecurityChallenge(documentValue) || amazonInteractiveBlock(documentValue, urlValue)) {
     return { ok: false, reason: "manual_action_required" };
   }
-  return verifySingleJobCart(job, observeAmazonCart(documentValue, new Date(now).toISOString()), proof, now);
+  return verifyCartAddDelta(job, baseline, observeAmazonCart(documentValue, new Date(now).toISOString()), proof, now);
 }
 
 Object.defineProperty(globalThis, "YoinkAmazonAction", {
   value: Object.freeze({
     abandonAmazonAdd,
     commitAmazonAdd,
-    inspectAmazonEmptyCart,
+    inspectAmazonCartBaseline,
     prepareAmazonAdd,
     rehearseAmazonAdd,
     verifyAmazonAddedCart

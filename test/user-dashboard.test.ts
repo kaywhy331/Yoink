@@ -361,7 +361,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
 
     await eventually(() => assert.ok(browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]')));
     assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Target guarded add is not qualified yet/);
-    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Guarded cart attempts always add exactly one item/);
+    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Guarded cart attempts add exactly one item and preserve existing cart quantities/);
     assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Qualified store lane/);
     (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
     const editDialog = browser.document.querySelector("#planDialog") as HTMLDialogElement;

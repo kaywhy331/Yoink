@@ -3,10 +3,12 @@ import test from "node:test";
 import {
   BROWSER_SAFETY_CONTRACT_VERSION,
   type BrowserActionContract,
+  captureCartBaseline,
   type CartInventoryEvidence,
   type CheckoutEvidence,
   type LiveOfferObservation,
   verifyCheckoutEvidence,
+  verifyCartAddDelta,
   verifyLiveOffer,
   verifySingleJobCart
 } from "../packages/browser-safety/src/index.js";
@@ -115,6 +117,69 @@ test("cart verification rejects foreign lines, quantity drift, and a replacement
   assert.equal(verifySingleJobCart(job(), cart({ independentLineCount: 2, lines: [...cart().lines, { retailerSku: "FOREIGN", quantity: 1, unitPriceCents: 1, sellerName: "Amazon.com", sellerType: "first_party" }] }), live.proof, NOW).reason, "foreign_cart_line");
   assert.equal(verifySingleJobCart(job(), cart({ lines: [{ ...cart().lines[0]!, quantity: 2 }] }), live.proof, NOW).reason, "quantity_unavailable");
   assert.equal(verifySingleJobCart(job(), cart({ lines: [{ ...cart().lines[0]!, unitPriceCents: 7000 }] }), live.proof, NOW).reason, "over_unit_cap");
+});
+
+test("cart delta verification preserves existing lines and proves exactly one authorized addition", () => {
+  const live = verifyLiveOffer(job({ action: "add_to_cart" }), offer(), NOW);
+  assert.equal(live.ok, true);
+  if (!live.ok) return;
+  const foreign = { retailerSku: "EXISTING-1", quantity: 2, unitPriceCents: 1499, sellerName: "Amazon.com", sellerType: "first_party" as const };
+  const before = cart({ observedAt: new Date(NOW - 2_000).toISOString(), lines: [foreign] });
+  const baseline = captureCartBaseline("amazon", before, NOW - 1_500);
+  assert.equal(baseline.ok, true);
+  if (!baseline.ok) return;
+  assert.deepEqual(baseline.proof.lines, [{ retailerSku: "EXISTING-1", quantity: 2 }]);
+  assert.equal("sellerName" in baseline.proof.lines[0]!, false);
+  const after = cart({
+    independentLineCount: 2,
+    lines: [foreign, cart().lines[0]!]
+  });
+  assert.equal(verifyCartAddDelta(job({ action: "add_to_cart" }), baseline.proof, after, live.proof, NOW).ok, true);
+});
+
+test("cart delta verification accepts an exact quantity increment and rejects every unrelated drift", () => {
+  const actionJob = job({ action: "add_to_cart" });
+  const live = verifyLiveOffer(actionJob, offer(), NOW);
+  assert.equal(live.ok, true);
+  if (!live.ok) return;
+  const targetBefore = { ...cart().lines[0]!, quantity: 1 };
+  const foreign = { retailerSku: "EXISTING-1", quantity: 2, unitPriceCents: 1499, sellerName: "Amazon.com", sellerType: "first_party" as const };
+  const baseline = captureCartBaseline("amazon", cart({
+    observedAt: new Date(NOW - 2_000).toISOString(),
+    independentLineCount: 2,
+    lines: [foreign, targetBefore]
+  }), NOW - 1_500);
+  assert.equal(baseline.ok, true);
+  if (!baseline.ok) return;
+  const exact = cart({
+    independentLineCount: 2,
+    lines: [foreign, { ...targetBefore, quantity: 2 }]
+  });
+  assert.equal(verifyCartAddDelta(actionJob, baseline.proof, exact, live.proof, NOW).ok, true);
+  assert.equal(verifyCartAddDelta(actionJob, baseline.proof, cart({
+    independentLineCount: 2,
+    lines: [{ ...foreign, quantity: 1 }, { ...targetBefore, quantity: 2 }]
+  }), live.proof, NOW).reason, "cart_delta_unverified");
+  assert.equal(verifyCartAddDelta(actionJob, baseline.proof, cart({
+    independentLineCount: 3,
+    lines: [foreign, { ...targetBefore, quantity: 2 }, { ...foreign, retailerSku: "EXTRA" }]
+  }), live.proof, NOW).reason, "cart_delta_unverified");
+  assert.equal(verifyCartAddDelta(actionJob, baseline.proof, cart({
+    independentLineCount: 2,
+    lines: [foreign, { ...targetBefore, quantity: 3 }]
+  }), live.proof, NOW).reason, "cart_delta_unverified");
+});
+
+test("cart baselines reject ambiguous, oversized, and stale inventories", () => {
+  const duplicate = cart({
+    independentLineCount: 2,
+    lines: [cart().lines[0]!, { ...cart().lines[0]!, quantity: 2 }]
+  });
+  assert.equal(captureCartBaseline("amazon", duplicate, NOW).reason, "cart_unverified");
+  assert.equal(captureCartBaseline("amazon", cart({ lines: [{ ...cart().lines[0]!, quantity: null }] }), NOW).reason, "cart_unverified");
+  assert.equal(captureCartBaseline("amazon", cart({ observedAt: new Date(NOW - 31_000).toISOString() }), NOW).reason, "cart_evidence_stale");
+  const lines = Array.from({ length: 26 }, (_, index) => ({ ...cart().lines[0]!, retailerSku: `SKU-${index}` }));
+  assert.equal(captureCartBaseline("amazon", cart({ independentLineCount: lines.length, lines }), NOW).reason, "cart_unverified");
 });
 
 function checkout(overrides: Partial<CheckoutEvidence> = {}): CheckoutEvidence {

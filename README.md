@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.11.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.12.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,6 +15,16 @@ new lane. Every lane is restricted to first-party offers, quantity one, and the
 exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.12.0 removes the empty-cart bottleneck without weakening the
+at-most-once Add boundary. Before a qualified add, Chrome captures at most 25
+uniquely identified SKU-and-quantity lines in ephemeral session state. After
+the click it requires every baseline quantity to remain unchanged and only the
+authorized exact SKU to increase by one. This lets several qualified signal
+matches accumulate into one retailer cart for a faster manual checkout. Any
+stale, duplicated, incomplete, missing, or extra line locks safely; checkout,
+payment, Buy Now, and order submission remain manual. All four adapter versions
+advance and prior qualifications are retired for explicit requalification.
 
 Version 1.11.0 gives signal-imported legacy plans a one-review, stale-safe
 transition into explicit notification-only plans. The exact preview is
@@ -2641,7 +2651,7 @@ page memory and are discarded; only readiness and a reason code are persisted.
 These observations never authorize mutation by themselves.
 
 Walmart Collectibles Draw uses a separate `walmart-draw-observer-v1` contract,
-not the normal Walmart product observer or `walmart-add-v5` qualification
+not the normal Walmart product observer or `walmart-add-v6` qualification
 dossier. From the exact `/shop/collectibles/draw` hub it records at most 24
 normalized cards and reconstructs canonical item URLs server-side. Draw cards
 are matched to private missions only by exact Walmart item ID. They are never
@@ -2691,31 +2701,31 @@ seller, fulfillment, quantity, price-cap, offer-scope, and offer-token checks
 all pass. Duplicate candidates fail closed. Remote observer recipes remain
 read-only shadow evidence and cannot supply click targets.
 
-Target's qualified `target-add-v4` runner requires:
+Target's qualified `target-add-v5` runner requires:
 
 - live execution mode, Actions unpaused, an online paired device, and a current
   adapter qualification;
 - an immutable exact TCIN job with unit/total caps;
 - quantity one, Target as seller, and exact Shipping or explicitly configured Pickup fulfillment;
-- a provably empty cart;
+- a complete pre-add baseline of at most 25 unique SKU-and-quantity lines;
 - exact binding to Target's current fulfillment tiles and TCIN-scoped Add control;
 - guarded selection of available Shipping, or available same-day Delivery when
   Shipping is unavailable, followed by immediate live SKU, stock, seller, price,
   and fulfillment revalidation;
 - a durable `adding` receipt before one click;
-- exact cart-line verification afterward.
+- an exact +1 delta afterward, with every baseline quantity unchanged.
 
-Walmart's separately gated `walmart-add-v5` runner applies the same immutable
-job, empty-cart, at-most-once, cart-proof, and recovery boundaries. In addition,
+Walmart's separately gated `walmart-add-v6` runner applies the same immutable
+job, bounded-baseline, at-most-once, cart-delta, and recovery boundaries. In addition,
 the live buy box must exactly match Shipping or explicitly configured Pickup,
 Walmart must be the seller, and
 virtual queues, memberships, location prompts, authentication, MFA, or security
 challenges stop the job before mutation.
 
-Amazon's separately gated `amazon-add-v7` runner requires an exact ASIN,
+Amazon's separately gated `amazon-add-v8` runner requires an exact ASIN,
 Amazon.com as first-party seller and an exact Shipping or explicitly configured
 Pickup offer, quantity one,
-a provably empty Amazon cart, and a unique offer token scoped with the price,
+a provable Amazon cart baseline, and a unique offer token scoped with the price,
 seller evidence, shipping evidence, and Add control. Observer v7 binds the
 nearest exact product form before considering bounded local fallbacks, including
 when Amazon deeply nests the Add control. Canonical `offerListingID` checkout
@@ -2729,9 +2739,10 @@ script, style, template, and hidden text, and the volatile offer token comes
 only from the selected Add form rather than unrelated same-ASIN forms. The raw
 token stays inside the isolated page runner and must be unchanged at the final
 pre-click check. Only the Add-to-Cart control can be clicked; Buy Now navigation
-is never used. The resulting cart must contain one exact ASIN at quantity one.
+is never used. The resulting cart must show exactly one authorized quantity
+added while every baseline quantity remains unchanged.
 
-Best Buy's separately gated `bestbuy-add-v7` runner requires an exact numeric
+Best Buy's separately gated `bestbuy-add-v8` runner requires an exact numeric
 SKU from a current or legacy product URL, explicit visible `Sold by Best Buy`
 evidence in the same bounded offer scope as one Add-to-Cart control and price,
 an exact Shipping or explicitly configured Pickup selection, and quantity one.
@@ -2744,10 +2755,10 @@ sanitized repair queue to distinguish selector drift from a genuinely missing
 control. It also binds a seller name represented by bounded accessibility
 metadata inside the exact seller element. Explicit in-store-only products are
 manual/local evidence with unknown global availability rather than false
-out-of-stock evidence. Migration 52 retires inherited Best Buy
-qualification, requiring fresh v8 evidence and a v7 rehearsal before explicit
-activation. Its empty-cart, at-most-once receipt, immediate offer revalidation,
-and exact single-line cart proof match the other guarded lanes. A historical
+out-of-stock evidence. Migration 53 retires inherited qualifications for all
+four stores, requiring fresh evidence and current-runner rehearsal before
+explicit activation. Its bounded baseline, at-most-once receipt, immediate offer
+revalidation, and exact cart-delta proof match the other guarded lanes. A historical
 repair group is superseded only by a strictly newer packaged adapter's later
 non-failure result for that same exact SKU.
 

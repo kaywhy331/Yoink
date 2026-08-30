@@ -61,14 +61,14 @@ export const RETAILER_OBSERVER_VERSIONS = {
 } as const;
 export type SupportedRetailerId = keyof typeof RETAILER_OBSERVER_VERSIONS;
 export type RetailerObserverVersion = (typeof RETAILER_OBSERVER_VERSIONS)[SupportedRetailerId];
-export const TARGET_ADD_ADAPTER_VERSION = "target-add-v4";
-export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V4";
-export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v5";
-export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V5";
-export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v7";
-export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V7";
-export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v7";
-export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V7";
+export const TARGET_ADD_ADAPTER_VERSION = "target-add-v5";
+export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V5";
+export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v6";
+export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V6";
+export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v8";
+export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V8";
+export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v8";
+export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V8";
 
 export const RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS = ["observe", "rehearse_add", "live_add"] as const;
 export type RetailerAdapterDiagnosticOperation = (typeof RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS)[number];

@@ -4,6 +4,7 @@ export const BROWSER_SAFETY_CONTRACT_VERSION = 1;
 export const LIVE_OFFER_MAX_AGE_MS = 30_000;
 export const CART_PROOF_MAX_AGE_MS = 5 * 60_000;
 export const CHECKOUT_EVIDENCE_MAX_AGE_MS = 2 * 60_000;
+export const CART_BASELINE_MAX_LINES = 25;
 
 const RETAILER_DOMAINS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   target: ["target.com"],
@@ -85,6 +86,19 @@ export interface CartInventoryEvidence {
   independentlyCounted: boolean;
   independentLineCount: number;
   lines: CartLineEvidence[];
+}
+
+export interface CartBaselineLine {
+  retailerSku: string;
+  quantity: number;
+}
+
+export interface CartBaselineProof {
+  contractVersion: typeof BROWSER_SAFETY_CONTRACT_VERSION;
+  retailerId: string;
+  observedAt: string;
+  lineCount: number;
+  lines: CartBaselineLine[];
 }
 
 export interface CartProof {
@@ -268,6 +282,127 @@ export function verifySingleJobCart(
       observedAt: inventory.observedAt,
       quantity: job.quantity,
       unitPriceCents,
+      sellerName: cleanSeller(sellerName),
+      sellerType: sellerType as Exclude<SellerType, "unknown">
+    }
+  };
+}
+
+function normalizedCartLines(inventory: CartInventoryEvidence): CartBaselineLine[] | null {
+  if (!inventory.complete || !inventory.independentlyCounted
+    || inventory.independentLineCount !== inventory.lines.length
+    || inventory.lines.length > CART_BASELINE_MAX_LINES) return null;
+  const lines: CartBaselineLine[] = [];
+  const seen = new Set<string>();
+  for (const line of inventory.lines) {
+    const retailerSku = String(line.retailerSku || "").normalize("NFKC").trim().toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9._-]{0,119}$/.test(retailerSku)
+      || !Number.isInteger(line.quantity) || Number(line.quantity) < 1 || Number(line.quantity) > 99
+      || seen.has(retailerSku)) return null;
+    seen.add(retailerSku);
+    lines.push({ retailerSku, quantity: Number(line.quantity) });
+  }
+  return lines.sort((left, right) => left.retailerSku.localeCompare(right.retailerSku, "en-US"));
+}
+
+export function captureCartBaseline(
+  retailerId: string,
+  inventory: CartInventoryEvidence,
+  now = Date.now()
+): VerificationResult<CartBaselineProof> {
+  if (!Object.hasOwn(RETAILER_DOMAINS, retailerId)) return rejected("retailer_not_supported");
+  if (inventory.contractVersion !== BROWSER_SAFETY_CONTRACT_VERSION) return rejected("contract_version_mismatch");
+  const age = timestampAge(inventory.observedAt, now);
+  if (age === null || age > LIVE_OFFER_MAX_AGE_MS) return rejected("cart_evidence_stale");
+  const lines = normalizedCartLines(inventory);
+  if (!lines) return rejected("cart_unverified");
+  return {
+    ok: true,
+    reason: "verified",
+    proof: {
+      contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
+      retailerId,
+      observedAt: inventory.observedAt,
+      lineCount: lines.length,
+      lines
+    }
+  };
+}
+
+export function verifyCartAddDelta(
+  job: BrowserActionContract,
+  baseline: CartBaselineProof,
+  inventory: CartInventoryEvidence,
+  offerProof: LiveOfferProof,
+  now = Date.now()
+): VerificationResult<CartProof> {
+  const invalidJob = validJob(job, now);
+  if (invalidJob) return rejected(invalidJob);
+  if (baseline.contractVersion !== BROWSER_SAFETY_CONTRACT_VERSION
+    || baseline.retailerId !== job.retailerId
+    || baseline.lineCount !== baseline.lines.length
+    || baseline.lines.length > CART_BASELINE_MAX_LINES) return rejected("cart_baseline_invalid");
+  const baselineAge = timestampAge(baseline.observedAt, now);
+  const cartAge = timestampAge(inventory.observedAt, now);
+  const offerAge = timestampAge(offerProof.observedAt, now);
+  if (baselineAge === null || baselineAge > CART_PROOF_MAX_AGE_MS) return rejected("cart_baseline_stale");
+  if (cartAge === null || cartAge > LIVE_OFFER_MAX_AGE_MS
+    || offerAge === null || offerAge > CART_PROOF_MAX_AGE_MS) return rejected("cart_evidence_stale");
+  if (new Date(baseline.observedAt).getTime() > new Date(inventory.observedAt).getTime()) {
+    return rejected("cart_baseline_invalid");
+  }
+  if (offerProof.jobId !== job.jobId || offerProof.retailerId !== job.retailerId
+    || offerProof.retailerSku !== job.retailerSku) return rejected("offer_proof_mismatch");
+  const baselineLines = normalizedCartLines({
+    contractVersion: baseline.contractVersion,
+    observedAt: baseline.observedAt,
+    complete: true,
+    independentlyCounted: true,
+    independentLineCount: baseline.lineCount,
+    lines: baseline.lines.map((line) => ({
+      retailerSku: line.retailerSku,
+      quantity: line.quantity,
+      unitPriceCents: null,
+      sellerName: "",
+      sellerType: "unknown"
+    }))
+  });
+  const afterLines = normalizedCartLines(inventory);
+  if (!baselineLines || !afterLines) return rejected("cart_unverified");
+  const expectedSku = job.retailerSku.toUpperCase();
+  const before = new Map(baselineLines.map((line) => [line.retailerSku, line.quantity]));
+  const after = new Map(afterLines.map((line) => [line.retailerSku, line.quantity]));
+  if (after.size !== before.size + (before.has(expectedSku) ? 0 : 1)) return rejected("cart_delta_unverified");
+  for (const [retailerSku, quantity] of before) {
+    const expectedQuantity = quantity + (retailerSku === expectedSku ? job.quantity : 0);
+    if (after.get(retailerSku) !== expectedQuantity) return rejected("cart_delta_unverified");
+  }
+  if (!before.has(expectedSku) && after.get(expectedSku) !== job.quantity) return rejected("cart_delta_unverified");
+  for (const retailerSku of after.keys()) {
+    if (retailerSku !== expectedSku && !before.has(retailerSku)) return rejected("cart_delta_unverified");
+  }
+  const line = inventory.lines.find((candidate) => (
+    String(candidate.retailerSku || "").normalize("NFKC").trim().toUpperCase() === expectedSku
+  ));
+  if (!line) return rejected("quantity_unavailable");
+  const unitPriceCents = line.unitPriceCents ?? offerProof.unitPriceCents;
+  const sellerName = line.sellerName || offerProof.sellerName;
+  const sellerType = line.sellerType === "unknown" ? offerProof.sellerType : line.sellerType;
+  const sellerReason = sellerAllowed(job, sellerName, sellerType);
+  if (sellerReason) return rejected(sellerReason);
+  if (!Number.isSafeInteger(unitPriceCents) || Number(unitPriceCents) <= 0) return rejected("price_unavailable");
+  if (Number(unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
+  return {
+    ok: true,
+    reason: "verified",
+    proof: {
+      contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
+      jobId: job.jobId,
+      retailerId: job.retailerId,
+      retailerSku: job.retailerSku,
+      observedAt: inventory.observedAt,
+      quantity: job.quantity,
+      unitPriceCents: Number(unitPriceCents),
       sellerName: cleanSeller(sellerName),
       sellerType: sellerType as Exclude<SellerType, "unknown">
     }

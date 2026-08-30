@@ -45,7 +45,7 @@ readiness projection: it cannot write an adapter qualification, change global
 execution settings, advertise browser mutation capability, or lease a job.
 
 Yoink 0.5 introduced `target-add-v1`, an independently versioned add-only runner.
-The current `target-add-v4` contract binds Target's fulfillment-tile UI and can
+The current `target-add-v5` contract binds Target's fulfillment-tile UI and can
 guardedly select the exact saved fulfillment: Shipping by default (including an
 available same-day Delivery fallback) or Pickup only after explicit user opt-in.
 It rebinds and revalidates the single Add control, and unavailable or mismatched
@@ -55,10 +55,12 @@ no-click production-runner rehearsal, a recently connected capable companion,
 and an explicit local confirmation. Activation writes the versioned evidence
 hash and enables live mode atomically; the global pause remains reversible.
 
-Every leased Target job first proves an empty cart, then binds one DOM control
-to an in-memory authorization. Chrome reports and durably persists `adding`
-before consuming that authorization and clicking once. It then verifies one
-exact cart line. A worker restart before the boundary cancels safely; a lease
+Every leased Target job first binds a privacy-bounded baseline of at most 25
+unique SKU-and-quantity lines, then binds one DOM control to an in-memory
+authorization. Chrome reports and durably persists `adding` before consuming
+that authorization and clicking once. It then verifies only the authorized SKU
+increased by one and every baseline quantity remained unchanged. A worker
+restart before the boundary cancels safely; a lease
 expiry or uncertain result after the boundary locks the job for manual review
 and cannot trigger an automatic retry. Checkout and submit states remain
 unqualified.
@@ -1066,8 +1068,8 @@ gated, so SQLite retains runtime authority. See
 
 ## Constrained action-store layout recovery
 
-The current action contracts are `target-add-v4`, `walmart-add-v5`,
-`amazon-add-v7`, and `bestbuy-add-v7`, paired with observer versions 3, 5, 7,
+The current action contracts are `target-add-v5`, `walmart-add-v6`,
+`amazon-add-v8`, and `bestbuy-add-v8`, paired with observer versions 3, 5, 7,
 and 8 respectively. Packaged selectors remain authoritative when present.
 When they drift, local packaged code may recover only one unique semantic Add
 control and one unique price landmark, after the existing exact identity,

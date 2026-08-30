@@ -124,17 +124,21 @@ function deviceEvidence(value: Record<string, unknown>): Record<string, unknown>
   if (["first_party", "third_party", "unknown"].includes(String(value.sellerType))) output.sellerType = value.sellerType;
   if (["shipping", "pickup", "unknown"].includes(String(value.fulfillment))) output.fulfillment = value.fulfillment;
   if (Number.isInteger(value.quantity) && Number(value.quantity) >= 1 && Number(value.quantity) <= 99) output.quantity = Number(value.quantity);
+  if (Number.isInteger(value.baselineLineCount)
+    && Number(value.baselineLineCount) >= 0 && Number(value.baselineLineCount) <= 25) {
+    output.baselineLineCount = Number(value.baselineLineCount);
+  }
   return output;
 }
 
 function deviceStateMessage(state: JobState): string {
   const messages: Partial<Record<JobState, string>> = {
-    navigating: "Chrome started the retailer navigation and empty-cart preflight.",
+    navigating: "Chrome started retailer navigation and bound the pre-add cart baseline.",
     verifying_listing: "Chrome started exact live listing verification.",
     offer_verified: "Chrome verified the live offer against the immutable action contract.",
     add_authorized: "Chrome prepared the exact add control for final revalidation.",
     adding: "Chrome armed the durable add receipt before crossing the click boundary.",
-    cart_verified: "Chrome verified one exact cart line after the add boundary.",
+    cart_verified: "Chrome verified an exact +1 cart delta while preserving every baseline quantity.",
     confirmed: "Chrome confirmed the bounded add-to-cart job.",
     offer_rejected: "Chrome rejected the live offer before retailer mutation.",
     cancelled: "Chrome cancelled the job before retailer mutation.",

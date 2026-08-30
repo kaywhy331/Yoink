@@ -122,11 +122,11 @@ const SUPPORTED_RETAILER_DOMAINS = Object.freeze([
   "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
   "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
 ]);
-const TARGET_ADD_ADAPTER_VERSION = "target-add-v4";
-const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v5";
+const TARGET_ADD_ADAPTER_VERSION = "target-add-v5";
+const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v6";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
-const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v7";
-const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v7";
+const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v8";
+const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v8";
 const TARGET_CART_URL = "https://www.target.com/cart";
 const WALMART_CART_URL = "https://www.walmart.com/cart";
 const AMAZON_CART_URL = "https://www.amazon.com/gp/cart/view.html";
@@ -138,7 +138,7 @@ const ADD_LANES = Object.freeze({
     cartUrl: TARGET_CART_URL,
     runnerFile: "target-action.js",
     runnerGlobal: "YoinkTargetAction",
-    emptyOperation: "inspectTargetEmptyCart",
+    baselineOperation: "inspectTargetCartBaseline",
     prepareOperation: "prepareTargetAdd",
     commitOperation: "commitTargetAdd",
     verifyCartOperation: "verifyTargetAddedCart"
@@ -149,7 +149,7 @@ const ADD_LANES = Object.freeze({
     cartUrl: WALMART_CART_URL,
     runnerFile: "walmart-action.js",
     runnerGlobal: "YoinkWalmartAction",
-    emptyOperation: "inspectWalmartEmptyCart",
+    baselineOperation: "inspectWalmartCartBaseline",
     prepareOperation: "prepareWalmartAdd",
     commitOperation: "commitWalmartAdd",
     verifyCartOperation: "verifyWalmartAddedCart"
@@ -160,7 +160,7 @@ const ADD_LANES = Object.freeze({
     cartUrl: AMAZON_CART_URL,
     runnerFile: "amazon-action.js",
     runnerGlobal: "YoinkAmazonAction",
-    emptyOperation: "inspectAmazonEmptyCart",
+    baselineOperation: "inspectAmazonCartBaseline",
     prepareOperation: "prepareAmazonAdd",
     commitOperation: "commitAmazonAdd",
     verifyCartOperation: "verifyAmazonAddedCart"
@@ -171,7 +171,7 @@ const ADD_LANES = Object.freeze({
     cartUrl: BESTBUY_CART_URL,
     runnerFile: "bestbuy-action.js",
     runnerGlobal: "YoinkBestBuyAction",
-    emptyOperation: "inspectBestBuyEmptyCart",
+    baselineOperation: "inspectBestBuyCartBaseline",
     prepareOperation: "prepareBestBuyAdd",
     commitOperation: "commitBestBuyAdd",
     verifyCartOperation: "verifyBestBuyAddedCart"
@@ -3516,12 +3516,19 @@ function safeOfferEvidence(proof) {
 async function verifyAddedCart(active) {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
-  if (!lane || !Number.isInteger(active.tabId) || !active.proof) throw new Error("The retailer cart verification context is unavailable.");
+  if (!lane || !Number.isInteger(active.tabId) || !active.proof || !active.cartBaseline) {
+    throw new Error("The retailer cart verification context is unavailable.");
+  }
   await navigateRetailerTab(active.tabId, retailerId, lane.cartUrl, "cart");
   await injectAddAction(active.tabId, retailerId);
   let result = { ok: false, reason: "cart_unverified" };
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    result = await executeAddAction(active.tabId, retailerId, lane.verifyCartOperation, [active.runnerJob, active.proof]);
+    result = await executeAddAction(
+      active.tabId,
+      retailerId,
+      lane.verifyCartOperation,
+      [active.runnerJob, active.proof, active.cartBaseline]
+    );
     if (result?.ok || !["cart_unverified", "quantity_unavailable"].includes(result?.reason)) break;
     await new Promise((resolve) => setTimeout(resolve, 750));
   }
@@ -3530,15 +3537,16 @@ async function verifyAddedCart(active) {
     await clearActiveJob();
     return false;
   }
-  await reportJob(active, "cart_verified", "exact_cart_verified", `The cart contains one exact ${lane.name} line at the authorized quantity and price.`, {
+  await reportJob(active, "cart_verified", "exact_cart_delta_verified", `The ${lane.name} cart changed by exactly one authorized item and every baseline quantity remained unchanged.`, {
     retailerSku: active.runnerJob.retailerSku,
     quantity: 1,
     unitPriceCents: result.proof?.unitPriceCents ?? null,
     sellerType: result.proof?.sellerType ?? "unknown"
   });
-  await reportJob(active, "confirmed", `${retailerId}_add_confirmed`, `${lane.name} add-to-cart completed and the exact cart line was verified.`, {
+  await reportJob(active, "confirmed", `${retailerId}_add_confirmed`, `${lane.name} add-to-cart completed and the exact +1 cart delta was verified.`, {
     retailerSku: active.runnerJob.retailerSku,
-    quantity: 1
+    quantity: 1,
+    baselineLineCount: Number(active.cartBaseline?.lineCount) || 0
   });
   await clearActiveJob();
   return true;
@@ -3566,7 +3574,7 @@ async function executeLeasedRetailerJob(lease) {
   const retailerId = lease.retailerId || lease.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
   if (!lane) throw new Error("The leased retailer lane is unsupported.");
-  const active = { ...lease, phase: "leased", tabId: null, proof: null };
+  const active = { ...lease, phase: "leased", tabId: null, proof: null, cartBaseline: null };
   await saveActiveJob(active);
   try {
     if (!await addLaneAccess(retailerId)) {
@@ -3574,16 +3582,23 @@ async function executeLeasedRetailerJob(lease) {
       await clearActiveJob();
       return;
     }
-    await reportJob(active, "navigating", "cart_preflight_started", `Chrome opened ${lane.name} cart for an empty-cart preflight.`);
+    await reportJob(active, "navigating", "cart_baseline_started", `Chrome opened ${lane.name} cart to bind the exact pre-add baseline.`);
     active.tabId = await openRetailerTab(retailerId, lane.cartUrl, "cart");
     await saveActiveJob(active);
     await injectAddAction(active.tabId, retailerId);
-    const empty = await executeAddAction(active.tabId, retailerId, lane.emptyOperation);
-    if (!empty?.ok) {
-      await reportJob(active, "cancelled", empty?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the cart was not provably empty.`);
+    let baseline = { ok: false, reason: "cart_unverified" };
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      baseline = await executeAddAction(active.tabId, retailerId, lane.baselineOperation);
+      if (baseline?.ok || !["cart_unverified", "quantity_unavailable"].includes(baseline?.reason)) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    if (!baseline?.ok || !baseline.proof) {
+      await reportJob(active, "cancelled", baseline?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the current cart baseline could not be proven.`);
       await clearActiveJob();
       return;
     }
+    active.cartBaseline = baseline.proof;
+    await saveActiveJob(active);
 
     await navigateRetailerTab(active.tabId, retailerId, active.navigationUrl, active.runnerJob.retailerSku);
     await reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`);

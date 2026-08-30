@@ -7,7 +7,7 @@ import type { BrowserActionContract } from "../packages/browser-safety/src/index
 import { BESTBUY_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
 import {
   commitBestBuyAdd,
-  inspectBestBuyEmptyCart,
+  inspectBestBuyCartBaseline,
   prepareBestBuyAdd,
   rehearseBestBuyAdd,
   type BestBuyAddJob,
@@ -136,7 +136,7 @@ test("Best Buy safely self-heals unique control and price selector drift", () =>
   assert.equal(prepareBestBuyAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Best Buy v7 requires an exact selected Shipping or explicit Pickup offer", () => {
+test("Best Buy v8 requires an exact selected Shipping or explicit Pickup offer", () => {
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
@@ -170,7 +170,7 @@ test("Best Buy v7 requires an exact selected Shipping or explicit Pickup offer",
   );
 });
 
-test("Best Buy v7 reaches the no-click boundary on the modern fulfillment layout", () => {
+test("Best Buy v8 reaches the no-click boundary on the modern fulfillment layout", () => {
   const url = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const document = fixture("bestbuy-modern-first-party.html", url);
   let clicks = 0;
@@ -186,7 +186,7 @@ test("Best Buy v7 reaches the no-click boundary on the modern fulfillment layout
   assert.equal(clicks, 0);
 });
 
-test("Best Buy v7 uses the primary action when one exact offer also renders a sticky duplicate", () => {
+test("Best Buy v8 uses the primary action when one exact offer also renders a sticky duplicate", () => {
   const url = "https://www.bestbuy.com/product/riftbound-origins-ahri-playmat/J3GWY596JF/sku/6677244";
   const document = fixture("bestbuy-primary-and-sticky-add.html", url);
   const primary = document.querySelector("[data-testid='purchase-controls'] button");
@@ -213,7 +213,7 @@ test("Best Buy v7 uses the primary action when one exact offer also renders a st
   assert.equal(stickyClicks, 0);
 });
 
-test("Best Buy v7 rehearses and commits one exact split-shell action", () => {
+test("Best Buy v8 rehearses and commits one exact split-shell action", () => {
   const url = "https://www.bestbuy.com/product/2026-topps-flagship-football-mega-box/J3ZPGXX9RP/sku/6685081";
   const document = fixture("bestbuy-single-split-shell.html", url);
   const control = document.querySelector(".add-to-cart-button");
@@ -235,14 +235,20 @@ test("Best Buy v7 rehearses and commits one exact split-shell action", () => {
   assert.equal(clicks, 1);
 });
 
-test("Best Buy cart preflight requires emptiness and post-add proof requires one exact line", () => {
+test("Best Buy cart preflight captures a bounded baseline and post-add proof requires an exact delta", () => {
   const empty = fixture("bestbuy-cart-empty.html", CART_URL);
-  assert.deepEqual(inspectBestBuyEmptyCart(empty, CART_URL), { ok: true, reason: "verified_empty" });
+  const baseline = inspectBestBuyCartBaseline(empty, CART_URL, NOW);
+  assert.equal(baseline.ok, true);
+  if (!baseline.ok) return;
+  assert.deepEqual(baseline.proof.lines, []);
   const cart = fixture("bestbuy-cart-single.html", CART_URL);
-  assert.deepEqual(inspectBestBuyEmptyCart(cart, CART_URL), { ok: false, reason: "foreign_cart_line" });
+  const existing = inspectBestBuyCartBaseline(cart, CART_URL, NOW);
+  assert.equal(existing.ok, true);
+  if (!existing.ok) return;
+  assert.equal(existing.proof.lineCount, 1);
   const prepared = prepareBestBuyAdd(product(), PRODUCT_URL, job(), NOW);
   assert.equal(prepared.ok, true);
   if (!prepared.ok) return;
-  const verified = verifyBestBuyAddedCart(cart, CART_URL, job(), prepared.proof, NOW + 500);
+  const verified = verifyBestBuyAddedCart(cart, CART_URL, job(), prepared.proof, baseline.proof, NOW + 500);
   assert.equal(verified.ok, true);
 });

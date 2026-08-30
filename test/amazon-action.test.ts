@@ -7,7 +7,7 @@ import type { BrowserActionContract } from "../packages/browser-safety/src/index
 import { AMAZON_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
 import {
   commitAmazonAdd,
-  inspectAmazonEmptyCart,
+  inspectAmazonCartBaseline,
   prepareAmazonAdd,
   rehearseAmazonAdd,
   type AmazonAddJob,
@@ -148,7 +148,7 @@ test("Amazon safely self-heals unique control and price selector drift", () => {
   assert.equal(prepareAmazonAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Amazon add v7 rejects ambiguity and permits pickup only for an exact selected pickup offer", () => {
+test("Amazon add v8 rejects ambiguity and permits pickup only for an exact selected pickup offer", () => {
   assert.equal(prepareAmazonAdd(product("amazon-marketplace.html"), PRODUCT_URL, job(), NOW).reason, "third_party_seller");
   const separatedMarketplaceUrl = "https://www.amazon.com/dp/B081J5PW5J";
   assert.equal(prepareAmazonAdd(
@@ -230,14 +230,20 @@ test("Amazon add v7 rejects ambiguity and permits pickup only for an exact selec
   assert.equal(prepareAmazonAdd(quantityChanged, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Amazon cart preflight requires emptiness and post-add proof requires one exact line", () => {
+test("Amazon cart preflight captures a bounded baseline and post-add proof requires an exact delta", () => {
   const empty = new JSDOM("<body><main id='sc-active-cart'><h1>Your Amazon Cart is empty</h1></main></body>", { url: CART_URL }).window.document;
-  assert.deepEqual(inspectAmazonEmptyCart(empty, CART_URL), { ok: true, reason: "verified_empty" });
+  const baseline = inspectAmazonCartBaseline(empty, CART_URL, NOW);
+  assert.equal(baseline.ok, true);
+  if (!baseline.ok) return;
+  assert.deepEqual(baseline.proof.lines, []);
   const cart = new JSDOM(readFileSync(join(AMAZON_FIXTURES, "cart.html"), "utf8"), { url: CART_URL }).window.document;
-  assert.deepEqual(inspectAmazonEmptyCart(cart, CART_URL), { ok: false, reason: "foreign_cart_line" });
+  const existing = inspectAmazonCartBaseline(cart, CART_URL, NOW);
+  assert.equal(existing.ok, true);
+  if (!existing.ok) return;
+  assert.equal(existing.proof.lineCount, 1);
   const prepared = prepareAmazonAdd(product(), PRODUCT_URL, job(), NOW);
   assert.equal(prepared.ok, true);
   if (!prepared.ok) return;
-  const verified = verifyAmazonAddedCart(cart, CART_URL, job(), prepared.proof, NOW + 500);
+  const verified = verifyAmazonAddedCart(cart, CART_URL, job(), prepared.proof, baseline.proof, NOW + 500);
   assert.equal(verified.ok, true);
 });

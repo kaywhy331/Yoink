@@ -1,6 +1,21 @@
 # Yoink roadmap
 
-## Shipped through 1.11.0
+## Shipped through 1.12.0
+
+### Verified multi-item cart accumulation (1.12.0)
+
+- Replaces the empty-cart-only preflight with a privacy-bounded baseline of at
+  most 25 unique SKU-and-quantity lines, retained only in Chrome session state
+  for post-click and cold-worker recovery
+- Proves that every existing quantity remains unchanged and only the authorized
+  exact SKU increases by one; stale, duplicate, incomplete, added, removed, or
+  otherwise changed lines lock safely instead of retrying the mutation
+- Retries only the read-only baseline observation while a cart hydrates, keeps
+  the durable pre-click receipt and at-most-once click boundary unchanged, and
+  leaves checkout, payment, and order submission manual
+- Advances all four add runners and migration 53 retires every inherited lane,
+  requiring fresh evidence, no-click rehearsal, and explicit activation before
+  the broader cart behavior can run live
 
 ### Signal-plan transition and guarded-cart preparation (1.11.0)
 

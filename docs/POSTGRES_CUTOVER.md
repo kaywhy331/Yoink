@@ -1945,7 +1945,7 @@ SQLite remains authoritative.
 
 Version 0.87 adds the thirteenth independent hosted-signal role. It ports the
 complete Target add-only activation transaction, not retailer DOM execution.
-The operation can only qualify `target-add-v4`, set the current user's control
+The operation can only qualify `target-add-v5`, set the current user's control
 state to live and unpaused, promote already-created eligible Target shadow jobs,
 and append the existing receipts. Walmart, Amazon, and Best Buy remain outside
 this boundary because their SQLite activation also changes shared retailer and
@@ -1960,7 +1960,7 @@ qualification then settings mask `01100`.
 
 Before the first mutation, PostgreSQL holds the evidence/trial append boundary
 stable and recomputes the exact current 30-day Target qualification hash from
-`target-observer-v3` observations and passed `target-add-v4` rehearsals. It
+`target-observer-v3` observations and passed `target-add-v5` rehearsals. It
 requires at least one Target-sold actionable observation, one shipping
 actionable observation, two distinct TCINs, one passed no-click rehearsal, the
 latest active companion's exact Target add-v4 capability, and the expected

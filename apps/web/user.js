@@ -712,7 +712,7 @@ function renderPlans() {
       <details class="plan-details">
         <summary>Details</summary>
         <p>${plan.primaryRetailerSku ? `Exact item ${escapeHtml(plan.primaryRetailerSku)} · ` : ""}last seen ${escapeHtml(current)} · ${escapeHtml(fulfillment)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p>
-        <p>${escapeHtml(decision)} when a fresh exact offer arrives. Guarded cart attempts always add exactly one item.</p>
+        <p>${escapeHtml(decision)} when a fresh exact offer arrives. Guarded cart attempts add exactly one item and preserve existing cart quantities through an exact delta check.</p>
         ${automationReadinessMarkup(plan.automationReadiness)}
       </details>
     </article>`;

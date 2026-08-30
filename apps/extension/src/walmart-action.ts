@@ -1,7 +1,9 @@
 import {
+  captureCartBaseline,
+  verifyCartAddDelta,
   verifyLiveOffer,
-  verifySingleJobCart,
   type BrowserActionContract,
+  type CartBaselineProof,
   type CartProof,
   type LiveOfferProof
 } from "../../../packages/browser-safety/src/index.js";
@@ -140,16 +142,20 @@ function walmartCartUrl(value: string): boolean {
   return walmartPageKind(value) === "cart";
 }
 
-export function inspectWalmartEmptyCart(documentValue: Document, urlValue: string): { ok: boolean; reason: string } {
-  if (!walmartCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
+export function inspectWalmartCartBaseline(
+  documentValue: Document,
+  urlValue: string,
+  now = Date.now()
+) {
+  if (!walmartCartUrl(urlValue)) return { ok: false as const, reason: "cart_page_unverified" };
   if (walmartSecurityChallenge(documentValue) || walmartInteractiveBlock(documentValue, urlValue)) {
-    return { ok: false, reason: "manual_action_required" };
+    return { ok: false as const, reason: "manual_action_required" };
   }
-  const cart = observeWalmartCart(documentValue);
-  if (!cart.complete || !cart.independentlyCounted) return { ok: false, reason: "cart_unverified" };
-  return cart.lines.length === 0
-    ? { ok: true, reason: "verified_empty" }
-    : { ok: false, reason: "foreign_cart_line" };
+  return captureCartBaseline(
+    "walmart",
+    observeWalmartCart(documentValue, new Date(now).toISOString()),
+    now
+  );
 }
 
 export function verifyWalmartAddedCart(
@@ -157,20 +163,21 @@ export function verifyWalmartAddedCart(
   urlValue: string,
   job: WalmartAddJob,
   proof: LiveOfferProof,
+  baseline: CartBaselineProof,
   now = Date.now()
 ): { ok: true; reason: "verified"; proof: CartProof } | { ok: false; reason: string } {
   if (!walmartCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
   if (walmartSecurityChallenge(documentValue) || walmartInteractiveBlock(documentValue, urlValue)) {
     return { ok: false, reason: "manual_action_required" };
   }
-  return verifySingleJobCart(job, observeWalmartCart(documentValue, new Date(now).toISOString()), proof, now);
+  return verifyCartAddDelta(job, baseline, observeWalmartCart(documentValue, new Date(now).toISOString()), proof, now);
 }
 
 Object.defineProperty(globalThis, "YoinkWalmartAction", {
   value: Object.freeze({
     abandonWalmartAdd,
     commitWalmartAdd,
-    inspectWalmartEmptyCart,
+    inspectWalmartCartBaseline,
     prepareWalmartAdd,
     rehearseWalmartAdd,
     verifyWalmartAddedCart

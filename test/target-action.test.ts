@@ -7,7 +7,7 @@ import type { BrowserActionContract } from "../packages/browser-safety/src/index
 import { TARGET_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
 import {
   commitTargetAdd,
-  inspectTargetEmptyCart,
+  inspectTargetCartBaseline,
   prepareTargetAdd,
   rehearseTargetAdd,
   type TargetAddJob,
@@ -231,14 +231,20 @@ test("Target safely self-heals current fulfillment and price landmark drift", as
   assert.equal(prepareTargetAdd(ambiguous, PRODUCT_URL, actionJob, NOW).ok, false);
 });
 
-test("Target cart preflight requires a visibly empty cart and post-add proof requires one exact line", () => {
+test("Target cart preflight captures a bounded baseline and post-add proof requires an exact delta", () => {
   const empty = new JSDOM(`<body><main><h1>Your cart is empty</h1></main></body>`, { url: "https://www.target.com/cart" }).window.document;
-  assert.deepEqual(inspectTargetEmptyCart(empty, "https://www.target.com/cart"), { ok: true, reason: "verified_empty" });
+  const baseline = inspectTargetCartBaseline(empty, "https://www.target.com/cart", NOW);
+  assert.equal(baseline.ok, true);
+  if (!baseline.ok) return;
+  assert.deepEqual(baseline.proof.lines, []);
   const cart = new JSDOM(readFileSync(join(FIXTURES, "cart.html"), "utf8"), { url: "https://www.target.com/cart" }).window.document;
-  assert.deepEqual(inspectTargetEmptyCart(cart, "https://www.target.com/cart"), { ok: false, reason: "foreign_cart_line" });
+  const existing = inspectTargetCartBaseline(cart, "https://www.target.com/cart", NOW);
+  assert.equal(existing.ok, true);
+  if (!existing.ok) return;
+  assert.equal(existing.proof.lineCount, 1);
   const prepared = prepareTargetAdd(product(), PRODUCT_URL, job(), NOW);
   assert.equal(prepared.ok, true);
   if (!prepared.ok) return;
-  const verified = verifyTargetAddedCart(cart, "https://www.target.com/cart", job(), prepared.proof, NOW + 500);
+  const verified = verifyTargetAddedCart(cart, "https://www.target.com/cart", job(), prepared.proof, baseline.proof, NOW + 500);
   assert.equal(verified.ok, true);
 });

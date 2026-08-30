@@ -23,7 +23,7 @@ var YoinkBestBuyActionModule = (() => {
   __export(bestbuy_action_exports, {
     abandonBestBuyAdd: () => abandonBestBuyAdd,
     commitBestBuyAdd: () => commitBestBuyAdd,
-    inspectBestBuyEmptyCart: () => inspectBestBuyEmptyCart,
+    inspectBestBuyCartBaseline: () => inspectBestBuyCartBaseline,
     prepareBestBuyAdd: () => prepareBestBuyAdd,
     rehearseBestBuyAdd: () => rehearseBestBuyAdd,
     verifyBestBuyAddedCart: () => verifyBestBuyAddedCart
@@ -34,6 +34,7 @@ var YoinkBestBuyActionModule = (() => {
   var LIVE_OFFER_MAX_AGE_MS = 3e4;
   var CART_PROOF_MAX_AGE_MS = 5 * 6e4;
   var CHECKOUT_EVIDENCE_MAX_AGE_MS = 2 * 6e4;
+  var CART_BASELINE_MAX_LINES = 25;
   var RETAILER_DOMAINS = Object.freeze({
     target: ["target.com"],
     walmart: ["walmart.com"],
@@ -134,25 +135,87 @@ var YoinkBestBuyActionModule = (() => {
       }
     };
   }
-  function verifySingleJobCart(job, inventory, offerProof, now = Date.now()) {
+  function normalizedCartLines(inventory) {
+    if (!inventory.complete || !inventory.independentlyCounted || inventory.independentLineCount !== inventory.lines.length || inventory.lines.length > CART_BASELINE_MAX_LINES) return null;
+    const lines = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const line of inventory.lines) {
+      const retailerSku = String(line.retailerSku || "").normalize("NFKC").trim().toUpperCase();
+      if (!/^[A-Z0-9][A-Z0-9._-]{0,119}$/.test(retailerSku) || !Number.isInteger(line.quantity) || Number(line.quantity) < 1 || Number(line.quantity) > 99 || seen.has(retailerSku)) return null;
+      seen.add(retailerSku);
+      lines.push({ retailerSku, quantity: Number(line.quantity) });
+    }
+    return lines.sort((left, right) => left.retailerSku.localeCompare(right.retailerSku, "en-US"));
+  }
+  function captureCartBaseline(retailerId, inventory, now = Date.now()) {
+    if (!Object.hasOwn(RETAILER_DOMAINS, retailerId)) return rejected("retailer_not_supported");
+    if (inventory.contractVersion !== BROWSER_SAFETY_CONTRACT_VERSION) return rejected("contract_version_mismatch");
+    const age = timestampAge(inventory.observedAt, now);
+    if (age === null || age > LIVE_OFFER_MAX_AGE_MS) return rejected("cart_evidence_stale");
+    const lines = normalizedCartLines(inventory);
+    if (!lines) return rejected("cart_unverified");
+    return {
+      ok: true,
+      reason: "verified",
+      proof: {
+        contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
+        retailerId,
+        observedAt: inventory.observedAt,
+        lineCount: lines.length,
+        lines
+      }
+    };
+  }
+  function verifyCartAddDelta(job, baseline, inventory, offerProof, now = Date.now()) {
     const invalidJob = validJob(job, now);
     if (invalidJob) return rejected(invalidJob);
-    if (inventory.contractVersion !== BROWSER_SAFETY_CONTRACT_VERSION) return rejected("contract_version_mismatch");
+    if (baseline.contractVersion !== BROWSER_SAFETY_CONTRACT_VERSION || baseline.retailerId !== job.retailerId || baseline.lineCount !== baseline.lines.length || baseline.lines.length > CART_BASELINE_MAX_LINES) return rejected("cart_baseline_invalid");
+    const baselineAge = timestampAge(baseline.observedAt, now);
     const cartAge = timestampAge(inventory.observedAt, now);
     const offerAge = timestampAge(offerProof.observedAt, now);
+    if (baselineAge === null || baselineAge > CART_PROOF_MAX_AGE_MS) return rejected("cart_baseline_stale");
     if (cartAge === null || cartAge > LIVE_OFFER_MAX_AGE_MS || offerAge === null || offerAge > CART_PROOF_MAX_AGE_MS) return rejected("cart_evidence_stale");
+    if (new Date(baseline.observedAt).getTime() > new Date(inventory.observedAt).getTime()) {
+      return rejected("cart_baseline_invalid");
+    }
     if (offerProof.jobId !== job.jobId || offerProof.retailerId !== job.retailerId || offerProof.retailerSku !== job.retailerSku) return rejected("offer_proof_mismatch");
-    if (!inventory.complete || !inventory.independentlyCounted || inventory.independentLineCount !== inventory.lines.length) return rejected("cart_unverified");
-    if (inventory.lines.length !== 1 || inventory.lines[0]?.retailerSku !== job.retailerSku) return rejected("foreign_cart_line");
-    const line = inventory.lines[0];
-    if (!line || line.quantity !== job.quantity) return rejected("quantity_unavailable");
+    const baselineLines = normalizedCartLines({
+      contractVersion: baseline.contractVersion,
+      observedAt: baseline.observedAt,
+      complete: true,
+      independentlyCounted: true,
+      independentLineCount: baseline.lineCount,
+      lines: baseline.lines.map((line2) => ({
+        retailerSku: line2.retailerSku,
+        quantity: line2.quantity,
+        unitPriceCents: null,
+        sellerName: "",
+        sellerType: "unknown"
+      }))
+    });
+    const afterLines = normalizedCartLines(inventory);
+    if (!baselineLines || !afterLines) return rejected("cart_unverified");
+    const expectedSku = job.retailerSku.toUpperCase();
+    const before = new Map(baselineLines.map((line2) => [line2.retailerSku, line2.quantity]));
+    const after = new Map(afterLines.map((line2) => [line2.retailerSku, line2.quantity]));
+    if (after.size !== before.size + (before.has(expectedSku) ? 0 : 1)) return rejected("cart_delta_unverified");
+    for (const [retailerSku, quantity] of before) {
+      const expectedQuantity = quantity + (retailerSku === expectedSku ? job.quantity : 0);
+      if (after.get(retailerSku) !== expectedQuantity) return rejected("cart_delta_unverified");
+    }
+    if (!before.has(expectedSku) && after.get(expectedSku) !== job.quantity) return rejected("cart_delta_unverified");
+    for (const retailerSku of after.keys()) {
+      if (retailerSku !== expectedSku && !before.has(retailerSku)) return rejected("cart_delta_unverified");
+    }
+    const line = inventory.lines.find((candidate) => String(candidate.retailerSku || "").normalize("NFKC").trim().toUpperCase() === expectedSku);
+    if (!line) return rejected("quantity_unavailable");
     const unitPriceCents = line.unitPriceCents ?? offerProof.unitPriceCents;
     const sellerName = line.sellerName || offerProof.sellerName;
     const sellerType = line.sellerType === "unknown" ? offerProof.sellerType : line.sellerType;
     const sellerReason = sellerAllowed(job, sellerName, sellerType);
     if (sellerReason) return rejected(sellerReason);
-    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0) return rejected("price_unavailable");
-    if (unitPriceCents > job.maxUnitPriceCents) return rejected("over_unit_cap");
+    if (!Number.isSafeInteger(unitPriceCents) || Number(unitPriceCents) <= 0) return rejected("price_unavailable");
+    if (Number(unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
     return {
       ok: true,
       reason: "verified",
@@ -163,7 +226,7 @@ var YoinkBestBuyActionModule = (() => {
         retailerSku: job.retailerSku,
         observedAt: inventory.observedAt,
         quantity: job.quantity,
-        unitPriceCents,
+        unitPriceCents: Number(unitPriceCents),
         sellerName: cleanSeller(sellerName),
         sellerType
       }
@@ -171,7 +234,7 @@ var YoinkBestBuyActionModule = (() => {
   }
 
   // packages/contracts/src/index.ts
-  var BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v7";
+  var BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v8";
 
   // packages/browser-adapters/src/retailers.ts
   function fanaticsProductId(url) {
@@ -1669,27 +1732,29 @@ var YoinkBestBuyActionModule = (() => {
   function bestBuyCartUrl(value) {
     return bestBuyPageKind(value) === "cart";
   }
-  function inspectBestBuyEmptyCart(documentValue, urlValue) {
+  function inspectBestBuyCartBaseline(documentValue, urlValue, now = Date.now()) {
     if (!bestBuyCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
     if (bestBuySecurityChallenge(documentValue) || bestBuyInteractiveBlock(documentValue, urlValue)) {
       return { ok: false, reason: "manual_action_required" };
     }
-    const cart = observeBestBuyCart(documentValue);
-    if (!cart.complete || !cart.independentlyCounted) return { ok: false, reason: "cart_unverified" };
-    return cart.lines.length === 0 ? { ok: true, reason: "verified_empty" } : { ok: false, reason: "foreign_cart_line" };
+    return captureCartBaseline(
+      "bestbuy",
+      observeBestBuyCart(documentValue, new Date(now).toISOString()),
+      now
+    );
   }
-  function verifyBestBuyAddedCart(documentValue, urlValue, job, proof, now = Date.now()) {
+  function verifyBestBuyAddedCart(documentValue, urlValue, job, proof, baseline, now = Date.now()) {
     if (!bestBuyCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
     if (bestBuySecurityChallenge(documentValue) || bestBuyInteractiveBlock(documentValue, urlValue)) {
       return { ok: false, reason: "manual_action_required" };
     }
-    return verifySingleJobCart(job, observeBestBuyCart(documentValue, new Date(now).toISOString()), proof, now);
+    return verifyCartAddDelta(job, baseline, observeBestBuyCart(documentValue, new Date(now).toISOString()), proof, now);
   }
   Object.defineProperty(globalThis, "YoinkBestBuyAction", {
     value: Object.freeze({
       abandonBestBuyAdd,
       commitBestBuyAdd,
-      inspectBestBuyEmptyCart,
+      inspectBestBuyCartBaseline,
       prepareBestBuyAdd,
       rehearseBestBuyAdd,
       verifyBestBuyAddedCart

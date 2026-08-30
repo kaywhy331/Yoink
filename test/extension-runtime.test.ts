@@ -494,6 +494,8 @@ interface HarnessOptions {
   walmartJob?: boolean;
   amazonJob?: boolean;
   bestBuyJob?: boolean;
+  cartBaselineHydrationRetry?: boolean;
+  cartBaselineFailure?: boolean;
   notification?: boolean;
   releaseVersion?: string;
   releaseReady?: boolean;
@@ -575,8 +577,15 @@ function harness(options: HarnessOptions = {}) {
         sellerType: "first_party",
         fulfillment: "shipping"
       } : null,
+      cartBaseline: options.activeJob === "post_boundary" ? {
+        contractVersion: 1,
+        retailerId: "target",
+        observedAt: new Date().toISOString(),
+        lineCount: 1,
+        lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
+      } : null,
       runnerJob: {
-        adapterVersion: "target-add-v4",
+        adapterVersion: "target-add-v5",
         contractVersion: 1,
         jobId: "job_target_fixture",
         retailerId: "target",
@@ -667,6 +676,7 @@ function harness(options: HarnessOptions = {}) {
   const notificationCompleted = new Promise<void>((resolve) => { completeNotification = resolve; });
   let notificationAcknowledged = false;
   let amazonObservationAttempts = 0;
+  let cartBaselineAttempts = 0;
   let adapterDiagnosticFailuresRemaining = Math.max(0, options.adapterDiagnosticFailures ?? 0);
   let adapterDiagnosticQueueWasNonEmpty = Array.isArray(storage.yoinkAdapterDiagnosticQueueV1)
     && storage.yoinkAdapterDiagnosticQueueV1.length > 0;
@@ -764,17 +774,36 @@ function harness(options: HarnessOptions = {}) {
         if (args?.[0] === "rehearseBestBuyAdd") {
           return [{ frameId: 0, result: { ok: true, reason: "verified", wouldClick: true, proof: { retailerSku: "6588149" } } }];
         }
-        if (args?.[0] === "inspectTargetEmptyCart") {
-          return [{ frameId: 0, result: { ok: true, reason: "verified_empty" } }];
+        if (args?.[0] === "inspectTargetCartBaseline") {
+          cartBaselineAttempts += 1;
+          if (options.cartBaselineFailure) {
+            return [{ frameId: 0, result: { ok: false, reason: "cart_unverified" } }];
+          }
+          if (options.cartBaselineHydrationRetry && cartBaselineAttempts === 1) {
+            return [{ frameId: 0, result: { ok: false, reason: "cart_unverified" } }];
+          }
+          return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
+            contractVersion: 1, retailerId: "target", observedAt: new Date().toISOString(),
+            lineCount: 1, lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
+          } } }];
         }
-        if (args?.[0] === "inspectWalmartEmptyCart") {
-          return [{ frameId: 0, result: { ok: true, reason: "verified_empty" } }];
+        if (args?.[0] === "inspectWalmartCartBaseline") {
+          return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
+            contractVersion: 1, retailerId: "walmart", observedAt: new Date().toISOString(),
+            lineCount: 1, lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
+          } } }];
         }
-        if (args?.[0] === "inspectAmazonEmptyCart") {
-          return [{ frameId: 0, result: { ok: true, reason: "verified_empty" } }];
+        if (args?.[0] === "inspectAmazonCartBaseline") {
+          return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
+            contractVersion: 1, retailerId: "amazon", observedAt: new Date().toISOString(),
+            lineCount: 1, lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
+          } } }];
         }
-        if (args?.[0] === "inspectBestBuyEmptyCart") {
-          return [{ frameId: 0, result: { ok: true, reason: "verified_empty" } }];
+        if (args?.[0] === "inspectBestBuyCartBaseline") {
+          return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
+            contractVersion: 1, retailerId: "bestbuy", observedAt: new Date().toISOString(),
+            lineCount: 1, lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
+          } } }];
         }
         if (args?.[0] === "prepareTargetAdd") {
           return [{ frameId: 0, result: {
@@ -1341,7 +1370,7 @@ function harness(options: HarnessOptions = {}) {
     if (url.endsWith("/devices/self/jobs/next")) {
       const leasedJob = options.amazonJob ? {
         contractVersion: 1,
-        adapterVersion: "amazon-add-v7",
+        adapterVersion: "amazon-add-v8",
         id: "job_amazon_fixture",
         capabilityToken: "A".repeat(43),
         action: "add_to_cart",
@@ -1358,7 +1387,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.walmartJob ? {
         contractVersion: 1,
-        adapterVersion: "walmart-add-v5",
+        adapterVersion: "walmart-add-v6",
         id: "job_walmart_fixture",
         capabilityToken: "W".repeat(43),
         action: "add_to_cart",
@@ -1375,7 +1404,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.bestBuyJob ? {
         contractVersion: 1,
-        adapterVersion: "bestbuy-add-v7",
+        adapterVersion: "bestbuy-add-v8",
         id: "job_bestbuy_fixture",
         capabilityToken: "B".repeat(43),
         action: "add_to_cart",
@@ -1392,7 +1421,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : {
         contractVersion: 1,
-        adapterVersion: "target-add-v4",
+        adapterVersion: "target-add-v5",
         id: "job_target_fixture",
         capabilityToken: "C".repeat(43),
         action: "add_to_cart",
@@ -2325,7 +2354,7 @@ test("one domain-aware workflow inspects exactly once and routes all four guarde
   assert.equal(readOnly.injections.some((entry) => (entry.files as string[] | undefined)?.some((file) => file.includes("action.js"))), false);
 });
 
-test("the service worker captures observer-v5 evidence and rehearses Walmart add-v5 without clicking", async () => {
+test("the service worker captures observer-v5 evidence and rehearses Walmart add-v6 without clicking", async () => {
   const runtime = harness({ activeUrl: WALMART_PRODUCT_URL });
   const inspection = await runtime.send({ type: "yoink:inspect-retailer" });
   assert.equal(inspection.ok, true);
@@ -2343,7 +2372,7 @@ test("the service worker captures observer-v5 evidence and rehearses Walmart add
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/walmart-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "walmart-add-v5");
+  assert.equal(trialBody.adapterVersion, "walmart-add-v6");
   assert.equal(trialBody.observerVersion, "walmart-observer-v5");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("4499"), false);
@@ -2351,7 +2380,7 @@ test("the service worker captures observer-v5 evidence and rehearses Walmart add
   assert.equal(JSON.stringify(trialBody).includes(TOKEN), false);
 });
 
-test("the service worker rehearses Amazon add-v7 without persisting its offer token", async () => {
+test("the service worker rehearses Amazon add-v8 without persisting its offer token", async () => {
   const runtime = harness({ activeUrl: AMAZON_PRODUCT_URL });
   const rehearsal = await runtime.send({ type: "yoink:rehearse-amazon" });
   assert.equal(rehearsal.ok, true);
@@ -2361,7 +2390,7 @@ test("the service worker rehearses Amazon add-v7 without persisting its offer to
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/amazon-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "amazon-add-v7");
+  assert.equal(trialBody.adapterVersion, "amazon-add-v8");
   assert.equal(trialBody.observerVersion, "amazon-observer-v7");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("offerListing"), false);
@@ -2375,7 +2404,7 @@ test("the service worker rehearses Amazon add-v7 without persisting its offer to
   assert.equal(JSON.stringify(rehearsalDiagnostic).includes("offerListing"), false);
 });
 
-test("the service worker captures observer-v8 evidence and rehearses Best Buy add-v7 without clicking", async () => {
+test("the service worker captures observer-v8 evidence and rehearses Best Buy add-v8 without clicking", async () => {
   const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL });
   const rehearsal = await runtime.send({ type: "yoink:rehearse-bestbuy" });
   assert.equal(rehearsal.ok, true);
@@ -2390,7 +2419,7 @@ test("the service worker captures observer-v8 evidence and rehearses Best Buy ad
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v7");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v8");
   assert.equal(trialBody.observerVersion, "bestbuy-observer-v8");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("699"), false);
@@ -2445,8 +2474,8 @@ test("the service worker records one sanitized Target add rehearsal without clic
   assert.equal(JSON.stringify(body).includes(TOKEN), false);
 });
 
-test("the service worker runs one leased Target add through preflight, click receipt, and exact cart proof", async () => {
-  const runtime = harness({ liveJob: true });
+test("the service worker runs one leased Target add through baseline, click receipt, and exact cart delta proof", async () => {
+  const runtime = harness({ liveJob: true, cartBaselineHydrationRetry: true });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
@@ -2465,10 +2494,34 @@ test("the service worker runs one leased Target add through preflight, click rec
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectTargetEmptyCart").length, 1);
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 2);
   assert.equal(operations.filter((operation) => operation === "prepareTargetAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitTargetAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyTargetAddedCart").length, 1);
+  const targetVerifyArgs = runtime.injections.find(
+    (entry) => (entry.args as unknown[] | undefined)?.[0] === "verifyTargetAddedCart"
+  )?.args as unknown[];
+  const targetVerifyOperationArgs = targetVerifyArgs[1] as unknown[];
+  assert.deepEqual((targetVerifyOperationArgs[2] as { lines: unknown[] }).lines, [
+    { retailerSku: "EXISTING-FIXTURE", quantity: 1 }
+  ]);
+  assert.equal("activeTargetJob" in runtime.storage, false);
+});
+
+test("an ambiguous cart baseline fails closed before any add click", async () => {
+  const runtime = harness({ liveJob: true, cartBaselineFailure: true });
+  runtime.fireJobAlarm();
+  await waitFor(
+    () => runtime.jobStates.includes("cancelled"),
+    "Fixture Target job did not cancel after baseline verification failed."
+  );
+  assert.deepEqual(runtime.jobStates, ["navigating", "cancelled"]);
+  const operations = runtime.injections
+    .map((entry) => (entry.args as unknown[] | undefined)?.[0])
+    .filter(Boolean);
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 4);
+  assert.equal(operations.some((operation) => operation === "prepareTargetAdd"), false);
+  assert.equal(operations.some((operation) => operation === "commitTargetAdd"), false);
   assert.equal("activeTargetJob" in runtime.storage, false);
 });
 
@@ -2492,7 +2545,7 @@ test("the service worker runs one leased Walmart add through its own cart and ru
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectWalmartEmptyCart").length, 1);
+  assert.equal(operations.filter((operation) => operation === "inspectWalmartCartBaseline").length, 1);
   assert.equal(operations.filter((operation) => operation === "prepareWalmartAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitWalmartAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyWalmartAddedCart").length, 1);
@@ -2521,7 +2574,7 @@ test("the service worker runs one leased Amazon add through its own cart and iso
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectAmazonEmptyCart").length, 1);
+  assert.equal(operations.filter((operation) => operation === "inspectAmazonCartBaseline").length, 1);
   assert.equal(operations.filter((operation) => operation === "prepareAmazonAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitAmazonAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyAmazonAddedCart").length, 1);
@@ -2529,7 +2582,7 @@ test("the service worker runs one leased Amazon add through its own cart and iso
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
 });
 
-test("the service worker runs one leased Best Buy add through its own empty-cart and exact-cart proof", async () => {
+test("the service worker runs one leased Best Buy add through its own baseline and exact-cart delta proof", async () => {
   const runtime = harness({ bestBuyJob: true });
   runtime.fireJobAlarm();
   await Promise.race([
@@ -2549,7 +2602,7 @@ test("the service worker runs one leased Best Buy add through its own empty-cart
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectBestBuyEmptyCart").length, 1);
+  assert.equal(operations.filter((operation) => operation === "inspectBestBuyCartBaseline").length, 1);
   assert.equal(operations.filter((operation) => operation === "prepareBestBuyAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitBestBuyAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyBestBuyAddedCart").length, 1);

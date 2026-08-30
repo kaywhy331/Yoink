@@ -811,7 +811,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional coverage for a future marketplace-capable adapter; target-add-v4 rejects it.",
+        detail: "Optional coverage for a future marketplace-capable adapter; target-add-v5 rejects it.",
         required: 1,
         requiredForQualification: false
       },
@@ -825,7 +825,7 @@ export class ShadowObservationRepository {
       {
         id: "pickup_actionable",
         label: "Pickup fulfillment",
-        detail: "Optional coverage for a future pickup-capable adapter; target-add-v4 rejects it.",
+        detail: "Optional live coverage for explicitly configured Pickup; Shipping remains the default.",
         required: 1,
         requiredForQualification: false
       },
@@ -965,7 +965,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional coverage for a future marketplace-capable adapter; walmart-add-v5 rejects it.",
+        detail: "Optional coverage for a future marketplace-capable adapter; walmart-add-v6 rejects it.",
         required: 1,
         requiredForQualification: false
       },
@@ -979,7 +979,7 @@ export class ShadowObservationRepository {
       {
         id: "pickup_actionable",
         label: "Pickup fulfillment",
-        detail: "Optional coverage for a future pickup-capable adapter; walmart-add-v5 rejects it.",
+        detail: "Optional live coverage for explicitly configured Pickup; Shipping remains the default.",
         required: 1,
         requiredForQualification: false
       },
@@ -1120,7 +1120,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional fail-closed coverage; amazon-add-v7 rejects marketplace sellers.",
+        detail: "Optional fail-closed coverage; amazon-add-v8 rejects marketplace sellers.",
         required: 1,
         requiredForQualification: false
       },
@@ -1274,7 +1274,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional fail-closed coverage; bestbuy-add-v7 rejects every marketplace seller.",
+        detail: "Optional fail-closed coverage; bestbuy-add-v8 rejects every marketplace seller.",
         required: 1,
         requiredForQualification: false
       },
@@ -1288,7 +1288,7 @@ export class ShadowObservationRepository {
       {
         id: "pickup_actionable",
         label: "Pickup fulfillment",
-        detail: "Optional fail-closed coverage; bestbuy-add-v7 rejects pickup.",
+        detail: "Optional live coverage for explicitly configured Pickup; Shipping remains the default.",
         required: 1,
         requiredForQualification: false
       },

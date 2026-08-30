@@ -1,7 +1,9 @@
 import {
+  captureCartBaseline,
+  verifyCartAddDelta,
   verifyLiveOffer,
-  verifySingleJobCart,
   type BrowserActionContract,
+  type CartBaselineProof,
   type CartProof,
   type LiveOfferProof
 } from "../../../packages/browser-safety/src/index.js";
@@ -204,16 +206,20 @@ function targetCartUrl(value: string): boolean {
   }
 }
 
-export function inspectTargetEmptyCart(documentValue: Document, urlValue: string): { ok: boolean; reason: string } {
-  if (!targetCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
+export function inspectTargetCartBaseline(
+  documentValue: Document,
+  urlValue: string,
+  now = Date.now()
+) {
+  if (!targetCartUrl(urlValue)) return { ok: false as const, reason: "cart_page_unverified" };
   if (targetSecurityChallenge(documentValue) || targetInteractiveBlock(documentValue)) {
-    return { ok: false, reason: "manual_action_required" };
+    return { ok: false as const, reason: "manual_action_required" };
   }
-  const cart = observeTargetCart(documentValue);
-  if (!cart.complete || !cart.independentlyCounted) return { ok: false, reason: "cart_unverified" };
-  return cart.lines.length === 0
-    ? { ok: true, reason: "verified_empty" }
-    : { ok: false, reason: "foreign_cart_line" };
+  return captureCartBaseline(
+    "target",
+    observeTargetCart(documentValue, new Date(now).toISOString()),
+    now
+  );
 }
 
 export function verifyTargetAddedCart(
@@ -221,20 +227,21 @@ export function verifyTargetAddedCart(
   urlValue: string,
   job: TargetAddJob,
   proof: LiveOfferProof,
+  baseline: CartBaselineProof,
   now = Date.now()
 ): { ok: true; reason: "verified"; proof: CartProof } | { ok: false; reason: string } {
   if (!targetCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
   if (targetSecurityChallenge(documentValue) || targetInteractiveBlock(documentValue)) {
     return { ok: false, reason: "manual_action_required" };
   }
-  return verifySingleJobCart(job, observeTargetCart(documentValue, new Date(now).toISOString()), proof, now);
+  return verifyCartAddDelta(job, baseline, observeTargetCart(documentValue, new Date(now).toISOString()), proof, now);
 }
 
 Object.defineProperty(globalThis, "YoinkTargetAction", {
   value: Object.freeze({
     abandonTargetAdd,
     commitTargetAdd,
-    inspectTargetEmptyCart,
+    inspectTargetCartBaseline,
     prepareTargetAdd,
     rehearseTargetAdd,
     verifyTargetAddedCart

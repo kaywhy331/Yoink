@@ -9,8 +9,8 @@ and submit qualification.
 
 The current Yoink companion has only loopback access as a required host
 permission. Retailer access is optional. Generic `retailerMutation` remains
-forced false, while the independently versioned `target-add-v4`,
-`walmart-add-v5`, `amazon-add-v7`, and `bestbuy-add-v7` capabilities can be declared and qualified
+forced false, while the independently versioned `target-add-v5`,
+`walmart-add-v6`, `amazon-add-v8`, and `bestbuy-add-v8` capabilities can be declared and qualified
 only for their narrow add-only scopes.
 
 ## Source-to-target map
@@ -18,7 +18,7 @@ only for their narrow add-only scopes.
 | CartCollect source | Reusable responsibility | Yoink target | Status |
 | --- | --- | --- | --- |
 | `extension/offer-policy.js` | Live price and seller binding | `packages/browser-safety/src/index.ts` | Ported as integer-money, immutable-job verification |
-| `extension/safety.js` | Exact cart scope, quantity, total, and fresh proof | `packages/browser-safety/src/index.ts` | Ported for one-job carts |
+| `extension/safety.js` | Exact cart scope, quantity, total, and fresh proof | `packages/browser-safety/src/index.ts` | Ported with a bounded pre-add baseline and exact +1 delta proof |
 | `extension/evidence.js` | Privacy-preserving destination/payment fingerprints | Browser safety checkout contract | Validator ported; Target fixture capture accepts an in-memory signer; runtime signing pending |
 | `extension/retailers.js` | Retailer visible-DOM readers | One versioned adapter module per retailer | Four qualification-gated add lanes plus nine exact-identity read-only observers with sanitized fixture coverage |
 | `extension/automation-state.js` | Durable reservations and post-mutation locks | Yoink action-job state machine and lease reconciliation | Mission-wide claims, four-lane lease expiry, cold-worker recovery, and explicit uncertain-state resolution implemented |
@@ -33,7 +33,8 @@ only for their narrow add-only scopes.
 - allowlisted HTTPS retailer origin;
 - fresh visible product-page evidence;
 - stock, actionable control, unit price, seller, and fulfillment;
-- independently counted single-job cart with no foreign lines;
+- independently counted baseline of at most 25 unique SKU-and-quantity lines;
+- a post-add cart differing only by exactly +1 on the authorized SKU;
 - bounded final total and unchanged quantity;
 - visible checkout evidence represented only by keyed fingerprints;
 - no unsafe substitutions, memberships, authentication, MFA, queues, location
@@ -71,11 +72,11 @@ confirm the exact retailer add-only scope in the control center.
 observes product offer, seller type, fulfillment, cart inventory, bounded order
 total, manual blockers, and privacy-preserving checkout evidence. Its fixtures
 cover first-party and marketplace offers, hidden/recommended controls, wrong
-SKUs, authentication/MFA/location/membership/queue/challenge states, foreign
-cart lines, and unsafe checkout choices.
+SKUs, authentication/MFA/location/membership/queue/challenge states, changed
+or ambiguous cart deltas, and unsafe checkout choices.
 
 It contains no click, event-dispatch, fetch, navigation, or credential logic.
-The separate `target-add-v4` bundle owns Target's only commerce click function. It accepts
+The separate `target-add-v5` bundle owns Target's only commerce click function. It accepts
 only an immutable Target/add-to-cart/quantity-one/first-party job with exact
 Shipping or explicitly configured Pickup fulfillment, binds the exact current
 fulfillment region, and can select the matching available tile. Shipping may
@@ -85,7 +86,8 @@ the single Add click. `Check availability`, a Pickup tile for a Shipping job,
 unavailable tiles, ambiguous regions, and location or membership prompts remain
 closed. The service worker
 consumes a short-lived authorization and writes the durable mutation receipt
-before selection; it verifies the exact cart afterward.
+before selection; it verifies an exact +1 cart delta afterward while preserving
+every baseline quantity.
 
 The initial live dossier requires two distinct exact TCINs, one Target-sold
 remote-fulfillment candidate, and one no-click rehearsal. Marketplace, Pickup,
@@ -97,12 +99,12 @@ order submission remain closed.
 
 `walmart-observer-v5` is a pure visible-DOM reader whose shipping evidence must
 be explicit; the v1 observer cannot qualify mutation. The separate
-`walmart-add-v5` bundle accepts only an immutable
+`walmart-add-v6` bundle accepts only an immutable
 Walmart/add-to-cart/quantity-one/first-party job matching exact Shipping or
-explicitly configured Pickup. It applies an
-empty-cart preflight, stops on virtual queues or interactive blockers,
+explicitly configured Pickup. It captures a bounded cart baseline, stops on
+virtual queues or interactive blockers,
 reobserves immediately before consuming a short-lived click authorization, and
-proves one exact cart line afterward. Its service-worker receipt and restart
+proves only the authorized SKU increased by one afterward. Its service-worker receipt and restart
 semantics match Target without sharing a generic mutation capability.
 
 The implementation and automated recovery coverage are complete. Live Walmart
@@ -124,13 +126,14 @@ the shipment. Fulfillment ignores non-rendered script, style, template, and
 hidden text. Canonical offer fields take precedence over alternate payment
 tokens when internally consistent, while explicit checkout ASIN inputs take
 precedence over variation-swatch metadata. Route validation takes its volatile
-offer token only from the selected exact Add form. The separate `amazon-add-v7` bundle
+offer token only from the selected exact Add form. The separate `amazon-add-v8` bundle
 accepts only an immutable Amazon/add-to-cart/quantity-one/first-party job whose
 live fulfillment matches exact Shipping or explicitly configured Pickup. The
 offer token stays only inside a short-lived in-page authorization and
-must remain unchanged at commit. The service worker proves the Amazon cart is
-empty first, writes the durable mutation receipt, clicks Add at most once, and
-then proves one exact cart line. Buy Now, checkout, marketplace, fulfillment
+must remain unchanged at commit. The service worker binds the current Amazon
+cart first, writes the durable mutation receipt, clicks Add at most once, and
+then proves an exact +1 delta with every baseline quantity unchanged. Buy Now,
+checkout, marketplace, fulfillment
 mismatch, and order submission remain closed.
 
 The live dossier requires two exact ASINs, one Amazon.com-sold shipping
@@ -169,15 +172,15 @@ supports current and legacy product routes plus current test/automation and
 accessible native-button layouts. Its diagnostic reports a sanitized generic
 Add-intent count when an unknown selector exists, allowing immediate repair
 queue classification without storing page text or DOM. The separate
-`bestbuy-add-v7` runner preserves the empty-cart, durable pre-click receipt,
-at-most-once click, exact cart-line proof, queue/interactive restraint, and
+`bestbuy-add-v8` runner preserves the bounded-baseline, durable pre-click receipt,
+at-most-once click, exact cart-delta proof, queue/interactive restraint, and
 marketplace/fulfillment-mismatch rejection boundaries. Accessibility-backed seller names are
 read only inside the already-bound seller element, and in-store-only products
 remain manual/local evidence with unknown global availability. A single-control
 split shell may bind sibling commerce regions only when the exact page has one
 Add control, one distinct price, one seller class, quantity one, selected
-fulfillment, and no competing SKU. Migration 52
-retires prior Best Buy qualifications; observer-version binding also excludes
+fulfillment, and no competing SKU. Migration 53
+retires prior qualifications for all four add stores; observer-version binding also excludes
 pre-v8 evidence from current qualification. Preorders and actual high-demand
 gates are retained as read-only evidence but cannot satisfy or execute the
 in-stock lane; a passive demand badge does not close an otherwise exact offer.

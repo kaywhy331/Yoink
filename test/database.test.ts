@@ -249,6 +249,60 @@ test("migration 52 retires prior Best Buy qualification after the v8 observer an
   }
 });
 
+test("migration 53 retires every prior add lane before multi-item cart delta execution", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-cart-delta-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new YoinkDatabase(filePath);
+    legacy.run("DELETE FROM schema_migrations WHERE version = 53");
+    legacy.run("UPDATE retailers SET execution_supported = 1 WHERE id IN ('target','walmart','amazon','bestbuy')");
+    legacy.exec(`
+      INSERT INTO product_families(id, title, brand, created_at, updated_at)
+        VALUES ('family_cart_delta_fixture', 'Cart delta fixture', '', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z');
+      INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+        VALUES ('variant_cart_delta_fixture', 'family_cart_delta_fixture', 'Cart delta fixture', '{}', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z');
+      INSERT INTO listings(
+        id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+        execution_supported, currency, created_at, updated_at
+      ) VALUES
+        ('listing_cart_delta_target', 'variant_cart_delta_fixture', 'target', '94972381', 'https://www.target.com/p/-/A-94972381', 'in_stock', 1, 'USD', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z'),
+        ('listing_cart_delta_walmart', 'variant_cart_delta_fixture', 'walmart', '20252562938', 'https://www.walmart.com/ip/20252562938', 'in_stock', 1, 'USD', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z'),
+        ('listing_cart_delta_amazon', 'variant_cart_delta_fixture', 'amazon', 'B00E4AMFKK', 'https://www.amazon.com/dp/B00E4AMFKK', 'in_stock', 1, 'USD', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z'),
+        ('listing_cart_delta_bestbuy', 'variant_cart_delta_fixture', 'bestbuy', '6685081', 'https://www.bestbuy.com/site/-/6685081.p', 'in_stock', 1, 'USD', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z');
+      INSERT OR REPLACE INTO retailer_adapter_qualifications(
+        tenant_id, user_id, retailer_id, adapter_version, highest_action,
+        status, evidence_hash, qualified_at, updated_at
+      ) VALUES
+        ('tenant_local', 'user_local', 'target', 'target-add-v4', 'add_to_cart', 'qualified', 'target-v4-evidence', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z'),
+        ('tenant_local', 'user_local', 'walmart', 'walmart-add-v5', 'add_to_cart', 'qualified', 'walmart-v5-evidence', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z'),
+        ('tenant_local', 'user_local', 'amazon', 'amazon-add-v7', 'add_to_cart', 'qualified', 'amazon-v7-evidence', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z'),
+        ('tenant_local', 'user_local', 'bestbuy', 'bestbuy-add-v7', 'add_to_cart', 'qualified', 'bestbuy-v7-evidence', '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ name: string }>(
+        "SELECT name FROM schema_migrations WHERE version = 53"
+      )?.name, "multi_item_cart_delta_requalification_boundary");
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM retailers WHERE id IN ('target','walmart','amazon','bestbuy') AND execution_supported = 0"
+      )?.count, 4);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM listings WHERE id LIKE 'listing_cart_delta_%' AND execution_supported = 0"
+      )?.count, 4);
+      assert.equal(upgraded.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id IN ('target','walmart','amazon','bestbuy') AND status = 'retired'"
+      )?.count, 4);
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("an existing 0.2 database upgrades transactionally to shadow observations and add rehearsals", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-db-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
@@ -496,7 +550,7 @@ test("migration 23 adds reversible catalog identity governance without changing 
   }
 });
 
-test("migration 24 adds a read-only Walmart Draw ledger without changing retailer execution state", () => {
+test("an upgrade from migration 23 adds the Walmart Draw ledger and applies the current requalification boundary", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-walmart-draw-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -531,11 +585,11 @@ test("migration 24 adds a read-only Walmart Draw ledger without changing retaile
         WHERE type = 'table' AND name IN ('walmart_draw_scans', 'walmart_draw_items')`)?.count, 2);
       assert.equal(upgraded.get<{ executionSupported: number }>(
         "SELECT execution_supported AS executionSupported FROM retailers WHERE id = 'walmart'"
-      )?.executionSupported, 1);
+      )?.executionSupported, 0);
       const qualification = upgraded.get<{ status: string; evidenceHash: string }>(
         "SELECT status, evidence_hash AS evidenceHash FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'walmart'"
       );
-      assert.equal(qualification?.status, "qualified");
+      assert.equal(qualification?.status, "retired");
       assert.equal(qualification?.evidenceHash, "preserved-draw-migration-evidence");
       upgraded.assertIntegrity();
     } finally {
@@ -546,7 +600,7 @@ test("migration 24 adds a read-only Walmart Draw ledger without changing retaile
   }
 });
 
-test("migration 25 adds privacy-classified operator alert control without widening retailer execution", () => {
+test("an upgrade from migration 24 adds privacy-classified alerts and applies the current requalification boundary", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-operator-alert-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -589,7 +643,7 @@ test("migration 25 adds privacy-classified operator alert control without wideni
       assert.deepEqual(JSON.parse(rule?.routes ?? "[]"), ["dashboard", "audit_outbox"]);
       assert.equal(upgraded.get<{ executionSupported: number }>(
         "SELECT execution_supported AS executionSupported FROM retailers WHERE id = 'walmart'"
-      )?.executionSupported, 1);
+      )?.executionSupported, 0);
       upgraded.assertIntegrity();
     } finally {
       upgraded.close();
@@ -599,7 +653,7 @@ test("migration 25 adds privacy-classified operator alert control without wideni
   }
 });
 
-test("migration 26 retires TOFU recipes and adds immutable rooted trust without widening execution", () => {
+test("an upgrade from migration 25 retires TOFU recipes and applies the current requalification boundary", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-rooted-trust-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -660,7 +714,7 @@ test("migration 26 retires TOFU recipes and adds immutable rooted trust without 
       )?.count, 1);
       assert.equal(upgraded.get<{ executionSupported: number }>(
         "SELECT execution_supported AS executionSupported FROM retailers WHERE id = 'target'"
-      )?.executionSupported, 1);
+      )?.executionSupported, 0);
       assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master
         WHERE type = 'trigger' AND name IN (
           'observer_recipe_trust_manifests_no_update', 'observer_recipe_trust_manifests_no_delete',
@@ -720,7 +774,7 @@ test("migration 27 adds exact selected-offer scope without widening retailer exe
   }
 });
 
-test("migration 28 retires only inherited Best Buy execution for observer v5 requalification", () => {
+test("an upgrade from migration 27 preserves the Best Buy boundary and applies the current all-lane boundary", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-bestbuy-v5-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -776,10 +830,10 @@ test("migration 28 retires only inherited Best Buy execution for observer v5 req
       )?.status, "retired");
       assert.equal(upgraded.get<{ execution_supported: number }>(
         "SELECT execution_supported FROM retailers WHERE id = 'target'"
-      )?.execution_supported, 1);
+      )?.execution_supported, 0);
       assert.equal(upgraded.get<{ status: string }>(
         "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'target'"
-      )?.status, "qualified");
+      )?.status, "retired");
       upgraded.assertIntegrity();
     } finally {
       upgraded.close();
@@ -789,7 +843,7 @@ test("migration 28 retires only inherited Best Buy execution for observer v5 req
   }
 });
 
-test("migration 29 adds immutable external witness receipts without widening retailer execution", () => {
+test("an upgrade from migration 28 adds witness receipts and applies the current requalification boundary", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-observer-witness-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -824,7 +878,7 @@ test("migration 29 adds immutable external witness receipts without widening ret
         )`)?.count, 4);
       assert.equal(upgraded.get<{ execution_supported: number }>(
         "SELECT execution_supported FROM retailers WHERE id = 'target'"
-      )?.execution_supported, 1);
+      )?.execution_supported, 0);
       assert.equal(upgraded.get<{ execution_supported: number }>(
         "SELECT execution_supported FROM retailers WHERE id = 'bestbuy'"
       )?.execution_supported, 0);
@@ -948,7 +1002,7 @@ test("migration 30 preserves strategy history and appends direct mode for review
   }
 });
 
-test("migration 31 adds bounded operational telemetry without changing retailer execution", () => {
+test("an upgrade from migration 30 adds bounded telemetry and applies the current requalification boundary", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-operational-telemetry-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -1008,8 +1062,8 @@ test("migration 31 adds bounded operational telemetry without changing retailer 
         `SELECT retailer_id AS retailerId, status FROM retailer_adapter_qualifications
          WHERE user_id = 'user_upgrade_31' ORDER BY retailer_id`
       ).map((row) => ({ ...row })), [
-        { retailerId: "target", status: "qualified" },
-        { retailerId: "walmart", status: "qualified" }
+        { retailerId: "target", status: "retired" },
+        { retailerId: "walmart", status: "retired" }
       ]);
       assert.equal(upgraded.get<{ executionSupported: number }>(
         "SELECT execution_supported AS executionSupported FROM retailers WHERE id = 'amazon'"
@@ -1023,7 +1077,7 @@ test("migration 31 adds bounded operational telemetry without changing retailer 
   }
 });
 
-test("migration 32 adds high-risk change control without widening or closing retailer execution", () => {
+test("an upgrade from migration 31 adds high-risk change control and applies the current requalification boundary", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-change-control-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -1084,8 +1138,8 @@ test("migration 32 adds high-risk change control without widening or closing ret
         `SELECT retailer_id AS retailerId, status FROM retailer_adapter_qualifications
          WHERE user_id = 'user_upgrade_32' ORDER BY retailer_id`
       ).map((row) => ({ ...row })), [
-        { retailerId: "target", status: "qualified" },
-        { retailerId: "walmart", status: "qualified" }
+        { retailerId: "target", status: "retired" },
+        { retailerId: "walmart", status: "retired" }
       ]);
       assert.equal(upgraded.get<{ executionSupported: number }>(
         "SELECT execution_supported AS executionSupported FROM retailers WHERE id = 'amazon'"
@@ -1281,7 +1335,7 @@ test("migration 35 upgrades only the packaged signal-recovery schedule default",
   }
 });
 
-test("migration 36 backfills recoverable device credential state without exposing or rotating the credential", () => {
+test("an upgrade from migration 35 backfills recoverable credentials and applies the current requalification boundary", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-device-credential-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
@@ -1354,7 +1408,7 @@ test("migration 36 backfills recoverable device credential state without exposin
         `SELECT status FROM retailer_adapter_qualifications
          WHERE tenant_id = 'tenant_device_upgrade_36'
            AND user_id = 'user_device_upgrade_36' AND retailer_id = 'target'`
-      )?.status, "qualified");
+      )?.status, "retired");
       assert.throws(
         () => upgraded.run(
           "UPDATE extension_devices SET pending_token_hash = 'invalid-state' WHERE id = 'device_upgrade_36'"

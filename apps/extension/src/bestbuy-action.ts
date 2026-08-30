@@ -1,7 +1,9 @@
 import {
+  captureCartBaseline,
+  verifyCartAddDelta,
   verifyLiveOffer,
-  verifySingleJobCart,
   type BrowserActionContract,
+  type CartBaselineProof,
   type CartProof,
   type LiveOfferProof
 } from "../../../packages/browser-safety/src/index.js";
@@ -146,16 +148,20 @@ function bestBuyCartUrl(value: string): boolean {
   return bestBuyPageKind(value) === "cart";
 }
 
-export function inspectBestBuyEmptyCart(documentValue: Document, urlValue: string): { ok: boolean; reason: string } {
-  if (!bestBuyCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
+export function inspectBestBuyCartBaseline(
+  documentValue: Document,
+  urlValue: string,
+  now = Date.now()
+) {
+  if (!bestBuyCartUrl(urlValue)) return { ok: false as const, reason: "cart_page_unverified" };
   if (bestBuySecurityChallenge(documentValue) || bestBuyInteractiveBlock(documentValue, urlValue)) {
-    return { ok: false, reason: "manual_action_required" };
+    return { ok: false as const, reason: "manual_action_required" };
   }
-  const cart = observeBestBuyCart(documentValue);
-  if (!cart.complete || !cart.independentlyCounted) return { ok: false, reason: "cart_unverified" };
-  return cart.lines.length === 0
-    ? { ok: true, reason: "verified_empty" }
-    : { ok: false, reason: "foreign_cart_line" };
+  return captureCartBaseline(
+    "bestbuy",
+    observeBestBuyCart(documentValue, new Date(now).toISOString()),
+    now
+  );
 }
 
 export function verifyBestBuyAddedCart(
@@ -163,20 +169,21 @@ export function verifyBestBuyAddedCart(
   urlValue: string,
   job: BestBuyAddJob,
   proof: LiveOfferProof,
+  baseline: CartBaselineProof,
   now = Date.now()
 ): { ok: true; reason: "verified"; proof: CartProof } | { ok: false; reason: string } {
   if (!bestBuyCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
   if (bestBuySecurityChallenge(documentValue) || bestBuyInteractiveBlock(documentValue, urlValue)) {
     return { ok: false, reason: "manual_action_required" };
   }
-  return verifySingleJobCart(job, observeBestBuyCart(documentValue, new Date(now).toISOString()), proof, now);
+  return verifyCartAddDelta(job, baseline, observeBestBuyCart(documentValue, new Date(now).toISOString()), proof, now);
 }
 
 Object.defineProperty(globalThis, "YoinkBestBuyAction", {
   value: Object.freeze({
     abandonBestBuyAdd,
     commitBestBuyAdd,
-    inspectBestBuyEmptyCart,
+    inspectBestBuyCartBaseline,
     prepareBestBuyAdd,
     rehearseBestBuyAdd,
     verifyBestBuyAddedCart

@@ -148,7 +148,7 @@ function renderStatus() {
   const activeStores = [targetActive ? "Target" : "", walmartActive ? "Walmart" : "", amazonActive ? "Amazon" : "", bestBuyActive ? "Best Buy" : ""].filter(Boolean);
   $("#safetyTitle").textContent = activeStores.length ? `Guarded ${activeStores.join(" and ")} adds are active` : "Qualification-gated execution";
   $("#safetyCopy").textContent = activeStores.length
-    ? `Chrome may add one exact first-party item at ${activeStores.join(" or ")} to a provably empty cart only when fresh fulfillment evidence matches the target's exact Shipping or Pickup choice. Shipping is the default; Pickup is opt-in. Checkout and ordering remain disabled.`
+    ? `Chrome may add one exact first-party item at ${activeStores.join(" or ")} only when fresh fulfillment evidence matches the target's exact Shipping or Pickup choice. It binds up to 25 existing cart lines and proves only the authorized SKU increased by one. Shipping is the default; Pickup is opt-in. Checkout and ordering remain manual.`
     : "Target, Walmart, Amazon, and Best Buy add-only lanes remain independently closed until their live evidence, no-click rehearsal, and explicit activation gates are complete.";
   const executorKind = targetActive || walmartActive || amazonActive || bestBuyActive ? "good" : "warning";
   const targetState = targetActive ? "Target active" : targetQualified ? "Target qualified · paused" : "Target closed";
@@ -1746,7 +1746,7 @@ document.addEventListener("click", async (event) => {
       if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
         throw new Error("Target qualification evidence is not ready yet.");
       }
-      const approved = confirm("Enable guarded Target adds?\n\nScope: Target-sold offers matching exact Shipping or explicitly configured Pickup, quantity 1, add-to-cart only. Chrome will require an empty cart and revalidate SKU, seller, price, stock, and fulfillment immediately before clicking. Checkout and order submission remain disabled.");
+      const approved = confirm("Enable guarded Target adds?\n\nScope: Target-sold offers matching exact Shipping or explicitly configured Pickup, quantity 1, add-to-cart only. Chrome will bind the current cart, revalidate SKU, seller, price, stock, and fulfillment immediately before clicking, then require an exact +1 cart delta with every prior quantity unchanged. Checkout and order submission remain manual.");
       if (!approved) return;
       button.disabled = true;
       const result = await api("/api/v1/admin/qualifications/target-add/activate", {
@@ -1754,7 +1754,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_TARGET_ADD_V4"
+          confirmation: "ENABLE_TARGET_ADD_V5"
         })
       });
       await refresh();
@@ -1765,7 +1765,7 @@ document.addEventListener("click", async (event) => {
       if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
         throw new Error("Walmart qualification evidence is not ready yet.");
       }
-      const approved = confirm("Enable guarded Walmart adds?\n\nScope: Walmart-sold offers matching exact Shipping or explicitly configured Pickup, quantity 1, add-to-cart only. Chrome will require an empty cart, stop at queues or challenges, and revalidate SKU, seller, price, stock, and fulfillment immediately before clicking. Checkout and order submission remain disabled.");
+      const approved = confirm("Enable guarded Walmart adds?\n\nScope: Walmart-sold offers matching exact Shipping or explicitly configured Pickup, quantity 1, add-to-cart only. Chrome will bind the current cart, stop at queues or challenges, revalidate the exact offer, then require an exact +1 cart delta with every prior quantity unchanged. Checkout and order submission remain manual.");
       if (!approved) return;
       button.disabled = true;
       const result = await api("/api/v1/admin/qualifications/walmart-add/activate", {
@@ -1773,7 +1773,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_WALMART_ADD_V5"
+          confirmation: "ENABLE_WALMART_ADD_V6"
         })
       });
       await refresh();
@@ -1784,7 +1784,7 @@ document.addEventListener("click", async (event) => {
       if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
         throw new Error("Amazon qualification evidence is not ready yet.");
       }
-      const approved = confirm("Enable guarded Amazon adds?\n\nScope: Amazon.com-sold offers with an exact ephemeral offer binding and exact Shipping or explicitly configured Pickup, quantity 1, add-to-cart only. Chrome will require an empty cart, stop at queues or challenges, and revalidate ASIN, seller, offer binding, price, stock, and fulfillment immediately before clicking. Buy Now, checkout, and order submission remain disabled.");
+      const approved = confirm("Enable guarded Amazon adds?\n\nScope: Amazon.com-sold offers with an exact ephemeral offer binding and exact Shipping or explicitly configured Pickup, quantity 1, add-to-cart only. Chrome will bind the current cart, stop at challenges, revalidate the exact offer, then require an exact +1 cart delta with every prior quantity unchanged. Buy Now, checkout, and order submission remain manual.");
       if (!approved) return;
       button.disabled = true;
       const result = await api("/api/v1/admin/qualifications/amazon-add/activate", {
@@ -1792,7 +1792,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_AMAZON_ADD_V7"
+          confirmation: "ENABLE_AMAZON_ADD_V8"
         })
       });
       await refresh();
@@ -1803,7 +1803,7 @@ document.addEventListener("click", async (event) => {
       if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
         throw new Error("Best Buy qualification evidence is not ready yet.");
       }
-      const approved = confirm("Enable guarded Best Buy adds?\n\nScope: offers explicitly labeled Sold by Best Buy with exact Shipping or explicitly configured Pickup selected, quantity 1, add-to-cart only. Chrome will require an empty cart, stop at high-demand queues or challenges, and revalidate SKU, seller, price, stock, and fulfillment immediately before clicking. Marketplace, fulfillment mismatch, checkout, and order submission remain disabled.");
+      const approved = confirm("Enable guarded Best Buy adds?\n\nScope: offers explicitly labeled Sold by Best Buy with exact Shipping or explicitly configured Pickup selected, quantity 1, add-to-cart only. Chrome will bind the current cart, stop at high-demand queues or challenges, revalidate the exact offer, then require an exact +1 cart delta with every prior quantity unchanged. Marketplace, fulfillment mismatch, checkout, and order submission remain manual.");
       if (!approved) return;
       button.disabled = true;
       const result = await api("/api/v1/admin/qualifications/bestbuy-add/activate", {
@@ -1811,7 +1811,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_BESTBUY_ADD_V7"
+          confirmation: "ENABLE_BESTBUY_ADD_V8"
         })
       });
       await refresh();

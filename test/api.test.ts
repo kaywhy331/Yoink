@@ -1217,13 +1217,13 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v4",
+          targetAddAdapterVersion: "target-add-v5",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v5",
+          walmartAddAdapterVersion: "walmart-add-v6",
           amazonAddOnly: true,
-          amazonAddAdapterVersion: "amazon-add-v7",
+          amazonAddAdapterVersion: "amazon-add-v8",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v7"
+          bestBuyAddAdapterVersion: "bestbuy-add-v8"
         }
       })
     });
@@ -1256,13 +1256,13 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v4",
+          targetAddAdapterVersion: "target-add-v5",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v5",
+          walmartAddAdapterVersion: "walmart-add-v6",
           amazonAddOnly: true,
-          amazonAddAdapterVersion: "amazon-add-v7",
+          amazonAddAdapterVersion: "amazon-add-v8",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v7"
+          bestBuyAddAdapterVersion: "bestbuy-add-v8"
         }
       })
     });
@@ -1446,13 +1446,13 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v4",
+          targetAddAdapterVersion: "target-add-v5",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v5",
+          walmartAddAdapterVersion: "walmart-add-v6",
           amazonAddOnly: true,
-          amazonAddAdapterVersion: "amazon-add-v7",
+          amazonAddAdapterVersion: "amazon-add-v8",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v7"
+          bestBuyAddAdapterVersion: "bestbuy-add-v8"
         }
       })
     });
@@ -1500,7 +1500,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "target-add-v4",
+        adapterVersion: "target-add-v5",
         observerVersion: "target-observer-v3",
         contractVersion: 1,
         shadowObservationId: shadow.id,
@@ -1624,9 +1624,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "target-add-v4",
+        adapterVersion: "target-add-v5",
         evidenceHash: readySnapshot.targetQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_TARGET_ADD_V4"
+        confirmation: "ENABLE_TARGET_ADD_V5"
       })
     });
     assert.equal(activation.status, 200);
@@ -1689,7 +1689,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "walmart-add-v5",
+        adapterVersion: "walmart-add-v6",
         observerVersion: "walmart-observer-v5",
         contractVersion: 1,
         shadowObservationId: walmartShadowIds[0],
@@ -1707,9 +1707,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "walmart-add-v5",
+        adapterVersion: "walmart-add-v6",
         evidenceHash: walmartReadySnapshot.walmartQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_WALMART_ADD_V5"
+        confirmation: "ENABLE_WALMART_ADD_V6"
       })
     });
     assert.equal(walmartActivation.status, 200);
@@ -1763,7 +1763,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "amazon-add-v7",
+        adapterVersion: "amazon-add-v8",
         observerVersion: "amazon-observer-v7",
         contractVersion: 1,
         shadowObservationId: amazonShadowIds[0],
@@ -1781,9 +1781,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "amazon-add-v7",
+        adapterVersion: "amazon-add-v8",
         evidenceHash: amazonReadySnapshot.amazonQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_AMAZON_ADD_V7"
+        confirmation: "ENABLE_AMAZON_ADD_V8"
       })
     });
     assert.equal(amazonActivation.status, 200);
@@ -1833,7 +1833,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v7",
+        adapterVersion: "bestbuy-add-v8",
         observerVersion: "bestbuy-observer-v8",
         contractVersion: 1,
         shadowObservationId: bestBuyShadowIds[0],
@@ -1851,9 +1851,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v7",
+        adapterVersion: "bestbuy-add-v8",
         evidenceHash: bestBuyReadySnapshot.bestBuyQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_BESTBUY_ADD_V7"
+        confirmation: "ENABLE_BESTBUY_ADD_V8"
       })
     });
     assert.equal(bestBuyActivation.status, 200);
