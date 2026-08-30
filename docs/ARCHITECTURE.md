@@ -65,6 +65,16 @@ expiry or uncertain result after the boundary locks the job for manual review
 and cannot trigger an automatic retry. Checkout and submit states remain
 unqualified.
 
+The Chrome orchestrator may drain at most four fresh guarded-add leases per
+cycle, sequentially. It repeats health, pairing, live/pause, mutation-enable,
+store-access, credential, and lease checks before every job and advances only
+after exact cart confirmation. A tab created by that cycle may be reused only
+for another job at the same retailer; another retailer receives its own tab.
+Fresh TrackaLacker delivery triggers an immediate job check and one bounded
+2.5-second follow-up for asynchronous worker evaluation, with the recurring
+30-second alarm retained as fallback. This changes scheduling latency only and
+does not widen any retailer action contract.
+
 Yoink 0.6 adds an extension-owned TrackaLacker Web Push path. A user gesture
 grants optional TrackaLacker page access, the extension creates a real silent
 PushSubscription with TrackaLacker's published application-server key, and a

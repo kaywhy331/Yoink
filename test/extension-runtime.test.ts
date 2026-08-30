@@ -491,6 +491,8 @@ interface HarnessOptions {
   activeUrl?: string;
   healthVersion?: string;
   liveJob?: boolean;
+  queuedJobCount?: number;
+  jobAvailableAfterPolls?: number;
   walmartJob?: boolean;
   amazonJob?: boolean;
   bestBuyJob?: boolean;
@@ -670,6 +672,12 @@ function harness(options: HarnessOptions = {}) {
   let managedUpdateChecks = 0;
   let contextMenuClickedListener: ((info: Record<string, unknown>, tab?: Record<string, unknown>) => void) | undefined;
   const serviceWorkerListeners = new Map<string, (event: unknown) => void>();
+  const expectedJobCount = liveJob
+    ? Math.max(1, Math.min(8, Math.trunc(options.queuedJobCount ?? 1)))
+    : 0;
+  let jobLeaseRequests = 0;
+  let jobsLeased = 0;
+  let jobsConfirmed = 0;
   let completeJob: (() => void) | undefined;
   const jobCompleted = new Promise<void>((resolve) => { completeJob = resolve; });
   let completeNotification: (() => void) | undefined;
@@ -1368,10 +1376,17 @@ function harness(options: HarnessOptions = {}) {
       return new Response(JSON.stringify({ notification: { id: "notification_delivery_fixture", state: body.interaction } }), { status: 200 });
     }
     if (url.endsWith("/devices/self/jobs/next")) {
+      jobLeaseRequests += 1;
+      if (!liveJob || jobLeaseRequests <= Math.max(0, Math.trunc(options.jobAvailableAfterPolls ?? 0))
+        || jobsLeased >= expectedJobCount) {
+        return new Response(JSON.stringify({ job: null, reason: liveJob ? "no_jobs" : "shadow_mode" }), { status: 200 });
+      }
+      jobsLeased += 1;
+      const jobSuffix = jobsLeased === 1 ? "" : `_${jobsLeased}`;
       const leasedJob = options.amazonJob ? {
         contractVersion: 1,
         adapterVersion: "amazon-add-v8",
-        id: "job_amazon_fixture",
+        id: `job_amazon_fixture${jobSuffix}`,
         capabilityToken: "A".repeat(43),
         action: "add_to_cart",
         quantity: 1,
@@ -1388,7 +1403,7 @@ function harness(options: HarnessOptions = {}) {
       } : options.walmartJob ? {
         contractVersion: 1,
         adapterVersion: "walmart-add-v6",
-        id: "job_walmart_fixture",
+        id: `job_walmart_fixture${jobSuffix}`,
         capabilityToken: "W".repeat(43),
         action: "add_to_cart",
         quantity: 1,
@@ -1405,7 +1420,7 @@ function harness(options: HarnessOptions = {}) {
       } : options.bestBuyJob ? {
         contractVersion: 1,
         adapterVersion: "bestbuy-add-v8",
-        id: "job_bestbuy_fixture",
+        id: `job_bestbuy_fixture${jobSuffix}`,
         capabilityToken: "B".repeat(43),
         action: "add_to_cart",
         quantity: 1,
@@ -1422,7 +1437,7 @@ function harness(options: HarnessOptions = {}) {
       } : {
         contractVersion: 1,
         adapterVersion: "target-add-v5",
-        id: "job_target_fixture",
+        id: `job_target_fixture${jobSuffix}`,
         capabilityToken: "C".repeat(43),
         action: "add_to_cart",
         quantity: 1,
@@ -1437,18 +1452,18 @@ function harness(options: HarnessOptions = {}) {
         canonicalUrl: PRODUCT_URL,
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       };
-      return new Response(JSON.stringify(liveJob ? {
+      return new Response(JSON.stringify({
         reason: "leased",
         job: leasedJob
-      } : { job: null, reason: "shadow_mode" }), { status: 200 });
+      }), { status: 200 });
     }
-    if (url.includes("/devices/self/jobs/job_target_fixture/events")
-      || url.includes("/devices/self/jobs/job_walmart_fixture/events")
-      || url.includes("/devices/self/jobs/job_amazon_fixture/events")
-      || url.includes("/devices/self/jobs/job_bestbuy_fixture/events")) {
+    if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/events$/.test(url)) {
       const body = JSON.parse(String(requestOptions.body)) as { state: string };
       jobStates.push(body.state);
-      if (body.state === "confirmed") completeJob?.();
+      if (body.state === "confirmed") {
+        jobsConfirmed += 1;
+        if (jobsConfirmed >= expectedJobCount) completeJob?.();
+      }
       return new Response(JSON.stringify({ job: { id: "job_target_fixture", state: body.state } }), { status: 200 });
     }
     throw new Error(`Unexpected fixture request: ${url}`);
@@ -1550,6 +1565,7 @@ function harness(options: HarnessOptions = {}) {
     actionTitles,
     adapterDiagnosticQueueDrained,
     diagnosticReasonCodes,
+    jobLeaseRequests: () => jobLeaseRequests,
     firePush: (payload: Record<string, unknown>) => new Promise<void>((resolve, reject) => {
       const listener = serviceWorkerListeners.get("push");
       if (!listener) return reject(new Error("The push listener was not registered."));
@@ -2508,8 +2524,95 @@ test("the service worker runs one leased Target add through baseline, click rece
   assert.equal("activeTargetJob" in runtime.storage, false);
 });
 
+test("one alarm drains confirmed Target jobs immediately and reuses one Yoink-created store tab", async () => {
+  const runtime = harness({ liveJob: true, queuedJobCount: 2 });
+  runtime.fireJobAlarm();
+  await Promise.race([
+    runtime.jobCompleted,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Fixture Target queue did not drain.")), 7_000))
+  ]);
+  await waitFor(() => runtime.jobLeaseRequests() === 3, "The drained queue was not checked for completion.");
+  const expectedStates = [
+    "navigating",
+    "verifying_listing",
+    "offer_verified",
+    "add_authorized",
+    "adding",
+    "cart_verified",
+    "confirmed"
+  ];
+  assert.deepEqual(runtime.jobStates, [...expectedStates, ...expectedStates]);
+  const operations = runtime.injections
+    .map((entry) => (entry.args as unknown[] | undefined)?.[0])
+    .filter(Boolean);
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 2);
+  assert.equal(operations.filter((operation) => operation === "commitTargetAdd").length, 2);
+  assert.equal(operations.filter((operation) => operation === "verifyTargetAddedCart").length, 2);
+  assert.equal(runtime.tabUrls().length, 2);
+  assert.equal(runtime.tabUrls().filter((url) => url === "https://www.target.com/cart").length, 1);
+  assert.equal("activeRetailerJobV1" in runtime.storage, false);
+});
+
+test("Walmart, Amazon, and Best Buy drains each reuse only their own Yoink-created store tab", async () => {
+  const fixtures = [
+    {
+      options: { walmartJob: true, queuedJobCount: 2 },
+      baseline: "inspectWalmartCartBaseline",
+      commit: "commitWalmartAdd",
+      verify: "verifyWalmartAddedCart",
+      cartUrl: "https://www.walmart.com/cart"
+    },
+    {
+      options: { amazonJob: true, queuedJobCount: 2 },
+      baseline: "inspectAmazonCartBaseline",
+      commit: "commitAmazonAdd",
+      verify: "verifyAmazonAddedCart",
+      cartUrl: "https://www.amazon.com/gp/cart/view.html"
+    },
+    {
+      options: { bestBuyJob: true, queuedJobCount: 2 },
+      baseline: "inspectBestBuyCartBaseline",
+      commit: "commitBestBuyAdd",
+      verify: "verifyBestBuyAddedCart",
+      cartUrl: "https://www.bestbuy.com/cart"
+    }
+  ] as const;
+  for (const fixture of fixtures) {
+    const runtime = harness(fixture.options);
+    runtime.fireJobAlarm();
+    await Promise.race([
+      runtime.jobCompleted,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${fixture.cartUrl} queue did not drain.`)), 7_000))
+    ]);
+    await waitFor(() => runtime.jobLeaseRequests() === 3, `${fixture.cartUrl} did not reach an empty queue.`);
+    const operations = runtime.injections
+      .map((entry) => (entry.args as unknown[] | undefined)?.[0])
+      .filter(Boolean);
+    assert.equal(operations.filter((operation) => operation === fixture.baseline).length, 2);
+    assert.equal(operations.filter((operation) => operation === fixture.commit).length, 2);
+    assert.equal(operations.filter((operation) => operation === fixture.verify).length, 2);
+    assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 2);
+    assert.equal(runtime.tabUrls().length, 2);
+    assert.equal(runtime.tabUrls().filter((url) => url === fixture.cartUrl).length, 1);
+  }
+});
+
+test("one alarm stops at the four-job drain ceiling", async () => {
+  const runtime = harness({ liveJob: true, queuedJobCount: 5 });
+  runtime.fireJobAlarm();
+  await waitFor(
+    () => runtime.jobStates.filter((state) => state === "confirmed").length === 4,
+    "The bounded Target drain did not confirm four jobs.",
+    8_000
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(runtime.jobLeaseRequests(), 4);
+  assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 4);
+  assert.equal(runtime.tabUrls().length, 2);
+});
+
 test("an ambiguous cart baseline fails closed before any add click", async () => {
-  const runtime = harness({ liveJob: true, cartBaselineFailure: true });
+  const runtime = harness({ liveJob: true, queuedJobCount: 2, cartBaselineFailure: true });
   runtime.fireJobAlarm();
   await waitFor(
     () => runtime.jobStates.includes("cancelled"),
@@ -2522,6 +2625,7 @@ test("an ambiguous cart baseline fails closed before any add click", async () =>
   assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 4);
   assert.equal(operations.some((operation) => operation === "prepareTargetAdd"), false);
   assert.equal(operations.some((operation) => operation === "commitTargetAdd"), false);
+  assert.equal(runtime.jobLeaseRequests(), 1);
   assert.equal("activeTargetJob" in runtime.storage, false);
 });
 
@@ -2659,6 +2763,23 @@ test("TrackaLacker push stays silent when supported and exposes no signed click 
   assert.equal(runtime.shownTrackalackerNotifications.length, 0);
   assert.equal(JSON.stringify(runtime.deliveredTrackalackerSignals).includes("DO_NOT_FORWARD"), false);
   assert.equal(JSON.stringify(runtime.storage).includes("DO_NOT_FORWARD"), false);
+});
+
+test("a delivered TrackaLacker signal gets one delayed action-job handoff without waiting for the alarm", async () => {
+  const runtime = harness({ liveJob: true, trackalackerPush: true, jobAvailableAfterPolls: 1 });
+  await Promise.race([
+    runtime.firePush({
+      title: "IN STOCK at Target!",
+      body: "Runtime Fixture Product\nAvailable for $59.99",
+      url: "https://www.trackalacker.com/products/showcase/runtime-fixture?utm_term=138022"
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Signal action handoff did not complete.")), 7_000))
+  ]);
+  await waitFor(() => runtime.jobStates.includes("confirmed"), "The signal-triggered job was not confirmed.");
+  assert.equal(runtime.deliveredTrackalackerSignals.length, 1);
+  assert.equal(runtime.jobLeaseRequests(), 3);
+  assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 1);
+  assert.equal(runtime.tabUrls().filter((url) => url === "https://www.target.com/cart").length, 1);
 });
 
 test("legacy visible-push fallback shows one TrackaLacker notification while delivering one signal", async () => {

@@ -1,6 +1,22 @@
 # Yoink roadmap
 
-## Shipped through 1.12.0
+## Shipped through 1.12.1
+
+### Bounded signal-to-cart fast path (1.12.1)
+
+- Removes the 30-second inter-job alarm delay by draining at most four freshly
+  leased guarded-add jobs in one Chrome cycle, sequentially and only while each
+  predecessor reaches exact cart confirmation
+- Rechecks control-plane health, pairing, live/pause state, mutation enablement,
+  optional store access, device credentials, and the server lease before every
+  job; any rejection, ambiguity, uncertain mutation, or recovery state ends the
+  drain immediately
+- Reuses only a Yoink-created tab for the same retailer within that bounded
+  cycle, so same-store matches accumulate without duplicate cart tabs while
+  different retailers retain separate cart handoffs
+- Gives every newly delivered TrackaLacker push an immediate job check and one
+  2.5-second worker-aware follow-up, while preserving the durable 30-second
+  alarm fallback and all manual checkout, payment, and order boundaries
 
 ### Verified multi-item cart accumulation (1.12.0)
 

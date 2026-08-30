@@ -5,7 +5,7 @@ pairs with the loopback control plane. The same reviewed source can be packaged
 under an explicit production profile. Both profiles report an authenticated
 readiness heartbeat, receive TrackaLacker Web Push,
 support explicit inspection for thirteen exact retailers, run separate Target,
-Walmart, Amazon, and Best Buy no-click qualification rehearsals, and executes
+Walmart, Amazon, and Best Buy no-click qualification rehearsals, and execute
 only those four independently activated guarded add-only contracts. Disney
 Store, Ravensburger, Riot Games Merch, Books-A-Million, Fanatics, Kohl's,
 Macy's, Premium Bandai, and Pokémon Center remain catalog/read-only
@@ -106,8 +106,13 @@ or entry.
 
 The rehearsal runs the production offer verifier to its final click boundary,
 then discards the authorization without clicking. After explicit activation in
-Yoink, the background runner checks only the local job queue. For one qualified
-Target, Walmart, Amazon, or Best Buy job it binds up to 25 existing
+Yoink, the background runner checks only the local job queue. A cycle processes
+at most four freshly leased jobs, one at a time, and continues only after exact
+cart confirmation. It rechecks health, live/pause state, optional store access,
+device credentials, and the server lease before every job. A Yoink-created tab
+may be reused only for the same retailer during that cycle; different stores
+retain separate cart tabs. For each qualified Target, Walmart, Amazon, or Best
+Buy job the runner binds up to 25 existing
 SKU-and-quantity lines, revalidates exact SKU, first-party seller, the saved
 Shipping or Pickup choice, stock, and price, writes the add receipt,
 clicks at most once, and verifies that only the authorized SKU increased by one
@@ -122,6 +127,12 @@ read a bounded accessibility label inside that exact seller element, while an
 explicit in-store-only product becomes manual/local evidence with unknown
 global availability. The paired add runner is v8, and upgrading retires every
 earlier Best Buy qualification.
+
+After Chrome delivers a valid TrackaLacker push to the durable inbox, the
+companion checks for an action job immediately and once more 2.5 seconds later
+if the worker has not produced one yet. The recurring 30-second alarm remains a
+fallback. A failed, rejected, or uncertain job stops the bounded drain; it does
+not skip ahead or retry a click.
 
 The popup overflow can also offer **Share evidence** after the user enables
 that retailer in Yoink's Community view and opens an eligible exact page. A
