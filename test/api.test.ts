@@ -1179,8 +1179,11 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       })
     });
     assert.equal(heartbeat.status, 200);
-    const heartbeatBody = await heartbeat.json() as { controlPlane: { retailerMutationEnabled: boolean } };
+    const heartbeatBody = await heartbeat.json() as {
+      controlPlane: { retailerMutationEnabled: boolean; communitySharingRetailers: string[] };
+    };
     assert.equal(heartbeatBody.controlPlane.retailerMutationEnabled, false);
+    assert.deepEqual(heartbeatBody.controlPlane.communitySharingRetailers, []);
 
     const diagnosticResponse = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/bestbuy`, {
       method: "POST",
@@ -1292,6 +1295,38 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       })
     });
     assert.equal(consentResponse.status, 200);
+    const consentHeartbeat = await fetch(`${baseUrl}/api/v1/devices/self/heartbeat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: extensionOrigin,
+        Authorization: `Bearer ${paired.token}`
+      },
+      body: JSON.stringify({
+        platform: "windows-chrome",
+        extensionVersion: "0.11.0",
+        capabilities: {
+          readiness: true,
+          jobReconciliation: true,
+          communityReadOnlyEvidence: true,
+          exactSelectedOfferEvidence: true,
+          retailerMutation: false,
+          targetAddOnly: true,
+          targetAddAdapterVersion: "target-add-v4",
+          walmartAddOnly: true,
+          walmartAddAdapterVersion: "walmart-add-v5",
+          amazonAddOnly: true,
+          amazonAddAdapterVersion: "amazon-add-v7",
+          bestBuyAddOnly: true,
+          bestBuyAddAdapterVersion: "bestbuy-add-v7"
+        }
+      })
+    });
+    assert.equal(consentHeartbeat.status, 200);
+    const consentHeartbeatBody = await consentHeartbeat.json() as {
+      controlPlane: { communitySharingRetailers: string[] };
+    };
+    assert.deepEqual(consentHeartbeatBody.controlPlane.communitySharingRetailers, ["target"]);
     const nonceResponse = await fetch(`${baseUrl}/api/v1/devices/self/community/nonces/target`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: extensionOrigin, Authorization: `Bearer ${paired.token}` },

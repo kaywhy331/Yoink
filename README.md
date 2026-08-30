@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.9.1 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.10.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,6 +15,16 @@ new lane. Every lane is restricted to first-party offers, quantity one, and the
 exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.10.0 replaces the extension's stacked admin-style popup with one
+compact, exact-page-aware control surface. A shared deterministic classifier
+and view reducer select at most one dominant action, retain inspection during
+paused, test, monitoring, or TrackaLacker-attention states, and progressively
+disclose health, diagnostics, store access, updates, and consent-gated evidence
+sharing. Sanitized qualification results persist across popup closes, and the
+small extension action menu revalidates the live tab, health, permission, and
+exact product identity before acting. Existing no-click qualification,
+manual-entry, permission, pairing, and retailer-action boundaries are unchanged.
 
 Version 1.9.1 extends Best Buy observer v8 and add v7 to the single-control,
 split-shell layout observed on SKU 6685081. Recovery may cross sibling regions
@@ -2532,7 +2542,7 @@ persistent retailer content script.
 ## Connect TrackaLacker
 
 Stay signed in on a normal TrackaLacker tab, open the Yoink popup, and choose
-**Connect TrackaLacker push**. The extension creates a real PushSubscription and
+**Reconnect** when signals need attention. The extension creates a real PushSubscription and
 a minimal MAIN-world function submits the confirmed nested device contract from
 the signed-in TrackaLacker origin. Push endpoint/key material, cookies, CSRF
 values, Cloudflare/session values, and signed notification URLs never enter the
@@ -2544,7 +2554,7 @@ push is unavailable, the popup states that the fallback can produce an extra
 visible notification. Yoink still deduplicates signal incidents and action jobs
 independently of desktop toast presentation.
 
-Choose **Sync followed library** for a user-requested catalog pass. It has no
+Choose **Sync products** from the popup overflow for a user-requested catalog pass. It has no
 application product or mission-count limit and imports every source listing
 returned by TrackaLacker, including out-of-stock, Best Buy, unsupported-store,
 and alternate same-retailer records. Progress and per-product receipts are
@@ -2746,13 +2756,12 @@ Build the exact-version update artifact with:
 npm run package:extension
 ```
 
-The popup's **Check for updates** button compares semantic versions against the
+The local popup overflow's **Check for updates** item compares semantic versions against the
 local Yoink release, validates exact filename/hash/size metadata, and downloads
 the packaged ZIP when newer. Chrome does not allow an unpacked extension to
 replace its own source directory. Extract the ZIP over the same companion
-folder, then choose **Reload after overwriting the folder** in the popup (or
-Reload on `chrome://extensions`). Pairing and local extension state remain in
-Chrome storage.
+folder, then reload it on `chrome://extensions`. Pairing and local extension
+state remain in Chrome storage.
 
 For a production-channel artifact, supply exact HTTPS origins explicitly:
 

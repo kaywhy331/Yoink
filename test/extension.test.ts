@@ -18,7 +18,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   };
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.version, packageJson.version);
-  assert.deepEqual(manifest.permissions, ["activeTab", "alarms", "notifications", "storage", "scripting"]);
+  assert.deepEqual(manifest.permissions, ["activeTab", "alarms", "contextMenus", "notifications", "storage", "scripting"]);
   assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1/*"]);
   assert.deepEqual(manifest.optional_host_permissions, [
     "https://www.target.com/*",
@@ -43,12 +43,13 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.equal(manifest.host_permissions.includes("https://www.target.com/*"), false);
   assert.equal(manifest.host_permissions.includes("https://*.walmart.com/*"), false);
 
-  for (const file of ["background.js", "popup.js", "runtime-config.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js", "observer-recipe-oracle.js"]) {
+  for (const file of ["background.js", "popup-state.js", "popup.js", "runtime-config.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js", "observer-recipe-oracle.js"]) {
     const result = spawnSync(process.execPath, ["--check", join(extensionRoot, file)], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
   }
   const background = readFileSync(join(extensionRoot, "background.js"), "utf8");
   const popup = readFileSync(join(extensionRoot, "popup.js"), "utf8");
+  const popupState = readFileSync(join(extensionRoot, "popup-state.js"), "utf8");
   const popupHtml = readFileSync(join(extensionRoot, "popup.html"), "utf8");
   const runtimeConfig = readFileSync(join(extensionRoot, "runtime-config.js"), "utf8");
   const targetBundle = readFileSync(join(extensionRoot, "target-shadow.js"), "utf8");
@@ -83,6 +84,8 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /walmartDrawReadOnly: true/);
   assert.match(background, /yoink:inspect-walmart-draw/);
   assert.match(background, /yoink:inspect-and-qualify/);
+  assert.match(background, /chrome\.contextMenus\.onClicked/);
+  assert.match(background, /classifyPageContext/);
   assert.match(background, /devices\/self\/walmart-draw\/scans/);
   assert.doesNotMatch(background, /draw\.www\.walmart\.com|\/draw\/enter/);
   assert.match(background, /Ed25519/);
@@ -107,16 +110,21 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /high_demand/);
   assert.doesNotMatch(background, /\.click\s*\(|dispatchEvent\s*\(/);
   assert.match(popup, /chrome\.permissions\.request/);
-  assert.match(popup, /chrome\.permissions\.remove/);
-  assert.match(popup, /Share current page evidence once|yoink:contribute-retailer/);
+  assert.doesNotMatch(popup, /chrome\.permissions\.remove/);
+  assert.match(popup, /yoink:contribute-retailer/);
   assert.match(popup, /yoink:inspect-walmart-draw/);
   assert.match(popup, /yoink:inspect-and-qualify/);
-  assert.match(popup, /preorder read-only/);
-  assert.match(popup, /high-demand gate closed/);
+  assert.match(popup, /derivePopupView/);
+  assert.match(popup, /classifyPageContext/);
+  assert.match(popupState, /derivePopupView/);
+  assert.match(popupState, /deriveContextMenuCommands/);
   assert.match(popup, /POPUP_RUNTIME_CONFIG\.appOrigin/);
   assert.doesNotMatch(popup, /http:\/\/127\.0\.0\.1:32991/);
   assert.doesNotMatch(popupHtml, /Checking local app/);
-  assert.match(popupHtml, /id="inspectAndQualify"/);
+  assert.match(popupHtml, /id="primaryAction"/);
+  assert.match(popupHtml, /id="statusPanel"/);
+  assert.match(popupHtml, /id="overflowPanel"/);
+  assert.doesNotMatch(popupHtml, /PUSH|ADAPTIVE|READ ONLY|PRIVATE PILOT|LOCAL/);
   assert.doesNotMatch(popupHtml, /id="(?:inspectTarget|rehearseTarget|inspectRetailer|rehearseWalmart|rehearseAmazon|rehearseBestBuy)"/);
   assert.ok(popupHtml.indexOf('src="runtime-config.js"') < popupHtml.indexOf('src="popup.js"'));
   assert.match(runtimeConfig, /profile: "local"/);

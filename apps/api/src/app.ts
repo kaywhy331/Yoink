@@ -1121,7 +1121,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               targetAddExecutionEnabled: targetAddQualified,
               walmartAddExecutionEnabled: walmartAddQualified,
               amazonAddExecutionEnabled: amazonAddQualified,
-              bestBuyAddExecutionEnabled: bestBuyAddQualified
+              bestBuyAddExecutionEnabled: bestBuyAddQualified,
+              communitySharingRetailers: community.consents()
+                .filter((consent) => consent.enabled)
+                .map((consent) => consent.retailerId)
             }
           });
           return;

@@ -66,6 +66,7 @@ const files = [
   "runtime-config.js",
   "background.js",
   "popup.html",
+  "popup-state.js",
   "popup.js",
   "popup.css",
   "target-shadow.js",

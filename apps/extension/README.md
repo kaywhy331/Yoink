@@ -4,7 +4,7 @@ The checked-in Manifest V3 extension uses Yoink's local runtime profile and
 pairs with the loopback control plane. The same reviewed source can be packaged
 under an explicit production profile. Both profiles report an authenticated
 readiness heartbeat, receive TrackaLacker Web Push,
-supports explicit inspection for thirteen exact retailers, runs separate Target,
+support explicit inspection for thirteen exact retailers, run separate Target,
 Walmart, Amazon, and Best Buy no-click qualification rehearsals, and executes
 only those four independently activated guarded add-only contracts. Disney
 Store, Ravensburger, Riot Games Merch, Books-A-Million, Fanatics, Kohl's,
@@ -15,7 +15,7 @@ no persistent content scripts, cookie API access,
 notification interception, checkout, or order capability. Page access is
 optional and is requested only from a user click.
 
-Walmart Collectibles Draw has a separate explicit **Inspect current drawings**
+Walmart Collectibles Draw has a separate explicit **Inspect drawings**
 action. It works only on the exact draw hub and sends a bounded list of public
 item IDs, titles, prices, seller classification, closing times, condition and
 quantity limits, plus draw/Add-control state. The companion sends sanitized
@@ -87,19 +87,19 @@ To load it for development:
 3. Choose **Load unpacked** and select this `apps/extension` directory.
 4. Open Yoink → **Preferences** and create a one-time pairing code (or use
    **Connections** in the `/admin` control center).
-5. Open the Yoink toolbar popup, enter the code, and choose **Pair**.
+5. Open the Yoink toolbar popup, enter the code, and choose **Pair browser**.
 
 For a Target, Walmart, Amazon, or Best Buy qualification check:
 
 1. Open an exact product page for the retailer.
 2. Open the Yoink popup.
-3. Choose that store's **qualification rehearsal** and approve the optional
-   permission.
-4. Review the sanitized result and qualification state in Yoink `/admin` →
-   Connections.
+3. Choose **Inspect product** and approve that store's optional permission if
+   Chrome requests it.
+4. Review the concise sanitized result in-place, or choose **View details** for
+   the bounded evidence summary.
 
 To inspect Walmart drawings, open
-`https://www.walmart.com/shop/collectibles/draw`, choose **Inspect current
+`https://www.walmart.com/shop/collectibles/draw`, choose **Inspect
 drawings**, and review the exact current cards in Yoink's Walmart drawings view
 or `/admin` → Connections. This is observation only and performs no rehearsal
 or entry.
@@ -121,8 +121,9 @@ explicit in-store-only product becomes manual/local evidence with unknown
 global availability. The paired add runner is v3, and upgrading retires every
 earlier Best Buy qualification.
 
-The popup can also **Share current page evidence once** after the user enables
-that retailer in Yoink's Community view. Sharing is never automatic. The
+The popup overflow can also offer **Share evidence** after the user enables
+that retailer in Yoink's Community view and opens an eligible exact page. A
+visible confirmation is still required, and sharing is never automatic. The
 extension sends only IDs for a sanitized observation/diagnostic the server
 already accepted; the server reconstructs the exact SKU, variant, seller,
 fulfillment, location scope, price, and availability behind a one-use nonce.
@@ -144,8 +145,9 @@ authoritative.
 For TrackaLacker:
 
 1. Sign in to TrackaLacker in the same Chrome profile.
-2. Open the Yoink popup and choose **Connect TrackaLacker push**.
-3. Optionally choose **Sync followed library** for one bounded catalog pass.
+2. Open the Yoink popup and choose **Reconnect** when signals need attention.
+3. Optionally choose **Sync products** from the overflow menu for one bounded
+   catalog pass.
 
 Enrollment uses the page's legitimate cookies and runtime CSRF token only in a
 MAIN-world same-origin request. The real subscription endpoint, p256dh, and auth
@@ -160,11 +162,22 @@ popup reports that an additional alert can appear; signal and action dedupe are
 still enforced by Yoink.
 
 For a local source update, build `npm run package:extension` from the repository
-and choose **Check for updates** in the popup. A newer exact-version ZIP is
+and choose **Check for updates** in the popup overflow. A newer exact-version ZIP is
 downloaded only when its filename, size, and SHA-256 metadata validate. Because
 Chrome does not let an unpacked extension overwrite its own directory, extract
-the ZIP over the same folder and use the popup's reload button. Chrome storage
-preserves the pairing and bridge state.
+the ZIP over the same folder and reload it on `chrome://extensions`. Chrome
+storage preserves the pairing and bridge state.
+
+The popup is a single context-aware action surface. Its header summarizes
+health; clicking it reveals browser, TrackaLacker, action-mode, store-access,
+and last-check details. Exact retailer pages expose one **Inspect product**
+action, Walmart Draw exposes **Inspect drawings**, and healthy idle pages expose
+no invented primary action. One secondary activity row carries the highest
+priority background state. Secondary controls live in overflow, while the
+extension action context menu is limited to Open Yoink, the exact current-page
+action when eligible, Reconnect when needed, Sync products, and Settings. Every
+context-menu selection revalidates the current tab and health before work
+starts; its visible label is never treated as authorization.
 
 For a production artifact, set exact non-loopback HTTPS origins and run:
 

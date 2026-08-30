@@ -1,6 +1,21 @@
 # Yoink roadmap
 
-## Shipped through 1.9.1
+## Shipped through 1.10.0
+
+### Context-aware companion popup (1.10.0)
+
+- Replaces the stacked popup dashboard with a compact state-derived action
+  surface containing at most one dominant CTA, one activity row, an on-demand
+  health reveal, and a bounded overflow menu
+- Shares one pure exact-page classifier and popup view reducer across the popup
+  and extension action menu for all thirteen supported retailers plus Walmart
+  Draw; click-time revalidation keeps menu labels presentational only
+- Defers optional retailer access to an explicit user gesture, persists only
+  bounded sanitized results, and keeps community sharing consent-gated behind
+  visible confirmation
+- Preserves inspection and no-click qualification during TrackaLacker,
+  paused, test, and monitoring attention states without widening any retailer
+  mutation or Walmart Draw entry boundary
 
 ### Best Buy single-control split-shell recovery (1.9.1)
 

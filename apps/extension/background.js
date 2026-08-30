@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("runtime-config.js", "trackalacker-push.js", "observer-recipe-root.js");
+importScripts("runtime-config.js", "popup-state.js", "trackalacker-push.js", "observer-recipe-root.js");
 
 function normalizedRuntimeOrigin(value, profile) {
   const parsed = new URL(String(value || ""));
@@ -31,6 +31,10 @@ function normalizedRuntimeConfig(value) {
 }
 
 const RUNTIME_CONFIG = normalizedRuntimeConfig(globalThis.YoinkRuntimeConfig);
+const PopupState = globalThis.YoinkPopupStateModule;
+if (!PopupState?.classifyPageContext || !PopupState?.qualificationPopupResult) {
+  throw new Error("Yoink Companion has no packaged popup state model.");
+}
 const API_ROOT = `${RUNTIME_CONFIG.apiOrigin}/api/v1`;
 const APP_ROOT = RUNTIME_CONFIG.appOrigin;
 const LOCAL_PACKAGE_UPDATES = RUNTIME_CONFIG.localPackageUpdates;
@@ -38,6 +42,7 @@ const EVIDENCE_REQUEST_TIMEOUT_MS = 10_000;
 const HEALTH_ALARM = "yoink-health";
 const JOB_ALARM = "yoink-jobs";
 const READINESS_KEY = "readiness";
+const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
 const DEVICE_KEY = "pairedDevice";
 const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
@@ -52,6 +57,14 @@ const OBSERVER_RECIPE_TRUST_STATE_KEY = "yoinkObserverRecipeTrustStateV1";
 const OBSERVER_RECIPE_STATUS_KEY = "yoinkObserverRecipeStatusV1";
 const ADAPTER_DIAGNOSTIC_QUEUE_KEY = "yoinkAdapterDiagnosticQueueV1";
 const COMMUNITY_CONTRIBUTION_INTERVAL_MS = 60_000;
+const CONTEXT_MENU_IDS = Object.freeze({
+  open: "yoink-open",
+  inspectProduct: "yoink-inspect-product",
+  inspectDrawings: "yoink-inspect-drawings",
+  reconnect: "yoink-reconnect-trackalacker",
+  sync: "yoink-sync-products",
+  settings: "yoink-settings"
+});
 const TRACKALACKER_PUSH_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_MAX_AGE_MS = 9 * 60_000;
@@ -177,6 +190,11 @@ let adapterDiagnosticQueueLock = Promise.resolve();
 let deviceCredentialRotationPromise = null;
 
 function readiness(connected, details = {}, device = null) {
+  const communitySharingRetailers = Array.isArray(details.communitySharingRetailers)
+    ? [...new Set(details.communitySharingRetailers
+      .map((value) => String(value || ""))
+      .filter((value) => value === "target" || Object.hasOwn(RETAILER_OBSERVER_VERSIONS, value)))]
+    : [];
   return {
     connected,
     paired: Boolean(device?.id),
@@ -191,6 +209,7 @@ function readiness(connected, details = {}, device = null) {
     amazonAddCapable: true,
     bestBuyAddCapable: true,
     targetShadowAccess: details.targetShadowAccess === true,
+    communitySharingRetailers,
     trackalackerPush: details.trackalackerPush || normalizeTrackalackerState(),
     trackalackerSync: details.trackalackerSync || normalizeTrackalackerSyncState(),
     message: connected ? "Yoink control plane ready" : "Yoink control plane unavailable"
@@ -2451,6 +2470,7 @@ async function checkHealth() {
       executionMode: controlPlane?.executionMode ?? health.executionMode,
       actionsPaused: controlPlane?.actionsPaused ?? health.actionsPaused,
       chromeMutationEnabled: controlPlane?.retailerMutationEnabled ?? health.chromeMutationEnabled,
+      communitySharingRetailers: controlPlane?.communitySharingRetailers,
       targetShadowAccess: await targetShadowAccess(),
       trackalackerPush: await readTrackalackerState(),
       trackalackerSync: await readTrackalackerSyncState()
@@ -2464,6 +2484,7 @@ async function checkHealth() {
   }
   await chrome.storage.local.set({ [READINESS_KEY]: state });
   await showBadge(state);
+  await updateContextMenuHealth(state);
   return state;
 }
 
@@ -3199,8 +3220,13 @@ async function rehearseBestBuyTab(existingInspection = null) {
 
 async function inspectAndQualifyActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const popupPage = PopupState.classifyPageContext(tabs[0]?.url);
   const identity = canonicalRetailerIdentity(tabs[0]?.url);
-  if (!identity) throw new Error("Open an exact supported retailer product page first.");
+  if (!identity || popupPage.kind !== "product"
+    || popupPage.retailerId !== identity.retailerId
+    || popupPage.sku !== identity.retailerSku) {
+    throw new Error("Open an exact supported retailer product page first.");
+  }
   const guardedRehearsals = {
     target: rehearseTargetTab,
     walmart: rehearseWalmartTab,
@@ -3218,6 +3244,13 @@ async function inspectAndQualifyActiveTab() {
       workflow: "inspection",
       qualificationAvailable: false
     };
+  }
+  if (typeof chrome.runtime.sendMessage === "function") {
+    void chrome.runtime.sendMessage({
+      type: "yoink:popup-progress",
+      stage: "qualifying",
+      contextKey: popupPage.key
+    }).catch(() => undefined);
   }
   try {
     return {
@@ -3239,6 +3272,41 @@ async function inspectAndQualifyActiveTab() {
       },
       message: error instanceof Error ? error.message : "The current offer did not qualify."
     };
+  }
+}
+
+async function persistPopupResult(result) {
+  if (result?.schemaVersion !== 1 || !result.contextKey) return;
+  await chrome.storage.session.set({ [POPUP_RESULT_STORAGE_KEY]: result }).catch(() => undefined);
+}
+
+async function inspectAndQualifyPopupOperation() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const page = PopupState.classifyPageContext(tabs[0]?.url);
+  if (page.kind !== "product") throw new Error("Open an exact supported retailer product page first.");
+  try {
+    const result = await inspectAndQualifyActiveTab();
+    const popupResult = PopupState.qualificationPopupResult(result, page);
+    await persistPopupResult(popupResult);
+    return { ...result, popupResult };
+  } catch (error) {
+    await persistPopupResult(PopupState.errorPopupResult(page.key, error));
+    throw error;
+  }
+}
+
+async function inspectWalmartDrawPopupOperation() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const page = PopupState.classifyPageContext(tabs[0]?.url);
+  if (page.kind !== "walmart_draw") throw new Error("Open the exact Walmart Collectibles Draw page first.");
+  try {
+    const result = await inspectWalmartDrawHubTab();
+    const popupResult = PopupState.drawingsPopupResult(result, page);
+    await persistPopupResult(popupResult);
+    return { ...result, popupResult };
+  } catch (error) {
+    await persistPopupResult(PopupState.errorPopupResult(page.key, error));
+    throw error;
   }
 }
 
@@ -3758,11 +3826,185 @@ async function handleTrackalackerSubscriptionChange() {
   if (tabs.some((tab) => Number.isInteger(tab?.id))) await connectTrackalacker(false).catch(() => undefined);
 }
 
+function contextMenuCallback(operation) {
+  return new Promise((resolve, reject) => {
+    operation(() => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message || "The extension menu could not be updated."));
+      else resolve();
+    });
+  });
+}
+
+async function ensureContextMenus() {
+  if (!chrome.contextMenus) return;
+  await contextMenuCallback((done) => chrome.contextMenus.removeAll(done)).catch(() => undefined);
+  const definitions = [
+    { id: CONTEXT_MENU_IDS.open, title: "Open Yoink", contexts: ["action"] },
+    {
+      id: CONTEXT_MENU_IDS.inspectProduct,
+      title: "Inspect product",
+      contexts: ["action"],
+      documentUrlPatterns: PopupState.PRODUCT_DOCUMENT_PATTERNS
+    },
+    {
+      id: CONTEXT_MENU_IDS.inspectDrawings,
+      title: "Inspect drawings",
+      contexts: ["action"],
+      documentUrlPatterns: ["https://*.walmart.com/shop/collectibles/draw*"]
+    },
+    { id: CONTEXT_MENU_IDS.reconnect, title: "Reconnect TrackaLacker", contexts: ["action"], visible: false },
+    { id: CONTEXT_MENU_IDS.sync, title: "Sync products", contexts: ["action"] },
+    { id: CONTEXT_MENU_IDS.settings, title: "Settings", contexts: ["action"] }
+  ];
+  for (const definition of definitions) {
+    await contextMenuCallback((done) => chrome.contextMenus.create(definition, done));
+  }
+}
+
+function updateContextMenu(id, properties) {
+  if (!chrome.contextMenus) return Promise.resolve();
+  return contextMenuCallback((done) => chrome.contextMenus.update(id, properties, done)).catch(() => undefined);
+}
+
+async function updateContextMenuHealth(state) {
+  if (!chrome.contextMenus) return;
+  const base = {
+    health: state,
+    installedVersion: EXTENSION_VERSION,
+    production: RUNTIME_CONFIG.profile === "production"
+  };
+  const idleCommands = PopupState.deriveContextMenuCommands({
+    ...base,
+    page: PopupState.classifyPageContext("")
+  });
+  const productCommands = PopupState.deriveContextMenuCommands({
+    ...base,
+    page: PopupState.classifyPageContext("https://www.target.com/p/-/A-123456")
+  });
+  const drawingCommands = PopupState.deriveContextMenuCommands({
+    ...base,
+    page: PopupState.classifyPageContext("https://www.walmart.com/shop/collectibles/draw")
+  });
+  await Promise.all([
+    updateContextMenu(CONTEXT_MENU_IDS.inspectProduct, { visible: productCommands.includes("inspect_product") }),
+    updateContextMenu(CONTEXT_MENU_IDS.inspectDrawings, { visible: drawingCommands.includes("inspect_drawings") }),
+    updateContextMenu(CONTEXT_MENU_IDS.reconnect, { visible: idleCommands.includes("reconnect_trackalacker") }),
+    updateContextMenu(CONTEXT_MENU_IDS.sync, { visible: idleCommands.includes("sync_products") })
+  ]);
+}
+
+function contextMenuCommand(menuItemId) {
+  if (menuItemId === CONTEXT_MENU_IDS.open) return "open_yoink";
+  if (menuItemId === CONTEXT_MENU_IDS.inspectProduct) return "inspect_product";
+  if (menuItemId === CONTEXT_MENU_IDS.inspectDrawings) return "inspect_drawings";
+  if (menuItemId === CONTEXT_MENU_IDS.reconnect) return "reconnect_trackalacker";
+  if (menuItemId === CONTEXT_MENU_IDS.sync) return "sync_products";
+  if (menuItemId === CONTEXT_MENU_IDS.settings) return "settings";
+  return "";
+}
+
+function appViewUrl(view = "") {
+  const url = new URL("/", APP_ROOT);
+  if (view) url.hash = view;
+  return url.href;
+}
+
+function contextMenuPermission(command, page) {
+  if (command === "inspect_product" && page.kind === "product") {
+    return chrome.permissions.request({ origins: PopupState.RETAILER_ORIGINS[page.retailerId] });
+  }
+  if (command === "inspect_drawings" && page.kind === "walmart_draw") {
+    return chrome.permissions.request({ origins: PopupState.RETAILER_ORIGINS.walmart });
+  }
+  if (command === "reconnect_trackalacker") {
+    return chrome.permissions.request({ origins: TRACKALACKER_ORIGINS });
+  }
+  if (command === "sync_products") {
+    const origins = [...new Set([
+      ...TRACKALACKER_ORIGINS,
+      ...Object.values(PopupState.RETAILER_ORIGINS).flat()
+    ])];
+    return chrome.permissions.request({ origins });
+  }
+  return Promise.resolve(true);
+}
+
+async function currentContextMenuTab(tab) {
+  if (!Number.isInteger(tab?.id)) throw new Error("No active browser tab is available.");
+  const fresh = await chrome.tabs.get(tab.id);
+  const active = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!fresh || active[0]?.id !== tab.id) throw new Error("Keep the original tab active and try again.");
+  return { tab: fresh, page: PopupState.classifyPageContext(fresh.url) };
+}
+
+async function showContextMenuOutcome(result, error = false) {
+  const title = String(result?.summary || result?.message || (error ? "Action failed" : "Action complete"))
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  await Promise.all([
+    chrome.action.setTitle({ title: `Yoink · ${title}` }),
+    chrome.action.setBadgeBackgroundColor({ color: error ? "#BE5B4B" : "#1D9D77" }),
+    chrome.action.setBadgeText({ text: error ? "!" : "✓" })
+  ]).catch(() => undefined);
+}
+
+async function handleContextMenuClick(command, presentedPage, permissionPromise, tab) {
+  try {
+    const current = await currentContextMenuTab(tab);
+    const state = await checkHealth();
+    const allowed = PopupState.deriveContextMenuCommands({
+      health: state,
+      page: current.page,
+      installedVersion: EXTENSION_VERSION,
+      production: RUNTIME_CONFIG.profile === "production"
+    });
+    if (!allowed.includes(command)) throw new Error("This action is no longer available.");
+    if (current.page.key !== presentedPage.key
+      && (command === "inspect_product" || command === "inspect_drawings")) {
+      throw new Error("The active page changed. Open the extension and try again.");
+    }
+    if (!await permissionPromise) throw new Error("Required page access wasn’t approved.");
+    if (command === "open_yoink") {
+      await chrome.tabs.create({ url: appViewUrl(), active: true });
+      return;
+    }
+    if (command === "settings") {
+      await chrome.tabs.create({ url: appViewUrl("settings"), active: true });
+      return;
+    }
+    if (command === "inspect_product") {
+      const result = await inspectAndQualifyPopupOperation();
+      await showContextMenuOutcome(result.popupResult);
+      return;
+    }
+    if (command === "inspect_drawings") {
+      const result = await inspectWalmartDrawPopupOperation();
+      await showContextMenuOutcome(result.popupResult);
+      return;
+    }
+    if (command === "reconnect_trackalacker") {
+      const result = await connectTrackalacker(false);
+      await showContextMenuOutcome({ summary: result.diagnostic || "TrackaLacker connected" });
+      return;
+    }
+    if (command === "sync_products") {
+      const result = await startTrackalackerSync();
+      await showContextMenuOutcome({ summary: result.alreadyRunning ? "Product sync already running" : "Product sync started" });
+    }
+  } catch (error) {
+    await showContextMenuOutcome({ message: error instanceof Error ? error.message : "Action failed" }, true);
+  }
+}
+
 async function initialize() {
   await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   await chrome.alarms.create(HEALTH_ALARM, { periodInMinutes: 1 });
   await chrome.alarms.create(JOB_ALARM, { periodInMinutes: 0.5 });
+  await ensureContextMenus();
   await checkHealth();
   await drainAdapterDiagnosticQueue();
   await drainTrackalackerQueue();
@@ -3772,6 +4014,20 @@ async function initialize() {
 
 chrome.runtime.onInstalled.addListener(() => { void initialize(); });
 chrome.runtime.onStartup.addListener(() => { void initialize(); });
+if (chrome.contextMenus?.onClicked) {
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    const command = contextMenuCommand(info.menuItemId);
+    if (!command) return;
+    const presentedPage = PopupState.classifyPageContext(tab?.url || info.pageUrl);
+    let permissionPromise;
+    try {
+      permissionPromise = contextMenuPermission(command, presentedPage);
+    } catch (error) {
+      permissionPromise = Promise.reject(error);
+    }
+    void handleContextMenuClick(command, presentedPage, permissionPromise, tab);
+  });
+}
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEALTH_ALARM) {
     void checkHealth();
@@ -3811,11 +4067,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       : message?.type === "yoink:forget-device"
         ? forgetDevice()
         : inspectAndQualify
-          ? inspectAndQualifyActiveTab()
+          ? inspectAndQualifyPopupOperation()
         : inspection
           ? inspectTargetTab()
           : walmartDrawInspection
-            ? inspectWalmartDrawHubTab()
+            ? inspectWalmartDrawPopupOperation()
           : retailerInspection
             ? inspectRetailerTab()
           : communityContribution

@@ -23,375 +23,505 @@ const POPUP_RUNTIME_CONFIG = (() => {
     localPackageUpdates: value.localPackageUpdates
   });
 })();
+
+const PopupState = globalThis.YoinkPopupStateModule;
+if (!PopupState?.classifyPageContext || !PopupState?.derivePopupView) {
+  throw new Error("Yoink Companion has no packaged popup state model.");
+}
+
 const PRODUCTION_PROFILE = POPUP_RUNTIME_CONFIG.profile === "production";
-const $ = (selector) => document.querySelector(selector);
-const TARGET_ORIGINS = ["https://www.target.com/*"];
-const TRACKALACKER_ORIGINS = ["https://trackalacker.com/*", "https://www.trackalacker.com/*"];
-const TRACKALACKER_SYNC_ORIGINS = [
-  ...TRACKALACKER_ORIGINS,
-  "https://*.amazon.com/*",
-  "https://*.walmart.com/*",
-  "https://*.bestbuy.com/*",
-  "https://www.disneystore.com/*",
-  "https://*.ravensburger.us/*",
-  "https://merch.riotgames.com/*",
-  "https://*.booksamillion.com/*",
-  "https://*.fanatics.com/*",
-  "https://*.kohls.com/*",
-  "https://*.macys.com/*",
-  "https://*.p-bandai.com/*",
-  "https://*.pokemoncenter.com/*"
-];
-const RETAILER_ORIGINS = {
-  target: TARGET_ORIGINS,
-  walmart: ["https://*.walmart.com/*"],
-  amazon: ["https://*.amazon.com/*"],
-  bestbuy: ["https://*.bestbuy.com/*"],
-  disney: ["https://www.disneystore.com/*"],
-  ravensburger: ["https://*.ravensburger.us/*"],
-  riot: ["https://merch.riotgames.com/*"],
-  booksamillion: ["https://*.booksamillion.com/*"],
-  fanatics: ["https://*.fanatics.com/*"],
-  kohls: ["https://*.kohls.com/*"],
-  macys: ["https://*.macys.com/*"],
-  pbandai: ["https://*.p-bandai.com/*"],
-  pokemoncenter: ["https://*.pokemoncenter.com/*"]
-};
 const INSTALLED_VERSION = chrome.runtime.getManifest().version;
+const TRACKALACKER_ORIGINS = ["https://trackalacker.com/*", "https://www.trackalacker.com/*"];
+const TRACKALACKER_SYNC_ORIGINS = [...new Set([
+  ...TRACKALACKER_ORIGINS,
+  ...Object.values(PopupState.RETAILER_ORIGINS).flat()
+])];
+const $ = (selector) => document.querySelector(selector);
 
-function comparableVersion(value) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(String(value || ""));
-  return match ? match.slice(1, 4).map((part) => Number(part)) : null;
+const ui = {
+  health: null,
+  page: PopupState.classifyPageContext(""),
+  pageAccessGranted: false,
+  operation: null,
+  result: null,
+  confirmation: null,
+  notice: "",
+  view: null,
+  toastTimer: 0,
+  openPanel: null,
+  panelOpener: null
+};
+
+function cleanText(value, maximum = 360) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maximum);
 }
 
-function compareVersions(left, right) {
-  const a = comparableVersion(left);
-  const b = comparableVersion(right);
-  if (!a || !b) return 0;
-  for (let index = 0; index < 3; index += 1) {
-    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+function errorMessage(error, fallback = "The request could not be completed.") {
+  return PopupState.errorPopupResult("popup", error?.message || fallback).details || fallback;
+}
+
+function relativeCheck(value) {
+  const time = new Date(String(value || "")).getTime();
+  if (!Number.isFinite(time)) return "Not checked";
+  const seconds = Math.max(0, Math.round((Date.now() - time) / 1_000));
+  if (seconds < 15) return "Just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return new Date(time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function appUrl(view = "") {
+  const url = new URL("/", POPUP_RUNTIME_CONFIG.appOrigin);
+  if (view) url.hash = view;
+  return url.href;
+}
+
+function openYoink(view = "") {
+  return chrome.tabs.create({ url: appUrl(view), active: true });
+}
+
+function announce(message) {
+  const element = $("#assertiveStatus");
+  element.textContent = "";
+  requestAnimationFrame(() => { element.textContent = cleanText(message); });
+}
+
+function showToast(message, error = false) {
+  const toast = $("#toast");
+  toast.textContent = cleanText(message);
+  toast.classList.toggle("error", error);
+  toast.hidden = false;
+  clearTimeout(ui.toastTimer);
+  ui.toastTimer = setTimeout(() => { toast.hidden = true; }, 4_000);
+}
+
+function resultForView() {
+  return ui.result?.schemaVersion === 1 ? ui.result : null;
+}
+
+function deriveView() {
+  return PopupState.derivePopupView({
+    health: ui.health,
+    page: ui.page,
+    installedVersion: INSTALLED_VERSION,
+    production: PRODUCTION_PROFILE,
+    pageAccessGranted: ui.pageAccessGranted,
+    operation: ui.operation,
+    lastResult: resultForView(),
+    confirmation: ui.confirmation,
+    notice: ui.notice
+  });
+}
+
+function replaceStatusDetails(details) {
+  const fragment = document.createDocumentFragment();
+  for (const detail of details) {
+    const row = document.createElement("div");
+    const term = document.createElement("dt");
+    const value = document.createElement("dd");
+    term.textContent = detail.label;
+    value.textContent = detail.label === "Checked" ? relativeCheck(detail.value) : detail.value;
+    row.append(term, value);
+    fragment.append(row);
   }
-  return 0;
+  $("#statusDetails").replaceChildren(fragment);
 }
 
-function render(state) {
-  const connected = state?.connected === true;
-  const paired = state?.paired === true;
-  $("#statusDot").className = `status-dot ${connected ? paired ? "ready" : "" : "error"}`;
-  $("#statusTitle").textContent = connected ? (paired ? "Paired and connected" : "Connected; pairing required") : `${PRODUCTION_PROFILE ? "Yoink service" : "Local app"} unavailable`;
-  $("#statusCopy").textContent = connected
-    ? paired ? `Yoink ${state.version || ""} recognizes this browser.` : "Create a one-time code in Yoink to pair this browser."
-    : PRODUCTION_PROFILE ? "Check your connection, then ask your Yoink administrator if this continues." : "Start Yoink, then check again.";
-  $("#device").textContent = paired ? (state.deviceName || "Paired Chrome") : "Not paired";
-  $("#mode").textContent = connected ? state.executionMode : "—";
-  $("#actions").textContent = connected ? (state.actionsPaused ? "Paused" : "Enabled") : "—";
-  $("#mutation").textContent = state?.chromeMutationEnabled ? "Enabled" : "Disabled";
-  $("#checkedAt").textContent = state?.checkedAt ? new Date(state.checkedAt).toLocaleTimeString() : "—";
-  $("#pairCard").hidden = !connected || paired;
-  $("#forget").hidden = !paired;
-  const targetAccess = state?.targetShadowAccess === true;
-  $("#targetAccess").textContent = targetAccess
-    ? "Auto-detects the active store · Target access enabled"
-    : "Auto-detects the active store · Target access on demand";
-  $("#inspectAndQualify").disabled = !connected || !paired;
-  $("#inspectWalmartDraw").disabled = !connected || !paired;
-  $("#shareCommunity").disabled = !connected || !paired;
-  $("#removeTarget").hidden = !targetAccess;
-  const trackalacker = state?.trackalackerPush || {};
-  $("#trackalackerStatus").textContent = trackalacker.ready
-    ? "Connected and listening"
-    : trackalacker.state === "error" ? "Connection needs attention" : "Not connected";
-  $("#connectTrackalacker").textContent = trackalacker.ready ? "Verify TrackaLacker connection" : "Connect TrackaLacker push";
-  $("#connectTrackalacker").disabled = !connected || !paired;
-  const sync = state?.trackalackerSync || {};
-  const syncUpdatedAt = new Date(sync.updatedAt || "").getTime();
-  const syncRunning = ["starting", "discovering", "importing"].includes(sync.phase)
-    && Number.isFinite(syncUpdatedAt) && Date.now() - syncUpdatedAt < 10 * 60_000;
-  $("#syncTrackalacker").disabled = !connected || !paired || syncRunning;
-  $("#syncTrackalacker").textContent = syncRunning
-    ? `Syncing ${Number(sync.processed || 0)}/${Number(sync.discovered || 0)}`
-    : "Sync followed library";
-  if (trackalacker.ready) {
-    $("#trackalackerMessage").textContent = trackalacker.errorCode === "silent_push_unavailable"
-      ? "Connected, but this Chrome build requires a visible fallback notification and may show an extra alert."
-      : trackalacker.pendingSignals
-      ? `${trackalacker.pendingSignals} sanitized signal${trackalacker.pendingSignals === 1 ? "" : "s"} waiting for ${PRODUCTION_PROFILE ? "the Yoink service" : "the local app"}.`
-      : "Silent push is active. TrackaLacker's normal browser notifications remain unchanged.";
-  } else if (trackalacker.state === "error") {
-    $("#trackalackerMessage").textContent = `Connection stopped safely${trackalacker.lastHttpStatus ? ` at HTTP ${trackalacker.lastHttpStatus}` : ""}. Open a signed-in TrackaLacker tab and retry.`;
+function render() {
+  const view = deriveView();
+  ui.view = view;
+  $("#statusLabel").textContent = view.statusLabel;
+  $("#statusDot").className = `status-dot ${view.status}`;
+  $("#statusButton").setAttribute("aria-label", `System status: ${view.statusLabel}`);
+  replaceStatusDetails(view.details);
+
+  $("#contextSurface").hidden = !view.context.visible;
+  $("#contextEyebrow").textContent = view.context.eyebrow;
+  $("#contextTitle").textContent = view.context.title;
+  $("#contextSupporting").textContent = view.context.supporting;
+  $("#contextSupporting").hidden = !view.context.supporting;
+  $("#pairFields").hidden = !view.context.pairing;
+
+  const primary = $("#primaryAction");
+  primary.hidden = !view.primaryAction;
+  primary.textContent = view.primaryAction?.label || "";
+  primary.disabled = view.primaryAction?.disabled === true;
+  primary.dataset.action = view.primaryAction?.id || "";
+  primary.dataset.outcome = view.result?.outcome || "";
+  const repeatLabel = view.primaryAction?.id === "inspect_drawings" ? "Inspect drawings again" : "Inspect product again";
+  primary.setAttribute("aria-label", view.result && view.primaryAction
+    ? `${view.primaryAction.label}. ${repeatLabel}.` : view.primaryAction?.label || "Primary action");
+  primary.title = view.result && view.primaryAction ? repeatLabel : "";
+  $("#cancelContext").hidden = ui.confirmation === null;
+
+  const showResult = ui.confirmation === null && Boolean(view.result?.details);
+  const detailsButton = $("#resultDetailsButton");
+  detailsButton.hidden = !showResult;
+  if (!showResult) {
+    detailsButton.setAttribute("aria-expanded", "false");
+    detailsButton.textContent = "View details";
+    $("#resultDetails").hidden = true;
   }
-  if (syncRunning || sync.phase === "complete" || sync.phase === "error") {
-    $("#trackalackerMessage").textContent = sync.message || (syncRunning ? "Syncing followed products…" : "TrackaLacker sync finished.");
-  }
-  const reportedRelease = comparableVersion(state?.version) ? state.version : "—";
-  const newerReported = compareVersions(reportedRelease, INSTALLED_VERSION) > 0;
-  $("#updateChannel").textContent = PRODUCTION_PROFILE ? "MANAGED" : "LOCAL";
-  $("#updateVersions").textContent = PRODUCTION_PROFILE
-    ? `Installed ${INSTALLED_VERSION} · managed production channel`
-    : `Installed ${INSTALLED_VERSION} · local release ${reportedRelease}`;
-  $("#checkUpdate").classList.toggle("update-ready", !PRODUCTION_PROFILE && newerReported);
-  $("#checkUpdate").textContent = PRODUCTION_PROFILE
-    ? "Updates managed by Chrome"
-    : newerReported ? "Check and download update" : "Check for updates";
-  $("#checkUpdate").disabled = PRODUCTION_PROFILE || !connected;
-  $("#updateMessage").textContent = PRODUCTION_PROFILE
-    ? "Chrome installs production companion updates through the managed browser release channel. Yoink never downloads an unpacked ZIP in this profile."
-    : "The local Yoink app provides a hash-bound unpacked-extension package when a newer build is available.";
-  $("#forget").textContent = PRODUCTION_PROFILE ? "Forget pairing" : "Forget local pairing";
+  $("#resultDetails").textContent = showResult ? view.result.details : "";
+
+  const activity = view.activity;
+  const actionableActivity = activity && activity.action !== "none";
+  $("#activityAction").hidden = !actionableActivity;
+  $("#activityActionLabel").textContent = actionableActivity ? activity.label : "";
+  $("#activityAction").dataset.action = actionableActivity ? activity.action : "";
+  $("#activityStatus").hidden = !activity || actionableActivity;
+  $("#activityStatus").textContent = activity && !actionableActivity ? activity.label : "";
+
+  $("#syncProducts").hidden = !view.menu.syncProducts;
+  $("#shareEvidence").hidden = !view.menu.shareEvidence;
+  $("#manageStoreAccess").hidden = !view.menu.manageStoreAccess;
+  $("#checkUpdate").hidden = !view.menu.checkUpdates;
+  $("#syncProducts").disabled = activity?.id === "sync";
+  $("#syncProducts").textContent = activity?.id === "sync" ? activity.label : "Sync products";
 }
 
-function retailerFromUrl(value) {
-  try {
-    const host = new URL(String(value || "")).hostname.toLocaleLowerCase("en-US");
-    if (host === "target.com" || host.endsWith(".target.com")) return "target";
-    if (host === "walmart.com" || host.endsWith(".walmart.com")) return "walmart";
-    if (host === "amazon.com" || host.endsWith(".amazon.com")) return "amazon";
-    if (host === "bestbuy.com" || host.endsWith(".bestbuy.com")) return "bestbuy";
-    if (host === "disneystore.com" || host.endsWith(".disneystore.com")) return "disney";
-    if (host === "ravensburger.us" || host.endsWith(".ravensburger.us")) return "ravensburger";
-    if (host === "merch.riotgames.com") return "riot";
-    if (host === "booksamillion.com" || host.endsWith(".booksamillion.com")) return "booksamillion";
-    if (host === "fanatics.com" || host.endsWith(".fanatics.com")) return "fanatics";
-    if (host === "kohls.com" || host.endsWith(".kohls.com")) return "kohls";
-    if (host === "macys.com" || host.endsWith(".macys.com")) return "macys";
-    if (host === "p-bandai.com" || host.endsWith(".p-bandai.com")) return "pbandai";
-    if (host === "pokemoncenter.com" || host.endsWith(".pokemoncenter.com")) return "pokemoncenter";
-    return "";
-  } catch {
-    return "";
-  }
+function setOperation(stage, contextKey = ui.page.key) {
+  ui.operation = stage === "idle" ? null : { stage, contextKey };
+  render();
 }
 
-function renderRetailerObservation(observation) {
-  const price = Number.isSafeInteger(observation?.unitPriceCents)
-    ? new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(observation.unitPriceCents / 100)
-    : "price not observed";
-  const retailerNames = {
-    target: "Target", walmart: "Walmart", amazon: "Amazon",
-    bestbuy: "Best Buy", disney: "Disney Store", ravensburger: "Ravensburger",
-    riot: "Riot Games Merch", booksamillion: "Books-A-Million", fanatics: "Fanatics",
-    kohls: "Kohl's", macys: "Macy's", pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center"
-  };
-  const retailer = retailerNames[observation?.retailerId]
-    || `${String(observation?.retailerId || "Store").slice(0, 1).toUpperCase()}${String(observation?.retailerId || "store").slice(1)}`;
-  const evidence = observation?.observationState === "actionable_candidate"
-    ? "Complete candidate evidence"
-    : observation?.observationState === "manual_block" ? "Manual browser step detected" : "Not currently actionable";
-  const route = observation?.retailerId === "amazon"
-    ? observation.purchaseRouteReady
-      ? " · exact ephemeral offer binding verified; token discarded"
-      : ` · offer binding closed: ${String(observation.routeReasonCode || "not ready").replaceAll("_", " ")}`
-    : "";
-  const boundaries = [];
-  if (observation?.availability === "preorder") boundaries.push("preorder read-only");
-  if (observation?.interactiveBlock === "high_demand") boundaries.push("high-demand gate closed");
-  else if (observation?.interactiveBlock === "queue") boundaries.push("queue handling closed");
-  if (observation?.retailerId === "bestbuy" && observation?.fulfillment === "pickup") {
-    boundaries.push("select Shipping to qualify");
-  }
-  const boundary = boundaries.length ? ` · ${boundaries.join(" · ")}` : "";
-  const identityLabel = observation?.retailerId === "target" ? "TCIN" : "SKU";
-  $("#retailerMessage").textContent = `${retailer}: ${evidence} · ${identityLabel} ${observation?.retailerSku || "unknown"} · ${price} · ${observation?.sellerName || "seller unknown"} · ${observation?.fulfillment || "fulfillment unknown"}${route}${boundary}.`;
+async function persistResult(result) {
+  ui.result = result;
+  await chrome.storage.session.set({ [PopupState.POPUP_RESULT_STORAGE_KEY]: result });
 }
 
-function renderWalmartDrawScan(scan) {
-  const items = Array.isArray(scan?.items) ? scan.items : [];
-  const label = scan?.outcome === "passed" ? "Verified"
-    : scan?.outcome === "partial" ? "Partially observed"
-      : scan?.outcome === "manual" ? "Manual browser step detected" : "Observation failed";
-  const active = items.filter((item) => item.drawState === "active").length;
-  const tracked = items.filter((item) => item.tracked === true).length;
-  $("#walmartDrawMessage").textContent = `${label}: ${active} active drawing${active === 1 ? "" : "s"} across ${items.length} exact item${items.length === 1 ? "" : "s"}${tracked ? ` · ${tracked} matches a purchase plan` : ""}. Entry remains manual; no account, address, payment, or entry state was collected.`;
+async function pageAccess() {
+  const retailerId = ui.page.kind === "product" || ui.page.kind === "walmart_draw"
+    ? ui.page.retailerId : "";
+  const origins = retailerId ? PopupState.RETAILER_ORIGINS[retailerId] : null;
+  return Boolean(origins && await chrome.permissions.contains({ origins }).catch(() => false));
 }
 
-async function check() {
-  $("#statusTitle").textContent = PRODUCTION_PROFILE ? "Checking Yoink service…" : "Checking local app…";
+async function refreshHealth() {
   try {
     const response = await chrome.runtime.sendMessage({ type: "yoink:check-health" });
     if (!response?.ok) throw new Error(response?.message || "Health check failed.");
-    render(response.state);
+    ui.health = response.state;
   } catch {
-    render({ connected: false, checkedAt: new Date().toISOString() });
+    ui.health = { connected: false, checkedAt: new Date().toISOString() };
+  }
+  ui.pageAccessGranted = await pageAccess();
+  render();
+}
+
+function closePanels(restoreFocus = false) {
+  if (!ui.openPanel) return;
+  const opener = ui.panelOpener;
+  $(ui.openPanel).hidden = true;
+  $("#statusButton").setAttribute("aria-expanded", "false");
+  $("#menuButton").setAttribute("aria-expanded", "false");
+  ui.openPanel = null;
+  ui.panelOpener = null;
+  if (restoreFocus) opener?.focus();
+}
+
+function togglePanel(panelSelector, opener) {
+  const opening = ui.openPanel !== panelSelector;
+  closePanels(false);
+  if (!opening) {
+    opener.focus();
+    return;
+  }
+  const panel = $(panelSelector);
+  panel.hidden = false;
+  opener.setAttribute("aria-expanded", "true");
+  ui.openPanel = panelSelector;
+  ui.panelOpener = opener;
+  if (panelSelector === "#overflowPanel") {
+    panel.querySelector('[role="menuitem"]:not([hidden]):not(:disabled)')?.focus();
   }
 }
 
-$("#pair").addEventListener("click", async () => {
-  const button = $("#pair");
+async function requestRetailerAccess() {
+  if (ui.page.kind !== "product" && ui.page.kind !== "walmart_draw") {
+    throw new Error("Open an exact supported retailer page first.");
+  }
+  if (ui.pageAccessGranted) return;
+  const origins = PopupState.RETAILER_ORIGINS[ui.page.retailerId];
+  setOperation("requesting_access");
+  const granted = await chrome.permissions.request({ origins });
+  if (!granted) {
+    const error = new Error("Store access wasn’t approved.");
+    error.blocked = true;
+    throw error;
+  }
+  ui.pageAccessGranted = true;
+}
+
+async function inspectProduct() {
+  try {
+    await requestRetailerAccess();
+    setOperation("inspecting");
+    const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-and-qualify" });
+    if (!response?.ok) throw new Error(response?.message || "Product inspection failed.");
+    if (response.state) ui.health = response.state;
+    await persistResult(response.popupResult || PopupState.qualificationPopupResult(response, ui.page));
+    ui.notice = "";
+    announce(ui.result.summary);
+  } catch (error) {
+    await persistResult(PopupState.errorPopupResult(ui.page.key, error, error?.blocked === true));
+    announce(ui.result.summary);
+  } finally {
+    setOperation("idle");
+  }
+}
+
+async function inspectDrawings() {
+  try {
+    await requestRetailerAccess();
+    setOperation("inspecting");
+    const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-walmart-draw" });
+    if (!response?.ok) throw new Error(response?.message || "Drawing inspection failed.");
+    if (response.state) ui.health = response.state;
+    await persistResult(response.popupResult || PopupState.drawingsPopupResult(response, ui.page));
+    ui.notice = "";
+    announce(ui.result.summary);
+  } catch (error) {
+    await persistResult(PopupState.errorPopupResult(ui.page.key, error, error?.blocked === true));
+    announce(ui.result.summary);
+  } finally {
+    setOperation("idle");
+  }
+}
+
+async function pairBrowser() {
   const code = $("#pairCode").value.trim();
-  $("#pairMessage").textContent = "Pairing…";
-  button.disabled = true;
+  if (!code) {
+    showToast("Enter the one-time pairing code.", true);
+    $("#pairCode").focus();
+    return;
+  }
+  setOperation("pairing");
   try {
     const response = await chrome.runtime.sendMessage({ type: "yoink:pair-device", code });
     if (!response?.ok) throw new Error(response?.message || "Pairing failed.");
+    ui.health = response.state;
     $("#pairCode").value = "";
-    render(response.state);
+    announce("Browser paired.");
   } catch (error) {
-    $("#pairMessage").textContent = error.message || "The code could not be paired.";
+    showToast(errorMessage(error, "The browser could not be paired."), true);
   } finally {
-    button.disabled = false;
+    setOperation("idle");
   }
-});
-$("#forget").addEventListener("click", async () => {
-  const response = await chrome.runtime.sendMessage({ type: "yoink:forget-device" });
-  if (response?.ok) render(response.state);
-});
-$("#inspectAndQualify").addEventListener("click", async () => {
-  const button = $("#inspectAndQualify");
-  button.disabled = true;
-  $("#retailerMessage").textContent = "Detecting the active store and checking its exact product offer once…";
-  try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const retailerId = retailerFromUrl(tabs[0]?.url);
-    if (!retailerId) throw new Error("Open an exact supported retailer product page first.");
-    const granted = await chrome.permissions.request({ origins: RETAILER_ORIGINS[retailerId] });
-    if (!granted) throw new Error("Retailer page access was not granted.");
-    const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-and-qualify" });
-    if (!response?.ok) throw new Error(response?.message || "Store inspection failed.");
-    render(response.state);
-    renderRetailerObservation(response.observation);
-    const observationSummary = $("#retailerMessage").textContent;
-    if (response.workflow === "qualification") {
-      $("#retailerMessage").textContent = response.rehearsal?.ok
-        ? `${observationSummary} Qualification passed: the exact offer reached the final pre-click boundary, and no click occurred.`
-        : `${observationSummary} Qualification stopped safely: ${response.message || String(response.rehearsal?.reason || "offer not verified").replaceAll("_", " ")}`;
-    } else {
-      $("#retailerMessage").textContent = `${observationSummary} This store is read-only, so inspection completed without a qualification rehearsal.`;
-    }
-  } catch (error) {
-    $("#retailerMessage").textContent = error.message || "The store page could not be inspected.";
-    await check();
-  } finally {
-    button.disabled = false;
-  }
-});
-$("#inspectWalmartDraw").addEventListener("click", async () => {
-  const button = $("#inspectWalmartDraw");
-  button.disabled = true;
-  $("#walmartDrawMessage").textContent = "Requesting read-only Walmart access…";
-  try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const url = new URL(String(tabs[0]?.url || ""));
-    if (!(url.hostname === "walmart.com" || url.hostname.endsWith(".walmart.com"))
-      || url.pathname.replace(/\/+$/, "") !== "/shop/collectibles/draw") {
-      throw new Error("Open Walmart’s exact Collectibles Draw hub first.");
-    }
-    const granted = await chrome.permissions.request({ origins: RETAILER_ORIGINS.walmart });
-    if (!granted) throw new Error("Read-only Walmart page access was not granted.");
-    $("#walmartDrawMessage").textContent = "Inspecting current drawings without entering any of them…";
-    const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-walmart-draw" });
-    if (!response?.ok) throw new Error(response?.message || "Walmart drawing inspection failed.");
-    render(response.state);
-    renderWalmartDrawScan(response.scan);
-  } catch (error) {
-    $("#walmartDrawMessage").textContent = error.message || "Walmart drawings could not be inspected.";
-    await check();
-  } finally {
-    button.disabled = false;
-  }
-});
-$("#shareCommunity").addEventListener("click", async () => {
-  const button = $("#shareCommunity");
-  button.disabled = true;
-  $("#communityMessage").textContent = "Validating and sharing this page once…";
-  try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const retailerId = retailerFromUrl(tabs[0]?.url);
-    if (!retailerId) throw new Error("Open an exact supported retailer product page first.");
-    const granted = await chrome.permissions.request({ origins: RETAILER_ORIGINS[retailerId] });
-    if (!granted) throw new Error("Read-only retailer page access was not granted.");
-    const response = await chrome.runtime.sendMessage({ type: "yoink:contribute-retailer" });
-    if (!response?.ok) throw new Error(response?.message || "The evidence was not shared.");
-    render(response.state);
-    renderRetailerObservation(response.observation);
-    const disposition = response.receipt?.disposition === "deduped" ? "Deduplicated"
-      : response.receipt?.disposition === "quarantined" ? "Held for review" : "Accepted";
-    const selectionState = String(response.assertion?.selectedOffer?.selectionState || "unresolved").replaceAll("_", " ");
-    $("#communityMessage").textContent = `${disposition}: one sanitized, read-only ${selectionState} assertion was recorded. No page text, account data, or offer token was sent.`;
-  } catch (error) {
-    $("#communityMessage").textContent = error.message || "The evidence could not be shared.";
-    await check();
-  } finally {
-    button.disabled = false;
-  }
-});
-$("#connectTrackalacker").addEventListener("click", async () => {
-  const button = $("#connectTrackalacker");
-  button.disabled = true;
-  $("#trackalackerMessage").textContent = "Requesting TrackaLacker page access and preparing a silent push subscription…";
+}
+
+async function reconnectTrackalacker() {
+  setOperation("reconnecting");
   try {
     const granted = await chrome.permissions.request({ origins: TRACKALACKER_ORIGINS });
-    if (!granted) throw new Error("TrackaLacker page access was not granted.");
+    if (!granted) throw new Error("TrackaLacker access wasn’t approved.");
     const response = await chrome.runtime.sendMessage({ type: "yoink:connect-trackalacker" });
-    if (!response?.ok) throw new Error(response?.message || "TrackaLacker connection failed.");
-    render(response.state);
-    $("#trackalackerMessage").textContent = `${response.diagnostic || "Device registration succeeded"}. Silent signal delivery is active.`;
+    if (!response?.ok) throw new Error(response?.message || "TrackaLacker could not reconnect.");
+    ui.health = response.state;
+    showToast("TrackaLacker connected.");
+    announce("TrackaLacker connected.");
   } catch (error) {
-    $("#trackalackerMessage").textContent = error.message || "TrackaLacker could not be connected.";
-    await check();
+    showToast(errorMessage(error), true);
   } finally {
-    button.disabled = false;
+    setOperation("idle");
   }
-});
-$("#syncTrackalacker").addEventListener("click", async () => {
-  const button = $("#syncTrackalacker");
-  button.disabled = true;
-  $("#trackalackerMessage").textContent = "Starting one bounded pass across your followed library…";
+}
+
+async function updateCompanion() {
+  setOperation("updating");
   try {
-    const granted = await chrome.permissions.request({ origins: TRACKALACKER_SYNC_ORIGINS });
-    if (!granted) throw new Error("TrackaLacker page access was not granted.");
-    const response = await chrome.runtime.sendMessage({ type: "yoink:sync-trackalacker" });
-    if (!response?.ok) throw new Error(response?.message || "TrackaLacker sync failed to start.");
-    await check();
-  } catch (error) {
-    $("#trackalackerMessage").textContent = error.message || "TrackaLacker sync could not start.";
-    await check();
-  } finally {
-    button.disabled = false;
-  }
-});
-$("#removeTarget").addEventListener("click", async () => {
-  await chrome.permissions.remove({ origins: TARGET_ORIGINS });
-  $("#retailerMessage").textContent = "Target page access removed. It can be requested again from the unified button while a Target product page is active.";
-  await check();
-});
-$("#checkUpdate").addEventListener("click", async () => {
-  if (PRODUCTION_PROFILE) return;
-  const button = $("#checkUpdate");
-  button.disabled = true;
-  $("#updateMessage").textContent = "Checking the local signed-by-hash release feed…";
-  try {
-    const response = await chrome.runtime.sendMessage({ type: "yoink:check-update", download: true });
+    const response = await chrome.runtime.sendMessage({ type: "yoink:check-update", download: !PRODUCTION_PROFILE });
     if (!response?.ok || !response.update) throw new Error(response?.message || "Update check failed.");
     const update = response.update;
-    $("#updateVersions").textContent = `Installed ${update.installedVersion} · local release ${update.releaseVersion}`;
     if (update.downloadStarted) {
-      $("#updateMessage").textContent = "Update downloaded. Extract it over the same Yoink Companion folder, then choose Reload below (or Reload on chrome://extensions). Pairing and local settings remain intact.";
-      $("#reloadExtension").hidden = false;
-      button.textContent = "Update downloaded";
+      showToast("Update downloaded. Replace the extension folder, then reload it in Chrome.");
+    } else if (update.managedByBrowser) {
+      showToast("Chrome manages companion updates.");
     } else if (update.updateAvailable && !update.packageReady) {
-      $("#updateMessage").textContent = "A newer app build exists, but its companion package is still being prepared. Run the local release packaging step, then retry.";
-      button.textContent = "Retry update check";
+      showToast("The companion update package is still being prepared.", true);
     } else if (update.updateAvailable) {
-      $("#updateMessage").textContent = "A newer companion is available, but Chrome did not start the local download. Retry or open Yoink for the package link.";
-      button.textContent = "Retry download";
-    } else if (compareVersions(update.installedVersion, update.releaseVersion) > 0) {
-      $("#updateMessage").textContent = "This companion is newer than the running local app. Update and restart Yoink before changing the extension.";
-      button.textContent = "Check for updates";
+      showToast("A companion update is available. Retry the download.", true);
     } else {
-      $("#updateMessage").textContent = "The installed companion is current. No folder changes are needed.";
-      button.textContent = "Check again";
+      showToast("The companion is current.");
     }
   } catch (error) {
-    $("#updateMessage").textContent = error.message || "The local update feed could not be checked.";
-    button.textContent = "Retry update check";
+    showToast(errorMessage(error), true);
+  } finally {
+    setOperation("idle");
+  }
+}
+
+async function syncProducts() {
+  closePanels(false);
+  const button = $("#syncProducts");
+  button.disabled = true;
+  showToast("Starting product sync…");
+  try {
+    const granted = await chrome.permissions.request({ origins: TRACKALACKER_SYNC_ORIGINS });
+    if (!granted) throw new Error("TrackaLacker and store access wasn’t approved.");
+    const response = await chrome.runtime.sendMessage({ type: "yoink:sync-trackalacker" });
+    if (!response?.ok) throw new Error(response?.message || "Product sync could not start.");
+    showToast(response.alreadyRunning ? "Product sync is already running." : "Product sync started.");
+    await refreshHealth();
+  } catch (error) {
+    showToast(errorMessage(error), true);
   } finally {
     button.disabled = false;
   }
-});
-$("#reloadExtension").addEventListener("click", () => chrome.runtime.reload());
-$("#check").addEventListener("click", check);
-$("#open").addEventListener("click", () => chrome.tabs.create({ url: `${POPUP_RUNTIME_CONFIG.appOrigin}/` }));
+}
 
-const stored = await chrome.storage.local.get("readiness");
-render(stored.readiness);
-void check();
+async function shareEvidence() {
+  if (ui.page.kind !== "product") return;
+  try {
+    await requestRetailerAccess();
+    setOperation("sharing");
+    const response = await chrome.runtime.sendMessage({ type: "yoink:contribute-retailer" });
+    if (!response?.ok) throw new Error(response?.message || "Evidence could not be shared.");
+    if (response.state) ui.health = response.state;
+    ui.confirmation = null;
+    ui.notice = response.receipt?.disposition === "quarantined" ? "Evidence held for review"
+      : response.receipt?.disposition === "deduped" ? "Evidence already recorded" : "Evidence shared";
+    showToast(ui.notice);
+    announce(ui.notice);
+  } catch (error) {
+    showToast(errorMessage(error), true);
+  } finally {
+    setOperation("idle");
+  }
+}
+
+async function handlePrimaryAction() {
+  const action = ui.view?.primaryAction?.id;
+  if (!action || ui.view.primaryAction.disabled) return;
+  if (action === "retry") return refreshHealth();
+  if (action === "pair") return pairBrowser();
+  if (action === "update_companion") return updateCompanion();
+  if (action === "open_yoink") return openYoink();
+  if (action === "inspect_product") return inspectProduct();
+  if (action === "inspect_drawings") return inspectDrawings();
+  if (action === "reconnect_trackalacker") return reconnectTrackalacker();
+  if (action === "review_pause" || action === "review_mode") return openYoink("settings");
+  if (action === "confirm_share_evidence") return shareEvidence();
+}
+
+function cancelContext() {
+  ui.confirmation = null;
+  ui.notice = "";
+  render();
+  $("#menuButton").focus();
+}
+
+function menuItems() {
+  return [...$("#overflowPanel").querySelectorAll('[role="menuitem"]')]
+    .filter((element) => !element.hidden && !element.disabled);
+}
+
+function handleMenuKeys(event) {
+  const items = menuItems();
+  if (!items.length) return;
+  const current = items.indexOf(document.activeElement);
+  let next = current;
+  if (event.key === "ArrowDown") next = (current + 1 + items.length) % items.length;
+  else if (event.key === "ArrowUp") next = (current - 1 + items.length) % items.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = items.length - 1;
+  else return;
+  event.preventDefault();
+  items[next]?.focus();
+}
+
+function bindEvents() {
+  $("#statusButton").addEventListener("click", (event) => togglePanel("#statusPanel", event.currentTarget));
+  $("#menuButton").addEventListener("click", (event) => togglePanel("#overflowPanel", event.currentTarget));
+  $("#overflowPanel").addEventListener("keydown", handleMenuKeys);
+  $("#primaryAction").addEventListener("click", () => { void handlePrimaryAction(); });
+  $("#cancelContext").addEventListener("click", cancelContext);
+  $("#openYoink").addEventListener("click", () => { void openYoink(); });
+  $("#statusDiagnostics").addEventListener("click", () => { void openYoink("operations"); });
+  $("#diagnostics").addEventListener("click", () => { void openYoink("operations"); });
+  $("#settings").addEventListener("click", () => { void openYoink("settings"); });
+  $("#manageStoreAccess").addEventListener("click", () => { void openYoink("connections"); });
+  $("#syncProducts").addEventListener("click", () => { void syncProducts(); });
+  $("#checkUpdate").addEventListener("click", () => { closePanels(false); void updateCompanion(); });
+  $("#shareEvidence").addEventListener("click", () => {
+    closePanels(false);
+    ui.confirmation = "share_evidence";
+    ui.notice = "";
+    render();
+    $("#primaryAction").focus();
+  });
+  $("#activityAction").addEventListener("click", () => {
+    const action = ui.view?.activity?.action;
+    if (action === "reconnect_trackalacker") void reconnectTrackalacker();
+    if (action === "review_pause" || action === "review_mode") void openYoink("settings");
+  });
+  $("#resultDetailsButton").addEventListener("click", (event) => {
+    const expanded = event.currentTarget.getAttribute("aria-expanded") === "true";
+    event.currentTarget.setAttribute("aria-expanded", String(!expanded));
+    event.currentTarget.textContent = expanded ? "View details" : "Hide details";
+    $("#resultDetails").hidden = expanded;
+  });
+  $("#pairCode").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); void pairBrowser(); }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (ui.openPanel) { event.preventDefault(); closePanels(true); return; }
+    if ($("#resultDetailsButton").getAttribute("aria-expanded") === "true") {
+      event.preventDefault();
+      $("#resultDetailsButton").click();
+      $("#resultDetailsButton").focus();
+      return;
+    }
+    if (ui.confirmation) { event.preventDefault(); cancelContext(); }
+  });
+  document.addEventListener("click", (event) => {
+    if (!ui.openPanel) return;
+    const panel = $(ui.openPanel);
+    if (!panel.contains(event.target) && !ui.panelOpener?.contains(event.target)) closePanels(false);
+  });
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== "yoink:popup-progress" || message.contextKey !== ui.page.key) return false;
+    if (["inspecting", "qualifying"].includes(message.stage)) setOperation(message.stage, message.contextKey);
+    return false;
+  });
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes.readiness?.newValue) {
+      ui.health = changes.readiness.newValue;
+      render();
+    }
+    if (areaName === "session" && changes[PopupState.POPUP_RESULT_STORAGE_KEY]?.newValue) {
+      ui.result = changes[PopupState.POPUP_RESULT_STORAGE_KEY].newValue;
+      render();
+    }
+  });
+}
+
+async function initializePopup() {
+  bindEvents();
+  const [tabs, storedHealth, storedResult] = await Promise.all([
+    chrome.tabs.query({ active: true, currentWindow: true }),
+    chrome.storage.local.get("readiness"),
+    chrome.storage.session.get(PopupState.POPUP_RESULT_STORAGE_KEY)
+  ]);
+  ui.page = PopupState.classifyPageContext(tabs[0]?.url);
+  ui.health = storedHealth.readiness || null;
+  ui.result = storedResult[PopupState.POPUP_RESULT_STORAGE_KEY] || null;
+  ui.pageAccessGranted = await pageAccess();
+  render();
+  void refreshHealth();
+}
+
+globalThis.YoinkPopupController = Object.freeze({
+  render,
+  deriveView,
+  state: ui,
+  closePanels
+});
+
+void initializePopup();

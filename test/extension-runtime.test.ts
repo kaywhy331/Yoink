@@ -487,7 +487,9 @@ function queuedRuntimeDiagnostic(retailerSku: string, observedAt: string, extras
 
 interface HarnessOptions {
   permission?: boolean;
+  permissionRequest?: boolean;
   activeUrl?: string;
+  healthVersion?: string;
   liveJob?: boolean;
   walmartJob?: boolean;
   amazonJob?: boolean;
@@ -521,6 +523,19 @@ interface HarnessOptions {
   observerRecipeRoot?: Record<string, unknown>;
   observerRecipeTrustState?: Record<string, unknown>;
   observerRecipeEvaluation?: Record<string, unknown>;
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  message: string,
+  timeoutMs = 3_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(message);
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -628,6 +643,9 @@ function harness(options: HarnessOptions = {}) {
   const notificationInteractions: string[] = [];
   const deliveredTrackalackerSignals: Array<Record<string, unknown>> = [];
   const shownTrackalackerNotifications: Array<{ title: string; options: Record<string, unknown> }> = [];
+  const permissionRequests: Array<{ origins: string[] }> = [];
+  const contextMenuDefinitions = new Map<string, Record<string, unknown>>();
+  const actionTitles: string[] = [];
   const tabs = new Map<number, { id: number; url: string; status: string }>([
     [17, { id: 17, url: options.activeUrl ?? PRODUCT_URL, status: "complete" }]
   ]);
@@ -637,6 +655,7 @@ function harness(options: HarnessOptions = {}) {
   let notificationClickedListener: ((notificationId: string) => void) | undefined;
   let notificationClosedListener: ((notificationId: string, byUser: boolean) => void) | undefined;
   let startupListener: (() => void) | undefined;
+  let contextMenuClickedListener: ((info: Record<string, unknown>, tab?: Record<string, unknown>) => void) | undefined;
   const serviceWorkerListeners = new Map<string, (event: unknown) => void>();
   let completeJob: (() => void) | undefined;
   const jobCompleted = new Promise<void>((resolve) => { completeJob = resolve; });
@@ -652,6 +671,7 @@ function harness(options: HarnessOptions = {}) {
   const chrome = {
     runtime: {
       id: "a".repeat(32),
+      lastError: undefined,
       getManifest: () => ({ version: "0.3.0" }),
       getURL: (path: string) => `chrome-extension://${"a".repeat(32)}/${path}`,
       reload: () => undefined,
@@ -682,7 +702,13 @@ function harness(options: HarnessOptions = {}) {
         setAccessLevel: async () => undefined
       }
     },
-    permissions: { contains: async () => options.permission !== false },
+    permissions: {
+      contains: async () => options.permission !== false,
+      request: async (request: { origins: string[] }) => {
+        permissionRequests.push(request);
+        return options.permissionRequest !== false;
+      }
+    },
     tabs: {
       query: async () => [tabs.get(17)],
       get: async (id: number) => tabs.get(id),
@@ -1007,7 +1033,25 @@ function harness(options: HarnessOptions = {}) {
     action: {
       setBadgeBackgroundColor: async () => undefined,
       setBadgeText: async () => undefined,
-      setTitle: async () => undefined
+      setTitle: async ({ title }: { title: string }) => { actionTitles.push(title); }
+    },
+    contextMenus: {
+      create: (definition: Record<string, unknown>, callback?: () => void) => {
+        contextMenuDefinitions.set(String(definition.id), { ...definition });
+        callback?.();
+      },
+      removeAll: (callback?: () => void) => {
+        contextMenuDefinitions.clear();
+        callback?.();
+      },
+      update: (id: string, properties: Record<string, unknown>, callback?: () => void) => {
+        const current = contextMenuDefinitions.get(id) || { id };
+        contextMenuDefinitions.set(id, { ...current, ...properties });
+        callback?.();
+      },
+      onClicked: {
+        addListener: (listener: typeof contextMenuClickedListener) => { contextMenuClickedListener = listener; }
+      }
     },
     alarms: {
       create: async () => undefined,
@@ -1029,7 +1073,7 @@ function harness(options: HarnessOptions = {}) {
     if (url.endsWith("/health")) {
       return new Response(JSON.stringify({
         status: "ready",
-        version: "0.5.0",
+        version: options.healthVersion ?? "0.5.0",
         executionMode: liveJob ? "live" : "shadow",
         actionsPaused: !liveJob,
         chromeMutationEnabled: liveJob
@@ -1443,6 +1487,18 @@ function harness(options: HarnessOptions = {}) {
     clickNotification: (id: string) => notificationClickedListener?.(id),
     closeNotification: (id: string, byUser = true) => notificationClosedListener?.(id, byUser),
     fireStartup: () => startupListener?.(),
+    clickContextMenu: (menuItemId: string, presentedUrl?: string) => contextMenuClickedListener?.(
+      { menuItemId, pageUrl: presentedUrl ?? tabs.get(17)?.url },
+      { ...(tabs.get(17) || {}), url: presentedUrl ?? tabs.get(17)?.url }
+    ),
+    setActiveUrl: (url: string) => {
+      const current = tabs.get(17);
+      if (!current) throw new Error("Missing fixture tab.");
+      tabs.set(17, { ...current, url });
+    },
+    contextMenuDefinitions,
+    permissionRequests,
+    actionTitles,
     adapterDiagnosticQueueDrained,
     diagnosticReasonCodes,
     firePush: (payload: Record<string, unknown>) => new Promise<void>((resolve, reject) => {
@@ -2604,4 +2660,82 @@ test("the production service worker uses only its pinned HTTPS API and never ope
   const body = JSON.parse(String(heartbeat?.options.body)) as { capabilities: Record<string, unknown> };
   assert.equal(body.capabilities.productionTransportProfile, true);
   assert.equal(body.capabilities.managedExtensionUpdates, true);
+});
+
+test("the extension action menu stays small and derives visibility from the shared health model", async () => {
+  const runtime = harness({ healthVersion: "0.3.0", trackalackerPush: true });
+  assert.equal(runtime.permissionRequests.length, 0);
+  runtime.fireStartup();
+  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  await waitFor(
+    () => runtime.contextMenuDefinitions.get("yoink-inspect-product")?.visible === true,
+    "Context menu health was not applied."
+  );
+  assert.deepEqual([...runtime.contextMenuDefinitions.keys()], [
+    "yoink-open",
+    "yoink-inspect-product",
+    "yoink-inspect-drawings",
+    "yoink-reconnect-trackalacker",
+    "yoink-sync-products",
+    "yoink-settings"
+  ]);
+  assert.equal(
+    Array.from(runtime.contextMenuDefinitions.get("yoink-inspect-product")?.contexts as string[]).join(","),
+    "action"
+  );
+  assert.equal(runtime.contextMenuDefinitions.get("yoink-reconnect-trackalacker")?.visible, false);
+  assert.equal(runtime.contextMenuDefinitions.get("yoink-sync-products")?.visible, true);
+  assert.equal(runtime.permissionRequests.length, 0);
+
+  const disconnected = harness({ healthVersion: "0.3.0" });
+  disconnected.fireStartup();
+  await waitFor(
+    () => disconnected.contextMenuDefinitions.get("yoink-reconnect-trackalacker")?.visible === true,
+    "Disconnected menu state was not applied."
+  );
+  assert.equal(disconnected.contextMenuDefinitions.get("yoink-sync-products")?.visible, false);
+  assert.equal(disconnected.permissionRequests.length, 0);
+});
+
+test("a context-menu inspection revalidates state and page, requests exact access, and persists a no-click result", async () => {
+  const runtime = harness({
+    activeUrl: PRODUCT_URL,
+    healthVersion: "0.3.0",
+    trackalackerPush: true,
+    permission: true,
+    permissionRequest: true
+  });
+  runtime.fireStartup();
+  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  runtime.clickContextMenu("yoink-inspect-product", PRODUCT_URL);
+  await waitFor(() => Boolean(runtime.storage.yoinkPopupResultV1), "The context-menu result was not persisted.");
+  assert.equal(runtime.permissionRequests.length, 1);
+  assert.equal(Array.from(runtime.permissionRequests[0]?.origins || []).join(","), "https://www.target.com/*");
+  const result = runtime.storage.yoinkPopupResultV1 as Record<string, unknown>;
+  assert.equal(result.contextKey, "product:target:1011483414");
+  assert.ok(["qualified", "blocked", "inspected"].includes(String(result.outcome)));
+  assert.equal(JSON.stringify(result).includes(TOKEN), false);
+  assert.ok(runtime.injections.length > 0);
+  assert.ok(runtime.actionTitles.some((title) => title.startsWith("Yoink ·")));
+});
+
+test("a stale context-menu label never authorizes inspection after the active page changes", async () => {
+  const runtime = harness({
+    activeUrl: PRODUCT_URL,
+    healthVersion: "0.3.0",
+    trackalackerPush: true,
+    permission: true,
+    permissionRequest: true
+  });
+  runtime.fireStartup();
+  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  const injectionCount = runtime.injections.length;
+  runtime.setActiveUrl("https://example.com/not-a-product");
+  runtime.clickContextMenu("yoink-inspect-product", PRODUCT_URL);
+  await waitFor(
+    () => runtime.actionTitles.some((title) => title.includes("This action is no longer available")),
+    "The stale context-menu action was not rejected."
+  );
+  assert.equal(runtime.injections.length, injectionCount);
+  assert.equal(runtime.storage.yoinkPopupResultV1, undefined);
 });
