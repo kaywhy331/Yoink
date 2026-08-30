@@ -22,6 +22,7 @@ var YoinkPopupStateModule = (() => {
   var popup_state_exports = {};
   __export(popup_state_exports, {
     POPUP_RESULT_STORAGE_KEY: () => POPUP_RESULT_STORAGE_KEY,
+    POPUP_UPDATE_HANDOFF_STORAGE_KEY: () => POPUP_UPDATE_HANDOFF_STORAGE_KEY,
     PRODUCT_DOCUMENT_PATTERNS: () => PRODUCT_DOCUMENT_PATTERNS,
     RETAILER_ORIGINS: () => RETAILER_ORIGINS,
     classifyPageContext: () => classifyPageContext,
@@ -30,6 +31,7 @@ var YoinkPopupStateModule = (() => {
     derivePopupView: () => derivePopupView,
     drawingsPopupResult: () => drawingsPopupResult,
     errorPopupResult: () => errorPopupResult,
+    popupUpdateHandoff: () => popupUpdateHandoff,
     qualificationPopupResult: () => qualificationPopupResult
   });
 
@@ -585,6 +587,7 @@ var YoinkPopupStateModule = (() => {
 
   // packages/extension-ui/src/popup-state.ts
   var POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
+  var POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
   var RETAILERS = {
     target: { name: "Target", domains: ["target.com"], identityLabel: "TCIN" },
     walmart: { name: "Walmart", domains: ["walmart.com"], identityLabel: "Item" },
@@ -722,21 +725,43 @@ var YoinkPopupStateModule = (() => {
     const cents = value === null || value === void 0 || value === "" ? Number.NaN : Number(value);
     return Number.isSafeInteger(cents) && cents >= 0 ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100) : "Price unavailable";
   }
-  function persistedResult(contextKey, outcome, summary, details, now) {
+  function persistedResult(contextKey, outcome, summary, details, now, productTitle = "") {
+    const sanitizedTitle = cleanResultText(productTitle, 300);
     return {
       schemaVersion: 1,
       contextKey: cleanResultText(contextKey, 180),
       outcome,
       summary: cleanResultText(summary, 180),
       details: cleanResultText(details, 1200),
+      recordedAt: new Date(now).toISOString(),
+      ...sanitizedTitle ? { productTitle: sanitizedTitle } : {}
+    };
+  }
+  function popupUpdateHandoff(value, now = Date.now()) {
+    const candidate = record(value);
+    const channel = candidate.channel === "local" || candidate.channel === "managed" ? candidate.channel : null;
+    const releaseVersion = cleanResultText(candidate.releaseVersion, 40);
+    if (!channel || !comparableVersion(releaseVersion)) return null;
+    return {
+      schemaVersion: 1,
+      channel,
+      releaseVersion,
       recordedAt: new Date(now).toISOString()
     };
+  }
+  function exactCatalogProductTitle(response, page) {
+    const identity = record(response.productIdentity);
+    const retailerId = cleanResultText(identity.retailerId, 40).toLocaleLowerCase("en-US");
+    const retailerSku = cleanResultText(identity.retailerSku, 120).toLocaleUpperCase("en-US");
+    if (identity.source !== "catalog_exact_retailer_sku" || retailerId !== page.retailerId || retailerSku !== page.sku.toLocaleUpperCase("en-US")) return "";
+    return cleanResultText(identity.title, 300);
   }
   function qualificationPopupResult(value, page, now = Date.now()) {
     if (page.kind !== "product") return null;
     const response = record(value);
     const observation = record(response.observation);
     const rehearsal = record(response.rehearsal);
+    const productTitle = exactCatalogProductTitle(response, page);
     const price = resultMoney(observation.unitPriceCents);
     const fulfillment = resultTitleCase(observation.fulfillment || "Fulfillment unavailable");
     const seller = cleanResultText(observation.sellerName || "Seller unavailable", 160);
@@ -746,12 +771,12 @@ var YoinkPopupStateModule = (() => {
     if (observation.purchaseRouteReady === true) lines.push("Exact offer binding verified");
     const qualification = response.workflow === "qualification";
     lines.push(qualification ? "Qualification stopped at the final pre-click boundary." : "Read-only inspection completed; no retailer control was clicked.");
-    if (!qualification) return persistedResult(page.key, "inspected", `Inspected \xB7 ${price}`, lines.join(" \xB7 "), now);
+    if (!qualification) return persistedResult(page.key, "inspected", `Inspected \xB7 ${price}`, lines.join(" \xB7 "), now, productTitle);
     if (rehearsal.ok === true) {
-      return persistedResult(page.key, "qualified", `Qualified \xB7 ${price} \xB7 ${fulfillment}`, lines.join(" \xB7 "), now);
+      return persistedResult(page.key, "qualified", `Qualified \xB7 ${price} \xB7 ${fulfillment}`, lines.join(" \xB7 "), now, productTitle);
     }
     const reason = safeErrorText(response.message || resultTitleCase(rehearsal.reason || "Offer not verified"));
-    return persistedResult(page.key, "blocked", `Blocked \xB7 ${reason}`, `${lines.join(" \xB7 ")} \xB7 ${reason}`, now);
+    return persistedResult(page.key, "blocked", `Blocked \xB7 ${reason}`, `${lines.join(" \xB7 ")} \xB7 ${reason}`, now, productTitle);
   }
   function drawingsPopupResult(value, page, now = Date.now()) {
     if (page.kind !== "walmart_draw") return null;
@@ -834,6 +859,8 @@ var YoinkPopupStateModule = (() => {
     const monitoringOnly = health.executionMode !== "live" || health.chromeMutationEnabled !== true;
     const pageActionable = input.page.kind === "product" || input.page.kind === "walmart_draw";
     const matchedResult = input.lastResult?.schemaVersion === 1 && input.lastResult.contextKey === input.page.key ? input.lastResult : null;
+    const handoffRecordedAt = new Date(String(input.updateHandoff?.recordedAt || "")).getTime();
+    const readyUpdateHandoff = input.updateHandoff?.schemaVersion === 1 && compareVersions(input.updateHandoff.releaseVersion, health.version) === 0 && Number.isFinite(handoffRecordedAt) && handoffRecordedAt <= now + 6e4 && now - handoffRecordedAt < 24 * 60 * 6e4 ? input.updateHandoff : null;
     let hardBlocker = null;
     let context = {
       visible: false,
@@ -865,14 +892,25 @@ var YoinkPopupStateModule = (() => {
       primaryAction = { id: "pair", label: "Pair browser", disabled: false };
     } else if (versionDifference > 0) {
       hardBlocker = "companion_update";
-      context = {
-        visible: true,
-        eyebrow: "UPDATE REQUIRED",
-        title: "Update companion",
-        supporting: `Yoink ${health.version || ""} requires the matching companion.`,
-        pairing: false
-      };
-      primaryAction = { id: "update_companion", label: "Update companion", disabled: false };
+      if (readyUpdateHandoff) {
+        context = {
+          visible: true,
+          eyebrow: readyUpdateHandoff.channel === "managed" ? "UPDATE READY" : "UPDATE DOWNLOADED",
+          title: readyUpdateHandoff.channel === "managed" ? "Restart companion" : "Replace extension files",
+          supporting: readyUpdateHandoff.channel === "managed" ? `Reload to finish installing Yoink ${readyUpdateHandoff.releaseVersion}.` : `Use the Yoink ${readyUpdateHandoff.releaseVersion} files, then reload.`,
+          pairing: false
+        };
+        primaryAction = { id: "reload_companion", label: "Reload companion", disabled: false };
+      } else {
+        context = {
+          visible: true,
+          eyebrow: "UPDATE REQUIRED",
+          title: "Update companion",
+          supporting: `Yoink ${health.version || ""} requires the matching companion.`,
+          pairing: false
+        };
+        primaryAction = { id: "update_companion", label: "Update companion", disabled: false };
+      }
     } else if (versionDifference < 0) {
       hardBlocker = "app_update";
       context = {
@@ -893,11 +931,13 @@ var YoinkPopupStateModule = (() => {
       };
       primaryAction = { id: "confirm_share_evidence", label: "Share evidence", disabled: false };
     } else if (input.page.kind === "product") {
+      const productTitle = cleanResultText(matchedResult?.productTitle, 300);
+      const resultSummary = matchedResult ? resultSupporting(matchedResult) : "";
       context = {
         visible: true,
         eyebrow: input.page.retailerName.toLocaleUpperCase("en-US"),
-        title: `${input.page.retailerName} product \xB7 ${input.page.identityLabel} ${input.page.sku}`,
-        supporting: input.notice || (matchedResult ? resultSupporting(matchedResult) : ""),
+        title: productTitle || `${input.page.retailerName} product \xB7 ${input.page.identityLabel} ${input.page.sku}`,
+        supporting: productTitle ? [`${input.page.identityLabel} ${input.page.sku}`, input.notice || resultSummary].filter(Boolean).join(" \xB7 ") : input.notice || resultSummary,
         pairing: false
       };
       primaryAction = {

@@ -1141,8 +1141,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && shadowObservationMatch) {
           const body = await readJson(request);
           if (body.retailerId !== shadowObservationMatch[1]) throw new Error("The retailer observation route and payload must match.");
+          const observation = shadowObservations.record(device.id, body as unknown as RetailerShadowObservationInput);
+          const listing = catalog.exactRetailerListing(observation.retailerId, observation.retailerSku);
           json(response, 201, {
-            observation: shadowObservations.record(device.id, body as unknown as RetailerShadowObservationInput)
+            observation,
+            productIdentity: listing ? {
+              source: "catalog_exact_retailer_sku",
+              retailerId: listing.retailerId,
+              retailerSku: listing.retailerSku,
+              title: listing.title
+            } : null
           });
           return;
         }

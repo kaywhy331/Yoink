@@ -29,6 +29,8 @@ const popupState = readFileSync(join(extensionRoot, "popup-state.js"), "utf8");
 const popup = readFileSync(join(extensionRoot, "popup.js"), "utf8");
 const iconDataUrl = `data:image/svg+xml;base64,${readFileSync(join(extensionRoot, "yoink-icon.svg")).toString("base64")}`;
 const extensionVersion = JSON.parse(readFileSync(join(extensionRoot, "manifest.json"), "utf8")).version;
+const [extensionMajor, extensionMinor, extensionPatch] = extensionVersion.split(".").map(Number);
+const nextExtensionVersion = `${extensionMajor}.${extensionMinor}.${extensionPatch + 1}`;
 
 const ready = {
   connected: true,
@@ -66,6 +68,17 @@ const states = [
     id: "hard-blocker",
     url: "https://www.target.com/p/pokemon/-/A-94972381",
     health: { ...ready, connected: false }
+  },
+  {
+    id: "update-downloaded",
+    url: "https://example.com/",
+    health: { ...ready, version: nextExtensionVersion },
+    updateHandoff: {
+      schemaVersion: 1,
+      channel: "local",
+      releaseVersion: nextExtensionVersion,
+      recordedAt: new Date().toISOString()
+    }
   }
 ];
 const zooms = [1, 1.25, 2];
@@ -80,11 +93,13 @@ function fixtureScript(state, zoom) {
       localPackageUpdates: true
     });
     const fixtureHealth = ${JSON.stringify(state.health)};
+    const fixtureSession = ${JSON.stringify({ yoinkUpdateHandoffV1: state.updateHandoff || null })};
     globalThis.chrome = {
       runtime: {
         getManifest: () => ({ version: ${JSON.stringify(extensionVersion)} }),
         sendMessage: async (message) => message?.type === "yoink:check-health"
           ? ({ ok: true, state: fixtureHealth }) : ({ ok: true, state: fixtureHealth }),
+        reload: () => undefined,
         onMessage: { addListener: () => undefined }
       },
       tabs: {
@@ -97,7 +112,11 @@ function fixtureScript(state, zoom) {
       },
       storage: {
         local: { get: async () => ({ readiness: fixtureHealth }) },
-        session: { get: async () => ({}), set: async () => undefined },
+        session: {
+          get: async (key) => ({ [key]: fixtureSession[key] }),
+          set: async () => undefined,
+          remove: async () => undefined
+        },
         onChanged: { addListener: () => undefined }
       }
     };

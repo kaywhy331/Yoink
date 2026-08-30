@@ -6,6 +6,7 @@ import {
 import type { SupportedRetailerId } from "../../contracts/src/index.js";
 
 export const POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
+export const POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
 
 const RETAILERS: Record<SupportedRetailerId, {
   name: string;
@@ -177,6 +178,7 @@ export type PopupActionId =
   | "retry"
   | "pair"
   | "update_companion"
+  | "reload_companion"
   | "open_yoink"
   | "inspect_product"
   | "inspect_drawings"
@@ -227,6 +229,14 @@ export interface PersistedPopupResult {
   summary: string;
   details: string;
   recordedAt: string;
+  productTitle?: string;
+}
+
+export interface PopupUpdateHandoff {
+  schemaVersion: 1;
+  channel: "local" | "managed";
+  releaseVersion: string;
+  recordedAt: string;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -266,16 +276,43 @@ function persistedResult(
   outcome: PersistedPopupResult["outcome"],
   summary: string,
   details: string,
-  now: number
+  now: number,
+  productTitle = ""
 ): PersistedPopupResult {
+  const sanitizedTitle = cleanResultText(productTitle, 300);
   return {
     schemaVersion: 1,
     contextKey: cleanResultText(contextKey, 180),
     outcome,
     summary: cleanResultText(summary, 180),
     details: cleanResultText(details, 1_200),
+    recordedAt: new Date(now).toISOString(),
+    ...(sanitizedTitle ? { productTitle: sanitizedTitle } : {})
+  };
+}
+
+export function popupUpdateHandoff(value: unknown, now = Date.now()): PopupUpdateHandoff | null {
+  const candidate = record(value);
+  const channel = candidate.channel === "local" || candidate.channel === "managed"
+    ? candidate.channel : null;
+  const releaseVersion = cleanResultText(candidate.releaseVersion, 40);
+  if (!channel || !comparableVersion(releaseVersion)) return null;
+  return {
+    schemaVersion: 1,
+    channel,
+    releaseVersion,
     recordedAt: new Date(now).toISOString()
   };
+}
+
+function exactCatalogProductTitle(response: Record<string, unknown>, page: Extract<PopupPageContext, { kind: "product" }>): string {
+  const identity = record(response.productIdentity);
+  const retailerId = cleanResultText(identity.retailerId, 40).toLocaleLowerCase("en-US");
+  const retailerSku = cleanResultText(identity.retailerSku, 120).toLocaleUpperCase("en-US");
+  if (identity.source !== "catalog_exact_retailer_sku"
+    || retailerId !== page.retailerId
+    || retailerSku !== page.sku.toLocaleUpperCase("en-US")) return "";
+  return cleanResultText(identity.title, 300);
 }
 
 export function qualificationPopupResult(
@@ -287,6 +324,7 @@ export function qualificationPopupResult(
   const response = record(value);
   const observation = record(response.observation);
   const rehearsal = record(response.rehearsal);
+  const productTitle = exactCatalogProductTitle(response, page);
   const price = resultMoney(observation.unitPriceCents);
   const fulfillment = resultTitleCase(observation.fulfillment || "Fulfillment unavailable");
   const seller = cleanResultText(observation.sellerName || "Seller unavailable", 160);
@@ -298,12 +336,12 @@ export function qualificationPopupResult(
   lines.push(qualification
     ? "Qualification stopped at the final pre-click boundary."
     : "Read-only inspection completed; no retailer control was clicked.");
-  if (!qualification) return persistedResult(page.key, "inspected", `Inspected · ${price}`, lines.join(" · "), now);
+  if (!qualification) return persistedResult(page.key, "inspected", `Inspected · ${price}`, lines.join(" · "), now, productTitle);
   if (rehearsal.ok === true) {
-    return persistedResult(page.key, "qualified", `Qualified · ${price} · ${fulfillment}`, lines.join(" · "), now);
+    return persistedResult(page.key, "qualified", `Qualified · ${price} · ${fulfillment}`, lines.join(" · "), now, productTitle);
   }
   const reason = safeErrorText(response.message || resultTitleCase(rehearsal.reason || "Offer not verified"));
-  return persistedResult(page.key, "blocked", `Blocked · ${reason}`, `${lines.join(" · ")} · ${reason}`, now);
+  return persistedResult(page.key, "blocked", `Blocked · ${reason}`, `${lines.join(" · ")} · ${reason}`, now, productTitle);
 }
 
 export function drawingsPopupResult(
@@ -343,6 +381,7 @@ export interface PopupViewInput {
     contextKey: string;
   } | null;
   lastResult?: PersistedPopupResult | null;
+  updateHandoff?: PopupUpdateHandoff | null;
   confirmation?: "share_evidence" | null;
   notice?: string;
   now?: number;
@@ -470,6 +509,13 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   const pageActionable = input.page.kind === "product" || input.page.kind === "walmart_draw";
   const matchedResult = input.lastResult?.schemaVersion === 1
     && input.lastResult.contextKey === input.page.key ? input.lastResult : null;
+  const handoffRecordedAt = new Date(String(input.updateHandoff?.recordedAt || "")).getTime();
+  const readyUpdateHandoff = input.updateHandoff?.schemaVersion === 1
+    && compareVersions(input.updateHandoff.releaseVersion, health.version) === 0
+    && Number.isFinite(handoffRecordedAt)
+    && handoffRecordedAt <= now + 60_000
+    && now - handoffRecordedAt < 24 * 60 * 60_000
+      ? input.updateHandoff : null;
   let hardBlocker: PopupViewModel["hardBlocker"] = null;
   let context: PopupViewModel["context"] = {
     visible: false,
@@ -502,14 +548,27 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     primaryAction = { id: "pair", label: "Pair browser", disabled: false };
   } else if (versionDifference > 0) {
     hardBlocker = "companion_update";
-    context = {
-      visible: true,
-      eyebrow: "UPDATE REQUIRED",
-      title: "Update companion",
-      supporting: `Yoink ${health.version || ""} requires the matching companion.`,
-      pairing: false
-    };
-    primaryAction = { id: "update_companion", label: "Update companion", disabled: false };
+    if (readyUpdateHandoff) {
+      context = {
+        visible: true,
+        eyebrow: readyUpdateHandoff.channel === "managed" ? "UPDATE READY" : "UPDATE DOWNLOADED",
+        title: readyUpdateHandoff.channel === "managed" ? "Restart companion" : "Replace extension files",
+        supporting: readyUpdateHandoff.channel === "managed"
+          ? `Reload to finish installing Yoink ${readyUpdateHandoff.releaseVersion}.`
+          : `Use the Yoink ${readyUpdateHandoff.releaseVersion} files, then reload.`,
+        pairing: false
+      };
+      primaryAction = { id: "reload_companion", label: "Reload companion", disabled: false };
+    } else {
+      context = {
+        visible: true,
+        eyebrow: "UPDATE REQUIRED",
+        title: "Update companion",
+        supporting: `Yoink ${health.version || ""} requires the matching companion.`,
+        pairing: false
+      };
+      primaryAction = { id: "update_companion", label: "Update companion", disabled: false };
+    }
   } else if (versionDifference < 0) {
     hardBlocker = "app_update";
     context = {
@@ -530,11 +589,15 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     };
     primaryAction = { id: "confirm_share_evidence", label: "Share evidence", disabled: false };
   } else if (input.page.kind === "product") {
+    const productTitle = cleanResultText(matchedResult?.productTitle, 300);
+    const resultSummary = matchedResult ? resultSupporting(matchedResult) : "";
     context = {
       visible: true,
       eyebrow: input.page.retailerName.toLocaleUpperCase("en-US"),
-      title: `${input.page.retailerName} product · ${input.page.identityLabel} ${input.page.sku}`,
-      supporting: input.notice || (matchedResult ? resultSupporting(matchedResult) : ""),
+      title: productTitle || `${input.page.retailerName} product · ${input.page.identityLabel} ${input.page.sku}`,
+      supporting: productTitle
+        ? [`${input.page.identityLabel} ${input.page.sku}`, input.notice || resultSummary].filter(Boolean).join(" · ")
+        : input.notice || resultSummary,
       pairing: false
     };
     primaryAction = {

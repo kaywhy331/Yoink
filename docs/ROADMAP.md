@@ -1,6 +1,20 @@
 # Yoink roadmap
 
-## Shipped through 1.10.0
+## Shipped through 1.10.1
+
+### Authoritative popup identity and update handoff (1.10.1)
+
+- Displays a catalog product title only after an authenticated observation is
+  joined by exact retailer and SKU; unverified page and tab titles remain
+  presentation-only and cannot become product identity
+- Persists the exact-version update handoff across popup closure, keeps local
+  unpacked-file replacement explicit, and offers a user-triggered reload only
+  after the required package or Chrome-managed update is ready
+- Requests Chrome's managed update check only from the incompatible-version
+  action, while automatic update availability feeds the same deterministic
+  popup reducer and normal production UI remains quiet
+- Restores the full TypeScript check baseline and extends reducer, popup,
+  service-worker, API, and zoom-render coverage for the new states
 
 ### Context-aware companion popup (1.10.0)
 

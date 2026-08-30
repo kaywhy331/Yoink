@@ -1246,6 +1246,42 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(nextJob.status, 200);
     assert.deepEqual(await nextJob.json(), { job: null, reason: "shadow_mode" });
 
+    const catalogTimestamp = new Date().toISOString();
+    db.run(
+      "INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      "family_popup_identity",
+      "Yoink API Test Product",
+      "",
+      catalogTimestamp,
+      catalogTimestamp
+    );
+    db.run(
+      "INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "variant_popup_identity",
+      "family_popup_identity",
+      "Yoink API Test Product",
+      "{}",
+      catalogTimestamp,
+      catalogTimestamp
+    );
+    db.run(
+      `INSERT INTO listings(
+         id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+         execution_supported, msrp_cents, currency, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      "listing_popup_identity",
+      "variant_popup_identity",
+      "target",
+      "1011483414",
+      "https://www.target.com/p/-/A-1011483414",
+      "unknown",
+      1,
+      6999,
+      "USD",
+      catalogTimestamp,
+      catalogTimestamp
+    );
+
     const shadowResponse = await fetch(`${baseUrl}/api/v1/devices/self/shadow-observations/target`, {
       method: "POST",
       headers: {
@@ -1279,10 +1315,20 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       })
     });
     assert.equal(shadowResponse.status, 201);
-    const shadow = (await shadowResponse.json() as { observation: Record<string, unknown> }).observation;
+    const shadowBody = await shadowResponse.json() as {
+      observation: Record<string, unknown>;
+      productIdentity: Record<string, unknown> | null;
+    };
+    const shadow = shadowBody.observation;
     assert.equal(shadow.observationState, "actionable_candidate");
     assert.equal(shadow.canonicalUrl, "https://www.target.com/p/-/A-1011483414");
     assert.equal("cookie" in shadow, false);
+    assert.deepEqual(shadowBody.productIdentity, {
+      source: "catalog_exact_retailer_sku",
+      retailerId: "target",
+      retailerSku: "1011483414",
+      title: "Yoink API Test Product"
+    });
 
     const consentResponse = await fetch(`${baseUrl}/api/v1/community/consents/target`, {
       method: "PATCH",
@@ -1478,6 +1524,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       })
     });
     assert.equal(secondShadowResponse.status, 201);
+    assert.equal((await secondShadowResponse.json() as { productIdentity: unknown }).productIdentity, null);
     const readySnapshot = await fetch(`${baseUrl}/api/v1/snapshot`).then((response) => response.json()) as {
       targetQualification: {
         qualificationEvidenceReady: boolean;

@@ -43,6 +43,7 @@ const HEALTH_ALARM = "yoink-health";
 const JOB_ALARM = "yoink-jobs";
 const READINESS_KEY = "readiness";
 const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
+const POPUP_UPDATE_HANDOFF_STORAGE_KEY = PopupState.POPUP_UPDATE_HANDOFF_STORAGE_KEY;
 const DEVICE_KEY = "pairedDevice";
 const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
@@ -288,30 +289,59 @@ function normalizedExtensionRelease(value) {
   };
 }
 
-async function checkExtensionUpdate(download = false) {
+function extensionUpdateHandoff(channel, releaseVersion) {
+  return PopupState.popupUpdateHandoff?.({ channel, releaseVersion }) || null;
+}
+
+async function persistExtensionUpdateHandoff(channel, releaseVersion) {
+  const handoff = extensionUpdateHandoff(channel, releaseVersion);
+  if (!handoff || !POPUP_UPDATE_HANDOFF_STORAGE_KEY) return null;
+  await chrome.storage.session.set({ [POPUP_UPDATE_HANDOFF_STORAGE_KEY]: handoff });
+  return handoff;
+}
+
+async function checkExtensionUpdate(download = false, requestManaged = false) {
   if (!LOCAL_PACKAGE_UPDATES) {
+    let managedResult = null;
+    if (requestManaged) {
+      if (typeof chrome.runtime.requestUpdateCheck !== "function") {
+        throw new Error("Chrome update checks are unavailable in this browser.");
+      }
+      managedResult = await chrome.runtime.requestUpdateCheck();
+    }
+    const managedStatus = ["throttled", "no_update", "update_available"].includes(managedResult?.status)
+      ? managedResult.status : "";
+    const releaseVersion = comparableVersion(managedResult?.version)
+      ? String(managedResult.version) : EXTENSION_VERSION;
+    const updateAvailable = managedStatus === "update_available";
+    const handoff = updateAvailable && comparableVersion(managedResult?.version)
+      ? await persistExtensionUpdateHandoff("managed", releaseVersion) : null;
     return {
       update: {
         installedVersion: EXTENSION_VERSION,
-        releaseVersion: EXTENSION_VERSION,
-        updateAvailable: false,
+        releaseVersion,
+        updateAvailable,
         packageReady: false,
         sha256: "",
         sizeBytes: 0,
         downloadUrl: "",
         downloadStarted: false,
         channel: "managed",
-        managedByBrowser: true
+        managedByBrowser: true,
+        ...(managedStatus ? { managedStatus } : {}),
+        ...(handoff ? { handoff } : {})
       }
     };
   }
   const release = normalizedExtensionRelease(await request("/extension/release", {}, 10_000));
   let downloadStarted = false;
+  let handoff = null;
   if (download && release.updateAvailable && release.packageReady) {
+    handoff = await persistExtensionUpdateHandoff("local", release.releaseVersion);
     await chrome.tabs.create({ url: release.downloadUrl, active: true });
     downloadStarted = true;
   }
-  return { update: { ...release, downloadStarted } };
+  return { update: { ...release, downloadStarted, ...(handoff ? { handoff } : {}) } };
 }
 
 async function targetShadowAccess() {
@@ -2555,7 +2585,12 @@ async function inspectTargetTab() {
     body: JSON.stringify(observation)
   }, EVIDENCE_REQUEST_TIMEOUT_MS);
   const recipeTrial = await runObserverRecipeShadow(tab.id, "target", payload.observation, null, device);
-  return { state: await checkHealth(), observation: payload.observation, recipeTrial };
+  return {
+    state: await checkHealth(),
+    observation: payload.observation,
+    productIdentity: payload.productIdentity || null,
+    recipeTrial
+  };
 }
 
 async function inspectWalmartDrawHubTab() {
@@ -2744,6 +2779,7 @@ async function inspectRetailerTab() {
   return {
     state: await checkHealth(),
     observation: observationPayload.observation,
+    productIdentity: observationPayload.productIdentity || null,
     diagnostic: diagnosticPayload.diagnostic,
     recipeTrial
   };
@@ -3255,6 +3291,7 @@ async function inspectAndQualifyActiveTab() {
   try {
     return {
       ...await rehearsal(inspection),
+      productIdentity: inspection.productIdentity || null,
       retailerId: identity.retailerId,
       workflow: "qualification",
       qualificationAvailable: true
@@ -4014,6 +4051,10 @@ async function initialize() {
 
 chrome.runtime.onInstalled.addListener(() => { void initialize(); });
 chrome.runtime.onStartup.addListener(() => { void initialize(); });
+chrome.runtime.onUpdateAvailable?.addListener((details) => {
+  if (LOCAL_PACKAGE_UPDATES || !comparableVersion(details?.version)) return;
+  void persistExtensionUpdateHandoff("managed", String(details.version));
+});
 if (chrome.contextMenus?.onClicked) {
   chrome.contextMenus.onClicked.addListener((info, tab) => {
     const command = contextMenuCommand(info.menuItemId);
@@ -4089,7 +4130,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               : trackalackerSync
                 ? startTrackalackerSync()
                 : extensionUpdate
-                  ? checkExtensionUpdate(message.download === true)
+                  ? checkExtensionUpdate(message.download === true, message.requestManaged === true)
                 : message?.type === "yoink:resolve-trackalacker-listing"
                   ? resolveTrackalackerListing(message, sender)
                   : message?.type === "yoink:trackalacker-sync-progress"

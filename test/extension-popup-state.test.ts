@@ -5,6 +5,7 @@ import {
   deriveContextMenuCommands,
   derivePopupView,
   errorPopupResult,
+  popupUpdateHandoff,
   qualificationPopupResult,
   type PopupHealthState,
   type PopupPageContext
@@ -100,6 +101,32 @@ test("hard blockers override exact product context", () => {
   assert.equal(mismatch.primaryAction?.id, "update_companion");
 });
 
+test("an exact, fresh update handoff replaces the mismatch action with explicit reload", () => {
+  const handoff = popupUpdateHandoff({ channel: "local", releaseVersion: "1.9.2" }, new Date("2026-08-29T18:00:30.000Z").getTime());
+  const ready = derivePopupView({
+    health: { ...READY, version: "1.9.2" },
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    updateHandoff: handoff,
+    now: new Date("2026-08-29T18:01:00.000Z").getTime()
+  });
+  assert.equal(ready.hardBlocker, "companion_update");
+  assert.equal(ready.context.title, "Replace extension files");
+  assert.equal(ready.primaryAction?.id, "reload_companion");
+
+  const wrongVersion = derivePopupView({
+    health: { ...READY, version: "1.9.3" },
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    updateHandoff: handoff,
+    now: new Date("2026-08-29T18:01:00.000Z").getTime()
+  });
+  assert.equal(wrongVersion.primaryAction?.id, "update_companion");
+  assert.equal(popupUpdateHandoff({ channel: "other", releaseVersion: "1.9.2" }), null);
+});
+
 test("TrackaLacker disconnection does not replace a product inspection", () => {
   const result = view({ ...READY, trackalackerPush: { ready: false, state: "error" } });
   assert.equal(result.status, "attention");
@@ -158,6 +185,12 @@ test("community sharing is conditional on exact page eligibility and consent", (
 test("persisted popup results are bounded, contextual, and redact untrusted error material", () => {
   const result = qualificationPopupResult({
     workflow: "qualification",
+    productIdentity: {
+      source: "catalog_exact_retailer_sku",
+      retailerId: "target",
+      retailerSku: "13331333",
+      title: "Bicycle Standard Playing Cards\n2pk"
+    },
     observation: {
       unitPriceCents: 539,
       fulfillment: "shipping",
@@ -169,7 +202,29 @@ test("persisted popup results are bounded, contextual, and redact untrusted erro
   }, PRODUCT, 1_788_037_200_000);
   assert.equal(result?.outcome, "qualified");
   assert.equal(result?.summary, "Qualified · $5.39 · Shipping");
+  assert.equal(result?.productTitle, "Bicycle Standard Playing Cards 2pk");
   assert.match(result?.details || "", /final pre-click boundary/);
+  const identifiedView = derivePopupView({
+    health: READY,
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    lastResult: result
+  });
+  assert.equal(identifiedView.context.title, "Bicycle Standard Playing Cards 2pk");
+  assert.equal(identifiedView.context.supporting, "TCIN 13331333 · $5.39 · Shipping");
+
+  const mismatchedIdentity = qualificationPopupResult({
+    workflow: "inspection",
+    productIdentity: {
+      source: "catalog_exact_retailer_sku",
+      retailerId: "target",
+      retailerSku: "99999999",
+      title: "Wrong product"
+    },
+    observation: { unitPriceCents: 539, fulfillment: "shipping", sellerName: "Target" }
+  }, PRODUCT);
+  assert.equal(mismatchedIdentity?.productTitle, undefined);
 
   const missingPrice = qualificationPopupResult({
     workflow: "inspection",

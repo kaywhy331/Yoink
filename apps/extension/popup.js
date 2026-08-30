@@ -31,6 +31,7 @@ if (!PopupState?.classifyPageContext || !PopupState?.derivePopupView) {
 
 const PRODUCTION_PROFILE = POPUP_RUNTIME_CONFIG.profile === "production";
 const INSTALLED_VERSION = chrome.runtime.getManifest().version;
+const UPDATE_HANDOFF_KEY = PopupState.POPUP_UPDATE_HANDOFF_STORAGE_KEY;
 const TRACKALACKER_ORIGINS = ["https://trackalacker.com/*", "https://www.trackalacker.com/*"];
 const TRACKALACKER_SYNC_ORIGINS = [...new Set([
   ...TRACKALACKER_ORIGINS,
@@ -44,6 +45,7 @@ const ui = {
   pageAccessGranted: false,
   operation: null,
   result: null,
+  updateHandoff: null,
   confirmation: null,
   notice: "",
   view: null,
@@ -113,6 +115,7 @@ function deriveView() {
     pageAccessGranted: ui.pageAccessGranted,
     operation: ui.operation,
     lastResult: resultForView(),
+    updateHandoff: ui.updateHandoff,
     confirmation: ui.confirmation,
     notice: ui.notice
   });
@@ -335,13 +338,24 @@ async function reconnectTrackalacker() {
 async function updateCompanion() {
   setOperation("updating");
   try {
-    const response = await chrome.runtime.sendMessage({ type: "yoink:check-update", download: !PRODUCTION_PROFILE });
+    const response = await chrome.runtime.sendMessage({
+      type: "yoink:check-update",
+      download: !PRODUCTION_PROFILE,
+      requestManaged: PRODUCTION_PROFILE
+    });
     if (!response?.ok || !response.update) throw new Error(response?.message || "Update check failed.");
     const update = response.update;
-    if (update.downloadStarted) {
-      showToast("Update downloaded. Replace the extension folder, then reload it in Chrome.");
+    if (update.handoff) {
+      ui.updateHandoff = update.handoff;
+      await chrome.storage.session.set({ [UPDATE_HANDOFF_KEY]: update.handoff });
+      render();
+      announce(update.handoff.channel === "managed" ? "Companion update ready." : "Companion update downloaded.");
+    } else if (update.downloadStarted) {
+      showToast("Update downloaded. Reopen Yoink Companion to finish.");
     } else if (update.managedByBrowser) {
-      showToast("Chrome manages companion updates.");
+      showToast(update.managedStatus === "throttled"
+        ? "Chrome will check again automatically."
+        : "Chrome found no companion update yet.");
     } else if (update.updateAvailable && !update.packageReady) {
       showToast("The companion update package is still being prepared.", true);
     } else if (update.updateAvailable) {
@@ -354,6 +368,12 @@ async function updateCompanion() {
   } finally {
     setOperation("idle");
   }
+}
+
+async function reloadCompanion() {
+  await chrome.storage.session.remove(UPDATE_HANDOFF_KEY).catch(() => undefined);
+  announce("Reloading companion.");
+  chrome.runtime.reload();
 }
 
 async function syncProducts() {
@@ -401,6 +421,7 @@ async function handlePrimaryAction() {
   if (action === "retry") return refreshHealth();
   if (action === "pair") return pairBrowser();
   if (action === "update_companion") return updateCompanion();
+  if (action === "reload_companion") return reloadCompanion();
   if (action === "open_yoink") return openYoink();
   if (action === "inspect_product") return inspectProduct();
   if (action === "inspect_drawings") return inspectDrawings();
@@ -499,19 +520,25 @@ function bindEvents() {
       ui.result = changes[PopupState.POPUP_RESULT_STORAGE_KEY].newValue;
       render();
     }
+    if (areaName === "session" && changes[UPDATE_HANDOFF_KEY]) {
+      ui.updateHandoff = changes[UPDATE_HANDOFF_KEY].newValue || null;
+      render();
+    }
   });
 }
 
 async function initializePopup() {
   bindEvents();
-  const [tabs, storedHealth, storedResult] = await Promise.all([
+  const [tabs, storedHealth, storedResult, storedUpdateHandoff] = await Promise.all([
     chrome.tabs.query({ active: true, currentWindow: true }),
     chrome.storage.local.get("readiness"),
-    chrome.storage.session.get(PopupState.POPUP_RESULT_STORAGE_KEY)
+    chrome.storage.session.get(PopupState.POPUP_RESULT_STORAGE_KEY),
+    chrome.storage.session.get(UPDATE_HANDOFF_KEY)
   ]);
   ui.page = PopupState.classifyPageContext(tabs[0]?.url);
   ui.health = storedHealth.readiness || null;
   ui.result = storedResult[PopupState.POPUP_RESULT_STORAGE_KEY] || null;
+  ui.updateHandoff = storedUpdateHandoff[UPDATE_HANDOFF_KEY] || null;
   ui.pageAccessGranted = await pageAccess();
   render();
   void refreshHealth();

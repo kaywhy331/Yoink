@@ -33,6 +33,7 @@ interface PopupHarnessOptions {
   url?: string;
   health?: Record<string, unknown>;
   permission?: boolean;
+  updateResponse?: Record<string, unknown>;
 }
 
 async function turn(): Promise<void> {
@@ -43,6 +44,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
   const requestCalls: Array<{ origins: string[] }> = [];
   const createdTabs: string[] = [];
   const session: Record<string, unknown> = {};
+  let reloadCount = 0;
   const health = { ...READY, ...(options.health || {}) };
   const dom = new JSDOM(POPUP_HTML, {
     pretendToBeVisual: true,
@@ -63,6 +65,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
       getManifest: () => ({ version: "1.9.1" }),
       sendMessage: async (message: { type?: string }) => {
         if (message.type === "yoink:check-health") return { ok: true, state: health };
+        if (message.type === "yoink:check-update") return options.updateResponse || { ok: false, message: "No update fixture." };
         if (message.type === "yoink:inspect-and-qualify") {
           return {
             ok: true,
@@ -73,12 +76,14 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
               outcome: "qualified",
               summary: "Qualified · $39.99 · Shipping",
               details: "TCIN 94972381 · $39.99 · Target · Shipping · Exact offer binding verified · Qualification stopped at the final pre-click boundary.",
-              recordedAt: new Date().toISOString()
+              recordedAt: new Date().toISOString(),
+              productTitle: "Pokémon Deluxe Battle Action Pikachu"
             }
           };
         }
         return { ok: true, state: health };
       },
+      reload: () => { reloadCount += 1; },
       onMessage: { addListener: (listener: (message: unknown) => boolean) => runtimeListeners.push(listener) }
     },
     tabs: {
@@ -96,7 +101,8 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
       local: { get: async () => ({ readiness: health }) },
       session: {
         get: async (key: string) => ({ [key]: session[key] }),
-        set: async (value: Record<string, unknown>) => { Object.assign(session, value); }
+        set: async (value: Record<string, unknown>) => { Object.assign(session, value); },
+        remove: async (key: string) => { delete session[key]; }
       },
       onChanged: { addListener: (listener: (changes: unknown, area: string) => void) => storageListeners.push(listener) }
     }
@@ -110,7 +116,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
   window.eval(POPUP);
   await turn();
   await turn();
-  return { dom, window, document: window.document, requestCalls, createdTabs, session };
+  return { dom, window, document: window.document, requestCalls, createdTabs, session, reloadCount: () => reloadCount };
 }
 
 function click(window: Window, element: Element): void {
@@ -199,7 +205,8 @@ test("retailer access is requested only after the contextual action receives a u
   assert.equal(fixture.requestCalls[0]?.origins.join(","), "https://www.target.com/*");
   assert.equal(action.textContent, "Qualified");
   assert.equal(action.getAttribute("aria-label"), "Qualified. Inspect product again.");
-  assert.equal(fixture.document.querySelector("#contextSupporting")?.textContent, "$39.99 · Shipping");
+  assert.equal(fixture.document.querySelector("#contextTitle")?.textContent, "Pokémon Deluxe Battle Action Pikachu");
+  assert.equal(fixture.document.querySelector("#contextSupporting")?.textContent, "TCIN 94972381 · $39.99 · Shipping");
   const resultDetails = fixture.document.querySelector("#resultDetails") as HTMLElement;
   const resultDetailsButton = fixture.document.querySelector("#resultDetailsButton") as HTMLButtonElement;
   assert.equal(resultDetails.hidden, true);
@@ -232,5 +239,41 @@ test("community evidence appears only for an opted-in exact page and requires vi
   assert.equal(fixture.document.querySelector("#contextTitle")?.textContent, "Target product · TCIN 94972381");
   assert.equal((fixture.document.querySelector("#cancelContext") as HTMLButtonElement).hidden, true);
   assert.equal(fixture.document.activeElement, menuButton);
+  fixture.dom.window.close();
+});
+
+test("a downloaded local update becomes a persistent reload handoff", async () => {
+  const recordedAt = new Date().toISOString();
+  const handoff = {
+    schemaVersion: 1,
+    channel: "local",
+    releaseVersion: "1.9.2",
+    recordedAt
+  };
+  const fixture = await popupHarness({
+    health: { version: "1.9.2" },
+    updateResponse: {
+      ok: true,
+      update: {
+        installedVersion: "1.9.1",
+        releaseVersion: "1.9.2",
+        updateAvailable: true,
+        downloadStarted: true,
+        handoff
+      }
+    }
+  });
+  const action = fixture.document.querySelector("#primaryAction") as HTMLButtonElement;
+  assert.equal(action.textContent, "Update companion");
+  click(fixture.window, action);
+  await turn();
+  await turn();
+  assert.equal(fixture.document.querySelector("#contextTitle")?.textContent, "Replace extension files");
+  assert.equal(action.textContent, "Reload companion");
+  assert.deepEqual(fixture.session.yoinkUpdateHandoffV1, handoff);
+  click(fixture.window, action);
+  await turn();
+  assert.equal(fixture.reloadCount(), 1);
+  assert.equal(fixture.session.yoinkUpdateHandoffV1, undefined);
   fixture.dom.window.close();
 });

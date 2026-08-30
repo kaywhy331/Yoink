@@ -267,7 +267,10 @@ test("parseFollowedPage captures a raw first-item sample even when its field nam
     sampleSink?: { listItem: Record<string, unknown> | null; productDetail: Record<string, unknown> | null }
   ) => { items: Array<{ sourceProductId: string; imageUrl: string; msrpCents: number | null }> };
 
-  const sink = { listItem: null, productDetail: null };
+  const sink: {
+    listItem: Record<string, unknown> | null;
+    productDetail: Record<string, unknown> | null;
+  } = { listItem: null, productDetail: null };
   const parsed = parseFollowedPage(dom.window.document, "https://www.trackalacker.com/products/followed", sink);
 
   // Item 1 uses unrecognized field names: extraction correctly finds nothing.

@@ -2,6 +2,7 @@ import type {
   CatalogListingInput,
   ListingContext,
   NormalizedSignal,
+  SupportedRetailerId,
   TrackalackerCatalogItemInput
 } from "../../contracts/src/index.js";
 import { normalizeCatalogListing, hostnameAllowed } from "../../domain/src/catalog.js";
@@ -74,6 +75,21 @@ function listingContext(row: ListingRow): ListingContext {
 
 export class CatalogRepository {
   constructor(private readonly db: YoinkDatabase) {}
+
+  exactRetailerListing(retailerId: SupportedRetailerId, retailerSku: string): ListingContext | null {
+    const normalizedSku = cleanText(retailerSku, 64).toUpperCase();
+    if (!normalizedSku) return null;
+    const row = this.db.get<ListingRow>(
+      `SELECT l.id, l.variant_id, v.title, l.retailer_id, l.retailer_sku,
+              l.canonical_url, l.execution_supported, l.msrp_cents, l.currency
+       FROM listings l
+       JOIN variants v ON v.id = l.variant_id
+       WHERE l.retailer_id = ? AND l.retailer_sku = ?`,
+      retailerId,
+      normalizedSku
+    );
+    return row ? listingContext(row) : null;
+  }
 
   sourceConnection(id: string): SourceConnectionRow | null {
     return this.db.get<SourceConnectionRow>(

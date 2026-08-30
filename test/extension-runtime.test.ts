@@ -509,6 +509,8 @@ interface HarnessOptions {
   pendingDeviceCredential?: boolean;
   deviceCredentialCommitFailures?: number;
   runtimeProfile?: "local" | "production";
+  managedUpdateStatus?: "throttled" | "no_update" | "update_available";
+  managedUpdateVersion?: string;
   retailerObserverFailure?:
     | "bundle_injection"
     | "execution"
@@ -655,6 +657,8 @@ function harness(options: HarnessOptions = {}) {
   let notificationClickedListener: ((notificationId: string) => void) | undefined;
   let notificationClosedListener: ((notificationId: string, byUser: boolean) => void) | undefined;
   let startupListener: (() => void) | undefined;
+  let updateAvailableListener: ((details: { version: string }) => void) | undefined;
+  let managedUpdateChecks = 0;
   let contextMenuClickedListener: ((info: Record<string, unknown>, tab?: Record<string, unknown>) => void) | undefined;
   const serviceWorkerListeners = new Map<string, (event: unknown) => void>();
   let completeJob: (() => void) | undefined;
@@ -675,8 +679,16 @@ function harness(options: HarnessOptions = {}) {
       getManifest: () => ({ version: "0.3.0" }),
       getURL: (path: string) => `chrome-extension://${"a".repeat(32)}/${path}`,
       reload: () => undefined,
+      requestUpdateCheck: async () => {
+        managedUpdateChecks += 1;
+        return {
+          status: options.managedUpdateStatus || "no_update",
+          ...(options.managedUpdateVersion ? { version: options.managedUpdateVersion } : {})
+        };
+      },
       onInstalled: { addListener: () => undefined },
       onStartup: { addListener: (listener: typeof startupListener) => { startupListener = listener; } },
+      onUpdateAvailable: { addListener: (listener: typeof updateAvailableListener) => { updateAvailableListener = listener; } },
       onMessage: { addListener: (listener: typeof messageListener) => { messageListener = listener; } }
     },
     storage: {
@@ -1159,6 +1171,12 @@ function harness(options: HarnessOptions = {}) {
           canonicalUrl: "https://www.target.com/p/-/A-1011483414",
           selectedOffer: { ...OBSERVATION.selectedOffer, fingerprint: "a".repeat(64) },
           observationState: "actionable_candidate"
+        },
+        productIdentity: {
+          source: "catalog_exact_retailer_sku",
+          retailerId: "target",
+          retailerSku: "1011483414",
+          title: "Pokémon Trading Card Game Collection"
         }
       }), { status: 201 });
     }
@@ -1487,6 +1505,8 @@ function harness(options: HarnessOptions = {}) {
     clickNotification: (id: string) => notificationClickedListener?.(id),
     closeNotification: (id: string, byUser = true) => notificationClosedListener?.(id, byUser),
     fireStartup: () => startupListener?.(),
+    fireUpdateAvailable: (version: string) => updateAvailableListener?.({ version }),
+    managedUpdateChecks: () => managedUpdateChecks,
     clickContextMenu: (menuItemId: string, presentedUrl?: string) => contextMenuClickedListener?.(
       { menuItemId, pageUrl: presentedUrl ?? tabs.get(17)?.url },
       { ...(tabs.get(17) || {}), url: presentedUrl ?? tabs.get(17)?.url }
@@ -2652,6 +2672,7 @@ test("the production service worker uses only its pinned HTTPS API and never ope
   });
   assert.equal(runtime.fetchCalls.some((entry) => entry.url.includes("/extension/release")), false);
   assert.equal(runtime.tabUrls().some((url) => url.includes("/extension/release/download")), false);
+  assert.equal(runtime.managedUpdateChecks(), 0);
 
   const health = await runtime.send({ type: "yoink:check-health" });
   assert.equal(health.ok, true);
@@ -2660,6 +2681,27 @@ test("the production service worker uses only its pinned HTTPS API and never ope
   const body = JSON.parse(String(heartbeat?.options.body)) as { capabilities: Record<string, unknown> };
   assert.equal(body.capabilities.productionTransportProfile, true);
   assert.equal(body.capabilities.managedExtensionUpdates, true);
+});
+
+test("a user-requested managed update check records an exact reload handoff", async () => {
+  const runtime = harness({
+    runtimeProfile: "production",
+    managedUpdateStatus: "update_available",
+    managedUpdateVersion: "0.4.0"
+  });
+  const response = await runtime.send({ type: "yoink:check-update", requestManaged: true });
+  assert.equal(response.ok, true);
+  const update = response.update as Record<string, unknown>;
+  assert.equal(update.managedStatus, "update_available");
+  assert.equal(update.releaseVersion, "0.4.0");
+  assert.equal(update.updateAvailable, true);
+  assert.equal(runtime.managedUpdateChecks(), 1);
+  assert.deepEqual(runtime.storage.yoinkUpdateHandoffV1, update.handoff);
+
+  const automatic = harness({ runtimeProfile: "production" });
+  automatic.fireUpdateAvailable("0.5.0");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal((automatic.storage.yoinkUpdateHandoffV1 as Record<string, unknown>)?.releaseVersion, "0.5.0");
 });
 
 test("the extension action menu stays small and derives visibility from the shared health model", async () => {
@@ -2713,6 +2755,7 @@ test("a context-menu inspection revalidates state and page, requests exact acces
   assert.equal(Array.from(runtime.permissionRequests[0]?.origins || []).join(","), "https://www.target.com/*");
   const result = runtime.storage.yoinkPopupResultV1 as Record<string, unknown>;
   assert.equal(result.contextKey, "product:target:1011483414");
+  assert.equal(result.productTitle, "Pokémon Trading Card Game Collection");
   assert.ok(["qualified", "blocked", "inspected"].includes(String(result.outcome)));
   assert.equal(JSON.stringify(result).includes(TOKEN), false);
   assert.ok(runtime.injections.length > 0);
