@@ -3,6 +3,9 @@ import {
   PRICE_POLICY_KINDS,
   type Fulfillment,
   type AppSettingsUpdateInput,
+  LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION,
+  LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION,
+  type LegacyPurchaseIntentTransitionInput,
   type MissionContext,
   type PurchaseIntentCreateInput,
   type PurchaseIntentDraftInput,
@@ -19,7 +22,7 @@ import {
   type SellerPolicy,
   type StrategyDefinition
 } from "../../contracts/src/index.js";
-import { newId, nowIso } from "../../domain/src/ids.js";
+import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import type { PurchaseAutomationPlanInput } from "../../domain/src/purchase-automation-readiness.js";
 import { YoinkDatabase } from "./database.js";
@@ -46,6 +49,35 @@ interface MissionRow {
   max_unit_price_cents: number | null;
   seller_policy: SellerPolicy | "inherit";
   fulfillment: Fulfillment | "inherit";
+}
+
+interface LegacyPurchaseIntentTransitionRow {
+  id: string;
+  title: string;
+  origin: string;
+  status: "active" | "paused";
+  revision: number;
+  policyHash: string;
+  updatedAt: string;
+}
+
+export interface LegacyPurchaseIntentTransitionPreview {
+  contractVersion: typeof LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION;
+  eligibleCount: number;
+  activeCount: number;
+  pausedCount: number;
+  previewFingerprint: string;
+  outcome: "notification_only";
+  retailerMutationAuthorized: false;
+  checkoutAuthorized: false;
+  samplePlans: Array<{ id: string; title: string; status: "active" | "paused" }>;
+}
+
+export interface LegacyPurchaseIntentTransitionResult {
+  transitionedCount: number;
+  cancelledPendingJobCount: number;
+  transitionedPlanIds: string[];
+  preview: LegacyPurchaseIntentTransitionPreview;
 }
 
 export interface MissionEnsureResult {
@@ -1059,6 +1091,132 @@ export class ControlRepository {
       executionSupported: Number(target.executionSupported) === 1
     }));
     return { ...mission, intentPolicy: this.purchasePolicies.current(String(mission.id)), targets };
+  }
+
+  private legacyPurchaseIntentTransitionRows(): LegacyPurchaseIntentTransitionRow[] {
+    return this.db.all<LegacyPurchaseIntentTransitionRow>(
+      `SELECT m.id, v.title, m.origin, m.status, ir.revision,
+              ir.policy_hash AS policyHash, m.updated_at AS updatedAt
+       FROM missions m
+       JOIN variants v ON v.id = m.variant_id
+       JOIN mission_intent_revisions ir ON ir.mission_id = m.id
+       WHERE m.user_id = ? AND m.status IN ('active', 'paused')
+         AND m.origin LIKE 'signal:%'
+         AND ir.decision_mode = 'strategy'
+         AND ir.revision = (
+           SELECT MAX(current_ir.revision)
+           FROM mission_intent_revisions current_ir
+           WHERE current_ir.mission_id = m.id
+         )
+       ORDER BY m.id`,
+      currentRequestScope().userId
+    );
+  }
+
+  legacyPurchaseIntentTransitionPreview(): LegacyPurchaseIntentTransitionPreview {
+    const rows = this.legacyPurchaseIntentTransitionRows();
+    const previewFingerprint = stableHash(
+      "legacy-purchase-intent-transition-v1",
+      currentRequestScope().tenantId,
+      currentRequestScope().userId,
+      ...rows.flatMap((row) => [
+        row.id,
+        row.origin,
+        row.status,
+        Number(row.revision),
+        row.policyHash,
+        row.updatedAt
+      ])
+    );
+    return {
+      contractVersion: LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION,
+      eligibleCount: rows.length,
+      activeCount: rows.filter((row) => row.status === "active").length,
+      pausedCount: rows.filter((row) => row.status === "paused").length,
+      previewFingerprint,
+      outcome: "notification_only",
+      retailerMutationAuthorized: false,
+      checkoutAuthorized: false,
+      samplePlans: rows.slice(0, 5).map((row) => ({ id: row.id, title: row.title, status: row.status }))
+    };
+  }
+
+  transitionLegacyPurchaseIntents(
+    input: LegacyPurchaseIntentTransitionInput,
+    now = Date.now()
+  ): LegacyPurchaseIntentTransitionResult {
+    if (input?.contractVersion !== LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION
+      || input?.confirmation !== LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION
+      || !/^[a-f0-9]{64}$/.test(String(input?.previewFingerprint ?? ""))) {
+      throw new PurchaseSafetyError(
+        "legacy_purchase_intent_transition_confirmation_required",
+        400,
+        "Review the current legacy-plan preview and explicitly confirm notification-only transition."
+      );
+    }
+    return this.db.transaction(() => {
+      const preview = this.legacyPurchaseIntentTransitionPreview();
+      if (input.previewFingerprint !== preview.previewFingerprint) {
+        throw new PurchaseSafetyError(
+          "legacy_purchase_intent_transition_stale",
+          409,
+          "The eligible legacy plans changed after preview. Review the current transition summary before trying again."
+        );
+      }
+      const rows = this.legacyPurchaseIntentTransitionRows();
+      let cancelledPendingJobCount = 0;
+      for (const row of rows) {
+        const intentPolicy = this.purchasePolicies.revise(row.id, {
+          expectedRevision: Number(row.revision),
+          actionCeiling: "notify",
+          decisionMode: "purchase_intent",
+          changeReason: "Explicitly converted from a legacy strategy plan to a user-controlled notification plan."
+        }, now);
+        const stalePendingJobs = this.db.all<{ id: string }>(
+          `SELECT id FROM action_jobs
+           WHERE mission_id = ? AND user_id = ?
+             AND intent_revision_id IS NOT NULL AND intent_revision_id <> ?
+             AND state IN ('shadow_ready', 'awaiting_executor')
+           ORDER BY created_at, id`,
+          row.id,
+          currentRequestScope().userId,
+          intentPolicy.id
+        );
+        for (const job of stalePendingJobs) {
+          this.signals.transitionJob(
+            job.id,
+            "cancelled",
+            "intent_revision_superseded",
+            "The legacy plan was converted before the action was leased; the stale job and reservation were cancelled.",
+            { intentRevision: intentPolicy.revision },
+            now
+          );
+          cancelledPendingJobCount += 1;
+        }
+      }
+      if (rows.length) {
+        this.auditEvents.record({
+          correlationId: currentRequestScope().userId,
+          aggregateType: "purchase_intent_set",
+          eventType: "legacy_purchase_intents_transitioned",
+          reasonCode: "notification_only",
+          message: `${rows.length} legacy purchase plan${rows.length === 1 ? " was" : "s were"} converted to explicit notification-only plans.`,
+          data: {
+            transitionedPlanIds: rows.map((row) => row.id),
+            transitionedCount: rows.length,
+            cancelledPendingJobCount,
+            retailerMutationAuthorized: false,
+            checkoutAuthorized: false
+          }
+        }, now);
+      }
+      return {
+        transitionedCount: rows.length,
+        cancelledPendingJobCount,
+        transitionedPlanIds: rows.map((row) => row.id),
+        preview: this.legacyPurchaseIntentTransitionPreview()
+      };
+    });
   }
 
   updateMission(missionId: string, input: MissionUpdateInput, now = Date.now()): Record<string, unknown> {

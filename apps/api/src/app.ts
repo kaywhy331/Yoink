@@ -33,6 +33,7 @@ import {
   type CatalogIdentityOperationDecisionInput,
   type CatalogIdentityOperationProposalInput,
   type JobState,
+  type LegacyPurchaseIntentTransitionInput,
   type MissionUpdateInput,
   type PurchaseIntentCreateInput,
   type PurchaseIntentPreflightInput,
@@ -1008,6 +1009,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const query = String(requestUrl.searchParams.get("q") ?? "");
         const items = decoratePurchaseIntents(control.listMissions(limit, offset, query, true));
         json(response, 200, { items, total: control.missionCount(query), offset, limit: items.length });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/purchase-intents/legacy-transition") {
+        json(response, 200, { preview: control.legacyPurchaseIntentTransitionPreview() });
         return;
       }
 
@@ -2080,6 +2086,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const body = await readJson(request);
         json(response, 200, {
           preflight: configuredPurchaseIntentPreflight(body as unknown as PurchaseIntentPreflightInput)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/legacy-transition") {
+        const body = await readJson(request);
+        json(response, 200, {
+          transition: control.transitionLegacyPurchaseIntents(body as unknown as LegacyPurchaseIntentTransitionInput)
         });
         return;
       }

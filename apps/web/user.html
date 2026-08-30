@@ -95,6 +95,10 @@
 
     <section class="workspace" data-panel="plans">
       <div class="section-heading"><div><p class="eyebrow">Your private intent</p><h2>Purchase plans</h2><p>Price caps, seller choice, fulfillment, and quantity stay explicit per product and store.</p></div></div>
+      <section class="plan-transition" id="legacyPlanTransition" aria-live="polite" hidden>
+        <div><p class="eyebrow">One-time plan update</p><h3 id="legacyPlanTransitionTitle">Imported plans need review</h3><p id="legacyPlanTransitionCopy"></p></div>
+        <button class="button secondary" id="reviewLegacyPlanTransitionButton" type="button">Review transition</button>
+      </section>
       <div class="stack" id="planList"></div>
     </section>
 
@@ -243,12 +247,24 @@
         <label><span>Substitutions</span><select name="substitutionPolicy"><option value="exact_only">Exact item only</option><option value="verified_equivalent" disabled>Verified equivalents (not available yet)</option></select></label>
         <label><span>Cooldown between attempts (minutes)</span><input name="cooldownMinutes" type="number" min="0" max="43200" step="1" value="0"></label>
       </div>
+      <div class="plan-preparation-actions"><button class="button secondary" id="prepareGuardedPlanButton" type="button">Prepare guarded cart draft</button></div>
       <div class="form-row">
         <label><span>Plan expires</span><input name="expiresAt" type="datetime-local"></label>
         <div class="field-note"><strong id="planModeTitle">This plan decides directly; advanced strategies are optional.</strong><span id="planModeCopy">Checkout stays manual. These limits can authorize only qualified add-only actions and never authorize checkout or order submission.</span></div>
       </div>
       <div class="target-list" id="targetEditors"></div>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save preferences</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="legacyPlanTransitionDialog" class="compact-dialog">
+    <form id="legacyPlanTransitionForm">
+      <div class="dialog-heading"><div><p class="eyebrow">One-time plan update</p><h2>Make imported plans monitoring-ready</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <p class="dialog-copy" id="legacyPlanTransitionSummary"></p>
+      <div class="mini-list" id="legacyPlanTransitionSamples"></div>
+      <p class="boundary-note good"><strong>No store action is authorized.</strong> Every selected plan becomes notification-only. Price caps, guarded cart actions, checkout, payment, and ordering are not inferred or enabled.</p>
+      <label class="review-confirm"><input name="reviewed" type="checkbox" required><span>I understand this converts the current preview to user-controlled notification-only plans.</span></label>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="transitionLegacyPlansButton" type="submit" disabled>Make plans monitoring-ready</button></div>
     </form>
   </dialog>
 

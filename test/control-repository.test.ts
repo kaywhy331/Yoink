@@ -367,6 +367,101 @@ test("legacy user plan creation is notification-only until limits are explicitly
   }
 });
 
+test("legacy signal plans transition atomically to explicit notification-only control", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    const control = new ControlRepository(db);
+    const createLegacy = (suffix: string) => {
+      const listing = catalog.upsertListing({
+        sourceConnectionId: "source_trackalacker_local",
+        source: "trackalacker",
+        sourceProductId: `legacy-transition-${suffix}`,
+        sourceListingId: `legacy-transition-listing-${suffix}`,
+        title: `Legacy Transition ${suffix}`,
+        retailerId: "target",
+        retailerSku: `95281${suffix.padStart(3, "0")}`,
+        canonicalUrl: `https://www.target.com/p/-/A-95281${suffix.padStart(3, "0")}`,
+        listingStatus: "in_stock",
+        executionSupported: true,
+        msrpCents: 2500
+      });
+      return control.ensureMission(listing.listing.variantId, listing.listing.id, "signal:trackalacker").mission.id;
+    };
+    const firstId = createLegacy("1");
+    const secondId = createLegacy("2");
+    const advancedListing = catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "advanced-strategy-plan",
+      sourceListingId: "advanced-strategy-listing",
+      title: "Intentional Advanced Strategy",
+      retailerId: "target",
+      retailerSku: "95281998",
+      canonicalUrl: "https://www.target.com/p/-/A-95281998",
+      listingStatus: "in_stock",
+      executionSupported: true,
+      msrpCents: 2500
+    });
+    const advancedId = control.ensureMission(
+      advancedListing.listing.variantId,
+      advancedListing.listing.id,
+      "advanced:operator"
+    ).mission.id;
+    const firstPreview = control.legacyPurchaseIntentTransitionPreview();
+    assert.equal(firstPreview.contractVersion, 1);
+    assert.equal(firstPreview.eligibleCount, 2);
+    assert.equal(firstPreview.activeCount, 2);
+    assert.equal(firstPreview.outcome, "notification_only");
+    assert.equal(firstPreview.retailerMutationAuthorized, false);
+    assert.match(firstPreview.previewFingerprint, /^[a-f0-9]{64}$/);
+    assert.throws(() => control.transitionLegacyPurchaseIntents({
+      contractVersion: 1,
+      previewFingerprint: firstPreview.previewFingerprint,
+      confirmation: "WRONG" as "CONVERT_LEGACY_PLANS_TO_NOTIFICATIONS"
+    }), /explicitly confirm/);
+    const thirdId = createLegacy("3");
+    assert.throws(() => control.transitionLegacyPurchaseIntents({
+      contractVersion: 1,
+      previewFingerprint: firstPreview.previewFingerprint,
+      confirmation: "CONVERT_LEGACY_PLANS_TO_NOTIFICATIONS"
+    }), /changed after preview/);
+    assert.equal((control.missionDetail(firstId) as { intentPolicy: { decisionMode: string } }).intentPolicy.decisionMode, "strategy");
+
+    const currentPreview = control.legacyPurchaseIntentTransitionPreview();
+    const result = control.transitionLegacyPurchaseIntents({
+      contractVersion: 1,
+      previewFingerprint: currentPreview.previewFingerprint,
+      confirmation: "CONVERT_LEGACY_PLANS_TO_NOTIFICATIONS"
+    });
+    assert.equal(result.transitionedCount, 3);
+    assert.equal(result.cancelledPendingJobCount, 0);
+    assert.equal(result.preview.eligibleCount, 0);
+    assert.deepEqual(new Set(result.transitionedPlanIds), new Set([firstId, secondId, thirdId]));
+    assert.equal((control.missionDetail(advancedId) as { intentPolicy: { decisionMode: string } }).intentPolicy.decisionMode, "strategy");
+    for (const id of [firstId, secondId, thirdId]) {
+      const detail = control.missionDetail(id) as {
+        intentPolicy: { revision: number; decisionMode: string; actionCeiling: string };
+        targets: Array<{ enabled: boolean; maxUnitPriceCents: number | null; sellerPolicy: string; fulfillment: string }>;
+      };
+      assert.equal(detail.intentPolicy.revision, 2);
+      assert.equal(detail.intentPolicy.decisionMode, "purchase_intent");
+      assert.equal(detail.intentPolicy.actionCeiling, "notify");
+      assert.deepEqual(detail.targets.map((target) => ({
+        enabled: target.enabled,
+        maxUnitPriceCents: target.maxUnitPriceCents,
+        sellerPolicy: target.sellerPolicy,
+        fulfillment: target.fulfillment
+      })), [{ enabled: true, maxUnitPriceCents: null, sellerPolicy: "inherit", fulfillment: "inherit" }]);
+    }
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'legacy_purchase_intents_transitioned'"
+    )?.count, 1);
+  } finally {
+    db.close();
+  }
+});
+
 test("a direct plan update cannot authorize an unsafe cart target", () => {
   const db = new YoinkDatabase();
   try {

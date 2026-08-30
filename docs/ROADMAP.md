@@ -1,6 +1,20 @@
 # Yoink roadmap
 
-## Shipped through 1.10.1
+## Shipped through 1.11.0
+
+### Signal-plan transition and guarded-cart preparation (1.11.0)
+
+- Adds a deterministic preview for active or paused signal-imported strategy
+  plans and binds the exact eligible set to a one-time SHA-256 fingerprint
+- Converts only an explicitly confirmed preview to user-controlled,
+  notification-only policy revisions in one transaction; no price cap,
+  retailer mutation, checkout, payment, or order authority is inferred
+- Cancels stale unleased action work when the policy revision changes and
+  records an auditable aggregate transition receipt
+- Streamlines individual guarded-cart review by excluding monitoring-only
+  targets, using latest observed prices only as editable draft caps, computing
+  the current all-in safety minimum, defaulting to Shipping, and retaining
+  Pickup only after explicit selection
 
 ### Authoritative popup identity and update handoff (1.10.1)
 

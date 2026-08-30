@@ -38,7 +38,9 @@ test("guided dashboard setup does not create a plan before review and submits ex
   const posts: Array<Record<string, unknown>> = [];
   const preflights: Array<Record<string, unknown>> = [];
   const patches: Array<Record<string, unknown>> = [];
+  const transitions: Array<Record<string, unknown>> = [];
   let created = false;
+  let transitioned = false;
   const product = {
     variantId: "variant_dashboard_test",
     title: "Exact Dashboard Fixture",
@@ -169,6 +171,17 @@ test("guided dashboard setup does not create a plan before review and submits ex
       categories: [{ id: "catalog_and_plans", label: "Products and purchase plans", recordCount: 12 }]
     } };
     if (path.startsWith("/api/v1/user/library")) return { items: [libraryGroup], total: 1 };
+    if (path === "/api/v1/user/purchase-intents/legacy-transition") return { preview: {
+      contractVersion: 1,
+      eligibleCount: transitioned ? 0 : 1,
+      activeCount: transitioned ? 0 : 1,
+      pausedCount: 0,
+      previewFingerprint: "b".repeat(64),
+      outcome: "notification_only",
+      retailerMutationAuthorized: false,
+      checkoutAuthorized: false,
+      samplePlans: transitioned ? [] : [{ id: "mission_imported_test", title: "Imported Signal Fixture", status: "active" }]
+    } };
     if (path === "/api/v1/user/purchase-intents/mission_dashboard_test") return { purchaseIntent: planDetail };
     if (path.startsWith("/api/v1/user/purchase-intents")) return { items: created ? [planSummary] : [] };
     if (path.startsWith("/api/v1/user/jobs")) return { items: [] };
@@ -178,6 +191,11 @@ test("guided dashboard setup does not create a plan before review and submits ex
   Object.defineProperty(browser, "fetch", {
     configurable: true,
     value: async (path: string, options: { method?: string; body?: string } = {}) => {
+      if (path === "/api/v1/user/purchase-intents/legacy-transition" && options.method === "POST") {
+        transitions.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
+        transitioned = true;
+        return { ok: true, status: 200, json: async () => ({ transition: { transitionedCount: 1, preview: { eligibleCount: 0 } } }) };
+      }
       if (path === "/api/v1/user/purchase-intents/preflight" && options.method === "POST") {
         const draft = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
         preflights.push(draft);
@@ -230,6 +248,29 @@ test("guided dashboard setup does not create a plan before review and submits ex
   try {
     browser.eval(`${script}\n//# sourceURL=user-dashboard-test.js`);
     await eventually(() => assert.ok(browser.document.querySelector("[data-quick-add]")));
+    const transitionPanel = browser.document.querySelector("#legacyPlanTransition") as HTMLElement;
+    assert.equal(transitionPanel.hidden, false);
+    assert.match(transitionPanel.textContent ?? "", /1 imported plan needs one review/);
+    (browser.document.querySelector("#reviewLegacyPlanTransitionButton") as HTMLButtonElement).click();
+    const transitionDialog = browser.document.querySelector("#legacyPlanTransitionDialog") as HTMLDialogElement;
+    assert.equal(transitionDialog.hasAttribute("open"), true);
+    assert.match(transitionDialog.textContent ?? "", /No store action is authorized/);
+    const transitionForm = browser.document.querySelector("#legacyPlanTransitionForm") as HTMLFormElement;
+    const transitionReviewed = transitionForm.elements.namedItem("reviewed") as HTMLInputElement;
+    const transitionButton = browser.document.querySelector("#transitionLegacyPlansButton") as HTMLButtonElement;
+    assert.equal(transitionButton.disabled, true);
+    transitionReviewed.checked = true;
+    transitionReviewed.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    assert.equal(transitionButton.disabled, false);
+    transitionForm.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
+    await eventually(() => assert.equal(transitions.length, 1));
+    assert.deepEqual(transitions[0], {
+      contractVersion: 1,
+      previewFingerprint: "b".repeat(64),
+      confirmation: "CONVERT_LEGACY_PLANS_TO_NOTIFICATIONS"
+    });
+    await eventually(() => assert.equal(transitionDialog.hasAttribute("open"), false));
+    await eventually(() => assert.equal(transitionPanel.hidden, true));
     const outbound = new URL((browser.document.querySelector("#productList a.canonical") as HTMLAnchorElement).href);
     assert.equal(outbound.origin, "https://howl.link");
     assert.equal(outbound.pathname, "/link");
@@ -349,10 +390,35 @@ test("guided dashboard setup does not create a plan before review and submits ex
 
     planDetail.intentPolicy.decisionMode = "strategy";
     planDetail.intentPolicy.actionCeiling = "add_to_cart";
+    planDetail.targets.push({
+      id: "mission_target_monitor_only",
+      listingId: "listing_monitor_only",
+      retailerId: "amazon",
+      retailerName: "Amazon",
+      retailerSku: "B0MONITOR1",
+      canonicalUrl: "https://www.amazon.com/dp/B0MONITOR1",
+      executionSupported: false,
+      enabled: true,
+      maxUnitPriceCents: 1200,
+      sellerPolicy: "inherit",
+      fulfillment: "inherit",
+      currency: "USD",
+      lastObservedPriceCents: 1200
+    });
     (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(editDialog.hasAttribute("open"), true));
     assert.equal((editForm.elements.namedItem("actionCeiling") as HTMLSelectElement).value, "notify");
     assert.match(browser.document.querySelector("#planModeCopy")?.textContent ?? "", /converts it to a reviewed direct plan/i);
+    const preparedTarget = browser.document.querySelector('[data-target-id="mission_target_dashboard_test"]') as HTMLElement;
+    (preparedTarget.querySelector('[data-field="fulfillment"]') as HTMLSelectElement).value = "pickup";
+    (browser.document.querySelector("#prepareGuardedPlanButton") as HTMLButtonElement).click();
+    assert.equal((editForm.elements.namedItem("actionCeiling") as HTMLSelectElement).value, "add_to_cart");
+    assert.equal((preparedTarget.querySelector('[data-field="sellerPolicy"]') as HTMLSelectElement).value, "first_party_only");
+    assert.equal((preparedTarget.querySelector('[data-field="fulfillment"]') as HTMLSelectElement).value, "pickup");
+    const monitorOnlyTarget = browser.document.querySelector('[data-target-id="mission_target_monitor_only"]') as HTMLElement;
+    assert.equal((monitorOnlyTarget.querySelector('[data-field="enabled"]') as HTMLInputElement).checked, false);
+    assert.equal((monitorOnlyTarget.querySelector('[data-field="enabled"]') as HTMLInputElement).disabled, true);
+    assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /explicit Pickup choice was retained/);
     editDialog.close();
   } finally {
     browser.close();

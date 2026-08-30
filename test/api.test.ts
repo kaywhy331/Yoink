@@ -5,6 +5,8 @@ import { once } from "node:events";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import { emptyInternalServiceCapabilityProjection } from "../apps/api/src/internal-service-capabilities.js";
+import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
+import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { postgresCutoverCapabilityProjection } from "../packages/database/src/postgres-cutover.js";
 import { postgresRuntimeReadRoleCapabilityProjection } from "../packages/database/src/postgres-runtime-roles.js";
@@ -1057,6 +1059,92 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.ok(activity.total >= 1);
     assert.ok(activity.items.length >= 1);
     assert.ok(activity.outbox.pendingOutboxEvents >= 1);
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});
+
+test("the user API previews and applies a stale-safe notification-only legacy-plan transition", async () => {
+  const db = new YoinkDatabase();
+  const listing = new CatalogRepository(db).upsertListing({
+    sourceConnectionId: "source_trackalacker_local",
+    source: "trackalacker",
+    sourceProductId: "api-legacy-transition-product",
+    sourceListingId: "api-legacy-transition-listing",
+    title: "API Legacy Transition Fixture",
+    retailerId: "target",
+    retailerSku: "95281991",
+    canonicalUrl: "https://www.target.com/p/-/A-95281991",
+    listingStatus: "in_stock",
+    executionSupported: true,
+    msrpCents: 3200
+  });
+  const missionId = new ControlRepository(db).ensureMission(
+    listing.listing.variantId,
+    listing.listing.id,
+    "signal:trackalacker"
+  ).mission.id;
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "0.1.0-test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    const previewResponse = await fetch(`${baseUrl}/api/v1/user/purchase-intents/legacy-transition`);
+    assert.equal(previewResponse.status, 200);
+    const preview = (await previewResponse.json() as { preview: {
+      contractVersion: number;
+      eligibleCount: number;
+      previewFingerprint: string;
+      retailerMutationAuthorized: boolean;
+    } }).preview;
+    assert.equal(preview.contractVersion, 1);
+    assert.equal(preview.eligibleCount, 1);
+    assert.equal(preview.retailerMutationAuthorized, false);
+
+    const stale = await fetch(`${baseUrl}/api/v1/user/purchase-intents/legacy-transition`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        contractVersion: 1,
+        previewFingerprint: "0".repeat(64),
+        confirmation: "CONVERT_LEGACY_PLANS_TO_NOTIFICATIONS"
+      })
+    });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json() as { error: string }).error, "legacy_purchase_intent_transition_stale");
+
+    const applied = await fetch(`${baseUrl}/api/v1/user/purchase-intents/legacy-transition`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        contractVersion: preview.contractVersion,
+        previewFingerprint: preview.previewFingerprint,
+        confirmation: "CONVERT_LEGACY_PLANS_TO_NOTIFICATIONS"
+      })
+    });
+    assert.equal(applied.status, 200);
+    const transition = (await applied.json() as { transition: {
+      transitionedCount: number;
+      transitionedPlanIds: string[];
+      preview: { eligibleCount: number };
+    } }).transition;
+    assert.equal(transition.transitionedCount, 1);
+    assert.deepEqual(transition.transitionedPlanIds, [missionId]);
+    assert.equal(transition.preview.eligibleCount, 0);
+
+    const detail = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(missionId)}`).then((response) => response.json()) as {
+      purchaseIntent: {
+        intentPolicy: { decisionMode: string; actionCeiling: string };
+        automationReadiness: { state: string; configuredAction: string };
+      };
+    };
+    assert.equal(detail.purchaseIntent.intentPolicy.decisionMode, "purchase_intent");
+    assert.equal(detail.purchaseIntent.intentPolicy.actionCeiling, "notify");
+    assert.equal(detail.purchaseIntent.automationReadiness.state, "needs_current_companion");
+    assert.equal(detail.purchaseIntent.automationReadiness.configuredAction, "notify");
   } finally {
     server.close();
     await once(server, "close");

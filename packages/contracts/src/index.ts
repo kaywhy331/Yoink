@@ -1181,6 +1181,15 @@ export interface MissionUpdateInput {
   policy?: PurchaseIntentPolicyUpdateInput;
 }
 
+export const LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION = 1;
+export const LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION = "CONVERT_LEGACY_PLANS_TO_NOTIFICATIONS";
+
+export interface LegacyPurchaseIntentTransitionInput {
+  contractVersion: typeof LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION;
+  previewFingerprint: string;
+  confirmation: typeof LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION;
+}
+
 export interface SpendPolicy {
   revision: number;
   currency: "USD";

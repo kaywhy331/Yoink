@@ -7,6 +7,7 @@ const state = {
   profiles: [],
   quickAddBusy: false,
   plans: [],
+  legacyTransition: null,
   actions: [],
   proposals: [],
   editingPlan: null,
@@ -692,6 +693,7 @@ function automationReadinessMarkup(readiness) {
 }
 
 function renderPlans() {
+  renderLegacyPlanTransition();
   $("#planList").innerHTML = state.plans.length ? state.plans.map((plan) => {
     const store = plan.primaryRetailerName || "No store enabled";
     const current = plan.primaryCurrentPriceCents ? money(plan.primaryCurrentPriceCents) : "not seen yet";
@@ -717,6 +719,49 @@ function renderPlans() {
   }).join("") : '<div class="empty">You have no purchase plans. Choose “Set up purchase” from the Products tab and review the exact limits before creating one.</div>';
 }
 
+function renderLegacyPlanTransition() {
+  const preview = state.legacyTransition;
+  const panel = $("#legacyPlanTransition");
+  const count = Number(preview?.eligibleCount || 0);
+  panel.hidden = count < 1;
+  if (!count) return;
+  $("#legacyPlanTransitionTitle").textContent = `${count.toLocaleString()} imported plan${count === 1 ? " needs" : "s need"} one review`;
+  $("#legacyPlanTransitionCopy").textContent = "Make them explicit notification-only plans now; guarded cart limits still require separate review per product.";
+}
+
+function openLegacyPlanTransition() {
+  const preview = state.legacyTransition;
+  const count = Number(preview?.eligibleCount || 0);
+  if (!preview || count < 1) {
+    toast("No imported plans currently need transition.");
+    return;
+  }
+  const active = Number(preview.activeCount || 0);
+  const paused = Number(preview.pausedCount || 0);
+  $("#legacyPlanTransitionSummary").textContent = `${count.toLocaleString()} plan${count === 1 ? "" : "s"} will stop delegating decisions to advanced strategies and become explicit notification-only plans (${active.toLocaleString()} active${paused ? `, ${paused.toLocaleString()} paused` : ""}).`;
+  const samples = Array.isArray(preview.samplePlans) ? preview.samplePlans : [];
+  $("#legacyPlanTransitionSamples").innerHTML = samples.map((plan) => `<div class="mini-row"><span>${escapeHtml(plan.title)}</span><strong>${escapeHtml(plan.status)}</strong></div>`).join("");
+  const form = $("#legacyPlanTransitionForm");
+  form.elements.reviewed.checked = false;
+  $("#transitionLegacyPlansButton").disabled = true;
+  $("#legacyPlanTransitionDialog").showModal();
+  requestAnimationFrame(() => form.elements.reviewed.focus());
+}
+
+async function transitionLegacyPlans() {
+  const preview = state.legacyTransition;
+  if (!preview || Number(preview.eligibleCount || 0) < 1) throw new Error("Refresh the current transition preview first.");
+  const result = await api("/api/v1/user/purchase-intents/legacy-transition", {
+    method: "POST",
+    body: JSON.stringify({
+      contractVersion: Number(preview.contractVersion),
+      previewFingerprint: preview.previewFingerprint,
+      confirmation: "CONVERT_LEGACY_PLANS_TO_NOTIFICATIONS"
+    })
+  });
+  return result.transition || {};
+}
+
 function renderActions() {
   $("#actionList").innerHTML = state.actions.length ? state.actions.map((action) => `<article class="action-card">
     <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${action.state === "confirmed" ? "good" : "warn"}">${escapeHtml(String(action.state).replaceAll("_", " "))}</span></div>
@@ -735,10 +780,11 @@ function renderProposals() {
 
 async function refresh() {
   const query = state.query ? `&q=${encodeURIComponent(state.query)}` : "";
-  const [overview, products, plans, actions, proposals, privacy, recoveryEvidence, profiles] = await Promise.all([
+  const [overview, products, plans, legacyTransition, actions, proposals, privacy, recoveryEvidence, profiles] = await Promise.all([
     api("/api/v1/user/overview"),
     api(`/api/v1/user/library/products?limit=200&offset=0${query}`),
     api("/api/v1/user/purchase-intents?limit=200&offset=0"),
+    api("/api/v1/user/purchase-intents/legacy-transition"),
     api("/api/v1/user/jobs?limit=100&offset=0"),
     api("/api/v1/user/catalog/proposals?limit=100&offset=0"),
     state.privacy ? Promise.resolve({ inventory: state.privacy }) : api("/api/v1/user/privacy"),
@@ -755,6 +801,7 @@ async function refresh() {
     ...listing
   })));
   state.plans = plans.items || [];
+  state.legacyTransition = legacyTransition.preview || null;
   state.actions = actions.items || [];
   state.proposals = proposals.items || [];
   state.privacy = privacy.inventory || null;
@@ -1036,8 +1083,8 @@ async function openPlan(id) {
     ? "Checkout stays manual. These limits can authorize only qualified add-only actions and never authorize checkout or order submission."
     : "Saving here converts it to a reviewed direct plan in notification mode unless you explicitly choose and satisfy guarded cart requirements. Checkout stays manual.";
   $("#planDialogTitle").textContent = mission.title;
-  $("#targetEditors").innerHTML = mission.targets.map((target) => `<article class="target-editor" data-target-id="${escapeHtml(target.id)}" data-retailer-id="${escapeHtml(target.retailerId)}" data-execution-supported="${target.executionSupported === true}">
-    <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div><a class="canonical" href="${escapeHtml(howlAffiliateUrl(target.canonicalUrl, mission.title))}" target="_blank" rel="noopener noreferrer sponsored">View ↗</a></div>
+  $("#targetEditors").innerHTML = mission.targets.map((target) => `<article class="target-editor" data-target-id="${escapeHtml(target.id)}" data-retailer-id="${escapeHtml(target.retailerId)}" data-execution-supported="${target.executionSupported === true}" data-last-observed-price-cents="${Number.isSafeInteger(Number(target.lastObservedPriceCents)) ? Number(target.lastObservedPriceCents) : ""}">
+    <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><span class="tag ${target.executionSupported === true ? "good" : ""} target-capability">${target.executionSupported === true ? "Cart mapping available" : "Monitoring only"}</span><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div><a class="canonical" href="${escapeHtml(howlAffiliateUrl(target.canonicalUrl, mission.title))}" target="_blank" rel="noopener noreferrer sponsored">View ↗</a></div>
     <div class="target-fields">
       <label class="check"><input data-field="enabled" type="checkbox" ${target.enabled ? "checked" : ""}><span>Use store</span></label>
       <label><span>Maximum price</span><input data-field="maxPrice" inputmode="decimal" placeholder="Strategy limit" value="${target.maxUnitPriceCents ? (target.maxUnitPriceCents / 100).toFixed(2) : ""}"></label>
@@ -1045,6 +1092,9 @@ async function openPlan(id) {
       <label><span>Fulfillment</span><select data-field="fulfillment"><option value="shipping" ${target.fulfillment !== "pickup" && target.fulfillment !== "manual" ? "selected" : ""}>Shipping (default)</option><option value="pickup" ${target.fulfillment === "pickup" ? "selected" : ""}>Pickup (explicit opt-in)</option><option value="manual" ${target.fulfillment === "manual" ? "selected" : ""}>Manual only</option></select></label>
     </div>
   </article>`).join("");
+  const supportedTargets = mission.targets.filter((target) => target.executionSupported === true);
+  form.elements.actionCeiling.querySelector('option[value="add_to_cart"]').disabled = supportedTargets.length < 1;
+  $("#prepareGuardedPlanButton").hidden = supportedTargets.length < 1;
   syncPlanAction();
   $("#planDialog").showModal();
 }
@@ -1084,16 +1134,21 @@ function planAutomaticMinimum(form, targets = planTargetDrafts(form)) {
 function syncPlanAction(normalizeTargets = false) {
   const form = $("#planForm");
   const adding = form.elements.actionCeiling.value === "add_to_cart";
-  if (adding && normalizeTargets) {
-    $$("[data-target-id]", form).forEach((card) => {
-      if ($("[data-field=enabled]", card).checked) {
+  $$("[data-target-id]", form).forEach((card) => {
+    const supported = card.dataset.executionSupported === "true";
+    const enabledControl = $("[data-field=enabled]", card);
+    enabledControl.disabled = adding && !supported;
+    if (adding && normalizeTargets) {
+      if (!supported) {
+        enabledControl.checked = false;
+      } else if (enabledControl.checked) {
         $("[data-field=sellerPolicy]", card).value = "first_party_only";
         if ($("[data-field=fulfillment]", card).value !== "pickup") {
           $("[data-field=fulfillment]", card).value = "shipping";
         }
       }
-    });
-  }
+    }
+  });
   const targets = planTargetDrafts(form);
   const enabled = targets.filter((target) => target.enabled);
   const unsafe = enabled.find((target) => !target.executionSupported
@@ -1119,6 +1174,58 @@ function syncPlanAction(normalizeTargets = false) {
           : totalTooLow
             ? `Raise the maximum total to at least ${money(minimum)} only if you accept that bound, or choose notifications.`
             : `The reviewed total covers the current ${money(minimum)} tax and store-fee safety bound. Each guarded attempt adds exactly one item, and Chrome still rechecks the exact live offer before any click.`;
+}
+
+function prepareGuardedPlanDraft() {
+  const form = $("#planForm");
+  const supportedCards = $$("[data-target-id]", form).filter((card) => card.dataset.executionSupported === "true");
+  if (!supportedCards.length) {
+    toast("This plan has no store target with a packaged guarded-cart runner.", true);
+    return;
+  }
+  if (!supportedCards.some((card) => $("[data-field=enabled]", card).checked)) {
+    toast("Enable at least one guarded cart capable store, then prepare the draft again.", true);
+    return;
+  }
+  form.elements.actionCeiling.value = "add_to_cart";
+  let preparedCount = 0;
+  let missingPriceCount = 0;
+  let retainedPickupCount = 0;
+  for (const card of $$("[data-target-id]", form)) {
+    const enabled = $("[data-field=enabled]", card);
+    if (card.dataset.executionSupported !== "true") {
+      enabled.checked = false;
+      continue;
+    }
+    if (!enabled.checked) continue;
+    $("[data-field=sellerPolicy]", card).value = "first_party_only";
+    if ($("[data-field=fulfillment]", card).value === "pickup") {
+      retainedPickupCount += 1;
+    } else {
+      $("[data-field=fulfillment]", card).value = "shipping";
+    }
+    const price = $("[data-field=maxPrice]", card);
+    if (!price.value.trim()) {
+      const observed = Number(card.dataset.lastObservedPriceCents);
+      if (Number.isSafeInteger(observed) && observed > 0) {
+        price.value = moneyInput(observed);
+      } else {
+        missingPriceCount += 1;
+      }
+    }
+    preparedCount += 1;
+  }
+  syncPlanAction(true);
+  const minimum = planAutomaticMinimum(form);
+  if (minimum !== null) {
+    let currentTotal = null;
+    try { currentTotal = centsInput(form.elements.maxAllIn.value, "The all-in cap"); } catch { currentTotal = null; }
+    if (currentTotal === null || currentTotal < minimum) form.elements.maxAllIn.value = moneyInput(minimum);
+  }
+  syncPlanAction();
+  toast(missingPriceCount
+    ? `Prepared ${preparedCount} supported store${preparedCount === 1 ? "" : "s"}. Enter ${missingPriceCount} missing price cap${missingPriceCount === 1 ? "" : "s"}, then review every field before saving.`
+    : `Prepared ${preparedCount} supported store${preparedCount === 1 ? "" : "s"}; Shipping is the default${retainedPickupCount ? ` and ${retainedPickupCount} explicit Pickup choice${retainedPickupCount === 1 ? " was" : "s were"} retained` : ""}. Review every price and the maximum total before saving.`);
 }
 
 async function createPairingCode(showPreferences = false) {
@@ -1402,6 +1509,36 @@ $("#setupForm").addEventListener("submit", async (event) => {
 $("#planForm").addEventListener("input", () => syncPlanAction());
 $("#planForm").addEventListener("change", (event) => {
   syncPlanAction(event.target.name === "actionCeiling" && event.target.value === "add_to_cart");
+});
+$("#prepareGuardedPlanButton").addEventListener("click", prepareGuardedPlanDraft);
+
+$("#reviewLegacyPlanTransitionButton").addEventListener("click", openLegacyPlanTransition);
+$("#legacyPlanTransitionForm").elements.reviewed.addEventListener("change", (event) => {
+  $("#transitionLegacyPlansButton").disabled = event.target.checked !== true;
+});
+$("#legacyPlanTransitionForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = $("#transitionLegacyPlansButton");
+  try {
+    if (form.elements.reviewed.checked !== true) {
+      throw new Error("Review and confirm the notification-only transition first.");
+    }
+    button.disabled = true;
+    button.textContent = "Updating plans…";
+    const transition = await transitionLegacyPlans();
+    $("#legacyPlanTransitionDialog").close();
+    await refresh();
+    setTab("plans");
+    const count = Number(transition.transitionedCount || 0);
+    toast(`${count.toLocaleString()} imported plan${count === 1 ? " is" : "s are"} now user-controlled and notification-ready. Guarded cart actions still require explicit limits per product.`);
+  } catch (error) {
+    if (error.code === "legacy_purchase_intent_transition_stale") await refresh();
+    toast(error.message || "The imported plans could not be transitioned.", true);
+  } finally {
+    button.textContent = "Make plans monitoring-ready";
+    button.disabled = form.elements.reviewed.checked !== true;
+  }
 });
 
 $("#planForm").addEventListener("submit", async (event) => {
