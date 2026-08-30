@@ -7,6 +7,7 @@ import type { SupportedRetailerId } from "../../contracts/src/index.js";
 
 export const POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
 export const POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
+export const CART_READY_STORAGE_KEY = "yoinkCartReadyV1";
 
 export type YoinkAppDestination = "dashboard" | "connections" | "operations" | "settings";
 
@@ -196,6 +197,7 @@ export type PopupActionId =
   | "pair"
   | "update_companion"
   | "reload_companion"
+  | "open_cart"
   | "open_yoink"
   | "inspect_product"
   | "inspect_drawings"
@@ -210,6 +212,7 @@ export type PopupOperationStage =
   | "qualifying"
   | "pairing"
   | "reconnecting"
+  | "opening_cart"
   | "updating"
   | "sharing";
 
@@ -256,6 +259,28 @@ export interface PopupUpdateHandoff {
   recordedAt: string;
 }
 
+export type CartReadyRetailerId = "target" | "walmart" | "amazon" | "bestbuy";
+
+export interface PersistedCartReadyItem {
+  schemaVersion: 1;
+  jobId: string;
+  retailerId: CartReadyRetailerId;
+  retailerName: string;
+  identityLabel: string;
+  retailerSku: string;
+  tabId: number;
+  recordedAt: string;
+  latency: {
+    leaseToCartReadyMs?: number;
+    clickToCartReadyMs?: number;
+  };
+}
+
+export interface PersistedCartReadyState {
+  schemaVersion: 1;
+  items: PersistedCartReadyItem[];
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
@@ -267,6 +292,64 @@ function cleanResultText(value: unknown, maximum = 360): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maximum);
+}
+
+const CART_READY_RETAILERS: Record<CartReadyRetailerId, { name: string; identityLabel: string }> = {
+  target: { name: "Target", identityLabel: "TCIN" },
+  walmart: { name: "Walmart", identityLabel: "Item" },
+  amazon: { name: "Amazon", identityLabel: "ASIN" },
+  bestbuy: { name: "Best Buy", identityLabel: "SKU" }
+};
+
+function cartReadyLatency(value: unknown): PersistedCartReadyItem["latency"] {
+  const candidate = record(value);
+  const duration = (input: unknown): number | undefined => {
+    const milliseconds = Number(input);
+    return Number.isSafeInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 60 * 60_000
+      ? milliseconds : undefined;
+  };
+  const leaseToCartReadyMs = duration(candidate.leaseToCartReadyMs);
+  const clickToCartReadyMs = duration(candidate.clickToCartReadyMs);
+  return {
+    ...(leaseToCartReadyMs !== undefined ? { leaseToCartReadyMs } : {}),
+    ...(clickToCartReadyMs !== undefined ? { clickToCartReadyMs } : {})
+  };
+}
+
+export function cartReadyState(value: unknown, now = Date.now()): PersistedCartReadyState {
+  const source = record(value);
+  const input = Array.isArray(source.items) ? source.items : [];
+  const unique = new Map<string, PersistedCartReadyItem>();
+  for (const raw of input.slice(-20)) {
+    const candidate = record(raw);
+    const retailerId = String(candidate.retailerId || "") as CartReadyRetailerId;
+    const retailer = CART_READY_RETAILERS[retailerId];
+    const jobId = cleanResultText(candidate.jobId, 120);
+    const retailerSku = cleanResultText(candidate.retailerSku, 120).toLocaleUpperCase("en-US");
+    const tabId = Number(candidate.tabId);
+    const recordedAt = new Date(String(candidate.recordedAt || "")).getTime();
+    if (candidate.schemaVersion !== 1
+      || !retailer
+      || !/^[A-Za-z0-9_-]{3,120}$/.test(jobId)
+      || !/^[A-Z0-9-]{3,120}$/.test(retailerSku)
+      || !Number.isSafeInteger(tabId)
+      || tabId < 0
+      || !Number.isFinite(recordedAt)
+      || recordedAt > now + 60_000
+      || now - recordedAt >= 24 * 60 * 60_000) continue;
+    unique.set(jobId, {
+      schemaVersion: 1,
+      jobId,
+      retailerId,
+      retailerName: retailer.name,
+      identityLabel: retailer.identityLabel,
+      retailerSku,
+      tabId,
+      recordedAt: new Date(recordedAt).toISOString(),
+      latency: cartReadyLatency(candidate.latency)
+    });
+  }
+  return { schemaVersion: 1, items: [...unique.values()].slice(-10) };
 }
 
 function safeErrorText(value: unknown): string {
@@ -399,6 +482,7 @@ export interface PopupViewInput {
   } | null;
   lastResult?: PersistedPopupResult | null;
   updateHandoff?: PopupUpdateHandoff | null;
+  cartReady?: PersistedCartReadyState | null;
   confirmation?: "share_evidence" | null;
   notice?: string;
   now?: number;
@@ -426,6 +510,7 @@ export interface PopupViewModel {
     action: "none" | "reconnect_trackalacker" | "review_pause" | "review_mode";
   } | null;
   result: PersistedPopupResult | null;
+  cartReady: PersistedCartReadyItem | null;
   details: Array<{ label: string; value: string }>;
   menu: {
     syncProducts: boolean;
@@ -466,6 +551,7 @@ function operationLabel(action: PopupActionId, stage: PopupOperationStage): stri
   if (stage === "qualifying") return "Qualifying…";
   if (stage === "pairing") return "Pairing…";
   if (stage === "reconnecting") return "Reconnecting…";
+  if (stage === "opening_cart") return "Opening cart…";
   if (stage === "updating") return "Checking update…";
   if (stage === "sharing") return "Sharing…";
   return null;
@@ -520,7 +606,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   const versionDifference = health.connected === true && comparableVersion(health.version)
     ? compareVersions(health.version, input.installedVersion)
     : 0;
-  const status = statusFor(health, versionDifference);
+  let status = statusFor(health, versionDifference);
   const trackalackerReady = health.trackalackerPush?.ready === true;
   const monitoringOnly = health.executionMode !== "live" || health.chromeMutationEnabled !== true;
   const pageActionable = input.page.kind === "product" || input.page.kind === "walmart_draw";
@@ -533,6 +619,8 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     && handoffRecordedAt <= now + 60_000
     && now - handoffRecordedAt < 24 * 60 * 60_000
       ? input.updateHandoff : null;
+  const readyCarts = cartReadyState(input.cartReady, now).items;
+  const newestReadyCart = readyCarts.at(-1) ?? null;
   let hardBlocker: PopupViewModel["hardBlocker"] = null;
   let context: PopupViewModel["context"] = {
     visible: false,
@@ -596,6 +684,20 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       pairing: false
     };
     primaryAction = { id: "open_yoink", label: "Open Yoink", disabled: false };
+  } else if (newestReadyCart) {
+    status = "attention";
+    context = {
+      visible: true,
+      eyebrow: "CART READY",
+      title: readyCarts.length === 1
+        ? `${newestReadyCart.retailerName} cart ready`
+        : `${readyCarts.length} carts ready`,
+      supporting: readyCarts.length === 1
+        ? `${newestReadyCart.identityLabel} ${newestReadyCart.retailerSku} · Checkout stays manual`
+        : "Checkout stays manual",
+      pairing: false
+    };
+    primaryAction = { id: "open_cart", label: "Open cart", disabled: false };
   } else if (input.confirmation === "share_evidence" && input.page.kind === "product") {
     context = {
       visible: true,
@@ -707,7 +809,8 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     context,
     primaryAction,
     activity,
-    result: matchedResult,
+    result: newestReadyCart ? null : matchedResult,
+    cartReady: newestReadyCart,
     details: [
       { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },
       { label: "TrackaLacker", value: trackalackerReady ? "Connected" : "Disconnected" },

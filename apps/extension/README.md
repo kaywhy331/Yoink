@@ -106,12 +106,13 @@ or entry.
 
 The rehearsal runs the production offer verifier to its final click boundary,
 then discards the authorization without clicking. After explicit activation in
-Yoink, the background runner checks only the local job queue. A cycle processes
-at most four freshly leased jobs, one at a time, and continues only after exact
-cart confirmation. It rechecks health, live/pause state, optional store access,
-device credentials, and the server lease before every job. A Yoink-created tab
-may be reused only for the same retailer during that cycle; different stores
-retain separate cart tabs. For each qualified Target, Walmart, Amazon, or Best
+Yoink, the background runner checks only the local job queue. A cycle performs
+one health, live/pause, optional store-access, and device preflight, then
+processes at most four freshly server-validated leases, one at a time. It
+continues after a clean pre-click rejection but stops on any mutation-uncertain
+or manual-review result. A Yoink-created tab may be reused only for the same
+retailer during that cycle; different stores retain separate cart tabs. For
+each qualified Target, Walmart, Amazon, or Best
 Buy job the runner binds up to 25 existing
 SKU-and-quantity lines, revalidates exact SKU, first-party seller, the saved
 Shipping or Pickup choice, stock, and price, writes the add receipt,
@@ -129,10 +130,20 @@ global availability. The paired add runner is v8, and upgrading retires every
 earlier Best Buy qualification.
 
 After Chrome delivers a valid TrackaLacker push to the durable inbox, the
-companion checks for an action job immediately and once more 2.5 seconds later
-if the worker has not produced one yet. The recurring 30-second alarm remains a
-fallback. A failed, rejected, or uncertain job stops the bounded drain; it does
-not skip ahead or retry a click.
+companion checks immediately, then uses bounded 250/750/1500/2500 ms follow-up
+probes until the worker produces a lease. Visible notification and status
+updates do not delay that handoff; the recurring 30-second alarm remains a
+fallback. A clean rejection before mutation may yield to another queued job,
+but an uncertain result stops the bounded drain and no click is retried.
+
+Exact cart confirmation stores only a bounded local handoff, updates the
+extension badge, and raises a Chrome **Cart ready** notification. The popup
+shows the same state. Opening it revalidates and focuses the existing exact
+retailer cart tab, acknowledges that one handoff, and never creates a checkout
+or order action. A fresh, exact post-add cart inventory may become the next
+same-lane job's in-memory baseline; ordinary post-click delta proof remains
+mandatory. Bounded lease-to-cart and click-to-cart durations accompany the
+sanitized evidence.
 
 The popup overflow can also offer **Share evidence** after the user enables
 that retailer in Yoink's Community view and opens an eligible exact page. A

@@ -1748,7 +1748,14 @@ var YoinkBestBuyActionModule = (() => {
     if (bestBuySecurityChallenge(documentValue) || bestBuyInteractiveBlock(documentValue, urlValue)) {
       return { ok: false, reason: "manual_action_required" };
     }
-    return verifyCartAddDelta(job, baseline, observeBestBuyCart(documentValue, new Date(now).toISOString()), proof, now);
+    const inventory = observeBestBuyCart(documentValue, new Date(now).toISOString());
+    const verified = verifyCartAddDelta(job, baseline, inventory, proof, now);
+    if (!verified.ok) return verified;
+    const nextBaseline = captureCartBaseline("bestbuy", inventory, now);
+    return {
+      ...verified,
+      ...nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {}
+    };
   }
   Object.defineProperty(globalThis, "YoinkBestBuyAction", {
     value: Object.freeze({

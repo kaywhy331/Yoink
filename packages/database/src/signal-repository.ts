@@ -922,7 +922,11 @@ export class SignalRepository {
               sr.id AS spendReservationId, sr.status AS spendReservationStatus,
               sr.reserved_amount_cents AS reservedAmountCents,
               aj.created_at AS createdAt, v.title,
-              l.retailer_id AS retailerId, l.retailer_sku AS retailerSku
+              l.retailer_id AS retailerId, l.retailer_sku AS retailerSku,
+              (SELECT ae.reason_code FROM action_events ae
+               WHERE ae.job_id = aj.id ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS decisionReasonCode,
+              (SELECT ae.message FROM action_events ae
+               WHERE ae.job_id = aj.id ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS decisionReason
        FROM action_jobs aj
        JOIN listings l ON l.id = aj.listing_id
        JOIN variants v ON v.id = l.variant_id
@@ -935,10 +939,15 @@ export class SignalRepository {
          OR aj.action LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR l.retailer_id LIKE ? ESCAPE '\\' COLLATE NOCASE
-         OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)
+         OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR EXISTS (SELECT 1 FROM action_events ae WHERE ae.job_id = aj.id
+           AND (ae.reason_code LIKE ? ESCAPE '\\' COLLATE NOCASE
+             OR ae.message LIKE ? ESCAPE '\\' COLLATE NOCASE)))
        ORDER BY aj.created_at DESC LIMIT ? OFFSET ?`,
       currentRequestScope().userId,
       query,
+      pattern,
+      pattern,
       pattern,
       pattern,
       pattern,
@@ -963,9 +972,14 @@ export class SignalRepository {
          OR aj.action LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR l.retailer_id LIKE ? ESCAPE '\\' COLLATE NOCASE
-         OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)`,
+         OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR EXISTS (SELECT 1 FROM action_events ae WHERE ae.job_id = aj.id
+           AND (ae.reason_code LIKE ? ESCAPE '\\' COLLATE NOCASE
+             OR ae.message LIKE ? ESCAPE '\\' COLLATE NOCASE)))`,
       currentRequestScope().userId,
       query,
+      pattern,
+      pattern,
       pattern,
       pattern,
       pattern,

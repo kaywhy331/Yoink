@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   appDestinationUrl,
+  cartReadyState,
   classifyPageContext,
   deriveContextMenuCommands,
   derivePopupView,
@@ -119,6 +120,63 @@ test("hard blockers override exact product context", () => {
   const mismatch = view({ ...READY, version: "1.9.2" });
   assert.equal(mismatch.hardBlocker, "companion_update");
   assert.equal(mismatch.primaryAction?.id, "update_companion");
+});
+
+test("a sanitized cart-ready handoff becomes the pending action without weakening hard blockers", () => {
+  const now = new Date("2026-08-29T18:01:00.000Z").getTime();
+  const cartReady = cartReadyState({
+    schemaVersion: 1,
+    items: [{
+      schemaVersion: 1,
+      jobId: "job_target_fixture",
+      retailerId: "target",
+      retailerName: "Spoofed store",
+      identityLabel: "Spoofed ID",
+      retailerSku: "13331333",
+      tabId: 17,
+      recordedAt: "2026-08-29T18:00:30.000Z",
+      latency: { leaseToCartReadyMs: 8_240, clickToCartReadyMs: 1_630, secret: "discarded" }
+    }, {
+      schemaVersion: 1,
+      jobId: "expired_job",
+      retailerId: "target",
+      retailerSku: "99999999",
+      tabId: 18,
+      recordedAt: "2026-08-27T18:00:00.000Z"
+    }]
+  }, now);
+  assert.equal(cartReady.items.length, 1);
+  assert.equal(cartReady.items[0]?.retailerName, "Target");
+  assert.equal(cartReady.items[0]?.identityLabel, "TCIN");
+  assert.deepEqual(cartReady.items[0]?.latency, {
+    leaseToCartReadyMs: 8_240,
+    clickToCartReadyMs: 1_630
+  });
+
+  const pending = derivePopupView({
+    health: READY,
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    cartReady,
+    now
+  });
+  assert.equal(pending.statusLabel, "Needs attention");
+  assert.equal(pending.context.title, "Target cart ready");
+  assert.equal(pending.context.supporting, "TCIN 13331333 · Checkout stays manual");
+  assert.equal(pending.primaryAction?.id, "open_cart");
+  assert.equal(pending.cartReady?.jobId, "job_target_fixture");
+
+  const blocked = derivePopupView({
+    health: { ...READY, connected: false },
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    cartReady,
+    now
+  });
+  assert.equal(blocked.hardBlocker, "unavailable");
+  assert.equal(blocked.primaryAction?.id, "retry");
 });
 
 test("an exact, fresh update handoff replaces the mismatch action with explicit reload", () => {

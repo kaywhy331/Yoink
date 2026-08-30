@@ -1745,7 +1745,14 @@ var YoinkAmazonActionModule = (() => {
     if (amazonSecurityChallenge(documentValue) || amazonInteractiveBlock(documentValue, urlValue)) {
       return { ok: false, reason: "manual_action_required" };
     }
-    return verifyCartAddDelta(job, baseline, observeAmazonCart(documentValue, new Date(now).toISOString()), proof, now);
+    const inventory = observeAmazonCart(documentValue, new Date(now).toISOString());
+    const verified = verifyCartAddDelta(job, baseline, inventory, proof, now);
+    if (!verified.ok) return verified;
+    const nextBaseline = captureCartBaseline("amazon", inventory, now);
+    return {
+      ...verified,
+      ...nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {}
+    };
   }
   Object.defineProperty(globalThis, "YoinkAmazonAction", {
     value: Object.freeze({

@@ -731,7 +731,14 @@ var YoinkTargetActionModule = (() => {
     if (targetSecurityChallenge(documentValue) || targetInteractiveBlock(documentValue)) {
       return { ok: false, reason: "manual_action_required" };
     }
-    return verifyCartAddDelta(job, baseline, observeTargetCart(documentValue, new Date(now).toISOString()), proof, now);
+    const inventory = observeTargetCart(documentValue, new Date(now).toISOString());
+    const verified = verifyCartAddDelta(job, baseline, inventory, proof, now);
+    if (!verified.ok) return verified;
+    const nextBaseline = captureCartBaseline("target", inventory, now);
+    return {
+      ...verified,
+      ...nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {}
+    };
   }
   Object.defineProperty(globalThis, "YoinkTargetAction", {
     value: Object.freeze({

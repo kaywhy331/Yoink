@@ -165,12 +165,19 @@ export function verifyWalmartAddedCart(
   proof: LiveOfferProof,
   baseline: CartBaselineProof,
   now = Date.now()
-): { ok: true; reason: "verified"; proof: CartProof } | { ok: false; reason: string } {
+): { ok: true; reason: "verified"; proof: CartProof; cartBaseline?: CartBaselineProof } | { ok: false; reason: string } {
   if (!walmartCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
   if (walmartSecurityChallenge(documentValue) || walmartInteractiveBlock(documentValue, urlValue)) {
     return { ok: false, reason: "manual_action_required" };
   }
-  return verifyCartAddDelta(job, baseline, observeWalmartCart(documentValue, new Date(now).toISOString()), proof, now);
+  const inventory = observeWalmartCart(documentValue, new Date(now).toISOString());
+  const verified = verifyCartAddDelta(job, baseline, inventory, proof, now);
+  if (!verified.ok) return verified;
+  const nextBaseline = captureCartBaseline("walmart", inventory, now);
+  return {
+    ...verified,
+    ...(nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {})
+  };
 }
 
 Object.defineProperty(globalThis, "YoinkWalmartAction", {

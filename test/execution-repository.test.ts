@@ -457,11 +457,21 @@ test("Amazon add-only leasing requires the exact adapter and sanitizes ASIN evid
       "navigating",
       "navigation_started",
       "Navigation started.",
-      { retailerId: "amazon", retailerSku: "B0AMZN0001", offerListingId: "DO_NOT_STORE" },
+      {
+        retailerId: "amazon",
+        retailerSku: "B0AMZN0001",
+        offerListingId: "DO_NOT_STORE",
+        latency: { leaseToCartReadyMs: 1_234, clickToCartReadyMs: 456, secret: "DO_NOT_STORE" }
+      },
       NOW + 3_000
     );
     assert.equal(navigating.state, "navigating");
     assert.equal(JSON.stringify(db.all("SELECT data_json FROM audit_events")).includes("DO_NOT_STORE"), false);
+    const evidence = JSON.parse(String(db.get<{ evidence_json: string }>(
+      "SELECT evidence_json FROM action_events WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
+      lease.job.id
+    )?.evidence_json || "{}")) as Record<string, unknown>;
+    assert.deepEqual(evidence.latency, { leaseToCartReadyMs: 1_234, clickToCartReadyMs: 456 });
   } finally {
     db.close();
   }

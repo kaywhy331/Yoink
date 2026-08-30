@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.12.2 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.13.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -16,6 +16,19 @@ exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
 
+Version 1.13.0 closes the confirmed-cart handoff without widening retailer
+authority. Exact cart confirmation now creates a local, persistent **Cart
+ready** popup state, an extension badge count, and a Chrome notification; Open
+cart revalidates and focuses the existing exact retailer cart tab while
+checkout stays manual. Signal delivery no longer waits for informational
+notification/status requests, and a bounded 250/750/1500/2500 ms lease probe
+replaces the one guessed follow-up timer. One bounded job drain performs its
+unchanged health/access preflight once, safely continues past clean pre-click
+rejections, and reuses only a fresh verified cart baseline for the next
+same-lane job. Mutation-uncertain results still stop and lock. Sanitized
+lease-to-cart and click-to-cart durations make the path measurable, while the
+dashboard now exposes the latest bounded decision reason.
+
 Version 1.12.2 gives every extension navigation option a distinct, validated
 destination. Open Yoink reaches the user dashboard; Manage store access opens
 Admin Connections; Diagnostics opens Admin Operations; and Settings opens
@@ -26,13 +39,9 @@ dashboard.
 Version 1.12.1 removes the recurring-alarm wait between already queued guarded
 adds. One Chrome cycle may lease and execute at most four jobs, strictly one at
 a time, and advances only after the previous exact cart delta is confirmed.
-Health, pairing, live-mode, pause, store-access, and server lease checks repeat
-before every job. Within that one bounded cycle, Yoink reuses only the tab it
-created for the same retailer, leaving at most one resulting cart tab per store.
-A newly delivered TrackaLacker signal also gets an immediate job check plus one
-bounded follow-up after the durable worker has had time to evaluate it, instead
-of relying only on the 30-second Chrome alarm. Any uncertain or rejected job
-ends the drain; checkout, payment, Buy Now, and ordering remain manual.
+Within that one bounded cycle, Yoink reuses only the tab it created for the same
+retailer, leaving at most one resulting cart tab per store. Checkout, payment,
+Buy Now, and ordering remain manual.
 
 Version 1.12.0 removes the empty-cart bottleneck without weakening the
 at-most-once Add boundary. Before a qualified add, Chrome captures at most 25

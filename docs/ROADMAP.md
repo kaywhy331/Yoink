@@ -1,6 +1,23 @@
 # Yoink roadmap
 
-## Shipped through 1.12.2
+## Shipped through 1.13.0
+
+### Confirmed-cart handoff and measured fast path (1.13.0)
+
+- Turns exact guarded-add confirmation into a local Cart ready notification,
+  badge count, and persistent popup state; Open cart revalidates and focuses
+  only the existing exact retailer cart tab, with checkout remaining manual
+- Removes informational notification/status calls from the critical dispatch
+  path and replaces the guessed single timer with bounded 250/750/1500/2500 ms
+  job probes plus the unchanged durable alarm fallback
+- Preflights each at-most-four-job cycle once, continues only past clean
+  pre-click rejections, and reuses the previous verified cart inventory as a
+  fresh in-memory baseline for the next same-lane job; uncertain mutations
+  still stop and lock without retrying a click
+- Records privacy-bounded lease-to-cart and click-to-cart durations and exposes
+  each job's latest decision reason on the user dashboard
+- Preserves first-party, exact-SKU, quantity-one, fulfillment, permission,
+  fresh-DOM, at-most-once Add, manual checkout, and lane-qualification gates
 
 ### Distinct extension workspace routing (1.12.2)
 

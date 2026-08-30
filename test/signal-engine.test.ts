@@ -491,6 +491,10 @@ test("closing an offer-mismatch incident permits a legitimate newer re-signal", 
     signals.transitionJob(first.actionJobId, "navigating", "fixture", "Fixture navigation started.", {}, NOW + 1_000);
     signals.transitionJob(first.actionJobId, "verifying_listing", "fixture", "Fixture offer verification started.", {}, NOW + 1_250);
     signals.transitionJob(first.actionJobId, "offer_rejected", "live_offer_changed", "The exact live offer no longer matched.", {}, NOW + 2_000);
+    const listed = signals.listJobs(20).find((job) => job.id === first.actionJobId);
+    assert.equal(listed?.decisionReasonCode, "live_offer_changed");
+    assert.equal(listed?.decisionReason, "The exact live offer no longer matched.");
+    assert.equal(signals.jobCount("live offer no longer matched"), 1);
     const second = engine.process(trackalackerSignal({
       externalEventId: "track-event-2",
       observedAt: new Date(NOW + 3_000).toISOString()

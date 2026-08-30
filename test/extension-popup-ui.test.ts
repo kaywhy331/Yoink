@@ -34,6 +34,7 @@ interface PopupHarnessOptions {
   health?: Record<string, unknown>;
   permission?: boolean;
   updateResponse?: Record<string, unknown>;
+  cartReady?: Record<string, unknown>;
 }
 
 async function turn(): Promise<void> {
@@ -43,7 +44,9 @@ async function turn(): Promise<void> {
 async function popupHarness(options: PopupHarnessOptions = {}) {
   const requestCalls: Array<{ origins: string[] }> = [];
   const createdTabs: string[] = [];
-  const session: Record<string, unknown> = {};
+  const runtimeMessages: Array<Record<string, unknown>> = [];
+  const session: Record<string, unknown> = options.cartReady
+    ? { yoinkCartReadyV1: options.cartReady } : {};
   let reloadCount = 0;
   const health = { ...READY, ...(options.health || {}) };
   const dom = new JSDOM(POPUP_HTML, {
@@ -64,7 +67,13 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
     runtime: {
       getManifest: () => ({ version: "1.9.1" }),
       sendMessage: async (message: { type?: string }) => {
+        runtimeMessages.push({ ...message });
         if (message.type === "yoink:check-health") return { ok: true, state: health };
+        if (message.type === "yoink:open-cart-ready") {
+          const empty = { schemaVersion: 1, items: [] };
+          session.yoinkCartReadyV1 = empty;
+          return { ok: true, opened: true, cartReady: empty };
+        }
         if (message.type === "yoink:check-update") return options.updateResponse || { ok: false, message: "No update fixture." };
         if (message.type === "yoink:inspect-and-qualify") {
           return {
@@ -116,7 +125,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
   window.eval(POPUP);
   await turn();
   await turn();
-  return { dom, window, document: window.document, requestCalls, createdTabs, session, reloadCount: () => reloadCount };
+  return { dom, window, document: window.document, requestCalls, createdTabs, runtimeMessages, session, reloadCount: () => reloadCount };
 }
 
 function click(window: Window, element: Element): void {
@@ -160,6 +169,37 @@ test("the popup renders the minimal healthy, product, drawing, disconnected, and
   assert.equal(paused.document.querySelector("#activityActionLabel")?.textContent, "Retailer actions paused · Review");
 
   for (const fixture of [idle, product, drawing, disconnected, paused]) fixture.dom.window.close();
+});
+
+test("a cart-ready handoff owns the popup action and opens only through the background validator", async () => {
+  const fixture = await popupHarness({
+    url: "https://www.target.com/p/pokemon/-/A-94972381",
+    cartReady: {
+      schemaVersion: 1,
+      items: [{
+        schemaVersion: 1,
+        jobId: "job_target_fixture",
+        retailerId: "target",
+        retailerSku: "94972381",
+        tabId: 42,
+        recordedAt: new Date().toISOString(),
+        latency: { leaseToCartReadyMs: 9_000 }
+      }]
+    }
+  });
+  const action = fixture.document.querySelector("#primaryAction") as HTMLButtonElement;
+  assert.equal(fixture.document.querySelector("#statusLabel")?.textContent, "Needs attention");
+  assert.equal(fixture.document.querySelector("#contextEyebrow")?.textContent, "CART READY");
+  assert.equal(fixture.document.querySelector("#contextTitle")?.textContent, "Target cart ready");
+  assert.equal(fixture.document.querySelector("#contextSupporting")?.textContent, "TCIN 94972381 · Checkout stays manual");
+  assert.equal(action.textContent, "Open cart");
+  click(fixture.window, action);
+  await turn();
+  await turn();
+  assert.equal(fixture.runtimeMessages.some((message) => message.type === "yoink:open-cart-ready"
+    && message.jobId === "job_target_fixture"), true);
+  assert.equal((fixture.window.YoinkPopupController.state.cartReady as { items: unknown[] }).items.length, 0);
+  fixture.dom.window.close();
 });
 
 test("status and overflow reveals maintain ARIA, keyboard navigation, Escape, and focus restoration", async () => {

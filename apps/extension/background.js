@@ -32,7 +32,8 @@ function normalizedRuntimeConfig(value) {
 
 const RUNTIME_CONFIG = normalizedRuntimeConfig(globalThis.YoinkRuntimeConfig);
 const PopupState = globalThis.YoinkPopupStateModule;
-if (!PopupState?.classifyPageContext || !PopupState?.qualificationPopupResult || !PopupState?.appDestinationUrl) {
+if (!PopupState?.classifyPageContext || !PopupState?.qualificationPopupResult
+  || !PopupState?.appDestinationUrl || !PopupState?.cartReadyState || !PopupState?.CART_READY_STORAGE_KEY) {
   throw new Error("Yoink Companion has no packaged popup state model.");
 }
 const API_ROOT = `${RUNTIME_CONFIG.apiOrigin}/api/v1`;
@@ -42,10 +43,11 @@ const EVIDENCE_REQUEST_TIMEOUT_MS = 10_000;
 const HEALTH_ALARM = "yoink-health";
 const JOB_ALARM = "yoink-jobs";
 const MAX_ACTION_JOBS_PER_CYCLE = 4;
-const SIGNAL_JOB_HANDOFF_DELAY_MS = 2_500;
+const SIGNAL_JOB_HANDOFF_RETRY_DELAYS_MS = Object.freeze([250, 750, 1_500, 2_500]);
 const READINESS_KEY = "readiness";
 const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
 const POPUP_UPDATE_HANDOFF_STORAGE_KEY = PopupState.POPUP_UPDATE_HANDOFF_STORAGE_KEY;
+const CART_READY_STORAGE_KEY = PopupState.CART_READY_STORAGE_KEY;
 const DEVICE_KEY = "pairedDevice";
 const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
@@ -54,6 +56,7 @@ const TRACKALACKER_PUSH_QUEUE_KEY = "yoinkTrackalackerPushQueueV1";
 const TRACKALACKER_SYNC_STATE_KEY = "yoinkTrackalackerSyncStateV1";
 const NOTIFICATION_HISTORY_KEY = "yoinkNotificationHistoryV1";
 const NOTIFICATION_ROUTES_KEY = "yoinkNotificationRoutesV1";
+const CART_READY_NOTIFICATION_PREFIX = "yoink-cart-ready:";
 const COMMUNITY_CONTRIBUTION_TIMES_KEY = "yoinkCommunityContributionTimesV1";
 const LEGACY_OBSERVER_RECIPE_KEY_PIN = "yoinkObserverRecipeKeyPinV1";
 const OBSERVER_RECIPE_TRUST_STATE_KEY = "yoinkObserverRecipeTrustStateV1";
@@ -189,6 +192,7 @@ let trackalackerEnrollmentPromise = null;
 let trackalackerDrainPromise = null;
 let trackalackerStateQueue = Promise.resolve();
 let trackalackerQueueQueue = Promise.resolve();
+let cartReadyStateQueue = Promise.resolve();
 let adapterDiagnosticDrainPromise = null;
 let adapterDiagnosticQueueLock = Promise.resolve();
 let deviceCredentialRotationPromise = null;
@@ -2019,8 +2023,7 @@ async function drainTrackalackerQueue() {
       break;
     }
     const next = await readTrackalackerState();
-    await postTrackalackerStatus(next);
-    return { delivered };
+    return { delivered, state: next };
   })().finally(() => { trackalackerDrainPromise = null; });
   return trackalackerDrainPromise;
 }
@@ -2124,7 +2127,7 @@ async function performTrackalackerEnrollment(force = false) {
   if (!force && !found.previousEndpoint && fingerprint && current.registeredFingerprint === fingerprint) {
     state = await updateTrackalackerState({ state: "ready", ready: true, subscriptionPresent: true, errorCode: "", lastHttpStatus: current.lastHttpStatus || 200 });
     await postTrackalackerStatus(state);
-    await drainTrackalackerQueue();
+    await runSignalDeliveryCycle();
     return { state, diagnostic: "Device already registered", pageSubscriptionPresent: pagePush.subscriptionPresent };
   }
   const registration = TrackalackerPush.deviceRegistrationPayload(found.subscription, TRACKALACKER_DEVICE_NICKNAME);
@@ -2167,7 +2170,7 @@ async function performTrackalackerEnrollment(force = false) {
       lastRegistrationAt: new Date().toISOString()
     });
     await postTrackalackerStatus(state);
-    await drainTrackalackerQueue();
+    await runSignalDeliveryCycle();
     return {
       state,
       diagnostic: TrackalackerPush.safeRegistrationDiagnostic(result),
@@ -2448,6 +2451,7 @@ async function startTrackalackerSync() {
 }
 
 async function showBadge(state) {
+  if (await showCartReadyBadge(await readCartReadyState())) return;
   const color = !state.connected ? "#BE5B4B" : state.paired ? "#1D9D77" : "#C89648";
   await chrome.action.setBadgeBackgroundColor({ color });
   await chrome.action.setBadgeText({ text: !state.connected ? "!" : state.paired ? "" : "?" });
@@ -3531,6 +3535,168 @@ function safeOfferEvidence(proof) {
   };
 }
 
+function markJobTiming(active, name, now = Date.now()) {
+  if (!active || !["leasedAt", "baselineReadyAt", "offerVerifiedAt", "clickedAt", "cartReadyAt"].includes(name)) return;
+  active.timing = {
+    ...(active.timing && typeof active.timing === "object" ? active.timing : {}),
+    [name]: now
+  };
+}
+
+function boundedLatency(start, end) {
+  const from = Number(start);
+  const to = Number(end);
+  const elapsed = Math.round(to - from);
+  return Number.isSafeInteger(elapsed) && elapsed >= 0 && elapsed <= 60 * 60_000
+    ? elapsed : undefined;
+}
+
+function cartReadyLatency(active, readyAt = Date.now()) {
+  const leaseToCartReadyMs = boundedLatency(active?.timing?.leasedAt, readyAt);
+  const clickToCartReadyMs = boundedLatency(active?.timing?.clickedAt, readyAt);
+  return {
+    ...(leaseToCartReadyMs !== undefined ? { leaseToCartReadyMs } : {}),
+    ...(clickToCartReadyMs !== undefined ? { clickToCartReadyMs } : {})
+  };
+}
+
+function freshCartBaseline(value, retailerId, now = Date.now()) {
+  if (!value || typeof value !== "object" || value.contractVersion !== 1
+    || value.retailerId !== retailerId || !Array.isArray(value.lines)
+    || !Number.isSafeInteger(value.lineCount) || value.lineCount !== value.lines.length
+    || value.lines.length > 25) return null;
+  const observedAt = new Date(String(value.observedAt || "")).getTime();
+  if (!Number.isFinite(observedAt) || observedAt > now + 1_000 || now - observedAt > 30_000) return null;
+  const lines = value.lines.map((line) => ({
+    retailerSku: String(line?.retailerSku || "").toLocaleUpperCase("en-US"),
+    quantity: Number(line?.quantity)
+  }));
+  if (lines.some((line) => !/^[A-Z0-9][A-Z0-9._-]{0,119}$/.test(line.retailerSku)
+    || !Number.isSafeInteger(line.quantity) || line.quantity < 1 || line.quantity > 99)) return null;
+  if (new Set(lines.map((line) => line.retailerSku)).size !== lines.length) return null;
+  return {
+    contractVersion: 1,
+    retailerId,
+    observedAt: new Date(observedAt).toISOString(),
+    lineCount: lines.length,
+    lines: lines.sort((left, right) => left.retailerSku.localeCompare(right.retailerSku, "en-US"))
+  };
+}
+
+async function readCartReadyState() {
+  const stored = await chrome.storage.session.get(CART_READY_STORAGE_KEY);
+  return PopupState.cartReadyState(stored[CART_READY_STORAGE_KEY]);
+}
+
+async function showCartReadyBadge(state) {
+  const count = PopupState.cartReadyState(state).items.length;
+  if (!count) return false;
+  await Promise.all([
+    chrome.action.setBadgeBackgroundColor({ color: "#1D9D77" }),
+    chrome.action.setBadgeText({ text: count > 9 ? "9+" : String(count) }),
+    chrome.action.setTitle({ title: `Yoink · ${count} cart${count === 1 ? "" : "s"} ready for checkout` })
+  ]);
+  return true;
+}
+
+async function refreshActionBadge() {
+  const stored = await chrome.storage.local.get(READINESS_KEY);
+  await showBadge(stored[READINESS_KEY] || { connected: false, paired: false });
+}
+
+function mutateCartReadyState(mutator) {
+  const task = cartReadyStateQueue.then(async () => {
+    const current = await readCartReadyState();
+    const next = PopupState.cartReadyState(mutator(current));
+    await chrome.storage.session.set({ [CART_READY_STORAGE_KEY]: next });
+    await refreshActionBadge();
+    return next;
+  });
+  cartReadyStateQueue = task.catch(() => undefined);
+  return task;
+}
+
+function retailerCartTab(tab, retailerId) {
+  const lane = ADD_LANES[retailerId];
+  if (!lane || !Number.isInteger(tab?.id)) return false;
+  try {
+    const actual = new URL(String(tab.url || ""));
+    const cart = new URL(lane.cartUrl);
+    const cartPath = cart.pathname.replace(/\/$/, "");
+    return actual.protocol === "https:" && !actual.username && !actual.password
+      && actual.origin === cart.origin
+      && (actual.pathname === cartPath || actual.pathname.startsWith(`${cartPath}/`));
+  } catch {
+    return false;
+  }
+}
+
+async function acknowledgeCartReady(jobId) {
+  const id = String(jobId || "");
+  const state = await mutateCartReadyState((current) => ({
+    schemaVersion: 1,
+    items: current.items.filter((item) => item.jobId !== id)
+  }));
+  await chrome.notifications?.clear?.(`${CART_READY_NOTIFICATION_PREFIX}${id}`).catch(() => undefined);
+  return state;
+}
+
+async function focusCartReady(jobId = "") {
+  const current = await readCartReadyState();
+  const requestedId = String(jobId || "");
+  const item = requestedId
+    ? current.items.find((candidate) => candidate.jobId === requestedId)
+    : current.items.at(-1);
+  if (!item) {
+    await mutateCartReadyState(() => current);
+    throw new Error("This cart-ready handoff is no longer available.");
+  }
+  const tab = await chrome.tabs.get(item.tabId).catch(() => null);
+  if (!retailerCartTab(tab, item.retailerId)) {
+    const running = await activeJob().catch(() => null);
+    if (Number.isInteger(tab?.id) && running?.tabId === item.tabId
+      && (running.retailerId || running.runnerJob?.retailerId) === item.retailerId) {
+      await chrome.tabs.update(item.tabId, { active: true });
+      return { opened: true, pending: true, item, cartReady: current };
+    }
+    await acknowledgeCartReady(item.jobId);
+    throw new Error(`The ${item.retailerName} cart tab is no longer open.`);
+  }
+  await chrome.tabs.update(item.tabId, { active: true });
+  const state = await acknowledgeCartReady(item.jobId);
+  return { opened: true, item, cartReady: state };
+}
+
+async function publishCartReady(active, readyAt = Date.now()) {
+  const retailerId = active.retailerId || active.runnerJob?.retailerId;
+  const lane = ADD_LANES[retailerId];
+  const raw = {
+    schemaVersion: 1,
+    jobId: active.id,
+    retailerId,
+    retailerSku: active.runnerJob?.retailerSku,
+    tabId: active.tabId,
+    recordedAt: new Date(readyAt).toISOString(),
+    latency: cartReadyLatency(active, readyAt)
+  };
+  const item = PopupState.cartReadyState({ schemaVersion: 1, items: [raw] }, readyAt).items[0];
+  if (!lane || !item) return null;
+  await mutateCartReadyState((current) => ({
+    schemaVersion: 1,
+    items: [...current.items.filter((candidate) => candidate.jobId !== item.jobId), item]
+  }));
+  await chrome.notifications?.create?.(`${CART_READY_NOTIFICATION_PREFIX}${item.jobId}`, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+    title: `Cart ready at ${item.retailerName}`,
+    message: `${item.identityLabel} ${item.retailerSku} was added. Checkout remains manual.`,
+    contextMessage: "Yoink needs you",
+    priority: 2,
+    requireInteraction: true
+  }).catch(() => undefined);
+  return item;
+}
+
 async function verifyAddedCart(active) {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
@@ -3548,12 +3714,12 @@ async function verifyAddedCart(active) {
       [active.runnerJob, active.proof, active.cartBaseline]
     );
     if (result?.ok || !["cart_unverified", "quantity_unavailable"].includes(result?.reason)) break;
-    await new Promise((resolve) => setTimeout(resolve, 750));
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 750));
   }
   if (!result?.ok) {
     await reportJob(active, "manual_review", result?.reason || "cart_unverified", `The exact ${lane.name} cart result could not be proven after Add; automatic retry is locked.`);
     await clearActiveJob();
-    return false;
+    return { confirmed: false, cartBaseline: null };
   }
   await reportJob(active, "cart_verified", "exact_cart_delta_verified", `The ${lane.name} cart changed by exactly one authorized item and every baseline quantity remained unchanged.`, {
     retailerSku: active.runnerJob.retailerSku,
@@ -3561,13 +3727,19 @@ async function verifyAddedCart(active) {
     unitPriceCents: result.proof?.unitPriceCents ?? null,
     sellerType: result.proof?.sellerType ?? "unknown"
   });
+  const readyAt = Date.now();
+  markJobTiming(active, "cartReadyAt", readyAt);
+  const latency = cartReadyLatency(active, readyAt);
   await reportJob(active, "confirmed", `${retailerId}_add_confirmed`, `${lane.name} add-to-cart completed and the exact +1 cart delta was verified.`, {
     retailerSku: active.runnerJob.retailerSku,
     quantity: 1,
-    baselineLineCount: Number(active.cartBaseline?.lineCount) || 0
+    baselineLineCount: Number(active.cartBaseline?.lineCount) || 0,
+    latency
   });
+  await publishCartReady(active, readyAt).catch(() => undefined);
+  const cartBaseline = freshCartBaseline(result.cartBaseline, retailerId, readyAt);
   await clearActiveJob();
-  return true;
+  return { confirmed: true, cartBaseline };
 }
 
 async function failActiveJob(active, mutationPossible, reason = "extension_error") {
@@ -3588,35 +3760,53 @@ async function failActiveJob(active, mutationPossible, reason = "extension_error
   await clearActiveJob();
 }
 
-async function executeLeasedRetailerJob(lease, reusableTabId = null) {
+async function executeLeasedRetailerJob(lease, reusableTabId = null, reusableBaseline = null) {
   const retailerId = lease.retailerId || lease.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
   if (!lane) throw new Error("The leased retailer lane is unsupported.");
-  const active = { ...lease, phase: "leased", tabId: null, proof: null, cartBaseline: null };
+  const active = {
+    ...lease,
+    phase: "leased",
+    tabId: null,
+    proof: null,
+    cartBaseline: null,
+    timing: { leasedAt: Date.now() }
+  };
   await saveActiveJob(active);
   try {
     if (!await addLaneAccess(retailerId)) {
       await reportJob(active, "cancelled", "retailer_access_missing", `${lane.name} add stopped before mutation because Chrome page access is not granted.`);
       await clearActiveJob();
-      return { confirmed: false, tabId: null };
+      return { confirmed: false, tabId: null, continueCycle: true };
     }
-    await reportJob(active, "navigating", "cart_baseline_started", `Chrome opened ${lane.name} cart to bind the exact pre-add baseline.`);
-    active.tabId = await acquireRetailerTab(reusableTabId, retailerId, lane.cartUrl, "cart");
-    await saveActiveJob(active);
-    await injectAddAction(active.tabId, retailerId);
-    let baseline = { ok: false, reason: "cart_unverified" };
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      baseline = await executeAddAction(active.tabId, retailerId, lane.baselineOperation);
-      if (baseline?.ok || !["cart_unverified", "quantity_unavailable"].includes(baseline?.reason)) break;
-      await new Promise((resolve) => setTimeout(resolve, 500));
+    const cachedBaseline = freshCartBaseline(reusableBaseline, retailerId);
+    const reusableTab = Number.isInteger(reusableTabId)
+      ? await chrome.tabs.get(reusableTabId).catch(() => null) : null;
+    if (cachedBaseline && retailerCartTab(reusableTab, retailerId)) {
+      active.tabId = reusableTabId;
+      active.cartBaseline = cachedBaseline;
+      markJobTiming(active, "baselineReadyAt");
+      await reportJob(active, "navigating", "cart_baseline_reused", `Chrome reused the fresh, exact ${lane.name} cart baseline from the preceding verified add.`);
+    } else {
+      await reportJob(active, "navigating", "cart_baseline_started", `Chrome opened ${lane.name} cart to bind the exact pre-add baseline.`);
+      active.tabId = await acquireRetailerTab(reusableTabId, retailerId, lane.cartUrl, "cart");
+      await saveActiveJob(active);
+      await injectAddAction(active.tabId, retailerId);
+      let baseline = { ok: false, reason: "cart_unverified" };
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        baseline = await executeAddAction(active.tabId, retailerId, lane.baselineOperation);
+        if (baseline?.ok || !["cart_unverified", "quantity_unavailable"].includes(baseline?.reason)) break;
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (!baseline?.ok || !baseline.proof) {
+        await reportJob(active, "cancelled", baseline?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the current cart baseline could not be proven.`);
+        await clearActiveJob();
+        return { confirmed: false, tabId: active.tabId, continueCycle: true, cartBaseline: null };
+      }
+      active.cartBaseline = baseline.proof;
+      markJobTiming(active, "baselineReadyAt");
+      await saveActiveJob(active);
     }
-    if (!baseline?.ok || !baseline.proof) {
-      await reportJob(active, "cancelled", baseline?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the current cart baseline could not be proven.`);
-      await clearActiveJob();
-      return { confirmed: false, tabId: active.tabId };
-    }
-    active.cartBaseline = baseline.proof;
-    await saveActiveJob(active);
 
     await navigateRetailerTab(active.tabId, retailerId, active.navigationUrl, active.runnerJob.retailerSku);
     await reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`);
@@ -3635,11 +3825,12 @@ async function executeLeasedRetailerJob(lease, reusableTabId = null) {
       );
       await reportJob(active, "offer_rejected", prepared?.reason || "offer_unverified", `The live ${lane.name} offer did not satisfy the immutable action contract.`);
       await clearActiveJob();
-      return { confirmed: false, tabId: active.tabId };
+      return { confirmed: false, tabId: active.tabId, continueCycle: true };
     }
     await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "passed", "complete", "verified", active.runnerJob.fulfillment);
     active.proof = prepared.proof;
     active.authorizationId = prepared.authorizationId;
+    markJobTiming(active, "offerVerifiedAt");
     await saveActiveJob(active);
     await reportJob(active, "offer_verified", "live_offer_verified", `The exact ${lane.name} SKU, seller, price, stock, and fulfillment passed live verification.`, safeOfferEvidence(active.proof));
     await reportJob(active, "add_authorized", "add_boundary_prepared", `The exact ${lane.name} Add control is prepared for one final revalidation.`);
@@ -3652,15 +3843,23 @@ async function executeLeasedRetailerJob(lease, reusableTabId = null) {
       await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "failed", runnerFailureStage(reasonCode), reasonCode, active.runnerJob.fulfillment);
       await reportJob(active, "manual_review", committed?.reason || "click_uncertain", "The Add boundary did not return a confirmed click result; automatic retry is locked.");
       await clearActiveJob();
-      return { confirmed: false, tabId: active.tabId };
+      return { confirmed: false, tabId: active.tabId, continueCycle: false };
     }
     active.proof = committed.proof;
+    markJobTiming(active, "clickedAt");
     await saveActiveJob(active);
     await new Promise((resolve) => setTimeout(resolve, 1_500));
-    return { confirmed: await verifyAddedCart(active), tabId: active.tabId };
+    const verification = await verifyAddedCart(active);
+    return {
+      confirmed: verification.confirmed,
+      tabId: active.tabId,
+      continueCycle: verification.confirmed,
+      cartBaseline: verification.cartBaseline
+    };
   } catch {
-    await failActiveJob(active, ["adding", "cart_verified"].includes(active.phase));
-    return { confirmed: false, tabId: active.tabId };
+    const mutationPossible = ["adding", "cart_verified"].includes(active.phase);
+    await failActiveJob(active, mutationPossible);
+    return { confirmed: false, tabId: active.tabId, continueCycle: !mutationPossible };
   }
 }
 
@@ -3834,39 +4033,50 @@ async function runJobCycle() {
     let leased = 0;
     let confirmed = 0;
     const reusableTabs = new Map();
+    const state = await checkHealth();
+    if (!state.connected || !state.paired || state.executionMode !== "live"
+      || state.actionsPaused || !state.chromeMutationEnabled) {
+      return { leased, confirmed, reason: "actions_unavailable" };
+    }
+    const [targetAccess, walmartAccess, amazonAccess, bestBuyAccess] = await Promise.all([
+      addLaneAccess("target"),
+      addLaneAccess("walmart"),
+      addLaneAccess("amazon"),
+      addLaneAccess("bestbuy")
+    ]);
+    if (!targetAccess && !walmartAccess && !amazonAccess && !bestBuyAccess) {
+      return { leased, confirmed, reason: "retailer_access_missing" };
+    }
+    const device = await storedDevice();
+    if (!device?.token) return { leased, confirmed, reason: "device_unavailable" };
     for (let index = 0; index < MAX_ACTION_JOBS_PER_CYCLE; index += 1) {
-      const state = await checkHealth();
-      if (!state.connected || !state.paired || state.executionMode !== "live"
-        || state.actionsPaused || !state.chromeMutationEnabled) {
-        return { leased, confirmed, reason: "actions_unavailable" };
-      }
-      const [targetAccess, walmartAccess, amazonAccess, bestBuyAccess] = await Promise.all([
-        addLaneAccess("target"),
-        addLaneAccess("walmart"),
-        addLaneAccess("amazon"),
-        addLaneAccess("bestbuy")
-      ]);
-      if (!targetAccess && !walmartAccess && !amazonAccess && !bestBuyAccess) {
-        return { leased, confirmed, reason: "retailer_access_missing" };
-      }
-      const device = await storedDevice();
-      if (!device?.token) return { leased, confirmed, reason: "device_unavailable" };
       const response = await request("/devices/self/jobs/next", {
         headers: { Authorization: `Bearer ${device.token}` }
       });
       const lease = normalizedLeaseJob(response);
       if (!lease) {
+        const leaseReason = ["no_jobs", "actions_paused", "shadow_mode", "device_busy", "device_unavailable"]
+          .includes(String(response?.reason || "")) ? String(response.reason) : "jobs_unavailable";
         return {
           leased,
           confirmed,
-          reason: response?.reason === "no_jobs" ? "no_jobs" : "jobs_unavailable"
+          reason: leaseReason
         };
       }
       leased += 1;
-      const outcome = await executeLeasedRetailerJob(lease, reusableTabs.get(lease.retailerId));
-      if (!outcome?.confirmed) return { leased, confirmed, reason: "job_stopped" };
+      const reusable = reusableTabs.get(lease.retailerId);
+      const outcome = await executeLeasedRetailerJob(lease, reusable?.tabId, reusable?.cartBaseline);
+      if (Number.isInteger(outcome.tabId)) {
+        reusableTabs.set(lease.retailerId, {
+          tabId: outcome.tabId,
+          cartBaseline: outcome.cartBaseline || null
+        });
+      }
+      if (!outcome?.confirmed) {
+        if (outcome?.continueCycle === true) continue;
+        return { leased, confirmed, reason: "job_stopped" };
+      }
       confirmed += 1;
-      if (Number.isInteger(outcome.tabId)) reusableTabs.set(lease.retailerId, outcome.tabId);
     }
     return { leased, confirmed, reason: "cycle_limit" };
   })().catch(() => ({ leased: 0, confirmed: 0, reason: "cycle_failed" })).finally(() => { jobCyclePromise = null; });
@@ -3876,17 +4086,22 @@ async function runJobCycle() {
 function runSignalJobHandoff() {
   if (signalJobHandoffPromise) return signalJobHandoffPromise;
   signalJobHandoffPromise = (async () => {
-    const immediate = await runJobCycle();
-    if (immediate?.reason !== "no_jobs") return immediate;
-    await new Promise((resolve) => setTimeout(resolve, SIGNAL_JOB_HANDOFF_DELAY_MS));
-    return runJobCycle();
+    let result = await runJobCycle();
+    for (const delayMs of SIGNAL_JOB_HANDOFF_RETRY_DELAYS_MS) {
+      if (Number(result?.leased) > 0 || !["no_jobs", "jobs_unavailable"].includes(result?.reason)) return result;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      result = await runJobCycle();
+    }
+    return result;
   })().finally(() => { signalJobHandoffPromise = null; });
   return signalJobHandoffPromise;
 }
 
 async function runSignalDeliveryCycle() {
   const delivery = await drainTrackalackerQueue();
-  if (delivery?.delivered > 0) await runSignalJobHandoff();
+  const status = delivery?.state ? postTrackalackerStatus(delivery.state) : Promise.resolve(false);
+  const handoff = delivery?.delivered > 0 ? runSignalJobHandoff() : Promise.resolve(null);
+  await Promise.allSettled([handoff, status]);
   return delivery;
 }
 
@@ -3897,28 +4112,28 @@ async function handleTrackalackerPushEvent(event) {
   try { payload = event.data?.json(); } catch { payload = null; }
   const receivedAt = new Date().toISOString();
   const signalId = `push:trackalacker:${crypto.randomUUID()}`;
-  let visibleNotificationRequired = true;
-  try {
-    const subscription = await globalThis.registration?.pushManager?.getSubscription?.();
-    visibleNotificationRequired = subscription?.options?.userVisibleOnly !== false;
-  } catch {
-    visibleNotificationRequired = true;
-  }
-  if (visibleNotificationRequired) {
+  const notification = (async () => {
+    let visibleNotificationRequired = true;
+    try {
+      const subscription = await globalThis.registration?.pushManager?.getSubscription?.();
+      visibleNotificationRequired = subscription?.options?.userVisibleOnly !== false;
+    } catch {
+      visibleNotificationRequired = true;
+    }
+    if (!visibleNotificationRequired) return;
     const presentation = TrackalackerPush.notificationPresentation(payload, signalId);
     await globalThis.registration?.showNotification?.(presentation.title, presentation.options).catch(() => undefined);
-  }
+  })();
   const envelope = TrackalackerPush.signalEnvelopeFromPush(payload, signalId, receivedAt, chrome.runtime.id);
   if (!envelope) {
     const failed = await updateTrackalackerState({ lastNotificationAt: receivedAt, errorCode: "signal_delivery_rejected" });
-    await postTrackalackerStatus(failed);
+    await Promise.allSettled([notification, postTrackalackerStatus(failed)]);
     return;
   }
   await mutateTrackalackerQueue((current) => current.some((entry) => entry.signalId === envelope.signalId)
     ? current : [...current, envelope]);
-  const next = await updateTrackalackerState({ lastNotificationAt: receivedAt, errorCode: "" });
-  await postTrackalackerStatus(next);
-  await runSignalDeliveryCycle();
+  await updateTrackalackerState({ lastNotificationAt: receivedAt, errorCode: "" });
+  await Promise.allSettled([notification, runSignalDeliveryCycle()]);
 }
 
 async function handleTrackalackerSubscriptionChange() {
@@ -4049,6 +4264,7 @@ async function currentContextMenuTab(tab) {
 }
 
 async function showContextMenuOutcome(result, error = false) {
+  if (await showCartReadyBadge(await readCartReadyState()).catch(() => null)) return;
   const title = String(result?.summary || result?.message || (error ? "Action failed" : "Action complete"))
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
@@ -4167,13 +4383,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const trackalackerConnection = message?.type === "yoink:connect-trackalacker";
   const trackalackerSync = message?.type === "yoink:sync-trackalacker";
   const extensionUpdate = message?.type === "yoink:check-update";
+  const cartReadyOpen = message?.type === "yoink:open-cart-ready";
   const contentOperation = [
     "yoink:resolve-trackalacker-listing",
     "yoink:trackalacker-sync-progress",
     "yoink:trackalacker-sync-item",
     "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
-  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || contentOperation;
+  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : message?.type === "yoink:pair-device"
@@ -4204,6 +4421,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 ? startTrackalackerSync()
                 : extensionUpdate
                   ? checkExtensionUpdate(message.download === true, message.requestManaged === true)
+                : cartReadyOpen
+                  ? focusCartReady(message.jobId)
                 : message?.type === "yoink:resolve-trackalacker-listing"
                   ? resolveTrackalackerListing(message, sender)
                   : message?.type === "yoink:trackalacker-sync-progress"
@@ -4261,6 +4480,13 @@ function trustedStoredNotificationRoute(value) {
 }
 
 chrome.notifications?.onClicked?.addListener((notificationId) => {
+  const cartReadyMatch = /^yoink-cart-ready:([A-Za-z0-9_-]{3,120})$/.exec(String(notificationId || ""));
+  if (cartReadyMatch) {
+    void focusCartReady(cartReadyMatch[1]).catch(async () => {
+      await chrome.notifications.clear(notificationId).catch(() => undefined);
+    });
+    return;
+  }
   const match = /^yoink-opportunity:([A-Za-z0-9_-]{3,160})$/.exec(String(notificationId || ""));
   if (!match) return;
   const deliveryId = match[1];
@@ -4277,4 +4503,11 @@ chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
   if (!byUser) return;
   const match = /^yoink-opportunity:([A-Za-z0-9_-]{3,160})$/.exec(String(notificationId || ""));
   if (match) void reportNotificationInteraction(match[1], "dismissed");
+});
+
+chrome.tabs.onRemoved?.addListener((tabId) => {
+  void mutateCartReadyState((current) => ({
+    schemaVersion: 1,
+    items: current.items.filter((item) => item.tabId !== tabId)
+  })).catch(() => undefined);
 });

@@ -171,12 +171,19 @@ export function verifyBestBuyAddedCart(
   proof: LiveOfferProof,
   baseline: CartBaselineProof,
   now = Date.now()
-): { ok: true; reason: "verified"; proof: CartProof } | { ok: false; reason: string } {
+): { ok: true; reason: "verified"; proof: CartProof; cartBaseline?: CartBaselineProof } | { ok: false; reason: string } {
   if (!bestBuyCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
   if (bestBuySecurityChallenge(documentValue) || bestBuyInteractiveBlock(documentValue, urlValue)) {
     return { ok: false, reason: "manual_action_required" };
   }
-  return verifyCartAddDelta(job, baseline, observeBestBuyCart(documentValue, new Date(now).toISOString()), proof, now);
+  const inventory = observeBestBuyCart(documentValue, new Date(now).toISOString());
+  const verified = verifyCartAddDelta(job, baseline, inventory, proof, now);
+  if (!verified.ok) return verified;
+  const nextBaseline = captureCartBaseline("bestbuy", inventory, now);
+  return {
+    ...verified,
+    ...(nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {})
+  };
 }
 
 Object.defineProperty(globalThis, "YoinkBestBuyAction", {

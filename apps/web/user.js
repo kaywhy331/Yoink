@@ -765,8 +765,9 @@ async function transitionLegacyPlans() {
 function renderActions() {
   $("#actionList").innerHTML = state.actions.length ? state.actions.map((action) => `<article class="action-card">
     <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${action.state === "confirmed" ? "good" : "warn"}">${escapeHtml(String(action.state).replaceAll("_", " "))}</span></div>
-    <p>${escapeHtml(action.retailerId)} · ${escapeHtml(action.retailerSku)} · ${escapeHtml(String(action.action).replaceAll("_", " "))} · ${action.decisionSource === "purchase_intent" ? "reviewed plan" : "advanced default"} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}${action.spendReservationStatus ? ` · reservation ${escapeHtml(action.spendReservationStatus)}` : ""}</p></div>
-    <a class="canonical" href="${escapeHtml(howlAffiliateUrl(action.canonicalUrl, action.title))}" target="_blank" rel="noopener noreferrer sponsored">Store page ↗</a>
+    <p>${escapeHtml(action.retailerId)} · ${escapeHtml(action.retailerSku)} · ${escapeHtml(String(action.action).replaceAll("_", " "))} · ${action.decisionSource === "purchase_intent" ? "reviewed plan" : "advanced default"} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}${action.spendReservationStatus ? ` · reservation ${escapeHtml(action.spendReservationStatus)}` : ""}</p>
+    ${action.decisionReason ? `<p><strong>Latest:</strong> ${escapeHtml(action.decisionReason)}${action.decisionReasonCode ? ` · ${escapeHtml(String(action.decisionReasonCode).replaceAll("_", " "))}` : ""}</p>` : ""}</div>
+    <div class="inline-actions">${["manual_review", "submission_uncertain"].includes(action.state) ? '<a class="canonical" href="/admin#operations">Review →</a>' : ""}<a class="canonical" href="${escapeHtml(howlAffiliateUrl(action.canonicalUrl, action.title))}" target="_blank" rel="noopener noreferrer sponsored">Store page ↗</a></div>
   </article>`).join("") : '<div class="empty">No purchase or notification actions have been recorded yet.</div>';
 }
 

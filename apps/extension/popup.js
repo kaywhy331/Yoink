@@ -46,6 +46,7 @@ const ui = {
   operation: null,
   result: null,
   updateHandoff: null,
+  cartReady: null,
   confirmation: null,
   notice: "",
   view: null,
@@ -114,6 +115,7 @@ function deriveView() {
     operation: ui.operation,
     lastResult: resultForView(),
     updateHandoff: ui.updateHandoff,
+    cartReady: ui.cartReady,
     confirmation: ui.confirmation,
     notice: ui.notice
   });
@@ -154,10 +156,11 @@ function render() {
   primary.disabled = view.primaryAction?.disabled === true;
   primary.dataset.action = view.primaryAction?.id || "";
   primary.dataset.outcome = view.result?.outcome || "";
+  const repeatAction = view.primaryAction?.id === "inspect_product" || view.primaryAction?.id === "inspect_drawings";
   const repeatLabel = view.primaryAction?.id === "inspect_drawings" ? "Inspect drawings again" : "Inspect product again";
-  primary.setAttribute("aria-label", view.result && view.primaryAction
+  primary.setAttribute("aria-label", view.result && view.primaryAction && repeatAction
     ? `${view.primaryAction.label}. ${repeatLabel}.` : view.primaryAction?.label || "Primary action");
-  primary.title = view.result && view.primaryAction ? repeatLabel : "";
+  primary.title = view.result && view.primaryAction && repeatAction ? repeatLabel : "";
   $("#cancelContext").hidden = ui.confirmation === null;
 
   const showResult = ui.confirmation === null && Boolean(view.result?.details);
@@ -374,6 +377,27 @@ async function reloadCompanion() {
   chrome.runtime.reload();
 }
 
+async function openCartReady() {
+  const item = ui.view?.cartReady;
+  if (!item?.jobId) return;
+  setOperation("opening_cart");
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "yoink:open-cart-ready",
+      jobId: item.jobId
+    });
+    if (!response?.ok || response.opened !== true) throw new Error(response?.message || "The cart tab could not be opened.");
+    ui.cartReady = PopupState.cartReadyState(response.cartReady);
+    announce(response.pending === true
+      ? `${item.retailerName} is finishing another cart check.`
+      : `${item.retailerName} cart opened.`);
+  } catch (error) {
+    showToast(errorMessage(error, "The cart tab could not be opened."), true);
+  } finally {
+    setOperation("idle");
+  }
+}
+
 async function syncProducts() {
   closePanels(false);
   const button = $("#syncProducts");
@@ -420,6 +444,7 @@ async function handlePrimaryAction() {
   if (action === "pair") return pairBrowser();
   if (action === "update_companion") return updateCompanion();
   if (action === "reload_companion") return reloadCompanion();
+  if (action === "open_cart") return openCartReady();
   if (action === "open_yoink") return openYoink();
   if (action === "inspect_product") return inspectProduct();
   if (action === "inspect_drawings") return inspectDrawings();
@@ -522,21 +547,27 @@ function bindEvents() {
       ui.updateHandoff = changes[UPDATE_HANDOFF_KEY].newValue || null;
       render();
     }
+    if (areaName === "session" && changes[PopupState.CART_READY_STORAGE_KEY]) {
+      ui.cartReady = PopupState.cartReadyState(changes[PopupState.CART_READY_STORAGE_KEY].newValue);
+      render();
+    }
   });
 }
 
 async function initializePopup() {
   bindEvents();
-  const [tabs, storedHealth, storedResult, storedUpdateHandoff] = await Promise.all([
+  const [tabs, storedHealth, storedResult, storedUpdateHandoff, storedCartReady] = await Promise.all([
     chrome.tabs.query({ active: true, currentWindow: true }),
     chrome.storage.local.get("readiness"),
     chrome.storage.session.get(PopupState.POPUP_RESULT_STORAGE_KEY),
-    chrome.storage.session.get(UPDATE_HANDOFF_KEY)
+    chrome.storage.session.get(UPDATE_HANDOFF_KEY),
+    chrome.storage.session.get(PopupState.CART_READY_STORAGE_KEY)
   ]);
   ui.page = PopupState.classifyPageContext(tabs[0]?.url);
   ui.health = storedHealth.readiness || null;
   ui.result = storedResult[PopupState.POPUP_RESULT_STORAGE_KEY] || null;
   ui.updateHandoff = storedUpdateHandoff[UPDATE_HANDOFF_KEY] || null;
+  ui.cartReady = PopupState.cartReadyState(storedCartReady[PopupState.CART_READY_STORAGE_KEY]);
   ui.pageAccessGranted = await pageAccess();
   render();
   void refreshHealth();

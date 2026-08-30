@@ -1123,6 +1123,27 @@ uncertain mutation retains the mission lock. Manual-review and
 submission-uncertain states remain blocking even after their original lease or
 signal window expires; only explicit browser-state review can release them.
 
+## Confirmed-cart handoff
+
+The Chrome executor owns the final handoff. After the server accepts an exact
+post-click cart delta, the service worker stores a bounded sanitized Cart ready
+record in session storage, raises a local notification, and derives the badge
+from the pending-record count. The popup consumes that same record. A user
+opening the handoff causes the worker to re-read state and revalidate the saved
+tab ID and exact retailer cart URL before focusing it and acknowledging the
+record. It never opens a replacement retailer tab and never invokes checkout.
+
+Signal delivery starts job probes without waiting for informational status or
+visible-notification requests. Probes use bounded delays and the durable alarm
+remains the recovery path. Each bounded drain performs one device/control-plane
+preflight; every lease remains server-authoritative. A clean pre-click
+rejection may yield to another queued job, while any mutation-uncertain state
+stops the drain. A verified post-add cart inventory may serve as a short-lived
+in-memory baseline for the next same-retailer job only when it passes the same
+bounded SKU/quantity grammar. The next post-click delta proof is unchanged.
+Sanitized monotonic latency evidence includes only lease-to-cart-ready and
+click-to-cart-ready durations.
+
 ## Affiliate routing
 
 Canonical retailer URLs establish identity. Attribution routes are selected only

@@ -21,11 +21,13 @@ var YoinkPopupStateModule = (() => {
   // packages/extension-ui/src/popup-state.ts
   var popup_state_exports = {};
   __export(popup_state_exports, {
+    CART_READY_STORAGE_KEY: () => CART_READY_STORAGE_KEY,
     POPUP_RESULT_STORAGE_KEY: () => POPUP_RESULT_STORAGE_KEY,
     POPUP_UPDATE_HANDOFF_STORAGE_KEY: () => POPUP_UPDATE_HANDOFF_STORAGE_KEY,
     PRODUCT_DOCUMENT_PATTERNS: () => PRODUCT_DOCUMENT_PATTERNS,
     RETAILER_ORIGINS: () => RETAILER_ORIGINS,
     appDestinationUrl: () => appDestinationUrl,
+    cartReadyState: () => cartReadyState,
     classifyPageContext: () => classifyPageContext,
     compareVersions: () => compareVersions,
     deriveContextMenuCommands: () => deriveContextMenuCommands,
@@ -589,6 +591,7 @@ var YoinkPopupStateModule = (() => {
   // packages/extension-ui/src/popup-state.ts
   var POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
   var POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
+  var CART_READY_STORAGE_KEY = "yoinkCartReadyV1";
   var APP_DESTINATION_ROUTES = {
     dashboard: { pathname: "/", hash: "" },
     connections: { pathname: "/admin", hash: "connections" },
@@ -729,6 +732,52 @@ var YoinkPopupStateModule = (() => {
   function cleanResultText(value, maximum = 360) {
     return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
+  var CART_READY_RETAILERS = {
+    target: { name: "Target", identityLabel: "TCIN" },
+    walmart: { name: "Walmart", identityLabel: "Item" },
+    amazon: { name: "Amazon", identityLabel: "ASIN" },
+    bestbuy: { name: "Best Buy", identityLabel: "SKU" }
+  };
+  function cartReadyLatency(value) {
+    const candidate = record(value);
+    const duration = (input) => {
+      const milliseconds = Number(input);
+      return Number.isSafeInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 60 * 6e4 ? milliseconds : void 0;
+    };
+    const leaseToCartReadyMs = duration(candidate.leaseToCartReadyMs);
+    const clickToCartReadyMs = duration(candidate.clickToCartReadyMs);
+    return {
+      ...leaseToCartReadyMs !== void 0 ? { leaseToCartReadyMs } : {},
+      ...clickToCartReadyMs !== void 0 ? { clickToCartReadyMs } : {}
+    };
+  }
+  function cartReadyState(value, now = Date.now()) {
+    const source = record(value);
+    const input = Array.isArray(source.items) ? source.items : [];
+    const unique = /* @__PURE__ */ new Map();
+    for (const raw of input.slice(-20)) {
+      const candidate = record(raw);
+      const retailerId = String(candidate.retailerId || "");
+      const retailer = CART_READY_RETAILERS[retailerId];
+      const jobId = cleanResultText(candidate.jobId, 120);
+      const retailerSku = cleanResultText(candidate.retailerSku, 120).toLocaleUpperCase("en-US");
+      const tabId = Number(candidate.tabId);
+      const recordedAt = new Date(String(candidate.recordedAt || "")).getTime();
+      if (candidate.schemaVersion !== 1 || !retailer || !/^[A-Za-z0-9_-]{3,120}$/.test(jobId) || !/^[A-Z0-9-]{3,120}$/.test(retailerSku) || !Number.isSafeInteger(tabId) || tabId < 0 || !Number.isFinite(recordedAt) || recordedAt > now + 6e4 || now - recordedAt >= 24 * 60 * 6e4) continue;
+      unique.set(jobId, {
+        schemaVersion: 1,
+        jobId,
+        retailerId,
+        retailerName: retailer.name,
+        identityLabel: retailer.identityLabel,
+        retailerSku,
+        tabId,
+        recordedAt: new Date(recordedAt).toISOString(),
+        latency: cartReadyLatency(candidate.latency)
+      });
+    }
+    return { schemaVersion: 1, items: [...unique.values()].slice(-10) };
+  }
   function safeErrorText(value) {
     return cleanResultText(value, 600).replace(/https?:\/\/\S+/gi, "[redacted URL]").replace(/\b(authorization|bearer|cookie|csrf|secret|session|token)\s*[:=]?\s*[^\s·,;]+/gi, "$1 [redacted]").replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[redacted]").slice(0, 300);
   }
@@ -827,6 +876,7 @@ var YoinkPopupStateModule = (() => {
     if (stage === "qualifying") return "Qualifying\u2026";
     if (stage === "pairing") return "Pairing\u2026";
     if (stage === "reconnecting") return "Reconnecting\u2026";
+    if (stage === "opening_cart") return "Opening cart\u2026";
     if (stage === "updating") return "Checking update\u2026";
     if (stage === "sharing") return "Sharing\u2026";
     return null;
@@ -868,13 +918,15 @@ var YoinkPopupStateModule = (() => {
     const health = input.health ?? {};
     const now = input.now ?? Date.now();
     const versionDifference = health.connected === true && comparableVersion(health.version) ? compareVersions(health.version, input.installedVersion) : 0;
-    const status = statusFor(health, versionDifference);
+    let status = statusFor(health, versionDifference);
     const trackalackerReady = health.trackalackerPush?.ready === true;
     const monitoringOnly = health.executionMode !== "live" || health.chromeMutationEnabled !== true;
     const pageActionable = input.page.kind === "product" || input.page.kind === "walmart_draw";
     const matchedResult = input.lastResult?.schemaVersion === 1 && input.lastResult.contextKey === input.page.key ? input.lastResult : null;
     const handoffRecordedAt = new Date(String(input.updateHandoff?.recordedAt || "")).getTime();
     const readyUpdateHandoff = input.updateHandoff?.schemaVersion === 1 && compareVersions(input.updateHandoff.releaseVersion, health.version) === 0 && Number.isFinite(handoffRecordedAt) && handoffRecordedAt <= now + 6e4 && now - handoffRecordedAt < 24 * 60 * 6e4 ? input.updateHandoff : null;
+    const readyCarts = cartReadyState(input.cartReady, now).items;
+    const newestReadyCart = readyCarts.at(-1) ?? null;
     let hardBlocker = null;
     let context = {
       visible: false,
@@ -935,6 +987,16 @@ var YoinkPopupStateModule = (() => {
         pairing: false
       };
       primaryAction = { id: "open_yoink", label: "Open Yoink", disabled: false };
+    } else if (newestReadyCart) {
+      status = "attention";
+      context = {
+        visible: true,
+        eyebrow: "CART READY",
+        title: readyCarts.length === 1 ? `${newestReadyCart.retailerName} cart ready` : `${readyCarts.length} carts ready`,
+        supporting: readyCarts.length === 1 ? `${newestReadyCart.identityLabel} ${newestReadyCart.retailerSku} \xB7 Checkout stays manual` : "Checkout stays manual",
+        pairing: false
+      };
+      primaryAction = { id: "open_cart", label: "Open cart", disabled: false };
     } else if (input.confirmation === "share_evidence" && input.page.kind === "product") {
       context = {
         visible: true,
@@ -1035,7 +1097,8 @@ var YoinkPopupStateModule = (() => {
       context,
       primaryAction,
       activity,
-      result: matchedResult,
+      result: newestReadyCart ? null : matchedResult,
+      cartReady: newestReadyCart,
       details: [
         { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },
         { label: "TrackaLacker", value: trackalackerReady ? "Connected" : "Disconnected" },

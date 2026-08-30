@@ -505,6 +505,8 @@ interface HarnessOptions {
   queuedTrackalackerSignal?: boolean;
   trackalackerPush?: boolean;
   visibleTrackalackerFallback?: boolean;
+  trackalackerStatusDelayMs?: number;
+  trackalackerNotificationDelayMs?: number;
   amazonHydrationRetry?: boolean;
   amazonSemanticRecovery?: boolean;
   observerRepairLandmark?: boolean;
@@ -659,6 +661,9 @@ function harness(options: HarnessOptions = {}) {
   const permissionRequests: Array<{ origins: string[] }> = [];
   const contextMenuDefinitions = new Map<string, Record<string, unknown>>();
   const actionTitles: string[] = [];
+  const badgeTexts: string[] = [];
+  const badgeColors: string[] = [];
+  const tabUpdates: Array<{ id: number; url?: string; active?: boolean }> = [];
   const tabs = new Map<number, { id: number; url: string; status: string }>([
     [17, { id: 17, url: options.activeUrl ?? PRODUCT_URL, status: "complete" }]
   ]);
@@ -747,9 +752,10 @@ function harness(options: HarnessOptions = {}) {
         tabs.set(tab.id, tab);
         return tab;
       },
-      update: async (id: number, update: { url?: string }) => {
+      update: async (id: number, update: { url?: string; active?: boolean }) => {
         const current = tabs.get(id);
         if (!current) throw new Error("Missing fixture tab.");
+        tabUpdates.push({ id, ...update });
         const tab = { ...current, url: update.url ?? current.url, status: "complete" };
         tabs.set(id, tab);
         return tab;
@@ -905,28 +911,56 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
-            proof: { retailerSku: "1011483414", quantity: 1, unitPriceCents: 5999, sellerType: "first_party" }
+            proof: { retailerSku: "1011483414", quantity: 1, unitPriceCents: 5999, sellerType: "first_party" },
+            cartBaseline: {
+              contractVersion: 1, retailerId: "target", observedAt: new Date().toISOString(),
+              lineCount: 2, lines: [
+                { retailerSku: "EXISTING-FIXTURE", quantity: 1 },
+                { retailerSku: "1011483414", quantity: 1 }
+              ]
+            }
           } }];
         }
         if (args?.[0] === "verifyWalmartAddedCart") {
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
-            proof: { retailerSku: "17354421975", quantity: 1, unitPriceCents: 4499, sellerType: "first_party" }
+            proof: { retailerSku: "17354421975", quantity: 1, unitPriceCents: 4499, sellerType: "first_party" },
+            cartBaseline: {
+              contractVersion: 1, retailerId: "walmart", observedAt: new Date().toISOString(),
+              lineCount: 2, lines: [
+                { retailerSku: "EXISTING-FIXTURE", quantity: 1 },
+                { retailerSku: "17354421975", quantity: 1 }
+              ]
+            }
           } }];
         }
         if (args?.[0] === "verifyAmazonAddedCart") {
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
-            proof: { retailerSku: "B0GYTRYV7P", quantity: 1, unitPriceCents: 2186, sellerType: "first_party" }
+            proof: { retailerSku: "B0GYTRYV7P", quantity: 1, unitPriceCents: 2186, sellerType: "first_party" },
+            cartBaseline: {
+              contractVersion: 1, retailerId: "amazon", observedAt: new Date().toISOString(),
+              lineCount: 2, lines: [
+                { retailerSku: "EXISTING-FIXTURE", quantity: 1 },
+                { retailerSku: "B0GYTRYV7P", quantity: 1 }
+              ]
+            }
           } }];
         }
         if (args?.[0] === "verifyBestBuyAddedCart") {
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
-            proof: { retailerSku: "6588149", quantity: 1, unitPriceCents: 699, sellerType: "first_party" }
+            proof: { retailerSku: "6588149", quantity: 1, unitPriceCents: 699, sellerType: "first_party" },
+            cartBaseline: {
+              contractVersion: 1, retailerId: "bestbuy", observedAt: new Date().toISOString(),
+              lineCount: 2, lines: [
+                { retailerSku: "EXISTING-FIXTURE", quantity: 1 },
+                { retailerSku: "6588149", quantity: 1 }
+              ]
+            }
           } }];
         }
         if (args?.[0] === "amazon") {
@@ -1080,8 +1114,8 @@ function harness(options: HarnessOptions = {}) {
       }
     },
     action: {
-      setBadgeBackgroundColor: async () => undefined,
-      setBadgeText: async () => undefined,
+      setBadgeBackgroundColor: async ({ color }: { color: string }) => { badgeColors.push(color); },
+      setBadgeText: async ({ text }: { text: string }) => { badgeTexts.push(text); },
       setTitle: async ({ title }: { title: string }) => { actionTitles.push(title); }
     },
     contextMenus: {
@@ -1192,6 +1226,9 @@ function harness(options: HarnessOptions = {}) {
       }), { status: 200 });
     }
     if (url.endsWith("/devices/self/sources/trackalacker/status")) {
+      if (options.trackalackerStatusDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.trackalackerStatusDelayMs));
+      }
       return new Response(JSON.stringify({ status: { ready: true } }), { status: 200 });
     }
     if (url.endsWith("/devices/self/sources/trackalacker/signals")) {
@@ -1473,6 +1510,9 @@ function harness(options: HarnessOptions = {}) {
       getSubscription: async () => ({ options: { userVisibleOnly: options.visibleTrackalackerFallback === true } })
     },
     showNotification: async (title: string, notificationOptions: Record<string, unknown>) => {
+      if (options.trackalackerNotificationDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.trackalackerNotificationDelayMs));
+      }
       shownTrackalackerNotifications.push({ title, options: notificationOptions });
     }
   };
@@ -1563,6 +1603,9 @@ function harness(options: HarnessOptions = {}) {
     contextMenuDefinitions,
     permissionRequests,
     actionTitles,
+    badgeTexts,
+    badgeColors,
+    tabUpdates,
     adapterDiagnosticQueueDrained,
     diagnosticReasonCodes,
     jobLeaseRequests: () => jobLeaseRequests,
@@ -2521,6 +2564,40 @@ test("the service worker runs one leased Target add through baseline, click rece
   assert.deepEqual((targetVerifyOperationArgs[2] as { lines: unknown[] }).lines, [
     { retailerSku: "EXISTING-FIXTURE", quantity: 1 }
   ]);
+  await waitFor(
+    () => runtime.shownNotifications.some((notification) => notification.id === "yoink-cart-ready:job_target_fixture"),
+    "The confirmed cart did not produce a local handoff."
+  );
+  const notification = runtime.shownNotifications.find(
+    (entry) => entry.id === "yoink-cart-ready:job_target_fixture"
+  );
+  assert.equal(notification?.options.title, "Cart ready at Target");
+  assert.equal(notification?.options.requireInteraction, true);
+  assert.match(String(notification?.options.message), /Checkout remains manual/);
+  const readyState = runtime.storage.yoinkCartReadyV1 as {
+    items: Array<{ jobId: string; tabId: number; latency: Record<string, number> }>;
+  };
+  assert.equal(readyState.items.length, 1);
+  assert.equal(readyState.items[0]?.jobId, "job_target_fixture");
+  assert.equal(Number.isSafeInteger(readyState.items[0]?.latency.leaseToCartReadyMs), true);
+  assert.equal(Number.isSafeInteger(readyState.items[0]?.latency.clickToCartReadyMs), true);
+  assert.equal(runtime.badgeTexts.at(-1), "1");
+  const confirmedEvent = runtime.fetchCalls.find((entry) => {
+    if (!entry.url.endsWith("/devices/self/jobs/job_target_fixture/events")) return false;
+    return JSON.parse(String(entry.options.body)).state === "confirmed";
+  });
+  const confirmedBody = JSON.parse(String(confirmedEvent?.options.body)) as {
+    evidence: { latency: Record<string, number> };
+  };
+  assert.equal(Number.isSafeInteger(confirmedBody.evidence.latency.leaseToCartReadyMs), true);
+
+  runtime.clickNotification("yoink-cart-ready:job_target_fixture");
+  await waitFor(
+    () => (runtime.storage.yoinkCartReadyV1 as { items?: unknown[] })?.items?.length === 0,
+    "The cart-ready handoff was not acknowledged after focusing its tab."
+  );
+  assert.deepEqual(runtime.tabUpdates.at(-1), { id: readyState.items[0]?.tabId, active: true });
+  assert.equal(runtime.badgeTexts.at(-1), "");
   assert.equal("activeTargetJob" in runtime.storage, false);
 });
 
@@ -2545,7 +2622,7 @@ test("one alarm drains confirmed Target jobs immediately and reuses one Yoink-cr
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 2);
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitTargetAdd").length, 2);
   assert.equal(operations.filter((operation) => operation === "verifyTargetAddedCart").length, 2);
   assert.equal(runtime.tabUrls().length, 2);
@@ -2588,7 +2665,7 @@ test("Walmart, Amazon, and Best Buy drains each reuse only their own Yoink-creat
     const operations = runtime.injections
       .map((entry) => (entry.args as unknown[] | undefined)?.[0])
       .filter(Boolean);
-    assert.equal(operations.filter((operation) => operation === fixture.baseline).length, 2);
+    assert.equal(operations.filter((operation) => operation === fixture.baseline).length, 1);
     assert.equal(operations.filter((operation) => operation === fixture.commit).length, 2);
     assert.equal(operations.filter((operation) => operation === fixture.verify).length, 2);
     assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 2);
@@ -2611,21 +2688,23 @@ test("one alarm stops at the four-job drain ceiling", async () => {
   assert.equal(runtime.tabUrls().length, 2);
 });
 
-test("an ambiguous cart baseline fails closed before any add click", async () => {
+test("ambiguous cart baselines fail closed while the remaining clean queue continues", async () => {
   const runtime = harness({ liveJob: true, queuedJobCount: 2, cartBaselineFailure: true });
   runtime.fireJobAlarm();
   await waitFor(
-    () => runtime.jobStates.includes("cancelled"),
-    "Fixture Target job did not cancel after baseline verification failed."
+    () => runtime.jobStates.filter((state) => state === "cancelled").length === 2,
+    "The cleanly rejected Target jobs did not finish draining.",
+    5_000
   );
-  assert.deepEqual(runtime.jobStates, ["navigating", "cancelled"]);
+  await waitFor(() => runtime.jobLeaseRequests() === 3, "The clean rejection drain did not reach an empty queue.");
+  assert.deepEqual(runtime.jobStates, ["navigating", "cancelled", "navigating", "cancelled"]);
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 4);
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 8);
   assert.equal(operations.some((operation) => operation === "prepareTargetAdd"), false);
   assert.equal(operations.some((operation) => operation === "commitTargetAdd"), false);
-  assert.equal(runtime.jobLeaseRequests(), 1);
+  assert.equal(runtime.jobLeaseRequests(), 3);
   assert.equal("activeTargetJob" in runtime.storage, false);
 });
 
@@ -2763,6 +2842,32 @@ test("TrackaLacker push stays silent when supported and exposes no signed click 
   assert.equal(runtime.shownTrackalackerNotifications.length, 0);
   assert.equal(JSON.stringify(runtime.deliveredTrackalackerSignals).includes("DO_NOT_FORWARD"), false);
   assert.equal(JSON.stringify(runtime.storage).includes("DO_NOT_FORWARD"), false);
+});
+
+test("TrackaLacker signal dispatch is not blocked by notification or status reporting", async () => {
+  const runtime = harness({
+    trackalackerPush: true,
+    visibleTrackalackerFallback: true,
+    trackalackerNotificationDelayMs: 250,
+    trackalackerStatusDelayMs: 250
+  });
+  const push = runtime.firePush({
+    title: "IN STOCK at Target!",
+    body: "Runtime Fixture Product\nAvailable for $59.99",
+    url: "https://www.trackalacker.com/products/showcase/runtime-fixture?utm_term=138022"
+  });
+  await waitFor(
+    () => runtime.deliveredTrackalackerSignals.length === 1,
+    "The signal waited for auxiliary push work.",
+    150
+  );
+  assert.equal(runtime.shownTrackalackerNotifications.length, 0);
+  const signalIndex = runtime.fetchCalls.findIndex((entry) => entry.url.endsWith("/sources/trackalacker/signals"));
+  const statusIndex = runtime.fetchCalls.findIndex((entry) => entry.url.endsWith("/sources/trackalacker/status"));
+  assert.ok(signalIndex >= 0);
+  assert.ok(statusIndex > signalIndex);
+  await push;
+  assert.equal(runtime.shownTrackalackerNotifications.length, 1);
 });
 
 test("a delivered TrackaLacker signal gets one delayed action-job handoff without waiting for the alarm", async () => {
