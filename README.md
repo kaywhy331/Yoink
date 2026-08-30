@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.12.1 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.12.2 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,6 +15,13 @@ new lane. Every lane is restricted to first-party offers, quantity one, and the
 exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.12.2 gives every extension navigation option a distinct, validated
+destination. Open Yoink reaches the user dashboard; Manage store access opens
+Admin Connections; Diagnostics opens Admin Operations; and Settings opens
+Admin Settings. The popup and right-click menu share one allowlisted route
+resolver, so labels cannot silently degrade into aliases of the default
+dashboard.
 
 Version 1.12.1 removes the recurring-alarm wait between already queued guarded
 adds. One Chrome cycle may lease and execute at most four jobs, strictly one at

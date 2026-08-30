@@ -1,6 +1,17 @@
 # Yoink roadmap
 
-## Shipped through 1.12.1
+## Shipped through 1.12.2
+
+### Distinct extension workspace routing (1.12.2)
+
+- Routes Open Yoink to the user dashboard while sending Store access,
+  Diagnostics, and Settings to their exact Admin Connections, Operations, and
+  Settings workspaces
+- Shares one deterministic, allowlisted destination resolver between the popup
+  and service worker, preventing menu labels from silently becoming aliases of
+  the default dashboard
+- Adds popup, pure-route, and right-click regression coverage for every
+  destination without changing retailer permissions or action authority
 
 ### Bounded signal-to-cart fast path (1.12.1)
 

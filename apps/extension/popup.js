@@ -25,7 +25,7 @@ const POPUP_RUNTIME_CONFIG = (() => {
 })();
 
 const PopupState = globalThis.YoinkPopupStateModule;
-if (!PopupState?.classifyPageContext || !PopupState?.derivePopupView) {
+if (!PopupState?.classifyPageContext || !PopupState?.derivePopupView || !PopupState?.appDestinationUrl) {
   throw new Error("Yoink Companion has no packaged popup state model.");
 }
 
@@ -77,14 +77,12 @@ function relativeCheck(value) {
   return new Date(time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function appUrl(view = "") {
-  const url = new URL("/", POPUP_RUNTIME_CONFIG.appOrigin);
-  if (view) url.hash = view;
-  return url.href;
+function appUrl(destination = "dashboard") {
+  return PopupState.appDestinationUrl(POPUP_RUNTIME_CONFIG.appOrigin, destination);
 }
 
-function openYoink(view = "") {
-  return chrome.tabs.create({ url: appUrl(view), active: true });
+function openYoink(destination = "dashboard") {
+  return chrome.tabs.create({ url: appUrl(destination), active: true });
 }
 
 function announce(message) {

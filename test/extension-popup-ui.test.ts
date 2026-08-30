@@ -190,6 +190,25 @@ test("status and overflow reveals maintain ARIA, keyboard navigation, Escape, an
   fixture.dom.window.close();
 });
 
+test("popup navigation options open their distinct intended Yoink workspaces", async () => {
+  const fixture = await popupHarness();
+  const { document, window } = fixture;
+  click(window, document.querySelector("#openYoink") as HTMLButtonElement);
+  click(window, document.querySelector("#manageStoreAccess") as HTMLButtonElement);
+  click(window, document.querySelector("#diagnostics") as HTMLButtonElement);
+  click(window, document.querySelector("#settings") as HTMLButtonElement);
+  click(window, document.querySelector("#statusDiagnostics") as HTMLButtonElement);
+  await turn();
+  assert.deepEqual(fixture.createdTabs, [
+    "http://127.0.0.1:32991/",
+    "http://127.0.0.1:32991/admin#connections",
+    "http://127.0.0.1:32991/admin#operations",
+    "http://127.0.0.1:32991/admin#settings",
+    "http://127.0.0.1:32991/admin#operations"
+  ]);
+  fixture.dom.window.close();
+});
+
 test("retailer access is requested only after the contextual action receives a user click", async () => {
   const fixture = await popupHarness({
     url: "https://www.target.com/p/pokemon/-/A-94972381",

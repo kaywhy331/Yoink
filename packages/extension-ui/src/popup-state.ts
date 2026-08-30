@@ -8,6 +8,23 @@ import type { SupportedRetailerId } from "../../contracts/src/index.js";
 export const POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
 export const POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
 
+export type YoinkAppDestination = "dashboard" | "connections" | "operations" | "settings";
+
+const APP_DESTINATION_ROUTES: Record<YoinkAppDestination, { pathname: string; hash: string }> = {
+  dashboard: { pathname: "/", hash: "" },
+  connections: { pathname: "/admin", hash: "connections" },
+  operations: { pathname: "/admin", hash: "operations" },
+  settings: { pathname: "/admin", hash: "settings" }
+};
+
+export function appDestinationUrl(appOrigin: string, destination: YoinkAppDestination = "dashboard"): string {
+  const route = APP_DESTINATION_ROUTES[destination];
+  if (!route) throw new Error("Unknown Yoink app destination.");
+  const url = new URL(route.pathname, appOrigin);
+  if (route.hash) url.hash = route.hash;
+  return url.href;
+}
+
 const RETAILERS: Record<SupportedRetailerId, {
   name: string;
   domains: string[];

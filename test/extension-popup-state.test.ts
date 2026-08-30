@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  appDestinationUrl,
   classifyPageContext,
   deriveContextMenuCommands,
   derivePopupView,
@@ -10,6 +11,25 @@ import {
   type PopupHealthState,
   type PopupPageContext
 } from "../packages/extension-ui/src/popup-state.js";
+
+test("extension app destinations resolve to distinct dashboard workspaces", () => {
+  const origin = "http://127.0.0.1:32991";
+  assert.deepEqual({
+    dashboard: appDestinationUrl(origin),
+    connections: appDestinationUrl(origin, "connections"),
+    operations: appDestinationUrl(origin, "operations"),
+    settings: appDestinationUrl(origin, "settings")
+  }, {
+    dashboard: `${origin}/`,
+    connections: `${origin}/admin#connections`,
+    operations: `${origin}/admin#operations`,
+    settings: `${origin}/admin#settings`
+  });
+  assert.throws(
+    () => appDestinationUrl(origin, "unknown" as never),
+    /Unknown Yoink app destination/
+  );
+});
 
 const PRODUCT_URLS = [
   ["target", "13331333", "https://www.target.com/p/bicycle-cards/-/A-13331333#lnk=sametab"],

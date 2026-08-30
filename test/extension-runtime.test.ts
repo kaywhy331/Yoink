@@ -2913,6 +2913,22 @@ test("the extension action menu stays small and derives visibility from the shar
   assert.equal(disconnected.permissionRequests.length, 0);
 });
 
+test("the extension action menu opens the dashboard and Settings workspace distinctly", async () => {
+  const runtime = harness({ healthVersion: "0.3.0", trackalackerPush: true });
+  runtime.fireStartup();
+  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  runtime.clickContextMenu("yoink-open");
+  await waitFor(
+    () => runtime.tabUrls().includes("http://127.0.0.1:32991/"),
+    "The user dashboard was not opened."
+  );
+  runtime.clickContextMenu("yoink-settings");
+  await waitFor(
+    () => runtime.tabUrls().includes("http://127.0.0.1:32991/admin#settings"),
+    "The Settings workspace was not opened."
+  );
+});
+
 test("a context-menu inspection revalidates state and page, requests exact access, and persists a no-click result", async () => {
   const runtime = harness({
     activeUrl: PRODUCT_URL,

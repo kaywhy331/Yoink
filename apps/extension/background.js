@@ -32,7 +32,7 @@ function normalizedRuntimeConfig(value) {
 
 const RUNTIME_CONFIG = normalizedRuntimeConfig(globalThis.YoinkRuntimeConfig);
 const PopupState = globalThis.YoinkPopupStateModule;
-if (!PopupState?.classifyPageContext || !PopupState?.qualificationPopupResult) {
+if (!PopupState?.classifyPageContext || !PopupState?.qualificationPopupResult || !PopupState?.appDestinationUrl) {
   throw new Error("Yoink Companion has no packaged popup state model.");
 }
 const API_ROOT = `${RUNTIME_CONFIG.apiOrigin}/api/v1`;
@@ -4016,10 +4016,8 @@ function contextMenuCommand(menuItemId) {
   return "";
 }
 
-function appViewUrl(view = "") {
-  const url = new URL("/", APP_ROOT);
-  if (view) url.hash = view;
-  return url.href;
+function appViewUrl(destination = "dashboard") {
+  return PopupState.appDestinationUrl(APP_ROOT, destination);
 }
 
 function contextMenuPermission(command, page) {

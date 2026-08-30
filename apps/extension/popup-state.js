@@ -25,6 +25,7 @@ var YoinkPopupStateModule = (() => {
     POPUP_UPDATE_HANDOFF_STORAGE_KEY: () => POPUP_UPDATE_HANDOFF_STORAGE_KEY,
     PRODUCT_DOCUMENT_PATTERNS: () => PRODUCT_DOCUMENT_PATTERNS,
     RETAILER_ORIGINS: () => RETAILER_ORIGINS,
+    appDestinationUrl: () => appDestinationUrl,
     classifyPageContext: () => classifyPageContext,
     compareVersions: () => compareVersions,
     deriveContextMenuCommands: () => deriveContextMenuCommands,
@@ -588,6 +589,19 @@ var YoinkPopupStateModule = (() => {
   // packages/extension-ui/src/popup-state.ts
   var POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
   var POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
+  var APP_DESTINATION_ROUTES = {
+    dashboard: { pathname: "/", hash: "" },
+    connections: { pathname: "/admin", hash: "connections" },
+    operations: { pathname: "/admin", hash: "operations" },
+    settings: { pathname: "/admin", hash: "settings" }
+  };
+  function appDestinationUrl(appOrigin, destination = "dashboard") {
+    const route = APP_DESTINATION_ROUTES[destination];
+    if (!route) throw new Error("Unknown Yoink app destination.");
+    const url = new URL(route.pathname, appOrigin);
+    if (route.hash) url.hash = route.hash;
+    return url.href;
+  }
   var RETAILERS = {
     target: { name: "Target", domains: ["target.com"], identityLabel: "TCIN" },
     walmart: { name: "Walmart", domains: ["walmart.com"], identityLabel: "Item" },
