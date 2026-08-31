@@ -16,6 +16,10 @@ test("drop-window and watch-queue controls expose supersession, mode, countdown,
   assert.match(adminScript, /data-use-restock-pattern/);
   assert.match(adminScript, /function useRestockPatternForWindow/);
   assert.match(adminScript, /form\.elements\.confidencePercent\.value/);
+  assert.match(adminScript, /pattern\.sampleCount/);
+  assert.match(adminScript, /pattern\.histogram/);
+  assert.doesNotMatch(adminScript, /pattern\.localHourHistogram/);
+  assert.match(adminScript, /qualificationNeedsAttention \? warning\.replaceAll/);
 
   assert.match(userHtml, /id="watchQueueMode"/);
   assert.match(userHtml, /Auto-watch armed plans/);
@@ -28,4 +32,5 @@ test("drop-window and watch-queue controls expose supersession, mode, countdown,
   assert.match(userScript, /Daily cap headroom/);
   assert.match(userScript, /Monthly cap headroom/);
   assert.match(userScript, /leaseToCartReadyMs: "Chrome → cart ready"/);
+  assert.match(userScript, /qualificationNeedsAttention \? words\(warning\)/);
 });

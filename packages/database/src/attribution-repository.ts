@@ -7,11 +7,18 @@ import type {
 import {
   attributionPolicyValidity,
   buildAttributionPlan,
+  howlAffiliateStoreForRetailer,
   isAttributionProvider,
   normalizedArticleBaseUrl
 } from "../../domain/src/attribution.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import {
+  HOWL_AFFILIATE_ENDPOINT,
+  HOWL_AFFILIATE_PROTOCOL_VERSION,
+  HOWL_AFFILIATE_STORES,
+  HOWL_DEFAULT_PUBLISHER_SLUG
+} from "../../domain/src/howl-affiliate-stores.js";
 import { type YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 import { AuditRepository } from "./audit-repository.js";
@@ -33,6 +40,7 @@ interface PolicyRow {
 }
 
 function policyDefinition(row: PolicyRow): AttributionPolicyDefinition {
+  const howlStore = howlAffiliateStoreForRetailer(row.retailer_id);
   const policy: AttributionPolicyDefinition = {
     id: row.id,
     retailerId: row.retailer_id,
@@ -42,6 +50,8 @@ function policyDefinition(row: PolicyRow): AttributionPolicyDefinition {
     publisherSlug: row.publisher_slug,
     articleBaseUrl: row.article_base_url,
     associateTag: row.associate_tag,
+    howlEligible: howlStore !== null,
+    howlStoreName: howlStore?.storeName ?? "",
     valid: false,
     validationReason: ""
   };
@@ -54,6 +64,32 @@ export class AttributionRepository {
 
   constructor(private readonly db: YoinkDatabase) {
     this.auditEvents = new AuditRepository(db);
+  }
+
+  routingDirectory(): {
+    protocolVersion: number;
+    endpoint: string;
+    publisherSlug: string;
+    stores: typeof HOWL_AFFILIATE_STORES;
+    registeredRetailerDomains: string[];
+  } {
+    const domains = this.db.all<{ domains_json: string }>(
+      "SELECT domains_json FROM retailers ORDER BY id"
+    ).flatMap((row) => {
+      try {
+        const parsed = JSON.parse(row.domains_json) as unknown;
+        return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+      } catch {
+        return [];
+      }
+    }).map((domain) => domain.trim().toLocaleLowerCase("en-US")).filter(Boolean);
+    return {
+      protocolVersion: HOWL_AFFILIATE_PROTOCOL_VERSION,
+      endpoint: HOWL_AFFILIATE_ENDPOINT,
+      publisherSlug: HOWL_DEFAULT_PUBLISHER_SLUG,
+      stores: HOWL_AFFILIATE_STORES,
+      registeredRetailerDomains: [...new Set(domains)].sort()
+    };
   }
 
   listPolicies(): AttributionPolicyDefinition[] {

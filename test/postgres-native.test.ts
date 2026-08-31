@@ -17982,7 +17982,6 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       attributionPolicyInputs({
         target: { provider: "howl", publisherSlug: "collectwithdodo" },
         walmart: { provider: "howl", publisherSlug: "collectwithdodo" },
-        bestbuy: { provider: "howl", publisherSlug: "collectwithdodo" },
         amazon: { provider: "amazon_associates", associateTag: "pokemon-restocks-20" }
       })
     );

@@ -44,6 +44,45 @@ function pickupProduct(): Document {
   return document;
 }
 
+function structuredProduct(): Document {
+  const offerId = "E3FEC929BA58303AA09F92D2712898BD";
+  const productState = {
+    usItemId: "20895014480",
+    availabilityStatus: "IN_STOCK",
+    itemPageAvailabilityStatus: "IN_STOCK",
+    showAtc: true,
+    isConditionNew: true,
+    selectedOfferId: offerId,
+    offerId,
+    sellerName: "Walmart.com",
+    sellerType: "INTERNAL",
+    orderLimit: 99,
+    priceInfo: { currentPrice: { price: 39.97, currencyUnit: "USD" } },
+    conditionOffers: [{
+      offerId,
+      availabilityStatus: { value: "IN_STOCK" },
+      condition: { groupCode: 1 },
+      price: { price: 39.97 }
+    }],
+    fulfillmentOptions: [{
+      type: "SHIPPING",
+      selected: true,
+      intent: true,
+      viewOnly: false,
+      restricted: false,
+      availabilityStatus: "IN_STOCK",
+      maxOrderQuantity: 99,
+      orderLimit: 99
+    }]
+  };
+  return new JSDOM(`<body><main>
+    <script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+      props: { pageProps: { initialData: { data: { product: productState } } } }
+    })}</script>
+    <section data-testid="add-to-cart-section"><button data-automation-id="atc">Add to cart</button></section>
+  </main></body>`, { url: "https://www.walmart.com/ip/fixture/20895014480" }).window.document;
+}
+
 function job(overrides: Partial<WalmartAddJob> = {}): WalmartAddJob {
   const base: BrowserActionContract = {
     contractVersion: 1,
@@ -79,6 +118,23 @@ test("Walmart rehearsal reaches the exact no-click boundary and virtual queues f
     ok: false,
     reason: "manual_action_required"
   });
+});
+
+test("Walmart v7 rehearses a split current page from its exact selected offer state", () => {
+  const url = "https://www.walmart.com/ip/fixture/20895014480";
+  const document = structuredProduct();
+  let clicks = 0;
+  document.querySelector("button[data-automation-id='atc']")?.addEventListener("click", () => { clicks += 1; });
+  const exactJob = job({
+    retailerSku: "20895014480",
+    canonicalUrl: url,
+    maxUnitPriceCents: 3997,
+    maxOrderTotalCents: 3997
+  });
+  const result = rehearseWalmartAdd(document, url, exactJob, NOW);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.wouldClick, true);
+  assert.equal(clicks, 0);
 });
 
 test("Walmart add consumes its authorization before one click and revalidates the offer", () => {
@@ -134,7 +190,7 @@ test("Walmart safely self-heals unique control and price selector drift", () => 
   assert.equal(prepareWalmartAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Walmart v6 accepts exact shipping or explicit pickup quantity-one jobs", () => {
+test("Walmart v7 accepts exact shipping or explicit pickup quantity-one jobs", () => {
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");

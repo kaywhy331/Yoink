@@ -32,6 +32,37 @@ function text(value: Element | Document | null | undefined, maximum = 2_000): st
   return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
 }
 
+function observableText(value: Element | Document | null | undefined, maximum = 2_000): string {
+  if (!value || maximum < 1) return "";
+  const fragments: string[] = [];
+  let length = 0;
+  const append = (candidate: unknown): void => {
+    if (length >= maximum) return;
+    const fragment = String(candidate || "")
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!fragment) return;
+    const bounded = fragment.slice(0, maximum - length);
+    fragments.push(bounded);
+    length += bounded.length + 1;
+  };
+  const visit = (node: Node): void => {
+    if (length >= maximum) return;
+    if (node.nodeType === 3) {
+      append(node.textContent);
+      return;
+    }
+    if (node.nodeType === 1) {
+      const element = node as Element;
+      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible(element)) return;
+    }
+    for (const child of [...node.childNodes]) visit(child);
+  };
+  visit(value);
+  return fragments.join(" ").replace(/\s+/g, " ").trim().slice(0, maximum);
+}
+
 function visible(element: Element | null): element is Element {
   if (!element) return false;
   const view = element.ownerDocument.defaultView;
@@ -137,11 +168,11 @@ export function targetSecurityChallenge(document: Document): boolean {
     "[data-test*='captcha' i]",
     "[data-testid*='captcha' i]",
     "[id*='captcha' i]"
-  ])) || /verify you are human|unusual traffic|security challenge/i.test(text(document.body, 50_000));
+  ])) || /verify you are human|unusual traffic|security challenge/i.test(observableText(document.body, 50_000));
 }
 
 export function targetInteractiveBlock(document: Document): LiveOfferObservation["interactiveBlock"] {
-  const visibleText = text(document.body, 80_000);
+  const visibleText = observableText(document.body, 80_000);
   if (queryVisible(document, ["input[autocomplete='one-time-code']", "input[name*='otp' i]"])) return "mfa";
   const dialog = queryVisible(document, ["[role='dialog']", "dialog[open]"]);
   const dialogText = text(dialog, 10_000);
@@ -251,6 +282,37 @@ function exactAddControls(root: ParentNode, sku: string): Element[] {
     .filter((candidate) => visible(candidate) && !recommendationControl(candidate));
 }
 
+function targetSkuEvidence(root: ParentNode): Set<string> {
+  const skus = new Set<string>();
+  const elements = [
+    ...(root.nodeType === 1 ? [root as Element] : []),
+    ...root.querySelectorAll("[data-tcin], button[id^='addToCartButtonOrTextIdFor']")
+  ];
+  for (const element of elements) {
+    const dataTcin = String(element.getAttribute("data-tcin") || "").trim();
+    const idTcin = String(element.getAttribute("id") || "").match(/^addToCartButtonOrTextIdFor(\d{6,})$/)?.[1] || "";
+    if (/^\d{6,}$/.test(dataTcin)) skus.add(dataTcin);
+    if (idTcin) skus.add(idTcin);
+  }
+  return skus;
+}
+
+function semanticTargetAddControls(root: ParentNode, sku: string): Element[] {
+  const skus = targetSkuEvidence(root);
+  if ([...skus].some((candidate) => candidate !== sku)) return [];
+  const candidates = [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")]
+    .filter((candidate) => visible(candidate) && !recommendationControl(candidate))
+    .filter((candidate) => /\badd(?:\s+(?:item\s+)?to)?\s+cart\b/i.test([
+      candidate.getAttribute("aria-label"),
+      candidate.getAttribute("name"),
+      candidate.getAttribute("value"),
+      candidate.getAttribute("data-test"),
+      candidate.getAttribute("data-testid"),
+      text(candidate, 300)
+    ].filter(Boolean).join(" ")));
+  return candidates.length === 1 ? candidates : [];
+}
+
 function addControls(document: Document, sku: string): Element[] {
   const candidates = [
     ...exactAddControls(document, sku),
@@ -271,10 +333,14 @@ function emptyTargetAddBinding(): TargetAddBinding {
 }
 
 function modernTargetAddBinding(document: Document, sku: string, required: Fulfillment): TargetAddBinding | null {
-  const roots = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))]
+  const visibleRoots = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))]
     .filter((root) => visible(root) && !recommendationControl(root));
+  const roots = visibleRoots.filter((root) => !visibleRoots.some((candidate) => candidate !== root && root.contains(candidate)));
   if (roots.length === 0) return null;
-  const scoped = roots.map((root) => ({ root, controls: exactAddControls(root, sku) }))
+  const scoped = roots.map((root) => {
+    const exact = exactAddControls(root, sku);
+    return { root, controls: exact.length > 0 ? exact : semanticTargetAddControls(root, sku) };
+  })
     .filter((entry) => entry.controls.length === 1 && entry.controls[0]);
   if (scoped.length !== 1 || !scoped[0]?.controls[0]) return emptyTargetAddBinding();
   const { root } = scoped[0];
@@ -304,6 +370,22 @@ function modernTargetAddBinding(document: Document, sku: string, required: Fulfi
   return preferred
     ? { control, fulfillmentControl: preferred.fulfillmentControl, fulfillment: required, selectionRequired: true, offerRoot: root }
     : emptyTargetAddBinding();
+}
+
+function targetExplicitlyUnavailable(document: Document): boolean {
+  const selectors = [
+    "[data-test*='availability' i]",
+    "[data-testid*='availability' i]",
+    "[data-test*='out-of-stock' i]",
+    "[data-testid*='out-of-stock' i]",
+    "[itemprop='availability']",
+    "button[disabled]"
+  ];
+  return [...document.querySelectorAll(selectors.join(", "))]
+    .filter((element) => visible(element) && !recommendationControl(element))
+    .some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
+      `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
+    ));
 }
 
 function legacyTargetAddBinding(document: Document, sku: string, required: Fulfillment): TargetAddBinding {
@@ -391,6 +473,10 @@ export function observeTargetOffer(
     "[itemprop='price']"
   ]);
   const blocked = targetInteractiveBlock(document);
+  const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
+  const availability = blocked ? "unknown"
+    : selectedControlActionable ? "in_stock"
+      : pageSku === expectedSku && targetExplicitlyUnavailable(document) ? "out_of_stock" : "unknown";
   return {
     contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
     observedAt,
@@ -398,13 +484,13 @@ export function observeTargetOffer(
     pageKind: targetPageKind(urlValue),
     retailerId: "target",
     retailerSku: pageSku,
-    availability: pageSku === expectedSku && actionable(selected.control) && !blocked ? "in_stock" : "out_of_stock",
+    availability,
     unitPriceCents,
     currency: "USD",
     sellerName: seller.sellerName,
     sellerType: seller.sellerType,
     fulfillment: selected.fulfillment,
-    addControlActionable: pageSku === expectedSku && actionable(selected.control) && !blocked,
+    addControlActionable: selectedControlActionable && !blocked,
     securityChallenge: targetSecurityChallenge(document),
     interactiveBlock: blocked
   };

@@ -832,15 +832,20 @@ var YoinkPopupStateModule = (() => {
     const seller = cleanResultText(observation.sellerName || "Seller unavailable", 160);
     const lines = [`${page.identityLabel} ${page.sku}`, price, seller, fulfillment];
     if (observation.availability) lines.push(`Availability: ${resultTitleCase(observation.availability)}`);
-    if (observation.interactiveBlock) lines.push(`Manual step: ${resultTitleCase(observation.interactiveBlock)}`);
+    if (observation.securityChallenge === true) lines.push("Security check on the page");
+    else if (observation.interactiveBlock) lines.push(`Manual step: ${resultTitleCase(observation.interactiveBlock)}`);
     if (observation.purchaseRouteReady === true) lines.push("Exact offer binding verified");
     const qualification = response.workflow === "qualification";
-    lines.push(qualification ? "Qualification stopped at the final pre-click boundary." : "Read-only inspection completed; no retailer control was clicked.");
-    if (!qualification) return persistedResult(page.key, "inspected", `Inspected \xB7 ${price}`, lines.join(" \xB7 "), now, productTitle);
+    if (!qualification) {
+      lines.push("Read-only inspection completed; no retailer control was clicked.");
+      return persistedResult(page.key, "inspected", `Inspected \xB7 ${price}`, lines.join(" \xB7 "), now, productTitle);
+    }
     if (rehearsal.ok === true) {
+      lines.push("Rehearsal passed \u2014 no retailer control was clicked.");
       return persistedResult(page.key, "qualified", `Qualified \xB7 ${price} \xB7 ${fulfillment}`, lines.join(" \xB7 "), now, productTitle);
     }
     const reason = safeErrorText(response.message || resultTitleCase(rehearsal.reason || "Offer not verified"));
+    lines.push("Qualification stopped safely before any retailer control was clicked.");
     return persistedResult(page.key, "blocked", `Blocked \xB7 ${reason}`, `${lines.join(" \xB7 ")} \xB7 ${reason}`, now, productTitle);
   }
   function drawingsPopupResult(value, page, now = Date.now()) {

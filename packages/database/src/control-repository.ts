@@ -2,12 +2,16 @@ import {
   ACTIONS,
   PRICE_POLICY_KINDS,
   type Fulfillment,
+  type JobState,
+  type MissionStatus,
   type AppSettingsUpdateInput,
   LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION,
   LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION,
+  PURCHASE_INTENT_DELETE_CONFIRMATION,
   type LegacyPurchaseIntentTransitionInput,
   type MissionContext,
   type PurchaseIntentCreateInput,
+  type PurchaseIntentDeleteInput,
   type PurchaseIntentDraftInput,
   type PurchaseIntentPreflightInput,
   PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS,
@@ -23,6 +27,7 @@ import {
   type StrategyDefinition
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
+import { canTransitionJob, jobIsTerminal, jobMayHaveMutated } from "../../domain/src/job-state.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import type { PurchaseAutomationPlanInput } from "../../domain/src/purchase-automation-readiness.js";
 import { YoinkDatabase } from "./database.js";
@@ -42,7 +47,7 @@ interface StrategyRow {
 
 interface MissionRow {
   id: string;
-  status: "active" | "paused" | "satisfied" | "archived";
+  status: MissionStatus;
   target_quantity: number;
   target_id: string;
   target_enabled: number;
@@ -167,7 +172,7 @@ function missionContext(row: MissionRow): MissionContext {
 
 const SELLER_POLICIES = new Set(["first_party_only", "allow_third_party"]);
 const FULFILLMENTS = new Set(["shipping", "pickup", "either", "manual", "unknown"]);
-const MISSION_STATUSES = new Set(["active", "paused", "satisfied", "archived"]);
+const EDITABLE_MISSION_STATUSES = new Set(["active", "paused", "satisfied", "archived"]);
 const MISSION_TARGET_POLICIES = new Set(["inherit", "first_party_only", "allow_third_party"]);
 const MISSION_TARGET_FULFILLMENTS = new Set(["inherit", "shipping", "pickup", "either", "manual", "unknown"]);
 const SETTING_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy"]);
@@ -830,12 +835,12 @@ export class ControlRepository {
       throw new PurchaseSafetyError("purchase_intent_preflight_confirmation_required", 400, "Request an explicit no-write purchase-plan preview.");
     }
     const validated = this.validateConfiguredMissionDraft(input, now, "preview");
-    const existing = this.db.get<{ id: string }>(
-      "SELECT id FROM missions WHERE user_id = ? AND variant_id = ?",
+    const existing = this.db.get<{ id: string; status: string }>(
+      "SELECT id, status FROM missions WHERE user_id = ? AND variant_id = ?",
       currentRequestScope().userId,
       validated.listing.variantId
     );
-    if (existing) {
+    if (existing && existing.status !== "deleted") {
       throw new PurchaseSafetyError("purchase_intent_exists", 409, "A purchase plan already exists for this exact product. Open it to review the current limits.");
     }
     const { variantId: _variantId, ...publicListing } = validated.listing;
@@ -935,15 +940,16 @@ export class ControlRepository {
   ): MissionEnsureResult {
     return this.db.transaction(() => {
       const timestamp = nowIso(now);
-      let mission = this.db.get<{ id: string }>(
-        "SELECT id FROM missions WHERE tenant_id = ? AND user_id = ? AND variant_id = ?",
+      let mission = this.db.get<{ id: string; status: MissionStatus }>(
+        "SELECT id, status FROM missions WHERE tenant_id = ? AND user_id = ? AND variant_id = ?",
         currentRequestScope().tenantId,
         currentRequestScope().userId,
         variantId
       );
-      const created = !mission;
+      const recreated = mission?.status === "deleted" && creation !== undefined;
+      const created = !mission || recreated;
       if (!mission) {
-        mission = { id: newId("mission") };
+        mission = { id: newId("mission"), status: "active" };
         this.db.run(
           `INSERT INTO missions(
              id, tenant_id, user_id, variant_id, status, origin,
@@ -959,6 +965,20 @@ export class ControlRepository {
           timestamp,
           timestamp
         );
+      } else if (recreated) {
+        this.db.run(
+          `UPDATE missions
+           SET status = 'active', origin = ?, target_quantity = ?, fulfilled_quantity = 0,
+               quick_add_profile_id = ?, updated_at = ?
+           WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'deleted'`,
+          cleanText(origin, 60),
+          creation.targetQuantity,
+          cleanText(creation.quickAddProfileId ?? "", 120),
+          timestamp,
+          mission.id,
+          currentRequestScope().tenantId,
+          currentRequestScope().userId
+        );
       }
       const listing = this.db.get<{ variant_id: string }>("SELECT variant_id FROM listings WHERE id = ?", listingId);
       if (!listing || listing.variant_id !== variantId) throw new Error("The mission target listing does not belong to the exact variant.");
@@ -972,11 +992,21 @@ export class ControlRepository {
         const maxUnitPriceCents = creation && selected ? creation.selectedMaxUnitPriceCents : null;
         const sellerPolicy = creation && selected ? creation.selectedSellerPolicy : "inherit";
         const fulfillment = creation && selected ? creation.selectedFulfillment : "inherit";
+        const conflictAction = recreated
+          ? `ON CONFLICT(mission_id, listing_id) DO UPDATE SET
+               enabled = excluded.enabled,
+               max_unit_price_cents = excluded.max_unit_price_cents,
+               currency = excluded.currency,
+               seller_policy = excluded.seller_policy,
+               fulfillment = excluded.fulfillment,
+               updated_at = excluded.updated_at`
+          : "ON CONFLICT(mission_id, listing_id) DO NOTHING";
         this.db.run(
-          `INSERT OR IGNORE INTO mission_targets(
+          `INSERT INTO mission_targets(
              id, mission_id, listing_id, enabled, max_unit_price_cents,
              currency, seller_policy, fulfillment, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ${conflictAction}`,
           newId("mission_target"),
           mission.id,
           target.id,
@@ -993,19 +1023,30 @@ export class ControlRepository {
         this.auditEvents.record({
           correlationId: mission.id,
           aggregateType: "mission",
-          eventType: "mission_created",
-          reasonCode: cleanText(origin, 60) || "created",
-          message: "A mission was created for an exact product variant and all known retailer targets were attached.",
+          eventType: recreated ? "mission_recreated" : "mission_created",
+          reasonCode: recreated ? "user_recreated" : cleanText(origin, 60) || "created",
+          message: recreated
+            ? "A previously deleted purchase plan was recreated from a new explicit user review."
+            : "A mission was created for an exact product variant and all known retailer targets were attached.",
           data: {
             variantId,
             initialListingId: listingId,
             targetCount: variantListings.length,
             enabledTargetCount: creation?.selectedOnly ? 1 : variantListings.length,
-            creationMode: creation ? "explicit_user_configuration" : "strategy_or_internal"
+            creationMode: creation ? "explicit_user_configuration" : "strategy_or_internal",
+            recreated
           }
         }, now);
       }
-      this.purchasePolicies.ensureCurrent(mission.id, now, creation?.initialPolicy);
+      if (recreated) {
+        this.purchasePolicies.revise(mission.id, {
+          ...creation.initialPolicy,
+          changeReason: cleanText(creation.initialPolicy.changeReason, 300)
+            || "Deleted purchase plan recreated after a new explicit review."
+        }, now);
+      } else {
+        this.purchasePolicies.ensureCurrent(mission.id, now, creation?.initialPolicy);
+      }
       return { mission: this.requireMissionContext(mission.id, listingId), created };
     });
   }
@@ -1065,7 +1106,7 @@ export class ControlRepository {
               m.fulfilled_quantity AS fulfilledQuantity, m.variant_id AS variantId,
               v.title, m.created_at AS createdAt, m.updated_at AS updatedAt
        FROM missions m JOIN variants v ON v.id = m.variant_id
-       WHERE m.id = ? AND m.user_id = ?`,
+       WHERE m.id = ? AND m.user_id = ? AND m.status <> 'deleted'`,
       cleanText(missionId, 120),
       currentRequestScope().userId
     );
@@ -1223,7 +1264,7 @@ export class ControlRepository {
     const id = cleanText(missionId, 120);
     const status = String(input?.status || "");
     const targetQuantity = Number(input?.targetQuantity);
-    if (!MISSION_STATUSES.has(status)) throw new Error("A supported mission status is required.");
+    if (!EDITABLE_MISSION_STATUSES.has(status)) throw new Error("A supported mission status is required.");
     if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > 99) {
       throw new Error("Mission quantity must be 1 through 99.");
     }
@@ -1259,7 +1300,11 @@ export class ControlRepository {
     if (targetIds.size !== normalizedTargets.length) throw new Error("Mission target IDs must be unique.");
 
     return this.db.transaction(() => {
-      const existing = this.db.get<{ id: string }>("SELECT id FROM missions WHERE id = ? AND user_id = ?", id, currentRequestScope().userId);
+      const existing = this.db.get<{ id: string }>(
+        "SELECT id FROM missions WHERE id = ? AND user_id = ? AND status <> 'deleted'",
+        id,
+        currentRequestScope().userId
+      );
       if (!existing) throw new Error("The mission does not exist.");
       const ownedTargets = new Set(this.db.all<{ id: string }>(
         "SELECT id FROM mission_targets WHERE mission_id = ?",
@@ -1332,6 +1377,125 @@ export class ControlRepository {
     });
   }
 
+  deleteMission(
+    missionId: string,
+    input: PurchaseIntentDeleteInput,
+    now = Date.now()
+  ): {
+    id: string;
+    deleted: true;
+    cancelledPendingJobCount: number;
+    cancelledWatchItemCount: number;
+  } {
+    const id = cleanText(missionId, 120);
+    if (input?.confirmation !== PURCHASE_INTENT_DELETE_CONFIRMATION) {
+      throw new PurchaseSafetyError(
+        "purchase_intent_delete_confirmation_required",
+        400,
+        "Confirm that you want to permanently remove this purchase plan."
+      );
+    }
+    return this.db.transaction(() => {
+      const mission = this.db.get<{ id: string; status: string; variantId: string; title: string }>(
+        `SELECT m.id, m.status, m.variant_id AS variantId, v.title
+         FROM missions m JOIN variants v ON v.id = m.variant_id
+         WHERE m.id = ? AND m.tenant_id = ? AND m.user_id = ? AND m.status <> 'deleted'`,
+        id,
+        currentRequestScope().tenantId,
+        currentRequestScope().userId
+      );
+      if (!mission) {
+        throw new PurchaseSafetyError("purchase_intent_not_found", 404, "The purchase plan does not exist.");
+      }
+      const openJobs = this.db.all<{ id: string; state: JobState }>(
+        `SELECT id, state FROM action_jobs
+         WHERE mission_id = ? AND tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
+        id,
+        currentRequestScope().tenantId,
+        currentRequestScope().userId
+      ).filter((job) => !jobIsTerminal(job.state));
+      const uncertainJob = openJobs.find((job) => jobMayHaveMutated(job.state));
+      if (uncertainJob) {
+        throw new PurchaseSafetyError(
+          "purchase_intent_action_in_progress",
+          409,
+          "This plan has a cart action that may already have changed the retailer cart. Resolve that action before deleting the plan."
+        );
+      }
+      const cancelableJobs = openJobs.filter((job) => canTransitionJob(job.state, "cancelled"));
+      if (cancelableJobs.length !== openJobs.length) {
+        throw new PurchaseSafetyError(
+          "purchase_intent_action_in_progress",
+          409,
+          "This plan has unfinished action work that cannot be cancelled safely yet. Try again after reviewing the action."
+        );
+      }
+      for (const job of cancelableJobs) {
+        this.signals.transitionJob(
+          job.id,
+          "cancelled",
+          "purchase_plan_deleted",
+          "The purchase plan was deleted before the retailer action could mutate a cart.",
+          { missionId: id, retailerMutationAuthorized: false },
+          now
+        );
+      }
+      const timestamp = nowIso(now);
+      this.db.run(
+        `UPDATE mission_targets SET enabled = 0, updated_at = ?
+         WHERE mission_id = ?`,
+        timestamp,
+        id
+      );
+      const cancelledWatchItems = this.db.run(
+        `UPDATE watch_queue_items
+         SET state = 'cancelled', closed_reason = 'purchase_plan_deleted',
+             lease_expires_at = '', updated_at = ?
+         WHERE mission_id = ? AND tenant_id = ? AND user_id = ?
+           AND state IN ('queued', 'observing')`,
+        timestamp,
+        id,
+        currentRequestScope().tenantId,
+        currentRequestScope().userId
+      );
+      const deleted = this.db.run(
+        `UPDATE missions SET status = 'deleted', quick_add_profile_id = '', updated_at = ?
+         WHERE id = ? AND tenant_id = ? AND user_id = ? AND status <> 'deleted'`,
+        timestamp,
+        id,
+        currentRequestScope().tenantId,
+        currentRequestScope().userId
+      );
+      if (Number(deleted.changes) !== 1) {
+        throw new PurchaseSafetyError("purchase_intent_not_found", 404, "The purchase plan does not exist.");
+      }
+      this.auditEvents.record({
+        correlationId: id,
+        aggregateType: "mission",
+        eventType: "mission_deleted",
+        reasonCode: "user_deleted",
+        message: "The user deleted a purchase plan; mutable targets were disabled while historical action and spend evidence was retained.",
+        data: {
+          missionId: id,
+          variantId: mission.variantId,
+          previousStatus: mission.status,
+          cancelledPendingJobCount: cancelableJobs.length,
+          cancelledWatchItemCount: Number(cancelledWatchItems.changes ?? 0),
+          actionHistoryRetained: true,
+          spendHistoryRetained: true,
+          retailerMutationAuthorized: false
+        }
+      }, now);
+      return {
+        id,
+        deleted: true,
+        cancelledPendingJobCount: cancelableJobs.length,
+        cancelledWatchItemCount: Number(cancelledWatchItems.changes ?? 0)
+      };
+    });
+  }
+
   listMissions(limit = 500, offset = 0, search = "", includeAutomationTargets = false): Array<Record<string, unknown>> {
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
@@ -1385,7 +1549,8 @@ export class ControlRepository {
        FROM missions m
        JOIN variants v ON v.id = m.variant_id
        LEFT JOIN mission_targets mt ON mt.mission_id = m.id
-       WHERE m.user_id = ? AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+       WHERE m.user_id = ? AND m.status <> 'deleted'
+         AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR m.origin LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR m.status LIKE ? ESCAPE '\\' COLLATE NOCASE)
        GROUP BY m.id
@@ -1440,7 +1605,8 @@ export class ControlRepository {
     return Number(this.db.get<{ count: number }>(
       `SELECT COUNT(*) AS count FROM missions m
        JOIN variants v ON v.id = m.variant_id
-       WHERE m.user_id = ? AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+       WHERE m.user_id = ? AND m.status <> 'deleted'
+         AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR m.origin LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR m.status LIKE ? ESCAPE '\\' COLLATE NOCASE)`,
       currentRequestScope().userId,

@@ -3,8 +3,21 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import test from "node:test";
+import {
+  HOWL_AFFILIATE_ENDPOINT,
+  HOWL_AFFILIATE_PROTOCOL_VERSION,
+  HOWL_AFFILIATE_STORES,
+  HOWL_DEFAULT_PUBLISHER_SLUG
+} from "../packages/domain/src/howl-affiliate-stores.js";
 
 const require = createRequire(import.meta.url);
+const AFFILIATE_ROUTING_FIXTURE = {
+  protocolVersion: HOWL_AFFILIATE_PROTOCOL_VERSION,
+  endpoint: HOWL_AFFILIATE_ENDPOINT,
+  publisherSlug: HOWL_DEFAULT_PUBLISHER_SLUG,
+  stores: HOWL_AFFILIATE_STORES,
+  registeredRetailerDomains: ["amazon.com", "target.com", "walmart.com", "bestbuy.com"]
+};
 const { JSDOM } = require("jsdom") as {
   JSDOM: new (html: string, options: Record<string, unknown>) => {
     window: Window & typeof globalThis & { close(): void; eval(source: string): unknown };
@@ -87,6 +100,7 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
       const method = options.method || "GET";
       const body = options.body ? JSON.parse(options.body) as Record<string, unknown> : {};
       if (method !== "GET") requests.push({ path, method, body });
+      if (path === "/api/v1/affiliate-routing") return response({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE });
       if (path === "/api/v1/user/devices/pairing-code" && method === "POST") {
         return response({ pairing: { code: "ABCD-EFGH", expiresAt: new Date(Date.now() + 300_000).toISOString() } }, 201);
       }
@@ -167,10 +181,9 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
     assert.match(browser.document.querySelector("#productLinkPreview")?.textContent ?? "", /Amazon.*B0DCGQ6CJD/s);
     assert.match(browser.document.querySelector("#productLinkPreview")?.textContent ?? "", /Not accepted.*stock status, price, seller, fulfillment, or permission to purchase/s);
     const previewOutbound = new URL((browser.document.querySelector("#productLinkPreview a.canonical") as HTMLAnchorElement).href);
-    assert.equal(previewOutbound.origin, "https://howl.link");
-    assert.equal(previewOutbound.searchParams.get("url"), "https://www.amazon.com/dp/B0DCGQ6CJD");
-    assert.equal(previewOutbound.searchParams.get("publisher_slug"), "collectwithdodo");
-    assert.equal(previewOutbound.searchParams.get("article_name"), "Amazon product preview");
+    assert.equal(previewOutbound.href, "https://www.amazon.com/dp/B0DCGQ6CJD");
+    assert.equal(previewOutbound.origin, "https://www.amazon.com");
+    assert.doesNotMatch((browser.document.querySelector("#productLinkPreview a.canonical") as HTMLAnchorElement).rel, /\bsponsored\b/);
     const confirmed = form.elements.namedItem("confirmed") as HTMLInputElement;
     confirmed.checked = true;
     confirmed.dispatchEvent(new browser.Event("input", { bubbles: true }));

@@ -94,6 +94,7 @@ input[aria-invalid="true"] { border-color: var(--amber); background: var(--amber
 .button.primary:hover { background: var(--green-dark); }
 .button.secondary { color: var(--green-dark); background: var(--green-soft); }
 .button.quiet { color: var(--ink); background: white; border: 1px solid var(--line); }
+.button.danger { color: var(--red); background: #fff1f0; border: 1px solid #e4b3b1; }
 .button:disabled { opacity: .48; cursor: not-allowed; }
 .canonical { color: var(--muted); font-size: 12px; text-decoration: none; }
 .canonical:hover { color: var(--green); }
@@ -212,6 +213,7 @@ label input, label select { width: 100%; border: 1px solid var(--line); border-r
 .check { display: flex; align-items: center; gap: 7px; padding-bottom: 10px; }
 .check input { width: auto; }
 .dialog-actions { justify-content: flex-end; margin-top: 22px; }
+.dialog-actions .button.danger { margin-right: auto; }
 .selected-product { display: flex; justify-content: space-between; gap: 20px; margin: 20px 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 15px; background: var(--wash); }
 .selected-product h3 { margin: 3px 0 5px; font-size: 18px; letter-spacing: -.02em; }
 .selected-product p { margin: 0; color: var(--muted); font-size: 12px; }

@@ -315,6 +315,20 @@
           <div class="dialog-actions"><button class="button primary" type="submit">Save affiliate routing</button></div>
         </form>
       </section>
+      <section class="panel settings-panel attribution-settings-panel" aria-labelledby="howlDirectoryTitle">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Provider directory</p><h2 id="howlDirectoryTitle">Howl affiliate stores</h2><p>Only destinations matching this directory use the Howl protocol. Registered stores outside it open their direct retailer URL until another affiliate provider is configured.</p></div>
+          <span class="mode-chip" id="howlStoreCount">0 STORES</span>
+        </div>
+        <label class="directory-filter"><span>Find a store or website</span><input id="howlStoreFilter" type="search" autocomplete="off" placeholder="Search Howl stores"></label>
+        <div class="affiliate-directory-wrap" tabindex="0" aria-label="Howl affiliate store directory">
+          <table class="affiliate-directory">
+            <thead><tr><th scope="col">Store</th><th scope="col">Website scope</th><th scope="col">Routing</th></tr></thead>
+            <tbody id="howlStoreDirectory"></tbody>
+          </table>
+        </div>
+        <p class="fine-print">Website paths are enforced when present. Similar-looking domains and destinations outside a listed locale path are never wrapped.</p>
+      </section>
     </section>
 
     <section class="view" id="view-access" data-view-panel="access">

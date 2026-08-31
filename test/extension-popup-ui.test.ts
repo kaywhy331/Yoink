@@ -90,7 +90,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
               contextKey: "product:target:94972381",
               outcome: "qualified",
               summary: "Qualified · $39.99 · Shipping",
-              details: "TCIN 94972381 · $39.99 · Target · Shipping · Exact offer binding verified · Qualification stopped at the final pre-click boundary.",
+              details: "TCIN 94972381 · $39.99 · Target · Shipping · Exact offer binding verified · Rehearsal passed — no retailer control was clicked.",
               recordedAt: new Date().toISOString(),
               productTitle: "Pokémon Deluxe Battle Action Pikachu"
             }

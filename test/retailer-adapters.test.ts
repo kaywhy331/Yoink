@@ -515,6 +515,90 @@ test("Walmart observer binds first-party and named marketplace buy boxes", () =>
   assert.equal(retailerAddControl(fixture("walmart-first-party.html", url), url, "walmart", "999999999", "shipping"), null);
 });
 
+test("Walmart recovers the exact selected first-party shipping offer from current page state", () => {
+  const url = "https://www.walmart.com/ip/pokemon-deluxe-battle-deck/20895014480";
+  const offerId = "E3FEC929BA58303AA09F92D2712898BD";
+  const product = {
+    usItemId: "20895014480",
+    availabilityStatus: "IN_STOCK",
+    itemPageAvailabilityStatus: "IN_STOCK",
+    showAtc: true,
+    isConditionNew: true,
+    selectedOfferId: offerId,
+    offerId,
+    sellerName: "Walmart.com",
+    sellerType: "INTERNAL",
+    orderLimit: 99,
+    priceInfo: { currentPrice: { price: 39.97, currencyUnit: "USD" } },
+    conditionOffers: [{
+      offerId,
+      availabilityStatus: { value: "IN_STOCK" },
+      condition: { groupCode: 1 },
+      price: { price: 39.97 }
+    }],
+    fulfillmentOptions: [{
+      type: "SHIPPING",
+      selected: true,
+      intent: true,
+      viewOnly: false,
+      restricted: false,
+      availabilityStatus: "IN_STOCK",
+      maxOrderQuantity: 99,
+      orderLimit: 99
+    }, {
+      type: "PICKUP",
+      selected: false,
+      intent: false,
+      viewOnly: false,
+      availabilityStatus: "NOT_AVAILABLE"
+    }]
+  };
+  const page = (overrides: Record<string, unknown> = {}) => new JSDOM(`<body><main>
+    <script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+      props: { pageProps: { initialData: { data: { product: { ...product, ...overrides } } } } }
+    })}</script>
+    <section data-testid="add-to-cart-section"><button data-automation-id="atc">Add to cart</button></section>
+  </main></body>`, { url }).window.document;
+
+  const document = page();
+  const observation = observeRetailerOffer(document, url, "walmart", "20895014480", "shipping", NOW);
+  assert.deepEqual({
+    availability: observation.availability,
+    price: observation.unitPriceCents,
+    seller: observation.sellerName,
+    sellerType: observation.sellerType,
+    fulfillment: observation.fulfillment,
+    actionable: observation.addControlActionable
+  }, {
+    availability: "in_stock",
+    price: 3997,
+    seller: "Walmart",
+    sellerType: "first_party",
+    fulfillment: "shipping",
+    actionable: true
+  });
+  assert.ok(retailerAddControl(document, url, "walmart", "20895014480", "shipping"));
+  const attempt = collectRetailerShadowAttempt(document, url, "walmart", "shipping");
+  assert.equal(attempt.diagnostic.outcome, "passed");
+  assert.equal(attempt.diagnostic.failureStage, "complete");
+  assert.equal(attempt.diagnostic.layout.scopedControlCount, 1);
+
+  const thirdParty = observeRetailerOffer(
+    page({ sellerName: "Fixture Marketplace", sellerType: "EXTERNAL" }),
+    url,
+    "walmart",
+    "20895014480",
+    "shipping",
+    NOW
+  );
+  assert.equal(thirdParty.addControlActionable, false);
+  assert.equal(thirdParty.availability, "unknown");
+
+  const pickup = observeRetailerOffer(page(), url, "walmart", "20895014480", "pickup", NOW);
+  assert.equal(pickup.addControlActionable, false);
+  assert.equal(pickup.fulfillment, "unknown");
+});
+
 test("Walmart split dollar and cent markup cannot inflate the bound price", () => {
   const document = new JSDOM(`<div data-automation-id="product-price"><span>$119</span><sup>95</sup></div>`).window.document;
   const price = document.querySelector("[data-automation-id='product-price']");
@@ -861,6 +945,22 @@ test("Best Buy observer binds exact first-party shipping and rejects marketplace
   assert.equal(sellerMissing.addControlActionable, false);
 });
 
+test("Best Buy ignores challenge phrases in non-observable scripts but still blocks visible security checks", () => {
+  const url = "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149";
+  const document = fixture("bestbuy-first-party.html", url);
+  document.body.insertAdjacentHTML("beforeend", `<script>window.__copy = "Additional security check is required";</script>`);
+  assert.equal(retailerSecurityChallenge(document), false);
+  const attempt = collectRetailerShadowAttempt(document, url, "bestbuy", "shipping");
+  assert.equal(attempt.observation.addControlActionable, true);
+  assert.equal(attempt.diagnostic.outcome, "passed");
+
+  document.body.insertAdjacentHTML("afterbegin", `<section>Additional security check is required</section>`);
+  assert.equal(retailerSecurityChallenge(document), true);
+  const blocked = collectRetailerShadowAttempt(document, url, "bestbuy", "shipping");
+  assert.equal(blocked.observation.addControlActionable, false);
+  assert.equal(blocked.diagnostic.reasonCode, "security_challenge");
+});
+
 test("Best Buy observer recognizes modern fulfillment while keeping pickup an explicit opt-in", () => {
   const shippingUrl = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const shippingDocument = fixture("bestbuy-modern-first-party.html", shippingUrl);
@@ -917,7 +1017,7 @@ test("Best Buy observer recognizes modern fulfillment while keeping pickup an ex
   assert.equal(selectorMiss.diagnostic.reasonCode, "add_control_selector_miss");
 });
 
-test("Best Buy v8 distinguishes passive demand badges from real gates and preserves pickup opt-in", () => {
+test("Best Buy v9 distinguishes passive demand badges from real gates and preserves pickup opt-in", () => {
   const preorderUrl = "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-reality-fracture-play-booster-box-30-packs/JJ8VP7Z65T/sku/6678193";
   const preorderDocument = fixture("bestbuy-reality-fracture-preorder.html", preorderUrl);
   const preorder = observeRetailerOffer(preorderDocument, preorderUrl, "bestbuy", "6678193", "either", NOW);
@@ -987,7 +1087,7 @@ test("Best Buy v8 distinguishes passive demand badges from real gates and preser
   }
 });
 
-test("Best Buy v8 binds one primary action when the same exact offer also renders a sticky duplicate", () => {
+test("Best Buy v9 binds one primary action when the same exact offer also renders a sticky duplicate", () => {
   const demandUrl = "https://www.bestbuy.com/product/riftbound-league-of-legends-trading-card-game-unleashed-champion-deck-vex/J3GWY59Q5Z/sku/6669286";
   const passiveDemand = fixture("bestbuy-passive-demand-badge.html", demandUrl);
   const demandObservation = observeRetailerOffer(passiveDemand, demandUrl, "bestbuy", "6669286", "shipping", NOW);
@@ -1044,7 +1144,7 @@ test("Best Buy v8 binds one primary action when the same exact offer also render
   ), null);
 });
 
-test("Best Buy v8 recovers one exact split-shell action without admitting page-level ambiguity", () => {
+test("Best Buy v9 recovers one exact split-shell action without admitting page-level ambiguity", () => {
   const url = "https://www.bestbuy.com/product/2026-topps-flagship-football-mega-box/J3ZPGXX9RP/sku/6685081";
   const document = fixture("bestbuy-single-split-shell.html", url);
   const observation = observeRetailerOffer(document, url, "bestbuy", "6685081", "shipping", NOW);

@@ -148,7 +148,7 @@ test("Amazon safely self-heals unique control and price selector drift", () => {
   assert.equal(prepareAmazonAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Amazon add v8 rejects ambiguity and permits pickup only for an exact selected pickup offer", () => {
+test("Amazon add v9 rejects ambiguity and permits pickup only for an exact selected pickup offer", () => {
   assert.equal(prepareAmazonAdd(product("amazon-marketplace.html"), PRODUCT_URL, job(), NOW).reason, "third_party_seller");
   const separatedMarketplaceUrl = "https://www.amazon.com/dp/B081J5PW5J";
   assert.equal(prepareAmazonAdd(

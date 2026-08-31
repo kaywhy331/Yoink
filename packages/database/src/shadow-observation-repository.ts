@@ -887,7 +887,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional coverage for a future marketplace-capable adapter; target-add-v5 rejects it.",
+        detail: "Optional coverage for a future marketplace-capable adapter; target-add-v6 rejects it.",
         required: 1,
         requiredForQualification: false
       },
@@ -1041,7 +1041,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional coverage for a future marketplace-capable adapter; walmart-add-v6 rejects it.",
+        detail: "Optional coverage for a future marketplace-capable adapter; walmart-add-v7 rejects it.",
         required: 1,
         requiredForQualification: false
       },
@@ -1196,7 +1196,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional fail-closed coverage; amazon-add-v8 rejects marketplace sellers.",
+        detail: "Optional fail-closed coverage; amazon-add-v9 rejects marketplace sellers.",
         required: 1,
         requiredForQualification: false
       },
@@ -1350,7 +1350,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional fail-closed coverage; bestbuy-add-v8 rejects every marketplace seller.",
+        detail: "Optional fail-closed coverage; bestbuy-add-v9 rejects every marketplace seller.",
         required: 1,
         requiredForQualification: false
       },

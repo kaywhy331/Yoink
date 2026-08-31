@@ -152,7 +152,7 @@ test("drop windows lease exact read-only observations and close one item on stoc
       sellerName: "Target",
       sellerType: "first_party",
       fulfillment: "shipping",
-      observerVersion: "target-observer-v3",
+      observerVersion: "target-observer-v4",
       observedAt: new Date(NOW + 25).toISOString(),
       extensionVersion: "1.15.0"
     }, NOW + 30);
@@ -171,7 +171,7 @@ test("drop windows lease exact read-only observations and close one item on stoc
       sellerName: "Target",
       sellerType: "first_party",
       fulfillment: "shipping",
-      observerVersion: "target-observer-v3",
+      observerVersion: "target-observer-v4",
       observedAt: new Date(NOW + 5 * 60_000 + 5).toISOString(),
       extensionVersion: "1.15.0"
     }, NOW + 5 * 60_000 + 10);

@@ -40,7 +40,10 @@ function permissionSurface(permission: AuthorizationPermission | null): ApiSurfa
 }
 
 function legacyPermission(method: string, pathname: string): AuthorizationPermission | null | undefined {
-  if (["/api/v1/health", "/api/v1/extension/release", "/api/v1/extension/release/download", "/api/v1/devices/pair"].includes(pathname)) {
+  if ([
+    "/api/v1/health", "/api/v1/affiliate-routing", "/api/v1/extension/release",
+    "/api/v1/extension/release/download", "/api/v1/devices/pair"
+  ].includes(pathname)) {
     return null;
   }
   if (pathname.startsWith("/api/v1/devices/self/")) return "device.self";
@@ -176,6 +179,7 @@ export function resolveApiRoutePolicy(method: string, pathname: string): ApiRout
 const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string, string>>>> = Object.freeze({
   public: Object.freeze({
     health: "health",
+    "affiliate-routing": "affiliate_routing",
     extension: "extension_release",
     devices: "device_pair"
   }),

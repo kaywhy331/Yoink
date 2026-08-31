@@ -36,6 +36,7 @@ import {
   type LegacyPurchaseIntentTransitionInput,
   type MissionUpdateInput,
   type PurchaseIntentCreateInput,
+  type PurchaseIntentDeleteInput,
   type PurchaseIntentPreflightInput,
   type PurchaseProfileInput,
   PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS,
@@ -973,6 +974,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         response.setHeader("Content-Length", String(body.length));
         response.setHeader("X-Content-SHA256", release.descriptor.sha256);
         response.end(body);
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/affiliate-routing") {
+        json(response, 200, { affiliateRouting: attribution.routingDirectory() });
         return;
       }
 
@@ -2556,6 +2562,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         );
         json(response, 200, {
           purchaseIntent: decoratePurchaseIntents([purchaseIntent])[0]
+        });
+        return;
+      }
+
+      if (request.method === "DELETE" && purchaseIntentDetailMatch) {
+        const body = await readJson(request);
+        json(response, 200, {
+          deletion: control.deleteMission(
+            purchaseIntentDetailMatch[1] ?? "",
+            body as unknown as PurchaseIntentDeleteInput
+          )
         });
         return;
       }

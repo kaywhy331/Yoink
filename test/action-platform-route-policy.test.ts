@@ -25,3 +25,13 @@ test("action-platform routes keep their intended surface and least-privilege per
     assert.equal(policy.surfaceMismatch, false, path);
   }
 });
+
+test("the credential-free affiliate directory is an explicitly classified public route", () => {
+  const policy = resolveApiRoutePolicy("GET", "/api/v1/affiliate-routing");
+  assert.ok(policy);
+  assert.equal(policy.pathname, "/api/v1/affiliate-routing");
+  assert.equal(policy.surface, "public");
+  assert.equal(policy.permission, null);
+  assert.equal(policy.classified, true);
+  assert.equal(policy.surfaceMismatch, false);
+});

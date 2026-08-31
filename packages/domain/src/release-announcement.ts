@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-16-1-action-audit",
-  version: "1.16.1",
-  publishedAt: "2026-08-30T00:00:00.000Z",
-  title: "Complete cart handoffs and drop-watch controls",
-  summary: "Yoink now hands off a proven cart immediately, keeps action connectors aligned with every lifecycle path, and makes scheduled drop watches fully controllable and explainable.",
+  id: "yoink-1-17-0-store-routing",
+  version: "1.17.0",
+  publishedAt: "2026-08-31T00:00:00.000Z",
+  title: "More reliable store checks and safer outbound routing",
+  summary: "Yoink now recognizes additional current retailer layouts, routes only approved Howl stores through affiliate links, and lets you safely delete obsolete purchase plans.",
   highlights: [
-    "The local Cart ready notification, badge, optional sound, popup state, and cart-tab handoff now happen before control-plane confirmation reporting.",
-    "Admin supersession and user Auto-watch armed plans controls now cover open windows, per-item countdown/readiness, and exact replacement semantics.",
-    "Carted, Needs you, and Missed connectors now follow the shared action transition path; Insights also exposes spend headroom and p50/p95 action latency."
+    "Target, Walmart, Amazon, and Best Buy checks handle additional current page structures while ambiguous evidence still stops safely before any Add control.",
+    "The admin Howl directory contains 160 exact website scopes; unlisted registered stores keep their direct retailer links.",
+    "Purchase plans can be deleted without erasing action or spend history, and challenged warm-readiness tabs no longer multiply in the background."
   ],
   docsUrl: "/docs"
 });

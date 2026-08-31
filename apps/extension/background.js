@@ -106,11 +106,11 @@ const RETAILER_ORIGINS = {
   pbandai: ["https://*.p-bandai.com/*"],
   pokemoncenter: ["https://*.pokemoncenter.com/*"]
 };
-const TARGET_OBSERVER_VERSION = "target-observer-v3";
+const TARGET_OBSERVER_VERSION = "target-observer-v4";
 const RETAILER_OBSERVER_VERSIONS = {
-  walmart: "walmart-observer-v5",
-  amazon: "amazon-observer-v7",
-  bestbuy: "bestbuy-observer-v8",
+  walmart: "walmart-observer-v6",
+  amazon: "amazon-observer-v8",
+  bestbuy: "bestbuy-observer-v9",
   disney: "disney-observer-v1",
   ravensburger: "ravensburger-observer-v1",
   riot: "riot-observer-v1",
@@ -140,11 +140,11 @@ const SUPPORTED_RETAILER_DOMAINS = Object.freeze([
   "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
   "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
 ]);
-const TARGET_ADD_ADAPTER_VERSION = "target-add-v5";
-const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v6";
+const TARGET_ADD_ADAPTER_VERSION = "target-add-v6";
+const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v7";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
-const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v8";
-const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v8";
+const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
+const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v9";
 const TARGET_CART_URL = "https://www.target.com/cart";
 const WALMART_CART_URL = "https://www.walmart.com/cart";
 const AMAZON_CART_URL = "https://www.amazon.com/gp/cart/view.html";
@@ -4994,6 +4994,18 @@ async function runWarmReadinessCycle() {
       if (protectedTabs.has(stored?.tabId)) continue;
       let tab = Number.isInteger(stored?.tabId)
         ? await chrome.tabs.get(stored.tabId).catch(() => null) : null;
+      if (stored?.signedInState === "challenged" && Number.isInteger(tab?.id)
+        && !retailerCartTab(tab, retailerId)) {
+        await chrome.storage.session.set({
+          [WARM_READINESS_CURSOR_KEY]: (index + 1) % retailerIds.length
+        });
+        return {
+          warmed: false,
+          retailerId,
+          signedInState: "challenged",
+          reason: "manual_action_required"
+        };
+      }
       let createdTabId = null;
       try {
         if (!retailerCartTab(tab, retailerId)) {

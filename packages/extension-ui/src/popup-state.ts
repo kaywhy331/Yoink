@@ -433,17 +433,20 @@ export function qualificationPopupResult(
   const seller = cleanResultText(observation.sellerName || "Seller unavailable", 160);
   const lines = [`${page.identityLabel} ${page.sku}`, price, seller, fulfillment];
   if (observation.availability) lines.push(`Availability: ${resultTitleCase(observation.availability)}`);
-  if (observation.interactiveBlock) lines.push(`Manual step: ${resultTitleCase(observation.interactiveBlock)}`);
+  if (observation.securityChallenge === true) lines.push("Security check on the page");
+  else if (observation.interactiveBlock) lines.push(`Manual step: ${resultTitleCase(observation.interactiveBlock)}`);
   if (observation.purchaseRouteReady === true) lines.push("Exact offer binding verified");
   const qualification = response.workflow === "qualification";
-  lines.push(qualification
-    ? "Qualification stopped at the final pre-click boundary."
-    : "Read-only inspection completed; no retailer control was clicked.");
-  if (!qualification) return persistedResult(page.key, "inspected", `Inspected · ${price}`, lines.join(" · "), now, productTitle);
+  if (!qualification) {
+    lines.push("Read-only inspection completed; no retailer control was clicked.");
+    return persistedResult(page.key, "inspected", `Inspected · ${price}`, lines.join(" · "), now, productTitle);
+  }
   if (rehearsal.ok === true) {
+    lines.push("Rehearsal passed — no retailer control was clicked.");
     return persistedResult(page.key, "qualified", `Qualified · ${price} · ${fulfillment}`, lines.join(" · "), now, productTitle);
   }
   const reason = safeErrorText(response.message || resultTitleCase(rehearsal.reason || "Offer not verified"));
+  lines.push("Qualification stopped safely before any retailer control was clicked.");
   return persistedResult(page.key, "blocked", `Blocked · ${reason}`, `${lines.join(" · ")} · ${reason}`, now, productTitle);
 }
 

@@ -27,17 +27,12 @@ const state = {
   calls: [],
   actionPlatform: null,
   health: null,
+  affiliateRouting: null,
   query: ""
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const HOWL_PUBLISHER_SLUG = "collectwithdodo";
 const DISMISSED_ANNOUNCEMENT_KEY = "yoinkDismissedAnnouncementV1";
-const HOWL_RETAILER_DOMAINS = Object.freeze([
-  "target.com", "walmart.com", "amazon.com", "bestbuy.com", "disneystore.com",
-  "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
-  "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
-]);
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -48,15 +43,32 @@ function escapeHtml(value) {
 function howlAffiliateUrl(value, articleName = "") {
   try {
     const destination = new URL(String(value || ""));
-    const host = destination.hostname.toLocaleLowerCase("en-US");
-    if (destination.protocol !== "https:" || destination.username || destination.password
-      || !HOWL_RETAILER_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`))) return "";
+    if (destination.protocol !== "https:" || destination.username || destination.password || destination.port) return "";
+    const routing = state.affiliateRouting;
+    if (Number(routing?.protocolVersion) !== 1 || !Array.isArray(routing?.stores)
+      || !Array.isArray(routing?.registeredRetailerDomains)) return "";
+    const normalizedHost = (hostname) => String(hostname || "").toLocaleLowerCase("en-US")
+      .replace(/\.$/, "").replace(/^www\./, "");
+    const host = normalizedHost(destination.hostname);
+    const path = `/${destination.pathname}`.replace(/\/{2,}/g, "/").replace(/\/+$/, "") || "/";
+    const store = routing.stores
+      .filter((candidate) => {
+        const prefix = String(candidate?.pathPrefix || "/").toLocaleLowerCase("en-US");
+        const pathMatches = prefix === "/" || path.toLocaleLowerCase("en-US") === prefix
+          || path.toLocaleLowerCase("en-US").startsWith(`${prefix}/`);
+        return normalizedHost(candidate?.hostname) === host && pathMatches;
+      })
+      .sort((left, right) => String(right.pathPrefix || "").length - String(left.pathPrefix || "").length)[0];
+    const directStore = routing.registeredRetailerDomains.some((domain) => normalizedHost(domain) === host);
+    if (!store) return directStore ? destination.href : "";
+    if (routing.endpoint !== "https://howl.link/link"
+      || !/^[a-z0-9][a-z0-9_-]{1,79}$/.test(String(routing.publisherSlug || ""))) return "";
     const articleUrl = new URL(location.pathname || "/", location.origin);
     articleUrl.search = "";
     articleUrl.hash = "";
-    const route = new URL("https://howl.link/link");
+    const route = new URL(routing.endpoint);
     route.searchParams.set("url", destination.href);
-    route.searchParams.set("publisher_slug", HOWL_PUBLISHER_SLUG);
+    route.searchParams.set("publisher_slug", routing.publisherSlug);
     route.searchParams.set(
       "article_name",
       String(articleName || document.title || "Yoink product dashboard").replace(/\s+/g, " ").trim().slice(0, 100)
@@ -67,6 +79,14 @@ function howlAffiliateUrl(value, articleName = "") {
   } catch {
     return "";
   }
+}
+
+function retailerLinkMarkup(value, articleName, label, className = "canonical") {
+  const href = howlAffiliateUrl(value, articleName);
+  if (!href) return "";
+  let affiliate = false;
+  try { affiliate = new URL(href).origin === "https://howl.link"; } catch { return ""; }
+  return `<a class="${escapeHtml(className)}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer${affiliate ? " sponsored" : ""}">${escapeHtml(label)}</a>`;
 }
 
 function money(cents, currency = "USD") {
@@ -546,7 +566,7 @@ function productCardMarkup(group, missionByVariant) {
     ${storeArea}
     <div class="card-actions">
       ${plan ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit purchase plan</button>` : quickAddMarkup(primary, group)}
-      ${primary ? `<a class="canonical" href="${escapeHtml(howlAffiliateUrl(primary.canonicalUrl, group.title))}" target="_blank" rel="noopener noreferrer sponsored">View at ${escapeHtml(primary.retailerName)} ↗</a>` : ""}
+      ${primary ? retailerLinkMarkup(primary.canonicalUrl, group.title, `View at ${primary.retailerName} ↗`) : ""}
     </div>
   </article>`;
 }
@@ -693,7 +713,7 @@ function openProductDetail(variantId) {
           ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit plan</button>`
           : `<button class="button primary" data-quick-add="${escapeHtml(listing.listingId)}" type="button">Quick add</button>
              <button class="button quiet" data-track-listing="${escapeHtml(listing.listingId)}" type="button">Custom setup</button>`}
-        <a class="canonical" href="${escapeHtml(howlAffiliateUrl(listing.canonicalUrl, group.title))}" target="_blank" rel="noopener noreferrer sponsored">View ↗</a>
+        ${retailerLinkMarkup(listing.canonicalUrl, group.title, "View ↗")}
       </div>
     </div>`;
   }).join("");
@@ -721,13 +741,13 @@ function renderWalmartDraws() {
   const draws = state.overview.walmartDraws || {};
   const latest = draws.latestScan || null;
   const items = Array.isArray(draws.items) ? draws.items : [];
-  $("#walmartDrawSummary").innerHTML = `<article class="plan-card"><div><div class="card-top"><h3>Read-only drawing observer</h3><span class="tag ${latest?.outcome === "passed" ? "good" : "warn"}">${escapeHtml(latest ? String(latest.outcome).replaceAll("_", " ") : "not scanned")}</span></div><p>${latest ? `${Number(latest.observedCardCount || 0)} of ${Number(latest.expectedCardCount || 0)} cards recorded ${relative(latest.observedAt)}.` : "Open the Walmart Draw hub and choose Inspect current drawings in the Chrome companion."} No entry was submitted, and Yoink does not collect drawing account, address, payment, or entry state.</p></div><a class="canonical" href="${escapeHtml(howlAffiliateUrl("https://www.walmart.com/shop/collectibles/draw", "Walmart Collectibles Draw"))}" target="_blank" rel="noopener noreferrer sponsored">Open drawing hub ↗</a></article>`;
+  $("#walmartDrawSummary").innerHTML = `<article class="plan-card"><div><div class="card-top"><h3>Read-only drawing observer</h3><span class="tag ${latest?.outcome === "passed" ? "good" : "warn"}">${escapeHtml(latest ? String(latest.outcome).replaceAll("_", " ") : "not scanned")}</span></div><p>${latest ? `${Number(latest.observedCardCount || 0)} of ${Number(latest.expectedCardCount || 0)} cards recorded ${relative(latest.observedAt)}.` : "Open the Walmart Draw hub and choose Inspect current drawings in the Chrome companion."} No entry was submitted, and Yoink does not collect drawing account, address, payment, or entry state.</p></div>${retailerLinkMarkup("https://www.walmart.com/shop/collectibles/draw", "Walmart Collectibles Draw", "Open drawing hub ↗")}</article>`;
   $("#walmartDrawList").innerHTML = items.length ? items.map((item) => `<article class="product-card">
     <div class="card-top"><span class="store">Walmart</span><span class="tag ${item.drawState === "active" ? "good" : "warn"}">${escapeHtml(String(item.drawState || "unknown"))}</span></div>
     <h3>${escapeHtml(item.title)}</h3>
     <p>Exact Walmart item ${escapeHtml(item.retailerSku)} · ${escapeHtml(item.sellerName || "seller unknown")}</p>
     <div class="tags"><span class="tag">${escapeHtml(money(item.unitPriceCents, item.currency))}</span><span class="tag">${item.closesAt ? `Closes ${escapeHtml(relative(item.closesAt))}` : "Closing time unknown"}</span><span class="tag ${item.tracked ? "good" : ""}">${item.tracked ? "Matches your plan" : "Not tracked"}</span></div>
-    <div class="card-actions"><a class="canonical" href="${escapeHtml(howlAffiliateUrl(item.canonicalUrl, item.title))}" target="_blank" rel="noopener noreferrer sponsored">View exact item ↗</a><span class="tag warn">Manual entry only</span></div>
+    <div class="card-actions">${retailerLinkMarkup(item.canonicalUrl, item.title, "View exact item ↗")}<span class="tag warn">Manual entry only</span></div>
   </article>`).join("") : '<div class="empty">No open drawings are currently recorded. Run one explicit inspection from the Walmart Draw hub; expired drawings disappear from this view.</div>';
 }
 
@@ -746,7 +766,7 @@ function automationReadinessMarkup(readiness) {
   const checks = Array.isArray(readiness.checks) ? readiness.checks : [];
   const candidate = qualificationCandidateFor(readiness);
   const candidateMarkup = candidate
-    ? `<div class="qualification-candidate"><span><strong>${escapeHtml(retailerDisplayName(candidate.retailerId))} qualification candidate</strong><small>${escapeHtml(candidate.retailerSku)} · ${escapeHtml(money(candidate.unitPriceCents, candidate.currency))} · Shipping · observed ${escapeHtml(relative(candidate.observedAt))}${candidate.rehearsalPassed ? " · rehearsal passed" : ""}</small></span><a class="button quiet" href="${escapeHtml(howlAffiliateUrl(candidate.canonicalUrl, `${retailerDisplayName(candidate.retailerId)} qualification candidate`))}" target="_blank" rel="noopener noreferrer sponsored">Open candidate ↗</a></div>`
+    ? `<div class="qualification-candidate"><span><strong>${escapeHtml(retailerDisplayName(candidate.retailerId))} qualification candidate</strong><small>${escapeHtml(candidate.retailerSku)} · ${escapeHtml(money(candidate.unitPriceCents, candidate.currency))} · Shipping · observed ${escapeHtml(relative(candidate.observedAt))}${candidate.rehearsalPassed ? " · rehearsal passed" : ""}</small></span>${retailerLinkMarkup(candidate.canonicalUrl, `${retailerDisplayName(candidate.retailerId)} qualification candidate`, "Open candidate ↗", "button quiet")}</div>`
     : "";
   const checkMarkup = checks.map((item) => {
     const symbol = item.state === "pass" ? "✓" : item.state === "runtime" ? "↻" : "•";
@@ -894,7 +914,7 @@ function renderActions() {
       <small id="cart-outcome-help-${escapeHtml(action.id)}">For Got it, include this item's share of tax or shipping. Checkout remains on the retailer site.</small>
       <div class="inline-actions"><button class="button primary" name="outcome" value="got_it" type="submit">Got it</button><button class="button quiet" name="outcome" value="missed_it" type="submit" formnovalidate>Missed it</button></div>
     </form>` : ""}
-    <div class="inline-actions"><a class="canonical" href="${escapeHtml(howlAffiliateUrl(action.canonicalUrl, action.title))}" target="_blank" rel="noopener noreferrer sponsored">Store page ↗</a></div>
+    <div class="inline-actions">${retailerLinkMarkup(action.canonicalUrl, action.title, "Store page ↗")}</div>
     </div>
   </article>`;
   }).join("") : '<div class="empty">No purchase or notification actions have been recorded yet.</div>';
@@ -974,7 +994,7 @@ function renderCalls() {
         ${watchActive ? `<button class="button quiet" data-watch-cancel="${escapeHtml(watch.id)}" type="button">Stop watching</button>` : ""}
         ${call.kind === "signal" && call.sourceChannelId && !call.falsePositiveReported ? `<button class="button quiet" data-false-positive="${escapeHtml(call.id)}" type="button">Report false positive</button>` : ""}
         ${call.falsePositiveReported ? '<span class="tag warn">False positive reported</span>' : ""}
-        ${call.canonicalUrl ? `<a class="canonical" href="${escapeHtml(howlAffiliateUrl(call.canonicalUrl, call.title))}" target="_blank" rel="noopener noreferrer sponsored">Store page ↗</a>` : ""}
+        ${call.canonicalUrl ? retailerLinkMarkup(call.canonicalUrl, call.title, "Store page ↗") : ""}
       </div></div>
     </article>`;
   }).join("") : '<div class="empty">No signals or scheduled drop calls have arrived yet.</div>';
@@ -1020,8 +1040,10 @@ function renderActionPlatform() {
     .join("") || '<div class="mini-row"><span>No measured action latency yet.</span></div>';
   $("#readinessList").innerHTML = (platform.readiness || []).map((lane) => {
     const ready = lane.readyForGuardedAdd === true;
-    const warning = lane.qualification?.warning;
-    return `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(lane.retailerId))}</strong><small>${(lane.checklist || []).map((check) => `${check.ready ? "✓" : "○"} ${check.label}`).join(" · ")}</small></span><span class="tag ${ready ? "good" : "warn"}">${ready ? "Ready" : warning && warning !== "none" ? words(warning) : "Needs setup"}</span></div>`;
+    const warning = lane.qualification?.warning || "none";
+    const qualificationNeedsAttention = warning !== "none";
+    const readinessLabel = qualificationNeedsAttention ? words(warning) : ready ? "Ready" : "Needs setup";
+    return `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(lane.retailerId))}</strong><small>${(lane.checklist || []).map((check) => `${check.ready ? "✓" : "○"} ${check.label}`).join(" · ")}</small></span><span class="tag ${ready && !qualificationNeedsAttention ? "good" : "warn"}">${escapeHtml(readinessLabel)}</span></div>`;
   }).join("") || '<div class="mini-row"><span>No guarded store lanes are configured.</span></div>';
   $("#sourceScorecards").innerHTML = (platform.sources || []).map((source) => `<div class="mini-row"><span><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(words(source.provider))} · ${Number(source.signalCount || 0).toLocaleString()} signals · ${source.accuracyBps === null || source.accuracyBps === undefined ? "accuracy pending" : `${(Number(source.accuracyBps) / 100).toFixed(1)}% accuracy`} · ${Number(source.falsePositiveCount || 0).toLocaleString()} false positive${Number(source.falsePositiveCount || 0) === 1 ? "" : "s"} · p95 ${duration(source.p95ObservedToReceivedMs)}</small></span><span class="tag ${source.health === "healthy" ? "good" : source.health === "attention" ? "warn" : ""}">${escapeHtml(words(source.health || source.status))}</span></div>`).join("") || '<div class="mini-row"><span>No source channels yet.</span></div>';
   renderConnectors();
@@ -1062,7 +1084,7 @@ function renderProposals() {
 
 async function refresh() {
   const query = state.query ? `&q=${encodeURIComponent(state.query)}` : "";
-  const [overview, products, plans, legacyTransition, actions, proposals, privacy, recoveryEvidence, profiles, calls, actionPlatform, health] = await Promise.all([
+  const [overview, products, plans, legacyTransition, actions, proposals, privacy, recoveryEvidence, profiles, calls, actionPlatform, health, affiliateRouting] = await Promise.all([
     api("/api/v1/user/overview"),
     api(`/api/v1/user/library/products?limit=200&offset=0${query}`),
     api("/api/v1/user/purchase-intents?limit=200&offset=0"),
@@ -1074,9 +1096,13 @@ async function refresh() {
     api("/api/v1/user/purchase-profiles").catch(() => ({ items: [] })),
     api("/api/v1/user/calls").catch(() => ({ items: [] })),
     api("/api/v1/user/action-platform").catch(() => ({})),
-    api("/api/v1/user/health").catch(() => null)
+    api("/api/v1/user/health").catch(() => null),
+    state.affiliateRouting
+      ? Promise.resolve({ affiliateRouting: state.affiliateRouting })
+      : api("/api/v1/affiliate-routing").catch(() => null)
   ]);
   state.overview = overview;
+  state.affiliateRouting = affiliateRouting?.affiliateRouting || overview.affiliateRouting || state.affiliateRouting;
   state.productGroups = products.items || [];
   state.productTotal = Number(products.total ?? state.productGroups.length);
   state.products = state.productGroups.flatMap((group) => (group.listings || []).map((listing) => ({
@@ -1366,6 +1392,13 @@ async function openPlan(id) {
   state.editingPlan = mission;
   const form = $("#planForm");
   form.elements.id.value = mission.id;
+  form.elements.status.querySelector('option[data-legacy-archived="true"]')?.remove();
+  if (mission.status === "archived") {
+    const legacyArchived = new Option("Archived (legacy)", "archived", true, true);
+    legacyArchived.disabled = true;
+    legacyArchived.dataset.legacyArchived = "true";
+    form.elements.status.add(legacyArchived);
+  }
   form.elements.status.value = mission.status;
   form.elements.targetQuantity.value = mission.targetQuantity;
   const policy = mission.intentPolicy || {};
@@ -1385,7 +1418,7 @@ async function openPlan(id) {
     : "Saving here converts it to a reviewed direct plan in notification mode unless you explicitly choose and satisfy guarded cart requirements. Checkout stays manual.";
   $("#planDialogTitle").textContent = mission.title;
   $("#targetEditors").innerHTML = mission.targets.map((target) => `<article class="target-editor" data-target-id="${escapeHtml(target.id)}" data-retailer-id="${escapeHtml(target.retailerId)}" data-execution-supported="${target.executionSupported === true}" data-last-observed-price-cents="${Number.isSafeInteger(Number(target.lastObservedPriceCents)) ? Number(target.lastObservedPriceCents) : ""}">
-    <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><span class="tag ${target.executionSupported === true ? "good" : ""} target-capability">${target.executionSupported === true ? "Cart mapping available" : "Monitoring only"}</span><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div><a class="canonical" href="${escapeHtml(howlAffiliateUrl(target.canonicalUrl, mission.title))}" target="_blank" rel="noopener noreferrer sponsored">View ↗</a></div>
+    <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><span class="tag ${target.executionSupported === true ? "good" : ""} target-capability">${target.executionSupported === true ? "Cart mapping available" : "Monitoring only"}</span><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div>${retailerLinkMarkup(target.canonicalUrl, mission.title, "View ↗")}</div>
     <div class="target-fields">
       <label class="check"><input data-field="enabled" type="checkbox" ${target.enabled ? "checked" : ""}><span>Use store</span></label>
       <label><span>Maximum price</span><input data-field="maxPrice" inputmode="decimal" placeholder="Strategy limit" value="${target.maxUnitPriceCents ? (target.maxUnitPriceCents / 100).toFixed(2) : ""}"></label>
@@ -1574,7 +1607,7 @@ async function checkProductLink() {
       <h3>${escapeHtml(preview.retailerSku)}</h3>
       <p>${escapeHtml(preview.capabilityLabel)}</p>
       <p><strong>Not accepted from this link:</strong> stock status, price, seller, fulfillment, or permission to purchase.</p>
-      <a class="canonical" href="${escapeHtml(howlAffiliateUrl(preview.canonicalUrl, `${preview.retailerName} product preview`))}" target="_blank" rel="noopener noreferrer sponsored">${escapeHtml(preview.canonicalUrl)} ↗</a>`;
+      ${retailerLinkMarkup(preview.canonicalUrl, `${preview.retailerName} product preview`, `${preview.canonicalUrl} ↗`)}`;
     $("#productLinkConfirm").hidden = false;
     $("#productLinkConfirm").querySelector("input").focus();
   } finally {
@@ -1751,6 +1784,25 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.editPlan) {
       if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
       await openPlan(button.dataset.editPlan);
+    }
+    if (button.id === "deletePlanButton") {
+      const plan = state.editingPlan;
+      if (!plan?.id) throw new Error("Refresh before deleting this purchase plan.");
+      if (!confirm(`Delete “${plan.title}”? This stops its pending checks and removes it from your purchase plans. Prior action and spend history is retained for safety.`)) return;
+      button.disabled = true;
+      try {
+        await api(`/api/v1/user/purchase-intents/${encodeURIComponent(plan.id)}`, {
+          method: "DELETE",
+          body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
+        });
+        $("#planDialog").close();
+        state.editingPlan = null;
+        await refresh();
+        setTab("plans");
+        toast("Purchase plan deleted.");
+      } finally {
+        button.disabled = false;
+      }
     }
     if (button.id === "pairButton") {
       await createPairingCode();

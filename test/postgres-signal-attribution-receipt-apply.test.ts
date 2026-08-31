@@ -57,7 +57,9 @@ function policyFor(overrides: Partial<AttributionPolicyDefinition> = {}): Attrib
     associateTag: "",
     valid: true,
     validationReason: "",
-    ...overrides
+    ...overrides,
+    howlEligible: overrides.howlEligible ?? true,
+    howlStoreName: overrides.howlStoreName ?? "Target"
   };
 }
 

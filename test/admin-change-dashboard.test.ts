@@ -101,6 +101,15 @@ test("the admin Approvals workspace reviews an exact request without applying it
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
     await browser.eval(`(async () => { ${script}\n })()`);
     await eventually(() => assert.match(browser.document.querySelector("#changeAssuranceTitle")?.textContent ?? "", /Trusted local control center/));
+    await eventually(() => assert.equal(browser.document.querySelectorAll("#howlStoreDirectory tr").length, 160));
+    assert.match(browser.document.querySelector("#howlStoreCount")?.textContent ?? "", /160 STORES/);
+    assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Target/);
+    assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Walmart Canada/);
+    const howlFilter = browser.document.querySelector("#howlStoreFilter") as HTMLInputElement;
+    howlFilter.value = "lenovo";
+    howlFilter.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    assert.equal(browser.document.querySelectorAll("#howlStoreDirectory tr").length, 2);
+    assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Lenovo CA/);
     await eventually(() => assert.match(browser.document.querySelector("#adminChangeRequestList")?.textContent ?? "", /Dashboard requester/));
     assert.match(browser.document.querySelector("#adminChangeRequestList")?.textContent ?? "", /Waiting for a different authorized person/);
     assert.equal(protectedExecutions, 0);

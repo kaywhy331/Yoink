@@ -257,6 +257,19 @@ test("the attribution-policy payload normalizer mirrors AttributionRepository.re
     ),
     /Amazon Associates routing is valid only for Amazon/
   );
+  assert.throws(
+    () => normalizedPostgresSignalAttributionPolicyReplacePayload(
+      baselineInputs({
+        bestbuy: {
+          enabled: true,
+          provider: "howl",
+          publisherSlug: "collectwithdodo",
+          articleBaseUrl: "https://example.com/blog/"
+        }
+      })
+    ),
+    /Howl is not available for this store/
+  );
 
   // A disabled policy never enforces howl's slug/URL validity rule, so an
   // invalid (fragment-bearing) article base URL is a benign normalize-to-""

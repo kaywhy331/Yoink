@@ -225,6 +225,14 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 80
 .attribution-policy-editor .form-grid { margin-top: 14px; }
 .attribution-policy-editor h3, .attribution-policy-editor p { margin: 0; }
 .attribution-policy-editor p { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.directory-filter { display: grid; gap: 6px; max-width: 360px; margin-bottom: 12px; color: var(--muted); font-size: 10px; font-weight: 750; }
+.affiliate-directory-wrap { max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.affiliate-directory { width: 100%; border-collapse: collapse; font-size: 11px; }
+.affiliate-directory th, .affiliate-directory td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.affiliate-directory th { position: sticky; top: 0; z-index: 1; color: var(--muted); background: #111520; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.affiliate-directory tbody tr:last-child td { border-bottom: 0; }
+.affiliate-directory td:nth-child(2) { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.affiliate-directory-empty { padding: 28px 12px !important; color: var(--subtle); text-align: center !important; }
 .mission-target-editors { display: grid; gap: 10px; margin-top: 20px; }
 .mission-target-editor { padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); }
 .mission-target-editor .form-grid { margin-top: 14px; }

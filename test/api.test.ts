@@ -100,6 +100,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /Unconfigured services are denied/);
     assert.match(adminPageBody, /PostgreSQL cutover/);
     assert.match(adminPageBody, /One source of truth, never dual write/);
+    assert.match(adminPageBody, /Howl affiliate stores/);
+    assert.match(adminPageBody, /Only destinations matching this directory use the Howl protocol/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
     assert.match(adminScript, /renderOperationalTelemetry/);
@@ -212,6 +214,21 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /complete forty-seven-edge post-creation job state machine/);
     assert.match(adminScript, /closes the post-creation job-lifecycle family/);
     assert.match(adminScript, /\/api\/v1\/admin\/attribution-policies/);
+
+    const affiliateDirectory = await fetch(`${baseUrl}/api/v1/affiliate-routing`).then((response) => response.json()) as {
+      affiliateRouting: {
+        protocolVersion: number;
+        endpoint: string;
+        stores: Array<{ storeName: string; website: string }>;
+        registeredRetailerDomains: string[];
+      };
+    };
+    assert.equal(affiliateDirectory.affiliateRouting.protocolVersion, 1);
+    assert.equal(affiliateDirectory.affiliateRouting.endpoint, "https://howl.link/link");
+    assert.equal(affiliateDirectory.affiliateRouting.stores.length, 160);
+    assert.ok(affiliateDirectory.affiliateRouting.stores.some((store) => store.website === "target.com"));
+    assert.equal(affiliateDirectory.affiliateRouting.stores.some((store) => store.website === "amazon.com"), false);
+    assert.ok(affiliateDirectory.affiliateRouting.registeredRetailerDomains.includes("amazon.com"));
 
     const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     const emptyInternalServices = emptyInternalServiceCapabilityProjection();
@@ -1152,6 +1169,66 @@ test("the user API previews and applies a stale-safe notification-only legacy-pl
   }
 });
 
+test("the user API deletes a purchase plan only after explicit confirmation", async () => {
+  const db = new YoinkDatabase();
+  const listing = new CatalogRepository(db).upsertListing({
+    sourceConnectionId: "source_trackalacker_local",
+    source: "trackalacker",
+    sourceProductId: "api-delete-plan-product",
+    sourceListingId: "api-delete-plan-listing",
+    title: "API Delete Plan Fixture",
+    retailerId: "target",
+    retailerSku: "95281992",
+    canonicalUrl: "https://www.target.com/p/-/A-95281992",
+    listingStatus: "in_stock",
+    executionSupported: true,
+    msrpCents: 3200
+  });
+  const missionId = new ControlRepository(db).ensureUserMission(
+    listing.listing.variantId,
+    listing.listing.id
+  ).mission.id;
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "0.1.0-test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    const unconfirmed = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(missionId)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({ confirmation: "DELETE_WITHOUT_REVIEW" })
+    });
+    assert.equal(unconfirmed.status, 400);
+    assert.equal((await unconfirmed.json() as { error: string }).error, "purchase_intent_delete_confirmation_required");
+
+    const deleted = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(missionId)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
+    });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual((await deleted.json() as { deletion: Record<string, unknown> }).deletion, {
+      id: missionId,
+      deleted: true,
+      cancelledPendingJobCount: 0,
+      cancelledWatchItemCount: 0
+    });
+    const detail = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(missionId)}`);
+    assert.equal(detail.status, 404);
+    const plans = await fetch(`${baseUrl}/api/v1/user/purchase-intents`).then((response) => response.json()) as {
+      items: unknown[];
+      total: number;
+    };
+    assert.deepEqual(plans.items, []);
+    assert.equal(plans.total, 0);
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});
+
 test("the loopback API rejects a foreign browser origin for mutations", async () => {
   const db = new YoinkDatabase();
   const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "test" });
@@ -1217,13 +1294,13 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v5",
+          targetAddAdapterVersion: "target-add-v6",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v6",
+          walmartAddAdapterVersion: "walmart-add-v7",
           amazonAddOnly: true,
-          amazonAddAdapterVersion: "amazon-add-v8",
+          amazonAddAdapterVersion: "amazon-add-v9",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v8"
+          bestBuyAddAdapterVersion: "bestbuy-add-v9"
         }
       })
     });
@@ -1256,13 +1333,13 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v5",
+          targetAddAdapterVersion: "target-add-v6",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v6",
+          walmartAddAdapterVersion: "walmart-add-v7",
           amazonAddOnly: true,
-          amazonAddAdapterVersion: "amazon-add-v8",
+          amazonAddAdapterVersion: "amazon-add-v9",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v8"
+          bestBuyAddAdapterVersion: "bestbuy-add-v9"
         }
       })
     });
@@ -1285,7 +1362,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         observedAt: new Date().toISOString(),
         retailerId: "bestbuy",
         retailerSku: "6612619",
-        adapterVersion: "bestbuy-observer-v8",
+        adapterVersion: "bestbuy-observer-v9",
         operation: "observe",
         outcome: "failed",
         failureStage: "add_control",
@@ -1378,7 +1455,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "target-observer-v3",
+        adapterVersion: "target-observer-v4",
         contractVersion: 1,
         observedAt: new Date().toISOString(),
         pageKind: "product",
@@ -1446,13 +1523,13 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v5",
+          targetAddAdapterVersion: "target-add-v6",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v6",
+          walmartAddAdapterVersion: "walmart-add-v7",
           amazonAddOnly: true,
-          amazonAddAdapterVersion: "amazon-add-v8",
+          amazonAddAdapterVersion: "amazon-add-v9",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v8"
+          bestBuyAddAdapterVersion: "bestbuy-add-v9"
         }
       })
     });
@@ -1500,8 +1577,8 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "target-add-v5",
-        observerVersion: "target-observer-v3",
+        adapterVersion: "target-add-v6",
+        observerVersion: "target-observer-v4",
         contractVersion: 1,
         shadowObservationId: shadow.id,
         observedAt: new Date().toISOString(),
@@ -1594,7 +1671,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "target-observer-v3",
+        adapterVersion: "target-observer-v4",
         contractVersion: 1,
         observedAt: new Date().toISOString(),
         pageKind: "product",
@@ -1624,9 +1701,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "target-add-v5",
+        adapterVersion: "target-add-v6",
         evidenceHash: readySnapshot.targetQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_TARGET_ADD_V5"
+        confirmation: "ENABLE_TARGET_ADD_V6"
       })
     });
     assert.equal(activation.status, 200);
@@ -1661,7 +1738,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           Authorization: `Bearer ${paired.token}`
         },
         body: JSON.stringify({
-          adapterVersion: "walmart-observer-v5",
+          adapterVersion: "walmart-observer-v6",
           contractVersion: 1,
           observedAt: new Date().toISOString(),
           pageKind: "product",
@@ -1689,8 +1766,8 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "walmart-add-v6",
-        observerVersion: "walmart-observer-v5",
+        adapterVersion: "walmart-add-v7",
+        observerVersion: "walmart-observer-v6",
         contractVersion: 1,
         shadowObservationId: walmartShadowIds[0],
         observedAt: new Date().toISOString(),
@@ -1707,9 +1784,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "walmart-add-v6",
+        adapterVersion: "walmart-add-v7",
         evidenceHash: walmartReadySnapshot.walmartQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_WALMART_ADD_V6"
+        confirmation: "ENABLE_WALMART_ADD_V7"
       })
     });
     assert.equal(walmartActivation.status, 200);
@@ -1732,7 +1809,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           Authorization: `Bearer ${paired.token}`
         },
         body: JSON.stringify({
-          adapterVersion: "amazon-observer-v7",
+          adapterVersion: "amazon-observer-v8",
           contractVersion: 1,
           observedAt: new Date().toISOString(),
           pageKind: "product",
@@ -1763,8 +1840,8 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "amazon-add-v8",
-        observerVersion: "amazon-observer-v7",
+        adapterVersion: "amazon-add-v9",
+        observerVersion: "amazon-observer-v8",
         contractVersion: 1,
         shadowObservationId: amazonShadowIds[0],
         observedAt: new Date().toISOString(),
@@ -1781,9 +1858,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "amazon-add-v8",
+        adapterVersion: "amazon-add-v9",
         evidenceHash: amazonReadySnapshot.amazonQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_AMAZON_ADD_V8"
+        confirmation: "ENABLE_AMAZON_ADD_V9"
       })
     });
     assert.equal(amazonActivation.status, 200);
@@ -1805,7 +1882,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           Authorization: `Bearer ${paired.token}`
         },
         body: JSON.stringify({
-          adapterVersion: "bestbuy-observer-v8",
+          adapterVersion: "bestbuy-observer-v9",
           contractVersion: 1,
           observedAt: new Date().toISOString(),
           pageKind: "product",
@@ -1833,8 +1910,8 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v8",
-        observerVersion: "bestbuy-observer-v8",
+        adapterVersion: "bestbuy-add-v9",
+        observerVersion: "bestbuy-observer-v9",
         contractVersion: 1,
         shadowObservationId: bestBuyShadowIds[0],
         observedAt: new Date().toISOString(),
@@ -1851,9 +1928,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v8",
+        adapterVersion: "bestbuy-add-v9",
         evidenceHash: bestBuyReadySnapshot.bestBuyQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_BESTBUY_ADD_V8"
+        confirmation: "ENABLE_BESTBUY_ADD_V9"
       })
     });
     assert.equal(bestBuyActivation.status, 200);

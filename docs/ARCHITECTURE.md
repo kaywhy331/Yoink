@@ -45,7 +45,7 @@ readiness projection: it cannot write an adapter qualification, change global
 execution settings, advertise browser mutation capability, or lease a job.
 
 Yoink 0.5 introduced `target-add-v1`, an independently versioned add-only runner.
-The current `target-add-v5` contract binds Target's fulfillment-tile UI and can
+The current `target-add-v6` contract binds Target's fulfillment-tile UI and can
 guardedly select the exact saved fulfillment: Shipping by default (including an
 available same-day Delivery fallback) or Pickup only after explicit user opt-in.
 It rebinds and revalidates the single Add control, and unavailable or mismatched
@@ -1078,14 +1078,20 @@ gated, so SQLite retains runtime authority. See
 
 ## Constrained action-store layout recovery
 
-The current action contracts are `target-add-v5`, `walmart-add-v6`,
-`amazon-add-v8`, and `bestbuy-add-v8`, paired with observer versions 3, 5, 7,
-and 8 respectively. Packaged selectors remain authoritative when present.
+The current action contracts are `target-add-v6`, `walmart-add-v7`,
+`amazon-add-v9`, and `bestbuy-add-v9`, paired with observer versions 4, 6, 8,
+and 9 respectively. Packaged selectors remain authoritative when present.
 When they drift, local packaged code may recover only one unique semantic Add
 control and one unique price landmark, after the existing exact identity,
 seller, fulfillment, quantity, price, offer-scope, and offer-token invariants
 all agree. Target's current accessibility-labeled fulfillment tiles follow the
-same uniqueness and availability boundary. Duplicate candidates fail closed.
+same uniqueness and availability boundary, including the current hydrated
+layout whose single product-level Add control no longer repeats the TCIN.
+Walmart's split layout may use its exact local `__NEXT_DATA__` product state
+only when selected offer, condition, price, first-party seller, selected
+fulfillment, quantity, and one primary Add control agree. Duplicate candidates
+fail closed. Challenge phrases are evaluated only from observable page content,
+not retailer scripts, styles, templates, or hidden copy.
 Remote/community observer recipes are still read-only shadow evidence and can
 never provide a mutation target.
 
@@ -1150,6 +1156,12 @@ Canonical retailer URLs establish identity. Attribution routes are selected only
 after resolution and are snapshotted onto a job. Default policy is to prefer a
 validated affiliate route and fall back to the exact canonical listing within a
 strict latency budget. Affiliate failure cannot relax any commerce validation.
+Howl eligibility comes from one curated store/website directory shared by job
+routing, the user dashboard, and the admin directory table. Matching requires
+HTTPS, an exact normalized hostname, and the listed locale path when present;
+lookalike domains, unlisted stores, and out-of-scope locale paths never receive a
+Howl prefix. The browser fetches this directory once per page session rather
+than adding it to recurring status snapshots.
 
 Raw Amazon offer IDs are volatile. Yoink may retain a one-way fingerprint for
 dedupe, but it does not write the token into SQLite, diagnostics, or audit data.

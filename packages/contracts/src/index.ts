@@ -30,11 +30,11 @@ export type Fulfillment = "shipping" | "pickup" | "either" | "manual" | "unknown
 export const ACTION_FULFILLMENTS = ["shipping", "pickup"] as const;
 export type ActionFulfillment = (typeof ACTION_FULFILLMENTS)[number];
 export type Availability = "in_stock" | "preorder" | "out_of_stock" | "unknown";
-export const TARGET_OBSERVER_VERSION = "target-observer-v3";
-export const WALMART_OBSERVER_VERSION = "walmart-observer-v5";
+export const TARGET_OBSERVER_VERSION = "target-observer-v4";
+export const WALMART_OBSERVER_VERSION = "walmart-observer-v6";
 export const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
-export const AMAZON_OBSERVER_VERSION = "amazon-observer-v7";
-export const BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v8";
+export const AMAZON_OBSERVER_VERSION = "amazon-observer-v8";
+export const BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v9";
 export const DISNEY_OBSERVER_VERSION = "disney-observer-v1";
 export const RAVENSBURGER_OBSERVER_VERSION = "ravensburger-observer-v1";
 export const RIOT_OBSERVER_VERSION = "riot-observer-v1";
@@ -61,14 +61,14 @@ export const RETAILER_OBSERVER_VERSIONS = {
 } as const;
 export type SupportedRetailerId = keyof typeof RETAILER_OBSERVER_VERSIONS;
 export type RetailerObserverVersion = (typeof RETAILER_OBSERVER_VERSIONS)[SupportedRetailerId];
-export const TARGET_ADD_ADAPTER_VERSION = "target-add-v5";
-export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V5";
-export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v6";
-export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V6";
-export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v8";
-export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V8";
-export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v8";
-export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V8";
+export const TARGET_ADD_ADAPTER_VERSION = "target-add-v6";
+export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V6";
+export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v7";
+export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V7";
+export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
+export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V9";
+export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v9";
+export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V9";
 
 export const RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS = ["observe", "rehearse_add", "live_add"] as const;
 export type RetailerAdapterDiagnosticOperation = (typeof RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS)[number];
@@ -795,7 +795,8 @@ export interface SignedObserverRecipeWitnessReceipt {
   signature: string;
 }
 
-export type MissionStatus = "active" | "paused" | "satisfied" | "archived";
+export type MissionStatus = "active" | "paused" | "satisfied" | "archived" | "deleted";
+export type EditableMissionStatus = Exclude<MissionStatus, "deleted">;
 export type ResolutionStatus = "matched" | "unresolved" | "ambiguous";
 export const JOB_STATES = [
   "notify_only",
@@ -1175,10 +1176,16 @@ export interface PurchaseIntentCreateInputV2 extends PurchaseIntentDraftInput {
 export type PurchaseIntentCreateInput = PurchaseIntentCreateInputV1 | PurchaseIntentCreateInputV2;
 
 export interface MissionUpdateInput {
-  status: MissionStatus;
+  status: EditableMissionStatus;
   targetQuantity: number;
   targets: MissionTargetUpdateInput[];
   policy?: PurchaseIntentPolicyUpdateInput;
+}
+
+export const PURCHASE_INTENT_DELETE_CONFIRMATION = "DELETE_PURCHASE_PLAN";
+
+export interface PurchaseIntentDeleteInput {
+  confirmation: typeof PURCHASE_INTENT_DELETE_CONFIRMATION;
 }
 
 export const LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION = 1;
@@ -1282,6 +1289,8 @@ export interface AttributionPolicyDefinition {
   publisherSlug: string;
   articleBaseUrl: string;
   associateTag: string;
+  howlEligible: boolean;
+  howlStoreName: string;
   valid: boolean;
   validationReason: string;
 }

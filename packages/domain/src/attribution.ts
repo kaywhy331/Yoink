@@ -4,6 +4,11 @@ import type {
   AttributionProvider,
   ListingContext
 } from "../../contracts/src/index.js";
+import {
+  buildHowlAffiliateRoute,
+  howlAffiliateStoreForDestination,
+  type HowlAffiliateStore
+} from "./howl-affiliate-stores.js";
 import { cleanText } from "./normalize.js";
 
 const RETAILER_DOMAINS: Readonly<Record<string, string>> = Object.freeze({
@@ -135,6 +140,9 @@ export function attributionPolicyValidity(
   if (!policy.enabled) return { valid: true, reason: "Policy is disabled; canonical fallback remains available." };
   if (policy.provider === "canonical") return { valid: true, reason: "Canonical retailer routing selected." };
   if (policy.provider === "howl") {
+    if (!howlAffiliateStoreForRetailer(policy.retailerId)) {
+      return { valid: false, reason: "Howl is not available for this store; use its direct retailer URL." };
+    }
     if (!SLUG_PATTERN.test(policy.publisherSlug)) return { valid: false, reason: "Howl requires a valid publisher slug." };
     if (!normalizedArticleBaseUrl(policy.articleBaseUrl)) return { valid: false, reason: "Howl requires a credential-free HTTPS article base URL." };
     return { valid: true, reason: "Howl route configuration is valid." };
@@ -145,6 +153,11 @@ export function attributionPolicyValidity(
     return { valid: true, reason: "Amazon Associates route configuration is valid." };
   }
   return { valid: false, reason: "The attribution provider is unsupported." };
+}
+
+export function howlAffiliateStoreForRetailer(retailerId: string): HowlAffiliateStore | null {
+  const domain = RETAILER_DOMAINS[cleanText(retailerId, 60).toLocaleLowerCase("en-US")];
+  return domain ? howlAffiliateStoreForDestination(`https://${domain}/`) : null;
 }
 
 function unavailablePlan(
@@ -196,18 +209,20 @@ export function buildAttributionPlan(
   if (policy.provider === "howl") {
     const articleBase = normalizedArticleBaseUrl(policy.articleBaseUrl);
     const articleUrl = new URL(productArticleSlug(title), articleBase).href;
-    const route = new URL("https://howl.link/link");
-    route.searchParams.set("url", canonicalUrl);
-    route.searchParams.set("publisher_slug", policy.publisherSlug);
-    route.searchParams.set("article_name", cleanText(title, 200) || "Product");
-    route.searchParams.set("article_url", articleUrl);
+    const routeUrl = buildHowlAffiliateRoute({
+      destinationUrl: canonicalUrl,
+      publisherSlug: policy.publisherSlug,
+      articleName: cleanText(title, 200) || "Product",
+      articleUrl
+    });
+    if (!routeUrl) return unavailablePlan(listing, mode, policy.id, "howl_store_not_eligible", canonicalUrl);
     return {
       policyId: policy.id,
       retailerId: listing.retailerId,
       provider: "howl",
       outcome: "affiliate_route",
       reasonCode: "howl_route_ready",
-      routeUrl: route.href,
+      routeUrl,
       metadata: { publisherSlug: policy.publisherSlug, articleUrl },
       blocked: false
     };

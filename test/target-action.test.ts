@@ -69,6 +69,23 @@ test("Target rehearsal reaches the final click boundary without clicking", () =>
   assert.equal(clicks, 0);
 });
 
+test("Target v6 rehearses the current no-TCIN hydrated fulfillment action", () => {
+  const document = new JSDOM(`<body><main>
+    <div data-test="product-price">$34.99</div>
+    <section aria-label="Fulfillment" data-test="@web/AddToCart/FulfillmentSection" role="region">
+      <button data-test="fulfillment-cell-pickup" aria-label="pickup - unselected - Available today">Pickup</button>
+      <button data-test="fulfillment-cell-shipping" aria-label="shipping - selected - Arrives tomorrow" aria-selected="true">Shipping</button>
+      <button>Add to cart</button>
+    </section>
+  </main></body>`, { url: PRODUCT_URL }).window.document;
+  let clicks = 0;
+  document.querySelector("[aria-label='Fulfillment'] button:last-child")?.addEventListener("click", () => { clicks += 1; });
+  const result = rehearseTargetAdd(document, PRODUCT_URL, job({ maxUnitPriceCents: 3499, maxOrderTotalCents: 3499 }), NOW);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.wouldClick, true);
+  assert.equal(clicks, 0);
+});
+
 test("Target add authorization clicks at most once and consumes its receipt before mutation", async () => {
   const document = product();
   let clicks = 0;

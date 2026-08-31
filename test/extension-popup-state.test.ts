@@ -287,7 +287,7 @@ test("persisted popup results are bounded, contextual, and redact untrusted erro
   assert.equal(result?.outcome, "qualified");
   assert.equal(result?.summary, "Qualified · $5.39 · Shipping");
   assert.equal(result?.productTitle, "Bicycle Standard Playing Cards 2pk");
-  assert.match(result?.details || "", /final pre-click boundary/);
+  assert.match(result?.details || "", /Rehearsal passed — no retailer control was clicked/);
   const identifiedView = derivePopupView({
     health: READY,
     page: PRODUCT,
@@ -315,6 +315,22 @@ test("persisted popup results are bounded, contextual, and redact untrusted erro
     observation: { unitPriceCents: null, fulfillment: "unknown", sellerName: "Best Buy" }
   }, PRODUCT);
   assert.equal(missingPrice?.summary, "Inspected · Price unavailable");
+
+  const securityBlock = qualificationPopupResult({
+    workflow: "qualification",
+    observation: {
+      unitPriceCents: null,
+      fulfillment: "unknown",
+      sellerName: "Best Buy",
+      availability: "unknown",
+      securityChallenge: true,
+      interactiveBlock: "unknown"
+    },
+    rehearsal: { ok: false, reason: "manual_action_required" }
+  }, PRODUCT);
+  assert.match(securityBlock?.details || "", /Security check on the page/);
+  assert.doesNotMatch(securityBlock?.details || "", /Manual step: Unknown/);
+  assert.match(securityBlock?.details || "", /stopped safely/);
 
   const secret = "S".repeat(48);
   const error = errorPopupResult(PRODUCT.key, new Error(

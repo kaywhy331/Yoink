@@ -9,8 +9,8 @@ and submit qualification.
 
 The current Yoink companion has only loopback access as a required host
 permission. Retailer access is optional. Generic `retailerMutation` remains
-forced false, while the independently versioned `target-add-v5`,
-`walmart-add-v6`, `amazon-add-v8`, and `bestbuy-add-v8` capabilities can be declared and qualified
+forced false, while the independently versioned `target-add-v6`,
+`walmart-add-v7`, `amazon-add-v9`, and `bestbuy-add-v9` capabilities can be declared and qualified
 only for their narrow add-only scopes.
 
 ## Source-to-target map
@@ -68,7 +68,7 @@ confirm the exact retailer add-only scope in the control center.
 
 ## Current Target boundary
 
-`target-observer-v3` is a pure visible-DOM reader for exact Target TCINs. It
+`target-observer-v4` is a pure visible-DOM reader for exact Target TCINs. It
 observes product offer, seller type, fulfillment, cart inventory, bounded order
 total, manual blockers, and privacy-preserving checkout evidence. Its fixtures
 cover first-party and marketplace offers, hidden/recommended controls, wrong
@@ -76,7 +76,7 @@ SKUs, authentication/MFA/location/membership/queue/challenge states, changed
 or ambiguous cart deltas, and unsafe checkout choices.
 
 It contains no click, event-dispatch, fetch, navigation, or credential logic.
-The separate `target-add-v5` bundle owns Target's only commerce click function. It accepts
+The separate `target-add-v6` bundle owns Target's only commerce click function. It accepts
 only an immutable Target/add-to-cart/quantity-one/first-party job with exact
 Shipping or explicitly configured Pickup fulfillment, binds the exact current
 fulfillment region, and can select the matching available tile. Shipping may
@@ -97,9 +97,13 @@ order submission remain closed.
 
 ## Current Walmart boundary
 
-`walmart-observer-v5` is a pure visible-DOM reader whose shipping evidence must
-be explicit; the v1 observer cannot qualify mutation. The separate
-`walmart-add-v6` bundle accepts only an immutable
+`walmart-observer-v6` is a local page reader whose shipping evidence must be
+explicit. It prefers a fully bound visible buy box and can recover Walmart's
+current split layout only when the exact `__NEXT_DATA__` product, selected offer
+ID, first-party seller, USD price, new-condition offer, selected in-stock
+Shipping option, quantity-one state, and one primary Add control all agree; the
+serialized offer ID is never emitted. The v1 observer cannot qualify mutation. The separate
+`walmart-add-v7` bundle accepts only an immutable
 Walmart/add-to-cart/quantity-one/first-party job matching exact Shipping or
 explicitly configured Pickup. It captures a bounded cart baseline, stops on
 virtual queues or interactive blockers,
@@ -108,13 +112,13 @@ proves only the authorized SKU increased by one afterward. Its service-worker re
 semantics match Target without sharing a generic mutation capability.
 
 The implementation and automated recovery coverage are complete. Live Walmart
-authorization requires two fresh v5 item IDs, a first-party shipping candidate,
+authorization requires two fresh v6 item IDs, a first-party shipping candidate,
 one no-click rehearsal, a recently connected capable companion, the exact
 dossier hash, and explicit local activation.
 
 ## Current Amazon boundary
 
-`amazon-observer-v7` is a pure visible-DOM reader that requires one offer scope
+`amazon-observer-v8` is a pure visible-DOM reader that requires one offer scope
 to bind the exact ASIN, a unique volatile offer token, price, seller, explicit
 selected-fulfillment evidence, and the Add control. It checks the Add control's nearest
 exact product form first so deeply nested live buy boxes remain bound without a
@@ -126,7 +130,7 @@ the shipment. Fulfillment ignores non-rendered script, style, template, and
 hidden text. Canonical offer fields take precedence over alternate payment
 tokens when internally consistent, while explicit checkout ASIN inputs take
 precedence over variation-swatch metadata. Route validation takes its volatile
-offer token only from the selected exact Add form. The separate `amazon-add-v8` bundle
+offer token only from the selected exact Add form. The separate `amazon-add-v9` bundle
 accepts only an immutable Amazon/add-to-cart/quantity-one/first-party job whose
 live fulfillment matches exact Shipping or explicitly configured Pickup. The
 offer token stays only inside a short-lived in-page authorization and
@@ -166,13 +170,13 @@ not retain raw errors, URLs, DOM, or any value outside the diagnostic contract.
 
 ## Current Best Buy boundary
 
-`bestbuy-observer-v8` binds one exact numeric SKU, price, first-party seller,
+`bestbuy-observer-v9` binds one exact numeric SKU, price, first-party seller,
 an exact selected Shipping or Pickup state, and Add control inside a bounded offer scope. It
 supports current and legacy product routes plus current test/automation and
 accessible native-button layouts. Its diagnostic reports a sanitized generic
 Add-intent count when an unknown selector exists, allowing immediate repair
 queue classification without storing page text or DOM. The separate
-`bestbuy-add-v8` runner preserves the bounded-baseline, durable pre-click receipt,
+`bestbuy-add-v9` runner preserves the bounded-baseline, durable pre-click receipt,
 at-most-once click, exact cart-delta proof, queue/interactive restraint, and
 marketplace/fulfillment-mismatch rejection boundaries. Accessibility-backed seller names are
 read only inside the already-bound seller element, and in-store-only products
@@ -181,7 +185,7 @@ split shell may bind sibling commerce regions only when the exact page has one
 Add control, one distinct price, one seller class, quantity one, selected
 fulfillment, and no competing SKU. Migration 53
 retires prior qualifications for all four add stores; observer-version binding also excludes
-pre-v8 evidence from current qualification. Preorders and actual high-demand
+pre-v9 evidence from current qualification. Preorders and actual high-demand
 gates are retained as read-only evidence but cannot satisfy or execute the
 in-stock lane; a passive demand badge does not close an otherwise exact offer.
 Activation requires a fresh v8 dossier,

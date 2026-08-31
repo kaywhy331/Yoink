@@ -5,6 +5,8 @@ const state = {
   editingMission: null,
   settingsDirty: false,
   attributionDirty: false,
+  affiliateRouting: null,
+  howlStoreQuery: "",
   identityDirty: false,
   observerRecipeDirty: false,
   editingOperatorAlertRuleId: "",
@@ -314,10 +316,13 @@ function renderActionPlatformAdmin() {
   $("#sourceChannelList").innerHTML = channels.map((channel) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(channel.name)}</h3><p>${escapeHtml(channel.provider)} · ${escapeHtml(channel.trustLevel.replaceAll("_", " "))}</p></div><span class="tag ${channel.health === "healthy" ? "good" : channel.health === "attention" ? "warning" : ""}">${escapeHtml(channel.health)}</span></div><div class="card-meta"><span class="tag">${Number(channel.acceptedEventCount || 0).toLocaleString()} accepted</span><span class="tag">${Number(channel.rejectedEventCount || 0).toLocaleString()} rejected</span><span class="tag">${Number(channel.falsePositiveCount || 0).toLocaleString()} false positive${Number(channel.falsePositiveCount || 0) === 1 ? "" : "s"}</span><span class="tag">${channel.accuracyBps == null ? "No accuracy sample" : `${(Number(channel.accuracyBps) / 100).toFixed(1)}% accuracy`}</span><span class="tag">p50 ${channel.p50ObservedToReceivedMs == null ? "—" : `${Number(channel.p50ObservedToReceivedMs).toLocaleString()} ms`}</span><span class="tag">p95 ${channel.p95ObservedToReceivedMs == null ? "—" : `${Number(channel.p95ObservedToReceivedMs).toLocaleString()} ms`}</span></div><div class="card-actions"><button class="button secondary" data-source-channel-status="${escapeHtml(channel.id)}" type="button">${channel.status === "active" ? "Pause" : "Activate"}</button><button class="button secondary" data-source-channel-trust="${escapeHtml(channel.id)}" type="button">${channel.trustLevel === "trusted_exact" ? "Set informational" : "Trust exact"}</button><button class="button quiet" data-source-channel-replay="${escapeHtml(channel.id)}" type="button">Replay dead letters</button></div></article>`).join("") || empty("No provider channels configured.");
   const windows = state.dropWindows || [];
   $("#dropWindowList").innerHTML = windows.map((window) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(window.title)}</h3><p>${escapeHtml(retailerName(window.retailerId))} · ${escapeHtml(window.kind.replaceAll("_", " "))} · ${Number(window.items?.length || 0).toLocaleString()} exact products</p></div><span class="tag ${window.status === "active" ? "good" : ""}">${escapeHtml(window.status)}</span></div><div class="card-meta"><span class="tag">Starts ${escapeHtml(relativeTime(window.startsAt))}</span><span class="tag">Closes ${escapeHtml(relativeTime(window.closesAt))}</span><span class="tag">${(Number(window.confidenceBps || 0) / 100).toFixed(1)}% confidence</span><span class="tag">${Number(window.items?.filter((item) => item.watch).length || 0)} watched</span></div></article>`).join("") || empty("No drop windows authored yet.");
-  $("#restockPatternList").innerHTML = (state.restockPatterns || []).map((pattern) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(pattern.title || pattern.listingId)}</h3><p>${escapeHtml(retailerName(pattern.retailerId))} · ${escapeHtml(pattern.retailerSku)} · ${escapeHtml(pattern.timezone)}</p></div><span class="tag">${Number(pattern.confidenceBps || 0) / 100}% confidence</span></div><div class="card-meta"><span class="tag">${Number(pattern.observationCount || 0)} observations</span><span class="tag">Median interval ${pattern.medianIntervalMinutes == null ? "—" : `${pattern.medianIntervalMinutes} min`}</span><span class="tag">Hours ${(pattern.localHourHistogram || []).map((item) => `${item.hour}:00 (${item.count})`).join(", ") || "—"}</span></div><div class="card-actions"><button class="button secondary" data-use-restock-pattern="${escapeHtml(pattern.id)}" type="button">Use in window</button></div></article>`).join("") || empty("No restock pattern has been computed yet.");
+  $("#restockPatternList").innerHTML = (state.restockPatterns || []).map((pattern) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(pattern.title || pattern.listingId)}</h3><p>${escapeHtml(retailerName(pattern.retailerId))} · ${escapeHtml(pattern.retailerSku)} · ${escapeHtml(pattern.timezone)}</p></div><span class="tag">${Number(pattern.confidenceBps || 0) / 100}% confidence</span></div><div class="card-meta"><span class="tag">${Number(pattern.sampleCount || 0)} observations</span><span class="tag">Median interval ${pattern.medianIntervalMinutes == null ? "—" : `${pattern.medianIntervalMinutes} min`}</span><span class="tag">Hours ${(pattern.histogram || []).map((count, hour) => ({ count: Number(count || 0), hour })).filter((item) => item.count > 0).map((item) => `${item.hour}:00 (${item.count})`).join(", ") || "—"}</span></div><div class="card-actions"><button class="button secondary" data-use-restock-pattern="${escapeHtml(pattern.id)}" type="button">Use in window</button></div></article>`).join("") || empty("No restock pattern has been computed yet.");
   $("#laneReadinessList").innerHTML = (state.laneReadiness || []).map((lane) => {
     const warning = lane.qualification?.warning || "none";
-    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(retailerName(lane.retailerId))}</h3><p>${escapeHtml(lane.expectedAdapterVersion)} · ${escapeHtml(lane.qualification?.status || "missing")}</p></div><span class="tag ${lane.readyForGuardedAdd ? "good" : "warning"}">${lane.readyForGuardedAdd ? "Ready" : warning !== "none" ? escapeHtml(warning.replaceAll("_", " ")) : "Needs setup"}</span></div><div class="card-meta">${(lane.checklist || []).map((check) => `<span class="tag ${check.ready ? "good" : ""}">${check.ready ? "✓" : "○"} ${escapeHtml(check.label)}</span>`).join("")}</div><div class="card-actions">${lane.candidate?.canonicalUrl ? `<a class="button secondary" href="${escapeHtml(lane.candidate.canonicalUrl)}" target="_blank" rel="noopener">Open prior passing SKU</a>` : ""}${lane.qualification?.status === "qualified" ? `<button class="button danger" data-retire-lane="${escapeHtml(lane.retailerId)}" type="button">Retire this lane</button>` : ""}</div></article>`;
+    const qualificationNeedsAttention = warning !== "none";
+    const readinessLabel = qualificationNeedsAttention ? warning.replaceAll("_", " ")
+      : lane.readyForGuardedAdd ? "Ready" : "Needs setup";
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(retailerName(lane.retailerId))}</h3><p>${escapeHtml(lane.expectedAdapterVersion)} · ${escapeHtml(lane.qualification?.status || "missing")}</p></div><span class="tag ${lane.readyForGuardedAdd && !qualificationNeedsAttention ? "good" : "warning"}">${escapeHtml(readinessLabel)}</span></div><div class="card-meta">${(lane.checklist || []).map((check) => `<span class="tag ${check.ready ? "good" : ""}">${check.ready ? "✓" : "○"} ${escapeHtml(check.label)}</span>`).join("")}</div><div class="card-actions">${lane.candidate?.canonicalUrl ? `<a class="button secondary" href="${escapeHtml(lane.candidate.canonicalUrl)}" target="_blank" rel="noopener">Open prior passing SKU</a>` : ""}${lane.qualification?.status === "qualified" ? `<button class="button danger" data-retire-lane="${escapeHtml(lane.retailerId)}" type="button">Retire this lane</button>` : ""}</div></article>`;
   }).join("") || empty("No guarded lanes are configured.");
   const retailerSelect = $("#dropWindowRetailer");
   if (!retailerSelect.options.length) retailerSelect.innerHTML = Object.entries(RETAILER_NAMES).map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`).join("");
@@ -769,12 +774,28 @@ function renderAttributionPolicies() {
     <div class="card-top"><div><h3>${escapeHtml(policy.retailerName)}</h3><p>${escapeHtml(policy.validationReason)}</p></div><span class="tag ${policy.valid ? "good" : "bad"}">${policy.valid ? "Configuration valid" : "Needs correction"}</span></div>
     <div class="form-grid">
       <label class="check-label"><input data-attribution-field="enabled" type="checkbox" ${policy.enabled ? "checked" : ""}><span>Affiliate route enabled</span></label>
-      <label><span>Provider</span><select data-attribution-field="provider"><option value="canonical" ${policy.provider === "canonical" ? "selected" : ""}>Canonical retailer URL</option><option value="howl" ${policy.provider === "howl" ? "selected" : ""}>Howl</option><option value="amazon_associates" ${policy.provider === "amazon_associates" ? "selected" : ""}>Amazon Associates</option></select></label>
+      <label><span>Provider</span><select data-attribution-field="provider"><option value="canonical" ${policy.provider === "canonical" ? "selected" : ""}>Canonical retailer URL</option><option value="howl" ${policy.provider === "howl" ? "selected" : ""} ${policy.howlEligible ? "" : "disabled"}>${policy.howlEligible ? `Howl · ${escapeHtml(policy.howlStoreName)}` : "Howl · unavailable for this store"}</option><option value="amazon_associates" ${policy.provider === "amazon_associates" ? "selected" : ""}>Amazon Associates</option></select></label>
       <label><span>Howl publisher slug</span><input data-attribution-field="publisherSlug" value="${escapeHtml(policy.publisherSlug)}" placeholder="collectwithdodo"></label>
       <label><span>Public article base URL</span><input data-attribution-field="articleBaseUrl" type="url" value="${escapeHtml(policy.articleBaseUrl)}" placeholder="https://yourdomain.com/products/"></label>
       <label><span>Amazon Associate tag</span><input data-attribution-field="associateTag" value="${escapeHtml(policy.associateTag)}" placeholder="your-tag-20"></label>
     </div>
   </article>`).join("");
+}
+
+function renderHowlStoreDirectory() {
+  const body = $("#howlStoreDirectory");
+  if (!body) return;
+  const stores = state.affiliateRouting?.stores || [];
+  const query = state.howlStoreQuery.trim().toLocaleLowerCase("en-US");
+  const visible = stores.filter((store) => !query
+    || String(store.storeName || "").toLocaleLowerCase("en-US").includes(query)
+    || String(store.website || "").toLocaleLowerCase("en-US").includes(query));
+  $("#howlStoreCount").textContent = `${stores.length.toLocaleString()} STORE${stores.length === 1 ? "" : "S"}`;
+  body.innerHTML = visible.length ? visible.map((store) => `<tr>
+    <td><strong>${escapeHtml(store.storeName)}</strong></td>
+    <td>${escapeHtml(store.website)}</td>
+    <td><span class="tag good">Howl eligible</span></td>
+  </tr>`).join("") : `<tr><td class="affiliate-directory-empty" colspan="3">No Howl stores match this search.</td></tr>`;
 }
 
 function renderSettings() {
@@ -1251,7 +1272,7 @@ function renderAdminChanges() {
 }
 
 function render() {
-  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderActionPlatformAdmin(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts(); renderOperationalTelemetry(); renderPostgresCutover(); renderBackgroundWork(); renderAdminChanges();
+  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderActionPlatformAdmin(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderHowlStoreDirectory(); renderAuthorization(); renderOperatorAlerts(); renderOperationalTelemetry(); renderPostgresCutover(); renderBackgroundWork(); renderAdminChanges();
 }
 
 async function storeFingerprint(retailerId, localStoreId) {
@@ -1350,7 +1371,14 @@ async function loadActionPlatformAdmin() {
 }
 
 async function refresh(reloadCollections = true) {
-  state.snapshot = await api("/api/v1/admin/snapshot");
+  const [snapshot, affiliateRouting] = await Promise.all([
+    api("/api/v1/admin/snapshot"),
+    state.affiliateRouting
+      ? Promise.resolve({ affiliateRouting: state.affiliateRouting })
+      : api("/api/v1/affiliate-routing")
+  ]);
+  state.snapshot = snapshot;
+  state.affiliateRouting = affiliateRouting.affiliateRouting || state.affiliateRouting;
   await Promise.all([loadOperationalTelemetry(), loadBackgroundWork(), loadAdminChanges(), loadActionPlatformAdmin()]);
   if (state.snapshot.authorization?.roleAdministrationEnabled === true) {
     const [users, roles] = await Promise.all([
@@ -1857,7 +1885,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_TARGET_ADD_V5"
+          confirmation: "ENABLE_TARGET_ADD_V6"
         })
       });
       await refresh();
@@ -1876,7 +1904,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_WALMART_ADD_V6"
+          confirmation: "ENABLE_WALMART_ADD_V7"
         })
       });
       await refresh();
@@ -1895,7 +1923,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_AMAZON_ADD_V8"
+          confirmation: "ENABLE_AMAZON_ADD_V9"
         })
       });
       await refresh();
@@ -1914,7 +1942,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_BESTBUY_ADD_V8"
+          confirmation: "ENABLE_BESTBUY_ADD_V9"
         })
       });
       await refresh();
@@ -2370,6 +2398,10 @@ $("#settingsForm").addEventListener("submit", async (event) => {
 });
 
 $("#attributionForm").addEventListener("input", () => { state.attributionDirty = true; });
+$("#howlStoreFilter").addEventListener("input", (event) => {
+  state.howlStoreQuery = event.currentTarget.value;
+  renderHowlStoreDirectory();
+});
 $("#attributionForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {

@@ -1,6 +1,6 @@
 # Yoink action backlog completion
 
-Release target: **1.16.1**
+Release target: **1.17.0**
 
 This matrix records the implementation and automated proof for backlog items
 Y01–Y30. “Complete” means the user-visible path, its bounded server or Chrome
@@ -45,7 +45,7 @@ manual checkout/order submission.
 | ID | Status | Implementation | Primary automated proof |
 | --- | --- | --- | --- |
 | Y21 | Complete | Deployment-bound Discord, Slack, or webhook connectors support Carted, Needs you, Missed, and Test events while storing only opaque endpoint references. Lifecycle events are generated at the shared job-transition boundary, including lease recovery and reviewed resolution. | `test/execution-repository.test.ts` (“connectors follow every shared action transition path”), `test/user-action-connector-dispatch.test.ts` |
-| Y22 | Complete | Calls combines live signals and scheduled windows, inline Quick add, multi-select profile application, queued-drop visibility, and Howl-attributed store links. | `apps/web/user.js`, `test/user-dashboard.test.ts` (“Calls combines…”) |
+| Y22 | Complete | Calls combines live signals and scheduled windows, inline Quick add, multi-select profile application, queued-drop visibility, and directory-gated Howl store links; unlisted registered stores remain direct. | `apps/web/user.js`, `packages/domain/src/howl-affiliate-stores.ts`, `test/user-dashboard.test.ts` (“Calls combines…”) |
 | Y23 | Complete | A read-only observer recognizes exact confirmation-page classes for all four guarded retailers and reports only action binding, retailer, page class, and timestamp—never order/query/page details. | `packages/database/src/order-confirmation-repository.ts`, `apps/extension/background.js`, `test/extension-runtime.test.ts` |
 | Y24 | Complete | Privacy policy/change notice are published; local deletion clears local and session storage, reads both areas back, and emits a verified receipt only when no keys remain. | `packages/database/src/privacy-compliance-repository.ts`, `apps/web/privacy.html`, `test/extension-runtime.test.ts`, privacy API/repository tests |
 | Y25 | Complete | Per-channel scorecards show unique signal count, latency, accuracy, and idempotent user-reported false positives bound to the exact source signal. | `packages/database/src/signal-provider-repository.ts`, `packages/database/src/signal-repository.ts`, `apps/web/user.js`, `apps/web/app.js`, `test/signal-provider.test.ts`, `test/user-dashboard.test.ts` |

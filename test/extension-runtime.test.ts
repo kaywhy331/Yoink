@@ -256,7 +256,7 @@ const selectedOffer = (childOfferKey: string, selectionState = "exact") => ({
 });
 
 const OBSERVATION = {
-  adapterVersion: "target-observer-v3",
+  adapterVersion: "target-observer-v4",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -276,7 +276,7 @@ const OBSERVATION = {
   cookie: "DO_NOT_SEND"
 };
 const AMAZON_OBSERVATION = {
-  adapterVersion: "amazon-observer-v7",
+  adapterVersion: "amazon-observer-v8",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -297,7 +297,7 @@ const AMAZON_OBSERVATION = {
   selectedOffer: selectedOffer("B0GYTRYV7P")
 };
 const WALMART_OBSERVATION = {
-  adapterVersion: "walmart-observer-v5",
+  adapterVersion: "walmart-observer-v6",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -315,7 +315,7 @@ const WALMART_OBSERVATION = {
   selectedOffer: selectedOffer("17354421975")
 };
 const BESTBUY_OBSERVATION = {
-  adapterVersion: "bestbuy-observer-v8",
+  adapterVersion: "bestbuy-observer-v9",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -602,7 +602,7 @@ function harness(options: HarnessOptions = {}) {
         lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
       } : null,
       runnerJob: {
-        adapterVersion: "target-add-v5",
+        adapterVersion: "target-add-v6",
         contractVersion: 1,
         jobId: "job_target_fixture",
         retailerId: "target",
@@ -1518,7 +1518,7 @@ function harness(options: HarnessOptions = {}) {
       const jobSuffix = jobsLeased === 1 ? "" : `_${jobsLeased}`;
       const leasedJob = options.amazonJob ? {
         contractVersion: 1,
-        adapterVersion: "amazon-add-v8",
+        adapterVersion: "amazon-add-v9",
         id: `job_amazon_fixture${jobSuffix}`,
         capabilityToken: "A".repeat(43),
         action: "add_to_cart",
@@ -1535,7 +1535,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.walmartJob ? {
         contractVersion: 1,
-        adapterVersion: "walmart-add-v6",
+        adapterVersion: "walmart-add-v7",
         id: `job_walmart_fixture${jobSuffix}`,
         capabilityToken: "W".repeat(43),
         action: "add_to_cart",
@@ -1552,7 +1552,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.bestBuyJob ? {
         contractVersion: 1,
-        adapterVersion: "bestbuy-add-v8",
+        adapterVersion: "bestbuy-add-v9",
         id: `job_bestbuy_fixture${jobSuffix}`,
         capabilityToken: "B".repeat(43),
         action: "add_to_cart",
@@ -1569,7 +1569,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : {
         contractVersion: 1,
-        adapterVersion: "target-add-v5",
+        adapterVersion: "target-add-v6",
         id: `job_target_fixture${jobSuffix}`,
         capabilityToken: "C".repeat(43),
         action: "add_to_cart",
@@ -1858,7 +1858,7 @@ test("the service worker records one sanitized Amazon exact-offer observation", 
   assert.ok(post);
   const body = JSON.parse(String(post.options.body)) as Record<string, unknown>;
   assert.equal(body.retailerSku, "B0GYTRYV7P");
-  assert.equal(body.adapterVersion, "amazon-observer-v7");
+  assert.equal(body.adapterVersion, "amazon-observer-v8");
   assert.equal(body.purchaseRouteReady, true);
   assert.equal("url" in body, false);
   assert.equal("cookie" in body, false);
@@ -1940,7 +1940,7 @@ for (const [failure, reasonCode] of [
     const body = JSON.parse(String(diagnosticPosts[0]?.options.body)) as Record<string, unknown>;
     assert.equal(body.retailerId, "amazon");
     assert.equal(body.retailerSku, "B0GYTRYV7P");
-    assert.equal(body.adapterVersion, "amazon-observer-v7");
+    assert.equal(body.adapterVersion, "amazon-observer-v8");
     assert.equal(body.operation, "observe");
     assert.equal(body.outcome, "failed");
     assert.equal(body.failureStage, "runner");
@@ -2538,7 +2538,7 @@ test("one domain-aware workflow inspects exactly once and routes all four guarde
   assert.equal(readOnly.injections.some((entry) => (entry.files as string[] | undefined)?.some((file) => file.includes("action.js"))), false);
 });
 
-test("the service worker captures observer-v5 evidence and rehearses Walmart add-v6 without clicking", async () => {
+test("the service worker captures observer-v6 evidence and rehearses Walmart add-v7 without clicking", async () => {
   const runtime = harness({ activeUrl: WALMART_PRODUCT_URL });
   const inspection = await runtime.send({ type: "yoink:inspect-retailer" });
   assert.equal(inspection.ok, true);
@@ -2551,20 +2551,20 @@ test("the service worker captures observer-v5 evidence and rehearses Walmart add
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/walmart"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "walmart-observer-v5");
+  assert.equal(observationBody.adapterVersion, "walmart-observer-v6");
   assert.equal(observationBody.retailerSku, "17354421975");
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/walmart-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "walmart-add-v6");
-  assert.equal(trialBody.observerVersion, "walmart-observer-v5");
+  assert.equal(trialBody.adapterVersion, "walmart-add-v7");
+  assert.equal(trialBody.observerVersion, "walmart-observer-v6");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("4499"), false);
   assert.equal(JSON.stringify(trialBody).includes(WALMART_PRODUCT_URL), false);
   assert.equal(JSON.stringify(trialBody).includes(TOKEN), false);
 });
 
-test("the service worker rehearses Amazon add-v8 without persisting its offer token", async () => {
+test("the service worker rehearses Amazon add-v9 without persisting its offer token", async () => {
   const runtime = harness({ activeUrl: AMAZON_PRODUCT_URL });
   const rehearsal = await runtime.send({ type: "yoink:rehearse-amazon" });
   assert.equal(rehearsal.ok, true);
@@ -2574,8 +2574,8 @@ test("the service worker rehearses Amazon add-v8 without persisting its offer to
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/amazon-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "amazon-add-v8");
-  assert.equal(trialBody.observerVersion, "amazon-observer-v7");
+  assert.equal(trialBody.adapterVersion, "amazon-add-v9");
+  assert.equal(trialBody.observerVersion, "amazon-observer-v8");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("offerListing"), false);
   assert.equal(JSON.stringify(trialBody).includes(TOKEN), false);
@@ -2588,7 +2588,7 @@ test("the service worker rehearses Amazon add-v8 without persisting its offer to
   assert.equal(JSON.stringify(rehearsalDiagnostic).includes("offerListing"), false);
 });
 
-test("the service worker captures observer-v8 evidence and rehearses Best Buy add-v8 without clicking", async () => {
+test("the service worker captures observer-v9 evidence and rehearses Best Buy add-v9 without clicking", async () => {
   const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL });
   const rehearsal = await runtime.send({ type: "yoink:rehearse-bestbuy" });
   assert.equal(rehearsal.ok, true);
@@ -2598,13 +2598,13 @@ test("the service worker captures observer-v8 evidence and rehearses Best Buy ad
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/bestbuy"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v8");
+  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v9");
   assert.equal(observationBody.retailerSku, "6588149");
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v8");
-  assert.equal(trialBody.observerVersion, "bestbuy-observer-v8");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v9");
+  assert.equal(trialBody.observerVersion, "bestbuy-observer-v9");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("699"), false);
   assert.equal(JSON.stringify(trialBody).includes(BESTBUY_PRODUCT_URL), false);
@@ -3377,6 +3377,34 @@ test("warm readiness rotates across every guarded retailer with bounded baseline
   assert.deepEqual(Object.keys(stored.tabs).sort(), ["amazon", "bestbuy", "target", "walmart"]);
   const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
+});
+
+test("warm readiness does not repeatedly replace a challenged retailer tab redirected away from cart", async () => {
+  const checkoutUrl = "https://www.bestbuy.com/checkout/r/fast-track";
+  const runtime = harness({ permission: true, activeUrl: checkoutUrl });
+  runtime.storage.yoinkRetailerActionTabsV1 = {
+    schemaVersion: 2,
+    tabs: {
+      bestbuy: {
+        tabId: 17,
+        cartBaseline: null,
+        signedInState: "challenged"
+      }
+    }
+  };
+  runtime.storage.yoinkWarmReadinessCursorV1 = 3;
+
+  const result = await runtime.invokeBackground("runWarmReadinessCycle()");
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    warmed: false,
+    retailerId: "bestbuy",
+    signedInState: "challenged",
+    reason: "manual_action_required"
+  });
+  assert.deepEqual(runtime.tabUrls(), [checkoutUrl]);
+  assert.equal(runtime.injections.some((entry) =>
+    (entry.args as unknown[] | undefined)?.[0] === "inspectBestBuyCartBaseline"), false);
+  assert.equal(runtime.storage.yoinkWarmReadinessCursorV1, 0);
 });
 
 test("drop-window observation is exact, read-only, bounded, and closes its inactive tab", async () => {

@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.16.1 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.17.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,6 +15,17 @@ new lane. Every lane is restricted to first-party offers, quantity one, and the
 exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.17.0 repairs false-negative qualification evidence across current
+Target, Walmart, Amazon, and Best Buy layouts without weakening any mutation
+gate. A curated 160-store, exact-host and locale-path-aware Howl directory now
+controls affiliate wrapping while every registered store outside the directory
+keeps its direct retailer URL. Users can delete obsolete purchase plans through
+a typed confirmation while action, spend, and audit history remains retained;
+unsafe in-flight work still blocks deletion. The same release corrects
+qualification-result and readiness copy, repairs admin restock projections, and
+prevents challenged retailer warm-up tabs from repeatedly spawning replacements.
+Checkout and order submission remain manual.
 
 Version 1.16.1 closes the independent Y01–Y30 acceptance audit. A proven local
 Cart-ready handoff no longer waits for control-plane reporting; drop-window
@@ -141,11 +152,12 @@ click read-only inspections. Best Buy observer v7 distinguishes a passive
 high-demand label from an actual demand gate and can collapse a sticky Add
 duplicate only when one non-sticky primary action remains bound to one exact
 SKU, price, seller class, and selected fulfillment; Best Buy add v6 therefore
-requires fresh qualification. Every retailer link rendered by the user
-dashboard is wrapped as a Howl ClickMate URL with the exact destination,
-`collectwithdodo` publisher slug, readable page name, and canonical dashboard
-URL. The dashboard visibly discloses that qualifying purchases may earn a
-commission.
+requires fresh qualification. User-dashboard destinations are matched against
+the curated, path-aware Howl store directory. Only matching destinations are
+wrapped as a Howl ClickMate URL with the exact destination, `collectwithdodo`
+publisher slug, readable page name, and canonical dashboard URL; all other
+registered retailers open directly until their provider integration exists.
+The admin Settings view exposes the same routing directory used by the matcher.
 
 Version 1.8.0 makes Shipping the deterministic fulfillment default throughout
 mission evaluation, persistence, qualification, and browser execution. Pickup
@@ -2722,7 +2734,7 @@ page memory and are discarded; only readiness and a reason code are persisted.
 These observations never authorize mutation by themselves.
 
 Walmart Collectibles Draw uses a separate `walmart-draw-observer-v1` contract,
-not the normal Walmart product observer or `walmart-add-v6` qualification
+not the normal Walmart product observer or `walmart-add-v7` qualification
 dossier. From the exact `/shop/collectibles/draw` hub it records at most 24
 normalized cards and reconstructs canonical item URLs server-side. Draw cards
 are matched to private missions only by exact Walmart item ID. They are never
@@ -2772,32 +2784,36 @@ seller, fulfillment, quantity, price-cap, offer-scope, and offer-token checks
 all pass. Duplicate candidates fail closed. Remote observer recipes remain
 read-only shadow evidence and cannot supply click targets.
 
-Target's qualified `target-add-v5` runner requires:
+Target's qualified `target-add-v6` runner requires:
 
 - live execution mode, Actions unpaused, an online paired device, and a current
   adapter qualification;
 - an immutable exact TCIN job with unit/total caps;
 - quantity one, Target as seller, and exact Shipping or explicitly configured Pickup fulfillment;
 - a complete pre-add baseline of at most 25 unique SKU-and-quantity lines;
-- exact binding to Target's current fulfillment tiles and TCIN-scoped Add control;
+- exact binding to Target's current fulfillment tiles and either its TCIN-scoped
+  Add control or the one unique product-level Add control on the exact TCIN page;
 - guarded selection of available Shipping, or available same-day Delivery when
   Shipping is unavailable, followed by immediate live SKU, stock, seller, price,
   and fulfillment revalidation;
 - a durable `adding` receipt before one click;
 - an exact +1 delta afterward, with every baseline quantity unchanged.
 
-Walmart's separately gated `walmart-add-v6` runner applies the same immutable
+Walmart's separately gated `walmart-add-v7` runner applies the same immutable
 job, bounded-baseline, at-most-once, cart-delta, and recovery boundaries. In addition,
 the live buy box must exactly match Shipping or explicitly configured Pickup,
 Walmart must be the seller, and
 virtual queues, memberships, location prompts, authentication, MFA, or security
-challenges stop the job before mutation.
+challenges stop the job before mutation. Walmart's current split layout can
+bind its locally serialized selected offer only when exact item ID, offer ID,
+new condition, USD price, internal Walmart seller, selected in-stock
+fulfillment, quantity one, and one primary Add control all agree.
 
-Amazon's separately gated `amazon-add-v8` runner requires an exact ASIN,
+Amazon's separately gated `amazon-add-v9` runner requires an exact ASIN,
 Amazon.com as first-party seller and an exact Shipping or explicitly configured
 Pickup offer, quantity one,
 a provable Amazon cart baseline, and a unique offer token scoped with the price,
-seller evidence, shipping evidence, and Add control. Observer v7 binds the
+seller evidence, shipping evidence, and Add control. Observer v8 binds the
 nearest exact product form before considering bounded local fallbacks, including
 when Amazon deeply nests the Add control. Canonical `offerListingID` checkout
 fields take precedence when they agree; `offeringID.1` is used only when the
@@ -2813,13 +2829,13 @@ pre-click check. Only the Add-to-Cart control can be clicked; Buy Now navigation
 is never used. The resulting cart must show exactly one authorized quantity
 added while every baseline quantity remains unchanged.
 
-Best Buy's separately gated `bestbuy-add-v8` runner requires an exact numeric
+Best Buy's separately gated `bestbuy-add-v9` runner requires an exact numeric
 SKU from a current or legacy product URL, explicit visible `Sold by Best Buy`
 evidence in the same bounded offer scope as one Add-to-Cart control and price,
 an exact Shipping or explicitly configured Pickup selection, and quantity one.
 `Sold & shipped by` marketplace offers, mismatched fulfillment, high-demand
 queues, location/account/security blocks, and ambiguous or conflicting SKU
-evidence stop before mutation. Observer v8
+evidence stop before mutation. Observer v9
 recognizes current Best Buy test/automation attributes and safely reports when
 a native Add-intent control exists outside the known selector set, allowing the
 sanitized repair queue to distinguish selector drift from a genuinely missing

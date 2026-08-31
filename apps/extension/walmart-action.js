@@ -234,7 +234,7 @@ var YoinkWalmartActionModule = (() => {
   }
 
   // packages/contracts/src/index.ts
-  var WALMART_ADD_ADAPTER_VERSION = "walmart-add-v6";
+  var WALMART_ADD_ADAPTER_VERSION = "walmart-add-v7";
 
   // packages/browser-adapters/src/retailers.ts
   function fanaticsProductId(url) {
@@ -771,7 +771,7 @@ var YoinkWalmartActionModule = (() => {
       "#challenge-running",
       "#challenge-stage",
       "[class*='cf-chl-' i]"
-    ])) || /verify you are human|robot or human|activate and hold the button|unusual traffic|security challenge|additional security check is required|protected and accelerated by imperva|enter the characters you see|checking your browser|performing security verification|enable javascript and cookies to continue|sorry, you have been blocked/i.test(text(document.body, 8e4));
+    ])) || /verify you are human|robot or human|activate and hold the button|unusual traffic|security challenge|additional security check is required|protected and accelerated by imperva|enter the characters you see|checking your browser|performing security verification|enable javascript and cookies to continue|sorry, you have been blocked/i.test(observableText(document.body, 8e4));
   }
   function retailerUnavailableShell(document) {
     const title = String(document.title || "").replace(/\s+/g, " ").trim();
@@ -1242,6 +1242,83 @@ var YoinkWalmartActionModule = (() => {
     const scopedText = text(root, 3e4);
     return retailer.firstPartyPattern.test(scopedText) || retailer.marketplacePattern.test(scopedText);
   }
+  function objectValue(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  }
+  function walmartQuantityOne(root) {
+    const controls = [...root.querySelectorAll(
+      "select[name*='quantity' i], select[aria-label*='quantity' i], input[name*='quantity' i], input[aria-label*='quantity' i]"
+    )].filter((element) => element.tagName === "INPUT" || visible(element));
+    if (!controls.length) return true;
+    return controls.every((control) => String(control.value || "").trim() === "1");
+  }
+  function walmartStructuredOffer(document, retailer, expectedSku, requiredFulfillment) {
+    const scripts = [...document.querySelectorAll("script#__NEXT_DATA__")];
+    if (scripts.length !== 1 || scripts[0]?.getAttribute("type") !== "application/json") return null;
+    const script = scripts[0];
+    const serialized = String(script?.textContent || "").trim();
+    if (!serialized || serialized.length > 2e6) return null;
+    let root = null;
+    try {
+      root = objectValue(JSON.parse(serialized));
+    } catch {
+      return null;
+    }
+    const props = objectValue(root?.props);
+    const pageProps = objectValue(props?.pageProps);
+    const initialData = objectValue(pageProps?.initialData);
+    const data = objectValue(initialData?.data);
+    const product = objectValue(data?.product);
+    if (!product || String(product.usItemId || "") !== expectedSku) return null;
+    if (product.availabilityStatus !== "IN_STOCK" || product.itemPageAvailabilityStatus !== "IN_STOCK" || product.showAtc !== true || product.isConditionNew !== true) return null;
+    const selectedOfferId = String(product.selectedOfferId || "").trim();
+    const offerId = String(product.offerId || "").trim();
+    if (!/^[A-Za-z0-9_-]{8,200}$/.test(selectedOfferId) || offerId !== selectedOfferId) return null;
+    const priceInfo = objectValue(product.priceInfo);
+    const currentPrice = objectValue(priceInfo?.currentPrice);
+    const dollars = Number(currentPrice?.price);
+    if (!Number.isFinite(dollars) || dollars <= 0 || currentPrice?.currencyUnit !== "USD") return null;
+    const unitPriceCents = Math.round(dollars * 100);
+    if (Math.abs(dollars * 100 - unitPriceCents) > 1e-3) return null;
+    if (product.sellerType !== "INTERNAL" || !/^walmart(?:\.com)?$/i.test(String(product.sellerName || "").trim())) return null;
+    const visibleSeller = queryVisible(document, retailer.sellerSelectors);
+    const visibleSellerText = sellerElementText(visibleSeller, 2e3);
+    if (visibleSellerText && retailer.marketplacePattern.test(visibleSellerText) && !retailer.firstPartyPattern.test(visibleSellerText)) return null;
+    const conditionOffers = Array.isArray(product.conditionOffers) ? product.conditionOffers.map(objectValue).filter(Boolean) : [];
+    const exactConditionOffers = conditionOffers.filter((conditionOffer2) => conditionOffer2?.offerId === selectedOfferId);
+    if (exactConditionOffers.length !== 1 || !exactConditionOffers[0]) return null;
+    const conditionOffer = exactConditionOffers[0];
+    const conditionAvailability = objectValue(conditionOffer.availabilityStatus);
+    const condition = objectValue(conditionOffer.condition);
+    const conditionPrice = objectValue(conditionOffer.price);
+    if (conditionAvailability?.value !== "IN_STOCK" || Number(condition?.groupCode) !== 1 || Math.round(Number(conditionPrice?.price) * 100) !== unitPriceCents) return null;
+    const expectedType = requiredFulfillment === "pickup" ? "PICKUP" : "SHIPPING";
+    const fulfillmentOptions = Array.isArray(product.fulfillmentOptions) ? product.fulfillmentOptions.map(objectValue).filter(Boolean) : [];
+    const selectedOptions = fulfillmentOptions.filter((option) => option?.type === expectedType && option?.selected === true);
+    if (selectedOptions.length !== 1 || !selectedOptions[0]) return null;
+    const fulfillmentOption = selectedOptions[0];
+    if (fulfillmentOption.availabilityStatus !== "IN_STOCK" || fulfillmentOption.viewOnly === true || fulfillmentOption.restricted === true || fulfillmentOption.intent === false) return null;
+    for (const limit of [fulfillmentOption.maxOrderQuantity, fulfillmentOption.orderLimit, product.orderLimit]) {
+      if (limit !== null && limit !== void 0 && (!Number.isFinite(Number(limit)) || Number(limit) < 1)) return null;
+    }
+    const controls = candidateControls(document, retailer).filter((control2) => !control2.closest(WALMART_MERCHANDISING_SCOPE));
+    const primary = controls.filter((control2) => Boolean(control2.closest(WALMART_PRIMARY_SCOPE)));
+    const pool = primary.length > 0 ? primary : controls;
+    if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document)) return null;
+    const control = pool[0];
+    const offerRoot = control.closest(WALMART_PRIMARY_SCOPE) || control.closest("main") || control.parentElement;
+    if (!offerRoot) return null;
+    return {
+      control,
+      fulfillment: expectedType === "PICKUP" ? "pickup" : "shipping",
+      offerRoot,
+      structuredOffer: {
+        unitPriceCents,
+        sellerName: "Walmart",
+        sellerType: "first_party"
+      }
+    };
+  }
   function walmartOfferScope(control, retailer, expectedSku) {
     if (control.closest(WALMART_MERCHANDISING_SCOPE)) return null;
     const primaryScope = Boolean(control.closest(WALMART_PRIMARY_SCOPE));
@@ -1274,7 +1351,7 @@ var YoinkWalmartActionModule = (() => {
     const pool = exact.length > 0 ? exact : primary.length > 0 ? primary : scoped;
     const matching = pool.filter((candidate) => candidate.fulfillment === expectedFulfillment);
     const selected = matching.length === 1 ? matching[0] : null;
-    return selected || { control: null, fulfillment: "unknown", offerRoot: null };
+    return selected || walmartStructuredOffer(document, retailer, expectedSku, requiredFulfillment) || { control: null, fulfillment: "unknown", offerRoot: null };
   }
   function bestBuySkuEvidence(root) {
     const skus = /* @__PURE__ */ new Set();
@@ -1454,19 +1531,32 @@ var YoinkWalmartActionModule = (() => {
     const fulfillmentAllowed2 = selected.fulfillment === expectedFulfillment;
     return fulfillmentAllowed2 && actionable(selected.control) ? selected.control : null;
   }
+  function explicitlyUnavailableOffer(document) {
+    const selectors = [
+      "[data-testid*='availability' i]",
+      "[data-automation-id*='availability' i]",
+      "[data-testid*='out-of-stock' i]",
+      "[data-automation-id*='out-of-stock' i]",
+      "[itemprop='availability']",
+      "button[disabled]"
+    ];
+    return [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible(element) && !merchandisingControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
+      `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
+    ));
+  }
   function observeRetailerOffer(document, urlValue, retailerId, expectedSku, requiredFulfillment = "shipping", observedAt = (/* @__PURE__ */ new Date()).toISOString()) {
     const retailer = CONFIGS[retailerId];
     const pageSku = extractRetailerSku(retailerId, urlValue);
     const blocked = retailerInteractiveBlock(document, urlValue);
     const selected = pageSku === expectedSku ? selectedControl(document, retailer, requiredFulfillment, expectedSku) : { control: null, fulfillment: "unknown", offerRoot: null };
     const retainBoundManualEvidence = blocked === "high_demand" && pageSku === expectedSku && Boolean(selected.offerRoot);
-    const seller = blocked && !retainBoundManualEvidence ? { sellerName: "", sellerType: "unknown" } : sellerEvidence(document, selected.control, retailer, selected.offerRoot);
+    const seller = blocked && !retainBoundManualEvidence ? { sellerName: "", sellerType: "unknown" } : selected.structuredOffer ? { sellerName: selected.structuredOffer.sellerName, sellerType: selected.structuredOffer.sellerType } : sellerEvidence(document, selected.control, retailer, selected.offerRoot);
     const priceRoot = selected.offerRoot || selected.control?.closest("form, [data-testid*='buy-box' i], [data-automation-id*='buy-box' i], #buybox, main") || null;
-    const unitPriceCents = (!blocked || retainBoundManualEvidence) && priceRoot ? adaptiveReadPrice(priceRoot, retailer) ?? adaptiveReadPrice(document, retailer) : null;
+    const unitPriceCents = (!blocked || retainBoundManualEvidence) && priceRoot ? selected.structuredOffer?.unitPriceCents ?? adaptiveReadPrice(priceRoot, retailer) ?? adaptiveReadPrice(document, retailer) : null;
     const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
     const canAdd = selectedControlActionable && !blocked;
     const controlText = text(selected.control, 300);
-    const availability = blocked && !(retainBoundManualEvidence && selectedControlActionable) ? "unknown" : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock" : "out_of_stock";
+    const availability = blocked && !(retainBoundManualEvidence && selectedControlActionable) ? "unknown" : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock" : retailerId === "walmart" ? explicitlyUnavailableOffer(document) ? "out_of_stock" : "unknown" : "out_of_stock";
     return {
       contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
       observedAt,

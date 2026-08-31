@@ -234,6 +234,12 @@ test("enabled policies reject untrusted article URLs and invalid provider-retail
     const mismatched = configuredPolicies();
     mismatched[0] = { ...mismatched[0]!, provider: "amazon_associates", associateTag: "tag-20" };
     assert.throws(() => attribution.replacePolicies(mismatched), /valid only for Amazon/);
+    const unlistedHowlStore = configuredPolicies();
+    unlistedHowlStore[3] = {
+      ...unlistedHowlStore[3]!, enabled: true, provider: "howl",
+      publisherSlug: "collectwithdodo", articleBaseUrl: "https://example.test/products/"
+    };
+    assert.throws(() => attribution.replacePolicies(unlistedHowlStore), /Howl is not available for this store/);
   } finally {
     db.close();
   }

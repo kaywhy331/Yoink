@@ -4,6 +4,7 @@ import type { BackgroundWorkerPrincipal } from "../../contracts/src/background-w
 import type { AttributionPolicyUpdateInput } from "../../contracts/src/index.js";
 import {
   attributionPolicyValidity,
+  howlAffiliateStoreForRetailer,
   isAttributionProvider,
   normalizedArticleBaseUrl
 } from "../../domain/src/attribution.js";
@@ -55,6 +56,12 @@ export const POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS = Object.freeze([
 export const POSTGRES_SIGNAL_ATTRIBUTION_POLICY_PROVIDERS = Object.freeze([
   "canonical", "howl", "amazon_associates"
 ] as const);
+
+export const POSTGRES_SIGNAL_ATTRIBUTION_POLICY_HOWL_RETAILERS = Object.freeze(
+  POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS.filter(
+    (retailerId) => howlAffiliateStoreForRetailer(retailerId) !== null
+  )
+);
 
 const MAXIMUM_REQUEST_PAYLOAD_BYTES = 65_536;
 const SAFE_SCHEMA = /^[a-z][a-z0-9_]{2,62}$/;
@@ -581,7 +588,8 @@ BEGIN
   -- a disabled policy or a 'canonical' policy is always valid, so only an
   -- *enabled* 'howl' or 'amazon_associates' policy is checked further here.
   -- This reproduces the pattern-shaped rules exactly (SLUG_PATTERN,
-  -- TAG_PATTERN, the amazon-only retailer restriction, and a structural
+  -- TAG_PATTERN, the Howl store-directory restriction, the amazon-only
+  -- retailer restriction, and a structural
   -- https://.../ shape for the article base URL) but does not reproduce
   -- \`normalizedArticleBaseUrl\`'s full URL-object semantics (no
   -- credentials, no fragment, no query string, exact trailing-slash
@@ -594,7 +602,8 @@ BEGIN
     WHERE (entry.value->>'enabled')::boolean
       AND (
         (entry.value->>'provider' = 'howl' AND (
-          entry.value->>'publisherSlug' !~ '^[a-z0-9][a-z0-9_-]{1,79}$'
+          entry.value->>'retailerId' NOT IN (${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_HOWL_RETAILERS.map((retailerId) => `'${retailerId}'`).join(", ")})
+          OR entry.value->>'publisherSlug' !~ '^[a-z0-9][a-z0-9_-]{1,79}$'
           OR entry.value->>'articleBaseUrl' = ''
           OR entry.value->>'articleBaseUrl' !~ '^https://[^\\s#]+/$'
         ))

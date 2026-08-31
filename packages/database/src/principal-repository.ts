@@ -23,7 +23,7 @@ const ATTRIBUTION_DEFAULTS = [
   ["target", "howl", "collectwithdodo", "", ""],
   ["walmart", "howl", "collectwithdodo", "", ""],
   ["amazon", "amazon_associates", "", "", "pokemon-restocks-20"],
-  ["bestbuy", "howl", "collectwithdodo", "", ""],
+  ["bestbuy", "canonical", "", "", ""],
   ["disney", "canonical", "", "", ""],
   ["ravensburger", "canonical", "", "", ""],
   ["riot", "canonical", "", "", ""],

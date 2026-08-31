@@ -3,8 +3,25 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { createRequire } from "node:module";
+import {
+  HOWL_AFFILIATE_ENDPOINT,
+  HOWL_AFFILIATE_PROTOCOL_VERSION,
+  HOWL_AFFILIATE_STORES,
+  HOWL_DEFAULT_PUBLISHER_SLUG
+} from "../packages/domain/src/howl-affiliate-stores.js";
 
 const require = createRequire(import.meta.url);
+const AFFILIATE_ROUTING_FIXTURE = {
+  protocolVersion: HOWL_AFFILIATE_PROTOCOL_VERSION,
+  endpoint: HOWL_AFFILIATE_ENDPOINT,
+  publisherSlug: HOWL_DEFAULT_PUBLISHER_SLUG,
+  stores: HOWL_AFFILIATE_STORES,
+  registeredRetailerDomains: [
+    "target.com", "walmart.com", "amazon.com", "bestbuy.com", "disneystore.com",
+    "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
+    "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
+  ]
+};
 const { JSDOM } = require("jsdom") as {
   JSDOM: new (html: string, options: Record<string, unknown>) => {
     window: Window & typeof globalThis & { close(): void; eval(source: string): unknown };
@@ -38,6 +55,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
   const posts: Array<Record<string, unknown>> = [];
   const preflights: Array<Record<string, unknown>> = [];
   const patches: Array<Record<string, unknown>> = [];
+  const deletions: Array<Record<string, unknown>> = [];
   const transitions: Array<Record<string, unknown>> = [];
   let created = false;
   let transitioned = false;
@@ -164,6 +182,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     }]
   };
   const payloadFor = (path: string) => {
+    if (path === "/api/v1/affiliate-routing") return { affiliateRouting: AFFILIATE_ROUTING_FIXTURE };
     if (path === "/api/v1/user/overview") return overview;
     if (path === "/api/v1/user/privacy") return { inventory: {
       totalRecords: 12,
@@ -223,6 +242,11 @@ test("guided dashboard setup does not create a plan before review and submits ex
           validForSeconds: 300
         } }) };
       }
+      if (path === "/api/v1/user/purchase-intents/mission_dashboard_test" && options.method === "DELETE") {
+        deletions.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
+        created = false;
+        return { ok: true, status: 200, json: async () => ({ deletion: { id: "mission_dashboard_test", deleted: true } }) };
+      }
       if (options.method === "POST") {
         posts.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
         created = true;
@@ -236,6 +260,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     }
   });
   Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
+  Object.defineProperty(browser, "confirm", { configurable: true, value: () => true });
   Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
     configurable: true,
     value(this: HTMLDialogElement) { this.setAttribute("open", ""); }
@@ -420,6 +445,16 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.equal((monitorOnlyTarget.querySelector('[data-field="enabled"]') as HTMLInputElement).disabled, true);
     assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /explicit Pickup choice was retained/);
     editDialog.close();
+
+    assert.equal(editForm.querySelector('option[value="archived"]'), null);
+    (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(editDialog.hasAttribute("open"), true));
+    (browser.document.querySelector("#deletePlanButton") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(deletions.length, 1));
+    assert.deepEqual(deletions[0], { confirmation: "DELETE_PURCHASE_PLAN" });
+    await eventually(() => assert.equal(editDialog.hasAttribute("open"), false));
+    await eventually(() => assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /no purchase plans/i));
+    assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /purchase plan deleted/i);
   } finally {
     browser.close();
   }
@@ -466,6 +501,9 @@ test("the user dashboard reviews quarantined store details with closed, revocabl
   Object.defineProperty(browser, "fetch", {
     configurable: true,
     value: async (path: string, options: { method?: string; body?: string } = {}) => {
+      if (path === "/api/v1/affiliate-routing") {
+        return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
+      }
       if (options.method === "POST" && path.includes("/community/recovery-evidence/")) {
         const body = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
         reviews.push({ path, body });
@@ -599,6 +637,9 @@ test("quick add creates one defaulted plan through server preflight without open
   Object.defineProperty(browser, "fetch", {
     configurable: true,
     value: async (path: string, options: { method?: string; body?: string } = {}) => {
+      if (path === "/api/v1/affiliate-routing") {
+        return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
+      }
       if (path === "/api/v1/user/purchase-intents/preflight" && options.method === "POST") {
         const requested = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
         preflights.push(requested);
@@ -819,6 +860,9 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
   Object.defineProperty(browser, "fetch", {
     configurable: true,
     value: async (path: string, options: { method?: string; body?: string } = {}) => {
+      if (path === "/api/v1/affiliate-routing") {
+        return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
+      }
       if (path === "/api/v1/user/source-feedback/false-positive" && options.method === "POST") {
         feedback.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
         falsePositiveReported = true;

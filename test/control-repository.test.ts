@@ -196,6 +196,110 @@ test("guided purchase setup creates one reviewed revision with only the chosen e
   }
 });
 
+test("purchase plans delete from active use while retaining history and can be explicitly recreated", () => {
+  const db = new YoinkDatabase();
+  const now = new Date("2026-08-31T18:00:00.000Z").getTime();
+  try {
+    const catalog = new CatalogRepository(db);
+    const selected = catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "delete-plan-product",
+      sourceListingId: "delete-plan-listing",
+      title: "Delete Purchase Plan Fixture",
+      retailerId: "target",
+      retailerSku: "95280998",
+      canonicalUrl: "https://www.target.com/p/-/A-95280998",
+      listingStatus: "in_stock",
+      executionSupported: true,
+      msrpCents: 2500
+    }, now);
+    const control = new ControlRepository(db);
+    const created = control.createConfiguredMission({
+      contractVersion: 1,
+      listingId: selected.listing.id,
+      targetQuantity: 1,
+      maxUnitPriceCents: 3000,
+      maxAllInCents: 3000,
+      actionCeiling: "notify",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, now);
+    const missionId = created.mission.id;
+
+    assert.throws(() => control.deleteMission(missionId, {
+      confirmation: "DELETE_PURCHASE_PLAN_WRONG" as "DELETE_PURCHASE_PLAN"
+    }), /Confirm that you want to permanently remove/);
+    const deletion = control.deleteMission(missionId, {
+      confirmation: "DELETE_PURCHASE_PLAN"
+    }, now + 1_000);
+    assert.deepEqual(deletion, {
+      id: missionId,
+      deleted: true,
+      cancelledPendingJobCount: 0,
+      cancelledWatchItemCount: 0
+    });
+    assert.equal(control.missionDetail(missionId), null);
+    assert.equal(control.missionCount(), 0);
+    assert.deepEqual(control.listMissions(), []);
+    assert.equal(control.findMissionForListing(selected.listing.id)?.status, "deleted");
+    assert.throws(() => control.updateMission(missionId, {
+      status: "active",
+      targetQuantity: 1,
+      targets: []
+    }), /mission does not exist/);
+    assert.equal(db.get<{ status: string }>("SELECT status FROM missions WHERE id = ?", missionId)?.status, "deleted");
+    assert.equal(db.get<{ enabled: number }>("SELECT enabled FROM mission_targets WHERE mission_id = ?", missionId)?.enabled, 0);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM mission_intent_revisions WHERE mission_id = ?",
+      missionId
+    )?.count, 1);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE correlation_id = ? AND event_type = 'mission_deleted'",
+      missionId
+    )?.count, 1);
+
+    const preview = control.previewConfiguredMission({
+      contractVersion: 2,
+      listingId: selected.listing.id,
+      targetQuantity: 2,
+      maxUnitPriceCents: 3200,
+      maxAllInCents: 6400,
+      actionCeiling: "notify",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 60,
+      confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN"
+    }, now + 2_000);
+    assert.equal(preview.noPurchasePlanSaved, true);
+    const recreated = control.createConfiguredMission({
+      contractVersion: 1,
+      listingId: selected.listing.id,
+      targetQuantity: 2,
+      maxUnitPriceCents: 3200,
+      maxAllInCents: 6400,
+      actionCeiling: "notify",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 60,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, now + 3_000);
+    assert.equal(recreated.created, true);
+    assert.equal(recreated.mission.id, missionId);
+    assert.equal(recreated.mission.status, "active");
+    assert.equal(recreated.mission.targetQuantity, 2);
+    assert.equal(control.missionCount(), 1);
+    assert.equal((control.missionDetail(missionId) as { intentPolicy: { cooldownSeconds: number } }).intentPolicy.cooldownSeconds, 60);
+  } finally {
+    db.close();
+  }
+});
+
 test("purchase-plan preflight returns authoritative cost and readiness inputs without writing purchase state", () => {
   const db = new YoinkDatabase();
   const now = new Date("2026-08-25T18:00:00.000Z").getTime();

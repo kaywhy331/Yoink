@@ -78,7 +78,7 @@ test("Target product observation binds the exact TCIN, offer, seller, and fulfil
   assert.equal(marketplace.unitPriceCents, 8999);
   const wrongSku = observeTargetOffer(fixture("product-first-party.html"), PRODUCT_URL, "9999999999", "shipping", NOW);
   assert.equal(wrongSku.addControlActionable, false);
-  assert.equal(wrongSku.availability, "out_of_stock");
+  assert.equal(wrongSku.availability, "unknown");
 });
 
 test("Target product observation ignores hidden, recommended, and wrong-SKU controls", () => {
@@ -90,7 +90,41 @@ test("Target product observation ignores hidden, recommended, and wrong-SKU cont
   </main></body>`, { url: PRODUCT_URL }).window.document;
   const observation = observeTargetOffer(document, PRODUCT_URL, "1011483414", "shipping", NOW);
   assert.equal(observation.addControlActionable, false);
-  assert.equal(observation.availability, "out_of_stock");
+  assert.equal(observation.availability, "unknown");
+});
+
+test("Target recovers the hydrated fulfillment layout when the exact page has one semantic Add control", () => {
+  const document = new JSDOM(`<body><main>
+    <div data-test="product-price">$34.99</div>
+    <section aria-label="Fulfillment" data-test="@web/AddToCart/FulfillmentSection" role="region">
+      <button type="button" data-test="fulfillment-cell-pickup" aria-label="pickup - unselected - Available today">Pickup</button>
+      <button type="button" data-test="fulfillment-cell-delivery" aria-label="delivery - unselected - Not available">Delivery</button>
+      <button type="button" data-test="fulfillment-cell-shipping" aria-label="shipping - selected - Arrives tomorrow" aria-selected="true">Shipping</button>
+      <button type="button">Add to cart</button>
+    </section>
+  </main></body>`, { url: PRODUCT_URL }).window.document;
+  const observation = observeTargetOffer(document, PRODUCT_URL, "1011483414", "shipping", NOW);
+  assert.deepEqual({
+    availability: observation.availability,
+    price: observation.unitPriceCents,
+    seller: observation.sellerName,
+    sellerType: observation.sellerType,
+    fulfillment: observation.fulfillment,
+    actionable: observation.addControlActionable
+  }, {
+    availability: "in_stock",
+    price: 3499,
+    seller: "Target",
+    sellerType: "first_party",
+    fulfillment: "shipping",
+    actionable: true
+  });
+  assert.equal(targetAddControl(document, PRODUCT_URL, "1011483414", "shipping")?.textContent, "Add to cart");
+
+  document.querySelector("[aria-label='Fulfillment']")?.setAttribute("data-tcin", "9999999999");
+  const conflicting = observeTargetOffer(document, PRODUCT_URL, "1011483414", "shipping", NOW);
+  assert.equal(conflicting.addControlActionable, false);
+  assert.equal(conflicting.availability, "unknown");
 });
 
 test("a marketplace recommendation cannot poison first-party evidence in the exact Target buy box", () => {
@@ -171,6 +205,8 @@ test("Target observation classifies authentication, MFA, location, membership, q
   const challenge = page(`<iframe src="https://security.example/captcha"></iframe>`);
   assert.equal(targetSecurityChallenge(challenge), true);
   assert.equal(targetInteractiveBlock(challenge), "unknown");
+  const hiddenChallengeCopy = page(`<script>window.copy = "additional security challenge";</script><main>Product details</main>`);
+  assert.equal(targetSecurityChallenge(hiddenChallengeCopy), false);
   assert.equal(targetInteractiveBlock(page(`<div role="dialog"><h2>Loading screen</h2><p>Something went wrong. Please try again in a bit.</p></div>`)), "unknown");
   assert.equal(targetInteractiveBlock(page(`<button aria-label="sign in to favorite this product">Favorite</button>`)), "");
 });

@@ -234,13 +234,40 @@ var YoinkTargetActionModule = (() => {
   }
 
   // packages/contracts/src/index.ts
-  var TARGET_ADD_ADAPTER_VERSION = "target-add-v5";
+  var TARGET_ADD_ADAPTER_VERSION = "target-add-v6";
 
   // packages/browser-adapters/src/target.ts
   var MARKETPLACE_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+(?!target\b)|sold\s+by\s+(?!target\b)|target\s*plus|marketplace\s+seller/i;
   var FIRST_PARTY_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+target\b|sold\s+by\s+target\b/i;
   function text(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
+  }
+  function observableText(value, maximum = 2e3) {
+    if (!value || maximum < 1) return "";
+    const fragments = [];
+    let length = 0;
+    const append = (candidate) => {
+      if (length >= maximum) return;
+      const fragment = String(candidate || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+      if (!fragment) return;
+      const bounded = fragment.slice(0, maximum - length);
+      fragments.push(bounded);
+      length += bounded.length + 1;
+    };
+    const visit = (node) => {
+      if (length >= maximum) return;
+      if (node.nodeType === 3) {
+        append(node.textContent);
+        return;
+      }
+      if (node.nodeType === 1) {
+        const element = node;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible(element)) return;
+      }
+      for (const child of [...node.childNodes]) visit(child);
+    };
+    visit(value);
+    return fragments.join(" ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
   function visible(element) {
     if (!element) return false;
@@ -325,10 +352,10 @@ var YoinkTargetActionModule = (() => {
       "[data-test*='captcha' i]",
       "[data-testid*='captcha' i]",
       "[id*='captcha' i]"
-    ])) || /verify you are human|unusual traffic|security challenge/i.test(text(document.body, 5e4));
+    ])) || /verify you are human|unusual traffic|security challenge/i.test(observableText(document.body, 5e4));
   }
   function targetInteractiveBlock(document) {
-    const visibleText = text(document.body, 8e4);
+    const visibleText = observableText(document.body, 8e4);
     if (queryVisible(document, ["input[autocomplete='one-time-code']", "input[name*='otp' i]"])) return "mfa";
     const dialog = queryVisible(document, ["[role='dialog']", "dialog[open]"]);
     const dialogText = text(dialog, 1e4);
@@ -420,6 +447,33 @@ var YoinkTargetActionModule = (() => {
     if (!/^\d{6,}$/.test(sku)) return [];
     return [...root.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`)].filter((candidate) => visible(candidate) && !recommendationControl(candidate));
   }
+  function targetSkuEvidence(root) {
+    const skus = /* @__PURE__ */ new Set();
+    const elements = [
+      ...root.nodeType === 1 ? [root] : [],
+      ...root.querySelectorAll("[data-tcin], button[id^='addToCartButtonOrTextIdFor']")
+    ];
+    for (const element of elements) {
+      const dataTcin = String(element.getAttribute("data-tcin") || "").trim();
+      const idTcin = String(element.getAttribute("id") || "").match(/^addToCartButtonOrTextIdFor(\d{6,})$/)?.[1] || "";
+      if (/^\d{6,}$/.test(dataTcin)) skus.add(dataTcin);
+      if (idTcin) skus.add(idTcin);
+    }
+    return skus;
+  }
+  function semanticTargetAddControls(root, sku) {
+    const skus = targetSkuEvidence(root);
+    if ([...skus].some((candidate) => candidate !== sku)) return [];
+    const candidates = [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((candidate) => visible(candidate) && !recommendationControl(candidate)).filter((candidate) => /\badd(?:\s+(?:item\s+)?to)?\s+cart\b/i.test([
+      candidate.getAttribute("aria-label"),
+      candidate.getAttribute("name"),
+      candidate.getAttribute("value"),
+      candidate.getAttribute("data-test"),
+      candidate.getAttribute("data-testid"),
+      text(candidate, 300)
+    ].filter(Boolean).join(" ")));
+    return candidates.length === 1 ? candidates : [];
+  }
   function addControls(document, sku) {
     const candidates = [
       ...exactAddControls(document, sku),
@@ -438,9 +492,13 @@ var YoinkTargetActionModule = (() => {
     return { control: null, fulfillmentControl: null, fulfillment: "unknown", selectionRequired: false, offerRoot: null };
   }
   function modernTargetAddBinding(document, sku, required) {
-    const roots = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))].filter((root2) => visible(root2) && !recommendationControl(root2));
+    const visibleRoots = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))].filter((root2) => visible(root2) && !recommendationControl(root2));
+    const roots = visibleRoots.filter((root2) => !visibleRoots.some((candidate) => candidate !== root2 && root2.contains(candidate)));
     if (roots.length === 0) return null;
-    const scoped = roots.map((root2) => ({ root: root2, controls: exactAddControls(root2, sku) })).filter((entry) => entry.controls.length === 1 && entry.controls[0]);
+    const scoped = roots.map((root2) => {
+      const exact = exactAddControls(root2, sku);
+      return { root: root2, controls: exact.length > 0 ? exact : semanticTargetAddControls(root2, sku) };
+    }).filter((entry) => entry.controls.length === 1 && entry.controls[0]);
     if (scoped.length !== 1 || !scoped[0]?.controls[0]) return emptyTargetAddBinding();
     const { root } = scoped[0];
     const control = scoped[0].controls[0];
@@ -462,6 +520,19 @@ var YoinkTargetActionModule = (() => {
     if (available.length === 0) return emptyTargetAddBinding();
     const preferred = required === "shipping" ? available.find((entry) => /shipping/i.test(String(entry.fulfillmentControl.getAttribute("data-test") || entry.fulfillmentControl.getAttribute("id") || ""))) ?? available[0] : available[0];
     return preferred ? { control, fulfillmentControl: preferred.fulfillmentControl, fulfillment: required, selectionRequired: true, offerRoot: root } : emptyTargetAddBinding();
+  }
+  function targetExplicitlyUnavailable(document) {
+    const selectors = [
+      "[data-test*='availability' i]",
+      "[data-testid*='availability' i]",
+      "[data-test*='out-of-stock' i]",
+      "[data-testid*='out-of-stock' i]",
+      "[itemprop='availability']",
+      "button[disabled]"
+    ];
+    return [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible(element) && !recommendationControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
+      `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
+    ));
   }
   function legacyTargetAddBinding(document, sku, required) {
     required = required === "pickup" ? "pickup" : "shipping";
@@ -517,6 +588,8 @@ var YoinkTargetActionModule = (() => {
       "[itemprop='price']"
     ]);
     const blocked = targetInteractiveBlock(document);
+    const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
+    const availability = blocked ? "unknown" : selectedControlActionable ? "in_stock" : pageSku === expectedSku && targetExplicitlyUnavailable(document) ? "out_of_stock" : "unknown";
     return {
       contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
       observedAt,
@@ -524,13 +597,13 @@ var YoinkTargetActionModule = (() => {
       pageKind: targetPageKind(urlValue),
       retailerId: "target",
       retailerSku: pageSku,
-      availability: pageSku === expectedSku && actionable(selected.control) && !blocked ? "in_stock" : "out_of_stock",
+      availability,
       unitPriceCents,
       currency: "USD",
       sellerName: seller.sellerName,
       sellerType: seller.sellerType,
       fulfillment: selected.fulfillment,
-      addControlActionable: pageSku === expectedSku && actionable(selected.control) && !blocked,
+      addControlActionable: selectedControlActionable && !blocked,
       securityChallenge: targetSecurityChallenge(document),
       interactiveBlock: blocked
     };

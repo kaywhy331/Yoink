@@ -1,6 +1,20 @@
 # Yoink roadmap
 
-## Shipped through 1.16.1
+## Shipped through 1.17.0
+
+### Exact affiliate routing and retailer-layout recovery (1.17.0)
+
+- Adds one curated 160-store Howl directory with exact host and locale-path
+  matching; unlisted registered retailers retain direct outbound links
+- Adds user-confirmed purchase-plan deletion that cancels only safe pending
+  work, disables targets, retains history, and requires a fresh explicit review
+  before the same exact plan can be recreated
+- Repairs current Target and Walmart offer binding and prevents hidden script
+  copy from masquerading as a retailer security challenge
+- Makes qualification success unambiguous, fixes restock and expiry warning
+  projections, and stops challenged warm-readiness tabs from multiplying
+- Advances every guarded adapter version so prior qualifications retire and
+  fresh evidence plus explicit activation remain mandatory
 
 ### Action-backlog audit closure (1.16.1)
 
@@ -190,9 +204,9 @@
   class, selected fulfillment, and non-sticky primary action
 - Best Buy add v6 and migration 51 retire earlier Best Buy activation so the
   widened layout coverage cannot inherit mutation authority
-- Every user-dashboard retailer destination is a disclosed Howl ClickMate URL
-  carrying the exact destination, `collectwithdodo` publisher slug, readable
-  article name, and canonical dashboard URL
+- User-dashboard destinations use the disclosed Howl ClickMate protocol only
+  when their exact host and optional locale path match the curated admin store
+  directory; unlisted registered retailers retain their direct canonical URL
 
 ### Exact fulfillment and self-healing retailer layouts (1.8.0)
 
