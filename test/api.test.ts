@@ -408,7 +408,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
       backgroundWorkerDeployment: "local_in_process",
       backgroundWorkerMode: "disabled",
       backgroundWorkerDeploymentAttested: false,
-      backgroundWorkerDeploymentContractVersion: 2,
+      backgroundWorkerDeploymentContractVersion: 3,
       asyncBackgroundWorkerContract: true,
       standaloneBackgroundWorkerProcessReady: true,
       productionWorkerFleetReady: false,

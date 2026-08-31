@@ -11,7 +11,7 @@ test("the user docs, machine guide, and release announcement share the current b
   const server = createYoinkServer({
     db,
     webRoot: join(process.cwd(), "apps", "web"),
-    version: "1.14.0"
+    version: "1.15.0"
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -22,6 +22,8 @@ test("the user docs, machine guide, and release announcement share the current b
     assert.match(docs.headers.get("content-type") || "", /^text\/html/);
     const docsBody = await docs.text();
     assert.match(docsBody, /Ready to check out/);
+    assert.match(docsBody, /Drop watch/);
+    assert.match(docsBody, /read-only observation/);
     assert.match(docsBody, /Checkout remains manual/);
     assert.doesNotMatch(docsBody, /automatic checkout/i);
 
@@ -34,8 +36,8 @@ test("the user docs, machine guide, and release announcement share the current b
       announcement: { id: string; version: string; docsUrl: string; highlights: string[] };
       qualificationCandidates: unknown[];
     };
-    assert.equal(overview.announcement.id, "yoink-1-14-cart-handoff");
-    assert.equal(overview.announcement.version, "1.14.0");
+    assert.equal(overview.announcement.id, "yoink-1-15-action-platform");
+    assert.equal(overview.announcement.version, "1.15.0");
     assert.equal(overview.announcement.docsUrl, "/docs");
     assert.equal(overview.announcement.highlights.length, 3);
     assert.deepEqual(overview.qualificationCandidates, []);

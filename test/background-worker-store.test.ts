@@ -82,7 +82,7 @@ test("the async SQLite worker store scopes queues and reports complete standalon
       coveredPrincipals: 2,
       totalPrincipals: 2,
       deploymentAttested: true,
-      deploymentContractVersion: 2
+      deploymentContractVersion: 3
     });
     await store.stopWorker("background_worker_store_test", "standalone", "", NOW + 2);
     const stopped = await store.deploymentStatus("standalone", DEPLOYMENT_FINGERPRINT, NOW + 3);

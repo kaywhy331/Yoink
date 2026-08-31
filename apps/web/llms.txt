@@ -7,6 +7,8 @@ User dashboard: /
 Diagnostics and administration: /admin#diagnostics
 
 Current action boundary:
+- Provider-neutral signal_event_v1 intake with configured per-channel trust and replay bounds.
+- Opt-in drop-window queues with bounded read-only observation in the paired Chrome session.
 - Trusted signal to exact retailer product identity.
 - Saved price, seller, fulfillment, quantity, spend, and lane constraints.
 - Fresh DOM revalidation in the user's paired Chrome session.

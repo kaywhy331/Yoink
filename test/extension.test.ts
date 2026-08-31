@@ -14,6 +14,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
     optional_host_permissions?: string[];
     content_scripts?: unknown;
     background?: { service_worker?: string };
+    options_ui?: { page?: string; open_in_tab?: boolean };
     version?: string;
   };
   assert.equal(manifest.manifest_version, 3);
@@ -39,11 +40,12 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   ]);
   assert.equal(manifest.content_scripts, undefined);
   assert.equal(manifest.background?.service_worker, "background.js");
+  assert.deepEqual(manifest.options_ui, { page: "options.html", open_in_tab: true });
   assert.equal(manifest.host_permissions.includes("https://*.amazon.com/*"), false);
   assert.equal(manifest.host_permissions.includes("https://www.target.com/*"), false);
   assert.equal(manifest.host_permissions.includes("https://*.walmart.com/*"), false);
 
-  for (const file of ["background.js", "popup-state.js", "popup.js", "runtime-config.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js", "observer-recipe-oracle.js", "offscreen.js"]) {
+  for (const file of ["background.js", "popup-state.js", "popup.js", "options.js", "runtime-config.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js", "observer-recipe-oracle.js", "offscreen.js"]) {
     const result = spawnSync(process.execPath, ["--check", join(extensionRoot, file)], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
   }
@@ -103,7 +105,8 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /world: "MAIN"/);
   assert.match(background, /shadow-observations\/target/);
   assert.match(background, /sources\/trackalacker\/signals/);
-  assert.match(background, /Idempotency-Key/);
+  assert.match(background, /signals\/batch/);
+  assert.match(background, /idempotencyKey: envelope\.signalId/);
   assert.match(background, /trackalacker-sync\.js/);
   assert.match(background, /retailerMutation: false/);
   assert.match(background, /preorder_not_supported/);

@@ -10,6 +10,8 @@ import { ObserverRecipeWitnessRefreshService } from "../../../packages/engine/sr
 import { loadWorkerConfig } from "./config.js";
 import { HmacOperatorAlertWebhookTransport } from "../../../packages/engine/src/operator-alert-webhook.js";
 import { OperatorAlertConnectorDispatchService } from "../../../packages/engine/src/operator-alert-connector-dispatch.js";
+import { BoundUserActionWebhookTransport } from "../../../packages/engine/src/user-action-webhook.js";
+import { UserActionConnectorDispatchService } from "../../../packages/engine/src/user-action-connector-dispatch.js";
 
 let db: YoinkDatabase | null = null;
 let runtime: BackgroundWorkerRuntime | null = null;
@@ -69,11 +71,16 @@ async function start(): Promise<void> {
       config.operatorAlertWebhookRegistry,
       new HmacOperatorAlertWebhookTransport(config.operatorAlertWebhookRegistry, process.env)
     );
+    const userActionConnectorDispatch = new UserActionConnectorDispatchService(
+      workerDb,
+      config.userActionWebhookRegistry,
+      new BoundUserActionWebhookTransport(config.userActionWebhookRegistry, process.env)
+    );
     runtime = new BackgroundWorkerRuntime({
       store,
       handler: new BackgroundMaintenanceHandler(workerDb, observerRecipeWitnessRefresh
-        ? { observerRecipeWitnessRefresh, operatorAlertConnectorDispatch }
-        : { operatorAlertConnectorDispatch }),
+        ? { observerRecipeWitnessRefresh, operatorAlertConnectorDispatch, userActionConnectorDispatch }
+        : { operatorAlertConnectorDispatch, userActionConnectorDispatch }),
       version: config.version,
       deploymentFingerprint: config.deploymentFingerprint,
       runtimeKind: "standalone",

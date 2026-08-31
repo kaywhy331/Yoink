@@ -29,7 +29,11 @@ const state = {
   jobTotal: 0,
   jobQuery: "",
   authorizationUsers: [],
-  authorizationRoles: []
+  authorizationRoles: [],
+  signalChannels: [],
+  dropWindows: [],
+  restockPatterns: [],
+  laneReadiness: []
 };
 const COLLECTION_PAGE_SIZE = 200;
 const RETAILER_NAMES = Object.freeze({
@@ -302,6 +306,21 @@ function renderSources() {
     const kind = run.phase === "complete" ? "good" : run.phase === "error" ? "bad" : "warning";
     return `<article class="sync-run"><div><strong>${statusDot(kind)} Library sync · ${escapeHtml(String(run.phase).replaceAll("_", " "))}</strong><p>${Number(run.imported || 0).toLocaleString()} imported · ${Number(run.failed || 0).toLocaleString()} failed · ${Number(run.itemReceiptCount || 0).toLocaleString()} durable item receipts</p></div><time>${escapeHtml(relativeTime(run.updatedAt))}</time></article>`;
   }).join("") : "";
+}
+
+function renderActionPlatformAdmin() {
+  const channels = state.signalChannels || [];
+  $("#sourceChannelGate").textContent = channels.some((channel) => channel.health === "attention") ? "NEEDS ATTENTION" : "READY";
+  $("#sourceChannelList").innerHTML = channels.map((channel) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(channel.name)}</h3><p>${escapeHtml(channel.provider)} · ${escapeHtml(channel.trustLevel.replaceAll("_", " "))}</p></div><span class="tag ${channel.health === "healthy" ? "good" : channel.health === "attention" ? "warning" : ""}">${escapeHtml(channel.health)}</span></div><div class="card-meta"><span class="tag">${Number(channel.acceptedEventCount || 0).toLocaleString()} accepted</span><span class="tag">${Number(channel.rejectedEventCount || 0).toLocaleString()} rejected</span><span class="tag">${channel.accuracyBps == null ? "No accuracy sample" : `${(Number(channel.accuracyBps) / 100).toFixed(1)}% accuracy`}</span><span class="tag">p50 ${channel.p50ObservedToReceivedMs == null ? "—" : `${Number(channel.p50ObservedToReceivedMs).toLocaleString()} ms`}</span><span class="tag">p95 ${channel.p95ObservedToReceivedMs == null ? "—" : `${Number(channel.p95ObservedToReceivedMs).toLocaleString()} ms`}</span></div><div class="card-actions"><button class="button secondary" data-source-channel-status="${escapeHtml(channel.id)}" type="button">${channel.status === "active" ? "Pause" : "Activate"}</button><button class="button secondary" data-source-channel-trust="${escapeHtml(channel.id)}" type="button">${channel.trustLevel === "trusted_exact" ? "Set informational" : "Trust exact"}</button><button class="button quiet" data-source-channel-replay="${escapeHtml(channel.id)}" type="button">Replay dead letters</button></div></article>`).join("") || empty("No provider channels configured.");
+  const windows = state.dropWindows || [];
+  $("#dropWindowList").innerHTML = windows.map((window) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(window.title)}</h3><p>${escapeHtml(retailerName(window.retailerId))} · ${escapeHtml(window.kind.replaceAll("_", " "))} · ${Number(window.items?.length || 0).toLocaleString()} exact products</p></div><span class="tag ${window.status === "active" ? "good" : ""}">${escapeHtml(window.status)}</span></div><div class="card-meta"><span class="tag">Starts ${escapeHtml(relativeTime(window.startsAt))}</span><span class="tag">Closes ${escapeHtml(relativeTime(window.closesAt))}</span><span class="tag">${(Number(window.confidenceBps || 0) / 100).toFixed(1)}% confidence</span><span class="tag">${Number(window.items?.filter((item) => item.watch).length || 0)} watched</span></div></article>`).join("") || empty("No drop windows authored yet.");
+  $("#restockPatternList").innerHTML = (state.restockPatterns || []).map((pattern) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(pattern.title || pattern.listingId)}</h3><p>${escapeHtml(retailerName(pattern.retailerId))} · ${escapeHtml(pattern.retailerSku)} · ${escapeHtml(pattern.timezone)}</p></div><span class="tag">${Number(pattern.confidenceBps || 0) / 100}% confidence</span></div><div class="card-meta"><span class="tag">${Number(pattern.observationCount || 0)} observations</span><span class="tag">Median interval ${pattern.medianIntervalMinutes == null ? "—" : `${pattern.medianIntervalMinutes} min`}</span><span class="tag">Hours ${(pattern.localHourHistogram || []).map((item) => `${item.hour}:00 (${item.count})`).join(", ") || "—"}</span></div></article>`).join("") || empty("No restock pattern has been computed yet.");
+  $("#laneReadinessList").innerHTML = (state.laneReadiness || []).map((lane) => {
+    const warning = lane.qualification?.warning || "none";
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(retailerName(lane.retailerId))}</h3><p>${escapeHtml(lane.expectedAdapterVersion)} · ${escapeHtml(lane.qualification?.status || "missing")}</p></div><span class="tag ${lane.readyForGuardedAdd ? "good" : "warning"}">${lane.readyForGuardedAdd ? "Ready" : warning !== "none" ? escapeHtml(warning.replaceAll("_", " ")) : "Needs setup"}</span></div><div class="card-meta">${(lane.checklist || []).map((check) => `<span class="tag ${check.ready ? "good" : ""}">${check.ready ? "✓" : "○"} ${escapeHtml(check.label)}</span>`).join("")}</div><div class="card-actions">${lane.candidate?.canonicalUrl ? `<a class="button secondary" href="${escapeHtml(lane.candidate.canonicalUrl)}" target="_blank" rel="noopener">Open prior passing SKU</a>` : ""}${lane.qualification?.status === "qualified" ? `<button class="button danger" data-retire-lane="${escapeHtml(lane.retailerId)}" type="button">Retire this lane</button>` : ""}</div></article>`;
+  }).join("") || empty("No guarded lanes are configured.");
+  const retailerSelect = $("#dropWindowRetailer");
+  if (!retailerSelect.options.length) retailerSelect.innerHTML = Object.entries(RETAILER_NAMES).map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`).join("");
 }
 
 function renderDevices() {
@@ -1205,7 +1224,7 @@ function renderAdminChanges() {
 }
 
 function render() {
-  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts(); renderOperationalTelemetry(); renderPostgresCutover(); renderBackgroundWork(); renderAdminChanges();
+  renderStatus(); renderMetrics(); renderReadinessGuide(); renderSignals(); renderSources(); renderActionPlatformAdmin(); renderDevices(); renderQualifications(); renderWalmartDraws(); renderAdapterRepairQueue(); renderShadowObservations(); renderCommunity(); renderIdentityGovernance(); renderObserverRegistry(); renderLibrary(); renderCatalogGovernance(); renderStrategies(); renderMissions(); renderJobs(); renderNotifications(); renderAttributionReceipts(); renderAudit(); renderSettings(); renderAttributionPolicies(); renderAuthorization(); renderOperatorAlerts(); renderOperationalTelemetry(); renderPostgresCutover(); renderBackgroundWork(); renderAdminChanges();
 }
 
 async function storeFingerprint(retailerId, localStoreId) {
@@ -1290,9 +1309,22 @@ async function loadAdminChanges() {
   state.adminChanges = await api("/api/v1/admin/change-requests?status=all&limit=100");
 }
 
+async function loadActionPlatformAdmin() {
+  const [channels, windows, patterns, readiness] = await Promise.all([
+    api("/api/v1/admin/sources/channels"),
+    api("/api/v1/admin/drop-windows"),
+    api("/api/v1/admin/restock-patterns"),
+    api("/api/v1/admin/qualifications/readiness")
+  ]);
+  state.signalChannels = channels.items || [];
+  state.dropWindows = windows.items || [];
+  state.restockPatterns = patterns.items || [];
+  state.laneReadiness = readiness.plan?.lanes || [];
+}
+
 async function refresh(reloadCollections = true) {
   state.snapshot = await api("/api/v1/admin/snapshot");
-  await Promise.all([loadOperationalTelemetry(), loadBackgroundWork(), loadAdminChanges()]);
+  await Promise.all([loadOperationalTelemetry(), loadBackgroundWork(), loadAdminChanges(), loadActionPlatformAdmin()]);
   if (state.snapshot.authorization?.roleAdministrationEnabled === true) {
     const [users, roles] = await Promise.all([
       api("/api/v1/admin/authorization/users"),
@@ -1441,6 +1473,44 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.openView) setView(button.dataset.openView);
     if (button.hasAttribute("data-close-dialog")) button.closest("dialog")?.close();
     if (button.id === "addListingButton") $("#listingDialog").showModal();
+    if (button.dataset.sourceChannelStatus) {
+      const channel = state.signalChannels.find((item) => item.id === button.dataset.sourceChannelStatus);
+      if (!channel) throw new Error("The signal channel is unavailable.");
+      await api(`/api/v1/admin/sources/channels/${encodeURIComponent(channel.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: channel.status === "active" ? "paused" : "active" })
+      });
+      await loadActionPlatformAdmin(); renderActionPlatformAdmin();
+      toast(channel.status === "active" ? "Signal channel paused." : "Signal channel activated.");
+    }
+    if (button.dataset.sourceChannelTrust) {
+      const channel = state.signalChannels.find((item) => item.id === button.dataset.sourceChannelTrust);
+      if (!channel) throw new Error("The signal channel is unavailable.");
+      const trustLevel = channel.trustLevel === "trusted_exact" ? "informational" : "trusted_exact";
+      if (trustLevel === "trusted_exact" && !confirm("Mark this channel trusted exact? Only structured, validated retailer identity can enter, but this trust choice affects how its normalized signals are evaluated.")) return;
+      await api(`/api/v1/admin/sources/channels/${encodeURIComponent(channel.id)}`, {
+        method: "PATCH", body: JSON.stringify({ trustLevel })
+      });
+      await loadActionPlatformAdmin(); renderActionPlatformAdmin();
+      toast("Signal channel trust updated.");
+    }
+    if (button.dataset.sourceChannelReplay) {
+      if (!confirm("Replay up to ten dead-lettered normalized signals from this exact channel? Existing idempotency and safety checks still apply.")) return;
+      const result = await api(`/api/v1/admin/sources/channels/${encodeURIComponent(button.dataset.sourceChannelReplay)}/replay`, {
+        method: "POST", body: JSON.stringify({ maximum: 10 })
+      });
+      await refresh(false);
+      toast(`${Number(result.replayed || 0)} dead-lettered signal${Number(result.replayed || 0) === 1 ? "" : "s"} queued for replay.`);
+    }
+    if (button.dataset.retireLane) {
+      if (!confirm(`Retire only the ${retailerName(button.dataset.retireLane)} guarded add lane? Other retailer qualifications remain unchanged.`)) return;
+      await api(`/api/v1/admin/qualifications/${encodeURIComponent(button.dataset.retireLane)}/retire`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation: "RETIRE_ONE_RETAILER_LANE", reasonCode: "operator_retired" })
+      });
+      await refresh(false);
+      toast(`${retailerName(button.dataset.retireLane)} lane retired independently.`);
+    }
     if (button.id === "sendSignalButton") { $("#signalForm").reset(); $("#signalDialog").showModal(); }
     if (button.id === "addStrategyButton") openStrategy();
     if (button.id === "proposeCatalogMergeButton") openCatalogIdentityForm("merge_variants");
@@ -1846,6 +1916,74 @@ document.addEventListener("click", async (event) => {
       await saveStrategies(strategies.map((item, itemIndex) => ({ ...item, position: (itemIndex + 1) * 10 })));
     }
   } catch (error) { toast(error.message || "The action failed.", true); }
+});
+
+$("#sourceChannelForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const form = event.currentTarget;
+    const values = formObject(form);
+    await api("/api/v1/admin/sources/channels", {
+      method: "POST",
+      body: JSON.stringify({
+        provider: values.provider,
+        name: values.name,
+        externalReference: values.externalReference,
+        trustLevel: values.trustLevel,
+        autoCreateMissions: false,
+        replayWindowSeconds: 900
+      })
+    });
+    form.reset();
+    await loadActionPlatformAdmin(); renderActionPlatformAdmin();
+    toast("Signal provider channel created with mission auto-creation off.");
+  } catch (error) { toast(error.message || "The signal channel could not be created.", true); }
+});
+
+$("#dropWindowForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const form = event.currentTarget;
+    const values = formObject(form);
+    const listingIds = [...new Set(String(values.listingIds || "").split(/[\s,]+/).map((value) => value.trim()).filter(Boolean))];
+    if (!listingIds.length || listingIds.length > 50) throw new Error("Choose 1 through 50 unique exact listing IDs.");
+    const earlyAccessNote = String(values.earlyAccessNote || "").trim();
+    await api("/api/v1/admin/drop-windows", {
+      method: "POST",
+      body: JSON.stringify({
+        contractVersion: 1,
+        kind: values.kind,
+        retailerId: values.retailerId,
+        title: values.title,
+        startsAt: new Date(values.startsAt).toISOString(),
+        closesAt: new Date(values.closesAt).toISOString(),
+        spreadSeconds: Number(values.spreadSeconds),
+        confidenceBps: Math.round(Number(values.confidencePercent) * 100),
+        timezone: values.timezone,
+        products: listingIds.map((listingId) => ({
+          listingId,
+          ...(earlyAccessNote ? { earlyAccess: { note: earlyAccessNote } } : {})
+        }))
+      })
+    });
+    form.reset();
+    await loadActionPlatformAdmin(); renderActionPlatformAdmin();
+    toast("Drop window scheduled and bounded signals queued.");
+  } catch (error) { toast(error.message || "The drop window could not be scheduled.", true); }
+});
+
+$("#restockPatternForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const form = event.currentTarget;
+    const values = formObject(form);
+    await api("/api/v1/admin/restock-patterns/recompute", {
+      method: "POST",
+      body: JSON.stringify({ listingId: values.listingId, timezone: values.timezone })
+    });
+    await loadActionPlatformAdmin(); renderActionPlatformAdmin();
+    toast("Restock pattern recomputed from normalized observations.");
+  } catch (error) { toast(error.message || "The restock pattern could not be recomputed.", true); }
 });
 
 let librarySearchTimer;

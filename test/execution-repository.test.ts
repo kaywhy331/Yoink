@@ -105,15 +105,16 @@ function qualifyAddLane(db: YoinkDatabase, retailerId: string, adapterVersion: s
   db.run(
     `INSERT INTO retailer_adapter_qualifications(
        tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
-       evidence_hash, qualified_at, updated_at
-     ) VALUES (?, ?, ?, ?, 'add_to_cart', 'qualified', ?, ?, ?)`,
+       evidence_hash, qualified_at, updated_at, expires_at
+     ) VALUES (?, ?, ?, ?, 'add_to_cart', 'qualified', ?, ?, ?, ?)`,
     LOCAL_TENANT_ID,
     LOCAL_USER_ID,
     retailerId,
     adapterVersion,
     `${retailerId}-add-test-evidence`,
     new Date(NOW).toISOString(),
-    new Date(NOW).toISOString()
+    new Date(NOW).toISOString(),
+    new Date(NOW + 30 * 24 * 60 * 60_000).toISOString()
   );
 }
 
@@ -544,6 +545,43 @@ test("Target add-only leasing binds the exact adapter and expires safely before 
     assert.equal(execution.recoverExpiredLeases(NOW + 50_000), 1);
     assert.equal(db.get<{ state: string }>("SELECT state FROM action_jobs WHERE id = ?", lease.job.id)?.state, "expired");
     assert.deepEqual(execution.leaseNextJob(deviceId, NOW + 51_000), { job: null, reason: "no_jobs" });
+  } finally {
+    db.close();
+  }
+});
+
+test("batched Chrome progress is atomic when a later transition is invalid", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db);
+    const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
+    assert.equal(lease.reason, "leased");
+    assert.ok(lease.job);
+    const beforeEvents = db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM action_events WHERE job_id = ?",
+      lease.job.id
+    )?.count;
+    assert.throws(() => execution.reconcileJobBatch(
+      deviceId,
+      lease.job!.id,
+      lease.job!.capabilityToken,
+      [
+        { state: "navigating", reasonCode: "navigation_started", message: "Navigation started.", evidence: {} },
+        { state: "confirmed", reasonCode: "invalid_skip", message: "Invalid skipped state.", evidence: {} }
+      ],
+      NOW + 3_000
+    ), /cannot move/i);
+    assert.equal(
+      db.get<{ state: string }>("SELECT state FROM action_jobs WHERE id = ?", lease.job.id)?.state,
+      "leased"
+    );
+    assert.equal(
+      db.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM action_events WHERE job_id = ?",
+        lease.job.id
+      )?.count,
+      beforeEvents
+    );
   } finally {
     db.close();
   }

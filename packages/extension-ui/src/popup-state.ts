@@ -13,9 +13,9 @@ export type YoinkAppDestination = "dashboard" | "connections" | "operations" | "
 
 const APP_DESTINATION_ROUTES: Record<YoinkAppDestination, { pathname: string; hash: string }> = {
   dashboard: { pathname: "/", hash: "" },
-  connections: { pathname: "/admin", hash: "connections" },
-  operations: { pathname: "/admin", hash: "operations" },
-  settings: { pathname: "/admin", hash: "settings" }
+  connections: { pathname: "/", hash: "connections" },
+  operations: { pathname: "/", hash: "health" },
+  settings: { pathname: "/", hash: "preferences" }
 };
 
 export function appDestinationUrl(appOrigin: string, destination: YoinkAppDestination = "dashboard"): string {

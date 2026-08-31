@@ -24,6 +24,10 @@ import {
   HmacOperatorAlertWebhookTransport
 } from "../../../packages/engine/src/operator-alert-webhook.js";
 import { OperatorAlertConnectorDispatchService } from "../../../packages/engine/src/operator-alert-connector-dispatch.js";
+import {
+  BoundUserActionWebhookTransport
+} from "../../../packages/engine/src/user-action-webhook.js";
+import { UserActionConnectorDispatchService } from "../../../packages/engine/src/user-action-connector-dispatch.js";
 
 const config = loadConfig();
 mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
@@ -46,13 +50,21 @@ const workerDeploymentFingerprint = deploymentFingerprintForWorker({
   runtimeVersion: config.version,
   observerRecipeWitness: config.observerRecipeWitness,
   observerRecipeWitnessRequired: config.hosted !== null,
-  operatorAlertWebhookRegistryFingerprint: config.operatorAlertWebhookRegistry.fingerprint
+  operatorAlertWebhookRegistryFingerprint: config.operatorAlertWebhookRegistry.fingerprint,
+  userActionWebhookRegistryFingerprint: config.userActionWebhookRegistry.fingerprint
 });
 const operatorAlertConnectorDispatch = new OperatorAlertConnectorDispatchService(
   db,
   config.operatorAlertWebhookRegistry,
   config.backgroundWorkerMode === "embedded"
     ? new HmacOperatorAlertWebhookTransport(config.operatorAlertWebhookRegistry, process.env)
+    : undefined
+);
+const userActionConnectorDispatch = new UserActionConnectorDispatchService(
+  db,
+  config.userActionWebhookRegistry,
+  config.backgroundWorkerMode === "embedded"
+    ? new BoundUserActionWebhookTransport(config.userActionWebhookRegistry, process.env)
     : undefined
 );
 const backgroundWorkerStore = new SqliteBackgroundWorkerStore(db, {
@@ -65,9 +77,9 @@ backgroundWorkerStore.configureDeploymentExpectation(
 );
 const backgroundWorker = new BackgroundWorkerRuntime({
   store: backgroundWorkerStore,
-  handler: new BackgroundMaintenanceHandler(db, observerRecipeWitnessRefresh
-    ? { observerRecipeWitnessRefresh, operatorAlertConnectorDispatch }
-    : { operatorAlertConnectorDispatch }),
+    handler: new BackgroundMaintenanceHandler(db, observerRecipeWitnessRefresh
+    ? { observerRecipeWitnessRefresh, operatorAlertConnectorDispatch, userActionConnectorDispatch }
+    : { operatorAlertConnectorDispatch, userActionConnectorDispatch }),
   version: config.version,
   deploymentFingerprint: workerDeploymentFingerprint,
   runtimeKind: "local_in_process",
@@ -99,6 +111,11 @@ const server = createYoinkServer({
   observerRecipeTrust,
   version: config.version,
   operatorAlertConnectorBindings: config.operatorAlertWebhookRegistry.bindings,
+  userActionConnectorBindings: config.userActionWebhookRegistry.bindings,
+  backgroundWorkerWake: () => backgroundWorker.wake(),
+  ...(config.backgroundWorkerMode === "embedded"
+    ? { backgroundWorkerRestart: async () => backgroundWorker.restart() }
+    : {}),
   backgroundWorkerStatus: async () => {
     if (config.backgroundWorkerMode === "embedded") {
       return { ...backgroundWorker.status(), mode: "embedded" as const };

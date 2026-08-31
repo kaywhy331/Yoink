@@ -71,6 +71,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
   window.chrome = {
     runtime: {
       getManifest: () => ({ version: "1.9.1" }),
+      getURL: (path: string) => `chrome-extension://${"a".repeat(32)}/${path}`,
       sendMessage: async (message: { type?: string }) => {
         runtimeMessages.push({ ...message });
         if (message.type === "yoink:check-health") return { ok: true, state: health };
@@ -260,10 +261,10 @@ test("popup navigation options open their distinct intended Yoink workspaces", a
   await turn();
   assert.deepEqual(fixture.createdTabs, [
     "http://127.0.0.1:32991/",
-    "http://127.0.0.1:32991/admin#connections",
-    "http://127.0.0.1:32991/admin#operations",
-    "http://127.0.0.1:32991/admin#settings",
-    "http://127.0.0.1:32991/admin#operations"
+    `chrome-extension://${"a".repeat(32)}/options.html#store-access`,
+    "http://127.0.0.1:32991/#health",
+    `chrome-extension://${"a".repeat(32)}/options.html`,
+    "http://127.0.0.1:32991/#health"
   ]);
   fixture.dom.window.close();
 });

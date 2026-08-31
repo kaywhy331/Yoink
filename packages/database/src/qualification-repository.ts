@@ -40,6 +40,7 @@ const RETENTION_LIMIT = 1_000;
 const REASON_PATTERN = /^[a-z][a-z0-9_]{1,79}$/;
 const EVIDENCE_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const ACTIVE_DEVICE_WINDOW_MS = 5 * 60_000;
+const QUALIFICATION_TTL_MS = 30 * 24 * 60 * 60_000;
 
 export interface StoredTargetAddTrial {
   id: string;
@@ -856,24 +857,27 @@ export class QualificationRepository {
 
     const promotedJobs = this.db.transaction(() => {
       const timestamp = nowIso(now);
+      const expiresAt = nowIso(now + QUALIFICATION_TTL_MS);
       this.db.run(
         `INSERT INTO retailer_adapter_qualifications(
            tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
-           evidence_hash, qualified_at, updated_at
-         ) VALUES (?, ?, 'target', ?, 'add_to_cart', 'qualified', ?, ?, ?)
+           evidence_hash, qualified_at, updated_at, expires_at
+         ) VALUES (?, ?, 'target', ?, 'add_to_cart', 'qualified', ?, ?, ?, ?)
          ON CONFLICT(user_id, retailer_id) DO UPDATE SET
            adapter_version = excluded.adapter_version,
            highest_action = excluded.highest_action,
            status = excluded.status,
            evidence_hash = excluded.evidence_hash,
            qualified_at = excluded.qualified_at,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at,
+           expires_at = excluded.expires_at`,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
         TARGET_ADD_ADAPTER_VERSION,
         evidenceHash,
         timestamp,
-        timestamp
+        timestamp,
+        expiresAt
       );
       this.db.run(
         `UPDATE app_settings SET execution_mode = 'live', actions_paused = 0,
@@ -956,24 +960,27 @@ export class QualificationRepository {
 
     const promotedJobs = this.db.transaction(() => {
       const timestamp = nowIso(now);
+      const expiresAt = nowIso(now + QUALIFICATION_TTL_MS);
       this.db.run(
         `INSERT INTO retailer_adapter_qualifications(
            tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
-           evidence_hash, qualified_at, updated_at
-         ) VALUES (?, ?, 'walmart', ?, 'add_to_cart', 'qualified', ?, ?, ?)
+           evidence_hash, qualified_at, updated_at, expires_at
+         ) VALUES (?, ?, 'walmart', ?, 'add_to_cart', 'qualified', ?, ?, ?, ?)
          ON CONFLICT(user_id, retailer_id) DO UPDATE SET
            adapter_version = excluded.adapter_version,
            highest_action = excluded.highest_action,
            status = excluded.status,
            evidence_hash = excluded.evidence_hash,
            qualified_at = excluded.qualified_at,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at,
+           expires_at = excluded.expires_at`,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
         WALMART_ADD_ADAPTER_VERSION,
         evidenceHash,
         timestamp,
-        timestamp
+        timestamp,
+        expiresAt
       );
       this.db.run("UPDATE retailers SET execution_supported = 1, updated_at = ? WHERE id = 'walmart'", timestamp);
       this.db.run("UPDATE listings SET execution_supported = 1, updated_at = ? WHERE retailer_id = 'walmart'", timestamp);
@@ -1057,24 +1064,27 @@ export class QualificationRepository {
 
     const promotedJobs = this.db.transaction(() => {
       const timestamp = nowIso(now);
+      const expiresAt = nowIso(now + QUALIFICATION_TTL_MS);
       this.db.run(
         `INSERT INTO retailer_adapter_qualifications(
            tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
-           evidence_hash, qualified_at, updated_at
-         ) VALUES (?, ?, 'amazon', ?, 'add_to_cart', 'qualified', ?, ?, ?)
+           evidence_hash, qualified_at, updated_at, expires_at
+         ) VALUES (?, ?, 'amazon', ?, 'add_to_cart', 'qualified', ?, ?, ?, ?)
          ON CONFLICT(user_id, retailer_id) DO UPDATE SET
            adapter_version = excluded.adapter_version,
            highest_action = excluded.highest_action,
            status = excluded.status,
            evidence_hash = excluded.evidence_hash,
            qualified_at = excluded.qualified_at,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at,
+           expires_at = excluded.expires_at`,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
         AMAZON_ADD_ADAPTER_VERSION,
         evidenceHash,
         timestamp,
-        timestamp
+        timestamp,
+        expiresAt
       );
       this.db.run("UPDATE retailers SET execution_supported = 1, updated_at = ? WHERE id = 'amazon'", timestamp);
       this.db.run("UPDATE listings SET execution_supported = 1, updated_at = ? WHERE retailer_id = 'amazon'", timestamp);
@@ -1158,24 +1168,27 @@ export class QualificationRepository {
 
     const promotedJobs = this.db.transaction(() => {
       const timestamp = nowIso(now);
+      const expiresAt = nowIso(now + QUALIFICATION_TTL_MS);
       this.db.run(
         `INSERT INTO retailer_adapter_qualifications(
            tenant_id, user_id, retailer_id, adapter_version, highest_action, status,
-           evidence_hash, qualified_at, updated_at
-         ) VALUES (?, ?, 'bestbuy', ?, 'add_to_cart', 'qualified', ?, ?, ?)
+           evidence_hash, qualified_at, updated_at, expires_at
+         ) VALUES (?, ?, 'bestbuy', ?, 'add_to_cart', 'qualified', ?, ?, ?, ?)
          ON CONFLICT(user_id, retailer_id) DO UPDATE SET
            adapter_version = excluded.adapter_version,
            highest_action = excluded.highest_action,
            status = excluded.status,
            evidence_hash = excluded.evidence_hash,
            qualified_at = excluded.qualified_at,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at,
+           expires_at = excluded.expires_at`,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
         BESTBUY_ADD_ADAPTER_VERSION,
         evidenceHash,
         timestamp,
-        timestamp
+        timestamp,
+        expiresAt
       );
       this.db.run("UPDATE retailers SET execution_supported = 1, updated_at = ? WHERE id = 'bestbuy'", timestamp);
       this.db.run("UPDATE listings SET execution_supported = 1, updated_at = ? WHERE retailer_id = 'bestbuy'", timestamp);

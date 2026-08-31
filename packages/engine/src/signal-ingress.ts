@@ -4,10 +4,18 @@ import {
   type DurableSignalRetryReceipt,
   type SignalIngressBatchResult
 } from "../../contracts/src/signal-ingress.js";
+import {
+  SIGNAL_PROVIDER_CONTRACT_VERSION,
+  SIGNAL_PROVIDERS,
+  type SignalProvider,
+  type SignalProviderBatchReceipt,
+  type SignalProviderEnvelope
+} from "../../contracts/src/signal-provider.js";
 import type { SignalEventInput } from "../../contracts/src/index.js";
 import { BackgroundTaskRepository } from "../../database/src/background-task-repository.js";
 import type { YoinkDatabase } from "../../database/src/database.js";
 import { HostedDeliveryRepository } from "../../database/src/hosted-delivery-repository.js";
+import { SignalProviderRepository } from "../../database/src/signal-provider-repository.js";
 import {
   currentRequestScope,
   runWithRequestScope
@@ -19,6 +27,14 @@ import { SignalEngine } from "./signal-engine.js";
 const MAXIMUM_SIGNALS_PER_TASK = 25;
 const SIGNAL_LEASE_SECONDS = 60;
 const SIGNAL_RETRY_SECONDS = 30;
+const PROVIDERS = new Set<SignalProvider>(SIGNAL_PROVIDERS);
+const PROVIDER_PARSERS: Readonly<Record<SignalProvider, RegExp>> = Object.freeze({
+  trackalacker: /^trackalacker-push-v1$/,
+  discord: /^discord-channel-v1$/,
+  drop_window: /^drop-window-v1$/,
+  api: /^api-signal-v1$/
+});
+const MAX_PROVIDER_BATCH = 50;
 
 function processingError(code: string): Error & { code: string } {
   const error = new Error("Durable signal ingress processing failed safely.") as Error & { code: string };
@@ -26,10 +42,10 @@ function processingError(code: string): Error & { code: string } {
   return error;
 }
 
-function durableSignal(input: SignalEventInput, now: number): SignalEventInput {
+function durableSignal(input: SignalEventInput, provider: SignalProvider, now: number): SignalEventInput {
   const normalized = normalizeSignal(input, now);
-  if (normalized.source !== "trackalacker" || normalized.parserVersion !== "trackalacker-push-v1") {
-    throw new Error("Durable TrackaLacker ingress requires the packaged parser contract.");
+  if (normalized.source !== provider || !PROVIDER_PARSERS[provider].test(normalized.parserVersion)) {
+    throw new Error("Durable signal ingress requires the configured provider parser contract.");
   }
   return {
     schemaVersion: normalized.schemaVersion,
@@ -60,25 +76,132 @@ function durableSignal(input: SignalEventInput, now: number): SignalEventInput {
 export class DurableSignalIngressService {
   private readonly delivery: HostedDeliveryRepository;
   private readonly tasks: BackgroundTaskRepository;
+  private readonly providers: SignalProviderRepository;
 
-  constructor(private readonly db: YoinkDatabase) {
+  constructor(
+    private readonly db: YoinkDatabase,
+    private readonly wakeWorker: (() => void | Promise<void>) | undefined = undefined
+  ) {
     this.delivery = new HostedDeliveryRepository(db);
     this.tasks = new BackgroundTaskRepository(db);
+    this.providers = new SignalProviderRepository(db);
   }
 
   acceptTrackalacker(input: SignalEventInput, now = Date.now()): DurableSignalIngressReceipt {
-    const payload = durableSignal(input, now);
+    return this.acceptProvider({
+      contractVersion: SIGNAL_PROVIDER_CONTRACT_VERSION,
+      provider: "trackalacker",
+      signal: input
+    }, now);
+  }
+
+  acceptProvider(envelope: SignalProviderEnvelope, now = Date.now()): DurableSignalIngressReceipt {
+    const provider = String(envelope?.provider || "") as SignalProvider;
+    const channelId = String(envelope?.channelId || "");
+    try {
+      if (envelope?.contractVersion !== SIGNAL_PROVIDER_CONTRACT_VERSION || !PROVIDERS.has(provider)) {
+        throw new Error("The signal provider envelope contract is invalid.");
+      }
+      const payload = durableSignal(envelope.signal, provider, now);
+      if (provider === "trackalacker") {
+        if (channelId) throw new Error("TrackaLacker ingress does not accept a provider channel binding.");
+      } else {
+        const channel = this.providers.requireActiveChannel(channelId, provider);
+        if (channel.sourceConnectionId !== payload.sourceConnectionId) {
+          throw new Error("The signal source connection does not match the configured provider channel.");
+        }
+        const observedAt = new Date(payload.observedAt).getTime();
+        if (observedAt < now - channel.replayWindowSeconds * 1_000) {
+          throw new Error("The provider signal is outside this channel's replay window.");
+        }
+      }
+      return this.acceptNormalizedProvider(provider, channelId, payload, now);
+    } catch (error) {
+      if (provider !== "trackalacker" && channelId) {
+        try {
+          this.providers.recordIngress(
+            channelId,
+            false,
+            error instanceof Error ? error.message : "provider_signal_rejected",
+            "",
+            now
+          );
+        } catch {
+          // Invalid and cross-scope channel identifiers remain indistinguishable.
+        }
+      }
+      throw error;
+    }
+  }
+
+  acceptProviderBatch(envelopes: SignalProviderEnvelope[], now = Date.now()): SignalProviderBatchReceipt {
+    if (!Array.isArray(envelopes) || envelopes.length < 1 || envelopes.length > MAX_PROVIDER_BATCH) {
+      throw new Error(`A signal batch must contain 1 through ${MAX_PROVIDER_BATCH} provider envelopes.`);
+    }
+    const receipts: SignalProviderBatchReceipt["receipts"] = [];
+    envelopes.forEach((envelope, index) => {
+      try {
+        const receipt = this.acceptProvider(envelope, now + index);
+        receipts.push({
+          index,
+          accepted: true,
+          signalId: receipt.signalId,
+          duplicate: receipt.duplicate,
+          processingState: receipt.processingState,
+          errorCode: ""
+        });
+      } catch (error) {
+        const errorCode = (error instanceof Error ? error.message : "signal_rejected")
+          .toLocaleLowerCase("en-US")
+          .replace(/[^a-z0-9_]+/g, "_")
+          .replace(/^_+|_+$/g, "")
+          .slice(0, 80) || "signal_rejected";
+        receipts.push({
+          index,
+          accepted: false,
+          signalId: String(envelope?.signal?.signalId ?? "").slice(0, 160),
+          duplicate: false,
+          processingState: "rejected",
+          errorCode
+        });
+      }
+    });
+    return {
+      accepted: receipts.filter((receipt) => receipt.accepted).length,
+      rejected: receipts.filter((receipt) => !receipt.accepted).length,
+      receipts
+    };
+  }
+
+  private acceptNormalizedProvider(
+    provider: SignalProvider,
+    channelId: string,
+    payload: SignalEventInput,
+    now: number
+  ): DurableSignalIngressReceipt {
     const owner = currentRequestScope();
-    const messageKey = `signal:${stableHash(
-      "yoink_durable_signal_ingress_v1",
-      owner.tenantId,
-      owner.userId,
-      payload.sourceConnectionId,
-      payload.signalId
-    )}`;
+    // TrackaLacker's durable idempotency key is an already-qualified contract
+    // shared with the inactive PostgreSQL boundary. Keep it byte-for-byte
+    // stable; provider-specific ingress uses the additive v2 namespace.
+    const messageKey = provider === "trackalacker"
+      ? `signal:${stableHash(
+        "yoink_durable_signal_ingress_v1",
+        owner.tenantId,
+        owner.userId,
+        payload.sourceConnectionId,
+        payload.signalId
+      )}`
+      : `signal:${stableHash(
+        "yoink_durable_signal_ingress_v2",
+        owner.tenantId,
+        owner.userId,
+        provider,
+        payload.sourceConnectionId,
+        payload.signalId
+      )}`;
     return this.db.transaction(() => {
       const inbox = this.delivery.acceptInbox({
-        source: "trackalacker",
+        source: provider,
         messageKey,
         eventType: SIGNAL_INGRESS_EVENT_TYPE,
         payload: payload as unknown as Record<string, unknown>
@@ -101,7 +224,7 @@ export class DurableSignalIngressService {
         backgroundTaskCreated = queued.created;
         backgroundWakeState = queued.state;
       }
-      return {
+      const receipt: DurableSignalIngressReceipt = {
         accepted: true,
         signalId: String(payload.signalId),
         duplicate: inbox.disposition === "deduped",
@@ -115,6 +238,11 @@ export class DurableSignalIngressService {
         backgroundTaskCreated,
         backgroundWakeState
       };
+      if (channelId) this.providers.recordIngress(channelId, true, "", String(payload.observedAt), now);
+      if (receipt.processingState === "queued" && this.wakeWorker) {
+        void Promise.resolve().then(() => this.wakeWorker?.()).catch(() => undefined);
+      }
+      return receipt;
     });
   }
 
@@ -173,10 +301,14 @@ export class DurableSignalIngressProcessor {
       if (!lease) break;
       let processed;
       try {
-        if (lease.source !== "trackalacker" || lease.eventType !== SIGNAL_INGRESS_EVENT_TYPE) {
+        const provider = lease.source as SignalProvider;
+        if (!PROVIDERS.has(provider) || lease.eventType !== SIGNAL_INGRESS_EVENT_TYPE) {
           throw processingError("signal_ingress_contract_mismatch");
         }
-        processed = this.engine.process(lease.payload as unknown as SignalEventInput, now);
+        processed = this.engine.process(
+          durableSignal(lease.payload as unknown as SignalEventInput, provider, now),
+          now
+        );
       } catch {
         try {
           const disposition = this.delivery.retryInbox(

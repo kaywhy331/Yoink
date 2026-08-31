@@ -12,6 +12,10 @@ import {
   loadInternalServiceCapabilityRegistry,
   type InternalServiceCapabilityRegistry
 } from "./internal-service-capabilities.js";
+import {
+  loadUserActionWebhookRegistry,
+  type UserActionWebhookRegistry
+} from "../../../packages/engine/src/user-action-webhook.js";
 
 export interface YoinkConfig {
   host: "127.0.0.1";
@@ -31,6 +35,7 @@ export interface YoinkConfig {
   } | null;
   observerRecipeWitness: ObserverRecipeWitnessRuntimeConfig | null;
   operatorAlertWebhookRegistry: OperatorAlertWebhookRegistry;
+  userActionWebhookRegistry: UserActionWebhookRegistry;
 }
 
 function port(value: string | undefined): number {
@@ -107,6 +112,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
   );
   const observerRecipeWitness = loadObserverRecipeWitnessConfig(env);
   const operatorAlertWebhookRegistry = loadOperatorAlertWebhookRegistry(env);
+  const userActionWebhookRegistry = loadUserActionWebhookRegistry(env);
   if (hostedRequested && !observerRecipeWitness) {
     throw new Error("Hosted mode requires an independently operated observer recipe witness configuration.");
   }
@@ -127,6 +133,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
       internalServiceCapabilities
     } : null,
     observerRecipeWitness,
-    operatorAlertWebhookRegistry
+    operatorAlertWebhookRegistry,
+    userActionWebhookRegistry
   };
 }

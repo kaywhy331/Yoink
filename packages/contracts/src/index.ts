@@ -1028,7 +1028,7 @@ export interface SignalEventInput {
   sourceConnectionId: string;
   source: string;
   externalEventId: string;
-  eventType: "in_stock" | "restock" | "preorder" | "price_change" | "unknown";
+  eventType: "in_stock" | "restock" | "preorder" | "price_change" | "drop_window" | "queue_open" | "unknown";
   observedAt: string;
   receivedAt?: string;
   test?: boolean;
@@ -1196,6 +1196,8 @@ export interface SpendPolicy {
   perOrderCapCents: number | null;
   dailyCapCents: number | null;
   monthlyCapCents: number | null;
+  timezone: string;
+  periodResetHour: number;
   orderSubmissionEnabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -1206,6 +1208,8 @@ export interface SpendPolicyUpdateInput {
   perOrderCapCents: number | null;
   dailyCapCents: number | null;
   monthlyCapCents: number | null;
+  timezone?: string;
+  periodResetHour?: number;
 }
 
 export interface AppSettingsUpdateInput {

@@ -1572,7 +1572,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       new Date("2026-08-25T16:45:00.000Z").getTime()
     );
     assert.equal(roles.roleCount, 5);
-    assert.equal(roles.grantedTableCount, 95);
+    assert.equal(roles.grantedTableCount, 105);
     assert.equal((await verifyPostgresRuntimeReadRoles(
       importer,
       NATIVE_SCHEMA,
@@ -1585,11 +1585,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_SESSION_ROLE_NAMESPACE,
       new Date("2026-08-25T16:50:00.000Z").getTime()
     );
-    assert.equal(sessionBoundary.tenantRlsTableCount, 83);
-    assert.equal(sessionBoundary.grantCount, 83);
+    assert.equal(sessionBoundary.tenantRlsTableCount, 93);
+    assert.equal(sessionBoundary.grantCount, 93);
     assert.equal(sessionBoundary.membershipCount, 0);
     assert.equal(sessionBoundary.activePrincipalCount, 0);
-    assert.equal(sessionBoundary.restrictivePolicyCount, 83);
+    assert.equal(sessionBoundary.restrictivePolicyCount, 93);
     assert.match(sessionBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(sessionBoundary.directParameterSetPrevented, false);
     assert.equal(sessionBoundary.directParameterScopeExpansionPrevented, true);
@@ -23863,7 +23863,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         coveredPrincipals: 1,
         totalPrincipals: 3,
         deploymentAttested: false,
-        deploymentContractVersion: 2
+        deploymentContractVersion: 3
       }
     );
     await firstStore.stopWorker("native_repository_probe", "standalone", "native_control_stop", NATIVE_NOW + 1);

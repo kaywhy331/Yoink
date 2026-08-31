@@ -27,7 +27,7 @@ test("the admin worker API exposes safe controls without lease capability materi
       lastHeartbeatAt: new Date().toISOString(),
       lastErrorCode: "",
       deploymentAttested: true,
-      deploymentContractVersion: 2
+      deploymentContractVersion: 3
     })
   });
   server.listen(0, "127.0.0.1");
@@ -49,7 +49,7 @@ test("the admin worker API exposes safe controls without lease capability materi
     assert.equal(health.backgroundWorkerHealthy, true);
     assert.equal(health.backgroundWorkerMode, "embedded");
     assert.equal(health.backgroundWorkerDeploymentAttested, true);
-    assert.equal(health.backgroundWorkerDeploymentContractVersion, 2);
+    assert.equal(health.backgroundWorkerDeploymentContractVersion, 3);
     assert.equal(health.asyncBackgroundWorkerContract, true);
     assert.equal(health.standaloneBackgroundWorkerProcessReady, true);
     assert.equal(health.productionWorkerFleetReady, false);
@@ -103,7 +103,7 @@ test("the admin worker API exposes safe controls without lease capability materi
       lastHeartbeatAt: initial.backgroundWork.deployment.lastHeartbeatAt,
       lastErrorCode: "",
       attested: true,
-      contractVersion: 2
+      contractVersion: 3
     });
     assert.equal(initial.backgroundWork.schedules.length, BACKGROUND_TASK_KINDS.length);
     assert.equal(initial.backgroundWork.schedules.some(

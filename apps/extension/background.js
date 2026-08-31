@@ -42,11 +42,13 @@ const LOCAL_PACKAGE_UPDATES = RUNTIME_CONFIG.localPackageUpdates;
 const EVIDENCE_REQUEST_TIMEOUT_MS = 10_000;
 const HEALTH_ALARM = "yoink-health";
 const JOB_ALARM = "yoink-jobs";
+const WATCH_QUEUE_ALARM = "yoink-watch-queue";
 const MAX_ACTION_JOBS_PER_CYCLE = 4;
 const SIGNAL_JOB_HANDOFF_RETRY_DELAYS_MS = Object.freeze([250, 750, 1_500, 2_500]);
 const POST_CLICK_SETTLE_MAX_MS = 1_500;
 const POST_CLICK_SETTLE_QUIET_MS = 125;
 const POST_CLICK_SETTLE_MIN_MS = 300;
+const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
 const POST_CLICK_SETTLE_STATE_KEY = "__yoinkPostClickSettleV1";
 const READINESS_KEY = "readiness";
 const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
@@ -56,6 +58,8 @@ const DEVICE_KEY = "pairedDevice";
 const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
 const RETAILER_ACTION_TABS_KEY = "yoinkRetailerActionTabsV1";
+const WARM_READINESS_CURSOR_KEY = "yoinkWarmReadinessCursorV1";
+const ORDER_HANDOFF_KEY = "yoinkOrderHandoffsV1";
 const CART_READY_SOUND_KEY = "yoinkCartReadySoundEnabledV1";
 const TRACKALACKER_PUSH_STATE_KEY = "yoinkTrackalackerPushStateV1";
 const TRACKALACKER_PUSH_QUEUE_KEY = "yoinkTrackalackerPushQueueV1";
@@ -192,6 +196,8 @@ const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const TrackalackerPush = globalThis.YoinkTrackalackerPush;
 const ObserverRecipeRoot = globalThis.YoinkObserverRecipeRoot;
 let jobCyclePromise = null;
+let watchQueueCyclePromise = null;
+let warmReadinessCyclePromise = null;
 let signalJobHandoffPromise = null;
 let notificationCyclePromise = null;
 let trackalackerEnrollmentPromise = null;
@@ -1982,19 +1988,28 @@ async function postTrackalackerStatus(state = null) {
   }
 }
 
-async function sendTrackalackerEnvelope(envelope) {
+async function sendTrackalackerBatch(envelopes) {
   const device = await storedDevice();
   if (!device?.token) return { delivered: false, retryable: true, status: 401 };
   try {
-    await request("/devices/self/sources/trackalacker/signals", {
+    const payload = await request("/devices/self/sources/trackalacker/signals/batch", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${device.token}`,
-        "Idempotency-Key": envelope.signalId
-      },
-      body: JSON.stringify(envelope)
+      headers: { Authorization: `Bearer ${device.token}` },
+      body: JSON.stringify({
+        signals: envelopes.map((envelope) => ({ ...envelope, idempotencyKey: envelope.signalId }))
+      })
     }, 5_000);
-    return { delivered: true, retryable: false, status: 202 };
+    const receipts = Array.isArray(payload?.receipts) ? payload.receipts : [];
+    if (receipts.length !== envelopes.length) throw new Error("Yoink returned an incomplete signal batch receipt.");
+    return {
+      delivered: true,
+      retryable: false,
+      status: 202,
+      acceptedIds: receipts.filter((receipt) => receipt?.accepted === true)
+        .map((receipt) => envelopes[Number(receipt.index)]?.signalId).filter(Boolean),
+      rejectedIds: receipts.filter((receipt) => receipt?.accepted !== true)
+        .map((receipt) => envelopes[Number(receipt.index)]?.signalId).filter(Boolean)
+    };
   } catch (error) {
     const status = Number(error?.status || 0);
     return { delivered: false, retryable: !status || status >= 500 || [408, 429].includes(status), status };
@@ -2009,17 +2024,23 @@ async function drainTrackalackerQueue() {
     let delivered = 0;
     while (true) {
       const queue = await readTrackalackerQueue();
-      const envelope = queue[0];
-      if (!envelope) break;
-      const result = await sendTrackalackerEnvelope(envelope);
+      const batch = queue.slice(0, 20);
+      if (!batch.length) break;
+      const result = await sendTrackalackerBatch(batch);
       if (result.delivered) {
-        await mutateTrackalackerQueue((current) => current.filter((entry) => entry.signalId !== envelope.signalId));
-        delivered += 1;
-        await updateTrackalackerState({ lastDeliveryAt: new Date().toISOString(), lastHttpStatus: result.status, errorCode: "" });
+        const completed = new Set([...(result.acceptedIds || []), ...(result.rejectedIds || [])]);
+        await mutateTrackalackerQueue((current) => current.filter((entry) => !completed.has(entry.signalId)));
+        delivered += result.acceptedIds?.length || 0;
+        await updateTrackalackerState({
+          lastDeliveryAt: new Date().toISOString(),
+          lastHttpStatus: result.status,
+          errorCode: result.rejectedIds?.length ? "signal_delivery_rejected" : ""
+        });
         continue;
       }
       if (!result.retryable && result.status) {
-        await mutateTrackalackerQueue((current) => current.filter((entry) => entry.signalId !== envelope.signalId));
+        const failedIds = new Set(batch.map((entry) => entry.signalId));
+        await mutateTrackalackerQueue((current) => current.filter((entry) => !failedIds.has(entry.signalId)));
         await updateTrackalackerState({ errorCode: "signal_delivery_rejected", lastHttpStatus: result.status });
         continue;
       }
@@ -2559,6 +2580,40 @@ async function pairDevice(code) {
 async function forgetDevice() {
   await chrome.storage.local.remove(DEVICE_KEY);
   return checkHealth();
+}
+
+async function deleteLocalCompanionData(confirmation) {
+  if (confirmation !== "DELETE_ALL_LOCAL_YOINK_DATA") {
+    throw new Error("Local data deletion requires deliberate confirmation.");
+  }
+  const device = await storedDevice();
+  await globalThis.registration?.pushManager?.getSubscription?.()
+    .then((subscription) => subscription?.unsubscribe?.()).catch(() => undefined);
+  await chrome.storage.local.clear();
+  await chrome.storage.session.clear();
+  await Promise.all([
+    chrome.action.setBadgeText({ text: "" }),
+    chrome.action.setTitle({ title: "Yoink Companion · Not paired" })
+  ]).catch(() => undefined);
+  let verified = false;
+  if (device?.token && device?.id) {
+    try {
+      await request("/devices/self/privacy/local-deletion", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${device.token}` },
+        body: JSON.stringify({
+          contractVersion: 1,
+          localCleared: true,
+          sessionCleared: true,
+          retainedKeys: []
+        })
+      }, EVIDENCE_REQUEST_TIMEOUT_MS);
+      verified = true;
+    } catch {
+      // Deletion is never rolled back merely because its remote receipt is unavailable.
+    }
+  }
+  return { deleted: true, verified };
 }
 
 async function inspectTargetTab() {
@@ -3462,6 +3517,38 @@ async function reportJob(active, state, reasonCode, message, evidence = {}) {
   return payload.job;
 }
 
+async function reportJobBatch(active, events) {
+  if (!Array.isArray(events) || !events.length) throw new Error("A job progress batch is required.");
+  const device = await storedDevice();
+  if (!device?.token) throw new Error("The paired Chrome device is unavailable.");
+  const payload = await request(`/devices/self/jobs/${encodeURIComponent(active.id)}/events/batch`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({
+      capabilityToken: active.capabilityToken,
+      events: events.map((event) => ({
+        state: event.state,
+        reasonCode: safeReasonCode(event.reasonCode),
+        message: String(event.message || "Chrome reported guarded retailer add progress.").slice(0, 500),
+        evidence: event.evidence || {}
+      }))
+    })
+  });
+  active.phase = payload.job?.state || events.at(-1)?.state || active.phase;
+  await saveActiveJob(active);
+  return payload.job;
+}
+
+async function heartbeatJob(active) {
+  const device = await storedDevice();
+  if (!device?.token) throw new Error("The paired Chrome device is unavailable.");
+  return request(`/devices/self/jobs/${encodeURIComponent(active.id)}/heartbeat`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({ capabilityToken: active.capabilityToken })
+  });
+}
+
 function waitForTab(tabId, retailerId, expected, timeoutMs = 25_000) {
   const lane = ADD_LANES[retailerId];
   return new Promise((resolve, reject) => {
@@ -3496,6 +3583,36 @@ function waitForTab(tabId, retailerId, expected, timeoutMs = 25_000) {
       if (updatedId === tabId && (changeInfo.status === "complete" || tab.status === "complete") && accepted(tab)) finish(null, tab);
     };
     timeout = setTimeout(() => finish(new Error(`The ${lane?.name || "retailer"} tab did not finish loading in time.`)), timeoutMs);
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId).then((tab) => {
+      if (accepted(tab)) finish(null, tab);
+    }).catch(() => undefined);
+  });
+}
+
+function waitForExactProductTab(tabId, retailerId, retailerSku, timeoutMs = 25_000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeout;
+    let listener;
+    const finish = (error, tab) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      chrome.tabs.onUpdated.removeListener(listener);
+      if (error) reject(error); else resolve(tab);
+    };
+    const accepted = (tab) => {
+      if (tab?.status !== "complete") return false;
+      const identity = canonicalRetailerIdentity(tab.url);
+      return identity?.retailerId === retailerId && identity.retailerSku === retailerSku;
+    };
+    listener = (updatedId, changeInfo, tab) => {
+      if (updatedId === tabId && (changeInfo.status === "complete" || tab.status === "complete") && accepted(tab)) {
+        finish(null, tab);
+      }
+    };
+    timeout = setTimeout(() => finish(new Error("The watched product page did not finish loading in time.")), timeoutMs);
     chrome.tabs.onUpdated.addListener(listener);
     chrome.tabs.get(tabId).then((tab) => {
       if (accepted(tab)) finish(null, tab);
@@ -3749,7 +3866,7 @@ function freshCartBaseline(value, retailerId, now = Date.now()) {
     || !Number.isSafeInteger(value.lineCount) || value.lineCount !== value.lines.length
     || value.lines.length > 25) return null;
   const observedAt = new Date(String(value.observedAt || "")).getTime();
-  if (!Number.isFinite(observedAt) || observedAt > now + 1_000 || now - observedAt > 30_000) return null;
+  if (!Number.isFinite(observedAt) || observedAt > now + 1_000 || now - observedAt > CART_BASELINE_MAX_AGE_MS) return null;
   const lines = value.lines.map((line) => ({
     retailerSku: String(line?.retailerSku || "").toLocaleUpperCase("en-US"),
     quantity: Number(line?.quantity)
@@ -3773,38 +3890,115 @@ async function readCartReadyState() {
 
 async function readRetailerActionTabs() {
   const value = (await chrome.storage.session.get(RETAILER_ACTION_TABS_KEY))[RETAILER_ACTION_TABS_KEY];
-  const tabs = value?.schemaVersion === 1 && value.tabs && typeof value.tabs === "object" && !Array.isArray(value.tabs)
+  const tabs = [1, 2].includes(value?.schemaVersion) && value.tabs && typeof value.tabs === "object" && !Array.isArray(value.tabs)
     ? value.tabs : {};
-  return new Map(Object.entries(tabs)
-    .filter(([retailerId, tabId]) => Object.hasOwn(ADD_LANES, retailerId) && Number.isInteger(tabId) && tabId > 0)
-    .map(([retailerId, tabId]) => [retailerId, Number(tabId)]));
+  return new Map(Object.entries(tabs).flatMap(([retailerId, stored]) => {
+    if (!Object.hasOwn(ADD_LANES, retailerId)) return [];
+    const tabId = Number.isInteger(stored) ? Number(stored) : Number(stored?.tabId);
+    if (!Number.isInteger(tabId) || tabId <= 0) return [];
+    return [[retailerId, {
+      tabId,
+      cartBaseline: freshCartBaseline(stored?.cartBaseline, retailerId),
+      signedInState: ["ready", "signed_out", "challenged"].includes(stored?.signedInState)
+        ? stored.signedInState : "unknown"
+    }]];
+  }));
 }
 
-async function rememberRetailerActionTab(retailerId, tabId) {
+async function rememberRetailerActionTab(retailerId, tabId, cartBaseline = undefined, signedInState = undefined) {
   if (!Object.hasOwn(ADD_LANES, retailerId) || !Number.isInteger(tabId) || tabId <= 0) return;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!Number.isInteger(tab?.id)) return;
   const tabs = await readRetailerActionTabs();
-  tabs.set(retailerId, tabId);
-  await chrome.storage.session.set({
-    [RETAILER_ACTION_TABS_KEY]: { schemaVersion: 1, tabs: Object.fromEntries(tabs) }
+  const current = tabs.get(retailerId);
+  tabs.set(retailerId, {
+    tabId,
+    cartBaseline: cartBaseline === undefined
+      ? current?.cartBaseline || null
+      : freshCartBaseline(cartBaseline, retailerId),
+    signedInState: signedInState === undefined
+      ? current?.signedInState || "unknown"
+      : ["ready", "signed_out", "challenged"].includes(signedInState) ? signedInState : "unknown"
   });
+  await chrome.storage.session.set({
+    [RETAILER_ACTION_TABS_KEY]: { schemaVersion: 2, tabs: Object.fromEntries(tabs) }
+  });
+}
+
+async function inspectRetailerSessionState(tabId, retailerId) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    args: [retailerId],
+    func: (exactRetailerId) => {
+      const visible = (element) => {
+        if (!(element instanceof Element)) return false;
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0
+          && rect.width > 0 && rect.height > 0;
+      };
+      const anyVisible = (selectors) => selectors.some((selector) => [...document.querySelectorAll(selector)].some(visible));
+      const ready = {
+        target: ['a[href*="/logout" i]', 'button[data-test*="account-menu" i]'],
+        walmart: ['a[href*="/account/logout" i]', 'button[data-automation-id="account-menu-button"]'],
+        amazon: ['#nav-item-signout', 'a[href*="/gp/flex/sign-out" i]'],
+        bestbuy: ['a[href*="/identity/global/signout" i]', 'a[href*="/logout" i]']
+      }[exactRetailerId] || [];
+      const signedOut = {
+        target: ['a[href*="/login" i]', 'a[href*="/signin" i]'],
+        walmart: ['a[href*="/account/login" i]', 'a[href*="/signin" i]'],
+        amazon: ['a[href*="/ap/signin" i]'],
+        bestbuy: ['a[href*="/identity/global/signin" i]', 'a[href*="/login" i]']
+      }[exactRetailerId] || [];
+      if (anyVisible(ready)) return "ready";
+      if (anyVisible(signedOut)) return "signed_out";
+      return "unknown";
+    }
+  });
+  const state = results.find((entry) => entry.frameId === 0)?.result;
+  return ["ready", "signed_out"].includes(state) ? state : "unknown";
 }
 
 async function forgetRetailerActionTab(tabId) {
   if (!Number.isInteger(tabId)) return;
   const tabs = await readRetailerActionTabs();
   let changed = false;
-  for (const [retailerId, storedTabId] of tabs) {
-    if (storedTabId !== tabId) continue;
+  for (const [retailerId, stored] of tabs) {
+    if (stored.tabId !== tabId) continue;
     tabs.delete(retailerId);
     changed = true;
   }
   if (changed) {
     await chrome.storage.session.set({
-      [RETAILER_ACTION_TABS_KEY]: { schemaVersion: 1, tabs: Object.fromEntries(tabs) }
+      [RETAILER_ACTION_TABS_KEY]: { schemaVersion: 2, tabs: Object.fromEntries(tabs) }
     });
   }
+}
+
+async function reportRetailerReadiness(retailerId, input = {}) {
+  const lane = ADD_LANES[retailerId];
+  const device = await storedDevice();
+  if (!lane || !device?.token) return null;
+  const baseline = freshCartBaseline(input.cartBaseline, retailerId);
+  const observedAt = baseline?.observedAt;
+  return request(`/devices/self/readiness/${encodeURIComponent(retailerId)}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({
+      contractVersion: 1,
+      retailerId,
+      signedInState: ["ready", "signed_out", "challenged"].includes(input.signedInState)
+        ? input.signedInState : "unknown",
+      cartBaselineState: baseline ? "ready" : input.cartBaselineState === "stale" ? "stale" : "unavailable",
+      ...(observedAt ? {
+        baselineObservedAt: observedAt,
+        expiresAt: new Date(new Date(observedAt).getTime() + CART_BASELINE_MAX_AGE_MS).toISOString()
+      } : {}),
+      adapterVersion: lane.adapterVersion,
+      ...(input.errorCode ? { errorCode: safeReasonCode(input.errorCode) } : {})
+    })
+  }, 3_000).catch(() => null);
 }
 
 async function showCartReadyBadge(state) {
@@ -3928,6 +4122,25 @@ async function publishCartReady(active, readyAt = Date.now()) {
   };
   const item = PopupState.cartReadyState({ schemaVersion: 1, items: [raw] }, readyAt).items[0];
   if (!lane || !item) return null;
+  const storedHandoffs = (await chrome.storage.session.get(ORDER_HANDOFF_KEY))[ORDER_HANDOFF_KEY];
+  const handoffs = Array.isArray(storedHandoffs) ? storedHandoffs.filter((entry) => {
+    const recordedAt = new Date(String(entry?.recordedAt || "")).getTime();
+    return /^[A-Za-z0-9_-]{3,120}$/.test(String(entry?.jobId || ""))
+      && Object.hasOwn(ADD_LANES, entry?.retailerId)
+      && Number.isInteger(entry?.tabId) && entry.tabId > 0
+      && Number.isFinite(recordedAt) && readyAt - recordedAt < 35 * 60_000;
+  }) : [];
+  await chrome.storage.session.set({
+    [ORDER_HANDOFF_KEY]: [
+      ...handoffs.filter((entry) => entry.jobId !== item.jobId),
+      {
+        jobId: item.jobId,
+        retailerId: item.retailerId,
+        tabId: item.tabId,
+        recordedAt: item.recordedAt
+      }
+    ].slice(-20)
+  });
   await mutateCartReadyState((current) => ({
     schemaVersion: 1,
     items: [...current.items.filter((candidate) => candidate.jobId !== item.jobId), item]
@@ -3945,12 +4158,68 @@ async function publishCartReady(active, readyAt = Date.now()) {
   return item;
 }
 
+function retailerConfirmationPage(retailerId, value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol !== "https:" || url.username || url.password) return false;
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname.toLowerCase().replace(/\/+$/, "") || "/";
+    if (retailerId === "target") {
+      return (host === "target.com" || host.endsWith(".target.com"))
+        && /(?:^|\/)(?:order-confirmation|co-order-confirmation|thank-you)(?:\/|$)/.test(path);
+    }
+    if (retailerId === "walmart") {
+      return (host === "walmart.com" || host.endsWith(".walmart.com"))
+        && /(?:^|\/)(?:thank-you|thankyou|order-confirmation)(?:\/|$)/.test(path);
+    }
+    if (retailerId === "amazon") {
+      return (host === "amazon.com" || host.endsWith(".amazon.com"))
+        && /(?:^|\/)(?:thankyou|thank-you|order-confirmation)(?:\/|$)/.test(path);
+    }
+    if (retailerId === "bestbuy") {
+      return (host === "bestbuy.com" || host.endsWith(".bestbuy.com"))
+        && /(?:^|\/)(?:thank-you|thankyou|order-confirmation)(?:\/|$)/.test(path);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function observeOrderConfirmation(tabId, url) {
+  const device = await storedDevice();
+  if (!device?.token || !Number.isInteger(tabId)) return false;
+  const stored = (await chrome.storage.session.get(ORDER_HANDOFF_KEY))[ORDER_HANDOFF_KEY];
+  if (!Array.isArray(stored)) return false;
+  const now = Date.now();
+  const handoff = stored.find((entry) => entry?.tabId === tabId
+    && retailerConfirmationPage(entry?.retailerId, url)
+    && now - new Date(String(entry?.recordedAt || "")).getTime() <= 30 * 60_000);
+  if (!handoff) return false;
+  await request("/devices/self/order-confirmations", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({
+      contractVersion: 1,
+      actionJobId: handoff.jobId,
+      retailerId: handoff.retailerId,
+      pageClass: "confirmation",
+      observedAt: new Date().toISOString()
+    })
+  }, EVIDENCE_REQUEST_TIMEOUT_MS);
+  await chrome.storage.session.set({
+    [ORDER_HANDOFF_KEY]: stored.filter((entry) => entry !== handoff)
+  });
+  return true;
+}
+
 async function verifyAddedCart(active) {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
   if (!lane || !Number.isInteger(active.tabId) || !active.proof || !active.cartBaseline) {
     throw new Error("The retailer cart verification context is unavailable.");
   }
+  await heartbeatJob(active);
   await navigateRetailerTab(active.tabId, retailerId, lane.cartUrl, "cart");
   await injectAddAction(active.tabId, retailerId);
   let result = { ok: false, reason: "cart_unverified" };
@@ -3969,25 +4238,43 @@ async function verifyAddedCart(active) {
     await clearActiveJob();
     return { confirmed: false, cartBaseline: null };
   }
-  await reportJob(active, "cart_verified", "exact_cart_delta_verified", `The ${lane.name} cart changed by exactly one authorized item and every baseline quantity remained unchanged.`, {
-    retailerSku: active.runnerJob.retailerSku,
-    quantity: 1,
-    unitPriceCents: result.proof?.unitPriceCents ?? null,
-    sellerType: result.proof?.sellerType ?? "unknown"
-  });
   const readyAt = Date.now();
   markJobTiming(active, "cartReadyAt", readyAt);
   const latency = cartReadyLatency(active, readyAt);
-  await reportJob(active, "confirmed", `${retailerId}_add_confirmed`, `${lane.name} add-to-cart completed and the exact +1 cart delta was verified.`, {
-    retailerSku: active.runnerJob.retailerSku,
-    quantity: 1,
-    baselineLineCount: Number(active.cartBaseline?.lineCount) || 0,
-    latency
-  });
+  await reportJobBatch(active, [
+    {
+      state: "cart_verified",
+      reasonCode: "exact_cart_delta_verified",
+      message: `The ${lane.name} cart changed by exactly one authorized item and every baseline quantity remained unchanged.`,
+      evidence: {
+        retailerId,
+        retailerSku: active.runnerJob.retailerSku,
+        quantity: 1,
+        unitPriceCents: result.proof?.unitPriceCents ?? null,
+        sellerType: result.proof?.sellerType ?? "unknown"
+      }
+    },
+    {
+      state: "confirmed",
+      reasonCode: `${retailerId}_add_confirmed`,
+      message: `${lane.name} add-to-cart completed and the exact +1 cart delta was verified.`,
+      evidence: {
+        retailerId,
+        retailerSku: active.runnerJob.retailerSku,
+        quantity: 1,
+        baselineLineCount: Number(active.cartBaseline?.lineCount) || 0,
+        latency
+      }
+    }
+  ]);
   await publishCartReady(active, readyAt).catch(() => undefined);
   const cartBaseline = freshCartBaseline(result.cartBaseline, retailerId, readyAt);
+  void reportRetailerReadiness(retailerId, {
+    cartBaseline,
+    signedInState: active.signedInState || "unknown"
+  });
   await clearActiveJob();
-  return { confirmed: true, cartBaseline };
+  return { confirmed: true, cartBaseline, signedInState: active.signedInState || "unknown" };
 }
 
 async function failActiveJob(active, mutationPossible, reason = "extension_error") {
@@ -4008,7 +4295,12 @@ async function failActiveJob(active, mutationPossible, reason = "extension_error
   await clearActiveJob();
 }
 
-async function executeLeasedRetailerJob(lease, reusableTabId = null, reusableBaseline = null) {
+async function executeLeasedRetailerJob(
+  lease,
+  reusableTabId = null,
+  reusableBaseline = null,
+  reusableSignedInState = "unknown"
+) {
   const retailerId = lease.retailerId || lease.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
   if (!lane) throw new Error("The leased retailer lane is unsupported.");
@@ -4018,6 +4310,8 @@ async function executeLeasedRetailerJob(lease, reusableTabId = null, reusableBas
     tabId: null,
     proof: null,
     cartBaseline: null,
+    signedInState: ["ready", "signed_out", "challenged"].includes(reusableSignedInState)
+      ? reusableSignedInState : "unknown",
     timing: { leasedAt: Date.now() }
   };
   await saveActiveJob(active);
@@ -4033,6 +4327,9 @@ async function executeLeasedRetailerJob(lease, reusableTabId = null, reusableBas
     if (cachedBaseline && retailerCartTab(reusableTab, retailerId)) {
       active.tabId = reusableTabId;
       active.cartBaseline = cachedBaseline;
+      active.signedInState = await inspectRetailerSessionState(active.tabId, retailerId).catch(
+        () => active.signedInState
+      );
       markJobTiming(active, "baselineReadyAt");
       await reportJob(active, "navigating", "cart_baseline_reused", `Chrome reused the fresh, exact ${lane.name} cart baseline from the preceding verified add.`);
     } else {
@@ -4047,11 +4344,24 @@ async function executeLeasedRetailerJob(lease, reusableTabId = null, reusableBas
         if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500));
       }
       if (!baseline?.ok || !baseline.proof) {
+        active.signedInState = baseline?.reason === "manual_action_required"
+          ? "challenged"
+          : await inspectRetailerSessionState(active.tabId, retailerId).catch(() => "unknown");
+        void reportRetailerReadiness(retailerId, {
+          cartBaselineState: baseline?.reason === "cart_baseline_stale" ? "stale" : "unavailable",
+          signedInState: active.signedInState,
+          errorCode: baseline?.reason || "cart_unverified"
+        });
         await reportJob(active, "cancelled", baseline?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the current cart baseline could not be proven.`);
         await clearActiveJob();
         return { confirmed: false, tabId: active.tabId, continueCycle: true, cartBaseline: null };
       }
       active.cartBaseline = baseline.proof;
+      active.signedInState = await inspectRetailerSessionState(active.tabId, retailerId).catch(() => "unknown");
+      void reportRetailerReadiness(retailerId, {
+        cartBaseline: baseline.proof,
+        signedInState: active.signedInState
+      });
       markJobTiming(active, "baselineReadyAt");
       await saveActiveJob(active);
     }
@@ -4080,9 +4390,24 @@ async function executeLeasedRetailerJob(lease, reusableTabId = null, reusableBas
     active.authorizationId = prepared.authorizationId;
     markJobTiming(active, "offerVerifiedAt");
     await saveActiveJob(active);
-    await reportJob(active, "offer_verified", "live_offer_verified", `The exact ${lane.name} SKU, seller, price, stock, and fulfillment passed live verification.`, safeOfferEvidence(active.proof));
-    await reportJob(active, "add_authorized", "add_boundary_prepared", `The exact ${lane.name} Add control is prepared for one final revalidation.`);
-    await reportJob(active, "adding", "add_receipt_armed", "The durable at-most-once Add receipt was armed before the browser click.");
+    await reportJobBatch(active, [
+      {
+        state: "offer_verified",
+        reasonCode: "live_offer_verified",
+        message: `The exact ${lane.name} SKU, seller, price, stock, and fulfillment passed live verification.`,
+        evidence: safeOfferEvidence(active.proof)
+      },
+      {
+        state: "add_authorized",
+        reasonCode: "add_boundary_prepared",
+        message: `The exact ${lane.name} Add control is prepared for one final revalidation.`
+      },
+      {
+        state: "adding",
+        reasonCode: "add_receipt_armed",
+        message: "The durable at-most-once Add receipt was armed before the browser click."
+      }
+    ]);
     const postClickSettle = await createPostClickSettle(active.tabId);
     const committed = await executeAddAction(active.tabId, retailerId, lane.commitOperation, [active.runnerJob, active.authorizationId]);
     active.authorizationId = "";
@@ -4107,7 +4432,8 @@ async function executeLeasedRetailerJob(lease, reusableTabId = null, reusableBas
       confirmed: verification.confirmed,
       tabId: active.tabId,
       continueCycle: verification.confirmed,
-      cartBaseline: verification.cartBaseline
+      cartBaseline: verification.cartBaseline,
+      signedInState: verification.signedInState || active.signedInState || "unknown"
     };
   } catch {
     const mutationPossible = ["adding", "cart_verified"].includes(active.phase);
@@ -4277,6 +4603,236 @@ async function reportNotificationInteraction(deliveryId, interaction) {
   }).catch(() => undefined);
 }
 
+function watchObservationBody(lease, observation = null, reasonCode = "") {
+  const exact = observation
+    && observation.retailerId === lease.retailerId
+    && String(observation.retailerSku || "").toUpperCase() === String(lease.retailerSku || "").toUpperCase()
+    ? observation : null;
+  return {
+    contractVersion: 1,
+    capabilityToken: lease.capabilityToken,
+    retailerId: lease.retailerId,
+    retailerSku: lease.retailerSku,
+    availability: exact?.availability || "unknown",
+    unitPriceCents: Number.isSafeInteger(exact?.unitPriceCents) ? exact.unitPriceCents : null,
+    currency: exact?.currency === "USD" ? "USD" : "USD",
+    sellerName: String(exact?.sellerName || "").slice(0, 160),
+    sellerType: ["first_party", "third_party"].includes(exact?.sellerType) ? exact.sellerType : "unknown",
+    fulfillment: ["shipping", "pickup"].includes(exact?.fulfillment) ? exact.fulfillment : "unknown",
+    observerVersion: lease.retailerId === "target"
+      ? TARGET_OBSERVER_VERSION
+      : RETAILER_OBSERVER_VERSIONS[lease.retailerId] || "unsupported-observer",
+    observedAt: exact?.observedAt || new Date().toISOString(),
+    extensionVersion: EXTENSION_VERSION,
+    ...(reasonCode ? { reasonCode: safeReasonCode(reasonCode) } : {})
+  };
+}
+
+async function postWatchObservation(device, lease, observation = null, reasonCode = "") {
+  return request(`/devices/self/watch-queue/${encodeURIComponent(lease.id)}/observations`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify(watchObservationBody(lease, observation, reasonCode))
+  }, EVIDENCE_REQUEST_TIMEOUT_MS);
+}
+
+async function collectWatchObservation(tabId, lease) {
+  if (lease.retailerId === "target") {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "ISOLATED",
+      files: ["target-shadow.js"]
+    });
+    const injections = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "ISOLATED",
+      func: () => {
+        try {
+          const observer = globalThis.YoinkTargetShadow;
+          return observer?.collectTargetShadowObservation
+            ? { ok: true, observation: observer.collectTargetShadowObservation(document, location.href) }
+            : { ok: false, reasonCode: "observer_runtime_unavailable" };
+        } catch {
+          return { ok: false, reasonCode: "observer_collection_failed" };
+        }
+      }
+    });
+    const result = injections.find((entry) => entry.frameId === 0)?.result;
+    if (!result?.ok) throw new Error(result?.reasonCode || "observer_collection_failed");
+    return targetObservationPayload(result.observation);
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    files: ["retailer-shadow.js"]
+  });
+  let result = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const injections = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "ISOLATED",
+      args: [lease.retailerId, attempt],
+      func: (retailerId, attemptCount) => {
+        try {
+          const observer = globalThis.YoinkRetailerShadow;
+          return observer?.collectRetailerShadowAttempt
+            ? { ok: true, ...observer.collectRetailerShadowAttempt(document, location.href, retailerId, "shipping", attemptCount, false) }
+            : { ok: false, reasonCode: "observer_runtime_unavailable" };
+        } catch {
+          return { ok: false, reasonCode: "observer_collection_failed" };
+        }
+      }
+    });
+    result = injections.find((entry) => entry.frameId === 0)?.result;
+    if (!result?.ok || result.observation?.availability !== "unknown" || attempt === 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  if (!result?.ok) throw new Error(result?.reasonCode || "observer_collection_failed");
+  return retailerObservationPayload(result.observation, lease.retailerId);
+}
+
+async function runWatchQueueCycle() {
+  if (watchQueueCyclePromise) return watchQueueCyclePromise;
+  watchQueueCyclePromise = (async () => {
+    const device = await storedDevice();
+    if (!device?.token) return { observed: false, reason: "device_unavailable" };
+    if (await activeJob().catch(() => null)) return { observed: false, reason: "action_job_active" };
+    const response = await request("/devices/self/watch-queue/next", {
+      headers: { Authorization: `Bearer ${device.token}` }
+    });
+    const lease = response?.item;
+    if (!lease?.readOnly || lease.contractVersion !== 1 || lease.quantity !== 1
+      || !/^[A-Za-z0-9_-]{20,100}$/.test(String(lease.capabilityToken || ""))) {
+      return { observed: false, reason: String(response?.reason || "no_watch_items") };
+    }
+    const identity = canonicalRetailerIdentity(lease.canonicalUrl);
+    if (!identity || identity.retailerId !== lease.retailerId
+      || identity.retailerSku !== String(lease.retailerSku || "").toUpperCase()) {
+      await postWatchObservation(device, lease, null, "listing_identity_invalid");
+      return { observed: true, reason: "listing_identity_invalid" };
+    }
+    const origins = lease.retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[lease.retailerId];
+    if (!origins || !await chrome.permissions.contains({ origins })) {
+      await postWatchObservation(device, lease, null, "access_missing");
+      return { observed: true, reason: "access_missing" };
+    }
+    let tabId = null;
+    try {
+      const tab = await chrome.tabs.create({ url: identity.canonicalUrl, active: false });
+      if (!Number.isInteger(tab?.id)) throw new Error("watch_tab_unavailable");
+      tabId = tab.id;
+      await waitForExactProductTab(tabId, identity.retailerId, identity.retailerSku);
+      const observation = await collectWatchObservation(tabId, lease);
+      await postWatchObservation(device, lease, observation,
+        observation.securityChallenge ? "security_challenge"
+          : observation.interactiveBlock ? `interactive_${observation.interactiveBlock}` : "observed");
+      return { observed: true, reason: observation.availability };
+    } catch (error) {
+      const reason = safeReasonCode(error instanceof Error ? error.message : "observation_failed");
+      await postWatchObservation(device, lease, null, reason).catch(() => undefined);
+      return { observed: true, reason };
+    } finally {
+      if (Number.isInteger(tabId)) await chrome.tabs.remove(tabId).catch(() => undefined);
+    }
+  })().catch(() => ({ observed: false, reason: "watch_cycle_failed" }))
+    .finally(() => { watchQueueCyclePromise = null; });
+  return watchQueueCyclePromise;
+}
+
+async function runWarmReadinessCycle() {
+  if (warmReadinessCyclePromise) return warmReadinessCyclePromise;
+  warmReadinessCyclePromise = (async () => {
+    if (jobCyclePromise || await activeJob().catch(() => null)) {
+      return { warmed: false, reason: "action_job_active" };
+    }
+    const device = await storedDevice();
+    if (!device?.token) return { warmed: false, reason: "device_unavailable" };
+    const [storedTabs, cartReady, cursorStorage] = await Promise.all([
+      readRetailerActionTabs(),
+      readCartReadyState(),
+      chrome.storage.session.get(WARM_READINESS_CURSOR_KEY)
+    ]);
+    const retailerIds = Object.keys(ADD_LANES);
+    const cursor = Number.isSafeInteger(cursorStorage[WARM_READINESS_CURSOR_KEY])
+      ? cursorStorage[WARM_READINESS_CURSOR_KEY] % retailerIds.length : 0;
+    const protectedTabs = new Set(cartReady.items.map((item) => item.tabId));
+
+    for (let offset = 0; offset < retailerIds.length; offset += 1) {
+      const index = (cursor + offset) % retailerIds.length;
+      const retailerId = retailerIds[index];
+      if (!await addLaneAccess(retailerId)) continue;
+      const lane = ADD_LANES[retailerId];
+      const stored = storedTabs.get(retailerId);
+      if (protectedTabs.has(stored?.tabId)) continue;
+      let tab = Number.isInteger(stored?.tabId)
+        ? await chrome.tabs.get(stored.tabId).catch(() => null) : null;
+      let createdTabId = null;
+      try {
+        if (!retailerCartTab(tab, retailerId)) {
+          tab = await chrome.tabs.create({ url: lane.cartUrl, active: false });
+          if (!Number.isInteger(tab?.id)) throw new Error("warm_cart_tab_unavailable");
+          createdTabId = tab.id;
+        }
+        await waitForTab(tab.id, retailerId, "cart");
+        if (jobCyclePromise || await activeJob().catch(() => null)) {
+          return { warmed: false, reason: "action_job_started" };
+        }
+        let signedInState = await inspectRetailerSessionState(tab.id, retailerId).catch(() => "unknown");
+        let cartBaseline = freshCartBaseline(stored?.cartBaseline, retailerId);
+        let errorCode = "";
+        if (!cartBaseline) {
+          await injectAddAction(tab.id, retailerId);
+          let baseline = { ok: false, reason: "cart_unverified" };
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            baseline = await executeAddAction(tab.id, retailerId, lane.baselineOperation);
+            if (baseline?.ok || !["cart_unverified", "quantity_unavailable"].includes(baseline?.reason)) break;
+            if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 350));
+          }
+          cartBaseline = baseline?.ok ? freshCartBaseline(baseline.proof, retailerId) : null;
+          errorCode = cartBaseline ? "" : safeReasonCode(baseline?.reason || "cart_unverified");
+          if (baseline?.reason === "manual_action_required") signedInState = "challenged";
+        }
+        await rememberRetailerActionTab(retailerId, tab.id, cartBaseline, signedInState);
+        await reportRetailerReadiness(retailerId, {
+          cartBaseline,
+          cartBaselineState: cartBaseline ? "ready" : "unavailable",
+          signedInState,
+          ...(errorCode ? { errorCode } : {})
+        });
+        await chrome.storage.session.set({
+          [WARM_READINESS_CURSOR_KEY]: (index + 1) % retailerIds.length
+        });
+        return {
+          warmed: Boolean(cartBaseline),
+          retailerId,
+          signedInState,
+          reason: cartBaseline ? "baseline_ready" : errorCode || "cart_unverified"
+        };
+      } catch (error) {
+        const reason = safeReasonCode(error instanceof Error ? error.message : "warm_readiness_failed");
+        const signedInState = Number.isInteger(tab?.id)
+          ? await inspectRetailerSessionState(tab.id, retailerId).catch(() => "unknown")
+          : "unknown";
+        await reportRetailerReadiness(retailerId, {
+          cartBaselineState: "unavailable",
+          signedInState,
+          errorCode: reason
+        });
+        await chrome.storage.session.set({
+          [WARM_READINESS_CURSOR_KEY]: (index + 1) % retailerIds.length
+        });
+        if (Number.isInteger(createdTabId) && !retailerCartTab(tab, retailerId)) {
+          await chrome.tabs.remove(createdTabId).catch(() => undefined);
+        }
+        return { warmed: false, retailerId, signedInState, reason };
+      }
+    }
+    return { warmed: false, reason: "retailer_access_missing" };
+  })().catch(() => ({ warmed: false, reason: "warm_readiness_failed" }))
+    .finally(() => { warmReadinessCyclePromise = null; });
+  return warmReadinessCyclePromise;
+}
+
 async function runJobCycle() {
   if (jobCyclePromise) return jobCyclePromise;
   jobCyclePromise = (async () => {
@@ -4305,12 +4861,12 @@ async function runJobCycle() {
     ]);
     const protectedTabs = new Set(cartReady.items.map((item) => item.tabId));
     const reusableTabs = new Map([...storedTabs]
-      .filter(([, tabId]) => !protectedTabs.has(tabId))
-      .map(([retailerId, tabId]) => [retailerId, { tabId, cartBaseline: null }]));
+      .filter(([, stored]) => !protectedTabs.has(stored.tabId))
+      .map(([retailerId, stored]) => [retailerId, stored]));
     const device = await storedDevice();
     if (!device?.token) return { leased, confirmed, reason: "device_unavailable" };
     for (let index = 0; index < MAX_ACTION_JOBS_PER_CYCLE; index += 1) {
-      const response = await request("/devices/self/jobs/next", {
+      const response = await request("/devices/self/jobs/next?wait=5000", {
         headers: { Authorization: `Bearer ${device.token}` }
       });
       const lease = normalizedLeaseJob(response);
@@ -4325,13 +4881,24 @@ async function runJobCycle() {
       }
       leased += 1;
       const reusable = reusableTabs.get(lease.retailerId);
-      const outcome = await executeLeasedRetailerJob(lease, reusable?.tabId, reusable?.cartBaseline);
+      const outcome = await executeLeasedRetailerJob(
+        lease,
+        reusable?.tabId,
+        reusable?.cartBaseline,
+        reusable?.signedInState
+      );
       if (Number.isInteger(outcome.tabId)) {
         reusableTabs.set(lease.retailerId, {
           tabId: outcome.tabId,
-          cartBaseline: outcome.cartBaseline || null
+          cartBaseline: outcome.cartBaseline || null,
+          signedInState: outcome.signedInState || "unknown"
         });
-        await rememberRetailerActionTab(lease.retailerId, outcome.tabId);
+        await rememberRetailerActionTab(
+          lease.retailerId,
+          outcome.tabId,
+          outcome.cartBaseline,
+          outcome.signedInState
+        );
       }
       if (!outcome?.confirmed) {
         if (outcome?.continueCycle === true) continue;
@@ -4559,7 +5126,7 @@ async function handleContextMenuClick(command, presentedPage, permissionPromise,
       return;
     }
     if (command === "settings") {
-      await chrome.tabs.create({ url: appViewUrl("settings"), active: true });
+      await chrome.runtime.openOptionsPage();
       return;
     }
     if (command === "inspect_product") {
@@ -4591,12 +5158,15 @@ async function initialize() {
   await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   await chrome.alarms.create(HEALTH_ALARM, { periodInMinutes: 1 });
   await chrome.alarms.create(JOB_ALARM, { periodInMinutes: 0.5 });
+  await chrome.alarms.create(WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 });
   await ensureContextMenus();
   await checkHealth();
   await drainAdapterDiagnosticQueue();
   const signalDelivery = await runSignalDeliveryCycle();
   await runNotificationCycle();
   if (!signalDelivery?.delivered) await runJobCycle();
+  void runWatchQueueCycle();
+  void runWarmReadinessCycle();
 }
 
 chrome.runtime.onInstalled.addListener(() => { void initialize(); });
@@ -4649,12 +5219,15 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEALTH_ALARM) {
     void checkHealth();
     void drainAdapterDiagnosticQueue();
-    void runSignalDeliveryCycle();
+    void runSignalDeliveryCycle().finally(() => runWarmReadinessCycle());
     void runNotificationCycle();
   }
   if (alarm.name === JOB_ALARM) {
     void runNotificationCycle();
     void runJobCycle();
+  }
+  if (alarm.name === WATCH_QUEUE_ALARM) {
+    void runWatchQueueCycle();
   }
 });
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -4671,13 +5244,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const trackalackerSync = message?.type === "yoink:sync-trackalacker";
   const extensionUpdate = message?.type === "yoink:check-update";
   const cartReadyOpen = message?.type === "yoink:open-cart-ready";
+  const localDataDeletion = message?.type === "yoink:delete-local-data";
   const contentOperation = [
     "yoink:resolve-trackalacker-listing",
     "yoink:trackalacker-sync-progress",
     "yoink:trackalacker-sync-item",
     "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
-  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || contentOperation;
+  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || localDataDeletion || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : message?.type === "yoink:pair-device"
@@ -4710,6 +5284,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   ? checkExtensionUpdate(message.download === true, message.requestManaged === true)
                 : cartReadyOpen
                   ? focusCartReady(message.jobId)
+                : localDataDeletion
+                  ? deleteLocalCompanionData(message.confirmation)
                 : message?.type === "yoink:resolve-trackalacker-listing"
                   ? resolveTrackalackerListing(message, sender)
                   : message?.type === "yoink:trackalacker-sync-progress"
@@ -4794,8 +5370,21 @@ chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
 
 chrome.tabs.onRemoved?.addListener((tabId) => {
   void forgetRetailerActionTab(tabId).catch(() => undefined);
+  void (async () => {
+    const stored = (await chrome.storage.session.get(ORDER_HANDOFF_KEY))[ORDER_HANDOFF_KEY];
+    if (Array.isArray(stored)) {
+      await chrome.storage.session.set({
+        [ORDER_HANDOFF_KEY]: stored.filter((entry) => entry?.tabId !== tabId)
+      });
+    }
+  })().catch(() => undefined);
   void mutateCartReadyState((current) => ({
     schemaVersion: 1,
     items: current.items.filter((item) => item.tabId !== tabId)
   })).catch(() => undefined);
+});
+
+chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete" && tab?.status !== "complete") return;
+  void observeOrderConfirmation(tabId, tab?.url || changeInfo.url).catch(() => undefined);
 });

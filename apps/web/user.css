@@ -314,8 +314,22 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .store-chip.muted .chip-store { color: var(--muted); }
 .store-chip .chip-status.good { color: var(--green-dark); }
 .store-chip .chip-status.warn { color: var(--amber); }
+.call-bulk-actions label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.call-bulk-actions select { min-width: 170px; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; background: white; font: inherit; }
+.call-card { position: relative; grid-template-columns: minmax(0, 1fr) auto; padding-left: 48px; }
+.call-select { position: absolute; top: 23px; left: 20px; }
+.call-select input { width: 18px; height: 18px; accent-color: var(--green); }
+.call-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.insight-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.insight-grid .preference-card { display: block; }
+.connector-card { grid-column: span 2; }
+.connector-events { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.connector-events legend { padding: 0 5px; color: var(--muted); font-size: 11px; font-weight: 800; }
+.connector-events .check { display: inline-flex; align-items: center; gap: 5px; }
+.connector-events .check span { margin: 0; font-size: 12px; }
+.health-card .mini-list { margin: 10px 0; }
 @media (max-width: 1000px) { .setup-guide { grid-template-columns: 1fr; } .setup-safety { grid-column: 1; } .setup-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 850px) { .hero { grid-template-columns: 1fr; } .metrics, .card-grid { grid-template-columns: repeat(2, 1fr); } .preference-grid { grid-template-columns: 1fr; } .setup-layout { grid-template-columns: 1fr; } .plan-review { position: static; } }
+@media (max-width: 850px) { .hero { grid-template-columns: 1fr; } .metrics, .card-grid { grid-template-columns: repeat(2, 1fr); } .preference-grid, .insight-grid { grid-template-columns: 1fr; } .connector-card { grid-column: auto; } .setup-layout { grid-template-columns: 1fr; } .plan-review { position: static; } }
 @media (max-width: 560px) { .app-header { padding: 0 15px; } .brand small, .mode-pill { display: none; } main { width: min(100% - 26px, 1180px); padding-top: 34px; } .metrics, .card-grid, .setup-steps, .privacy-list { grid-template-columns: 1fr; } .setup-step p { min-height: 0; } .section-heading, .action-card, .action-handoff, .release-announcement, .selected-product, .recovery-review-item, .plan-transition { display: block; } .action-handoff .button, .plan-transition .button { margin-top: 12px; } .release-announcement-actions { margin-top: 12px; } .action-controls { justify-items: stretch; } .cart-outcome { margin: 14px 0; } .section-actions { display: grid; margin-top: 14px; } .search { display: block; } .search input { width: 100%; } .recovery-review-actions { justify-content: flex-start; margin-top: 12px; } .target-fields, .form-row, .form-row.three, .budget-fields, .store-commitment, .action-choices { grid-template-columns: 1fr; } .selected-product .exact-price { display: block; margin-top: 12px; } dialog form { padding: 18px; } .browse-toolbar { display: grid; } .browse-toolbar select { width: 100%; } .browse-count { margin-left: 0; padding-bottom: 0; } }
 
 @media (prefers-reduced-motion: reduce) {

@@ -88,6 +88,12 @@ function openYoink(destination = "dashboard") {
   return chrome.tabs.create({ url: appUrl(destination), active: true });
 }
 
+function openExtensionSettings(fragment = "") {
+  const url = new URL(chrome.runtime.getURL("options.html"));
+  if (fragment) url.hash = fragment;
+  return chrome.tabs.create({ url: url.href, active: true });
+}
+
 function announce(message) {
   const element = $("#assertiveStatus");
   element.textContent = "";
@@ -492,8 +498,8 @@ function bindEvents() {
   $("#openYoink").addEventListener("click", () => { void openYoink(); });
   $("#statusDiagnostics").addEventListener("click", () => { void openYoink("operations"); });
   $("#diagnostics").addEventListener("click", () => { void openYoink("operations"); });
-  $("#settings").addEventListener("click", () => { void openYoink("settings"); });
-  $("#manageStoreAccess").addEventListener("click", () => { void openYoink("connections"); });
+  $("#settings").addEventListener("click", () => { void openExtensionSettings(); });
+  $("#manageStoreAccess").addEventListener("click", () => { void openExtensionSettings("store-access"); });
   $("#syncProducts").addEventListener("click", () => { void syncProducts(); });
   $("#checkUpdate").addEventListener("click", () => { closePanels(false); void updateCompanion(); });
   $("#cartReadySound").addEventListener("click", async () => {

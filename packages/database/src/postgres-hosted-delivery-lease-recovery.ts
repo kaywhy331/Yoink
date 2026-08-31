@@ -264,7 +264,7 @@ export interface PostgresHostedSignalResolutionPlan {
   signal: {
     signalId: string;
     externalEventId: string;
-    eventType: "in_stock" | "restock" | "preorder" | "price_change" | "unknown";
+    eventType: "in_stock" | "restock" | "preorder" | "price_change" | "drop_window" | "queue_open" | "unknown";
     observedAt: string;
     receivedAt: string;
     test: boolean;
@@ -698,7 +698,7 @@ function parseHostedSignalResolutionPlan(
   const signalId = exactPlanText(signal.signalId, "signal ID", 180);
   const externalEventId = exactPlanText(signal.externalEventId, "external event ID", 180);
   const eventType = exactPlanText(signal.eventType, "event type", 20);
-  if (!(["in_stock", "restock", "preorder", "price_change", "unknown"] as const)
+  if (!(["in_stock", "restock", "preorder", "price_change", "drop_window", "queue_open", "unknown"] as const)
     .includes(eventType as PostgresHostedSignalResolutionPlan["signal"]["eventType"])) {
     throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
       "The PostgreSQL hosted signal resolution event type is invalid."
@@ -1433,7 +1433,7 @@ BEGIN
     OR pg_catalog.jsonb_typeof(payload_value->'externalEventId') IS DISTINCT FROM 'string'
     OR pg_catalog.length(payload_value->>'externalEventId') NOT BETWEEN 1 AND 180
     OR pg_catalog.jsonb_typeof(payload_value->'eventType') IS DISTINCT FROM 'string'
-    OR COALESCE(payload_value->>'eventType', '') NOT IN ('in_stock', 'restock', 'preorder', 'price_change', 'unknown')
+    OR COALESCE(payload_value->>'eventType', '') NOT IN ('in_stock', 'restock', 'preorder', 'price_change', 'drop_window', 'queue_open', 'unknown')
     OR pg_catalog.jsonb_typeof(payload_value->'observedAt') IS DISTINCT FROM 'string'
     OR pg_catalog.jsonb_typeof(payload_value->'receivedAt') IS DISTINCT FROM 'string'
     OR pg_catalog.jsonb_typeof(payload_value->'test') IS DISTINCT FROM 'boolean'

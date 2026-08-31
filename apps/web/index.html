@@ -339,6 +339,43 @@
       <div class="page-heading"><div><p class="eyebrow">Source and executor health</p><h1>Connections</h1><p>Source collection, retailer evidence, qualification, and browser execution remain independently gated.</p></div></div>
       <div class="connection-grid" id="connectionList"></div>
       <section class="panel companion-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Provider-neutral ingress</p><h2>Signal channels</h2><p>Manage Discord and API channels, trust, health, latency, accuracy, and bounded dead-letter replay.</p></div><span class="mode-chip" id="sourceChannelGate">CHECKING</span></div>
+        <div class="card-list" id="sourceChannelList"></div>
+        <form id="sourceChannelForm" class="inline-admin-form">
+          <label><span>Name</span><input name="name" maxlength="100" required></label>
+          <label><span>Provider</span><select name="provider"><option value="discord">Discord</option><option value="api">API</option></select></label>
+          <label><span>Channel reference</span><input name="externalReference" maxlength="180" required></label>
+          <label><span>Trust</span><select name="trustLevel"><option value="informational">Informational</option><option value="trusted_exact">Trusted exact</option></select></label>
+          <button class="button secondary" type="submit">Add channel</button>
+        </form>
+      </section>
+      <section class="panel companion-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Admin-authored observation windows</p><h2>Drop windows</h2><p>Schedule an exact product set. User Chrome sessions observe each opted-in item read-only from T−15 until stock is seen or the window closes.</p></div><span class="mode-chip" id="dropWindowGate">READ ONLY</span></div>
+        <div class="card-list" id="dropWindowList"></div>
+        <form id="dropWindowForm" class="admin-grid-form">
+          <label><span>Title</span><input name="title" maxlength="160" required></label>
+          <label><span>Retailer</span><select name="retailerId" id="dropWindowRetailer"></select></label>
+          <label><span>Kind</span><select name="kind"><option value="drop_window">Drop window</option><option value="queue_open">Queue open</option></select></label>
+          <label><span>Starts</span><input name="startsAt" type="datetime-local" required></label>
+          <label><span>Closes</span><input name="closesAt" type="datetime-local" required></label>
+          <label><span>Spread (seconds)</span><input name="spreadSeconds" type="number" min="0" max="86400" value="0" required></label>
+          <label><span>Confidence %</span><input name="confidencePercent" type="number" min="0" max="100" step="0.1" value="80" required></label>
+          <label><span>Timezone</span><input name="timezone" value="America/Los_Angeles" maxlength="64" required></label>
+          <label class="wide"><span>Exact listing IDs (comma or newline separated, max 50)</span><textarea name="listingIds" rows="3" required></textarea></label>
+          <label class="wide"><span>Early-access note (optional)</span><input name="earlyAccessNote" maxlength="240"></label>
+          <button class="button secondary" type="submit">Schedule window</button>
+        </form>
+      </section>
+      <section class="panel companion-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Authoring evidence</p><h2>Restock patterns</h2><p>Recompute timezone-aware observation hours and median intervals for an exact listing. Patterns inform the author; they never schedule or authorize an action by themselves.</p></div></div>
+        <div class="card-list" id="restockPatternList"></div>
+        <form id="restockPatternForm" class="inline-admin-form"><label><span>Listing ID</span><input name="listingId" required></label><label><span>Timezone</span><input name="timezone" value="America/Los_Angeles" required></label><button class="button secondary" type="submit">Recompute pattern</button></form>
+      </section>
+      <section class="panel companion-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Per-lane lifecycle</p><h2>Qualification readiness</h2><p>Re-verify lanes independently, review expiry/version warnings and prior passing candidates, or retire one lane without changing the other stores.</p></div></div>
+        <div class="card-list" id="laneReadinessList"></div>
+      </section>
+      <section class="panel companion-panel">
         <p class="eyebrow">Primary signal source</p>
         <div class="panel-heading"><div><h2>TrackaLacker browser push</h2><p>TrackaLacker detects the event and sends Web Push directly to Chrome. Yoink does not poll TrackaLacker for stock changes.</p></div><span class="mode-chip" id="trackalackerGate">NOT CONNECTED</span></div>
         <div class="inline-status" id="trackalackerConnectionStatus"><span class="status-dot warning"></span><strong>Open the Yoink extension to connect</strong></div>

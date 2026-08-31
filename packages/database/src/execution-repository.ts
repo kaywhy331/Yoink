@@ -15,6 +15,7 @@ import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 import { SignalRepository } from "./signal-repository.js";
 import { SpendLedgerRepository } from "./spend-ledger-repository.js";
+import { UserActionConnectorRepository } from "./user-action-connector-repository.js";
 
 const LEASE_TTL_MS = 45_000;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
@@ -92,6 +93,13 @@ interface CandidateRow {
   attribution_provider: string;
   attribution_metadata_json: string;
   expires_at: string;
+}
+
+export interface JobProgressInput {
+  state: JobState;
+  reasonCode: string;
+  message: string;
+  evidence: Record<string, unknown>;
 }
 
 interface ExpiredLeaseRow {
@@ -176,11 +184,13 @@ export class ExecutionRepository {
   private readonly signals: SignalRepository;
   private readonly control: ControlRepository;
   private readonly spendLedger: SpendLedgerRepository;
+  private readonly userConnectors: UserActionConnectorRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.signals = new SignalRepository(db);
     this.control = new ControlRepository(db);
     this.spendLedger = new SpendLedgerRepository(db);
+    this.userConnectors = new UserActionConnectorRepository(db);
   }
 
   recoverExpiredLeases(now = Date.now()): number {
@@ -359,11 +369,12 @@ export class ExecutionRepository {
               : false;
       if (!deviceCanAttempt) return { job: null, reason: "device_unavailable" };
 
-      const qualification = this.db.get<{ adapter_version: string; highest_action: string }>(
-        `SELECT adapter_version, highest_action FROM retailer_adapter_qualifications
-         WHERE user_id = ? AND retailer_id = ? AND status = 'qualified'`,
+      const qualification = this.db.get<{ adapter_version: string; highest_action: string; expires_at: string }>(
+        `SELECT adapter_version, highest_action, expires_at FROM retailer_adapter_qualifications
+         WHERE user_id = ? AND retailer_id = ? AND status = 'qualified' AND expires_at > ?`,
         currentRequestScope().userId,
-        candidate.retailer_id
+        candidate.retailer_id,
+        nowIso(now)
       );
       if (!qualification || !adapterAllows(candidate.action, qualification.highest_action)) {
         return { job: null, reason: "adapter_unqualified" };
@@ -382,7 +393,7 @@ export class ExecutionRepository {
       }
 
       const capabilityToken = randomBytes(32).toString("base64url");
-      const leaseExpiresAt = nowIso(now + LEASE_TTL_MS);
+      const leaseExpiresAt = nowIso(Math.min(new Date(candidate.expires_at).getTime(), now + LEASE_TTL_MS));
       this.signals.transitionJob(
         candidate.id,
         "leased",
@@ -449,8 +460,9 @@ export class ExecutionRepository {
         assigned_device_id: string;
         capability_nonce_hash: string;
         lease_expires_at: string;
+        expires_at: string;
       }>(
-        `SELECT id, state, assigned_device_id, capability_nonce_hash, lease_expires_at
+        `SELECT id, state, assigned_device_id, capability_nonce_hash, lease_expires_at, expires_at
          FROM action_jobs WHERE id = ? AND user_id = ?`,
         cleanText(jobId, 120),
         currentRequestScope().userId
@@ -478,10 +490,16 @@ export class ExecutionRepository {
           nowIso(now),
           job.id
         );
+        if (nextState === "confirmed") this.userConnectors.queueForJob("carted", job.id, now);
+        else if (["manual_review", "submission_uncertain"].includes(nextState)) {
+          this.userConnectors.queueForJob("needs_you", job.id, now);
+        } else if (["offer_rejected", "cancelled", "expired"].includes(nextState)) {
+          this.userConnectors.queueForJob("missed", job.id, now);
+        }
       } else {
         this.db.run(
           "UPDATE action_jobs SET lease_expires_at = ?, updated_at = ? WHERE id = ?",
-          nowIso(now + LEASE_TTL_MS),
+          nowIso(Math.min(new Date(job.expires_at).getTime(), now + LEASE_TTL_MS)),
           nowIso(now),
           job.id
         );
@@ -489,4 +507,84 @@ export class ExecutionRepository {
       return result;
     });
   }
+
+  reconcileJobBatch(
+    deviceId: string,
+    jobId: string,
+    capabilityToken: string,
+    events: JobProgressInput[],
+    now = Date.now()
+  ): { job: Record<string, unknown>; applied: number } {
+    if (!Array.isArray(events) || events.length < 1 || events.length > 20) {
+      throw new Error("A progress batch must contain 1 through 20 ordered events.");
+    }
+    return this.db.transaction(() => {
+      let job: Record<string, unknown> = {};
+      let applied = 0;
+      for (const event of events) {
+        if (!event || !JOB_STATES_FOR_REPORT.has(event.state)) {
+          throw new Error("The action-job progress batch contains an invalid state.");
+        }
+        job = this.reconcileJob(
+          deviceId,
+          jobId,
+          capabilityToken,
+          event.state,
+          event.reasonCode,
+          event.message,
+          event.evidence,
+          now + applied
+        );
+        applied += 1;
+      }
+      return { job, applied };
+    });
+  }
+
+  heartbeatJob(
+    deviceId: string,
+    jobId: string,
+    capabilityToken: string,
+    now = Date.now()
+  ): { jobId: string; state: JobState; leaseExpiresAt: string; remainingBudgetMs: number } {
+    if (!CAPABILITY_PATTERN.test(capabilityToken)) throw new Error("The action-job capability is invalid.");
+    const job = this.db.get<{
+      id: string;
+      state: JobState;
+      assigned_device_id: string;
+      capability_nonce_hash: string;
+      expires_at: string;
+    }>(
+      `SELECT id, state, assigned_device_id, capability_nonce_hash, expires_at
+       FROM action_jobs WHERE id = ? AND user_id = ?`,
+      cleanText(jobId, 120), currentRequestScope().userId
+    );
+    if (!job || job.assigned_device_id !== cleanText(deviceId, 120)
+      || job.capability_nonce_hash !== capabilityHash(capabilityToken)
+      || jobIsTerminal(job.state)) {
+      throw new Error("The action-job capability is invalid.");
+    }
+    const budgetEnd = new Date(job.expires_at).getTime();
+    if (!Number.isFinite(budgetEnd) || budgetEnd <= now) {
+      throw new Error("The action-job execution budget has expired.");
+    }
+    const leaseExpiresAt = nowIso(Math.min(budgetEnd, now + LEASE_TTL_MS));
+    this.db.run(
+      `UPDATE action_jobs SET lease_expires_at = ?, updated_at = ?
+       WHERE id = ? AND user_id = ? AND assigned_device_id = ?`,
+      leaseExpiresAt, nowIso(now), job.id, currentRequestScope().userId, deviceId
+    );
+    return {
+      jobId: job.id,
+      state: job.state,
+      leaseExpiresAt,
+      remainingBudgetMs: Math.max(0, Math.round(budgetEnd - now))
+    };
+  }
 }
+
+const JOB_STATES_FOR_REPORT = new Set<JobState>([
+  "navigating", "verifying_listing", "offer_verified", "add_authorized", "adding",
+  "cart_verified", "confirmed", "offer_rejected", "cancelled", "manual_review",
+  "submission_uncertain"
+]);

@@ -214,7 +214,13 @@ test("the maintenance handler awaits the configured alert reconciliation reposit
       connectorDeliveriesAttempted: 0,
       connectorDeliveriesSucceeded: 0,
       connectorDeliveriesRetried: 0,
-      connectorDeliveriesDeadLettered: 0
+      connectorDeliveriesDeadLettered: 0,
+      userConnectorConfigured: false,
+      userConnectorTransportConfigured: false,
+      userConnectorDeliveriesAttempted: 0,
+      userConnectorDeliveriesSucceeded: 0,
+      userConnectorDeliveriesRetried: 0,
+      userConnectorDeliveriesDeadLettered: 0
     });
   } finally {
     db.close();

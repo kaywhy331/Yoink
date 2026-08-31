@@ -231,6 +231,10 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 80
 .mission-target-editor h3, .mission-target-editor p { margin: 0; }
 .mission-target-editor p { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .empty { grid-column: 1 / -1; padding: 35px 18px; border: 1px dashed var(--line); border-radius: 15px; color: var(--subtle); text-align: center; }
+.inline-admin-form, .admin-grid-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: end; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.admin-grid-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.inline-admin-form label, .admin-grid-form label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 750; }
+.admin-grid-form .wide { grid-column: 1 / -1; }
 
 input, select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 10px; outline: none; color: var(--text); background: #0d1018; }
 input, select { height: 40px; padding: 0 11px; }
@@ -282,6 +286,8 @@ dialog form { padding: 22px; }
   .strategy-row { grid-template-columns: 36px 1fr; }
   .strategy-actions { grid-column: 1 / -1; justify-content: start; }
   .form-grid { grid-template-columns: 1fr; }
+  .inline-admin-form, .admin-grid-form { grid-template-columns: 1fr; }
   .community-summary, .community-scope-fields { grid-template-columns: 1fr; }
   .form-grid .wide { grid-column: auto; }
+  .admin-grid-form .wide { grid-column: auto; }
 }

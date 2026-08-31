@@ -93,6 +93,7 @@ export class BackgroundWorkerRuntime {
   private readonly maximumTasksPerPrincipal: number;
   private readonly unrefTimer: boolean;
   private timer: NodeJS.Timeout | null = null;
+  private wakeScheduled = false;
   private cyclePromise: Promise<BackgroundWorkerCycleResult> | null = null;
   private runtimeState: BackgroundWorkerRuntimeState = "stopped";
   private principalCursor = "";
@@ -172,6 +173,22 @@ export class BackgroundWorkerRuntime {
     } finally {
       if (this.cyclePromise === operation) this.cyclePromise = null;
     }
+  }
+
+  wake(): void {
+    if (!["running", "starting"].includes(this.runtimeState) || this.wakeScheduled) return;
+    this.wakeScheduled = true;
+    setImmediate(() => {
+      this.wakeScheduled = false;
+      void this.runOnce().catch(() => {
+        // The next bounded poll remains the recovery path for a failed wake.
+      });
+    }).unref?.();
+  }
+
+  async restart(now = Date.now()): Promise<void> {
+    await this.stop(now);
+    await this.start(now + 1);
   }
 
   status(now = Date.now()): BackgroundWorkerRuntimeStatus {

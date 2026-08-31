@@ -62,6 +62,19 @@ import {
   type WalmartDrawScanInput
 } from "../../../packages/contracts/src/index.js";
 import { SIGNAL_INGRESS_EVENT_TYPE } from "../../../packages/contracts/src/signal-ingress.js";
+import type {
+  DiscordChannelSignalInput,
+  SignalProviderChannelInput,
+  SignalProviderChannelUpdate,
+  SignalProviderEnvelope
+} from "../../../packages/contracts/src/signal-provider.js";
+import type {
+  DropWindowInput,
+  OrderConfirmationObservationInput,
+  RetailerSessionReadinessInput,
+  UserActionConnectorInput,
+  WatchQueueObservationInput
+} from "../../../packages/contracts/src/action-platform.js";
 import { CatalogRepository } from "../../../packages/database/src/catalog-repository.js";
 import {
   CatalogGovernanceRepository,
@@ -177,6 +190,14 @@ import {
   type RequestScope
 } from "../../../packages/database/src/request-scope.js";
 import { SignalRepository } from "../../../packages/database/src/signal-repository.js";
+import { SignalProviderRepository } from "../../../packages/database/src/signal-provider-repository.js";
+import { DropWindowRepository } from "../../../packages/database/src/drop-window-repository.js";
+import { RetailerReadinessRepository } from "../../../packages/database/src/retailer-readiness-repository.js";
+import { UserActionConnectorRepository } from "../../../packages/database/src/user-action-connector-repository.js";
+import { OrderConfirmationRepository } from "../../../packages/database/src/order-confirmation-repository.js";
+import { PrivacyComplianceRepository } from "../../../packages/database/src/privacy-compliance-repository.js";
+import { RestockPatternRepository } from "../../../packages/database/src/restock-pattern-repository.js";
+import { ActionAnalyticsRepository } from "../../../packages/database/src/action-analytics-repository.js";
 import { OfferIdentityRepository } from "../../../packages/database/src/offer-identity-repository.js";
 import { SpendLedgerRepository } from "../../../packages/database/src/spend-ledger-repository.js";
 import { ShadowObservationRepository } from "../../../packages/database/src/shadow-observation-repository.js";
@@ -198,6 +219,7 @@ import {
 import { buildUserSetupReadiness } from "../../../packages/domain/src/user-setup.js";
 import { actionStatusGlossaryProjection } from "../../../packages/domain/src/action-status.js";
 import { currentUserReleaseAnnouncement } from "../../../packages/domain/src/release-announcement.js";
+import { discordSignalEnvelope } from "../../../packages/sources/src/discord.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import {
@@ -226,7 +248,10 @@ const STATIC_FILES = new Map([
   ["/docs/", "docs.html"],
   ["/docs.html", "docs.html"],
   ["/docs.css", "docs.css"],
-  ["/llms.txt", "llms.txt"]
+  ["/llms.txt", "llms.txt"],
+  ["/privacy", "privacy.html"],
+  ["/privacy/", "privacy.html"],
+  ["/privacy.js", "privacy.js"]
 ]);
 const ADMIN_STATIC_PATHS = new Set(["/admin", "/admin/", "/app.js", "/styles.css"]);
 
@@ -238,6 +263,9 @@ export interface AppDependencies {
   observerRecipeWitness?: ObserverRecipeWitnessPublisher;
   observerRecipeWitnessRequired?: boolean;
   operatorAlertConnectorBindings?: Readonly<Record<string, string>>;
+  userActionConnectorBindings?: Readonly<Record<string, string>>;
+  backgroundWorkerWake?: () => void | Promise<void>;
+  backgroundWorkerRestart?: () => Promise<void>;
   internalServiceCapabilityRegistry?: InternalServiceCapabilityProjection;
   requestScopeResolver?: (
     request: IncomingMessage,
@@ -330,6 +358,10 @@ function bearerToken(request: IncomingMessage): string {
 function adminChangeRequestId(request: IncomingMessage): { changeRequestId?: string } {
   const value = String(request.headers["x-yoink-change-request-id"] ?? "").trim();
   return value ? { changeRequestId: value } : {};
+}
+
+function boundedWait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function purchaseAutomationPlanInput(plan: Record<string, unknown>): PurchaseAutomationPlanInput {
@@ -504,10 +536,21 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const control = new ControlRepository(db);
   const community = new CommunityEvidenceRepository(db);
   const signals = new SignalRepository(db);
+  const signalProviders = new SignalProviderRepository(db);
+  const dropWindows = new DropWindowRepository(db);
+  const retailerReadiness = new RetailerReadinessRepository(db);
+  const userActionConnectors = new UserActionConnectorRepository(
+    db,
+    dependencies.userActionConnectorBindings ?? {}
+  );
+  const orderConfirmations = new OrderConfirmationRepository(db);
+  const privacyCompliance = new PrivacyComplianceRepository(db);
+  const restockPatterns = new RestockPatternRepository(db);
+  const actionAnalytics = new ActionAnalyticsRepository(db);
   const offerIdentity = new OfferIdentityRepository(db);
   const spendLedger = new SpendLedgerRepository(db);
   const engine = new SignalEngine(db);
-  const signalIngress = new DurableSignalIngressService(db);
+  const signalIngress = new DurableSignalIngressService(db, dependencies.backgroundWorkerWake);
   const devices = new DeviceRepository(db);
   const execution = new ExecutionRepository(db);
   const hostedDelivery = new HostedDeliveryRepository(db);
@@ -722,6 +765,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const backgroundScheduleRunMatch = /^\/api\/v1\/workers\/schedules\/([A-Za-z0-9_-]{3,160})\/run$/.exec(requestUrl.pathname);
       const backgroundTaskRetryMatch = /^\/api\/v1\/workers\/tasks\/([A-Za-z0-9_-]{3,160})\/retry$/.exec(requestUrl.pathname);
       const signalInboxRetryMatch = /^\/api\/v1\/workers\/signal-inbox\/(inbox_[a-f0-9]{32})\/retry$/.exec(requestUrl.pathname);
+      const signalProviderChannelMatch = /^\/api\/v1\/sources\/channels\/(signal_channel_[a-f0-9]{32})$/.exec(requestUrl.pathname);
+      const userConnectorMatch = /^\/api\/v1\/user\/connectors\/(user_connector_[a-f0-9]{32})$/.exec(requestUrl.pathname);
+      const userConnectorTestMatch = /^\/api\/v1\/user\/connectors\/(user_connector_[a-f0-9]{32})\/test$/.exec(requestUrl.pathname);
+      const watchEnrollMatch = /^\/api\/v1\/user\/watch-queue\/(drop_window_item_[a-f0-9]{32})\/enroll$/.exec(requestUrl.pathname);
+      const watchCancelMatch = /^\/api\/v1\/user\/watch-queue\/(watch_item_[a-f0-9]{32})\/cancel$/.exec(requestUrl.pathname);
+      const sourceChannelReplayMatch = /^\/api\/v1\/sources\/channels\/(signal_channel_[a-f0-9]{32})\/replay$/.exec(requestUrl.pathname);
+      const watchObservationMatch = /^\/api\/v1\/devices\/self\/watch-queue\/(watch_item_[a-f0-9]{32})\/observations$/.exec(requestUrl.pathname);
+      const readinessDeviceMatch = /^\/api\/v1\/devices\/self\/readiness\/(target|walmart|amazon|bestbuy)$/.exec(requestUrl.pathname);
+      const jobEventsBatchMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/events\/batch$/.exec(requestUrl.pathname);
+      const jobHeartbeatMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/heartbeat$/.exec(requestUrl.pathname);
       const observerRecoveryReviewMatch = /^\/api\/v1\/community\/recovery-evidence\/([A-Za-z0-9_-]{3,120})\/review$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
@@ -922,7 +975,147 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/privacy") {
-        json(response, 200, { inventory: userPrivacy.inventory() });
+        json(response, 200, { inventory: userPrivacy.inventory(), compliance: privacyCompliance.status() });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/action-platform") {
+        const now = Date.now();
+        json(response, 200, {
+          dropWindows: dropWindows.list(now, true),
+          watchQueue: dropWindows.listWatchQueue(now),
+          readiness: retailerReadiness.lanes(now),
+          connectors: userActionConnectors.list(),
+          connectorDeliveries: userActionConnectors.listDeliveries(50),
+          orderConfirmations: orderConfirmations.list(50),
+          sources: signalProviders.listChannels(),
+          privacy: privacyCompliance.status(),
+          analytics: actionAnalytics.snapshot(now)
+        });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/drop-windows") {
+        json(response, 200, { items: dropWindows.list(Date.now(), true) });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/watch-queue") {
+        json(response, 200, { items: dropWindows.listWatchQueue() });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/calls") {
+        const now = Date.now();
+        const signalCalls = signals.listSignals(100, 0, "").map((signal) => ({
+          id: `signal:${String(signal.signalId ?? "")}`,
+          kind: "signal",
+          listingId: String(signal.listingId ?? ""),
+          retailerId: String(signal.retailerId ?? ""),
+          retailerSku: String(signal.retailerSku ?? ""),
+          canonicalUrl: String(signal.canonicalUrl ?? ""),
+          title: String(signal.title ?? ""),
+          occurredAt: String(signal.observedAt ?? ""),
+          status: String(signal.actionJobState ?? signal.missionDecision ?? signal.resolutionStatus ?? "received"),
+          unitPriceCents: signal.unitPriceCents ?? null,
+          currency: String(signal.currency ?? "USD"),
+          actionJobId: String(signal.actionJobId ?? ""),
+          source: String(signal.source ?? "")
+        }));
+        const windowCalls = dropWindows.list(now, false).flatMap((window) => window.items.map((item) => ({
+          id: `drop:${item.id}`,
+          kind: window.kind,
+          listingId: item.listingId,
+          retailerId: item.retailerId,
+          retailerSku: item.retailerSku,
+          canonicalUrl: item.canonicalUrl,
+          title: item.title,
+          occurredAt: item.expectedAt,
+          status: item.watch?.state ?? "scheduled",
+          unitPriceCents: null,
+          currency: "USD",
+          actionJobId: "",
+          source: "drop_window",
+          dropWindowId: window.id,
+          dropWindowItemId: item.id,
+          watch: item.watch,
+          earlyAccess: item.earlyAccess,
+          confidenceBps: window.confidenceBps,
+          closesAt: window.closesAt
+        })));
+        const items = [...windowCalls, ...signalCalls]
+          .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime())
+          .slice(0, 200);
+        json(response, 200, { items, generatedAt: new Date(now).toISOString() });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/readiness") {
+        json(response, 200, { plan: retailerReadiness.reverifyPlan() });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/connectors") {
+        json(response, 200, {
+          items: userActionConnectors.list(),
+          deliveries: userActionConnectors.listDeliveries(100)
+        });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/analytics") {
+        json(response, 200, { analytics: actionAnalytics.snapshot() });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/analytics.csv") {
+        const body = Buffer.from(actionAnalytics.csv(), "utf8");
+        securityHeaders(response);
+        response.statusCode = 200;
+        response.setHeader("Content-Type", "text/csv; charset=utf-8");
+        response.setHeader("Content-Disposition", "attachment; filename=Yoink-action-analytics.csv");
+        response.setHeader("Content-Length", String(body.length));
+        response.end(body);
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/health") {
+        const now = Date.now();
+        const worker = await dependencies.backgroundWorkerStatus?.() ?? null;
+        const devicesNow = devices.listDevices(now);
+        const sourceChannels = signalProviders.listChannels();
+        json(response, 200, {
+          contractVersion: 1,
+          generatedAt: new Date(now).toISOString(),
+          version,
+          worker,
+          counts: {
+            devices: devicesNow.length,
+            onlineDevices: devicesNow.filter((item) => item.online).length,
+            sourceChannels: sourceChannels.length,
+            sourceAttention: sourceChannels.filter((item) => item.health === "attention").length,
+            watchQueue: dropWindows.listWatchQueue(now).filter((item) => ["queued", "observing"].includes(item.state)).length,
+            connectorFailures: userActionConnectors.listDeliveries(500).filter((item) => item.state === "dead_letter").length
+          },
+          readiness: retailerReadiness.lanes(now),
+          sources: sourceChannels,
+          connectors: userActionConnectors.list(),
+          diagnosticBundle: {
+            containsSecrets: false,
+            containsUrls: false,
+            containsDom: false,
+            containsAccountOrPaymentData: false,
+            workerState: worker?.state ?? "unavailable",
+            workerErrorCode: worker?.lastErrorCode ?? "",
+            deviceStates: devicesNow.map((item) => ({
+              id: item.id,
+              online: item.online,
+              status: item.status,
+              version: item.version,
+              lastSeenAt: item.lastSeenAt
+            }))
+          }
+        });
         return;
       }
 
@@ -1315,6 +1508,29 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           json(response, 202, signalIngress.acceptTrackalacker(input));
           return;
         }
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/signals/batch") {
+          const body = await readJson(request);
+          if (!Array.isArray(body.signals) || body.signals.length < 1 || body.signals.length > 50) {
+            throw new Error("A TrackaLacker signal batch must contain 1 through 50 signals.");
+          }
+          const envelopes = body.signals.map((entry) => {
+            if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+              throw new Error("Every TrackaLacker batch entry must be an object.");
+            }
+            const item = entry as Record<string, unknown>;
+            return {
+              contractVersion: 1 as const,
+              provider: "trackalacker" as const,
+              signal: trackalackerSignalInput(
+                item,
+                String(item.idempotencyKey ?? ""),
+                scopedSourceConnectionId("trackalacker")
+              )
+            };
+          });
+          json(response, 202, signalIngress.acceptProviderBatch(envelopes));
+          return;
+        }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/catalog") {
           const body = await readJson(request);
           const syncId = typeof body.syncId === "string" ? body.syncId : "";
@@ -1350,6 +1566,65 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           json(response, 200, notifications.leaseNext(device.id));
           return;
         }
+        if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/watch-queue/next") {
+          json(response, 200, dropWindows.leaseNext(device.id));
+          return;
+        }
+        if (request.method === "POST" && watchObservationMatch) {
+          const body = await readJson(request);
+          const observed = dropWindows.recordObservation(
+            device.id,
+            watchObservationMatch[1] ?? "",
+            body as unknown as WatchQueueObservationInput
+          );
+          const receipt = observed.signal
+            ? signalIngress.acceptProvider({
+                contractVersion: 1,
+                provider: "drop_window",
+                channelId: observed.channel.id,
+                signal: observed.signal
+              })
+            : null;
+          json(response, 202, { item: observed.item, signal: receipt });
+          return;
+        }
+        if (request.method === "POST" && readinessDeviceMatch) {
+          const body = await readJson(request);
+          if (body.retailerId !== readinessDeviceMatch[1]) {
+            throw new Error("The retailer-readiness route and payload must match.");
+          }
+          json(response, 200, {
+            readiness: retailerReadiness.record(
+              device.id,
+              body as unknown as RetailerSessionReadinessInput
+            )
+          });
+          return;
+        }
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/order-confirmations") {
+          const body = await readJson(request);
+          json(response, 202, {
+            observation: orderConfirmations.record(
+              device.id,
+              body as unknown as OrderConfirmationObservationInput
+            )
+          });
+          return;
+        }
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/privacy/local-deletion") {
+          const body = await readJson(request);
+          if (body.contractVersion !== 1
+            || body.localCleared !== true
+            || body.sessionCleared !== true
+            || !Array.isArray(body.retainedKeys)
+            || body.retainedKeys.length !== 0) {
+            throw new Error("Local deletion must clear both Chrome storage areas and retain no extension keys.");
+          }
+          json(response, 200, {
+            compliance: privacyCompliance.record("local_deletion", "deletion_completed", device.id)
+          });
+          return;
+        }
         const notificationAckMatch = /^\/api\/v1\/devices\/self\/notifications\/([A-Za-z0-9_-]{3,160})\/ack$/.exec(requestUrl.pathname);
         if (request.method === "POST" && notificationAckMatch) {
           const body = await readJson(request);
@@ -1383,7 +1658,54 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/jobs/next") {
-          json(response, 200, execution.leaseNextJob(device.id));
+          const waitMs = Math.max(0, Math.min(5_000, Math.floor(Number(requestUrl.searchParams.get("wait") ?? 0) || 0)));
+          const deadline = Date.now() + waitMs;
+          let lease = execution.leaseNextJob(device.id);
+          while (!lease.job && lease.reason === "no_jobs" && Date.now() < deadline && !request.destroyed) {
+            await boundedWait(Math.min(250, Math.max(1, deadline - Date.now())));
+            lease = execution.leaseNextJob(device.id);
+          }
+          json(response, 200, lease);
+          return;
+        }
+        if (request.method === "POST" && jobEventsBatchMatch) {
+          const body = await readJson(request);
+          if (typeof body.capabilityToken !== "string" || !Array.isArray(body.events)) {
+            throw new Error("A valid action-job capability and progress event batch are required.");
+          }
+          const events = body.events.map((entry) => {
+            if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+              throw new Error("Every action-job progress event must be an object.");
+            }
+            const event = entry as Record<string, unknown>;
+            if (!JOB_STATES.includes(event.state as JobState)) {
+              throw new Error("The action-job progress batch contains an invalid state.");
+            }
+            return {
+              state: event.state as JobState,
+              reasonCode: String(event.reasonCode ?? "device_report"),
+              message: String(event.message ?? "Chrome reported action progress."),
+              evidence: event.evidence && typeof event.evidence === "object" && !Array.isArray(event.evidence)
+                ? event.evidence as Record<string, unknown> : {}
+            };
+          });
+          json(response, 200, execution.reconcileJobBatch(
+            device.id,
+            jobEventsBatchMatch[1] ?? "",
+            body.capabilityToken,
+            events
+          ));
+          return;
+        }
+        if (request.method === "POST" && jobHeartbeatMatch) {
+          const body = await readJson(request);
+          json(response, 200, {
+            heartbeat: execution.heartbeatJob(
+              device.id,
+              jobHeartbeatMatch[1] ?? "",
+              String(body.capabilityToken ?? "")
+            )
+          });
           return;
         }
         const eventMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/events$/.exec(requestUrl.pathname);
@@ -2108,6 +2430,53 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "POST" && watchEnrollMatch) {
+        json(response, 200, { item: dropWindows.enroll(watchEnrollMatch[1] ?? "") });
+        return;
+      }
+
+      if (request.method === "POST" && watchCancelMatch) {
+        json(response, 200, { item: dropWindows.cancel(watchCancelMatch[1] ?? "") });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/connectors") {
+        const body = await readJson(request);
+        json(response, 201, {
+          connector: userActionConnectors.save(body as unknown as UserActionConnectorInput)
+        });
+        return;
+      }
+
+      if (request.method === "PATCH" && userConnectorMatch) {
+        const body = await readJson(request);
+        json(response, 200, {
+          connector: userActionConnectors.save(
+            body as unknown as UserActionConnectorInput,
+            userConnectorMatch[1] ?? ""
+          )
+        });
+        return;
+      }
+
+      if (request.method === "POST" && userConnectorTestMatch) {
+        json(response, 202, {
+          delivery: userActionConnectors.queueTest(userConnectorTestMatch[1] ?? "")
+        });
+        dependencies.backgroundWorkerWake?.();
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/privacy/policy-viewed") {
+        json(response, 200, { compliance: privacyCompliance.record("privacy_policy", "viewed") });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/privacy/change-acknowledged") {
+        json(response, 200, { compliance: privacyCompliance.record("change_notice", "acknowledged") });
+        return;
+      }
+
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/legacy-transition") {
         const body = await readJson(request);
         json(response, 200, {
@@ -2215,6 +2584,25 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 201, { receipt: hostedDelivery.acceptInbox(body as unknown as HostedInboxInput) });
         return;
       }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/hosted-delivery/signals") {
+        const body = await readJson(request);
+        json(response, 202, signalIngress.acceptProvider(body as unknown as SignalProviderEnvelope));
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/hosted-delivery/signals/batch") {
+        const body = await readJson(request);
+        if (!Array.isArray(body.signals)) throw new Error("A provider signal batch is required.");
+        json(response, 202, signalIngress.acceptProviderBatch(
+          body.signals as unknown as SignalProviderEnvelope[]
+        ));
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/hosted-delivery/discord/signals") {
+        const body = await readJson(request) as unknown as DiscordChannelSignalInput;
+        const channel = signalProviders.requireActiveChannel(body.channelId, "discord");
+        json(response, 202, signalIngress.acceptProvider(discordSignalEnvelope(body, channel)));
+        return;
+      }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/hosted/principals") {
         const body = await readJson(request);
         json(response, 201, { principal: principals.provision(body as unknown as HostedPrincipalInput) });
@@ -2278,6 +2666,88 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/pairing-code") {
         json(response, 201, { pairing: devices.createPairingCode() });
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/sources/channels") {
+        json(response, 200, { items: signalProviders.listChannels(requestUrl.searchParams.get("provider") ?? "") });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/sources/channels") {
+        const body = await readJson(request);
+        const channel = signalProviders.createChannel(body as unknown as SignalProviderChannelInput);
+        json(response, channel.created ? 201 : 200, { channel });
+        return;
+      }
+      if (request.method === "PATCH" && signalProviderChannelMatch) {
+        const body = await readJson(request);
+        json(response, 200, {
+          channel: signalProviders.updateChannel(
+            signalProviderChannelMatch[1] ?? "",
+            body as unknown as SignalProviderChannelUpdate
+          )
+        });
+        return;
+      }
+      if (request.method === "POST" && sourceChannelReplayMatch) {
+        const body = await readJson(request);
+        const channel = signalProviders.getChannel(sourceChannelReplayMatch[1] ?? "");
+        if (!channel) throw new Error("The signal provider channel does not exist.");
+        const maximum = Math.max(1, Math.min(20, Math.floor(Number(body.maximum ?? 10) || 10)));
+        const candidates = db.all<{ id: string }>(
+          `SELECT id FROM inbox_messages
+           WHERE tenant_id = ? AND user_id = ? AND state = 'dead_letter'
+             AND event_type = ?
+             AND json_extract(payload_json, '$.sourceConnectionId') = ?
+           ORDER BY received_at, id LIMIT ?`,
+          currentRequestScope().tenantId,
+          currentRequestScope().userId,
+          SIGNAL_INGRESS_EVENT_TYPE,
+          channel.sourceConnectionId,
+          maximum
+        );
+        const receipts = candidates.map((candidate) =>
+          signalIngress.retryDeadLetter(candidate.id, correlationId)
+        );
+        dependencies.backgroundWorkerWake?.();
+        json(response, 202, { channelId: channel.id, replayed: receipts.length, receipts });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/drop-windows") {
+        json(response, 200, { items: dropWindows.list(Date.now(), true) });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/admin/drop-windows") {
+        const body = await readJson(request);
+        const created = dropWindows.create(body as unknown as DropWindowInput);
+        const receipts = signalIngress.acceptProviderBatch(created.signals.map((signal) => ({
+          contractVersion: 1 as const,
+          provider: "drop_window" as const,
+          channelId: created.sourceChannelId,
+          signal
+        })));
+        json(response, 201, { window: created, signals: receipts });
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/restock-patterns") {
+        json(response, 200, {
+          items: restockPatterns.list(requestUrl.searchParams.get("retailer") ?? "")
+        });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/admin/restock-patterns/recompute") {
+        const body = await readJson(request);
+        json(response, 200, {
+          pattern: restockPatterns.recompute(body.listingId, body.timezone ?? "UTC")
+        });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/admin/workers/restart") {
+        if (!dependencies.backgroundWorkerRestart) {
+          throw new ApiError("worker_restart_unavailable", 409, "This deployment does not own an embedded worker to restart.");
+        }
+        await dependencies.backgroundWorkerRestart();
+        json(response, 200, { restarted: true, worker: await dependencies.backgroundWorkerStatus?.() ?? null });
         return;
       }
       const communityConsentMatch = /^\/api\/v1\/community\/consents\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
@@ -2465,6 +2935,24 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           }
           json(response, 200, governed.result);
         }
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/qualifications/readiness") {
+        json(response, 200, { plan: retailerReadiness.reverifyPlan() });
+        return;
+      }
+      const retireQualificationMatch = /^\/api\/v1\/qualifications\/(target|walmart|amazon|bestbuy)\/retire$/.exec(requestUrl.pathname);
+      if (request.method === "POST" && retireQualificationMatch) {
+        const body = await readJson(request);
+        if (body.confirmation !== "RETIRE_ONE_RETAILER_LANE") {
+          throw new Error("Explicit single-lane retirement confirmation is required.");
+        }
+        json(response, 200, {
+          lane: retailerReadiness.retireLane(
+            retireQualificationMatch[1] ?? "",
+            body.reasonCode ?? "operator_retired"
+          )
+        });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/target-add/activate") {

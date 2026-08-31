@@ -20,9 +20,13 @@ const state = {
   productLinkPreview: null,
   productLinkPreviewInput: "",
   privacy: null,
+  privacyCompliance: null,
   recoveryEvidence: [],
   recoveryRetention: null,
   contributorEligibility: null,
+  calls: [],
+  actionPlatform: null,
+  health: null,
   query: ""
 };
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -139,6 +143,16 @@ function toast(message, error = false) {
 function setTab(name) {
   $$("[data-tab]").forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
   $$("[data-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === name));
+}
+
+function applyHashRoute() {
+  const route = location.hash.slice(1);
+  const direct = new Set(["products", "calls", "drawings", "plans", "activity", "insights", "preferences"]);
+  const tab = direct.has(route) ? route : route === "connections" ? "preferences" : route === "health" ? "insights" : "products";
+  setTab(tab);
+  if (["connections", "health"].includes(route)) {
+    requestAnimationFrame(() => document.getElementById(route)?.scrollIntoView({ block: "start" }));
+  }
 }
 
 function words(value) {
@@ -271,6 +285,11 @@ function renderSpend(spend) {
   form.elements.perOrder.value = moneyInput(spend.policy.perOrderCapCents);
   form.elements.daily.value = moneyInput(spend.policy.dailyCapCents);
   form.elements.monthly.value = moneyInput(spend.policy.monthlyCapCents);
+  form.elements.timezone.value = spend.policy.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  if (!form.elements.periodResetHour.options.length) {
+    form.elements.periodResetHour.innerHTML = Array.from({ length: 24 }, (_, hour) => `<option value="${hour}">${new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(new Date(2020, 0, 1, hour))}</option>`).join("");
+  }
+  form.elements.periodResetHour.value = String(Number(spend.policy.periodResetHour || 0));
 }
 
 function renderPrivacy() {
@@ -283,6 +302,9 @@ function renderPrivacy() {
     ? "Device tokens, pairing codes, request nonces, and action capabilities are excluded. Other users and tenant-wide administrator data are never included. Account deletion stays closed until hosted identity revocation and durable cleanup are proven."
     : "The data-export boundary is unavailable; do not download until Yoink can verify credential exclusion.";
   $("#privacyExportLink").hidden = inventory.credentialMaterialsExcluded !== true;
+  const compliance = state.privacyCompliance;
+  $("#privacyPolicyLink").textContent = compliance?.policyViewed ? "Privacy policy viewed" : "Privacy policy";
+  $("#acknowledgePrivacyChange").hidden = !compliance || compliance.changeAcknowledged === true;
 }
 
 function recoveryValue(item) {
@@ -583,7 +605,7 @@ function openQuickMenu(anchor, listingId) {
   menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - menu.offsetHeight - 12)}px`;
 }
 
-async function quickAdd(listingId, profileId = "") {
+async function quickAdd(listingId, profileId = "", options = {}) {
   if (state.quickAddBusy) return;
   const product = state.products.find((item) => item.listingId === listingId);
   if (!product) throw new Error("That exact product is no longer in the current catalog view. Refresh and try again.");
@@ -635,14 +657,16 @@ async function quickAdd(listingId, profileId = "") {
         preflightedAt: preflight.preflightedAt
       })
     });
-    await refresh();
-    toast(actionCeiling === "add_to_cart"
+    if (options.refresh !== false) await refresh();
+    if (options.silent !== true) toast(actionCeiling === "add_to_cart"
       ? `${product.title} added with ${profile ? `the “${profile.name}” profile` : "your default"} — cart automation obeys your saved limits; checkout stays manual.`
       : `${product.title} added with ${profile ? `the “${profile.name}” profile` : "your default"} — you'll be notified on a fresh exact offer (cap ${money(preflight.draft.maxUnitPriceCents, product.currency)}).`);
+    return true;
   } catch (error) {
     if (error.code === "purchase_intent_exists") {
-      await refresh();
-      toast("That exact product already has a purchase plan. Review its current limits before changing it.");
+      if (options.refresh !== false) await refresh();
+      if (options.silent !== true) toast("That exact product already has a purchase plan. Review its current limits before changing it.");
+      return false;
     } else {
       throw error;
     }
@@ -855,11 +879,14 @@ function renderActions() {
   $("#actionList").innerHTML = state.actions.length ? state.actions.map((action) => {
     const stage = action.stage || (["manual_review", "submission_uncertain"].includes(action.state)
       ? "needs_you" : action.state === "confirmed" && action.action === "add_to_cart" ? "ready_to_checkout" : "closed");
+    const confirmation = (state.actionPlatform?.orderConfirmations || [])
+      .find((item) => item.actionJobId === action.id);
     return `<article class="action-card">
     <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${stage === "ready_to_checkout" || action.userReportOutcome === "got_it" ? "good" : stage === "needs_you" ? "warn" : ""}">${escapeHtml(action.statusLabel || (stage === "needs_you" ? "Needs you" : String(action.state).replaceAll("_", " ")))}</span></div>
     <p>${escapeHtml(action.retailerId)} · ${escapeHtml(action.retailerSku)} · ${escapeHtml(String(action.action).replaceAll("_", " "))} · ${action.decisionSource === "purchase_intent" ? "reviewed plan" : "advanced default"} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}${action.spendReservationStatus ? ` · reservation ${escapeHtml(action.spendReservationStatus)}` : ""}</p>
     ${action.statusSummary ? `<p>${escapeHtml(action.statusSummary)}</p>` : ""}
     ${action.decisionReason ? `<p><strong>Latest:</strong> ${escapeHtml(action.decisionReason)}${action.decisionReasonCode ? ` · ${escapeHtml(String(action.decisionReasonCode).replaceAll("_", " "))}` : ""}</p>` : ""}
+    ${confirmation ? `<p><strong>Checkout confirmation observed</strong> · ${escapeHtml(relative(confirmation.observedAt))}. Confirm the result below; Yoink did not collect order or payment details.</p>` : ""}
     ${Object.values(action.latency || {}).some((value) => value !== null && value !== undefined && Number.isFinite(Number(value))) ? `<p class="latency-breadcrumb">Observed → received ${duration(action.latency.observedToReceivedMs)} · received → job ${duration(action.latency.receivedToJobMs)} · job → lease ${duration(action.latency.jobToLeaseMs)} · lease → cart ${duration(action.latency.leaseToCartReadyMs)} · click → settle ${duration(action.latency.clickToSettleMs)} · click → cart ${duration(action.latency.clickToCartReadyMs)}</p>` : ""}</div>
     <div class="action-controls">
     ${action.action === "add_to_cart" && !action.userReportOutcome && ["ready_to_checkout", "needs_you"].includes(stage) ? `<form class="cart-outcome" data-cart-outcome="${escapeHtml(action.id)}">
@@ -873,6 +900,98 @@ function renderActions() {
   }).join("") : '<div class="empty">No purchase or notification actions have been recorded yet.</div>';
 }
 
+function callHasPlan(call) {
+  const product = state.products.find((item) => item.listingId === call.listingId);
+  return Boolean(product && state.plans.some((plan) => plan.variantId === product.variantId));
+}
+
+function renderCalls() {
+  const select = $("#callBulkProfile");
+  const selected = select.value;
+  select.innerHTML = ['<option value="">System default</option>', ...state.profiles.map((profile) =>
+    `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`)].join("");
+  select.value = state.profiles.some((profile) => profile.id === selected) ? selected : "";
+  const calls = Array.isArray(state.calls) ? state.calls : [];
+  $("#callList").innerHTML = calls.length ? calls.map((call) => {
+    const planned = callHasPlan(call);
+    const watch = call.watch || null;
+    const watchActive = watch && ["queued", "observing"].includes(watch.state);
+    const eligible = Boolean(call.listingId) && !planned;
+    const membership = String(call.earlyAccess?.membership || "");
+    const queueExpected = call.earlyAccess?.queueExpected === true;
+    const tags = [
+      call.kind === "signal" ? call.source || "Signal" : call.kind === "queue_open" ? "Queue open" : "Drop window",
+      String(call.status || "received").replaceAll("_", " "),
+      membership,
+      queueExpected ? "Queue expected" : ""
+    ].filter(Boolean);
+    return `<article class="action-card call-card">
+      <label class="call-select"><input type="checkbox" data-call-select="${escapeHtml(call.listingId)}" ${eligible ? "" : "disabled"}><span class="sr-only">Select ${escapeHtml(call.title)}</span></label>
+      <div><div class="card-top"><h3>${escapeHtml(call.title || `${retailerDisplayName(call.retailerId)} product`)}</h3><span class="tag ${["confirmed", "seen_in_stock", "in_stock"].includes(call.status) ? "good" : ""}">${escapeHtml(tags[0] || "Call")}</span></div>
+      <p>${escapeHtml(retailerDisplayName(call.retailerId))} · ${escapeHtml(call.retailerSku)}${call.unitPriceCents ? ` · ${escapeHtml(money(call.unitPriceCents, call.currency))}` : ""} · ${escapeHtml(relative(call.occurredAt))}</p>
+      <div class="call-tags">${tags.slice(1).map((tag) => `<span class="tag">${escapeHtml(words(tag))}</span>`).join("")}</div>
+      ${call.closesAt ? `<p>Watch window closes ${escapeHtml(relative(call.closesAt))}. Observation remains read-only until exact stock is seen or the window closes.</p>` : ""}</div>
+      <div class="action-controls"><div class="inline-actions">
+        ${eligible ? `<button class="button primary" data-quick-add="${escapeHtml(call.listingId)}" type="button">Quick add</button>` : planned ? '<span class="tag good">Plan ready</span>' : ""}
+        ${call.dropWindowItemId && !watch ? `<button class="button secondary" data-watch-enroll="${escapeHtml(call.dropWindowItemId)}" type="button">Watch window</button>` : ""}
+        ${watchActive ? `<button class="button quiet" data-watch-cancel="${escapeHtml(watch.id)}" type="button">Stop watching</button>` : ""}
+        ${call.canonicalUrl ? `<a class="canonical" href="${escapeHtml(howlAffiliateUrl(call.canonicalUrl, call.title))}" target="_blank" rel="noopener noreferrer sponsored">Store page ↗</a>` : ""}
+      </div></div>
+    </article>`;
+  }).join("") : '<div class="empty">No signals or scheduled drop calls have arrived yet.</div>';
+  $("#callBulkAdd").disabled = true;
+}
+
+function renderActionPlatform() {
+  const platform = state.actionPlatform || {};
+  const analytics = platform.analytics || {};
+  const funnel = analytics.funnel || {};
+  const metrics = [
+    [Object.values(funnel).reduce((sum, value) => sum + Number(value || 0), 0), "Actions"],
+    [funnel.ready_to_checkout || 0, "Ready to check out"],
+    [funnel.needs_you || 0, "Needs you"],
+    [analytics.hitRateBps === null || analytics.hitRateBps === undefined ? "—" : `${(Number(analytics.hitRateBps) / 100).toFixed(1)}%`, "Closed hit rate"],
+    [money(analytics.spend?.committedCents || 0), "User-reported spend"],
+    [analytics.spend?.savingsVsMsrpCents === null || analytics.spend?.savingsVsMsrpCents === undefined
+      ? "—" : money(analytics.spend.savingsVsMsrpCents),
+    analytics.spend?.savingsCoverage === "partial" ? "MSRP savings · partial" : "MSRP savings"]
+  ];
+  $("#analyticsMetrics").innerHTML = metrics.map(([value, label]) => `<article class="metric"><strong>${typeof value === "number" ? value.toLocaleString() : escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></article>`).join("");
+  $("#retailerAnalytics").innerHTML = (analytics.retailers || []).map((item) => `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(item.retailerId))}</strong><small>${Number(item.carted || 0)} carted · ${Number(item.gotIt || 0)} got it · ${Number(item.missed || 0)} missed</small></span><strong>${escapeHtml(money(item.committedCents || 0))}</strong></div>`).join("") || '<div class="mini-row"><span>No closed outcomes yet.</span></div>';
+  $("#readinessList").innerHTML = (platform.readiness || []).map((lane) => {
+    const ready = lane.readyForGuardedAdd === true;
+    const warning = lane.qualification?.warning;
+    return `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(lane.retailerId))}</strong><small>${(lane.checklist || []).map((check) => `${check.ready ? "✓" : "○"} ${check.label}`).join(" · ")}</small></span><span class="tag ${ready ? "good" : "warn"}">${ready ? "Ready" : warning && warning !== "none" ? words(warning) : "Needs setup"}</span></div>`;
+  }).join("") || '<div class="mini-row"><span>No guarded store lanes are configured.</span></div>';
+  $("#sourceScorecards").innerHTML = (platform.sources || []).map((source) => `<div class="mini-row"><span><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(words(source.provider))} · ${Number(source.acceptedEventCount || 0).toLocaleString()} accepted · p95 ${duration(source.p95ObservedToReceivedMs)}</small></span><span class="tag ${source.health === "healthy" ? "good" : source.health === "attention" ? "warn" : ""}">${escapeHtml(words(source.health || source.status))}</span></div>`).join("") || '<div class="mini-row"><span>No source channels yet.</span></div>';
+  renderConnectors();
+}
+
+function renderConnectors() {
+  const connectors = state.actionPlatform?.connectors || [];
+  const deliveries = state.actionPlatform?.connectorDeliveries || [];
+  $("#connectorList").innerHTML = connectors.map((connector) => {
+    const latest = deliveries.find((delivery) => delivery.connectorId === connector.id);
+    return `<div class="mini-row"><span><strong>${escapeHtml(connector.name)}</strong><small>${escapeHtml(words(connector.kind))} · ${connector.events.map(words).join(", ")}${latest ? ` · latest ${words(latest.state)}` : ""}</small></span><div class="inline-actions"><span class="tag ${connector.enabled && connector.runtimeBound ? "good" : "warn"}">${connector.runtimeBound ? connector.enabled ? "Ready" : "Paused" : "Binding missing"}</span><button class="button quiet" data-connector-test="${escapeHtml(connector.id)}" type="button" ${connector.runtimeBound ? "" : "disabled"}>Test</button><button class="button quiet" data-connector-toggle="${escapeHtml(connector.id)}" type="button">${connector.enabled ? "Pause" : "Enable"}</button></div></div>`;
+  }).join("") || '<div class="mini-row"><span>No action connectors configured.</span></div>';
+}
+
+function renderHealth() {
+  const health = state.health;
+  if (!health) return;
+  const workerReady = health.worker?.healthy === true;
+  $("#healthSummary").textContent = `${Number(health.counts?.onlineDevices || 0)} companion${Number(health.counts?.onlineDevices || 0) === 1 ? "" : "s"} online · worker ${workerReady ? "healthy" : words(health.worker?.state || "unavailable")}.`;
+  const details = [
+    ["Yoink version", health.version || "Unknown"],
+    ["Worker heartbeat", health.worker?.lastHeartbeatAt ? relative(health.worker.lastHeartbeatAt) : "Unavailable"],
+    ["Watch queue", Number(health.counts?.watchQueue || 0).toLocaleString()],
+    ["Source attention", Number(health.counts?.sourceAttention || 0).toLocaleString()],
+    ["Connector failures", Number(health.counts?.connectorFailures || 0).toLocaleString()]
+  ];
+  $("#healthDetails").innerHTML = details.map(([label, value]) => `<div class="mini-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+  $("#restartWorker").hidden = !state.overview?.permissions?.includes("worker.manage");
+}
+
 function renderProposals() {
   const pending = state.proposals.filter((proposal) => proposal.status === "pending");
   $("#proposalCopy").textContent = pending.length
@@ -883,7 +1002,7 @@ function renderProposals() {
 
 async function refresh() {
   const query = state.query ? `&q=${encodeURIComponent(state.query)}` : "";
-  const [overview, products, plans, legacyTransition, actions, proposals, privacy, recoveryEvidence, profiles] = await Promise.all([
+  const [overview, products, plans, legacyTransition, actions, proposals, privacy, recoveryEvidence, profiles, calls, actionPlatform, health] = await Promise.all([
     api("/api/v1/user/overview"),
     api(`/api/v1/user/library/products?limit=200&offset=0${query}`),
     api("/api/v1/user/purchase-intents?limit=200&offset=0"),
@@ -892,7 +1011,10 @@ async function refresh() {
     api("/api/v1/user/catalog/proposals?limit=100&offset=0"),
     state.privacy ? Promise.resolve({ inventory: state.privacy }) : api("/api/v1/user/privacy"),
     api("/api/v1/user/community/recovery-evidence"),
-    api("/api/v1/user/purchase-profiles").catch(() => ({ items: [] }))
+    api("/api/v1/user/purchase-profiles").catch(() => ({ items: [] })),
+    api("/api/v1/user/calls").catch(() => ({ items: [] })),
+    api("/api/v1/user/action-platform").catch(() => ({})),
+    api("/api/v1/user/health").catch(() => null)
   ]);
   state.overview = overview;
   state.productGroups = products.items || [];
@@ -908,11 +1030,15 @@ async function refresh() {
   applyActionActivity(actions);
   state.proposals = proposals.items || [];
   state.privacy = privacy.inventory || null;
+  state.privacyCompliance = privacy.compliance || state.privacyCompliance;
   state.recoveryEvidence = recoveryEvidence.items || [];
   state.recoveryRetention = recoveryEvidence.retention || null;
   state.contributorEligibility = recoveryEvidence.contributorEligibility || null;
   state.profiles = profiles.items || [];
-  renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals(); renderPrivacy(); renderRecoveryEvidence(); renderProfiles();
+  state.calls = calls.items || [];
+  state.actionPlatform = actionPlatform || null;
+  state.health = health || null;
+  renderOverview(); renderProducts(); renderCalls(); renderWalmartDraws(); renderPlans(); renderActions(); renderActionPlatform(); renderHealth(); renderProposals(); renderPrivacy(); renderRecoveryEvidence(); renderProfiles();
 }
 
 function applyActionActivity(actions) {
@@ -1403,7 +1529,10 @@ document.addEventListener("click", async (event) => {
   if (!quickMenu.hidden && !quickMenu.contains(event.target) && !(button && button.dataset.quickMenu)) closeQuickMenu();
   if (!button) return;
   try {
-    if (button.dataset.tab) setTab(button.dataset.tab);
+    if (button.dataset.tab) {
+      setTab(button.dataset.tab);
+      history.replaceState(null, "", `#${button.dataset.tab}`);
+    }
     if (button.hasAttribute("data-close-dialog")) button.closest("dialog")?.close();
     if (button.dataset.quickMenu) {
       if (!quickMenu.hidden && quickMenu.dataset.anchor === button.dataset.quickMenu) {
@@ -1417,6 +1546,98 @@ document.addEventListener("click", async (event) => {
       closeQuickMenu();
       if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
       await quickAdd(button.dataset.quickAdd, button.dataset.profileId || "");
+    }
+    if (button.dataset.watchEnroll) {
+      button.disabled = true;
+      await api(`/api/v1/user/watch-queue/${encodeURIComponent(button.dataset.watchEnroll)}/enroll`, {
+        method: "POST", body: "{}"
+      });
+      await refresh();
+      setTab("calls");
+      toast("Exact item added to the bounded read-only watch queue.");
+    }
+    if (button.dataset.watchCancel) {
+      button.disabled = true;
+      await api(`/api/v1/user/watch-queue/${encodeURIComponent(button.dataset.watchCancel)}/cancel`, {
+        method: "POST", body: "{}"
+      });
+      await refresh();
+      setTab("calls");
+      toast("Watch stopped. No store action was taken.");
+    }
+    if (button.dataset.connectorTest) {
+      button.disabled = true;
+      await api(`/api/v1/user/connectors/${encodeURIComponent(button.dataset.connectorTest)}/test`, {
+        method: "POST", body: "{}"
+      });
+      await refresh();
+      setTab("preferences");
+      toast("Connector test queued.");
+    }
+    if (button.dataset.connectorToggle) {
+      const connector = state.actionPlatform?.connectors?.find((item) => item.id === button.dataset.connectorToggle);
+      if (!connector) throw new Error("Refresh before changing this connector.");
+      button.disabled = true;
+      await api(`/api/v1/user/connectors/${encodeURIComponent(connector.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          contractVersion: 1,
+          kind: connector.kind,
+          name: connector.name,
+          endpointReference: connector.endpointReference,
+          enabled: !connector.enabled,
+          events: connector.events
+        })
+      });
+      await refresh();
+      setTab("preferences");
+      toast(connector.enabled ? "Connector paused." : "Connector enabled.");
+    }
+    if (button.id === "callBulkAdd") {
+      const listingIds = [...new Set($$("[data-call-select]:checked").map((input) => input.dataset.callSelect).filter(Boolean))];
+      if (!listingIds.length) throw new Error("Select at least one unplanned exact product.");
+      button.disabled = true;
+      const profileId = $("#callBulkProfile").value;
+      let added = 0;
+      for (const listingId of listingIds) {
+        if (await quickAdd(listingId, profileId, { refresh: false, silent: true })) added += 1;
+      }
+      await refresh();
+      setTab("calls");
+      toast(`${added.toLocaleString()} exact product${added === 1 ? "" : "s"} added with the selected profile.`);
+    }
+    if (button.id === "downloadDiagnostics") {
+      if (!state.health?.diagnosticBundle) throw new Error("Diagnostics are not available yet.");
+      const blob = new Blob([`${JSON.stringify({
+        contractVersion: 1,
+        generatedAt: state.health.generatedAt,
+        version: state.health.version,
+        counts: state.health.counts,
+        readiness: state.health.readiness,
+        sources: state.health.sources,
+        connectors: state.health.connectors,
+        diagnosticBundle: state.health.diagnosticBundle
+      }, null, 2)}\n`], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `yoink-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+    if (button.id === "restartWorker") {
+      if (!confirm("Restart the embedded Yoink background worker? Active durable tasks remain queued and will be recovered.")) return;
+      button.disabled = true;
+      await api("/api/v1/admin/workers/restart", { method: "POST", body: "{}" });
+      await refresh();
+      setTab("insights");
+      toast("Background worker restarted.");
+    }
+    if (button.id === "acknowledgePrivacyChange") {
+      await api("/api/v1/user/privacy/change-acknowledged", { method: "POST", body: "{}" });
+      await refresh();
+      setTab("preferences");
+      toast("Privacy change notice acknowledged.");
     }
     if (button.dataset.productDetail) openProductDetail(button.dataset.productDetail);
     if (button.dataset.profileEdit) beginProfileEdit(button.dataset.profileEdit);
@@ -1496,6 +1717,37 @@ document.addEventListener("click", async (event) => {
     }
     if (button.dataset.setupAction === "resume_actions") await toggleActions();
   } catch (error) { toast(error.message || "The request failed.", true); }
+});
+
+$("#callList").addEventListener("change", () => {
+  $("#callBulkAdd").disabled = !$("[data-call-select]:checked");
+});
+
+$("#connectorForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const events = [...form.querySelectorAll('input[name="events"]:checked')].map((input) => input.value);
+  try {
+    if (!events.length) throw new Error("Choose at least one connector update.");
+    await api("/api/v1/user/connectors", {
+      method: "POST",
+      body: JSON.stringify({
+        contractVersion: 1,
+        kind: form.elements.kind.value,
+        name: form.elements.name.value.trim(),
+        endpointReference: form.elements.endpointReference.value.trim(),
+        enabled: true,
+        events
+      })
+    });
+    form.reset();
+    for (const checkbox of form.querySelectorAll('input[name="events"]')) checkbox.checked = true;
+    await refresh();
+    setTab("preferences");
+    toast("Action connector saved.");
+  } catch (error) {
+    toast(error.message || "The connector could not be saved.", true);
+  }
 });
 
 $("#productLinkForm").addEventListener("input", (event) => {
@@ -1716,7 +1968,9 @@ $("#spendForm").addEventListener("submit", async (event) => {
         expectedRevision: Number(event.currentTarget.elements.revision.value),
         perOrderCapCents: centsInput(event.currentTarget.elements.perOrder.value, "The per-order cap"),
         dailyCapCents: centsInput(event.currentTarget.elements.daily.value, "The daily cap"),
-        monthlyCapCents: centsInput(event.currentTarget.elements.monthly.value, "The monthly cap")
+        monthlyCapCents: centsInput(event.currentTarget.elements.monthly.value, "The monthly cap"),
+        timezone: event.currentTarget.elements.timezone.value.trim(),
+        periodResetHour: Number(event.currentTarget.elements.periodResetHour.value)
       })
     });
     await refresh();
@@ -1917,7 +2171,12 @@ function scheduleAdaptivePoll() {
     }
   }, adaptivePollDelay());
 }
-refresh().catch((error) => toast(error.message || "Yoink could not load.", true)).finally(scheduleAdaptivePoll);
+window.addEventListener("hashchange", applyHashRoute);
+applyHashRoute();
+refresh().catch((error) => toast(error.message || "Yoink could not load.", true)).finally(() => {
+  applyHashRoute();
+  scheduleAdaptivePoll();
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     refresh().catch(() => undefined).finally(scheduleAdaptivePoll);

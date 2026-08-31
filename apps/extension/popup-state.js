@@ -594,9 +594,9 @@ var YoinkPopupStateModule = (() => {
   var CART_READY_STORAGE_KEY = "yoinkCartReadyV1";
   var APP_DESTINATION_ROUTES = {
     dashboard: { pathname: "/", hash: "" },
-    connections: { pathname: "/admin", hash: "connections" },
-    operations: { pathname: "/admin", hash: "operations" },
-    settings: { pathname: "/admin", hash: "settings" }
+    connections: { pathname: "/", hash: "connections" },
+    operations: { pathname: "/", hash: "health" },
+    settings: { pathname: "/", hash: "preferences" }
   };
   function appDestinationUrl(appOrigin, destination = "dashboard") {
     const route = APP_DESTINATION_ROUTES[destination];

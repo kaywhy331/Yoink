@@ -6,6 +6,7 @@ import type {
 } from "../../contracts/src/index.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import { validTimezone, zonedPeriodStarts } from "../../domain/src/time-period.js";
 import { AuditRepository } from "./audit-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { PurchaseSafetyError } from "./purchase-policy-repository.js";
@@ -54,6 +55,8 @@ interface SpendPolicyRow {
   perOrderCapCents: number | null;
   dailyCapCents: number | null;
   monthlyCapCents: number | null;
+  timezone: string;
+  periodResetHour: number;
   orderSubmissionEnabled: number;
   createdAt: string;
   updatedAt: string;
@@ -75,17 +78,11 @@ function spendPolicy(row: SpendPolicyRow): SpendPolicy {
     perOrderCapCents: row.perOrderCapCents === null ? null : Number(row.perOrderCapCents),
     dailyCapCents: row.dailyCapCents === null ? null : Number(row.dailyCapCents),
     monthlyCapCents: row.monthlyCapCents === null ? null : Number(row.monthlyCapCents),
+    timezone: row.timezone,
+    periodResetHour: Number(row.periodResetHour),
     orderSubmissionEnabled: row.orderSubmissionEnabled === 1,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
-  };
-}
-
-function periodStarts(now: number): { day: string; month: string } {
-  const value = new Date(now);
-  return {
-    day: new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate())).toISOString(),
-    month: new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), 1)).toISOString()
   };
 }
 
@@ -105,8 +102,9 @@ export class SpendLedgerRepository {
         `INSERT OR IGNORE INTO user_spend_policies(
            user_id, tenant_id, revision, currency, per_order_cap_cents,
            daily_cap_cents, monthly_cap_cents, order_submission_enabled,
+           timezone, period_reset_hour,
            created_at, updated_at
-         ) VALUES (?, ?, 1, 'USD', NULL, NULL, NULL, 0, ?, ?)`,
+         ) VALUES (?, ?, 1, 'USD', NULL, NULL, NULL, 0, 'UTC', 0, ?, ?)`,
         scope.userId,
         scope.tenantId,
         timestamp,
@@ -126,6 +124,13 @@ export class SpendLedgerRepository {
     const perOrder = nullableCap(input?.perOrderCapCents, "The per-order cap");
     const daily = nullableCap(input?.dailyCapCents, "The daily cap");
     const monthly = nullableCap(input?.monthlyCapCents, "The monthly cap");
+    const timezone = validTimezone(input?.timezone ?? this.policy(now).timezone);
+    const periodResetHour = input?.periodResetHour === undefined
+      ? this.policy(now).periodResetHour
+      : Number(input.periodResetHour);
+    if (!Number.isInteger(periodResetHour) || periodResetHour < 0 || periodResetHour > 23) {
+      throw new PurchaseSafetyError("spend_policy_invalid", 400, "The spending-period reset hour must be from 0 through 23.");
+    }
     if (perOrder !== null && daily !== null && perOrder > daily) {
       throw new PurchaseSafetyError("spend_policy_invalid", 400, "The per-order cap cannot exceed the daily cap.");
     }
@@ -143,16 +148,21 @@ export class SpendLedgerRepository {
       }
       if (current.perOrderCapCents === perOrder
         && current.dailyCapCents === daily
-        && current.monthlyCapCents === monthly) return current;
+        && current.monthlyCapCents === monthly
+        && current.timezone === timezone
+        && current.periodResetHour === periodResetHour) return current;
       const timestamp = nowIso(now);
       this.db.run(
         `UPDATE user_spend_policies
          SET revision = revision + 1, per_order_cap_cents = ?,
-             daily_cap_cents = ?, monthly_cap_cents = ?, updated_at = ?
+             daily_cap_cents = ?, monthly_cap_cents = ?, timezone = ?,
+             period_reset_hour = ?, updated_at = ?
          WHERE user_id = ? AND tenant_id = ? AND revision = ?`,
         perOrder,
         daily,
         monthly,
+        timezone,
+        periodResetHour,
         timestamp,
         currentRequestScope().userId,
         currentRequestScope().tenantId,
@@ -164,7 +174,14 @@ export class SpendLedgerRepository {
         eventType: "spend_policy_revised",
         reasonCode: "user_preferences",
         message: "Periodic spending limits were revised.",
-        data: { revision: expectedRevision + 1, perOrderCapCents: perOrder, dailyCapCents: daily, monthlyCapCents: monthly }
+        data: {
+          revision: expectedRevision + 1,
+          perOrderCapCents: perOrder,
+          dailyCapCents: daily,
+          monthlyCapCents: monthly,
+          timezone,
+          periodResetHour
+        }
       }, now);
       return this.policy(now);
     });
@@ -518,7 +535,7 @@ export class SpendLedgerRepository {
   summary(now = Date.now(), expire = true): SpendSummary {
     if (expire) this.releaseExpired(now);
     const policy = this.policy(now);
-    const starts = periodStarts(now);
+    const starts = zonedPeriodStarts(now, policy.timezone, policy.periodResetHour);
     const active = this.db.get<{ amount: number; count: number }>(
       `SELECT COALESCE(SUM(reserved_amount_cents), 0) AS amount, COUNT(*) AS count
        FROM spend_reservations
@@ -599,6 +616,7 @@ export class SpendLedgerRepository {
       `SELECT revision, currency, per_order_cap_cents AS perOrderCapCents,
               daily_cap_cents AS dailyCapCents,
               monthly_cap_cents AS monthlyCapCents,
+              timezone, period_reset_hour AS periodResetHour,
               order_submission_enabled AS orderSubmissionEnabled,
               created_at AS createdAt, updated_at AS updatedAt
        FROM user_spend_policies WHERE user_id = ? AND tenant_id = ?`,

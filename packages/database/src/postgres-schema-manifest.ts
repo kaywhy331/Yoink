@@ -331,7 +331,16 @@ function manifestFingerprint(value: Omit<PostgresSchemaManifest, "fingerprint">)
   return createHash("sha256").update(canonicalPortabilityJson(value)).digest("hex");
 }
 
+let cachedCanonicalManifest: PostgresSchemaManifest | null = null;
+
 export function buildPostgresSchemaManifest(): PostgresSchemaManifest {
+  // This manifest is derived entirely from the packaged migration ledger, but
+  // the qualification graph asks for it hundreds of times. Reapplying every
+  // migration to a fresh SQLite database on each request made the native
+  // PostgreSQL proof exceed its timeout after the action-platform tables were
+  // added. Cache the canonical derivation and return an isolated copy so a
+  // caller can never mutate the cached qualification contract.
+  if (cachedCanonicalManifest) return structuredClone(cachedCanonicalManifest);
   const db = new YoinkDatabase(":memory:");
   try {
     const triggerRows = db.all<TriggerRow>(
@@ -501,7 +510,9 @@ export function buildPostgresSchemaManifest(): PostgresSchemaManifest {
       unresolvedTenantTableCount: tables.filter((table) => table.tenantScopeKind === "unresolved").length,
       tables
     };
-    return { ...withoutFingerprint, fingerprint: manifestFingerprint(withoutFingerprint) };
+    const manifest = { ...withoutFingerprint, fingerprint: manifestFingerprint(withoutFingerprint) };
+    cachedCanonicalManifest = structuredClone(manifest);
+    return manifest;
   } finally {
     db.close();
   }

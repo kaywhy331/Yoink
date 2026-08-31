@@ -22,9 +22,9 @@ test("extension app destinations resolve to distinct dashboard workspaces", () =
     settings: appDestinationUrl(origin, "settings")
   }, {
     dashboard: `${origin}/`,
-    connections: `${origin}/admin#connections`,
-    operations: `${origin}/admin#operations`,
-    settings: `${origin}/admin#settings`
+    connections: `${origin}/#connections`,
+    operations: `${origin}/#health`,
+    settings: `${origin}/#preferences`
   });
   assert.throws(
     () => appDestinationUrl(origin, "unknown" as never),

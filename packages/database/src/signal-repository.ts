@@ -31,6 +31,7 @@ import { OfferIdentityRepository } from "./offer-identity-repository.js";
 import { PurchasePolicyRepository } from "./purchase-policy-repository.js";
 import { PurchaseSafetyError } from "./purchase-policy-repository.js";
 import { SpendLedgerRepository } from "./spend-ledger-repository.js";
+import { UserActionConnectorRepository } from "./user-action-connector-repository.js";
 
 export interface SourceConnectionContext {
   id: string;
@@ -124,12 +125,14 @@ export class SignalRepository {
   private readonly offerIdentity: OfferIdentityRepository;
   private readonly purchasePolicies: PurchasePolicyRepository;
   private readonly spendLedger: SpendLedgerRepository;
+  private readonly userConnectors: UserActionConnectorRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.auditEvents = new AuditRepository(db);
     this.offerIdentity = new OfferIdentityRepository(db);
     this.purchasePolicies = new PurchasePolicyRepository(db);
     this.spendLedger = new SpendLedgerRepository(db);
+    this.userConnectors = new UserActionConnectorRepository(db);
   }
 
   private addLaneQualified(retailerId: string): boolean {
@@ -982,6 +985,7 @@ export class SignalRepository {
         JSON.stringify(evidence),
         timestamp
       );
+      if (outcome === "missed_it") this.userConnectors.queueForJob("missed", job.id, reportNow);
       this.audit(job.id, "action_job_user_report", outcome, "The user closed the manual checkout handoff.", evidence as Record<string, unknown>, reportNow);
       const mission = this.db.get<{ status: string; fulfilledQuantity: number; targetQuantity: number }>(
         `SELECT status, fulfilled_quantity AS fulfilledQuantity, target_quantity AS targetQuantity
@@ -1037,6 +1041,7 @@ export class SignalRepository {
               si.id AS incidentId, si.occurrence_count AS occurrenceCount,
               COALESCE(v.title, NULLIF(json_extract(se.identity_json, '$.title'), ''),
                 NULLIF(json_extract(se.evidence_json, '$.headline'), '')) AS title,
+              l.id AS listingId, l.canonical_url AS canonicalUrl,
               COALESCE(l.retailer_id, NULLIF(json_extract(se.identity_json, '$.retailerId'), '')) AS retailerId,
               COALESCE(l.retailer_sku, NULLIF(json_extract(se.identity_json, '$.retailerSku'), '')) AS retailerSku,
               COALESCE(si.unit_price_cents, json_extract(se.offer_json, '$.unitPriceCents')) AS unitPriceCents,

@@ -20,7 +20,10 @@ test("the extension release allowlist contains every packaged observer and mutat
     "trackalacker-sync.js",
     "observer-recipe-root.js",
     "popup-state.js",
-    "runtime-config.js"
+    "runtime-config.js",
+    "options.html",
+    "options.js",
+    "options.css"
   ]) {
     assert.match(script, new RegExp(`\\"${file.replaceAll(".", "\\.")}\\"`), `${file} must be included in the release zip`);
   }
@@ -58,6 +61,12 @@ test("the production extension profile is deterministic, HTTPS-pinned, and conta
     assert.match(configResult.stdout, /"appOrigin": "https:\/\/app\.yoink\.example"/);
     assert.match(configResult.stdout, /"localPackageUpdates": false/);
     assert.doesNotMatch(configResult.stdout, /127\.0\.0\.1|http:\/\//);
+
+    const packagedFiles = spawnSync("unzip", ["-Z1", archive], { encoding: "utf8" });
+    assert.equal(packagedFiles.status, 0, packagedFiles.stderr);
+    for (const file of ["options.html", "options.js", "options.css"]) {
+      assert.match(packagedFiles.stdout, new RegExp(`^${file.replaceAll(".", "\\.")}$`, "m"));
+    }
 
     const missingOrigin = spawnSync(process.execPath, [
       "scripts/package-extension.mjs",

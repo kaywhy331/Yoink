@@ -4,7 +4,7 @@ import {
 } from "./background-task.js";
 import { stableHash } from "./ids.js";
 
-export const BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION = 2;
+export const BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION = 3;
 
 export type BackgroundWorkerDeploymentMode = "embedded" | "external" | "disabled";
 
@@ -24,6 +24,7 @@ export interface BackgroundWorkerDeploymentFingerprintInput {
   observerRecipeWitness: BackgroundWorkerPublicWitnessConfig | null;
   observerRecipeWitnessRequired: boolean;
   operatorAlertWebhookRegistryFingerprint: string;
+  userActionWebhookRegistryFingerprint: string;
 }
 
 export function backgroundWorkerDeploymentFingerprint(
@@ -35,15 +36,19 @@ export function backgroundWorkerDeploymentFingerprint(
   }
   const witness = input.observerRecipeWitness;
   const connectorRegistryFingerprint = String(input.operatorAlertWebhookRegistryFingerprint ?? "").trim();
+  const userActionRegistryFingerprint = String(input.userActionWebhookRegistryFingerprint ?? "").trim();
   if (!/^[a-f0-9]{64}$/.test(connectorRegistryFingerprint)) {
     throw new Error("A valid operator alert webhook registry fingerprint is required for deployment attestation.");
+  }
+  if (!/^[a-f0-9]{64}$/.test(userActionRegistryFingerprint)) {
+    throw new Error("A valid user action webhook registry fingerprint is required for deployment attestation.");
   }
   const taskRegistry = BACKGROUND_TASK_KINDS.map((taskKind) => {
     const definition = BACKGROUND_TASK_DEFINITIONS[taskKind];
     return [taskKind, definition.intervalSeconds, definition.maximumAttempts];
   });
   return stableHash(
-    "yoink_background_worker_deployment_v2",
+    "yoink_background_worker_deployment_v3",
     BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION,
     runtimeVersion,
     JSON.stringify(taskRegistry),
@@ -55,6 +60,7 @@ export function backgroundWorkerDeploymentFingerprint(
     witness?.key.keyId ?? "",
     witness ? stableHash("yoink_worker_witness_public_spki_v1", witness.key.publicKeySpki) : "",
     witness?.maxAgeSeconds ?? 0,
-    connectorRegistryFingerprint
+    connectorRegistryFingerprint,
+    userActionRegistryFingerprint
   );
 }

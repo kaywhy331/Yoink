@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { TARGET_ADD_ADAPTER_VERSION, type SignalEventInput, type StrategyDefinition } from "../packages/contracts/src/index.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
+import { ActionAnalyticsRepository } from "../packages/database/src/action-analytics-repository.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
@@ -308,6 +309,18 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
        WHERE action_job_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
       created.actionJobId
     )?.reason, "user_reported_order_committed");
+    const analytics = new ActionAnalyticsRepository(db);
+    const snapshot = analytics.snapshot(NOW + 2_001);
+    assert.equal(snapshot.spend.committedCents, 7_425);
+    assert.equal(snapshot.spend.reportedOrders, 1);
+    assert.equal(snapshot.spend.savingsCoveredOrders, 1);
+    assert.equal(snapshot.spend.savingsCoverage, "complete");
+    const csv = analytics.csv(NOW + 2_001);
+    assert.match(csv, /^section,metric,retailer,value,unit,coverage/m);
+    assert.match(csv, /funnel,closed,,1,actions,complete/);
+    assert.match(csv, /spend,committed_cents,,7425,cents,USD/);
+    assert.match(csv, /savings,vs_msrp_cents,/);
+    assert.match(csv, /latency,observedToReceivedMs_p50,/);
     assert.equal(db.get<{ reason: string }>(
       `SELECT reason_code AS reason FROM action_events
        WHERE job_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,

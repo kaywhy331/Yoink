@@ -27,6 +27,7 @@ import type {
 } from "./observer-recipe-witness-refresh.js";
 import type { OperatorAlertConnectorDispatchService } from "./operator-alert-connector-dispatch.js";
 import type { OperatorAlertReconciliationService } from "./operator-alert-reconciliation.js";
+import type { UserActionConnectorDispatchService } from "./user-action-connector-dispatch.js";
 
 export type BackgroundTaskHandler = BackgroundWorkerTaskHandler;
 
@@ -38,6 +39,7 @@ export interface BackgroundMaintenanceHandlerOptions {
   >;
   operatorAlertConnectorDispatch?: Pick<OperatorAlertConnectorDispatchService, "execute">;
   operatorAlertReconciliation?: Pick<OperatorAlertReconciliationService, "execute">;
+  userActionConnectorDispatch?: Pick<UserActionConnectorDispatchService, "execute">;
   notificationRecovery?: {
     recover(
       principal: BackgroundWorkerContext["principal"],
@@ -174,6 +176,16 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
                 connectorDeliveriesSucceeded: 0,
                 connectorDeliveriesRetried: 0,
                 connectorDeliveriesDeadLettered: 0
+              }),
+          ...(this.options.userActionConnectorDispatch
+            ? await this.options.userActionConnectorDispatch.execute(now)
+            : {
+                userConnectorConfigured: false,
+                userConnectorTransportConfigured: false,
+                userConnectorDeliveriesAttempted: 0,
+                userConnectorDeliveriesSucceeded: 0,
+                userConnectorDeliveriesRetried: 0,
+                userConnectorDeliveriesDeadLettered: 0
               })
         };
       case "observer_recipe_candidate_evaluation":

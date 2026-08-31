@@ -3483,5 +3483,374 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE retailer_id IN ('target', 'walmart', 'amazon', 'bestbuy');
     `
+  },
+  {
+    version: 54,
+    name: "provider_channels_and_per_channel_trust",
+    sql: `
+      CREATE TABLE signal_provider_channels (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        source_connection_id TEXT NOT NULL UNIQUE REFERENCES source_connections(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL CHECK (provider IN ('discord', 'drop_window', 'api')),
+        name TEXT NOT NULL,
+        external_ref_hash TEXT NOT NULL CHECK (
+          length(external_ref_hash) = 64
+          AND external_ref_hash NOT GLOB '*[^a-f0-9]*'
+        ),
+        trust_level TEXT NOT NULL CHECK (trust_level IN ('informational', 'trusted_exact')),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'disabled')),
+        replay_window_seconds INTEGER NOT NULL DEFAULT 900 CHECK (replay_window_seconds BETWEEN 30 AND 86400),
+        accepted_event_count INTEGER NOT NULL DEFAULT 0 CHECK (accepted_event_count >= 0),
+        rejected_event_count INTEGER NOT NULL DEFAULT 0 CHECK (rejected_event_count >= 0),
+        false_positive_count INTEGER NOT NULL DEFAULT 0 CHECK (false_positive_count >= 0),
+        last_event_at TEXT NOT NULL DEFAULT '',
+        last_error_code TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        UNIQUE(user_id, provider, external_ref_hash)
+      ) STRICT;
+
+      CREATE INDEX signal_provider_channels_owner_idx
+        ON signal_provider_channels(tenant_id, user_id, provider, status, updated_at DESC);
+      CREATE INDEX signal_provider_channels_health_idx
+        ON signal_provider_channels(provider, status, last_event_at DESC);
+    `
+  },
+  {
+    version: 55,
+    name: "drop_windows_connectors_readiness_and_privacy",
+    sql: `
+      CREATE TABLE drop_windows (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        source_channel_id TEXT NOT NULL REFERENCES signal_provider_channels(id) ON DELETE RESTRICT,
+        retailer_id TEXT NOT NULL REFERENCES retailers(id) ON DELETE RESTRICT,
+        kind TEXT NOT NULL CHECK (kind IN ('drop_window', 'queue_open')),
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 2 AND 160),
+        starts_at TEXT NOT NULL,
+        closes_at TEXT NOT NULL,
+        spread_seconds INTEGER NOT NULL CHECK (spread_seconds BETWEEN 0 AND 86400),
+        confidence_bps INTEGER NOT NULL CHECK (confidence_bps BETWEEN 0 AND 10000),
+        timezone TEXT NOT NULL DEFAULT 'UTC' CHECK (length(timezone) BETWEEN 3 AND 64),
+        status TEXT NOT NULL CHECK (status IN ('scheduled', 'active', 'superseded', 'closed', 'cancelled')),
+        supersedes_id TEXT REFERENCES drop_windows(id) ON DELETE SET NULL,
+        superseded_by_id TEXT REFERENCES drop_windows(id) ON DELETE SET NULL,
+        author_note TEXT NOT NULL DEFAULT '' CHECK (length(author_note) <= 500),
+        created_by_actor_id TEXT NOT NULL CHECK (length(created_by_actor_id) BETWEEN 3 AND 120),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        CHECK (closes_at > starts_at),
+        CHECK (supersedes_id IS NULL OR supersedes_id <> id),
+        CHECK (superseded_by_id IS NULL OR superseded_by_id <> id)
+      ) STRICT;
+      CREATE INDEX drop_windows_owner_time_idx
+        ON drop_windows(tenant_id, user_id, status, starts_at, id);
+      CREATE INDEX drop_windows_retailer_time_idx
+        ON drop_windows(retailer_id, status, starts_at, closes_at);
+
+      CREATE TABLE drop_window_items (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        drop_window_id TEXT NOT NULL REFERENCES drop_windows(id) ON DELETE CASCADE,
+        listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE RESTRICT,
+        ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 999),
+        expected_at TEXT NOT NULL,
+        early_access_json TEXT NOT NULL DEFAULT '{}' CHECK (
+          json_valid(early_access_json) AND length(early_access_json) <= 2000
+        ),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        UNIQUE(drop_window_id, listing_id),
+        UNIQUE(drop_window_id, ordinal)
+      ) STRICT;
+      CREATE INDEX drop_window_items_owner_idx
+        ON drop_window_items(tenant_id, user_id, expected_at, id);
+
+      CREATE TABLE watch_queue_items (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        drop_window_id TEXT NOT NULL REFERENCES drop_windows(id) ON DELETE CASCADE,
+        drop_window_item_id TEXT NOT NULL UNIQUE REFERENCES drop_window_items(id) ON DELETE CASCADE,
+        listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE RESTRICT,
+        mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL,
+        assigned_device_id TEXT REFERENCES extension_devices(id) ON DELETE SET NULL,
+        enrollment TEXT NOT NULL CHECK (enrollment IN ('manual', 'auto_armed')),
+        state TEXT NOT NULL CHECK (state IN (
+          'queued', 'observing', 'seen_in_stock', 'window_closed', 'cancelled'
+        )),
+        observation_starts_at TEXT NOT NULL,
+        observation_closes_at TEXT NOT NULL,
+        next_observation_at TEXT NOT NULL,
+        jitter_seconds INTEGER NOT NULL CHECK (jitter_seconds BETWEEN 5 AND 300),
+        observation_count INTEGER NOT NULL DEFAULT 0 CHECK (observation_count BETWEEN 0 AND 10000),
+        last_observed_at TEXT NOT NULL DEFAULT '',
+        last_availability TEXT NOT NULL DEFAULT 'unknown' CHECK (
+          last_availability IN ('in_stock', 'preorder', 'out_of_stock', 'unknown')
+        ),
+        readiness_json TEXT NOT NULL DEFAULT '{}' CHECK (
+          json_valid(readiness_json) AND length(readiness_json) <= 4000
+        ),
+        extension_version TEXT NOT NULL DEFAULT '' CHECK (length(extension_version) <= 40),
+        observation_capability_hash TEXT NOT NULL DEFAULT '' CHECK (
+          observation_capability_hash = '' OR (
+            length(observation_capability_hash) = 64
+            AND observation_capability_hash NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        lease_expires_at TEXT NOT NULL DEFAULT '',
+        closed_reason TEXT NOT NULL DEFAULT '' CHECK (length(closed_reason) <= 80),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        CHECK (observation_closes_at > observation_starts_at)
+      ) STRICT;
+      CREATE INDEX watch_queue_items_due_idx
+        ON watch_queue_items(tenant_id, user_id, state, next_observation_at, id);
+      CREATE INDEX watch_queue_items_window_idx
+        ON watch_queue_items(drop_window_id, state, listing_id);
+
+      CREATE TABLE retailer_session_readiness (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL REFERENCES extension_devices(id) ON DELETE CASCADE,
+        retailer_id TEXT NOT NULL REFERENCES retailers(id) ON DELETE RESTRICT,
+        signed_in_state TEXT NOT NULL CHECK (
+          signed_in_state IN ('unknown', 'ready', 'signed_out', 'challenged')
+        ),
+        cart_baseline_state TEXT NOT NULL CHECK (
+          cart_baseline_state IN ('unknown', 'ready', 'stale', 'unavailable')
+        ),
+        baseline_observed_at TEXT NOT NULL DEFAULT '',
+        expires_at TEXT NOT NULL DEFAULT '',
+        adapter_version TEXT NOT NULL DEFAULT '' CHECK (length(adapter_version) <= 80),
+        last_error_code TEXT NOT NULL DEFAULT '' CHECK (length(last_error_code) <= 80),
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        PRIMARY KEY(tenant_id, user_id, device_id, retailer_id)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX retailer_session_readiness_recent_idx
+        ON retailer_session_readiness(tenant_id, user_id, updated_at DESC, retailer_id);
+
+      CREATE TABLE user_action_connectors (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('discord', 'slack', 'webhook')),
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 2 AND 120),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        endpoint_reference TEXT NOT NULL CHECK (
+          length(endpoint_reference) BETWEEN 3 AND 120
+          AND endpoint_reference GLOB '[A-Za-z]*'
+          AND endpoint_reference NOT GLOB '*[^A-Za-z0-9_.:-]*'
+        ),
+        endpoint_binding_fingerprint TEXT NOT NULL DEFAULT '' CHECK (
+          endpoint_binding_fingerprint = '' OR (
+            length(endpoint_binding_fingerprint) = 64
+            AND endpoint_binding_fingerprint NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        events_json TEXT NOT NULL CHECK (json_valid(events_json) AND length(events_json) <= 500),
+        last_delivery_at TEXT NOT NULL DEFAULT '',
+        last_error_code TEXT NOT NULL DEFAULT '' CHECK (length(last_error_code) <= 80),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        UNIQUE(user_id, name)
+      ) STRICT;
+      CREATE INDEX user_action_connectors_enabled_idx
+        ON user_action_connectors(tenant_id, user_id, enabled, updated_at DESC);
+
+      CREATE TABLE user_action_connector_deliveries (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        connector_id TEXT NOT NULL REFERENCES user_action_connectors(id) ON DELETE CASCADE,
+        endpoint_reference TEXT NOT NULL CHECK (length(endpoint_reference) BETWEEN 3 AND 120),
+        endpoint_binding_fingerprint TEXT NOT NULL DEFAULT '' CHECK (
+          endpoint_binding_fingerprint = '' OR (
+            length(endpoint_binding_fingerprint) = 64
+            AND endpoint_binding_fingerprint NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        action_job_id TEXT REFERENCES action_jobs(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL CHECK (event_type IN ('carted', 'needs_you', 'missed', 'test')),
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND length(payload_json) <= 4000),
+        idempotency_key_hash TEXT NOT NULL UNIQUE CHECK (
+          length(idempotency_key_hash) = 64
+          AND idempotency_key_hash NOT GLOB '*[^a-f0-9]*'
+        ),
+        state TEXT NOT NULL CHECK (state IN (
+          'pending', 'leased', 'retry_wait', 'delivered', 'dead_letter', 'cancelled'
+        )),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 12),
+        lease_capability_hash TEXT NOT NULL DEFAULT '' CHECK (
+          lease_capability_hash = '' OR (
+            length(lease_capability_hash) = 64
+            AND lease_capability_hash NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        lease_expires_at TEXT NOT NULL DEFAULT '',
+        next_attempt_at TEXT NOT NULL DEFAULT '',
+        last_error_code TEXT NOT NULL DEFAULT '' CHECK (length(last_error_code) <= 80),
+        delivered_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE
+      ) STRICT;
+      CREATE INDEX user_action_connector_deliveries_queue_idx
+        ON user_action_connector_deliveries(tenant_id, user_id, state, next_attempt_at, created_at, id);
+
+      CREATE TABLE order_confirmation_observations (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL REFERENCES extension_devices(id) ON DELETE CASCADE,
+        action_job_id TEXT NOT NULL REFERENCES action_jobs(id) ON DELETE CASCADE,
+        retailer_id TEXT NOT NULL REFERENCES retailers(id) ON DELETE RESTRICT,
+        page_class TEXT NOT NULL CHECK (page_class = 'confirmation'),
+        evidence_hash TEXT NOT NULL UNIQUE CHECK (
+          length(evidence_hash) = 64 AND evidence_hash NOT GLOB '*[^a-f0-9]*'
+        ),
+        observed_at TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        acknowledged INTEGER NOT NULL DEFAULT 0 CHECK (acknowledged IN (0, 1)),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        UNIQUE(action_job_id, device_id)
+      ) STRICT;
+      CREATE INDEX order_confirmation_observations_recent_idx
+        ON order_confirmation_observations(tenant_id, user_id, observed_at DESC, id DESC);
+
+      CREATE TABLE privacy_notice_receipts (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 3 AND 40),
+        change_version TEXT NOT NULL CHECK (length(change_version) BETWEEN 1 AND 40),
+        notice_kind TEXT NOT NULL CHECK (
+          notice_kind IN ('privacy_policy', 'change_notice', 'local_deletion')
+        ),
+        action TEXT NOT NULL CHECK (action IN ('viewed', 'acknowledged', 'deletion_completed')),
+        evidence_hash TEXT NOT NULL CHECK (
+          length(evidence_hash) = 64 AND evidence_hash NOT GLOB '*[^a-f0-9]*'
+        ),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        UNIQUE(user_id, policy_version, change_version, notice_kind, action)
+      ) STRICT;
+      CREATE INDEX privacy_notice_receipts_user_idx
+        ON privacy_notice_receipts(tenant_id, user_id, created_at DESC);
+
+      CREATE TABLE restock_pattern_profiles (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        retailer_id TEXT NOT NULL REFERENCES retailers(id) ON DELETE RESTRICT,
+        listing_id TEXT REFERENCES listings(id) ON DELETE CASCADE,
+        timezone TEXT NOT NULL CHECK (length(timezone) BETWEEN 3 AND 64),
+        sample_count INTEGER NOT NULL CHECK (sample_count BETWEEN 0 AND 1000000),
+        likely_local_hour INTEGER CHECK (likely_local_hour IS NULL OR likely_local_hour BETWEEN 0 AND 23),
+        median_interval_minutes INTEGER CHECK (
+          median_interval_minutes IS NULL OR median_interval_minutes BETWEEN 1 AND 525600
+        ),
+        confidence_bps INTEGER NOT NULL CHECK (confidence_bps BETWEEN 0 AND 10000),
+        pattern_json TEXT NOT NULL CHECK (json_valid(pattern_json) AND length(pattern_json) <= 4000),
+        computed_through_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        UNIQUE(user_id, retailer_id, listing_id, timezone)
+      ) STRICT;
+      CREATE INDEX restock_pattern_profiles_owner_idx
+        ON restock_pattern_profiles(tenant_id, user_id, retailer_id, updated_at DESC);
+
+      ALTER TABLE app_settings
+        ADD COLUMN watch_queue_mode TEXT NOT NULL DEFAULT 'manual'
+          CHECK (watch_queue_mode IN ('manual', 'auto_armed'));
+      ALTER TABLE app_settings
+        ADD COLUMN privacy_notice_version TEXT NOT NULL DEFAULT '';
+      ALTER TABLE user_spend_policies
+        ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC';
+      ALTER TABLE user_spend_policies
+        ADD COLUMN period_reset_hour INTEGER NOT NULL DEFAULT 0
+          CHECK (period_reset_hour BETWEEN 0 AND 23);
+      ALTER TABLE retailer_adapter_qualifications
+        ADD COLUMN expires_at TEXT NOT NULL DEFAULT '';
+      UPDATE retailer_adapter_qualifications
+        SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', qualified_at, '+30 days')
+        WHERE expires_at = '';
+
+      CREATE TABLE background_worker_deployment_expectations_v55 (
+        id TEXT PRIMARY KEY CHECK (id = 'active'),
+        contract_version INTEGER NOT NULL CHECK (contract_version IN (2, 3)),
+        desired_mode TEXT NOT NULL CHECK (desired_mode IN ('embedded', 'external', 'disabled')),
+        runtime_version TEXT NOT NULL CHECK (length(runtime_version) BETWEEN 1 AND 40),
+        deployment_fingerprint TEXT NOT NULL CHECK (
+          length(deployment_fingerprint) = 64
+          AND deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+        ),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_configuration'
+          CHECK (privacy_classification = 'operational_configuration'),
+        updated_at TEXT NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      INSERT INTO background_worker_deployment_expectations_v55
+        SELECT * FROM background_worker_deployment_expectations;
+
+      CREATE TABLE background_worker_deployment_events_v55 (
+        id TEXT PRIMARY KEY,
+        sequence INTEGER NOT NULL UNIQUE CHECK (sequence > 0),
+        contract_version INTEGER NOT NULL CHECK (contract_version IN (1, 2, 3)),
+        from_mode TEXT NOT NULL CHECK (from_mode IN ('', 'embedded', 'external', 'disabled')),
+        to_mode TEXT NOT NULL CHECK (to_mode IN ('embedded', 'external', 'disabled')),
+        from_deployment_fingerprint TEXT NOT NULL CHECK (
+          from_deployment_fingerprint = '' OR (
+            length(from_deployment_fingerprint) = 64
+            AND from_deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        to_deployment_fingerprint TEXT NOT NULL CHECK (
+          length(to_deployment_fingerprint) = 64
+          AND to_deployment_fingerprint NOT GLOB '*[^a-f0-9]*'
+        ),
+        runtime_version TEXT NOT NULL CHECK (length(runtime_version) BETWEEN 1 AND 40),
+        previous_event_hash TEXT NOT NULL CHECK (
+          previous_event_hash = '' OR (
+            length(previous_event_hash) = 64
+            AND previous_event_hash NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        event_hash TEXT NOT NULL UNIQUE CHECK (
+          length(event_hash) = 64 AND event_hash NOT GLOB '*[^a-f0-9]*'
+        ),
+        reason_code TEXT NOT NULL CHECK (reason_code = 'api_startup_contract'),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_configuration'
+          CHECK (privacy_classification = 'operational_configuration'),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO background_worker_deployment_events_v55
+        SELECT * FROM background_worker_deployment_events;
+
+      DROP TABLE background_worker_deployment_expectations;
+      DROP TABLE background_worker_deployment_events;
+      ALTER TABLE background_worker_deployment_expectations_v55
+        RENAME TO background_worker_deployment_expectations;
+      ALTER TABLE background_worker_deployment_events_v55
+        RENAME TO background_worker_deployment_events;
+      CREATE INDEX background_worker_deployment_events_recent_idx
+        ON background_worker_deployment_events(sequence DESC);
+      CREATE TRIGGER background_worker_deployment_events_no_update
+      BEFORE UPDATE ON background_worker_deployment_events
+      BEGIN SELECT RAISE(ABORT, 'background worker deployment events are append-only'); END;
+      CREATE TRIGGER background_worker_deployment_events_no_delete
+      BEFORE DELETE ON background_worker_deployment_events
+      BEGIN SELECT RAISE(ABORT, 'background worker deployment events are append-only'); END;
+    `
   }
 ]);

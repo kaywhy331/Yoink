@@ -11,7 +11,9 @@ import { newId, nowIso, stableHash } from "./ids.js";
 const AVAILABILITY = new Set<Availability>(["in_stock", "preorder", "out_of_stock", "unknown"]);
 const SELLER_TYPES = new Set<SellerType>(["first_party", "third_party", "unknown"]);
 const FULFILLMENTS = new Set<Fulfillment>(["shipping", "pickup", "either", "manual", "unknown"]);
-const EVENT_TYPES = new Set<SignalEventInput["eventType"]>(["in_stock", "restock", "preorder", "price_change", "unknown"]);
+const EVENT_TYPES = new Set<SignalEventInput["eventType"]>([
+  "in_stock", "restock", "preorder", "price_change", "drop_window", "queue_open", "unknown"
+]);
 
 export function cleanText(value: unknown, maximum = 240): string {
   return String(value ?? "")

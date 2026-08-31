@@ -24,6 +24,8 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   community_contribution_receipts: "exported",
   community_inventory_assertions: "exported",
   device_pairing_codes: "safe_metadata_only",
+  drop_window_items: "exported",
+  drop_windows: "exported",
   extension_devices: "safe_metadata_only",
   hosted_delivery_receipts: "exported",
   hosted_request_nonces: "credential_material_excluded",
@@ -33,6 +35,7 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   mission_intent_revisions: "exported",
   missions: "exported",
   notification_deliveries: "safe_metadata_only",
+  order_confirmation_observations: "safe_metadata_only",
   observer_recipe_candidates: "exported",
   observer_recipe_contributor_eligibility_states: "exported",
   observer_recipe_lifecycle_events: "exported",
@@ -45,16 +48,23 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   retailer_adapter_diagnostics: "exported",
   retailer_adapter_qualifications: "exported",
   retailer_adapter_trials: "exported",
+  retailer_session_readiness: "safe_metadata_only",
   retailer_shadow_observations: "exported",
   signal_events: "exported",
+  signal_provider_channels: "exported",
   signal_incidents: "exported",
   source_connections: "exported",
   source_sync_runs: "exported",
   spend_ledger_entries: "exported",
   spend_reservations: "exported",
   strategies: "exported",
+  privacy_notice_receipts: "exported",
+  restock_pattern_profiles: "exported",
+  user_action_connector_deliveries: "safe_metadata_only",
+  user_action_connectors: "exported",
   user_spend_policies: "exported",
   users: "exported",
+  watch_queue_items: "exported",
   walmart_draw_items: "exported",
   walmart_draw_scans: "exported"
 } as const);
@@ -219,8 +229,11 @@ export class UserPrivacyRepository {
            (SELECT COUNT(*) FROM app_settings WHERE user_id = ?)
            + (SELECT COUNT(*) FROM user_spend_policies WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM attribution_policies WHERE tenant_id = ? AND user_id = ?)
-           + (SELECT COUNT(*) FROM strategies WHERE tenant_id = ? AND user_id = ?) AS count`,
-        userId, tenantId, userId, tenantId, userId, tenantId, userId
+           + (SELECT COUNT(*) FROM strategies WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM user_action_connectors WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM privacy_notice_receipts WHERE tenant_id = ? AND user_id = ?) AS count`,
+        userId, tenantId, userId, tenantId, userId, tenantId, userId,
+        tenantId, userId, tenantId, userId
       ),
       catalog_and_plans: count(
         `SELECT
@@ -247,10 +260,16 @@ export class UserPrivacyRepository {
            + (SELECT COUNT(*) FROM signal_occurrences WHERE event_id IN (
                SELECT id FROM signal_events WHERE tenant_id = ? AND user_id = ?))
            + (SELECT COUNT(*) FROM resolution_decisions WHERE event_id IN (
-               SELECT id FROM signal_events WHERE tenant_id = ? AND user_id = ?)) AS count`,
+               SELECT id FROM signal_events WHERE tenant_id = ? AND user_id = ?))
+           + (SELECT COUNT(*) FROM signal_provider_channels WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM drop_windows WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM drop_window_items WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM watch_queue_items WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM restock_pattern_profiles WHERE tenant_id = ? AND user_id = ?) AS count`,
         tenantId, userId, tenantId, userId, tenantId, userId,
         tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId, tenantId, userId
+        tenantId, userId, tenantId, userId, tenantId, userId,
+        tenantId, userId, tenantId, userId, tenantId, userId
       ),
       actions_and_spending: count(
         `SELECT
@@ -272,11 +291,14 @@ export class UserPrivacyRepository {
            + (SELECT COUNT(*) FROM notification_deliveries WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM spend_reservations WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM spend_ledger_entries WHERE tenant_id = ? AND user_id = ?)
-           + (SELECT COUNT(*) FROM attribution_receipts WHERE tenant_id = ? AND user_id = ?) AS count`,
+           + (SELECT COUNT(*) FROM attribution_receipts WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM user_action_connector_deliveries WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM order_confirmation_observations WHERE tenant_id = ? AND user_id = ?) AS count`,
         tenantId, userId,
         tenantId, tenantId, userId, tenantId, userId, tenantId, userId,
         tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId, tenantId, userId, tenantId, userId
+        tenantId, userId, tenantId, userId, tenantId, userId,
+        tenantId, userId, tenantId, userId
       ),
       devices_and_retailer_evidence: count(
         `SELECT
@@ -287,9 +309,11 @@ export class UserPrivacyRepository {
            + (SELECT COUNT(*) FROM retailer_adapter_trials WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM retailer_adapter_qualifications WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM walmart_draw_scans WHERE tenant_id = ? AND user_id = ?)
-           + (SELECT COUNT(*) FROM walmart_draw_items WHERE tenant_id = ? AND user_id = ?) AS count`,
+           + (SELECT COUNT(*) FROM walmart_draw_items WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM retailer_session_readiness WHERE tenant_id = ? AND user_id = ?) AS count`,
         tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId
+        tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId,
+        tenantId, userId
       ),
       community_and_maintenance: count(
         `SELECT
@@ -386,7 +410,8 @@ export class UserPrivacyRepository {
     const { tenantId, userId } = currentRequestScope();
     const settings = this.db.get<ExportRow>(
       `SELECT actions_paused, pause_reason, execution_mode, dedupe_window_seconds,
-              affiliate_mode, tax_bps, store_allowances_json, updated_at
+              affiliate_mode, tax_bps, store_allowances_json, watch_queue_mode,
+              privacy_notice_version, updated_at
        FROM app_settings WHERE user_id = ?`,
       userId
     );
@@ -394,7 +419,8 @@ export class UserPrivacyRepository {
       app_settings: settings ? parseJsonFields([settings], ["store_allowances_json"])[0] : null,
       spend_policy: this.db.get<ExportRow>(
         `SELECT revision, currency, per_order_cap_cents, daily_cap_cents,
-                monthly_cap_cents, order_submission_enabled, created_at, updated_at
+                monthly_cap_cents, order_submission_enabled, timezone,
+                period_reset_hour, created_at, updated_at
          FROM user_spend_policies WHERE tenant_id = ? AND user_id = ?`,
         tenantId, userId
       ) ?? null,
@@ -411,7 +437,22 @@ export class UserPrivacyRepository {
          FROM strategies WHERE tenant_id = ? AND user_id = ?
          ORDER BY position, id`,
         tenantId, userId
-      ), ["definition_json"])
+      ), ["definition_json"]),
+      action_connectors: parseJsonFields(this.rows(
+        `SELECT id, kind, name, enabled, endpoint_reference,
+                endpoint_binding_fingerprint, events_json, last_delivery_at,
+                last_error_code, created_at, updated_at
+         FROM user_action_connectors WHERE tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
+        tenantId, userId
+      ), ["events_json"]),
+      privacy_notice_receipts: this.rows(
+        `SELECT id, policy_version, change_version, notice_kind, action,
+                evidence_hash, created_at
+         FROM privacy_notice_receipts WHERE tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
+        tenantId, userId
+      )
     };
   }
 
@@ -552,7 +593,51 @@ export class UserPrivacyRepository {
          WHERE se.tenant_id = ? AND se.user_id = ?
          ORDER BY rd.created_at, rd.id`,
         tenantId, userId
-      )
+      ),
+      provider_channels: this.rows(
+        `SELECT id, source_connection_id, provider, name, external_ref_hash,
+                trust_level, status, replay_window_seconds, accepted_event_count,
+                rejected_event_count, false_positive_count, last_event_at,
+                last_error_code, created_at, updated_at
+         FROM signal_provider_channels WHERE tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
+        tenantId, userId
+      ),
+      drop_windows: this.rows(
+        `SELECT id, source_channel_id, retailer_id, kind, title, starts_at,
+                closes_at, spread_seconds, confidence_bps, timezone, status,
+                supersedes_id, superseded_by_id, author_note,
+                created_by_actor_id, created_at, updated_at
+         FROM drop_windows WHERE tenant_id = ? AND user_id = ?
+         ORDER BY starts_at, id`,
+        tenantId, userId
+      ),
+      drop_window_items: parseJsonFields(this.rows(
+        `SELECT id, drop_window_id, listing_id, ordinal, expected_at,
+                early_access_json, created_at
+         FROM drop_window_items WHERE tenant_id = ? AND user_id = ?
+         ORDER BY expected_at, id`,
+        tenantId, userId
+      ), ["early_access_json"]),
+      watch_queue: parseJsonFields(this.rows(
+        `SELECT id, drop_window_id, drop_window_item_id, listing_id, mission_id,
+                assigned_device_id, enrollment, state, observation_starts_at,
+                observation_closes_at, next_observation_at, jitter_seconds,
+                observation_count, last_observed_at, last_availability,
+                readiness_json, extension_version, lease_expires_at,
+                closed_reason, created_at, updated_at
+         FROM watch_queue_items WHERE tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
+        tenantId, userId
+      ), ["readiness_json"]),
+      restock_patterns: parseJsonFields(this.rows(
+        `SELECT id, retailer_id, listing_id, timezone, sample_count,
+                likely_local_hour, median_interval_minutes, confidence_bps,
+                pattern_json, computed_through_at, created_at, updated_at
+         FROM restock_pattern_profiles WHERE tenant_id = ? AND user_id = ?
+         ORDER BY retailer_id, listing_id, timezone, id`,
+        tenantId, userId
+      ), ["pattern_json"])
     };
   }
 
@@ -642,6 +727,23 @@ export class UserPrivacyRepository {
          FROM attribution_receipts WHERE tenant_id = ? AND user_id = ?
          ORDER BY created_at, id`,
         tenantId, userId
+      ),
+      action_connector_deliveries: this.rows(
+        `SELECT id, connector_id, action_job_id, event_type, state,
+                attempt_count, lease_expires_at, next_attempt_at,
+                last_error_code, delivered_at, created_at, updated_at
+         FROM user_action_connector_deliveries
+         WHERE tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
+        tenantId, userId
+      ),
+      order_confirmations: this.rows(
+        `SELECT id, device_id, action_job_id, retailer_id, page_class,
+                observed_at, received_at, acknowledged, created_at
+         FROM order_confirmation_observations
+         WHERE tenant_id = ? AND user_id = ?
+         ORDER BY observed_at, id`,
+        tenantId, userId
       )
     };
   }
@@ -718,6 +820,14 @@ export class UserPrivacyRepository {
                 evidence_hash, observed_at, received_at
          FROM walmart_draw_items WHERE tenant_id = ? AND user_id = ?
          ORDER BY received_at, id`,
+        tenantId, userId
+      ),
+      retailer_session_readiness: this.rows(
+        `SELECT device_id, retailer_id, signed_in_state, cart_baseline_state,
+                baseline_observed_at, expires_at, adapter_version,
+                last_error_code, updated_at
+         FROM retailer_session_readiness WHERE tenant_id = ? AND user_id = ?
+         ORDER BY retailer_id, device_id`,
         tenantId, userId
       )
     };

@@ -534,6 +534,7 @@ interface HarnessOptions {
   observerRecipeRoot?: Record<string, unknown>;
   observerRecipeTrustState?: Record<string, unknown>;
   observerRecipeEvaluation?: Record<string, unknown>;
+  watchLease?: Record<string, unknown>;
 }
 
 async function waitFor(
@@ -671,6 +672,7 @@ function harness(options: HarnessOptions = {}) {
   const badgeTexts: string[] = [];
   const badgeColors: string[] = [];
   const tabUpdates: Array<{ id: number; url?: string; active?: boolean }> = [];
+  const tabRemovals: number[] = [];
   const runtimeMessages: Array<Record<string, unknown>> = [];
   let offscreenCreates = 0;
   const tabs = new Map<number, { id: number; url: string; status: string }>([
@@ -712,6 +714,9 @@ function harness(options: HarnessOptions = {}) {
       lastError: undefined,
       getManifest: () => ({ version: "0.3.0" }),
       getURL: (path: string) => `chrome-extension://${"a".repeat(32)}/${path}`,
+      openOptionsPage: async () => {
+        await chrome.tabs.create({ url: `chrome-extension://${"a".repeat(32)}/options.html` });
+      },
       getContexts: async () => offscreenCreates ? [{ contextType: "OFFSCREEN_DOCUMENT" }] : [],
       sendMessage: async (message: Record<string, unknown>) => { runtimeMessages.push(message); return {}; },
       reload: () => undefined,
@@ -741,12 +746,14 @@ function harness(options: HarnessOptions = {}) {
           }
         },
         remove: async (key: string) => { delete storage[key]; },
+        clear: async () => { for (const key of Object.keys(storage)) delete storage[key]; },
         setAccessLevel: async () => undefined
       },
       session: {
         get: async (key: string) => ({ [key]: storage[key] }),
         set: async (value: Record<string, unknown>) => { Object.assign(storage, value); },
         remove: async (key: string) => { delete storage[key]; },
+        clear: async () => { for (const key of Object.keys(storage)) delete storage[key]; },
         setAccessLevel: async () => undefined
       }
     },
@@ -775,6 +782,11 @@ function harness(options: HarnessOptions = {}) {
         const tab = { ...current, url: update.url ?? current.url, status: "complete" };
         tabs.set(id, tab);
         return tab;
+      },
+      remove: async (id: number) => {
+        tabRemovals.push(id);
+        tabs.delete(id);
+        tabRemovedListener?.(id);
       },
       onUpdated: { addListener: () => undefined, removeListener: () => undefined },
       onRemoved: { addListener: (listener: typeof tabRemovedListener) => { tabRemovedListener = listener; } }
@@ -1262,6 +1274,32 @@ function harness(options: HarnessOptions = {}) {
       }
       return new Response(JSON.stringify({ status: { ready: true } }), { status: 200 });
     }
+    if (url.endsWith("/devices/self/watch-queue/next")) {
+      return new Response(JSON.stringify(options.watchLease
+        ? { reason: "leased", item: options.watchLease }
+        : { reason: "no_watch_items", item: null }), { status: 200 });
+    }
+    if (/\/devices\/self\/watch-queue\/watch_item_[a-f0-9]{32}\/observations$/.test(url)) {
+      return new Response(JSON.stringify({ item: { state: "seen_in_stock" }, signal: null }), { status: 202 });
+    }
+    if (/\/devices\/self\/readiness\/(?:target|walmart|amazon|bestbuy)$/.test(url)) {
+      return new Response(JSON.stringify({ readiness: JSON.parse(String(requestOptions.body)) }), { status: 200 });
+    }
+    if (url.endsWith("/devices/self/order-confirmations")) {
+      return new Response(JSON.stringify({ observation: { id: "order_confirmation_fixture" } }), { status: 202 });
+    }
+    if (url.endsWith("/devices/self/privacy/local-deletion")) {
+      return new Response(JSON.stringify({ compliance: { localDeletionVerified: true } }), { status: 200 });
+    }
+    if (url.endsWith("/devices/self/sources/trackalacker/signals/batch")) {
+      const body = JSON.parse(String(requestOptions.body)) as { signals?: Array<Record<string, unknown>> };
+      const signals = Array.isArray(body.signals) ? body.signals : [];
+      deliveredTrackalackerSignals.push(...signals);
+      return new Response(JSON.stringify({
+        contractVersion: 1,
+        receipts: signals.map((_, index) => ({ index, accepted: true, reasonCode: "accepted" }))
+      }), { status: 202 });
+    }
     if (url.endsWith("/devices/self/sources/trackalacker/signals")) {
       deliveredTrackalackerSignals.push(JSON.parse(String(requestOptions.body)) as Record<string, unknown>);
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
@@ -1443,7 +1481,7 @@ function harness(options: HarnessOptions = {}) {
       notificationInteractions.push(body.interaction);
       return new Response(JSON.stringify({ notification: { id: "notification_delivery_fixture", state: body.interaction } }), { status: 200 });
     }
-    if (url.endsWith("/devices/self/jobs/next")) {
+    if (new URL(url).pathname.endsWith("/devices/self/jobs/next")) {
       jobLeaseRequests += 1;
       if (!liveJob || jobLeaseRequests <= Math.max(0, Math.trunc(options.jobAvailableAfterPolls ?? 0))
         || jobsLeased >= expectedJobCount) {
@@ -1523,6 +1561,23 @@ function harness(options: HarnessOptions = {}) {
       return new Response(JSON.stringify({
         reason: "leased",
         job: leasedJob
+      }), { status: 200 });
+    }
+    if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/heartbeat$/.test(url)) {
+      return new Response(JSON.stringify({ heartbeat: { accepted: true } }), { status: 200 });
+    }
+    if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/events\/batch$/.test(url)) {
+      const body = JSON.parse(String(requestOptions.body)) as { events?: Array<{ state: string }> };
+      const events = Array.isArray(body.events) ? body.events : [];
+      for (const event of events) {
+        jobStates.push(event.state);
+        if (event.state === "confirmed") {
+          jobsConfirmed += 1;
+          if (jobsConfirmed >= expectedJobCount) completeJob?.();
+        }
+      }
+      return new Response(JSON.stringify({
+        job: { id: "job_target_fixture", state: events.at(-1)?.state || "leased" }
       }), { status: 200 });
     }
     if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/events$/.test(url)) {
@@ -1622,6 +1677,8 @@ function harness(options: HarnessOptions = {}) {
     fireStartup: () => startupListener?.(),
     fireUpdateAvailable: (version: string) => updateAvailableListener?.({ version }),
     managedUpdateChecks: () => managedUpdateChecks,
+    tabRemovals,
+    invokeBackground: (source: string) => runInContext(source, context) as Promise<unknown>,
     clickContextMenu: (menuItemId: string, presentedUrl?: string) => contextMenuClickedListener?.(
       { menuItemId, pageUrl: presentedUrl ?? tabs.get(17)?.url },
       { ...(tabs.get(17) || {}), url: presentedUrl ?? tabs.get(17)?.url }
@@ -2576,7 +2633,9 @@ test("the service worker runs one leased Target add through baseline, click rece
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
-    new Promise((_, reject) => setTimeout(() => reject(new Error("Fixture Target job did not complete.")), 3_000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error(
+      `Fixture Target job did not complete (states: ${runtime.jobStates.join(",") || "none"}; requests: ${runtime.fetchCalls.slice(-6).map((entry) => entry.url).join(",")}).`
+    )), 3_000))
   ]);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(runtime.jobStates, [
@@ -2629,13 +2688,15 @@ test("the service worker runs one leased Target add through baseline, click rece
     "The enabled cart-ready sound was not requested."
   );
   assert.equal(runtime.offscreenCreates(), 1);
-  const confirmedEvent = runtime.fetchCalls.find((entry) => {
-    if (!entry.url.endsWith("/devices/self/jobs/job_target_fixture/events")) return false;
-    return JSON.parse(String(entry.options.body)).state === "confirmed";
-  });
-  const confirmedBody = JSON.parse(String(confirmedEvent?.options.body)) as {
-    evidence: { latency: Record<string, number> };
-  };
+  const confirmedEvent = runtime.fetchCalls.flatMap((entry) => {
+    if (!entry.url.endsWith("/devices/self/jobs/job_target_fixture/events/batch")) return [];
+    const body = JSON.parse(String(entry.options.body)) as {
+      events?: Array<{ state: string; evidence: { latency: Record<string, number> } }>;
+    };
+    return body.events?.filter((event) => event.state === "confirmed") || [];
+  })[0];
+  assert.ok(confirmedEvent);
+  const confirmedBody = confirmedEvent;
   assert.equal(Number.isSafeInteger(confirmedBody.evidence.latency.leaseToCartReadyMs), true);
   assert.equal(Number.isSafeInteger(confirmedBody.evidence.latency.clickToSettleMs), true);
 
@@ -2926,7 +2987,7 @@ test("TrackaLacker signal dispatch is not blocked by notification or status repo
     150
   );
   assert.equal(runtime.shownTrackalackerNotifications.length, 0);
-  const signalIndex = runtime.fetchCalls.findIndex((entry) => entry.url.endsWith("/sources/trackalacker/signals"));
+  const signalIndex = runtime.fetchCalls.findIndex((entry) => entry.url.endsWith("/sources/trackalacker/signals/batch"));
   const statusIndex = runtime.fetchCalls.findIndex((entry) => entry.url.endsWith("/sources/trackalacker/status"));
   assert.ok(signalIndex >= 0);
   assert.ok(statusIndex > signalIndex);
@@ -3093,7 +3154,7 @@ test("the extension action menu opens the dashboard and Settings workspace disti
   );
   runtime.clickContextMenu("yoink-settings");
   await waitFor(
-    () => runtime.tabUrls().includes("http://127.0.0.1:32991/admin#settings"),
+    () => runtime.tabUrls().includes(`chrome-extension://${"a".repeat(32)}/options.html`),
     "The Settings workspace was not opened."
   );
 });
@@ -3155,4 +3216,116 @@ test("a stale context-menu label never authorizes inspection after the active pa
   );
   assert.equal(runtime.injections.length, injectionCount);
   assert.equal(runtime.storage.yoinkPopupResultV1, undefined);
+});
+
+test("warm readiness captures one inactive five-minute cart baseline without crossing an action boundary", async () => {
+  const runtime = harness({ permission: true });
+  const result = await runtime.invokeBackground("runWarmReadinessCycle()");
+  assert.equal((result as { warmed?: boolean }).warmed, true);
+  const readinessRequest = runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith("/devices/self/readiness/target"));
+  assert.ok(readinessRequest);
+  const body = JSON.parse(String(readinessRequest.options.body)) as Record<string, unknown>;
+  assert.equal(body.retailerId, "target");
+  assert.equal(body.cartBaselineState, "ready");
+  assert.equal(body.signedInState, "unknown");
+  const stored = runtime.storage.yoinkRetailerActionTabsV1 as {
+    schemaVersion: number;
+    tabs: Record<string, { tabId: number; cartBaseline: { lineCount: number } }>;
+  };
+  assert.equal(stored.schemaVersion, 2);
+  assert.equal(stored.tabs.target?.cartBaseline.lineCount, 1);
+  assert.equal(runtime.tabUrls().includes("https://www.target.com/cart"), true);
+  const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  assert.equal(operations.includes("inspectTargetCartBaseline"), true);
+  assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
+});
+
+test("drop-window observation is exact, read-only, bounded, and closes its inactive tab", async () => {
+  const watchId = `watch_item_${"a".repeat(32)}`;
+  const runtime = harness({
+    permission: true,
+    watchLease: {
+      contractVersion: 1,
+      id: watchId,
+      capabilityToken: "W".repeat(43),
+      retailerId: "target",
+      retailerSku: "1011483414",
+      canonicalUrl: PRODUCT_URL,
+      readOnly: true,
+      quantity: 1
+    }
+  });
+  const result = await runtime.invokeBackground("runWatchQueueCycle()");
+  assert.equal((result as { observed?: boolean }).observed, true);
+  const observationRequest = runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith(`/devices/self/watch-queue/${watchId}/observations`));
+  assert.ok(observationRequest);
+  const body = JSON.parse(String(observationRequest.options.body)) as Record<string, unknown>;
+  assert.equal(body.retailerId, "target");
+  assert.equal(body.retailerSku, "1011483414");
+  assert.equal(body.availability, "in_stock");
+  assert.equal(JSON.stringify(body).includes(PRODUCT_URL), false);
+  assert.equal(runtime.tabRemovals.length, 1);
+  const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
+});
+
+test("confirmation observation reports only a bound page class and never order-page details", async () => {
+  const runtime = harness();
+  runtime.storage.yoinkOrderHandoffsV1 = [{
+    jobId: "job_target_fixture",
+    retailerId: "target",
+    tabId: 17,
+    recordedAt: new Date().toISOString()
+  }];
+  const observed = await runtime.invokeBackground(
+    'observeOrderConfirmation(17, "https://www.target.com/co-order-confirmation?orderId=DO_NOT_SEND")'
+  );
+  assert.equal(observed, true);
+  const request = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/order-confirmations"));
+  assert.ok(request);
+  const body = JSON.parse(String(request.options.body)) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(body).sort(), [
+    "actionJobId", "contractVersion", "observedAt", "pageClass", "retailerId"
+  ]);
+  assert.equal(body.pageClass, "confirmation");
+  assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
+  assert.deepEqual(runtime.storage.yoinkOrderHandoffsV1, []);
+});
+
+test("verified local deletion clears both extension storage areas before posting its receipt", async () => {
+  const runtime = harness({ cartReadySound: true, queuedTrackalackerSignal: true });
+  const result = await runtime.send({
+    type: "yoink:delete-local-data",
+    confirmation: "DELETE_ALL_LOCAL_YOINK_DATA"
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.deleted, true);
+  assert.equal(result.verified, true);
+  assert.deepEqual(Object.keys(runtime.storage), []);
+  const receipt = runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith("/devices/self/privacy/local-deletion"));
+  assert.ok(receipt);
+  assert.deepEqual(JSON.parse(String(receipt.options.body)), {
+    contractVersion: 1,
+    localCleared: true,
+    sessionCleared: true,
+    retainedKeys: []
+  });
+});
+
+test("local deletion succeeds without pairing and does not invent a remote receipt", async () => {
+  const runtime = harness({ cartReadySound: true, queuedTrackalackerSignal: true });
+  delete runtime.storage.pairedDevice;
+  const result = await runtime.send({
+    type: "yoink:delete-local-data",
+    confirmation: "DELETE_ALL_LOCAL_YOINK_DATA"
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.deleted, true);
+  assert.equal(result.verified, false);
+  assert.deepEqual(Object.keys(runtime.storage), []);
+  assert.equal(runtime.fetchCalls.some((entry) =>
+    entry.url.endsWith("/devices/self/privacy/local-deletion")), false);
 });

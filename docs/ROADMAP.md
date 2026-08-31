@@ -1,6 +1,30 @@
 # Yoink roadmap
 
-## Shipped through 1.14.0
+## Shipped through 1.15.0
+
+### Provider-neutral calls and stagger-proof drop watch (1.15.0)
+
+- Adds one versioned provider envelope over the existing `signal_event_v1`
+  durable inbox, structured Discord intake, batch receipts, per-channel trust,
+  replay bounds, scorecards, source management, and replay controls while
+  retaining TrackaLacker's qualified idempotency contract byte-for-byte
+- Adds admin-authored drop-window and queue-open signals, exact opt-in watch
+  queues, T-15 activation, bounded jittered read-only Chrome observation, and
+  per-item close semantics so staggered releases remain visible without a
+  retailer click
+- Adds bounded job long-polling and wakeup, batched signal and progress reports,
+  lease heartbeats tied to the real action budget, warm five-minute cart
+  baselines, fresh signed-in readiness, and head-of-line-safe drains
+- Adds a user Calls feed with inline Quick add and bulk profile application,
+  deployment-bound Carted / Needs-you / Missed connectors, privacy-bounded exact
+  order-confirmation observation, and per-store qualification/version warnings
+- Adds funnel, hit-rate, spend/cap, latency, and MSRP-coverage analytics with a
+  CSV export; restock-pattern support for admin authoring; a sanitized health
+  bundle and worker restart control; and Chrome settings for permission,
+  reduced-motion/contrast, sound, and verified local deletion
+- Publishes a privacy policy and change notice while preserving first-party,
+  exact-SKU, quantity-one, Shipping-default or explicit-Pickup, fresh-DOM,
+  no-evasion, no-click qualification, and manual-checkout boundaries
 
 ### Action close-out, latency, and readiness (1.14.0)
 

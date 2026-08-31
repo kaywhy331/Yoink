@@ -48,6 +48,10 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/observer-recipe-eligibility") return "internal.eligibility";
   if (pathname.startsWith("/api/v1/hosted-delivery/")) return "internal.delivery";
 
+  if (pathname.startsWith("/api/v1/admin/drop-windows")) return method === "GET" ? "admin.read" : "source.manage";
+  if (pathname.startsWith("/api/v1/admin/restock-patterns")) return method === "GET" ? "admin.read" : "source.manage";
+  if (pathname === "/api/v1/admin/workers/restart") return "worker.manage";
+
   if (pathname === "/api/v1/snapshot") return "admin.read";
   if (pathname === "/api/v1/operations/telemetry") return "admin.read";
   if (pathname === "/api/v1/workers") return "admin.read";
@@ -55,6 +59,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (/^\/api\/v1\/change-requests\/[A-Za-z0-9_-]{3,120}\/decision$/.test(pathname)) return "change.approve";
   if (pathname.startsWith("/api/v1/change-requests")) return "admin.read";
   if (pathname === "/api/v1/admin/attribution-policies") return "affiliate.manage";
+  if (pathname.startsWith("/api/v1/sources")) return method === "GET" ? "admin.read" : "source.manage";
   if (pathname.startsWith("/api/v1/admin/authorization")) return "security.manage";
   if (/^\/api\/v1\/identity\/claims\/[A-Za-z0-9_-]{3,120}\/review$/.test(pathname)) return "identity.review";
   if (pathname.startsWith("/api/v1/observer-recipes")) return "recipe.manage";
@@ -73,6 +78,16 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/user/spend" || pathname === "/api/v1/user/spend-ledger") return "user.read";
   if (pathname === "/api/v1/user/spend-policy") return "user.settings.manage";
   if (pathname === "/api/v1/user/privacy" || pathname === "/api/v1/user/privacy/export") return "user.privacy.export";
+  if (pathname.startsWith("/api/v1/user/privacy/")) return "user.settings.manage";
+  if (pathname === "/api/v1/user/action-platform" || pathname === "/api/v1/user/readiness"
+    || pathname === "/api/v1/user/analytics" || pathname === "/api/v1/user/analytics.csv"
+    || pathname === "/api/v1/user/health" || pathname === "/api/v1/user/calls") return "user.read";
+  if (pathname.startsWith("/api/v1/user/drop-windows") || pathname.startsWith("/api/v1/user/watch-queue")) {
+    return method === "GET" ? "user.read" : "user.intent.manage";
+  }
+  if (pathname.startsWith("/api/v1/user/connectors")) {
+    return method === "GET" ? "user.read" : "user.settings.manage";
+  }
   if (["/api/v1/library", "/api/v1/library/products", "/api/v1/missions", "/api/v1/signals", "/api/v1/jobs", "/api/v1/audit", "/api/v1/strategies"].includes(pathname)
     || /^\/api\/v1\/missions\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
     return method === "GET" ? "user.read" : "user.intent.manage";
@@ -97,14 +112,25 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname.startsWith("/api/v1/user/privacy")
     || pathname.startsWith("/api/v1/user/catalog/")
     || pathname.startsWith("/api/v1/user/purchase-intents")
-    || pathname.startsWith("/api/v1/user/spend")) {
+    || pathname.startsWith("/api/v1/user/spend")
+    || pathname.startsWith("/api/v1/user/action-platform")
+    || pathname.startsWith("/api/v1/user/drop-windows")
+    || pathname.startsWith("/api/v1/user/watch-queue")
+    || pathname.startsWith("/api/v1/user/connectors")
+    || pathname.startsWith("/api/v1/user/readiness")
+    || pathname.startsWith("/api/v1/user/analytics")
+    || pathname.startsWith("/api/v1/user/health")
+    || pathname.startsWith("/api/v1/user/calls")) {
     return { pathname, requestedSurface: "user" };
   }
   if (pathname.startsWith("/api/v1/user/")) {
     return { pathname: `/api/v1/${pathname.slice("/api/v1/user/".length)}`, requestedSurface: "user" };
   }
   if (pathname.startsWith("/api/v1/admin/authorization") || pathname.startsWith("/api/v1/admin/catalog/")
-    || pathname === "/api/v1/admin/attribution-policies") {
+    || pathname === "/api/v1/admin/attribution-policies"
+    || pathname.startsWith("/api/v1/admin/drop-windows")
+    || pathname.startsWith("/api/v1/admin/restock-patterns")
+    || pathname === "/api/v1/admin/workers/restart") {
     return { pathname, requestedSurface: "admin" };
   }
   if (pathname.startsWith("/api/v1/admin/")) {
@@ -168,7 +194,14 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     identity: "identity",
     "attribution-policies": "attribution",
     settings: "settings",
-    privacy: "privacy"
+    privacy: "privacy",
+    connectors: "settings",
+    readiness: "settings",
+    analytics: "actions",
+    health: "settings",
+    calls: "signals",
+    "drop-windows": "signals",
+    "watch-queue": "signals"
   }),
   admin: Object.freeze({
     snapshot: "snapshot",
@@ -182,7 +215,9 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     sources: "sources",
     "attribution-policies": "attribution",
     "change-requests": "change_control",
-    workers: "workers"
+    workers: "workers",
+    "drop-windows": "sources",
+    "restock-patterns": "sources"
   }),
   device: Object.freeze({
     heartbeat: "heartbeat",

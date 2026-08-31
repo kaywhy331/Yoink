@@ -9,6 +9,10 @@ import {
   loadOperatorAlertWebhookRegistry,
   type OperatorAlertWebhookRegistry
 } from "../../../packages/engine/src/operator-alert-webhook.js";
+import {
+  loadUserActionWebhookRegistry,
+  type UserActionWebhookRegistry
+} from "../../../packages/engine/src/user-action-webhook.js";
 
 const WORKER_ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 
@@ -25,6 +29,7 @@ export interface YoinkWorkerConfig {
   observerRecipeWitness: ObserverRecipeWitnessRuntimeConfig | null;
   observerRecipeWitnessRequired: boolean;
   operatorAlertWebhookRegistry: OperatorAlertWebhookRegistry;
+  userActionWebhookRegistry: UserActionWebhookRegistry;
   deploymentFingerprint: string;
 }
 
@@ -69,6 +74,7 @@ export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
   }
   const version = projectVersion(projectRoot);
   const operatorAlertWebhookRegistry = loadOperatorAlertWebhookRegistry(env);
+  const userActionWebhookRegistry = loadUserActionWebhookRegistry(env);
   return {
     dataDirectory,
     databasePath: join(dataDirectory, "yoink.sqlite"),
@@ -100,11 +106,13 @@ export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
     observerRecipeWitness,
     observerRecipeWitnessRequired,
     operatorAlertWebhookRegistry,
+    userActionWebhookRegistry,
     deploymentFingerprint: backgroundWorkerDeploymentFingerprint({
       runtimeVersion: version,
       observerRecipeWitness,
       observerRecipeWitnessRequired,
-      operatorAlertWebhookRegistryFingerprint: operatorAlertWebhookRegistry.fingerprint
+      operatorAlertWebhookRegistryFingerprint: operatorAlertWebhookRegistry.fingerprint,
+      userActionWebhookRegistryFingerprint: userActionWebhookRegistry.fingerprint
     })
   };
 }
