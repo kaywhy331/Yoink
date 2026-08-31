@@ -3,6 +3,7 @@ import type {
   DropWindowInput,
   DropWindowKind,
   DropWindowStatus,
+  WatchQueueMode,
   WatchQueueObservationInput,
   WatchQueueState
 } from "../../contracts/src/action-platform.js";
@@ -327,6 +328,21 @@ export class DropWindowRepository {
     const createdAt = nowIso(now);
     const status: DropWindowStatus = starts.time <= now && closes.time > now ? "active" : "scheduled";
     this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO drop_windows(
+           id, tenant_id, user_id, source_channel_id, retailer_id, kind, title,
+           starts_at, closes_at, spread_seconds, confidence_bps, timezone, status,
+           supersedes_id, superseded_by_id, author_note, created_by_actor_id,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+        windowId, scope.tenantId, scope.userId, channel.id, input.retailerId,
+        input.kind, title, starts.iso, closes.iso, spreadSeconds, confidenceBps,
+        windowTimezone, status, previous?.id ?? null, cleanText(input.authorNote, 500),
+        scope.actorId, createdAt, createdAt
+      );
+      // Both supersession columns are foreign keys. Persist the replacement
+      // before pointing the previous window at it, then retire only watches
+      // owned by the superseded window inside the same transaction.
       if (previous) {
         this.db.run(
           `UPDATE drop_windows SET status = 'superseded', superseded_by_id = ?, updated_at = ?
@@ -340,18 +356,6 @@ export class DropWindowRepository {
           createdAt, previous.id
         );
       }
-      this.db.run(
-        `INSERT INTO drop_windows(
-           id, tenant_id, user_id, source_channel_id, retailer_id, kind, title,
-           starts_at, closes_at, spread_seconds, confidence_bps, timezone, status,
-           supersedes_id, superseded_by_id, author_note, created_by_actor_id,
-           created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
-        windowId, scope.tenantId, scope.userId, channel.id, input.retailerId,
-        input.kind, title, starts.iso, closes.iso, spreadSeconds, confidenceBps,
-        windowTimezone, status, previous?.id ?? null, cleanText(input.authorNote, 500),
-        scope.actorId, createdAt, createdAt
-      );
       listings.forEach((listing, ordinal) => {
         const expectedOffset = listings.length <= 1
           ? 0
@@ -403,6 +407,86 @@ export class DropWindowRepository {
        ORDER BY window.starts_at DESC, window.id DESC`,
       scope.tenantId, scope.userId, includeClosed ? 1 : 0
     ).map((row) => this.hydrateWindow(row));
+  }
+
+  watchQueueMode(): WatchQueueMode {
+    const value = this.db.get<{ mode: string }>(
+      `SELECT watch_queue_mode AS mode FROM app_settings WHERE user_id = ?`,
+      currentRequestScope().userId
+    )?.mode;
+    return value === "auto_armed" ? "auto_armed" : "manual";
+  }
+
+  setWatchQueueMode(mode: WatchQueueMode, now = Date.now()): {
+    mode: WatchQueueMode;
+    previousMode: WatchQueueMode;
+    newlyEnrolledCount: number;
+  } {
+    if (!(["manual", "auto_armed"] as const).includes(mode)) {
+      throw new Error("Choose manual watch enrollment or automatic enrollment for armed plans.");
+    }
+    const scope = currentRequestScope();
+    const previousMode = this.watchQueueMode();
+    const timestamp = nowIso(now);
+    let newlyEnrolledCount = 0;
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE app_settings SET watch_queue_mode = ?, updated_at = ? WHERE user_id = ?`,
+        mode, timestamp, scope.userId
+      );
+      if (mode === "auto_armed") {
+        const candidates = this.db.all<{
+          dropWindowId: string;
+          itemId: string;
+          listingId: string;
+          startsAt: string;
+          closesAt: string;
+          ordinal: number;
+        }>(
+          `SELECT window.id AS dropWindowId, item.id AS itemId,
+                  item.listing_id AS listingId, window.starts_at AS startsAt,
+                  window.closes_at AS closesAt, item.ordinal
+           FROM drop_window_items item
+           JOIN drop_windows window ON window.id = item.drop_window_id
+           LEFT JOIN watch_queue_items watch ON watch.drop_window_item_id = item.id
+             AND watch.tenant_id = item.tenant_id AND watch.user_id = item.user_id
+           WHERE item.tenant_id = ? AND item.user_id = ?
+             AND window.status IN ('scheduled', 'active') AND window.closes_at > ?
+             AND watch.id IS NULL
+           ORDER BY window.starts_at, item.ordinal, item.id`,
+          scope.tenantId, scope.userId, timestamp
+        );
+        for (const candidate of candidates) {
+          const missionId = this.armedMissionForListing(candidate.listingId);
+          if (!missionId) continue;
+          this.insertWatchItem(
+            candidate.dropWindowId,
+            candidate.itemId,
+            candidate.listingId,
+            missionId,
+            "auto_armed",
+            new Date(candidate.startsAt).getTime(),
+            new Date(candidate.closesAt).getTime(),
+            Number(candidate.ordinal),
+            now
+          );
+          newlyEnrolledCount += 1;
+        }
+      }
+      if (previousMode !== mode || newlyEnrolledCount > 0) {
+        this.audit.record({
+          correlationId: scope.userId,
+          aggregateType: "watch_queue",
+          eventType: "watch_queue_mode_changed",
+          reasonCode: mode === "auto_armed" ? "auto_armed_enabled" : "manual_enrollment_enabled",
+          message: mode === "auto_armed"
+            ? "Future and currently open drop-window items with an armed exact plan will enter the read-only watch queue automatically."
+            : "Drop-window items now require explicit manual watch enrollment.",
+          data: { previousMode, mode, newlyEnrolledCount }
+        }, now);
+      }
+    });
+    return { mode, previousMode, newlyEnrolledCount };
   }
 
   get(id: string): DropWindowRecord | null {
@@ -648,14 +732,6 @@ export class DropWindowRepository {
       supersededById: row.supersededById ?? "",
       items
     };
-  }
-
-  private watchQueueMode(): "manual" | "auto_armed" {
-    const value = this.db.get<{ mode: string }>(
-      `SELECT watch_queue_mode AS mode FROM app_settings WHERE user_id = ?`,
-      currentRequestScope().userId
-    )?.mode;
-    return value === "auto_armed" ? "auto_armed" : "manual";
   }
 
   private armedMissionForListing(listingId: string): string {

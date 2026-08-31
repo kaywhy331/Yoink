@@ -1,6 +1,23 @@
 # Yoink roadmap
 
-## Shipped through 1.16.0
+## Shipped through 1.16.1
+
+### Action-backlog audit closure (1.16.1)
+
+- Moves the proven local Cart-ready handoff ahead of control-plane reporting,
+  preserving exact +1 cart proof while removing server latency from the cue
+- Fixes drop-window supersession transaction ordering and exposes replacement
+  selection, manual/auto watch mode, open-window backfill, countdown, and
+  per-item readiness
+- Routes Carted, Needs-you, and Missed connector events through the shared job
+  transition boundary, including recovery and reviewed resolution, and retires
+  stale Chrome capabilities on review
+- Lets restock evidence seed an admin window draft and surfaces daily/monthly
+  cap headroom plus aggregate p50/p95 latency in user Insights
+- Adds direct API, repository, UI, connector-lifecycle, worker-wake, lease-budget,
+  bounded-long-poll, and immediate-handoff regression proof without changing
+  the first-party, exact-item, Shipping-default, quantity-one, or manual-checkout
+  safety boundary
 
 ### Provider-neutral calls and stagger-proof drop watch (1.16.0)
 

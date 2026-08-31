@@ -82,6 +82,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/user/action-platform" || pathname === "/api/v1/user/readiness"
     || pathname === "/api/v1/user/analytics" || pathname === "/api/v1/user/analytics.csv"
     || pathname === "/api/v1/user/health" || pathname === "/api/v1/user/calls") return "user.read";
+  if (pathname === "/api/v1/user/watch-queue/settings") return "user.settings.manage";
   if (pathname.startsWith("/api/v1/user/drop-windows") || pathname.startsWith("/api/v1/user/watch-queue")) {
     return method === "GET" ? "user.read" : "user.intent.manage";
   }

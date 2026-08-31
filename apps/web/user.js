@@ -905,7 +905,43 @@ function callHasPlan(call) {
   return Boolean(product && state.plans.some((plan) => plan.variantId === product.variantId));
 }
 
+function watchWindowSummary(call) {
+  const watch = call.watch || null;
+  const now = Date.now();
+  const observationStartsAt = new Date(String(watch?.observationStartsAt || call.startsAt || "")).getTime();
+  const closesAt = new Date(String(watch?.observationClosesAt || call.closesAt || "")).getTime();
+  if (Number.isFinite(closesAt) && closesAt <= now) return "Watch window closed.";
+  if (watch && Number.isFinite(observationStartsAt) && observationStartsAt > now) {
+    return `Read-only checks start ${relative(new Date(observationStartsAt).toISOString())}.`;
+  }
+  if (watch && Number.isFinite(closesAt)) {
+    return `Read-only checks are active · window closes ${relative(new Date(closesAt).toISOString())}.`;
+  }
+  if (Number.isFinite(observationStartsAt) && observationStartsAt > now) {
+    return `Drop watch opens ${relative(new Date(observationStartsAt).toISOString())}.`;
+  }
+  return Number.isFinite(closesAt)
+    ? `Watch window closes ${relative(new Date(closesAt).toISOString())}.`
+    : "Bounded read-only watch window.";
+}
+
+function watchReadinessSummary(watch) {
+  if (!watch) return "";
+  const count = Number(watch.observationCount || 0);
+  const availability = words(watch.lastAvailability || "unknown");
+  const reason = words(watch.readiness?.reasonCode || "");
+  const enrollment = watch.enrollment === "auto_armed" ? "Auto-enrolled from armed plan" : "Manually enrolled";
+  if (!count) return `${enrollment} · waiting for the first Chrome check.`;
+  return `${enrollment} · ${count.toLocaleString()} check${count === 1 ? "" : "s"} · ${availability}${watch.lastObservedAt ? ` · ${relative(watch.lastObservedAt)}` : ""}${reason ? ` · ${reason}` : ""}.`;
+}
+
 function renderCalls() {
+  const watchMode = state.actionPlatform?.watchQueueMode === "auto_armed" ? "auto_armed" : "manual";
+  const watchModeControl = $("#watchQueueMode");
+  if (watchModeControl && document.activeElement !== watchModeControl) watchModeControl.value = watchMode;
+  $("#watchQueueModeStatus").textContent = watchMode === "auto_armed"
+    ? "Future and open scheduled items with an armed exact plan are watched automatically."
+    : "Scheduled items enter read-only observation only when you choose Watch window.";
   const select = $("#callBulkProfile");
   const selected = select.value;
   select.innerHTML = ['<option value="">System default</option>', ...state.profiles.map((profile) =>
@@ -930,7 +966,8 @@ function renderCalls() {
       <div><div class="card-top"><h3>${escapeHtml(call.title || `${retailerDisplayName(call.retailerId)} product`)}</h3><span class="tag ${["confirmed", "seen_in_stock", "in_stock"].includes(call.status) ? "good" : ""}">${escapeHtml(tags[0] || "Call")}</span></div>
       <p>${escapeHtml(retailerDisplayName(call.retailerId))} · ${escapeHtml(call.retailerSku)}${call.unitPriceCents ? ` · ${escapeHtml(money(call.unitPriceCents, call.currency))}` : ""} · ${escapeHtml(relative(call.occurredAt))}</p>
       <div class="call-tags">${tags.slice(1).map((tag) => `<span class="tag">${escapeHtml(words(tag))}</span>`).join("")}</div>
-      ${call.closesAt ? `<p>Watch window closes ${escapeHtml(relative(call.closesAt))}. Observation remains read-only until exact stock is seen or the window closes.</p>` : ""}</div>
+      ${call.closesAt ? `<p>${escapeHtml(watchWindowSummary(call))} Observation remains read-only until exact stock is seen or the window closes.</p>` : ""}
+      ${watch ? `<p class="watch-readiness">${escapeHtml(watchReadinessSummary(watch))}</p>` : ""}</div>
       <div class="action-controls"><div class="inline-actions">
         ${eligible ? `<button class="button primary" data-quick-add="${escapeHtml(call.listingId)}" type="button">Quick add</button>` : planned ? '<span class="tag good">Plan ready</span>' : ""}
         ${call.dropWindowItemId && !watch ? `<button class="button secondary" data-watch-enroll="${escapeHtml(call.dropWindowItemId)}" type="button">Watch window</button>` : ""}
@@ -948,18 +985,39 @@ function renderActionPlatform() {
   const platform = state.actionPlatform || {};
   const analytics = platform.analytics || {};
   const funnel = analytics.funnel || {};
+  const spend = analytics.spend || {};
+  const dailyHeadroom = spend.dailyCapCents === null || spend.dailyCapCents === undefined
+    ? "No daily cap"
+    : `${money(spend.availableTodayCents || 0)} of ${money(spend.dailyCapCents)} left`;
+  const monthlyHeadroom = spend.monthlyCapCents === null || spend.monthlyCapCents === undefined
+    ? "No monthly cap"
+    : `${money(spend.availableThisMonthCents || 0)} of ${money(spend.monthlyCapCents)} left`;
   const metrics = [
     [Object.values(funnel).reduce((sum, value) => sum + Number(value || 0), 0), "Actions"],
     [funnel.ready_to_checkout || 0, "Ready to check out"],
     [funnel.needs_you || 0, "Needs you"],
     [analytics.hitRateBps === null || analytics.hitRateBps === undefined ? "—" : `${(Number(analytics.hitRateBps) / 100).toFixed(1)}%`, "Closed hit rate"],
-    [money(analytics.spend?.committedCents || 0), "User-reported spend"],
-    [analytics.spend?.savingsVsMsrpCents === null || analytics.spend?.savingsVsMsrpCents === undefined
-      ? "—" : money(analytics.spend.savingsVsMsrpCents),
-    analytics.spend?.savingsCoverage === "partial" ? "MSRP savings · partial" : "MSRP savings"]
+    [money(spend.committedCents || 0), "User-reported spend"],
+    [dailyHeadroom, "Daily cap headroom"],
+    [monthlyHeadroom, "Monthly cap headroom"],
+    [spend.savingsVsMsrpCents === null || spend.savingsVsMsrpCents === undefined
+      ? "—" : money(spend.savingsVsMsrpCents),
+    spend.savingsCoverage === "partial" ? "MSRP savings · partial" : "MSRP savings"]
   ];
   $("#analyticsMetrics").innerHTML = metrics.map(([value, label]) => `<article class="metric"><strong>${typeof value === "number" ? value.toLocaleString() : escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></article>`).join("");
   $("#retailerAnalytics").innerHTML = (analytics.retailers || []).map((item) => `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(item.retailerId))}</strong><small>${Number(item.carted || 0)} carted · ${Number(item.gotIt || 0)} got it · ${Number(item.missed || 0)} missed</small></span><strong>${escapeHtml(money(item.committedCents || 0))}</strong></div>`).join("") || '<div class="mini-row"><span>No closed outcomes yet.</span></div>';
+  const latencyLabels = {
+    observedToReceivedMs: "Observed → received",
+    receivedToJobMs: "Received → job",
+    jobToLeaseMs: "Job → Chrome",
+    leaseToCartReadyMs: "Chrome → cart ready",
+    clickToSettleMs: "Click → page settled",
+    clickToCartReadyMs: "Click → cart ready"
+  };
+  $("#analyticsLatency").innerHTML = Object.entries(analytics.latency?.hops || {})
+    .filter(([, hop]) => Number(hop?.samples || 0) > 0)
+    .map(([key, hop]) => `<div class="mini-row"><span><strong>${escapeHtml(latencyLabels[key] || words(key))}</strong><small>${Number(hop.samples || 0).toLocaleString()} sample${Number(hop.samples || 0) === 1 ? "" : "s"}</small></span><strong>p50 ${escapeHtml(duration(hop.p50Ms))} · p95 ${escapeHtml(duration(hop.p95Ms))}</strong></div>`)
+    .join("") || '<div class="mini-row"><span>No measured action latency yet.</span></div>';
   $("#readinessList").innerHTML = (platform.readiness || []).map((lane) => {
     const ready = lane.readyForGuardedAdd === true;
     const warning = lane.qualification?.warning;
@@ -2041,6 +2099,34 @@ function syncProfilePriceMode() {
 
 $("#profileForm").elements.priceMode.addEventListener("change", syncProfilePriceMode);
 syncProfilePriceMode();
+
+$("#watchQueueMode").addEventListener("change", async (event) => {
+  const control = event.currentTarget;
+  const previous = state.actionPlatform?.watchQueueMode === "auto_armed" ? "auto_armed" : "manual";
+  const mode = control.value === "auto_armed" ? "auto_armed" : "manual";
+  control.disabled = true;
+  try {
+    const result = await api("/api/v1/user/watch-queue/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ mode, confirmation: "SET_WATCH_QUEUE_MODE" })
+    });
+    state.actionPlatform = {
+      ...(state.actionPlatform || {}),
+      watchQueueMode: result.watchQueue?.mode || mode
+    };
+    await refresh();
+    setTab("calls");
+    const enrolled = Number(result.watchQueue?.newlyEnrolledCount || 0);
+    toast(mode === "auto_armed"
+      ? `Auto-watch enabled.${enrolled ? ` ${enrolled.toLocaleString()} open armed item${enrolled === 1 ? " was" : "s were"} enrolled.` : ""}`
+      : "Manual watch enrollment enabled. Existing watches remain available to stop individually.");
+  } catch (error) {
+    control.value = previous;
+    toast(error.message || "The watch mode could not be changed.", true);
+  } finally {
+    control.disabled = false;
+  }
+});
 
 $("#resetProfileButton").addEventListener("click", resetProfileForm);
 

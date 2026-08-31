@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.16.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.16.1 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,6 +15,16 @@ new lane. Every lane is restricted to first-party offers, quantity one, and the
 exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.16.1 closes the independent Y01–Y30 acceptance audit. A proven local
+Cart-ready handoff no longer waits for control-plane reporting; drop-window
+supersession is transactionally valid and exposed in admin authoring; users can
+choose manual or auto-watch for armed plans with open-window backfill, countdown,
+and per-item readiness; and Carted, Needs-you, and Missed connectors now follow
+the shared action transition boundary, including recovery. Restock evidence can
+seed an admin window draft, while Insights shows cap headroom and aggregate
+p50/p95 latency. These are control, visibility, and latency fixes only—the
+retailer safety and manual-checkout boundary is unchanged.
 
 Version 1.16.0 completes the provider-neutral action platform around the existing
 bounded signal-to-cart path. Structured Discord channels and future adapters

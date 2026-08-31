@@ -73,8 +73,10 @@ import type {
   OrderConfirmationObservationInput,
   RetailerSessionReadinessInput,
   UserActionConnectorInput,
+  WatchQueueMode,
   WatchQueueObservationInput
 } from "../../../packages/contracts/src/action-platform.js";
+import { WATCH_QUEUE_MODE_CONFIRMATION } from "../../../packages/contracts/src/action-platform.js";
 import { CatalogRepository } from "../../../packages/database/src/catalog-repository.js";
 import {
   CatalogGovernanceRepository,
@@ -984,6 +986,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           dropWindows: dropWindows.list(now, true),
           watchQueue: dropWindows.listWatchQueue(now),
+          watchQueueMode: dropWindows.watchQueueMode(),
           readiness: retailerReadiness.lanes(now),
           connectors: userActionConnectors.list(),
           connectorDeliveries: userActionConnectors.listDeliveries(50),
@@ -1001,7 +1004,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/watch-queue") {
-        json(response, 200, { items: dropWindows.listWatchQueue() });
+        json(response, 200, {
+          items: dropWindows.listWatchQueue(),
+          mode: dropWindows.watchQueueMode()
+        });
         return;
       }
 
@@ -1043,6 +1049,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           watch: item.watch,
           earlyAccess: item.earlyAccess,
           confidenceBps: window.confidenceBps,
+          startsAt: window.startsAt,
           closesAt: window.closesAt
         })));
         const items = [...windowCalls, ...signalCalls]
@@ -2447,6 +2454,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "POST" && watchEnrollMatch) {
         json(response, 200, { item: dropWindows.enroll(watchEnrollMatch[1] ?? "") });
+        return;
+      }
+
+      if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/user/watch-queue/settings") {
+        const body = await readJson(request);
+        if (body.confirmation !== WATCH_QUEUE_MODE_CONFIRMATION) {
+          throw new Error("Explicit watch-queue mode confirmation is required.");
+        }
+        json(response, 200, {
+          watchQueue: dropWindows.setWatchQueueMode(String(body.mode ?? "") as WatchQueueMode)
+        });
         return;
       }
 

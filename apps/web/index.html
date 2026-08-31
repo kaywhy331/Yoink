@@ -361,6 +361,7 @@
           <label><span>Spread (seconds)</span><input name="spreadSeconds" type="number" min="0" max="86400" value="0" required></label>
           <label><span>Confidence %</span><input name="confidencePercent" type="number" min="0" max="100" step="0.1" value="80" required></label>
           <label><span>Timezone</span><input name="timezone" value="America/Los_Angeles" maxlength="64" required></label>
+          <label><span>Supersedes (optional)</span><select name="supersedesId" id="dropWindowSupersedes"><option value="">No prior window</option></select></label>
           <label class="wide"><span>Exact listing IDs (comma or newline separated, max 50)</span><textarea name="listingIds" rows="3" required></textarea></label>
           <label class="wide"><span>Early-access note (optional)</span><input name="earlyAccessNote" maxlength="240"></label>
           <button class="button secondary" type="submit">Schedule window</button>

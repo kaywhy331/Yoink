@@ -10,6 +10,8 @@ export const PRIVACY_CHANGE_VERSION = "1.16.0" as const;
 export type DropWindowKind = "drop_window" | "queue_open";
 export type DropWindowStatus = "scheduled" | "active" | "superseded" | "closed" | "cancelled";
 export type WatchQueueState = "queued" | "observing" | "seen_in_stock" | "window_closed" | "cancelled";
+export type WatchQueueMode = "manual" | "auto_armed";
+export const WATCH_QUEUE_MODE_CONFIRMATION = "SET_WATCH_QUEUE_MODE" as const;
 
 export interface DropWindowProductInput {
   listingId: string;

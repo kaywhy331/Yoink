@@ -314,13 +314,40 @@ function renderActionPlatformAdmin() {
   $("#sourceChannelList").innerHTML = channels.map((channel) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(channel.name)}</h3><p>${escapeHtml(channel.provider)} · ${escapeHtml(channel.trustLevel.replaceAll("_", " "))}</p></div><span class="tag ${channel.health === "healthy" ? "good" : channel.health === "attention" ? "warning" : ""}">${escapeHtml(channel.health)}</span></div><div class="card-meta"><span class="tag">${Number(channel.acceptedEventCount || 0).toLocaleString()} accepted</span><span class="tag">${Number(channel.rejectedEventCount || 0).toLocaleString()} rejected</span><span class="tag">${Number(channel.falsePositiveCount || 0).toLocaleString()} false positive${Number(channel.falsePositiveCount || 0) === 1 ? "" : "s"}</span><span class="tag">${channel.accuracyBps == null ? "No accuracy sample" : `${(Number(channel.accuracyBps) / 100).toFixed(1)}% accuracy`}</span><span class="tag">p50 ${channel.p50ObservedToReceivedMs == null ? "—" : `${Number(channel.p50ObservedToReceivedMs).toLocaleString()} ms`}</span><span class="tag">p95 ${channel.p95ObservedToReceivedMs == null ? "—" : `${Number(channel.p95ObservedToReceivedMs).toLocaleString()} ms`}</span></div><div class="card-actions"><button class="button secondary" data-source-channel-status="${escapeHtml(channel.id)}" type="button">${channel.status === "active" ? "Pause" : "Activate"}</button><button class="button secondary" data-source-channel-trust="${escapeHtml(channel.id)}" type="button">${channel.trustLevel === "trusted_exact" ? "Set informational" : "Trust exact"}</button><button class="button quiet" data-source-channel-replay="${escapeHtml(channel.id)}" type="button">Replay dead letters</button></div></article>`).join("") || empty("No provider channels configured.");
   const windows = state.dropWindows || [];
   $("#dropWindowList").innerHTML = windows.map((window) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(window.title)}</h3><p>${escapeHtml(retailerName(window.retailerId))} · ${escapeHtml(window.kind.replaceAll("_", " "))} · ${Number(window.items?.length || 0).toLocaleString()} exact products</p></div><span class="tag ${window.status === "active" ? "good" : ""}">${escapeHtml(window.status)}</span></div><div class="card-meta"><span class="tag">Starts ${escapeHtml(relativeTime(window.startsAt))}</span><span class="tag">Closes ${escapeHtml(relativeTime(window.closesAt))}</span><span class="tag">${(Number(window.confidenceBps || 0) / 100).toFixed(1)}% confidence</span><span class="tag">${Number(window.items?.filter((item) => item.watch).length || 0)} watched</span></div></article>`).join("") || empty("No drop windows authored yet.");
-  $("#restockPatternList").innerHTML = (state.restockPatterns || []).map((pattern) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(pattern.title || pattern.listingId)}</h3><p>${escapeHtml(retailerName(pattern.retailerId))} · ${escapeHtml(pattern.retailerSku)} · ${escapeHtml(pattern.timezone)}</p></div><span class="tag">${Number(pattern.confidenceBps || 0) / 100}% confidence</span></div><div class="card-meta"><span class="tag">${Number(pattern.observationCount || 0)} observations</span><span class="tag">Median interval ${pattern.medianIntervalMinutes == null ? "—" : `${pattern.medianIntervalMinutes} min`}</span><span class="tag">Hours ${(pattern.localHourHistogram || []).map((item) => `${item.hour}:00 (${item.count})`).join(", ") || "—"}</span></div></article>`).join("") || empty("No restock pattern has been computed yet.");
+  $("#restockPatternList").innerHTML = (state.restockPatterns || []).map((pattern) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(pattern.title || pattern.listingId)}</h3><p>${escapeHtml(retailerName(pattern.retailerId))} · ${escapeHtml(pattern.retailerSku)} · ${escapeHtml(pattern.timezone)}</p></div><span class="tag">${Number(pattern.confidenceBps || 0) / 100}% confidence</span></div><div class="card-meta"><span class="tag">${Number(pattern.observationCount || 0)} observations</span><span class="tag">Median interval ${pattern.medianIntervalMinutes == null ? "—" : `${pattern.medianIntervalMinutes} min`}</span><span class="tag">Hours ${(pattern.localHourHistogram || []).map((item) => `${item.hour}:00 (${item.count})`).join(", ") || "—"}</span></div><div class="card-actions"><button class="button secondary" data-use-restock-pattern="${escapeHtml(pattern.id)}" type="button">Use in window</button></div></article>`).join("") || empty("No restock pattern has been computed yet.");
   $("#laneReadinessList").innerHTML = (state.laneReadiness || []).map((lane) => {
     const warning = lane.qualification?.warning || "none";
     return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(retailerName(lane.retailerId))}</h3><p>${escapeHtml(lane.expectedAdapterVersion)} · ${escapeHtml(lane.qualification?.status || "missing")}</p></div><span class="tag ${lane.readyForGuardedAdd ? "good" : "warning"}">${lane.readyForGuardedAdd ? "Ready" : warning !== "none" ? escapeHtml(warning.replaceAll("_", " ")) : "Needs setup"}</span></div><div class="card-meta">${(lane.checklist || []).map((check) => `<span class="tag ${check.ready ? "good" : ""}">${check.ready ? "✓" : "○"} ${escapeHtml(check.label)}</span>`).join("")}</div><div class="card-actions">${lane.candidate?.canonicalUrl ? `<a class="button secondary" href="${escapeHtml(lane.candidate.canonicalUrl)}" target="_blank" rel="noopener">Open prior passing SKU</a>` : ""}${lane.qualification?.status === "qualified" ? `<button class="button danger" data-retire-lane="${escapeHtml(lane.retailerId)}" type="button">Retire this lane</button>` : ""}</div></article>`;
   }).join("") || empty("No guarded lanes are configured.");
   const retailerSelect = $("#dropWindowRetailer");
   if (!retailerSelect.options.length) retailerSelect.innerHTML = Object.entries(RETAILER_NAMES).map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`).join("");
+  renderDropWindowSupersedeOptions();
+}
+
+function renderDropWindowSupersedeOptions() {
+  const select = $("#dropWindowSupersedes");
+  const retailerId = $("#dropWindowRetailer").value;
+  const selected = select.value;
+  const options = (state.dropWindows || [])
+    .filter((window) => window.retailerId === retailerId && ["scheduled", "active"].includes(window.status))
+    .map((window) => `<option value="${escapeHtml(window.id)}">${escapeHtml(window.title)} · ${escapeHtml(window.status)}</option>`)
+    .join("");
+  select.innerHTML = `<option value="">No prior window</option>${options}`;
+  if ([...select.options].some((option) => option.value === selected)) select.value = selected;
+}
+
+function useRestockPatternForWindow(pattern) {
+  const form = $("#dropWindowForm");
+  form.elements.retailerId.value = pattern.retailerId;
+  form.elements.listingIds.value = pattern.listingId;
+  form.elements.timezone.value = pattern.timezone;
+  form.elements.confidencePercent.value = (Number(pattern.confidenceBps || 0) / 100).toFixed(1);
+  if (!form.elements.title.value.trim()) {
+    form.elements.title.value = `${retailerName(pattern.retailerId)} observed restock window`;
+  }
+  renderDropWindowSupersedeOptions();
+  form.elements.startsAt.focus();
+  form.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function renderDevices() {
@@ -1502,6 +1529,12 @@ document.addEventListener("click", async (event) => {
       await refresh(false);
       toast(`${Number(result.replayed || 0)} dead-lettered signal${Number(result.replayed || 0) === 1 ? "" : "s"} queued for replay.`);
     }
+    if (button.dataset.useRestockPattern) {
+      const pattern = state.restockPatterns.find((item) => item.id === button.dataset.useRestockPattern);
+      if (!pattern) throw new Error("Refresh before using this restock pattern.");
+      useRestockPatternForWindow(pattern);
+      toast("Restock evidence added to a new window draft. Choose the bounded start and close times.");
+    }
     if (button.dataset.retireLane) {
       if (!confirm(`Retire only the ${retailerName(button.dataset.retireLane)} guarded add lane? Other retailer qualifications remain unchanged.`)) return;
       await api(`/api/v1/admin/qualifications/${encodeURIComponent(button.dataset.retireLane)}/retire`, {
@@ -1960,6 +1993,7 @@ $("#dropWindowForm").addEventListener("submit", async (event) => {
         spreadSeconds: Number(values.spreadSeconds),
         confidenceBps: Math.round(Number(values.confidencePercent) * 100),
         timezone: values.timezone,
+        ...(values.supersedesId ? { supersedesId: values.supersedesId } : {}),
         products: listingIds.map((listingId) => ({
           listingId,
           ...(earlyAccessNote ? { earlyAccess: { note: earlyAccessNote } } : {})
@@ -1971,6 +2005,8 @@ $("#dropWindowForm").addEventListener("submit", async (event) => {
     toast("Drop window scheduled and bounded signals queued.");
   } catch (error) { toast(error.message || "The drop window could not be scheduled.", true); }
 });
+
+$("#dropWindowRetailer").addEventListener("change", renderDropWindowSupersedeOptions);
 
 $("#restockPatternForm").addEventListener("submit", async (event) => {
   event.preventDefault();

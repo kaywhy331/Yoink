@@ -97,7 +97,7 @@
     <section class="workspace" data-panel="calls" id="calls">
       <div class="section-heading">
         <div><p class="eyebrow">Signals and scheduled drops</p><h2>Calls</h2><p>Act on exact product calls, or place scheduled drops in the bounded read-only watch queue.</p></div>
-        <div class="section-actions call-bulk-actions"><label><span>Apply profile</span><select id="callBulkProfile"><option value="">System default</option></select></label><button class="button secondary" id="callBulkAdd" type="button" disabled>Quick add selected</button></div>
+        <div class="section-actions call-bulk-actions"><label><span>Watch mode</span><select id="watchQueueMode" aria-describedby="watchQueueModeStatus"><option value="manual">Manual opt-in</option><option value="auto_armed">Auto-watch armed plans</option></select><small id="watchQueueModeStatus">Choose which scheduled drops enter read-only observation.</small></label><label><span>Apply profile</span><select id="callBulkProfile"><option value="">System default</option></select></label><button class="button secondary" id="callBulkAdd" type="button" disabled>Quick add selected</button></div>
       </div>
       <div class="stack" id="callList"></div>
     </section>
@@ -137,7 +137,8 @@
       <section class="metrics" id="analyticsMetrics" aria-label="Action analytics"></section>
       <div class="insight-grid">
         <article class="preference-card"><div><h3>Store readiness</h3><p>Qualification, companion state, sign-in evidence, and the warm cart baseline are tracked independently.</p><div class="mini-list" id="readinessList"></div></div></article>
-        <article class="preference-card"><div><h3>Retailer outcomes</h3><p>Completed actions and measured latency by store.</p><div class="mini-list" id="retailerAnalytics"></div></div></article>
+        <article class="preference-card"><div><h3>Retailer outcomes</h3><p>Carted and user-confirmed results by store.</p><div class="mini-list" id="retailerAnalytics"></div></div></article>
+        <article class="preference-card"><div><h3>Action latency</h3><p>Measured p50 and p95 for each available signal-to-cart hop.</p><div class="mini-list" id="analyticsLatency"></div></div></article>
         <article class="preference-card"><div><h3>Signal sources</h3><p>Accuracy and observed-to-received latency stay visible per channel.</p><div class="mini-list" id="sourceScorecards"></div></div></article>
       </div>
     </section>

@@ -11,7 +11,7 @@ test("the user docs, machine guide, and release announcement share the current b
   const server = createYoinkServer({
     db,
     webRoot: join(process.cwd(), "apps", "web"),
-    version: "1.16.0"
+    version: "1.16.1"
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -36,8 +36,8 @@ test("the user docs, machine guide, and release announcement share the current b
       announcement: { id: string; version: string; docsUrl: string; highlights: string[] };
       qualificationCandidates: unknown[];
     };
-    assert.equal(overview.announcement.id, "yoink-1-16-action-speed");
-    assert.equal(overview.announcement.version, "1.16.0");
+    assert.equal(overview.announcement.id, "yoink-1-16-1-action-audit");
+    assert.equal(overview.announcement.version, "1.16.1");
     assert.equal(overview.announcement.docsUrl, "/docs");
     assert.equal(overview.announcement.highlights.length, 3);
     assert.deepEqual(overview.qualificationCandidates, []);

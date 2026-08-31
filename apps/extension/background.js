@@ -4381,6 +4381,10 @@ async function verifyAddedCart(active) {
   const readyAt = Date.now();
   markJobTiming(active, "cartReadyAt", readyAt);
   const latency = cartReadyLatency(active, readyAt);
+  // The browser has already proven the exact +1 cart delta, so hand control
+  // back to the user immediately. Control-plane reporting must never delay
+  // the local notification, badge, sound, popup state, or cart-tab handoff.
+  await publishCartReady(active, readyAt).catch(() => undefined);
   await reportJobBatch(active, [
     {
       state: "cart_verified",
@@ -4407,7 +4411,6 @@ async function verifyAddedCart(active) {
       }
     }
   ]);
-  await publishCartReady(active, readyAt).catch(() => undefined);
   const cartBaseline = freshCartBaseline(result.cartBaseline, retailerId, readyAt);
   void reportRetailerReadiness(retailerId, {
     cartBaseline,

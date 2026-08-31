@@ -13,6 +13,7 @@ import { ControlRepository } from "../packages/database/src/control-repository.j
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { ExecutionRepository } from "../packages/database/src/execution-repository.js";
+import { UserActionConnectorRepository } from "../packages/database/src/user-action-connector-repository.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 
 const NOW = new Date("2026-08-22T21:00:00.000Z").getTime();
@@ -584,6 +585,104 @@ test("batched Chrome progress is atomic when a later transition is invalid", () 
     );
   } finally {
     db.close();
+  }
+});
+
+test("lease heartbeat is capped by the action job's real remaining execution budget", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db);
+    const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
+    assert.equal(lease.reason, "leased");
+    assert.ok(lease.job);
+    const budgetEnd = NOW + 8_000;
+    db.run("UPDATE action_jobs SET expires_at = ? WHERE id = ?", new Date(budgetEnd).toISOString(), lease.job.id);
+    const heartbeat = execution.heartbeatJob(
+      deviceId,
+      lease.job.id,
+      lease.job.capabilityToken,
+      NOW + 3_000
+    );
+    assert.equal(heartbeat.leaseExpiresAt, new Date(budgetEnd).toISOString());
+    assert.equal(heartbeat.remainingBudgetMs, 5_000);
+    assert.throws(() => execution.heartbeatJob(
+      deviceId,
+      lease.job!.id,
+      lease.job!.capabilityToken,
+      budgetEnd
+    ), /execution budget has expired/);
+  } finally {
+    db.close();
+  }
+});
+
+test("Carted, Needs you, and Missed connectors follow every shared action transition path", () => {
+  const scenarios = [{
+    eventType: "carted",
+    states: ["navigating", "verifying_listing", "offer_verified", "add_authorized", "adding", "cart_verified", "confirmed"],
+    recover: false
+  }, {
+    eventType: "needs_you",
+    states: ["navigating", "verifying_listing", "offer_verified", "add_authorized", "adding"],
+    recover: true
+  }, {
+    eventType: "missed",
+    states: ["navigating", "verifying_listing", "offer_rejected"],
+    recover: false
+  }] as const;
+
+  for (const scenario of scenarios) {
+    const db = new YoinkDatabase();
+    try {
+      const { execution, deviceId } = targetExecution(db);
+      const connectors = new UserActionConnectorRepository(db, { checkout_hook: "f".repeat(64) });
+      connectors.save({
+        contractVersion: 1,
+        kind: "webhook",
+        name: `${scenario.eventType} fixture`,
+        endpointReference: "checkout_hook",
+        events: [scenario.eventType]
+      }, "", NOW + 1_000);
+      const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
+      assert.equal(lease.reason, "leased");
+      assert.ok(lease.job);
+      for (const [index, state] of scenario.states.entries()) {
+        execution.reconcileJob(
+          deviceId,
+          lease.job.id,
+          lease.job.capabilityToken,
+          state,
+          `fixture_${state}`,
+          `Fixture ${state}.`,
+          {},
+          NOW + 3_000 + index * 1_000
+        );
+      }
+      if (scenario.recover) {
+        assert.equal(execution.recoverExpiredLeases(NOW + 60_000), 1);
+        assert.throws(() => execution.reconcileJob(
+          deviceId,
+          lease.job!.id,
+          lease.job!.capabilityToken,
+          "manual_review",
+          "stale_device_report",
+          "A stale device report must be rejected.",
+          {},
+          NOW + 61_000
+        ), /capability is invalid/);
+      }
+      const deliveries = connectors.listDeliveries();
+      assert.equal(deliveries.length, 1);
+      assert.equal(deliveries[0]?.eventType, scenario.eventType);
+      assert.equal(deliveries[0]?.actionJobId, lease.job.id);
+      assert.equal(deliveries[0]?.state, "pending");
+      const connectorLease = connectors.leaseNext(NOW + 70_000);
+      assert.equal(connectorLease?.eventType, scenario.eventType);
+      assert.equal(connectorLease?.actionJobId, lease.job.id);
+      assert.equal(connectorLease?.payload.checkoutManual, true);
+    } finally {
+      db.close();
+    }
   }
 });
 

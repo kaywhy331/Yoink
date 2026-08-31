@@ -15,7 +15,6 @@ import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 import { SignalRepository } from "./signal-repository.js";
 import { SpendLedgerRepository } from "./spend-ledger-repository.js";
-import { UserActionConnectorRepository } from "./user-action-connector-repository.js";
 
 const LEASE_TTL_MS = 45_000;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
@@ -184,13 +183,11 @@ export class ExecutionRepository {
   private readonly signals: SignalRepository;
   private readonly control: ControlRepository;
   private readonly spendLedger: SpendLedgerRepository;
-  private readonly userConnectors: UserActionConnectorRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.signals = new SignalRepository(db);
     this.control = new ControlRepository(db);
     this.spendLedger = new SpendLedgerRepository(db);
-    this.userConnectors = new UserActionConnectorRepository(db);
   }
 
   recoverExpiredLeases(now = Date.now()): number {
@@ -482,7 +479,10 @@ export class ExecutionRepository {
         deviceEvidence(evidence),
         now
       );
-      if (jobIsTerminal(nextState)) {
+      const deviceFinished = jobIsTerminal(nextState)
+        || nextState === "manual_review"
+        || nextState === "submission_uncertain";
+      if (deviceFinished) {
         this.db.run(
           "UPDATE action_jobs SET capability_nonce_hash = ?, lease_expires_at = ?, updated_at = ? WHERE id = ?",
           stableHash(newId("retired_capability")),
@@ -490,12 +490,6 @@ export class ExecutionRepository {
           nowIso(now),
           job.id
         );
-        if (nextState === "confirmed") this.userConnectors.queueForJob("carted", job.id, now);
-        else if (["manual_review", "submission_uncertain"].includes(nextState)) {
-          this.userConnectors.queueForJob("needs_you", job.id, now);
-        } else if (["offer_rejected", "cancelled", "expired"].includes(nextState)) {
-          this.userConnectors.queueForJob("missed", job.id, now);
-        }
       } else {
         this.db.run(
           "UPDATE action_jobs SET lease_expires_at = ?, updated_at = ? WHERE id = ?",

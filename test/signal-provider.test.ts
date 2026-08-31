@@ -203,6 +203,33 @@ test("provider batches classify retryability per item and continue after rejecti
   }
 });
 
+test("accepted provider ingress wakes the in-process worker without delaying its durable receipt", async () => {
+  const db = new YoinkDatabase();
+  try {
+    let wakes = 0;
+    const providers = new SignalProviderRepository(db);
+    const channel = providers.createChannel({
+      provider: "discord",
+      name: "Wake fixture",
+      externalReference: "discord-channel-wake-fixture",
+      trustLevel: "informational",
+      replayWindowSeconds: 300
+    }, NOW);
+    const ingress = new DurableSignalIngressService(db, () => { wakes += 1; });
+    const receipt = ingress.acceptProvider(
+      discordSignalEnvelope(discordInput(channel.id, "wake-message"), channel, NOW),
+      NOW
+    );
+    assert.equal(receipt.processingState, "queued");
+    assert.equal(receipt.backgroundTaskCreated, true);
+    assert.equal(wakes, 0, "worker wake stays off the synchronous receipt path");
+    await Promise.resolve();
+    assert.equal(wakes, 1);
+  } finally {
+    db.close();
+  }
+});
+
 test("the internal delivery API accepts a structured Discord event and exposes channel health to source managers", async () => {
   const db = new YoinkDatabase();
   const server = createYoinkServer({

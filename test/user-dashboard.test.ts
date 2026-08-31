@@ -699,7 +699,9 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
   const preflights: Array<Record<string, unknown>> = [];
   const posts: Array<Record<string, unknown>> = [];
   const feedback: Array<Record<string, unknown>> = [];
+  const watchModeUpdates: Array<Record<string, unknown>> = [];
   let falsePositiveReported = false;
+  let watchQueueMode = "auto_armed";
   let workerRestarts = 0;
   const profile = {
     id: "profile_calls_fixture",
@@ -785,8 +787,20 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
     currency: "USD",
     source: "drop_window",
     dropWindowItemId: "drop_window_item_calls_fixture",
+    startsAt: new Date(Date.now() + 10 * 60_000).toISOString(),
     closesAt: "2026-08-30T12:00:00.000Z",
-    earlyAccess: { membership: "Walmart+", queueExpected: true }
+    earlyAccess: { membership: "Walmart+", queueExpected: true },
+    watch: {
+      id: "watch_item_calls_fixture",
+      state: "queued",
+      enrollment: "auto_armed",
+      observationStartsAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      observationClosesAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+      observationCount: 1,
+      lastAvailability: "out_of_stock",
+      lastObservedAt: new Date(Date.now() - 60_000).toISOString(),
+      readiness: { readOnly: true, reasonCode: "read_only_observation" }
+    }
   }];
   const overview = {
     settings: { actionsPaused: false, executionMode: "live", taxBps: 0, storeAllowancesCents: {} },
@@ -809,6 +823,16 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
         feedback.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
         falsePositiveReported = true;
         return { ok: true, status: 200, json: async () => ({ recorded: true }) };
+      }
+      if (path === "/api/v1/user/watch-queue/settings" && options.method === "PATCH") {
+        const requested = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
+        watchModeUpdates.push(requested);
+        watchQueueMode = requested.mode === "auto_armed" ? "auto_armed" : "manual";
+        return { ok: true, status: 200, json: async () => ({ watchQueue: {
+          mode: watchQueueMode,
+          previousMode: watchQueueMode === "manual" ? "auto_armed" : "manual",
+          newlyEnrolledCount: 0
+        } }) };
       }
       if (path === "/api/v1/admin/workers/restart" && options.method === "POST") {
         workerRestarts += 1;
@@ -846,6 +870,17 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
       if (path === "/api/v1/user/calls") {
         return { ok: true, status: 200, json: async () => ({ items: calls() }) };
       }
+      if (path === "/api/v1/user/action-platform") {
+        return { ok: true, status: 200, json: async () => ({
+          watchQueueMode,
+          readiness: [],
+          connectors: [],
+          connectorDeliveries: [],
+          sources: [],
+          orderConfirmations: [],
+          analytics: { funnel: {}, spend: {}, retailers: [] }
+        }) };
+      }
       if (path === "/api/v1/user/health") return { ok: true, status: 200, json: async () => ({
         contractVersion: 1,
         generatedAt: "2026-08-30T08:02:00.000Z",
@@ -881,12 +916,26 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
     assert.match(callText, /Walmart\+/);
     assert.match(callText, /Queue Expected/);
     assert.match(callText, /Observation remains read-only/);
+    assert.match(callText, /Read-only checks start/);
+    assert.match(callText, /Auto-enrolled from armed plan/);
+    assert.match(callText, /1 check · Out Of Stock/);
+    const watchMode = browser.document.querySelector("#watchQueueMode") as HTMLSelectElement;
+    assert.equal(watchMode.value, "auto_armed");
     const outbound = new URL((browser.document.querySelector("#callList a.canonical") as HTMLAnchorElement).href);
     assert.equal(outbound.origin, "https://howl.link");
     assert.equal(outbound.searchParams.get("publisher_slug"), "collectwithdodo");
     assert.match(browser.document.querySelector("#healthSummary")?.textContent ?? "", /1 companion online · worker healthy/);
     assert.match(browser.document.querySelector("#healthDetails")?.textContent ?? "", /calls-health-fixture/);
     assert.equal((browser.document.querySelector("#restartWorker") as HTMLButtonElement).hidden, false);
+
+    watchMode.value = "manual";
+    watchMode.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    await eventually(() => assert.equal(watchModeUpdates.length, 1));
+    assert.deepEqual(watchModeUpdates[0], {
+      mode: "manual",
+      confirmation: "SET_WATCH_QUEUE_MODE"
+    });
+    await eventually(() => assert.equal(watchMode.value, "manual"));
 
     (browser.document.querySelector("[data-false-positive]") as HTMLButtonElement).click();
     await eventually(() => assert.equal(feedback.length, 1));

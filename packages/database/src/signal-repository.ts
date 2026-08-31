@@ -801,6 +801,16 @@ export class SignalRepository {
         }
       }
       this.audit(job.id, "action_job_transition", nextState, message, { previousState: job.state, ...sanitizeDiagnosticData(evidence) as Record<string, unknown> }, now);
+      // Connector events belong to the shared transition boundary so browser
+      // reports, lease recovery, expiry, policy cancellation, and reviewed
+      // resolution all produce the same idempotent user-facing lifecycle.
+      if (nextState === "confirmed") {
+        this.userConnectors.queueForJob("carted", job.id, now);
+      } else if (nextState === "manual_review" || nextState === "submission_uncertain") {
+        this.userConnectors.queueForJob("needs_you", job.id, now);
+      } else if (nextState === "offer_rejected" || nextState === "cancelled" || nextState === "expired") {
+        this.userConnectors.queueForJob("missed", job.id, now);
+      }
       return { id: job.id, previousState: job.state, state: nextState, updatedAt: timestamp };
     });
   }

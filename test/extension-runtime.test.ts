@@ -531,6 +531,7 @@ interface HarnessOptions {
   adapterDiagnosticFailures?: number;
   adapterDiagnosticFailureStatus?: number;
   adapterDiagnosticDelayMs?: number;
+  confirmedJobEventDelayMs?: number;
   queuedAdapterDiagnostics?: Array<Record<string, unknown>>;
   observerRecipeDistribution?: Record<string, unknown>;
   observerRecipeRoot?: Record<string, unknown>;
@@ -1595,6 +1596,9 @@ function harness(options: HarnessOptions = {}) {
     if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/events\/batch$/.test(url)) {
       const body = JSON.parse(String(requestOptions.body)) as { events?: Array<{ state: string }> };
       const events = Array.isArray(body.events) ? body.events : [];
+      if (events.some((event) => event.state === "confirmed") && options.confirmedJobEventDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.confirmedJobEventDelayMs));
+      }
       for (const event of events) {
         jobStates.push(event.state);
         if (event.state === "confirmed") {
@@ -2673,6 +2677,10 @@ test("the service worker runs one leased Target add through baseline, click rece
     "cart_verified",
     "confirmed"
   ]);
+  assert.equal(runtime.fetchCalls.some((entry) => {
+    const url = new URL(entry.url);
+    return url.pathname.endsWith("/devices/self/jobs/next") && url.searchParams.get("wait") === "5000";
+  }), true, "Chrome should use the bounded job long-poll contract");
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
@@ -2734,6 +2742,23 @@ test("the service worker runs one leased Target add through baseline, click rece
   assert.deepEqual(runtime.tabUpdates.at(-1), { id: readyState.items[0]?.tabId, active: true });
   assert.equal(runtime.badgeTexts.at(-1), "");
   assert.equal("activeTargetJob" in runtime.storage, false);
+});
+
+test("the cart-ready handoff does not wait for confirmed job-event reporting", async () => {
+  const runtime = harness({ liveJob: true, confirmedJobEventDelayMs: 750 });
+  runtime.fireJobAlarm();
+  await waitFor(
+    () => runtime.shownNotifications.some((notification) => notification.id === "yoink-cart-ready:job_target_fixture"),
+    "The local cart-ready handoff waited for the control plane.",
+    500
+  );
+  assert.equal(runtime.jobStates.includes("confirmed"), false);
+  assert.equal(runtime.badgeTexts.at(-1), "1");
+  await waitFor(
+    () => runtime.jobStates.includes("confirmed"),
+    "The delayed confirmed event was not eventually reported.",
+    2_000
+  );
 });
 
 test("one alarm drains confirmed Target jobs immediately and reuses one Yoink-created store tab", async () => {

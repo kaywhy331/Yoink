@@ -63,6 +63,19 @@ function seedConfirmedActionJob(db: YoinkDatabase, deviceId: string): string {
       'listing_action_platform', 1, 600, 'USD', 'first_party_only', 'shipping',
       '2026-08-30T17:00:00.000Z', '2026-08-30T17:00:00.000Z'
     );
+    INSERT INTO mission_intent_revisions(
+      id, tenant_id, user_id, mission_id, revision, quantity, currency,
+      max_all_in_cents, action_ceiling, substitution_policy, expires_at,
+      cooldown_seconds, target_policy_json, policy_hash, change_reason,
+      created_by_actor_id, created_at
+    ) VALUES (
+      'intent_action_platform', 'tenant_local', 'user_local',
+      'mission_action_platform', 1, 1, 'USD', 600, 'add_to_cart',
+      'exact_only', '', 0,
+      '[{"targetId":"mission_target_action_platform","listingId":"listing_action_platform","retailerId":"target","enabled":true,"maxUnitPriceCents":600,"sellerPolicy":"first_party_only","fulfillment":"shipping"}]',
+      'action-platform-policy', 'Exact add-to-cart plan armed.',
+      'user_local', '2026-08-30T17:00:00.000Z'
+    );
     INSERT INTO signal_incidents(
       id, tenant_id, user_id, listing_id, event_type, semantic_key, status,
       currency, first_observed_at, last_observed_at, created_at, updated_at
@@ -168,6 +181,73 @@ test("drop windows lease exact read-only observations and close one item on stoc
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM watch_queue_items WHERE observation_capability_hash = ''"
     )?.count, 1);
+    db.assertIntegrity();
+  } finally {
+    db.close();
+  }
+});
+
+test("auto-watch backfills armed plans and drop-window supersession closes only the replaced watches", () => {
+  const db = new YoinkDatabase();
+  try {
+    seedListing(db);
+    const device = pair(db);
+    seedConfirmedActionJob(db, device.id);
+    const repository = new DropWindowRepository(db);
+    const original = repository.create({
+      contractVersion: 1,
+      kind: "drop_window",
+      retailerId: "target",
+      title: "Original Target window",
+      startsAt: new Date(NOW + 10 * 60_000).toISOString(),
+      closesAt: new Date(NOW + 60 * 60_000).toISOString(),
+      spreadSeconds: 0,
+      confidenceBps: 7000,
+      timezone: "America/Los_Angeles",
+      products: [{ listingId: "listing_action_platform" }]
+    }, NOW);
+    assert.equal(repository.watchQueueMode(), "manual");
+    assert.equal(original.items[0]?.watch, null);
+
+    const enabled = repository.setWatchQueueMode("auto_armed", NOW + 1_000);
+    assert.deepEqual(enabled, {
+      mode: "auto_armed",
+      previousMode: "manual",
+      newlyEnrolledCount: 1
+    });
+    const autoWatch = repository.listWatchQueue(NOW + 1_001)[0];
+    assert.equal(autoWatch?.enrollment, "auto_armed");
+    assert.equal(autoWatch?.missionId, "mission_action_platform");
+    assert.equal(repository.leaseNext(device.id, NOW + 2_000).reason, "leased");
+
+    const replacement = repository.create({
+      contractVersion: 1,
+      kind: "queue_open",
+      retailerId: "target",
+      title: "Replacement Target queue",
+      startsAt: new Date(NOW + 15 * 60_000).toISOString(),
+      closesAt: new Date(NOW + 90 * 60_000).toISOString(),
+      spreadSeconds: 0,
+      confidenceBps: 8500,
+      timezone: "America/Los_Angeles",
+      supersedesId: original.id,
+      products: [{ listingId: "listing_action_platform", earlyAccess: { membership: "Circle" } }]
+    }, NOW + 3_000);
+    assert.equal(replacement.supersedesId, original.id);
+    assert.equal(repository.get(original.id)?.status, "superseded");
+    assert.equal(repository.get(original.id)?.supersededById, replacement.id);
+    const watches = repository.listWatchQueue(NOW + 3_001);
+    const replacedWatch = watches.find((item) => item.dropWindowId === original.id);
+    const replacementWatch = watches.find((item) => item.dropWindowId === replacement.id);
+    assert.equal(replacedWatch?.state, "cancelled");
+    assert.equal(replacedWatch?.closedReason, "window_superseded");
+    assert.equal(replacementWatch?.state, "queued");
+    assert.equal(replacementWatch?.enrollment, "auto_armed");
+
+    const disabled = repository.setWatchQueueMode("manual", NOW + 4_000);
+    assert.equal(disabled.mode, "manual");
+    assert.equal(disabled.previousMode, "auto_armed");
+    assert.equal(disabled.newlyEnrolledCount, 0);
     db.assertIntegrity();
   } finally {
     db.close();
