@@ -44,6 +44,10 @@ const HEALTH_ALARM = "yoink-health";
 const JOB_ALARM = "yoink-jobs";
 const MAX_ACTION_JOBS_PER_CYCLE = 4;
 const SIGNAL_JOB_HANDOFF_RETRY_DELAYS_MS = Object.freeze([250, 750, 1_500, 2_500]);
+const POST_CLICK_SETTLE_MAX_MS = 1_500;
+const POST_CLICK_SETTLE_QUIET_MS = 125;
+const POST_CLICK_SETTLE_MIN_MS = 300;
+const POST_CLICK_SETTLE_STATE_KEY = "__yoinkPostClickSettleV1";
 const READINESS_KEY = "readiness";
 const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
 const POPUP_UPDATE_HANDOFF_STORAGE_KEY = PopupState.POPUP_UPDATE_HANDOFF_STORAGE_KEY;
@@ -51,6 +55,8 @@ const CART_READY_STORAGE_KEY = PopupState.CART_READY_STORAGE_KEY;
 const DEVICE_KEY = "pairedDevice";
 const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
+const RETAILER_ACTION_TABS_KEY = "yoinkRetailerActionTabsV1";
+const CART_READY_SOUND_KEY = "yoinkCartReadySoundEnabledV1";
 const TRACKALACKER_PUSH_STATE_KEY = "yoinkTrackalackerPushStateV1";
 const TRACKALACKER_PUSH_QUEUE_KEY = "yoinkTrackalackerPushQueueV1";
 const TRACKALACKER_SYNC_STATE_KEY = "yoinkTrackalackerSyncStateV1";
@@ -193,6 +199,7 @@ let trackalackerDrainPromise = null;
 let trackalackerStateQueue = Promise.resolve();
 let trackalackerQueueQueue = Promise.resolve();
 let cartReadyStateQueue = Promise.resolve();
+let offscreenDocumentPromise = null;
 let adapterDiagnosticDrainPromise = null;
 let adapterDiagnosticQueueLock = Promise.resolve();
 let deviceCredentialRotationPromise = null;
@@ -3496,6 +3503,180 @@ function waitForTab(tabId, retailerId, expected, timeoutMs = 25_000) {
   });
 }
 
+function postClickNavigationSignal(tabId) {
+  let listener;
+  let observedChange = false;
+  let resolved = false;
+  let resolveSignal;
+  const promise = new Promise((resolve) => { resolveSignal = resolve; });
+  const finish = (reason) => {
+    if (resolved) return;
+    resolved = true;
+    chrome.tabs.onUpdated.removeListener(listener);
+    resolveSignal({ settled: true, reason });
+  };
+  listener = (updatedId, changeInfo, tab) => {
+    if (updatedId !== tabId) return;
+    if (changeInfo.url || changeInfo.status === "loading") observedChange = true;
+    if (observedChange && (changeInfo.status === "complete" || tab?.status === "complete")) {
+      finish("tab_complete");
+    }
+  };
+  chrome.tabs.onUpdated.addListener(listener);
+  return {
+    promise,
+    cancel() {
+      if (resolved) return;
+      resolved = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+    }
+  };
+}
+
+async function armPostClickDomSettle(tabId, token) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: false },
+    func: (_operation, key, expectedToken) => {
+      const root = globalThis;
+      const existing = root[key];
+      existing?.observer?.disconnect?.();
+      const state = {
+        token: expectedToken,
+        armedAt: performance.now(),
+        lastMutationAt: 0,
+        mutationCount: 0,
+        notify: null,
+        observer: null
+      };
+      const observer = new MutationObserver((records) => {
+        if (!records.length) return;
+        state.mutationCount += records.length;
+        state.lastMutationAt = performance.now();
+        state.notify?.();
+      });
+      observer.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["aria-busy", "aria-label", "class", "disabled", "data-test", "data-testid"]
+      });
+      state.observer = observer;
+      root[key] = state;
+      return { armed: true, token: expectedToken };
+    },
+    args: ["yoink_post_click_settle_arm", POST_CLICK_SETTLE_STATE_KEY, token]
+  });
+  return results.find((entry) => entry.frameId === 0)?.result?.armed === true;
+}
+
+async function waitForPostClickDomSettle(tabId, token) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      func: (_operation, key, expectedToken, timeoutMs, quietMs, minimumMs) => new Promise((resolve) => {
+        const root = globalThis;
+        const state = root[key];
+        if (!state || state.token !== expectedToken) {
+          setTimeout(() => resolve({ settled: false, reason: "observer_unavailable" }), timeoutMs);
+          return;
+        }
+        let finished = false;
+        let quietTimer;
+        let timeout;
+        const finish = (settled, reason) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(quietTimer);
+          clearTimeout(timeout);
+          state.observer?.disconnect?.();
+          state.notify = null;
+          if (root[key]?.token === expectedToken) delete root[key];
+          resolve({ settled, reason });
+        };
+        const schedule = () => {
+          clearTimeout(quietTimer);
+          const now = performance.now();
+          const minimumRemaining = Math.max(0, minimumMs - (now - state.armedAt));
+          const quietRemaining = Math.max(0, quietMs - (now - state.lastMutationAt));
+          quietTimer = setTimeout(
+            () => finish(true, "dom_mutation"),
+            Math.max(minimumRemaining, quietRemaining)
+          );
+        };
+        state.notify = schedule;
+        if (state.mutationCount > 0) schedule();
+        timeout = setTimeout(() => finish(false, "timeout"), timeoutMs);
+      }),
+      args: [
+        "yoink_post_click_settle_wait",
+        POST_CLICK_SETTLE_STATE_KEY,
+        token,
+        POST_CLICK_SETTLE_MAX_MS,
+        POST_CLICK_SETTLE_QUIET_MS,
+        POST_CLICK_SETTLE_MIN_MS
+      ]
+    });
+    const result = results.find((entry) => entry.frameId === 0)?.result;
+    return result && typeof result === "object"
+      ? result
+      : { settled: false, reason: "observer_unavailable" };
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, POST_CLICK_SETTLE_MAX_MS));
+    return { settled: false, reason: "observer_unavailable" };
+  }
+}
+
+async function clearPostClickDomSettle(tabId, token) {
+  await chrome.scripting.executeScript({
+    target: { tabId, allFrames: false },
+    func: (_operation, key, expectedToken) => {
+      const root = globalThis;
+      const state = root[key];
+      if (state?.token !== expectedToken) return false;
+      state.observer?.disconnect?.();
+      state.notify = null;
+      delete root[key];
+      return true;
+    },
+    args: ["yoink_post_click_settle_clear", POST_CLICK_SETTLE_STATE_KEY, token]
+  }).catch(() => undefined);
+}
+
+async function createPostClickSettle(tabId) {
+  const token = crypto.randomUUID();
+  const navigation = postClickNavigationSignal(tabId);
+  const armed = await armPostClickDomSettle(tabId, token).catch(() => false);
+  return {
+    async wait() {
+      const startedAt = Date.now();
+      try {
+        const result = await Promise.race([
+          navigation.promise,
+          armed
+            ? waitForPostClickDomSettle(tabId, token)
+            : new Promise((resolve) => setTimeout(
+              () => resolve({ settled: false, reason: "observer_unavailable" }),
+              POST_CLICK_SETTLE_MAX_MS
+            ))
+        ]);
+        return {
+          reason: ["tab_complete", "dom_mutation", "timeout", "observer_unavailable"].includes(result?.reason)
+            ? result.reason : "observer_unavailable",
+          durationMs: Math.max(0, Date.now() - startedAt)
+        };
+      } finally {
+        navigation.cancel();
+        await clearPostClickDomSettle(tabId, token);
+      }
+    },
+    async cancel() {
+      navigation.cancel();
+      await clearPostClickDomSettle(tabId, token);
+    }
+  };
+}
+
 async function openRetailerTab(retailerId, url, expected) {
   const lane = ADD_LANES[retailerId];
   const tab = await chrome.tabs.create({ url, active: true });
@@ -3536,7 +3717,7 @@ function safeOfferEvidence(proof) {
 }
 
 function markJobTiming(active, name, now = Date.now()) {
-  if (!active || !["leasedAt", "baselineReadyAt", "offerVerifiedAt", "clickedAt", "cartReadyAt"].includes(name)) return;
+  if (!active || !["leasedAt", "baselineReadyAt", "offerVerifiedAt", "clickedAt", "settledAt", "cartReadyAt"].includes(name)) return;
   active.timing = {
     ...(active.timing && typeof active.timing === "object" ? active.timing : {}),
     [name]: now
@@ -3554,9 +3735,11 @@ function boundedLatency(start, end) {
 function cartReadyLatency(active, readyAt = Date.now()) {
   const leaseToCartReadyMs = boundedLatency(active?.timing?.leasedAt, readyAt);
   const clickToCartReadyMs = boundedLatency(active?.timing?.clickedAt, readyAt);
+  const clickToSettleMs = boundedLatency(active?.timing?.clickedAt, active?.timing?.settledAt);
   return {
     ...(leaseToCartReadyMs !== undefined ? { leaseToCartReadyMs } : {}),
-    ...(clickToCartReadyMs !== undefined ? { clickToCartReadyMs } : {})
+    ...(clickToCartReadyMs !== undefined ? { clickToCartReadyMs } : {}),
+    ...(clickToSettleMs !== undefined ? { clickToSettleMs } : {})
   };
 }
 
@@ -3586,6 +3769,42 @@ function freshCartBaseline(value, retailerId, now = Date.now()) {
 async function readCartReadyState() {
   const stored = await chrome.storage.session.get(CART_READY_STORAGE_KEY);
   return PopupState.cartReadyState(stored[CART_READY_STORAGE_KEY]);
+}
+
+async function readRetailerActionTabs() {
+  const value = (await chrome.storage.session.get(RETAILER_ACTION_TABS_KEY))[RETAILER_ACTION_TABS_KEY];
+  const tabs = value?.schemaVersion === 1 && value.tabs && typeof value.tabs === "object" && !Array.isArray(value.tabs)
+    ? value.tabs : {};
+  return new Map(Object.entries(tabs)
+    .filter(([retailerId, tabId]) => Object.hasOwn(ADD_LANES, retailerId) && Number.isInteger(tabId) && tabId > 0)
+    .map(([retailerId, tabId]) => [retailerId, Number(tabId)]));
+}
+
+async function rememberRetailerActionTab(retailerId, tabId) {
+  if (!Object.hasOwn(ADD_LANES, retailerId) || !Number.isInteger(tabId) || tabId <= 0) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!Number.isInteger(tab?.id)) return;
+  const tabs = await readRetailerActionTabs();
+  tabs.set(retailerId, tabId);
+  await chrome.storage.session.set({
+    [RETAILER_ACTION_TABS_KEY]: { schemaVersion: 1, tabs: Object.fromEntries(tabs) }
+  });
+}
+
+async function forgetRetailerActionTab(tabId) {
+  if (!Number.isInteger(tabId)) return;
+  const tabs = await readRetailerActionTabs();
+  let changed = false;
+  for (const [retailerId, storedTabId] of tabs) {
+    if (storedTabId !== tabId) continue;
+    tabs.delete(retailerId);
+    changed = true;
+  }
+  if (changed) {
+    await chrome.storage.session.set({
+      [RETAILER_ACTION_TABS_KEY]: { schemaVersion: 1, tabs: Object.fromEntries(tabs) }
+    });
+  }
 }
 
 async function showCartReadyBadge(state) {
@@ -3667,6 +3886,34 @@ async function focusCartReady(jobId = "") {
   return { opened: true, item, cartReady: state };
 }
 
+async function ensureCartReadySoundDocument() {
+  if (!chrome.offscreen?.createDocument || !chrome.runtime.getContexts) return false;
+  if (offscreenDocumentPromise) return offscreenDocumentPromise;
+  offscreenDocumentPromise = (async () => {
+    const documentUrl = chrome.runtime.getURL("offscreen.html");
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["OFFSCREEN_DOCUMENT"],
+      documentUrls: [documentUrl]
+    });
+    if (!contexts.length) {
+      await chrome.offscreen.createDocument({
+        url: "offscreen.html",
+        reasons: ["AUDIO_PLAYBACK"],
+        justification: "Play the user-enabled cart-ready cue."
+      });
+    }
+    return true;
+  })().catch(() => false).finally(() => { offscreenDocumentPromise = null; });
+  return offscreenDocumentPromise;
+}
+
+async function playCartReadySound() {
+  const enabled = (await chrome.storage.local.get(CART_READY_SOUND_KEY))[CART_READY_SOUND_KEY] === true;
+  if (!enabled || !await ensureCartReadySoundDocument()) return false;
+  await chrome.runtime.sendMessage({ type: "yoink:play-cart-ready-sound" }).catch(() => undefined);
+  return true;
+}
+
 async function publishCartReady(active, readyAt = Date.now()) {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
@@ -3694,6 +3941,7 @@ async function publishCartReady(active, readyAt = Date.now()) {
     priority: 2,
     requireInteraction: true
   }).catch(() => undefined);
+  void playCartReadySound().catch(() => undefined);
   return item;
 }
 
@@ -3835,10 +4083,12 @@ async function executeLeasedRetailerJob(lease, reusableTabId = null, reusableBas
     await reportJob(active, "offer_verified", "live_offer_verified", `The exact ${lane.name} SKU, seller, price, stock, and fulfillment passed live verification.`, safeOfferEvidence(active.proof));
     await reportJob(active, "add_authorized", "add_boundary_prepared", `The exact ${lane.name} Add control is prepared for one final revalidation.`);
     await reportJob(active, "adding", "add_receipt_armed", "The durable at-most-once Add receipt was armed before the browser click.");
+    const postClickSettle = await createPostClickSettle(active.tabId);
     const committed = await executeAddAction(active.tabId, retailerId, lane.commitOperation, [active.runnerJob, active.authorizationId]);
     active.authorizationId = "";
     await saveActiveJob(active);
     if (!committed?.ok || committed?.clicked !== true) {
+      await postClickSettle.cancel();
       const reasonCode = safeReasonCode(committed?.reason || "click_uncertain");
       await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "failed", runnerFailureStage(reasonCode), reasonCode, active.runnerJob.fulfillment);
       await reportJob(active, "manual_review", committed?.reason || "click_uncertain", "The Add boundary did not return a confirmed click result; automatic retry is locked.");
@@ -3848,7 +4098,10 @@ async function executeLeasedRetailerJob(lease, reusableTabId = null, reusableBas
     active.proof = committed.proof;
     markJobTiming(active, "clickedAt");
     await saveActiveJob(active);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const settled = await postClickSettle.wait();
+    markJobTiming(active, "settledAt");
+    active.postClickSettle = settled;
+    await saveActiveJob(active);
     const verification = await verifyAddedCart(active);
     return {
       confirmed: verification.confirmed,
@@ -4032,7 +4285,6 @@ async function runJobCycle() {
     }
     let leased = 0;
     let confirmed = 0;
-    const reusableTabs = new Map();
     const state = await checkHealth();
     if (!state.connected || !state.paired || state.executionMode !== "live"
       || state.actionsPaused || !state.chromeMutationEnabled) {
@@ -4047,6 +4299,14 @@ async function runJobCycle() {
     if (!targetAccess && !walmartAccess && !amazonAccess && !bestBuyAccess) {
       return { leased, confirmed, reason: "retailer_access_missing" };
     }
+    const [storedTabs, cartReady] = await Promise.all([
+      readRetailerActionTabs(),
+      readCartReadyState()
+    ]);
+    const protectedTabs = new Set(cartReady.items.map((item) => item.tabId));
+    const reusableTabs = new Map([...storedTabs]
+      .filter(([, tabId]) => !protectedTabs.has(tabId))
+      .map(([retailerId, tabId]) => [retailerId, { tabId, cartBaseline: null }]));
     const device = await storedDevice();
     if (!device?.token) return { leased, confirmed, reason: "device_unavailable" };
     for (let index = 0; index < MAX_ACTION_JOBS_PER_CYCLE; index += 1) {
@@ -4071,6 +4331,7 @@ async function runJobCycle() {
           tabId: outcome.tabId,
           cartBaseline: outcome.cartBaseline || null
         });
+        await rememberRetailerActionTab(lease.retailerId, outcome.tabId);
       }
       if (!outcome?.confirmed) {
         if (outcome?.continueCycle === true) continue;
@@ -4358,6 +4619,32 @@ if (chrome.contextMenus?.onClicked) {
     void handleContextMenuClick(command, presentedPage, permissionPromise, tab);
   });
 }
+chrome.commands?.onCommand?.addListener((command) => {
+  if (command !== "inspect-current-page") return;
+  void (async () => {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
+    const page = PopupState.classifyPageContext(tab?.url);
+    const contextCommand = page.kind === "product"
+      ? "inspect_product"
+      : page.kind === "walmart_draw"
+        ? "inspect_drawings"
+        : "";
+    if (!contextCommand) {
+      await showContextMenuOutcome({ message: "Open a supported product or Walmart Draw page first." }, true);
+      return;
+    }
+    let permissionPromise;
+    try {
+      permissionPromise = contextMenuPermission(contextCommand, page);
+    } catch (error) {
+      permissionPromise = Promise.reject(error);
+    }
+    await handleContextMenuClick(contextCommand, page, permissionPromise, tab);
+  })().catch((error) => showContextMenuOutcome({
+    message: error instanceof Error ? error.message : "Action failed"
+  }, true));
+});
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEALTH_ALARM) {
     void checkHealth();
@@ -4506,6 +4793,7 @@ chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
 });
 
 chrome.tabs.onRemoved?.addListener((tabId) => {
+  void forgetRetailerActionTab(tabId).catch(() => undefined);
   void mutateCartReadyState((current) => ({
     schemaVersion: 1,
     items: current.items.filter((item) => item.tabId !== tabId)

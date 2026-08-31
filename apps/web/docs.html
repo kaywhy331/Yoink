@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yoink documentation</title>
+  <link rel="stylesheet" href="/docs.css">
+</head>
+<body>
+  <header><a href="/" aria-label="Back to Yoink"><span>Y</span><strong>Yoink</strong></a><nav><a href="/">Dashboard</a><a href="/admin#diagnostics">Diagnostics</a></nav></header>
+  <main>
+    <section class="hero"><p class="eyebrow">Yoink 1.14</p><h1>Action and status guide</h1><p>How signals become bounded Chrome actions, where user review is required, and what each visible status means.</p></section>
+    <nav class="contents" aria-label="Documentation sections"><a href="#flow">Action flow</a><a href="#statuses">Statuses</a><a href="#safety">Safety boundary</a><a href="#troubleshooting">Troubleshooting</a></nav>
+    <section id="flow"><h2>Action flow</h2><ol><li>A trusted signal identifies an exact retailer item.</li><li>Yoink applies the saved price, seller, fulfillment, quantity, spend, and lane limits.</li><li>The paired Chrome companion rechecks the live page and may click one exact Add control.</li><li>Chrome proves an exact +1 cart delta before reporting <strong>Ready to check out</strong>.</li><li>You complete checkout manually, then close the action as <strong>Got it</strong> or <strong>Missed it</strong>.</li></ol></section>
+    <section id="statuses"><h2>Status glossary</h2><dl><dt>Queued</dt><dd>The exact bounded action is waiting for the paired Chrome companion.</dd><dt>Checking</dt><dd>Chrome is opening the store and revalidating the exact offer.</dd><dt>Ready to check out</dt><dd>The exact item was verified in the retailer cart. Checkout remains manual.</dd><dt>Needs you</dt><dd>Chrome cannot safely infer the result. Review the retailer cart or session.</dd><dt>Got it</dt><dd>You confirmed that manual checkout completed and supplied the amount charged for this item.</dd><dt>Missed it</dt><dd>You confirmed that checkout did not complete; no spend is recorded.</dd></dl><p>The dashboard’s “What these statuses mean” section is generated from the same status model used by the API.</p></section>
+    <section id="safety"><h2>Safety boundary</h2><ul><li>First-party seller only for guarded cart actions.</li><li>Exactly one item per guarded Add attempt.</li><li>Shipping is the default; Pickup runs only when explicitly selected and currently available.</li><li>Fresh DOM evidence is required at action time.</li><li>Checkout, payment, order submission, raffles, and challenge handling remain manual.</li><li>No CAPTCHA evasion, proxying, or request-mode cart mutation.</li></ul></section>
+    <section id="troubleshooting"><h2>Troubleshooting</h2><dl><dt>No cart-ready cue</dt><dd>Open Recent actions, confirm the companion is paired, and review any Needs-you action. The extension badge counts unreviewed cart handoffs.</dd><dt>Lane not qualified</dt><dd>Use the qualification candidate shown on the purchase plan, run Inspect product, then review the lane evidence in Connections.</dd><dt>Product did not qualify</dt><dd>Open View details or Diagnostics. Yoink preserves the decision reason without copying retailer page content or secrets.</dd></dl><p><a href="/admin#diagnostics">Open diagnostics →</a></p></section>
+  </main>
+  <footer>Yoink keeps checkout manual. <a href="/llms.txt">llms.txt</a></footer>
+</body>
+</html>

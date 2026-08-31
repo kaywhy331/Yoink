@@ -155,6 +155,17 @@ test("Amazon observations share the sanitized ledger and remain independently qu
     assert.equal(repository.bestBuyQualificationReadiness(NOW + 3_000).liveEvidenceReady, false);
     assert.equal(repository.amazonQualificationReadiness(NOW + 3_000).liveEvidenceReady, false);
     assert.equal(repository.targetQualificationReadiness(NOW + 3_000).observationCount, 0);
+    assert.deepEqual(repository.qualificationCandidates(NOW + 3_000).map((candidate) => ({
+      retailerId: candidate.retailerId,
+      retailerSku: candidate.retailerSku,
+      fulfillment: candidate.fulfillment,
+      rehearsalPassed: candidate.rehearsalPassed
+    })), [{
+      retailerId: "amazon",
+      retailerSku: "B0GYTRYV7P",
+      fulfillment: "shipping",
+      rehearsalPassed: false
+    }]);
     assert.throws(() => repository.record(device.id, {
       ...stored,
       adapterVersion: TARGET_OBSERVER_VERSION,
@@ -272,6 +283,10 @@ test("Target qualification readiness requires diverse live evidence and never se
     assert.equal(Number(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM retailer_adapter_qualifications WHERE retailer_id = 'target'"
     )?.count ?? 0), 0);
+    const candidate = repository.qualificationCandidates(NOW + 7_000).find((item) => item.retailerId === "target");
+    assert.equal(candidate?.retailerSku, "111111111");
+    assert.equal(candidate?.canonicalUrl, "https://www.target.com/p/-/A-111111111");
+    assert.equal(candidate?.fulfillment, "shipping");
   } finally {
     db.close();
   }

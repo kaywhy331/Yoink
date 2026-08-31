@@ -69,6 +69,8 @@ const files = [
   "popup-state.js",
   "popup.js",
   "popup.css",
+  "offscreen.html",
+  "offscreen.js",
   "target-shadow.js",
   "target-action.js",
   "walmart-action.js",

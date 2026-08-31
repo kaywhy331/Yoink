@@ -131,7 +131,7 @@ function deviceEvidence(value: Record<string, unknown>): Record<string, unknown>
   if (value.latency && typeof value.latency === "object" && !Array.isArray(value.latency)) {
     const input = value.latency as Record<string, unknown>;
     const latency: Record<string, number> = {};
-    for (const key of ["leaseToCartReadyMs", "clickToCartReadyMs"] as const) {
+    for (const key of ["leaseToCartReadyMs", "clickToCartReadyMs", "clickToSettleMs"] as const) {
       const milliseconds = Number(input[key]);
       if (Number.isSafeInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 60 * 60_000) {
         latency[key] = milliseconds;

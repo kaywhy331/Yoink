@@ -496,6 +496,9 @@ interface HarnessOptions {
   walmartJob?: boolean;
   amazonJob?: boolean;
   bestBuyJob?: boolean;
+  postClickSettleDelayMs?: number;
+  persistedActionTab?: boolean;
+  cartReadySound?: boolean;
   cartBaselineHydrationRetry?: boolean;
   cartBaselineFailure?: boolean;
   notification?: boolean;
@@ -563,6 +566,10 @@ function harness(options: HarnessOptions = {}) {
       } : {})
     }
   };
+  if (options.persistedActionTab) {
+    storage.yoinkRetailerActionTabsV1 = { schemaVersion: 1, tabs: { target: 17 } };
+  }
+  if (options.cartReadySound) storage.yoinkCartReadySoundEnabledV1 = true;
   if (options.observerRecipeTrustState) {
     storage.yoinkObserverRecipeTrustStateV1 = options.observerRecipeTrustState;
   }
@@ -664,6 +671,8 @@ function harness(options: HarnessOptions = {}) {
   const badgeTexts: string[] = [];
   const badgeColors: string[] = [];
   const tabUpdates: Array<{ id: number; url?: string; active?: boolean }> = [];
+  const runtimeMessages: Array<Record<string, unknown>> = [];
+  let offscreenCreates = 0;
   const tabs = new Map<number, { id: number; url: string; status: string }>([
     [17, { id: 17, url: options.activeUrl ?? PRODUCT_URL, status: "complete" }]
   ]);
@@ -676,6 +685,8 @@ function harness(options: HarnessOptions = {}) {
   let updateAvailableListener: ((details: { version: string }) => void) | undefined;
   let managedUpdateChecks = 0;
   let contextMenuClickedListener: ((info: Record<string, unknown>, tab?: Record<string, unknown>) => void) | undefined;
+  let commandListener: ((command: string) => void) | undefined;
+  let tabRemovedListener: ((tabId: number) => void) | undefined;
   const serviceWorkerListeners = new Map<string, (event: unknown) => void>();
   const expectedJobCount = liveJob
     ? Math.max(1, Math.min(8, Math.trunc(options.queuedJobCount ?? 1)))
@@ -701,6 +712,8 @@ function harness(options: HarnessOptions = {}) {
       lastError: undefined,
       getManifest: () => ({ version: "0.3.0" }),
       getURL: (path: string) => `chrome-extension://${"a".repeat(32)}/${path}`,
+      getContexts: async () => offscreenCreates ? [{ contextType: "OFFSCREEN_DOCUMENT" }] : [],
+      sendMessage: async (message: Record<string, unknown>) => { runtimeMessages.push(message); return {}; },
       reload: () => undefined,
       requestUpdateCheck: async () => {
         managedUpdateChecks += 1;
@@ -737,6 +750,9 @@ function harness(options: HarnessOptions = {}) {
         setAccessLevel: async () => undefined
       }
     },
+    offscreen: {
+      createDocument: async () => { offscreenCreates += 1; }
+    },
     permissions: {
       contains: async () => options.permission !== false,
       request: async (request: { origins: string[] }) => {
@@ -760,7 +776,8 @@ function harness(options: HarnessOptions = {}) {
         tabs.set(id, tab);
         return tab;
       },
-      onUpdated: { addListener: () => undefined, removeListener: () => undefined }
+      onUpdated: { addListener: () => undefined, removeListener: () => undefined },
+      onRemoved: { addListener: (listener: typeof tabRemovedListener) => { tabRemovedListener = listener; } }
     },
     scripting: {
       executeScript: async (injection: Record<string, unknown>) => {
@@ -773,6 +790,17 @@ function harness(options: HarnessOptions = {}) {
           return [];
         }
         const args = injection.args as unknown[] | undefined;
+        if (args?.[0] === "yoink_post_click_settle_arm") {
+          return [{ frameId: 0, result: { armed: true, token: args[2] } }];
+        }
+        if (args?.[0] === "yoink_post_click_settle_wait") {
+          const delay = Math.max(0, Math.min(1_500, Number(options.postClickSettleDelayMs || 0)));
+          if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+          return [{ frameId: 0, result: { settled: true, reason: "dom_mutation" } }];
+        }
+        if (args?.[0] === "yoink_post_click_settle_clear") {
+          return [{ frameId: 0, result: true }];
+        }
         if (args?.[0] === "rehearseTargetAdd") {
           return [{ frameId: 0, result: { ok: true, reason: "verified", wouldClick: true, proof: { retailerSku: "1011483414" } } }];
         }
@@ -1135,6 +1163,9 @@ function harness(options: HarnessOptions = {}) {
       onClicked: {
         addListener: (listener: typeof contextMenuClickedListener) => { contextMenuClickedListener = listener; }
       }
+    },
+    commands: {
+      onCommand: { addListener: (listener: typeof commandListener) => { commandListener = listener; } }
     },
     alarms: {
       create: async () => undefined,
@@ -1595,6 +1626,11 @@ function harness(options: HarnessOptions = {}) {
       { menuItemId, pageUrl: presentedUrl ?? tabs.get(17)?.url },
       { ...(tabs.get(17) || {}), url: presentedUrl ?? tabs.get(17)?.url }
     ),
+    fireCommand: (command: string) => commandListener?.(command),
+    closeTab: (tabId: number) => {
+      tabs.delete(tabId);
+      tabRemovedListener?.(tabId);
+    },
     setActiveUrl: (url: string) => {
       const current = tabs.get(17);
       if (!current) throw new Error("Missing fixture tab.");
@@ -1606,6 +1642,8 @@ function harness(options: HarnessOptions = {}) {
     badgeTexts,
     badgeColors,
     tabUpdates,
+    runtimeMessages,
+    offscreenCreates: () => offscreenCreates,
     adapterDiagnosticQueueDrained,
     diagnosticReasonCodes,
     jobLeaseRequests: () => jobLeaseRequests,
@@ -2534,7 +2572,7 @@ test("the service worker records one sanitized Target add rehearsal without clic
 });
 
 test("the service worker runs one leased Target add through baseline, click receipt, and exact cart delta proof", async () => {
-  const runtime = harness({ liveJob: true, cartBaselineHydrationRetry: true });
+  const runtime = harness({ liveJob: true, cartBaselineHydrationRetry: true, cartReadySound: true });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
@@ -2556,6 +2594,8 @@ test("the service worker runs one leased Target add through baseline, click rece
   assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 2);
   assert.equal(operations.filter((operation) => operation === "prepareTargetAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitTargetAdd").length, 1);
+  assert.equal(operations.filter((operation) => operation === "yoink_post_click_settle_arm").length, 1);
+  assert.equal(operations.filter((operation) => operation === "yoink_post_click_settle_wait").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyTargetAddedCart").length, 1);
   const targetVerifyArgs = runtime.injections.find(
     (entry) => (entry.args as unknown[] | undefined)?.[0] === "verifyTargetAddedCart"
@@ -2580,8 +2620,15 @@ test("the service worker runs one leased Target add through baseline, click rece
   assert.equal(readyState.items.length, 1);
   assert.equal(readyState.items[0]?.jobId, "job_target_fixture");
   assert.equal(Number.isSafeInteger(readyState.items[0]?.latency.leaseToCartReadyMs), true);
+  assert.equal(Number.isSafeInteger(readyState.items[0]?.latency.clickToSettleMs), true);
+  assert.equal(Number(readyState.items[0]?.latency.clickToSettleMs) < 1_000, true);
   assert.equal(Number.isSafeInteger(readyState.items[0]?.latency.clickToCartReadyMs), true);
   assert.equal(runtime.badgeTexts.at(-1), "1");
+  await waitFor(
+    () => runtime.runtimeMessages.some((message) => message.type === "yoink:play-cart-ready-sound"),
+    "The enabled cart-ready sound was not requested."
+  );
+  assert.equal(runtime.offscreenCreates(), 1);
   const confirmedEvent = runtime.fetchCalls.find((entry) => {
     if (!entry.url.endsWith("/devices/self/jobs/job_target_fixture/events")) return false;
     return JSON.parse(String(entry.options.body)).state === "confirmed";
@@ -2590,6 +2637,7 @@ test("the service worker runs one leased Target add through baseline, click rece
     evidence: { latency: Record<string, number> };
   };
   assert.equal(Number.isSafeInteger(confirmedBody.evidence.latency.leaseToCartReadyMs), true);
+  assert.equal(Number.isSafeInteger(confirmedBody.evidence.latency.clickToSettleMs), true);
 
   runtime.clickNotification("yoink-cart-ready:job_target_fixture");
   await waitFor(
@@ -2628,6 +2676,22 @@ test("one alarm drains confirmed Target jobs immediately and reuses one Yoink-cr
   assert.equal(runtime.tabUrls().length, 2);
   assert.equal(runtime.tabUrls().filter((url) => url === "https://www.target.com/cart").length, 1);
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
+});
+
+test("a later job cycle reuses the persisted retailer action tab and forgets it when closed", async () => {
+  const runtime = harness({ liveJob: true, persistedActionTab: true });
+  runtime.fireJobAlarm();
+  await Promise.race([
+    runtime.jobCompleted,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Fixture persisted-tab job did not complete.")), 3_000))
+  ]);
+  assert.equal(runtime.tabUrls().length, 1);
+  assert.equal((runtime.storage.yoinkRetailerActionTabsV1 as { tabs: { target?: number } }).tabs.target, 17);
+  runtime.closeTab(17);
+  await waitFor(
+    () => !(runtime.storage.yoinkRetailerActionTabsV1 as { tabs?: { target?: number } })?.tabs?.target,
+    "The closed reusable action tab was not forgotten."
+  );
 });
 
 test("Walmart, Amazon, and Best Buy drains each reuse only their own Yoink-created store tab", async () => {
@@ -3055,6 +3119,21 @@ test("a context-menu inspection revalidates state and page, requests exact acces
   assert.equal(JSON.stringify(result).includes(TOKEN), false);
   assert.ok(runtime.injections.length > 0);
   assert.ok(runtime.actionTitles.some((title) => title.startsWith("Yoink ·")));
+});
+
+test("the inspect hotkey uses the same current-page classifier and revalidation path", async () => {
+  const runtime = harness({
+    activeUrl: PRODUCT_URL,
+    healthVersion: "0.3.0",
+    trackalackerPush: true,
+    permission: true,
+    permissionRequest: true
+  });
+  runtime.fireCommand("inspect-current-page");
+  await waitFor(() => Boolean(runtime.storage.yoinkPopupResultV1), "The hotkey result was not persisted.");
+  assert.equal(runtime.permissionRequests.length, 1);
+  assert.equal(Array.from(runtime.permissionRequests[0]?.origins || []).join(","), "https://www.target.com/*");
+  assert.equal((runtime.storage.yoinkPopupResultV1 as Record<string, unknown>).contextKey, "product:target:1011483414");
 });
 
 test("a stale context-menu label never authorizes inspection after the active page changes", async () => {

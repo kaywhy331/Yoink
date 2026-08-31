@@ -5,6 +5,7 @@ import { CatalogRepository } from "../packages/database/src/catalog-repository.j
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
+import { SpendLedgerRepository } from "../packages/database/src/spend-ledger-repository.js";
 import { runWithRequestScope } from "../packages/database/src/request-scope.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -247,6 +248,175 @@ test("a reviewed cart plan creates a bounded job without any signal strategy", (
       "SELECT decision_source FROM mission_decisions WHERE mission_id = ?",
       configured.mission.id
     )?.decision_source, "purchase_intent");
+  } finally {
+    db.close();
+  }
+});
+
+test("a typed Got it close-out commits user-reported spend and satisfies only the intended quantity", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const listingId = db.get<{ id: string }>(
+      "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+    )?.id;
+    assert.ok(listingId);
+    engine.control.replaceStrategies([], NOW);
+    const configured = engine.control.createConfiguredMission({
+      contractVersion: 1,
+      listingId,
+      targetQuantity: 2,
+      maxUnitPriceCents: 7000,
+      maxAllInCents: 18_680,
+      actionCeiling: "add_to_cart",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 900,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, NOW);
+    qualifyTargetAdd(db);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    const created = engine.process(trackalackerSignal({ externalEventId: "user-reported-order" }), NOW);
+    const spend = new SpendLedgerRepository(db);
+    assert.equal(spend.reservationForJob(created.actionJobId)?.status, "active");
+    db.run("UPDATE action_jobs SET state = 'confirmed' WHERE id = ?", created.actionJobId);
+    spend.releaseForJob(created.actionJobId, "add_to_cart_confirmed_without_order", NOW + 1_000);
+
+    const signals = new SignalRepository(db);
+    const recorded = signals.reportCartOutcome(
+      created.actionJobId,
+      "got_it",
+      "I_REVIEWED_CHECKOUT_RESULT",
+      7_425,
+      "Manual checkout complete",
+      NOW + 2_000
+    );
+    assert.equal(recorded.disposition, "recorded");
+    assert.equal(recorded.outcome, "got_it");
+    assert.equal(recorded.reservationStatus, "committed");
+    assert.deepEqual({ ...db.get<{ fulfilled: number; status: string }>(
+      "SELECT fulfilled_quantity AS fulfilled, status FROM missions WHERE id = ?",
+      configured.mission.id
+    ) }, { fulfilled: 1, status: "active" });
+    assert.deepEqual({ ...db.get<{ status: string; amount: number }>(
+      `SELECT status, committed_amount_cents AS amount
+       FROM spend_reservations WHERE action_job_id = ?`,
+      created.actionJobId
+    ) }, { status: "committed", amount: 7_425 });
+    assert.equal(db.get<{ reason: string }>(
+      `SELECT reason_code AS reason FROM spend_ledger_entries
+       WHERE action_job_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+      created.actionJobId
+    )?.reason, "user_reported_order_committed");
+    assert.equal(db.get<{ reason: string }>(
+      `SELECT reason_code AS reason FROM action_events
+       WHERE job_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+      created.actionJobId
+    )?.reason, "user_reported_order");
+    const listed = signals.listJobs(20).find((job) => job.id === created.actionJobId);
+    assert.equal(listed?.statusLabel, "Got it");
+    assert.equal(listed?.stage, "closed");
+    assert.equal(listed?.userReportOutcome, "got_it");
+    assert.equal(listed?.userReportedTotalCents, 7_425);
+    assert.equal(listed?.decisionReasonCode, "user_reported_order");
+    assert.equal(typeof (listed?.latency as Record<string, unknown>)?.observedToReceivedMs, "number");
+    const insights = signals.actionInsights() as {
+      stages: Record<string, number>;
+      latency: { hops: Record<string, { samples: number; p50Ms: number | null; p95Ms: number | null }> };
+    };
+    assert.equal(insights.stages.closed, 1);
+    assert.equal(insights.latency.hops.observedToReceivedMs?.samples, 1);
+    assert.equal(Number.isSafeInteger(insights.latency.hops.observedToReceivedMs?.p50Ms), true);
+
+    const replay = signals.reportCartOutcome(
+      created.actionJobId,
+      "got_it",
+      "I_REVIEWED_CHECKOUT_RESULT",
+      7_425,
+      "",
+      NOW + 3_000
+    );
+    assert.equal(replay.disposition, "unchanged");
+    assert.equal(db.get<{ fulfilled: number }>(
+      "SELECT fulfilled_quantity AS fulfilled FROM missions WHERE id = ?",
+      configured.mission.id
+    )?.fulfilled, 1);
+    assert.throws(() => signals.reportCartOutcome(
+      created.actionJobId,
+      "got_it",
+      "I_REVIEWED_CHECKOUT_RESULT",
+      7_500,
+      "",
+      NOW + 4_000
+    ), /different checkout result/);
+  } finally {
+    db.close();
+  }
+});
+
+test("Missed it closes a Needs you cart action without spend or mission fulfillment", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const listingId = db.get<{ id: string }>(
+      "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+    )?.id;
+    assert.ok(listingId);
+    engine.control.replaceStrategies([], NOW);
+    const configured = engine.control.createConfiguredMission({
+      contractVersion: 1,
+      listingId,
+      targetQuantity: 1,
+      maxUnitPriceCents: 7000,
+      maxAllInCents: 12_000,
+      actionCeiling: "add_to_cart",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 900,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, NOW);
+    qualifyTargetAdd(db);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    const created = engine.process(trackalackerSignal({ externalEventId: "user-reported-miss" }), NOW);
+    db.run("UPDATE action_jobs SET state = 'manual_review' WHERE id = ?", created.actionJobId);
+    db.run("UPDATE signal_incidents SET status = 'locked' WHERE id = ?", created.incidentId);
+
+    const signals = new SignalRepository(db);
+    const recorded = signals.reportCartOutcome(
+      created.actionJobId,
+      "missed_it",
+      "I_REVIEWED_CHECKOUT_RESULT",
+      null,
+      "Cart was empty",
+      NOW + 2_000
+    );
+    assert.equal(recorded.state, "cancelled");
+    assert.equal(recorded.outcome, "missed_it");
+    assert.equal(db.get<{ status: string }>(
+      "SELECT status FROM spend_reservations WHERE action_job_id = ?",
+      created.actionJobId
+    )?.status, "released");
+    assert.deepEqual({ ...db.get<{ fulfilled: number; status: string }>(
+      "SELECT fulfilled_quantity AS fulfilled, status FROM missions WHERE id = ?",
+      configured.mission.id
+    ) }, { fulfilled: 0, status: "active" });
+    assert.equal(db.get<{ reason: string }>(
+      `SELECT reason_code AS reason FROM action_events
+       WHERE job_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+      created.actionJobId
+    )?.reason, "user_reported_missed_it");
+    assert.equal(db.get<{ amount: number }>(
+      "SELECT COALESCE(SUM(spent_delta_cents), 0) AS amount FROM spend_ledger_entries WHERE action_job_id = ?",
+      created.actionJobId
+    )?.amount, 0);
+    assert.equal(signals.reportCartOutcome(
+      created.actionJobId,
+      "missed_it",
+      "I_REVIEWED_CHECKOUT_RESULT",
+      null,
+      "",
+      NOW + 3_000
+    ).disposition, "unchanged");
   } finally {
     db.close();
   }

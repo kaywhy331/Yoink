@@ -32,6 +32,7 @@ if (!PopupState?.classifyPageContext || !PopupState?.derivePopupView || !PopupSt
 const PRODUCTION_PROFILE = POPUP_RUNTIME_CONFIG.profile === "production";
 const INSTALLED_VERSION = chrome.runtime.getManifest().version;
 const UPDATE_HANDOFF_KEY = PopupState.POPUP_UPDATE_HANDOFF_STORAGE_KEY;
+const CART_READY_SOUND_KEY = "yoinkCartReadySoundEnabledV1";
 const TRACKALACKER_ORIGINS = ["https://trackalacker.com/*", "https://www.trackalacker.com/*"];
 const TRACKALACKER_SYNC_ORIGINS = [...new Set([
   ...TRACKALACKER_ORIGINS,
@@ -47,6 +48,7 @@ const ui = {
   result: null,
   updateHandoff: null,
   cartReady: null,
+  cartReadySoundEnabled: false,
   confirmation: null,
   notice: "",
   view: null,
@@ -185,6 +187,8 @@ function render() {
   $("#shareEvidence").hidden = !view.menu.shareEvidence;
   $("#manageStoreAccess").hidden = !view.menu.manageStoreAccess;
   $("#checkUpdate").hidden = !view.menu.checkUpdates;
+  $("#cartReadySound").setAttribute("aria-checked", String(ui.cartReadySoundEnabled));
+  $("#cartReadySound").querySelector(".menu-check").textContent = ui.cartReadySoundEnabled ? "On" : "Off";
   $("#syncProducts").disabled = activity?.id === "sync";
   $("#syncProducts").textContent = activity?.id === "sync" ? activity.label : "Sync products";
 }
@@ -242,7 +246,7 @@ function togglePanel(panelSelector, opener) {
   ui.openPanel = panelSelector;
   ui.panelOpener = opener;
   if (panelSelector === "#overflowPanel") {
-    panel.querySelector('[role="menuitem"]:not([hidden]):not(:disabled)')?.focus();
+    panel.querySelector('[role^="menuitem"]:not([hidden]):not(:disabled)')?.focus();
   }
 }
 
@@ -461,7 +465,7 @@ function cancelContext() {
 }
 
 function menuItems() {
-  return [...$("#overflowPanel").querySelectorAll('[role="menuitem"]')]
+  return [...$("#overflowPanel").querySelectorAll('[role^="menuitem"]')]
     .filter((element) => !element.hidden && !element.disabled);
 }
 
@@ -492,6 +496,12 @@ function bindEvents() {
   $("#manageStoreAccess").addEventListener("click", () => { void openYoink("connections"); });
   $("#syncProducts").addEventListener("click", () => { void syncProducts(); });
   $("#checkUpdate").addEventListener("click", () => { closePanels(false); void updateCompanion(); });
+  $("#cartReadySound").addEventListener("click", async () => {
+    ui.cartReadySoundEnabled = !ui.cartReadySoundEnabled;
+    await chrome.storage.local.set({ [CART_READY_SOUND_KEY]: ui.cartReadySoundEnabled });
+    render();
+    showToast(ui.cartReadySoundEnabled ? "Cart-ready sound on" : "Cart-ready sound off");
+  });
   $("#shareEvidence").addEventListener("click", () => {
     closePanels(false);
     ui.confirmation = "share_evidence";
@@ -539,6 +549,10 @@ function bindEvents() {
       ui.health = changes.readiness.newValue;
       render();
     }
+    if (areaName === "local" && changes[CART_READY_SOUND_KEY]) {
+      ui.cartReadySoundEnabled = changes[CART_READY_SOUND_KEY].newValue === true;
+      render();
+    }
     if (areaName === "session" && changes[PopupState.POPUP_RESULT_STORAGE_KEY]?.newValue) {
       ui.result = changes[PopupState.POPUP_RESULT_STORAGE_KEY].newValue;
       render();
@@ -556,15 +570,16 @@ function bindEvents() {
 
 async function initializePopup() {
   bindEvents();
-  const [tabs, storedHealth, storedResult, storedUpdateHandoff, storedCartReady] = await Promise.all([
+  const [tabs, storedLocal, storedResult, storedUpdateHandoff, storedCartReady] = await Promise.all([
     chrome.tabs.query({ active: true, currentWindow: true }),
-    chrome.storage.local.get("readiness"),
+    chrome.storage.local.get(["readiness", CART_READY_SOUND_KEY]),
     chrome.storage.session.get(PopupState.POPUP_RESULT_STORAGE_KEY),
     chrome.storage.session.get(UPDATE_HANDOFF_KEY),
     chrome.storage.session.get(PopupState.CART_READY_STORAGE_KEY)
   ]);
   ui.page = PopupState.classifyPageContext(tabs[0]?.url);
-  ui.health = storedHealth.readiness || null;
+  ui.health = storedLocal.readiness || null;
+  ui.cartReadySoundEnabled = storedLocal[CART_READY_SOUND_KEY] === true;
   ui.result = storedResult[PopupState.POPUP_RESULT_STORAGE_KEY] || null;
   ui.updateHandoff = storedUpdateHandoff[UPDATE_HANDOFF_KEY] || null;
   ui.cartReady = PopupState.cartReadyState(storedCartReady[PopupState.CART_READY_STORAGE_KEY]);

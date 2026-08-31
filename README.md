@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.13.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.14.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,6 +15,20 @@ new lane. Every lane is restricted to first-party offers, quantity one, and the
 exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.14.0 makes the cart handoff faster to see, easier to close, and
+measurable end to end without widening retailer authority. Chrome now settles
+after the Add click from a bounded DOM or navigation event instead of always
+sleeping 1.5 seconds, persists one reusable action tab per retailer across
+worker cycles, and offers an opt-in cart-ready sound plus an exact-page inspect
+hotkey. The dashboard polls only its action feed at an adaptive cadence,
+separates Queued, Checking, Ready to check out, Needs you, and Closed stages,
+and shows per-hop p50/p95 latency. Explicit Got it or Missed it review closes
+the handoff; Got it accepts only a positive amount for that item within the
+original reservation, records user-reported spend, and advances exactly one mission
+quantity. A generated status glossary, current-release announcement, user
+documentation, llms.txt, and Shipping-first qualification candidates remove
+status and arming dead ends. Checkout and order submission remain manual.
 
 Version 1.13.0 closes the confirmed-cart handoff without widening retailer
 authority. Exact cart confirmation now creates a local, persistent **Cart

@@ -18,7 +18,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   };
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.version, packageJson.version);
-  assert.deepEqual(manifest.permissions, ["activeTab", "alarms", "contextMenus", "notifications", "storage", "scripting"]);
+  assert.deepEqual(manifest.permissions, ["activeTab", "alarms", "contextMenus", "notifications", "offscreen", "storage", "scripting"]);
   assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1/*"]);
   assert.deepEqual(manifest.optional_host_permissions, [
     "https://www.target.com/*",
@@ -43,7 +43,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.equal(manifest.host_permissions.includes("https://www.target.com/*"), false);
   assert.equal(manifest.host_permissions.includes("https://*.walmart.com/*"), false);
 
-  for (const file of ["background.js", "popup-state.js", "popup.js", "runtime-config.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js", "observer-recipe-oracle.js"]) {
+  for (const file of ["background.js", "popup-state.js", "popup.js", "runtime-config.js", "trackalacker-push.js", "trackalacker-sync.js", "observer-recipe-root.js", "observer-recipe-oracle.js", "offscreen.js"]) {
     const result = spawnSync(process.execPath, ["--check", join(extensionRoot, file)], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
   }

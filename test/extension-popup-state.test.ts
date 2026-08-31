@@ -135,7 +135,12 @@ test("a sanitized cart-ready handoff becomes the pending action without weakenin
       retailerSku: "13331333",
       tabId: 17,
       recordedAt: "2026-08-29T18:00:30.000Z",
-      latency: { leaseToCartReadyMs: 8_240, clickToCartReadyMs: 1_630, secret: "discarded" }
+      latency: {
+        leaseToCartReadyMs: 8_240,
+        clickToSettleMs: 410,
+        clickToCartReadyMs: 1_630,
+        secret: "discarded"
+      }
     }, {
       schemaVersion: 1,
       jobId: "expired_job",
@@ -150,6 +155,7 @@ test("a sanitized cart-ready handoff becomes the pending action without weakenin
   assert.equal(cartReady.items[0]?.identityLabel, "TCIN");
   assert.deepEqual(cartReady.items[0]?.latency, {
     leaseToCartReadyMs: 8_240,
+    clickToSettleMs: 410,
     clickToCartReadyMs: 1_630
   });
 

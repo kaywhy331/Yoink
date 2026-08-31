@@ -41,6 +41,11 @@
 
     <section class="metrics" id="metrics" aria-label="Your Yoink totals"></section>
 
+    <section class="release-announcement" id="releaseAnnouncement" aria-labelledby="releaseAnnouncementTitle" hidden>
+      <div><p class="eyebrow" id="releaseAnnouncementVersion"></p><h2 id="releaseAnnouncementTitle"></h2><p id="releaseAnnouncementSummary"></p></div>
+      <div class="release-announcement-actions"><a class="button quiet" id="releaseAnnouncementLink" href="/docs">What changed</a><button class="button quiet" id="dismissReleaseAnnouncement" type="button" aria-label="Dismiss this announcement">Dismiss</button></div>
+    </section>
+
     <nav class="tabs" aria-label="Workspace">
       <button class="tab active" data-tab="products" type="button">Products</button>
       <button class="tab" data-tab="drawings" type="button">Walmart drawings</button>
@@ -104,7 +109,17 @@
 
     <section class="workspace" data-panel="activity">
       <div class="section-heading"><div><p class="eyebrow">What Yoink did</p><h2>Recent actions</h2><p>Each action shows the product, store, cap, and current outcome.</p></div></div>
+      <section class="action-handoff" id="actionHandoff" aria-live="polite" hidden>
+        <div><p class="eyebrow" id="actionHandoffEyebrow">Ready to check out</p><h3 id="actionHandoffTitle"></h3><p id="actionHandoffCopy"></p></div>
+        <button class="button secondary" id="viewCheckoutActions" type="button">Review actions</button>
+      </section>
+      <div class="action-stage-summary" id="actionStageSummary" aria-label="Action stages"></div>
+      <p class="action-latency-summary" id="actionLatencySummary"></p>
       <div class="stack" id="actionList"></div>
+      <details class="status-glossary" id="actionStatusGlossary">
+        <summary>What these statuses mean</summary>
+        <div class="mini-list" id="actionStatusGlossaryList"></div>
+      </details>
     </section>
 
     <section class="workspace" data-panel="preferences">

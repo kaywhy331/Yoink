@@ -436,6 +436,71 @@ export class SpendLedgerRepository {
     });
   }
 
+  commitUserReportedAddForJob(actionJobId: string, actualAmountCents: number, now = Date.now()): SpendReservation {
+    if (!Number.isSafeInteger(actualAmountCents) || actualAmountCents <= 0) {
+      throw new PurchaseSafetyError("user_reported_total_required", 409, "Enter the positive amount charged for this item before recording this purchase.");
+    }
+    return this.db.transaction(() => {
+      const reservation = this.reservationForJob(actionJobId);
+      if (!reservation) throw new PurchaseSafetyError("reservation_not_found", 404, "The cart action has no spend reservation.");
+      if (reservation.action !== "add_to_cart") {
+        throw new PurchaseSafetyError("user_reported_order_action_invalid", 409, "Only a confirmed add-to-cart action can accept this checkout report.");
+      }
+      if (reservation.status === "committed") {
+        if (reservation.committedAmountCents !== actualAmountCents) {
+          throw new PurchaseSafetyError("user_reported_order_conflict", 409, "This checkout result was already recorded with a different item amount.");
+        }
+        return reservation;
+      }
+      if (reservation.status !== "released"
+        || reservation.releaseReason !== "add_to_cart_confirmed_without_order"
+        || actualAmountCents > reservation.reservedAmountCents) {
+        throw new PurchaseSafetyError(
+          "user_reported_order_outside_reservation",
+          409,
+          "The reported item amount must remain within the exact cart action's reviewed all-in reservation."
+        );
+      }
+      const timestamp = nowIso(now);
+      this.db.run(
+        `UPDATE spend_reservations
+         SET status = 'committed', committed_amount_cents = ?, release_reason = '', updated_at = ?
+         WHERE id = ? AND status = 'released' AND release_reason = 'add_to_cart_confirmed_without_order'`,
+        actualAmountCents,
+        timestamp,
+        reservation.id
+      );
+      this.recordLedger(
+        reservation.id,
+        reservation.actionJobId,
+        "committed",
+        0,
+        actualAmountCents,
+        0,
+        reservation.currency,
+        "user_reported_order_committed",
+        reservation.actionJobId,
+        now
+      );
+      this.audit.record({
+        correlationId: reservation.actionJobId,
+        aggregateType: "spend_reservation",
+        eventType: "user_reported_spend_committed",
+        reasonCode: "user_reported_order_committed",
+        message: "The user reported completing manual checkout within the reviewed cart reservation.",
+        data: {
+          reservationId: reservation.id,
+          actualAmountCents,
+          quantity: reservation.quantity,
+          evidenceSource: "user_reported"
+        }
+      }, now);
+      const saved = this.reservationForJob(actionJobId);
+      if (!saved) throw new Error("The user-reported spend receipt could not be loaded.");
+      return saved;
+    });
+  }
+
   releaseExpired(now = Date.now()): number {
     const expired = this.db.all<{ actionJobId: string }>(
       `SELECT action_job_id AS actionJobId FROM spend_reservations

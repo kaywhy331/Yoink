@@ -433,6 +433,19 @@ export interface RetailerEvidenceReadiness {
   mode: "guarded_add" | "read_only";
 }
 
+export interface QualificationCandidate {
+  retailerId: "target" | "walmart" | "amazon" | "bestbuy";
+  retailerSku: string;
+  canonicalUrl: string;
+  unitPriceCents: number;
+  currency: "USD";
+  sellerName: string;
+  fulfillment: "shipping";
+  observedAt: string;
+  shadowObservationId: string;
+  rehearsalPassed: boolean;
+}
+
 interface ObservationRow {
   id: string;
   deviceId: string;
@@ -706,6 +719,69 @@ export class ShadowObservationRepository {
       safeLimit
     );
     return rows.map(rowToObservation);
+  }
+
+  qualificationCandidates(now = Date.now()): QualificationCandidate[] {
+    const guardedRetailers = new Set<QualificationCandidate["retailerId"]>([
+      "target", "walmart", "amazon", "bestbuy"
+    ]);
+    const currentObserverVersions: Record<QualificationCandidate["retailerId"], string> = {
+      target: TARGET_OBSERVER_VERSION,
+      walmart: WALMART_OBSERVER_VERSION,
+      amazon: AMAZON_OBSERVER_VERSION,
+      bestbuy: BESTBUY_OBSERVER_VERSION
+    };
+    const currentAddVersions: Record<QualificationCandidate["retailerId"], string> = {
+      target: TARGET_ADD_ADAPTER_VERSION,
+      walmart: WALMART_ADD_ADAPTER_VERSION,
+      amazon: AMAZON_ADD_ADAPTER_VERSION,
+      bestbuy: BESTBUY_ADD_ADAPTER_VERSION
+    };
+    const cutoff = now - QUALIFICATION_EVIDENCE_WINDOW_MS;
+    const passedRows = this.db.all<{ shadowObservationId: string; retailerId: QualificationCandidate["retailerId"]; adapterVersion: string }>(
+      `SELECT shadow_observation_id AS shadowObservationId, retailer_id AS retailerId,
+              adapter_version AS adapterVersion
+       FROM retailer_adapter_trials
+       WHERE user_id = ? AND trial_kind = 'pre_click_rehearsal' AND outcome = 'passed'
+         AND observed_at >= ?`,
+      currentRequestScope().userId,
+      nowIso(cutoff)
+    );
+    const passed = new Set(passedRows
+      .filter((row) => guardedRetailers.has(row.retailerId)
+        && row.adapterVersion === currentAddVersions[row.retailerId])
+      .map((row) => row.shadowObservationId));
+    const selected = new Map<QualificationCandidate["retailerId"], QualificationCandidate>();
+    for (const observation of this.listRecent(250)) {
+      if (!guardedRetailers.has(observation.retailerId as QualificationCandidate["retailerId"])) continue;
+      const retailerId = observation.retailerId as QualificationCandidate["retailerId"];
+      if (selected.has(retailerId)
+        || observation.adapterVersion !== currentObserverVersions[retailerId]
+        || new Date(observation.observedAt).getTime() < cutoff
+        || observation.observationState !== "actionable_candidate"
+        || observation.availability !== "in_stock"
+        || observation.sellerType !== "first_party"
+        || observation.fulfillment !== "shipping"
+        || !observation.addControlActionable
+        || observation.securityChallenge
+        || Boolean(observation.interactiveBlock)
+        || !Number.isSafeInteger(observation.unitPriceCents)
+        || Number(observation.unitPriceCents) <= 0
+        || (retailerId === "amazon" && observation.purchaseRouteReady !== true)) continue;
+      selected.set(retailerId, {
+        retailerId,
+        retailerSku: observation.retailerSku,
+        canonicalUrl: observation.canonicalUrl,
+        unitPriceCents: Number(observation.unitPriceCents),
+        currency: "USD",
+        sellerName: observation.sellerName,
+        fulfillment: "shipping",
+        observedAt: observation.observedAt,
+        shadowObservationId: observation.id,
+        rehearsalPassed: passed.has(observation.id)
+      });
+    }
+    return [...selected.values()].sort((left, right) => left.retailerId.localeCompare(right.retailerId));
   }
 
   retailerEvidenceReadiness(now = Date.now()): RetailerEvidenceReadiness[] {

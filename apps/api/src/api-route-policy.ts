@@ -87,7 +87,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/purchase-profiles" || /^\/api\/v1\/purchase-profiles\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
     return method === "GET" ? "user.read" : "user.intent.manage";
   }
-  if (pathname === "/api/v1/signals" || /^\/api\/v1\/jobs\/[A-Za-z0-9_-]{3,120}\/resolve$/.test(pathname)) return "user.intent.manage";
+  if (pathname === "/api/v1/signals"
+    || /^\/api\/v1\/jobs\/[A-Za-z0-9_-]{3,120}\/(?:resolve|outcome)$/.test(pathname)) return "user.intent.manage";
   return undefined;
 }
 

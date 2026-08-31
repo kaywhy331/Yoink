@@ -196,6 +196,8 @@ import {
   type PurchaseAutomationTargetInput
 } from "../../../packages/domain/src/purchase-automation-readiness.js";
 import { buildUserSetupReadiness } from "../../../packages/domain/src/user-setup.js";
+import { actionStatusGlossaryProjection } from "../../../packages/domain/src/action-status.js";
+import { currentUserReleaseAnnouncement } from "../../../packages/domain/src/release-announcement.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import {
@@ -219,7 +221,12 @@ const STATIC_FILES = new Map([
   ["/admin", "index.html"],
   ["/admin/", "index.html"],
   ["/app.js", "app.js"],
-  ["/styles.css", "styles.css"]
+  ["/styles.css", "styles.css"],
+  ["/docs", "docs.html"],
+  ["/docs/", "docs.html"],
+  ["/docs.html", "docs.html"],
+  ["/docs.css", "docs.css"],
+  ["/llms.txt", "llms.txt"]
 ]);
 const ADMIN_STATIC_PATHS = new Set(["/admin", "/admin/", "/app.js", "/styles.css"]);
 
@@ -399,7 +406,9 @@ function staticResponse(response: ServerResponse, webRoot: string, pathname: str
   response.statusCode = 200;
   response.setHeader("Content-Type", extname(file) === ".css"
     ? "text/css; charset=utf-8"
-    : extname(file) === ".js" ? "text/javascript; charset=utf-8" : "text/html; charset=utf-8");
+    : extname(file) === ".js"
+      ? "text/javascript; charset=utf-8"
+      : extname(file) === ".txt" ? "text/plain; charset=utf-8" : "text/html; charset=utf-8");
   response.end(body);
   return true;
 }
@@ -983,6 +992,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             latestScan: walmartDraws.latestScan(),
             items: walmartDraws.currentItems()
           },
+          qualificationCandidates: shadowObservations.qualificationCandidates(now),
+          announcement: currentUserReleaseAnnouncement(),
           permissions: authorization.permissions()
         });
         return;
@@ -1951,7 +1962,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
         const query = String(requestUrl.searchParams.get("q") ?? "");
         const items = signals.listJobs(limit, offset, query);
-        json(response, 200, { items, total: signals.jobCount(query), offset, limit: items.length });
+        json(response, 200, {
+          items,
+          total: signals.jobCount(query),
+          offset,
+          limit: items.length,
+          insights: signals.actionInsights(),
+          glossary: actionStatusGlossaryProjection()
+        });
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/audit") {
@@ -2568,6 +2586,23 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             reviewResolutionMatch[1] ?? "",
             body.outcome as "confirmed" | "cancelled",
             String(body.confirmation ?? ""),
+            String(body.note ?? "")
+          )
+        });
+        return;
+      }
+      const cartOutcomeMatch = /^\/api\/v1\/jobs\/([A-Za-z0-9_-]{3,120})\/outcome$/.exec(requestUrl.pathname);
+      if (request.method === "POST" && cartOutcomeMatch) {
+        const body = await readJson(request);
+        if (!["got_it", "missed_it"].includes(String(body.outcome))) {
+          throw new Error("Choose Got it or Missed it for this cart action.");
+        }
+        json(response, 200, {
+          outcome: signals.reportCartOutcome(
+            cartOutcomeMatch[1] ?? "",
+            body.outcome as "got_it" | "missed_it",
+            String(body.confirmation ?? ""),
+            body.outcome === "got_it" ? Number(body.actualTotalCents) : null,
             String(body.note ?? "")
           )
         });

@@ -35,6 +35,7 @@ interface PopupHarnessOptions {
   permission?: boolean;
   updateResponse?: Record<string, unknown>;
   cartReady?: Record<string, unknown>;
+  cartReadySound?: boolean;
 }
 
 async function turn(): Promise<void> {
@@ -49,6 +50,10 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
     ? { yoinkCartReadyV1: options.cartReady } : {};
   let reloadCount = 0;
   const health = { ...READY, ...(options.health || {}) };
+  const local: Record<string, unknown> = {
+    readiness: health,
+    yoinkCartReadySoundEnabledV1: options.cartReadySound === true
+  };
   const dom = new JSDOM(POPUP_HTML, {
     pretendToBeVisual: true,
     runScripts: "outside-only",
@@ -107,7 +112,10 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
       }
     },
     storage: {
-      local: { get: async () => ({ readiness: health }) },
+      local: {
+        get: async () => ({ ...local }),
+        set: async (value: Record<string, unknown>) => { Object.assign(local, value); }
+      },
       session: {
         get: async (key: string) => ({ [key]: session[key] }),
         set: async (value: Record<string, unknown>) => { Object.assign(session, value); },
@@ -125,7 +133,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
   window.eval(POPUP);
   await turn();
   await turn();
-  return { dom, window, document: window.document, requestCalls, createdTabs, runtimeMessages, session, reloadCount: () => reloadCount };
+  return { dom, window, document: window.document, requestCalls, createdTabs, runtimeMessages, session, local, reloadCount: () => reloadCount };
 }
 
 function click(window: Window, element: Element): void {
@@ -227,6 +235,17 @@ test("status and overflow reveals maintain ARIA, keyboard navigation, Escape, an
   document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   assert.equal(menuButton.getAttribute("aria-expanded"), "false");
   assert.equal(document.activeElement, menuButton);
+  fixture.dom.window.close();
+});
+
+test("cart-ready sound is explicitly opt-in and persists from the overflow menu", async () => {
+  const fixture = await popupHarness();
+  const control = fixture.document.querySelector("#cartReadySound") as HTMLButtonElement;
+  assert.equal(control.getAttribute("aria-checked"), "false");
+  click(fixture.window, control);
+  await turn();
+  assert.equal(control.getAttribute("aria-checked"), "true");
+  assert.equal(fixture.local.yoinkCartReadySoundEnabledV1, true);
   fixture.dom.window.close();
 });
 

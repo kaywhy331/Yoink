@@ -272,6 +272,7 @@ export interface PersistedCartReadyItem {
   recordedAt: string;
   latency: {
     leaseToCartReadyMs?: number;
+    clickToSettleMs?: number;
     clickToCartReadyMs?: number;
   };
 }
@@ -309,9 +310,11 @@ function cartReadyLatency(value: unknown): PersistedCartReadyItem["latency"] {
       ? milliseconds : undefined;
   };
   const leaseToCartReadyMs = duration(candidate.leaseToCartReadyMs);
+  const clickToSettleMs = duration(candidate.clickToSettleMs);
   const clickToCartReadyMs = duration(candidate.clickToCartReadyMs);
   return {
     ...(leaseToCartReadyMs !== undefined ? { leaseToCartReadyMs } : {}),
+    ...(clickToSettleMs !== undefined ? { clickToSettleMs } : {}),
     ...(clickToCartReadyMs !== undefined ? { clickToCartReadyMs } : {})
   };
 }

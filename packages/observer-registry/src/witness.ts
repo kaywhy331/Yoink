@@ -288,7 +288,11 @@ export class ObserverRecipeWitnessClient implements ObserverRecipeWitnessPublish
     try {
       response = await this.fetchImpl(this.endpoint, {
         method: "POST",
-        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": "Yoink-Observer-Witness/1"
+        },
         body: JSON.stringify(request),
         cache: "no-store",
         redirect: "error",

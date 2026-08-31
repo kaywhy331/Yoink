@@ -1,0 +1,31 @@
+# Yoink
+
+Yoink is a first-party, Chrome-mediated product signal and bounded cart-action system.
+
+User documentation: /docs
+User dashboard: /
+Diagnostics and administration: /admin#diagnostics
+
+Current action boundary:
+- Trusted signal to exact retailer product identity.
+- Saved price, seller, fulfillment, quantity, spend, and lane constraints.
+- Fresh DOM revalidation in the user's paired Chrome session.
+- At most one exact Add-to-cart click for qualified Target, Walmart, Amazon, or Best Buy lanes.
+- Exact cart +1 proof before a cart-ready handoff.
+- Manual checkout, payment, order submission, raffles, and challenge handling.
+
+Explicitly unsupported:
+- CAPTCHA or queue evasion.
+- Proxy or request-mode retailer mutations.
+- Third-party seller cart actions.
+- Automatic checkout or order submission.
+
+Primary user action stages:
+- queued
+- checking
+- ready_to_checkout
+- needs_you
+- closed
+
+Machine API prefix: /api/v1
+The API is authenticated and permission-scoped. Device routes require a paired Chrome companion credential and approved extension origin.

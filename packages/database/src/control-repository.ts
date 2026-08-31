@@ -1357,6 +1357,10 @@ export class ControlRepository {
                JOIN retailers r2 ON r2.id = l2.retailer_id
                WHERE mt2.mission_id = m.id AND mt2.enabled = 1
                ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryRetailerName,
+              (SELECT l2.retailer_id FROM mission_targets mt2
+               JOIN listings l2 ON l2.id = mt2.listing_id
+               WHERE mt2.mission_id = m.id AND mt2.enabled = 1
+               ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryRetailerId,
               (SELECT l2.retailer_sku FROM mission_targets mt2
                JOIN listings l2 ON l2.id = mt2.listing_id
                WHERE mt2.mission_id = m.id AND mt2.enabled = 1

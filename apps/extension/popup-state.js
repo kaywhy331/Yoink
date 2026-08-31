@@ -745,9 +745,11 @@ var YoinkPopupStateModule = (() => {
       return Number.isSafeInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 60 * 6e4 ? milliseconds : void 0;
     };
     const leaseToCartReadyMs = duration(candidate.leaseToCartReadyMs);
+    const clickToSettleMs = duration(candidate.clickToSettleMs);
     const clickToCartReadyMs = duration(candidate.clickToCartReadyMs);
     return {
       ...leaseToCartReadyMs !== void 0 ? { leaseToCartReadyMs } : {},
+      ...clickToSettleMs !== void 0 ? { clickToSettleMs } : {},
       ...clickToCartReadyMs !== void 0 ? { clickToCartReadyMs } : {}
     };
   }

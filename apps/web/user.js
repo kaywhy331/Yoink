@@ -9,6 +9,8 @@ const state = {
   plans: [],
   legacyTransition: null,
   actions: [],
+  actionInsights: null,
+  actionGlossary: {},
   proposals: [],
   editingPlan: null,
   setupProduct: null,
@@ -26,6 +28,7 @@ const state = {
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const HOWL_PUBLISHER_SLUG = "collectwithdodo";
+const DISMISSED_ANNOUNCEMENT_KEY = "yoinkDismissedAnnouncementV1";
 const HOWL_RETAILER_DOMAINS = Object.freeze([
   "target.com", "walmart.com", "amazon.com", "bestbuy.com", "disneystore.com",
   "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
@@ -96,6 +99,15 @@ function relative(value) {
   const minutes = Math.round((time - Date.now()) / 60_000);
   if (Math.abs(minutes) < 60) return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(minutes, "minute");
   return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(minutes / 60), "hour");
+}
+
+function duration(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "—";
+  if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`;
+  if (milliseconds < 60_000) return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)} s`;
+  return `${(milliseconds / 60_000).toFixed(1)} min`;
 }
 
 async function api(path, options = {}) {
@@ -228,7 +240,26 @@ function renderOverview() {
   companionLink.hidden = !companionUrl;
   if (companionUrl) companionLink.href = companionUrl;
   renderSetupGuide();
+  renderAnnouncement();
   renderSpend(spend);
+}
+
+function dismissedAnnouncementId() {
+  try { return localStorage.getItem(DISMISSED_ANNOUNCEMENT_KEY) || ""; } catch { return ""; }
+}
+
+function renderAnnouncement() {
+  const panel = $("#releaseAnnouncement");
+  const announcement = state.overview?.announcement;
+  if (!announcement?.id || dismissedAnnouncementId() === announcement.id) {
+    panel.hidden = true;
+    return;
+  }
+  $("#releaseAnnouncementVersion").textContent = `New in ${announcement.version}`;
+  $("#releaseAnnouncementTitle").textContent = announcement.title;
+  $("#releaseAnnouncementSummary").textContent = announcement.summary;
+  $("#releaseAnnouncementLink").href = announcement.docsUrl || "/docs";
+  panel.hidden = false;
 }
 
 function renderSpend(spend) {
@@ -676,10 +707,23 @@ function renderWalmartDraws() {
   </article>`).join("") : '<div class="empty">No open drawings are currently recorded. Run one explicit inspection from the Walmart Draw hub; expired drawings disappear from this view.</div>';
 }
 
+function qualificationCandidateFor(readiness) {
+  const unresolved = Array.isArray(readiness?.targets)
+    ? readiness.targets.find((target) => target.reasonCode === "lane_not_qualified")
+    : null;
+  if (!unresolved) return null;
+  return (state.overview?.qualificationCandidates || [])
+    .find((candidate) => candidate.retailerId === unresolved.retailerId) || null;
+}
+
 function automationReadinessMarkup(readiness) {
   if (!readiness || typeof readiness !== "object") return "";
   const ready = readiness.level === "ready";
   const checks = Array.isArray(readiness.checks) ? readiness.checks : [];
+  const candidate = qualificationCandidateFor(readiness);
+  const candidateMarkup = candidate
+    ? `<div class="qualification-candidate"><span><strong>${escapeHtml(retailerDisplayName(candidate.retailerId))} qualification candidate</strong><small>${escapeHtml(candidate.retailerSku)} · ${escapeHtml(money(candidate.unitPriceCents, candidate.currency))} · Shipping · observed ${escapeHtml(relative(candidate.observedAt))}${candidate.rehearsalPassed ? " · rehearsal passed" : ""}</small></span><a class="button quiet" href="${escapeHtml(howlAffiliateUrl(candidate.canonicalUrl, `${retailerDisplayName(candidate.retailerId)} qualification candidate`))}" target="_blank" rel="noopener noreferrer sponsored">Open candidate ↗</a></div>`
+    : "";
   const checkMarkup = checks.map((item) => {
     const symbol = item.state === "pass" ? "✓" : item.state === "runtime" ? "↻" : "•";
     return `<li class="${escapeHtml(item.state)}"><span aria-hidden="true">${symbol}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail)}</small></div></li>`;
@@ -688,6 +732,7 @@ function automationReadinessMarkup(readiness) {
     <div class="automation-readiness-head"><span class="tag ${ready ? "good" : "warn"}">${ready ? "Ready" : readiness.level === "off" ? "Off" : "Needs attention"}</span><strong>${escapeHtml(readiness.headline || "Automation status unavailable")}</strong></div>
     <p>${escapeHtml(readiness.summary || "")}</p>
     ${readiness.nextActionLabel ? `<small class="automation-next"><strong>Next:</strong> ${escapeHtml(readiness.nextActionLabel)}</small>` : ""}
+    ${candidateMarkup}
     ${checkMarkup ? `<details><summary>Why this status</summary><ul>${checkMarkup}</ul></details>` : ""}
   </section>`;
 }
@@ -701,11 +746,13 @@ function renderPlans() {
     const fulfillment = words(plan.primaryFulfillment || "not selected");
     const action = plan.actionCeiling === "add_to_cart" ? "Add to cart" : "Notify me only";
     const decision = plan.decisionMode === "purchase_intent" ? "This reviewed plan decides" : "Advanced defaults decide";
+    const readiness = plan.automationReadiness || {};
     return `<article class="plan-card">
       <div class="plan-row">
         <div class="plan-summary">
           <div class="plan-summary-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(plan.status)}</span></div>
           <p class="plan-line"><strong>${escapeHtml(store)}</strong> · cap ${escapeHtml(maximum)} · qty ${Number(plan.targetQuantity || 1)} · ${escapeHtml(action)}</p>
+          <p class="plan-readiness-headline"><span class="dot ${readiness.level === "ready" ? "good" : "warn"}"></span>${escapeHtml(readiness.headline || "Readiness unavailable")}</p>
         </div>
         <button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Review or change</button>
       </div>
@@ -713,7 +760,7 @@ function renderPlans() {
         <summary>Details</summary>
         <p>${plan.primaryRetailerSku ? `Exact item ${escapeHtml(plan.primaryRetailerSku)} · ` : ""}last seen ${escapeHtml(current)} · ${escapeHtml(fulfillment)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p>
         <p>${escapeHtml(decision)} when a fresh exact offer arrives. Guarded cart attempts add exactly one item and preserve existing cart quantities through an exact delta check.</p>
-        ${automationReadinessMarkup(plan.automationReadiness)}
+        ${automationReadinessMarkup(readiness)}
       </details>
     </article>`;
   }).join("") : '<div class="empty">You have no purchase plans. Choose “Set up purchase” from the Products tab and review the exact limits before creating one.</div>';
@@ -763,12 +810,67 @@ async function transitionLegacyPlans() {
 }
 
 function renderActions() {
-  $("#actionList").innerHTML = state.actions.length ? state.actions.map((action) => `<article class="action-card">
-    <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${action.state === "confirmed" ? "good" : "warn"}">${escapeHtml(String(action.state).replaceAll("_", " "))}</span></div>
+  const stages = state.actionInsights?.stages || {};
+  const readyCount = Number(stages.ready_to_checkout || 0);
+  const needsYouCount = Number(stages.needs_you || 0);
+  const handoff = $("#actionHandoff");
+  handoff.hidden = readyCount + needsYouCount < 1;
+  if (!handoff.hidden) {
+    const ready = readyCount > 0;
+    $("#actionHandoffEyebrow").textContent = ready ? "Ready to check out" : "Needs you";
+    $("#actionHandoffTitle").textContent = ready
+      ? `${readyCount.toLocaleString()} cart${readyCount === 1 ? " is" : "s are"} ready`
+      : `${needsYouCount.toLocaleString()} action${needsYouCount === 1 ? " needs" : "s need"} review`;
+    $("#actionHandoffCopy").textContent = ready
+      ? "Open the retailer cart, finish checkout yourself, then close the result below."
+      : "Check the retailer session, then choose Got it or Missed it so Yoink can close the mission safely.";
+  }
+  const stageLabels = {
+    queued: "Queued",
+    checking: "Checking",
+    ready_to_checkout: "Ready to check out",
+    needs_you: "Needs you",
+    closed: "Closed"
+  };
+  $("#actionStageSummary").innerHTML = Object.entries(stageLabels)
+    .filter(([stage]) => Number(stages[stage] || 0) > 0)
+    .map(([stage, label]) => `<span class="tag ${stage === "ready_to_checkout" ? "good" : stage === "needs_you" ? "warn" : ""}">${escapeHtml(label)} · ${Number(stages[stage]).toLocaleString()}</span>`)
+    .join("");
+  const hops = state.actionInsights?.latency?.hops || {};
+  const measured = [
+    ["Observed → received", hops.observedToReceivedMs],
+    ["Received → job", hops.receivedToJobMs],
+    ["Job → lease", hops.jobToLeaseMs],
+    ["Lease → cart", hops.leaseToCartReadyMs],
+    ["Click → settle", hops.clickToSettleMs],
+    ["Click → cart", hops.clickToCartReadyMs]
+  ].filter(([, hop]) => Number(hop?.samples || 0) > 0);
+  $("#actionLatencySummary").textContent = measured.length
+    ? measured.map(([label, hop]) => `${label} p50 ${duration(hop.p50Ms)} · p95 ${duration(hop.p95Ms)}`).join("  ·  ")
+    : "Latency appears after Yoink records completed action stages.";
+  const glossaryEntries = Object.entries(state.actionGlossary || {});
+  $("#actionStatusGlossary").hidden = glossaryEntries.length < 1;
+  $("#actionStatusGlossaryList").innerHTML = glossaryEntries.map(([status, definition]) => `<div class="mini-row"><span><strong>${escapeHtml(definition.label)}</strong><small>${escapeHtml(definition.summary)}</small></span><code>${escapeHtml(status)}</code></div>`).join("");
+
+  $("#actionList").innerHTML = state.actions.length ? state.actions.map((action) => {
+    const stage = action.stage || (["manual_review", "submission_uncertain"].includes(action.state)
+      ? "needs_you" : action.state === "confirmed" && action.action === "add_to_cart" ? "ready_to_checkout" : "closed");
+    return `<article class="action-card">
+    <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${stage === "ready_to_checkout" || action.userReportOutcome === "got_it" ? "good" : stage === "needs_you" ? "warn" : ""}">${escapeHtml(action.statusLabel || (stage === "needs_you" ? "Needs you" : String(action.state).replaceAll("_", " ")))}</span></div>
     <p>${escapeHtml(action.retailerId)} · ${escapeHtml(action.retailerSku)} · ${escapeHtml(String(action.action).replaceAll("_", " "))} · ${action.decisionSource === "purchase_intent" ? "reviewed plan" : "advanced default"} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}${action.spendReservationStatus ? ` · reservation ${escapeHtml(action.spendReservationStatus)}` : ""}</p>
-    ${action.decisionReason ? `<p><strong>Latest:</strong> ${escapeHtml(action.decisionReason)}${action.decisionReasonCode ? ` · ${escapeHtml(String(action.decisionReasonCode).replaceAll("_", " "))}` : ""}</p>` : ""}</div>
-    <div class="inline-actions">${["manual_review", "submission_uncertain"].includes(action.state) ? '<a class="canonical" href="/admin#operations">Review →</a>' : ""}<a class="canonical" href="${escapeHtml(howlAffiliateUrl(action.canonicalUrl, action.title))}" target="_blank" rel="noopener noreferrer sponsored">Store page ↗</a></div>
-  </article>`).join("") : '<div class="empty">No purchase or notification actions have been recorded yet.</div>';
+    ${action.statusSummary ? `<p>${escapeHtml(action.statusSummary)}</p>` : ""}
+    ${action.decisionReason ? `<p><strong>Latest:</strong> ${escapeHtml(action.decisionReason)}${action.decisionReasonCode ? ` · ${escapeHtml(String(action.decisionReasonCode).replaceAll("_", " "))}` : ""}</p>` : ""}
+    ${Object.values(action.latency || {}).some((value) => value !== null && value !== undefined && Number.isFinite(Number(value))) ? `<p class="latency-breadcrumb">Observed → received ${duration(action.latency.observedToReceivedMs)} · received → job ${duration(action.latency.receivedToJobMs)} · job → lease ${duration(action.latency.jobToLeaseMs)} · lease → cart ${duration(action.latency.leaseToCartReadyMs)} · click → settle ${duration(action.latency.clickToSettleMs)} · click → cart ${duration(action.latency.clickToCartReadyMs)}</p>` : ""}</div>
+    <div class="action-controls">
+    ${action.action === "add_to_cart" && !action.userReportOutcome && ["ready_to_checkout", "needs_you"].includes(stage) ? `<form class="cart-outcome" data-cart-outcome="${escapeHtml(action.id)}">
+      <label><span>Amount for this item</span><input name="actualTotal" inputmode="decimal" autocomplete="off" placeholder="$0.00" aria-describedby="cart-outcome-help-${escapeHtml(action.id)}"></label>
+      <small id="cart-outcome-help-${escapeHtml(action.id)}">For Got it, include this item's share of tax or shipping. Checkout remains on the retailer site.</small>
+      <div class="inline-actions"><button class="button primary" name="outcome" value="got_it" type="submit">Got it</button><button class="button quiet" name="outcome" value="missed_it" type="submit" formnovalidate>Missed it</button></div>
+    </form>` : ""}
+    <div class="inline-actions"><a class="canonical" href="${escapeHtml(howlAffiliateUrl(action.canonicalUrl, action.title))}" target="_blank" rel="noopener noreferrer sponsored">Store page ↗</a></div>
+    </div>
+  </article>`;
+  }).join("") : '<div class="empty">No purchase or notification actions have been recorded yet.</div>';
 }
 
 function renderProposals() {
@@ -803,7 +905,7 @@ async function refresh() {
   })));
   state.plans = plans.items || [];
   state.legacyTransition = legacyTransition.preview || null;
-  state.actions = actions.items || [];
+  applyActionActivity(actions);
   state.proposals = proposals.items || [];
   state.privacy = privacy.inventory || null;
   state.recoveryEvidence = recoveryEvidence.items || [];
@@ -811,6 +913,18 @@ async function refresh() {
   state.contributorEligibility = recoveryEvidence.contributorEligibility || null;
   state.profiles = profiles.items || [];
   renderOverview(); renderProducts(); renderWalmartDraws(); renderPlans(); renderActions(); renderProposals(); renderPrivacy(); renderRecoveryEvidence(); renderProfiles();
+}
+
+function applyActionActivity(actions) {
+  state.actions = actions?.items || [];
+  state.actionInsights = actions?.insights || null;
+  state.actionGlossary = actions?.glossary || {};
+}
+
+async function refreshActionActivity() {
+  const actions = await api("/api/v1/user/jobs?limit=100&offset=0");
+  applyActionActivity(actions);
+  renderActions();
 }
 
 async function toggleActions() {
@@ -1314,6 +1428,11 @@ document.addEventListener("click", async (event) => {
       toast("Quick-add profile removed.");
     }
     if (button.id === "pauseButton" || button.id === "preferencePauseButton") await toggleActions();
+    if (button.id === "dismissReleaseAnnouncement") {
+      const id = String(state.overview?.announcement?.id || "");
+      try { if (id) localStorage.setItem(DISMISSED_ANNOUNCEMENT_KEY, id); } catch { /* Dismissal remains best effort. */ }
+      $("#releaseAnnouncement").hidden = true;
+    }
     if (button.id === "addProductButton" || button.hasAttribute("data-open-product-link")) openProductLinkDialog();
     if (button.hasAttribute("data-clear-browse")) {
       state.browse = { store: "", availability: "", plan: "", price: "", sort: state.browse.sort };
@@ -1724,5 +1843,85 @@ $("#productSearch").addEventListener("input", (event) => {
   }, 250);
 });
 
-refresh().catch((error) => toast(error.message || "Yoink could not load.", true));
-setInterval(() => { if (document.visibilityState === "visible") refresh().catch(() => undefined); }, 20_000);
+$("#viewCheckoutActions").addEventListener("click", () => {
+  setTab("activity");
+  $("#actionList").querySelector("form.cart-outcome input, article.action-card a")?.focus();
+});
+
+$("#actionList").addEventListener("submit", async (event) => {
+  const form = event.target.closest("form[data-cart-outcome]");
+  if (!form) return;
+  event.preventDefault();
+  const submitter = event.submitter;
+  const outcome = submitter?.value === "got_it" ? "got_it" : submitter?.value === "missed_it" ? "missed_it" : "";
+  if (!outcome) return;
+  const action = state.actions.find((item) => item.id === form.dataset.cartOutcome);
+  if (!action) {
+    toast("Refresh before closing this cart action.", true);
+    return;
+  }
+  let actualTotalCents = null;
+  if (outcome === "got_it") {
+    try {
+      actualTotalCents = centsInput(form.elements.actualTotal.value, "The amount for this item");
+      if (actualTotalCents === null) throw new Error("Enter the amount charged for this item for Got it.");
+    } catch (error) {
+      toast(error.message || "Enter a valid amount charged for this item.", true);
+      form.elements.actualTotal.focus();
+      return;
+    }
+  }
+  const approved = confirm(outcome === "got_it"
+    ? `Record this item at ${money(actualTotalCents, action.currency)}?\n\nOnly continue after completing checkout on the retailer site and checking the amount charged for this item. Yoink will mark one mission item satisfied and record this user-reported spend.`
+    : "Close this cart action as Missed it?\n\nOnly continue after checking the retailer cart or checkout. Yoink will record no purchase and no spend.");
+  if (!approved) return;
+  const buttons = [...form.querySelectorAll("button")];
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    await api(`/api/v1/user/jobs/${encodeURIComponent(action.id)}/outcome`, {
+      method: "POST",
+      body: JSON.stringify({
+        outcome,
+        actualTotalCents,
+        confirmation: "I_REVIEWED_CHECKOUT_RESULT"
+      })
+    });
+    await refresh();
+    scheduleAdaptivePoll();
+    toast(outcome === "got_it" ? "Purchase recorded and mission progress updated." : "Cart action closed as Missed it.");
+  } catch (error) {
+    toast(error.message || "The checkout result could not be recorded.", true);
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+});
+
+let adaptivePollTimer = null;
+let adaptivePollRunning = false;
+function adaptivePollDelay() {
+  const stages = state.actionInsights?.stages || {};
+  if (Number(stages.queued || 0) + Number(stages.checking || 0) > 0) return 2_000;
+  if (Number(stages.ready_to_checkout || 0) + Number(stages.needs_you || 0) > 0) return 5_000;
+  return 20_000;
+}
+function scheduleAdaptivePoll() {
+  if (adaptivePollTimer !== null) clearInterval(adaptivePollTimer);
+  adaptivePollTimer = null;
+  if (document.visibilityState !== "visible") return;
+  adaptivePollTimer = setInterval(async () => {
+    if (adaptivePollRunning || document.visibilityState !== "visible") return;
+    adaptivePollRunning = true;
+    try { await refreshActionActivity(); } catch { /* A visible toast or the next cycle can recover. */ }
+    finally {
+      adaptivePollRunning = false;
+      scheduleAdaptivePoll();
+    }
+  }, adaptivePollDelay());
+}
+refresh().catch((error) => toast(error.message || "Yoink could not load.", true)).finally(scheduleAdaptivePoll);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refresh().catch(() => undefined).finally(scheduleAdaptivePoll);
+  } else {
+    scheduleAdaptivePoll();
+  }
+});

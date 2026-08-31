@@ -15,6 +15,12 @@ import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { assertJobTransition, jobMayHaveMutated } from "../../domain/src/job-state.js";
 import { sanitizeDiagnosticData } from "../../domain/src/redaction.js";
+import {
+  USER_ACTION_STAGES,
+  actionStatusPresentation,
+  type UserActionStage,
+  type UserReportedCartOutcome
+} from "../../domain/src/action-status.js";
 import type { AppSettings } from "./control-repository.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -23,6 +29,7 @@ import { AttributionRepository } from "./attribution-repository.js";
 import { AuditRepository } from "./audit-repository.js";
 import { OfferIdentityRepository } from "./offer-identity-repository.js";
 import { PurchasePolicyRepository } from "./purchase-policy-repository.js";
+import { PurchaseSafetyError } from "./purchase-policy-repository.js";
 import { SpendLedgerRepository } from "./spend-ledger-repository.js";
 
 export interface SourceConnectionContext {
@@ -69,6 +76,36 @@ interface IncidentRow {
   status: string;
   occurrence_count: number;
   last_observed_at: string;
+}
+
+const ACTION_LATENCY_HOPS = [
+  "observedToReceivedMs",
+  "receivedToJobMs",
+  "jobToLeaseMs",
+  "leaseToCartReadyMs",
+  "clickToSettleMs",
+  "clickToCartReadyMs"
+] as const;
+
+type ActionLatencyHop = typeof ACTION_LATENCY_HOPS[number];
+
+function boundedDuration(from: unknown, to: unknown, maximumMs = 24 * 60 * 60_000): number | null {
+  const start = new Date(String(from || "")).getTime();
+  const end = new Date(String(to || "")).getTime();
+  const duration = Math.round(end - start);
+  return Number.isSafeInteger(duration) && duration >= 0 && duration <= maximumMs ? duration : null;
+}
+
+function boundedStoredDuration(value: unknown): number | null {
+  const duration = Number(value);
+  return Number.isSafeInteger(duration) && duration >= 0 && duration <= 60 * 60_000 ? duration : null;
+}
+
+function percentile(values: number[], ratio: number): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1));
+  return sorted[index] ?? null;
 }
 
 function incidentRecord(row: IncidentRow): IncidentRecord {
@@ -797,6 +834,175 @@ export class SignalRepository {
     );
   }
 
+  reportCartOutcome(
+    jobId: string,
+    outcome: "got_it" | "missed_it",
+    confirmation: string,
+    actualTotalCents: number | null,
+    note = "",
+    now = Date.now()
+  ): Record<string, unknown> {
+    if (confirmation !== "I_REVIEWED_CHECKOUT_RESULT") {
+      throw new PurchaseSafetyError(
+        "user_reported_order_confirmation_required",
+        400,
+        "Confirm that you reviewed the retailer checkout result before closing this cart action."
+      );
+    }
+    if (!["got_it", "missed_it"].includes(outcome)) {
+      throw new PurchaseSafetyError("user_reported_order_outcome_invalid", 400, "Choose Got it or Missed it.");
+    }
+    const cleanedJobId = cleanText(jobId, 120);
+    return this.db.transaction(() => {
+      const job = this.db.get<{
+        id: string;
+        state: JobState;
+        action: string;
+        quantity: number;
+        mission_id: string;
+        incident_id: string;
+        currency: string;
+        max_order_total_cents: number;
+      }>(
+        `SELECT id, state, action, quantity, mission_id, incident_id, currency,
+                max_order_total_cents
+         FROM action_jobs WHERE id = ? AND tenant_id = ? AND user_id = ?`,
+        cleanedJobId,
+        currentRequestScope().tenantId,
+        currentRequestScope().userId
+      );
+      if (!job || job.action !== "add_to_cart") {
+        throw new PurchaseSafetyError(
+          "user_reported_order_job_invalid",
+          409,
+          "Only a carted or Needs you add-to-cart action can be closed this way."
+        );
+      }
+      const boundedTotal = outcome === "got_it" ? Number(actualTotalCents) : null;
+      if (outcome === "got_it" && (!Number.isSafeInteger(boundedTotal)
+        || Number(boundedTotal) <= 0 || Number(boundedTotal) > Number(job.max_order_total_cents))) {
+        throw new PurchaseSafetyError(
+          "user_reported_total_outside_plan",
+          409,
+          "The amount charged for this item must be positive and no higher than this cart action's reviewed maximum total."
+        );
+      }
+      const existing = this.db.get<{ reasonCode: string; evidenceJson: string; createdAt: string }>(
+        `SELECT reason_code AS reasonCode, evidence_json AS evidenceJson, created_at AS createdAt
+         FROM action_events
+         WHERE job_id = ? AND reason_code IN ('user_reported_order', 'user_reported_missed_it')
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        job.id
+      );
+      if (existing) {
+        let evidence: Record<string, unknown> = {};
+        try { evidence = JSON.parse(existing.evidenceJson) as Record<string, unknown>; } catch { evidence = {}; }
+        const existingOutcome = existing.reasonCode === "user_reported_order" ? "got_it" : "missed_it";
+        if (existingOutcome !== outcome
+          || (outcome === "got_it" && Number(evidence.actualTotalCents) !== boundedTotal)) {
+          throw new PurchaseSafetyError("user_reported_order_conflict", 409, "This cart action already has a different checkout result.");
+        }
+        return {
+          disposition: "unchanged",
+          jobId: job.id,
+          outcome,
+          actualTotalCents: outcome === "got_it" ? boundedTotal : null,
+          reportedAt: existing.createdAt
+        };
+      }
+      if (!["confirmed", "manual_review", "submission_uncertain"].includes(job.state)) {
+        throw new PurchaseSafetyError(
+          "user_reported_order_job_invalid",
+          409,
+          "Only a carted or Needs you add-to-cart action can be closed this way."
+        );
+      }
+
+      let finalState = job.state;
+      let transitionedFromReview = false;
+      if (["manual_review", "submission_uncertain"].includes(job.state)) {
+        const transition = this.transitionJob(
+          job.id,
+          outcome === "got_it" ? "confirmed" : "cancelled",
+          outcome === "got_it" ? "user_reviewed_cart_present" : "user_reviewed_no_order",
+          outcome === "got_it"
+            ? "The user reviewed the retailer session and reported completing manual checkout."
+            : "The user reviewed the retailer session and reported that checkout was not completed.",
+          { manualUserReview: true },
+          now,
+          true
+        );
+        finalState = transition.state as JobState;
+        transitionedFromReview = true;
+      }
+
+      let reservationStatus = this.spendLedger.reservationForJob(job.id)?.status ?? null;
+      if (outcome === "got_it") {
+        reservationStatus = this.spendLedger.commitUserReportedAddForJob(job.id, Number(boundedTotal), now).status;
+        const timestamp = nowIso(now);
+        this.db.run(
+          `UPDATE missions
+           SET fulfilled_quantity = MIN(target_quantity, fulfilled_quantity + ?),
+               status = CASE WHEN fulfilled_quantity + ? >= target_quantity THEN 'satisfied' ELSE status END,
+               updated_at = ?
+           WHERE id = ? AND tenant_id = ? AND user_id = ?`,
+          job.quantity,
+          job.quantity,
+          timestamp,
+          job.mission_id,
+          currentRequestScope().tenantId,
+          currentRequestScope().userId
+        );
+      } else {
+        this.closeIncident(job.incident_id, "user_reported_missed_it", now);
+      }
+
+      const reportNow = transitionedFromReview ? now + 1 : now;
+      const timestamp = nowIso(reportNow);
+      const evidence = sanitizeDiagnosticData({
+        contractVersion: 1,
+        outcome,
+        actualTotalCents: outcome === "got_it" ? boundedTotal : null,
+        quantity: job.quantity,
+        currency: job.currency,
+        evidenceSource: "user_reported",
+        note: cleanText(note, 300)
+      });
+      this.db.run(
+        `INSERT INTO action_events(
+           id, job_id, state, reason_code, message, evidence_json, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        newId("action_event"),
+        job.id,
+        finalState,
+        outcome === "got_it" ? "user_reported_order" : "user_reported_missed_it",
+        outcome === "got_it"
+          ? "The user reported completing manual checkout for the exact cart action."
+          : "The user reported that manual checkout was not completed.",
+        JSON.stringify(evidence),
+        timestamp
+      );
+      this.audit(job.id, "action_job_user_report", outcome, "The user closed the manual checkout handoff.", evidence as Record<string, unknown>, reportNow);
+      const mission = this.db.get<{ status: string; fulfilledQuantity: number; targetQuantity: number }>(
+        `SELECT status, fulfilled_quantity AS fulfilledQuantity, target_quantity AS targetQuantity
+         FROM missions WHERE id = ? AND tenant_id = ? AND user_id = ?`,
+        job.mission_id,
+        currentRequestScope().tenantId,
+        currentRequestScope().userId
+      );
+      return {
+        disposition: "recorded",
+        jobId: job.id,
+        state: finalState,
+        outcome,
+        actualTotalCents: outcome === "got_it" ? boundedTotal : null,
+        reservationStatus,
+        mission,
+        reportedAt: timestamp
+      };
+    });
+  }
+
   audit(
     correlationId: string,
     eventType: string,
@@ -907,7 +1113,7 @@ export class SignalRepository {
     const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
-    return this.db.all(
+    const rows = this.db.all<Record<string, unknown>>(
       `SELECT aj.id, aj.state, aj.action, aj.quantity,
               aj.decision_source AS decisionSource,
               aj.max_unit_price_cents AS maxUnitPriceCents,
@@ -923,6 +1129,52 @@ export class SignalRepository {
               sr.reserved_amount_cents AS reservedAmountCents,
               aj.created_at AS createdAt, v.title,
               l.retailer_id AS retailerId, l.retailer_sku AS retailerSku,
+              (SELECT CASE ae.reason_code
+                 WHEN 'user_reported_order' THEN 'got_it'
+                 WHEN 'user_reported_missed_it' THEN 'missed_it'
+                 ELSE '' END
+               FROM action_events ae
+               WHERE ae.job_id = aj.id
+                 AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS userReportOutcome,
+              (SELECT json_extract(ae.evidence_json, '$.actualTotalCents')
+               FROM action_events ae
+               WHERE ae.job_id = aj.id AND ae.reason_code = 'user_reported_order'
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS userReportedTotalCents,
+              (SELECT ae.created_at FROM action_events ae
+               WHERE ae.job_id = aj.id
+                 AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS userReportedAt,
+              (SELECT se.observed_at
+               FROM signal_occurrences so JOIN signal_events se ON se.id = so.event_id
+               WHERE so.incident_id = aj.incident_id AND se.user_id = aj.user_id
+               ORDER BY se.received_at DESC, se.id DESC LIMIT 1) AS signalObservedAt,
+              (SELECT se.received_at
+               FROM signal_occurrences so JOIN signal_events se ON se.id = so.event_id
+               WHERE so.incident_id = aj.incident_id AND se.user_id = aj.user_id
+               ORDER BY se.received_at DESC, se.id DESC LIMIT 1) AS signalReceivedAt,
+              (SELECT ae.created_at FROM action_events ae
+               WHERE ae.job_id = aj.id AND ae.state = 'leased'
+               ORDER BY ae.created_at, ae.id LIMIT 1) AS leasedAt,
+              (SELECT ae.created_at FROM action_events ae
+               WHERE ae.job_id = aj.id AND ae.state = 'confirmed'
+                 AND ae.reason_code NOT IN ('user_reported_order', 'user_reported_missed_it')
+               ORDER BY ae.created_at, ae.id LIMIT 1) AS cartReadyAt,
+              (SELECT json_extract(ae.evidence_json, '$.latency.leaseToCartReadyMs')
+               FROM action_events ae
+               WHERE ae.job_id = aj.id
+                 AND json_type(ae.evidence_json, '$.latency.leaseToCartReadyMs') IN ('integer', 'real')
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS storedLeaseToCartReadyMs,
+              (SELECT json_extract(ae.evidence_json, '$.latency.clickToSettleMs')
+               FROM action_events ae
+               WHERE ae.job_id = aj.id
+                 AND json_type(ae.evidence_json, '$.latency.clickToSettleMs') IN ('integer', 'real')
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS storedClickToSettleMs,
+              (SELECT json_extract(ae.evidence_json, '$.latency.clickToCartReadyMs')
+               FROM action_events ae
+               WHERE ae.job_id = aj.id
+                 AND json_type(ae.evidence_json, '$.latency.clickToCartReadyMs') IN ('integer', 'real')
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS storedClickToCartReadyMs,
               (SELECT ae.reason_code FROM action_events ae
                WHERE ae.job_id = aj.id ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS decisionReasonCode,
               (SELECT ae.message FROM action_events ae
@@ -957,6 +1209,133 @@ export class SignalRepository {
       safeLimit,
       safeOffset
     );
+    return rows.map((row) => {
+      const state = row.state as JobState;
+      const action = String(row.action || "");
+      const userReportOutcome = ["got_it", "missed_it"].includes(String(row.userReportOutcome || ""))
+        ? String(row.userReportOutcome) as UserReportedCartOutcome : "";
+      const presentation = actionStatusPresentation({ state, action, userReportOutcome });
+      const latency = {
+        observedToReceivedMs: boundedDuration(row.signalObservedAt, row.signalReceivedAt),
+        receivedToJobMs: boundedDuration(row.signalReceivedAt, row.createdAt),
+        jobToLeaseMs: boundedDuration(row.createdAt, row.leasedAt),
+        leaseToCartReadyMs: boundedStoredDuration(row.storedLeaseToCartReadyMs)
+          ?? boundedDuration(row.leasedAt, row.cartReadyAt, 60 * 60_000),
+        clickToSettleMs: boundedStoredDuration(row.storedClickToSettleMs),
+        clickToCartReadyMs: boundedStoredDuration(row.storedClickToCartReadyMs)
+      } satisfies Record<ActionLatencyHop, number | null>;
+      const {
+        storedLeaseToCartReadyMs: _storedLeaseToCartReadyMs,
+        storedClickToSettleMs: _storedClickToSettleMs,
+        storedClickToCartReadyMs: _storedClickToCartReadyMs,
+        ...publicRow
+      } = row;
+      return {
+        ...publicRow,
+        userReportOutcome,
+        userReportedTotalCents: userReportOutcome === "got_it"
+          && Number.isSafeInteger(Number(row.userReportedTotalCents))
+          ? Number(row.userReportedTotalCents) : null,
+        statusLabel: presentation.label,
+        stage: presentation.stage,
+        statusSummary: presentation.summary,
+        latency
+      };
+    });
+  }
+
+  actionInsights(sampleLimit = 500): Record<string, unknown> {
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(sampleLimit) || 500)));
+    const counts = Object.fromEntries(USER_ACTION_STAGES.map((stage) => [stage, 0])) as Record<UserActionStage, number>;
+    const states = this.db.all<{ state: JobState; action: string; userReportOutcome: string; count: number }>(
+      `WITH classified AS (
+         SELECT aj.state, aj.action,
+                COALESCE((SELECT CASE ae.reason_code
+                   WHEN 'user_reported_order' THEN 'got_it'
+                   WHEN 'user_reported_missed_it' THEN 'missed_it'
+                   ELSE '' END
+                 FROM action_events ae
+                 WHERE ae.job_id = aj.id
+                   AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
+                 ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1), '') AS userReportOutcome
+         FROM action_jobs aj WHERE aj.tenant_id = ? AND aj.user_id = ?
+       )
+       SELECT state, action, userReportOutcome, COUNT(*) AS count
+       FROM classified GROUP BY state, action, userReportOutcome`,
+      currentRequestScope().tenantId,
+      currentRequestScope().userId
+    );
+    for (const row of states) {
+      const userReportOutcome = ["got_it", "missed_it"].includes(row.userReportOutcome)
+        ? row.userReportOutcome as UserReportedCartOutcome : "";
+      const stage = actionStatusPresentation({ state: row.state, action: row.action, userReportOutcome }).stage;
+      counts[stage] += Number(row.count) || 0;
+    }
+    const sampleRows = this.db.all<Record<string, unknown>>(
+      `SELECT aj.created_at AS createdAt,
+              (SELECT se.observed_at
+               FROM signal_occurrences so JOIN signal_events se ON se.id = so.event_id
+               WHERE so.incident_id = aj.incident_id AND se.user_id = aj.user_id
+               ORDER BY se.received_at DESC, se.id DESC LIMIT 1) AS signalObservedAt,
+              (SELECT se.received_at
+               FROM signal_occurrences so JOIN signal_events se ON se.id = so.event_id
+               WHERE so.incident_id = aj.incident_id AND se.user_id = aj.user_id
+               ORDER BY se.received_at DESC, se.id DESC LIMIT 1) AS signalReceivedAt,
+              (SELECT ae.created_at FROM action_events ae
+               WHERE ae.job_id = aj.id AND ae.state = 'leased'
+               ORDER BY ae.created_at, ae.id LIMIT 1) AS leasedAt,
+              (SELECT ae.created_at FROM action_events ae
+               WHERE ae.job_id = aj.id AND ae.state = 'confirmed'
+                 AND ae.reason_code NOT IN ('user_reported_order', 'user_reported_missed_it')
+               ORDER BY ae.created_at, ae.id LIMIT 1) AS cartReadyAt,
+              (SELECT json_extract(ae.evidence_json, '$.latency.leaseToCartReadyMs')
+               FROM action_events ae
+               WHERE ae.job_id = aj.id
+                 AND json_type(ae.evidence_json, '$.latency.leaseToCartReadyMs') IN ('integer', 'real')
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS storedLeaseToCartReadyMs,
+              (SELECT json_extract(ae.evidence_json, '$.latency.clickToSettleMs')
+               FROM action_events ae
+               WHERE ae.job_id = aj.id
+                 AND json_type(ae.evidence_json, '$.latency.clickToSettleMs') IN ('integer', 'real')
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS storedClickToSettleMs,
+              (SELECT json_extract(ae.evidence_json, '$.latency.clickToCartReadyMs')
+               FROM action_events ae
+               WHERE ae.job_id = aj.id
+                 AND json_type(ae.evidence_json, '$.latency.clickToCartReadyMs') IN ('integer', 'real')
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS storedClickToCartReadyMs
+       FROM action_jobs aj WHERE aj.tenant_id = ? AND aj.user_id = ?
+       ORDER BY aj.created_at DESC LIMIT ?`,
+      currentRequestScope().tenantId,
+      currentRequestScope().userId,
+      safeLimit
+    );
+    const samples = sampleRows.map((row) => ({
+      observedToReceivedMs: boundedDuration(row.signalObservedAt, row.signalReceivedAt),
+      receivedToJobMs: boundedDuration(row.signalReceivedAt, row.createdAt),
+      jobToLeaseMs: boundedDuration(row.createdAt, row.leasedAt),
+      leaseToCartReadyMs: boundedStoredDuration(row.storedLeaseToCartReadyMs)
+        ?? boundedDuration(row.leasedAt, row.cartReadyAt, 60 * 60_000),
+      clickToSettleMs: boundedStoredDuration(row.storedClickToSettleMs),
+      clickToCartReadyMs: boundedStoredDuration(row.storedClickToCartReadyMs)
+    } satisfies Record<ActionLatencyHop, number | null>));
+    const hops = Object.fromEntries(ACTION_LATENCY_HOPS.map((hop) => {
+      const values = samples.map((sample) => sample?.[hop]).filter((value): value is number => Number.isSafeInteger(value));
+      return [hop, {
+        samples: values.length,
+        p50Ms: percentile(values, 0.5),
+        p95Ms: percentile(values, 0.95)
+      }];
+    }));
+    return {
+      contractVersion: 1,
+      stages: counts,
+      latency: {
+        contractVersion: 1,
+        maximumSampleSize: safeLimit,
+        jobsSampled: samples.length,
+        hops
+      }
+    };
   }
 
   jobCount(search = ""): number {

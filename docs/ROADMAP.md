@@ -1,6 +1,25 @@
 # Yoink roadmap
 
-## Shipped through 1.13.0
+## Shipped through 1.14.0
+
+### Action close-out, latency, and readiness (1.14.0)
+
+- Replaces the fixed post-click delay with a bounded DOM/navigation settle,
+  preserving the unchanged fresh exact-cart proof and at-most-once Add boundary
+- Adds explicit Got it / Missed it close-out on the user surface; only Got it
+  with a reviewed total inside the original reservation records spend and
+  advances one mission quantity
+- Adds authoritative action stages, decision reasons, per-job latency
+  breadcrumbs, p50/p95 hop summaries, an adaptive action-only dashboard poll,
+  and a Ready-to-check-out / Needs-you handoff
+- Persists reusable per-retailer action tabs across worker cycles, adds a
+  shared-classifier inspect hotkey, and keeps custom cart-ready audio opt-in
+- Generates the status glossary from one domain model and adds in-product
+  release notes, user docs, llms.txt, visible plan readiness, and current
+  Shipping-first qualification candidates
+- Preserves first-party, exact-SKU, quantity-one, explicit-fulfillment,
+  permission, fresh-DOM, lane-qualification, manual-checkout, and no-evasion
+  boundaries
 
 ### Confirmed-cart handoff and measured fast path (1.13.0)
 
