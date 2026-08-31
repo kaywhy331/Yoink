@@ -36,6 +36,15 @@ const PROVIDER_PARSERS: Readonly<Record<SignalProvider, RegExp>> = Object.freeze
 });
 const MAX_PROVIDER_BATCH = 50;
 
+type ProviderIngressError = Error & { code: string; retryable: boolean };
+
+function providerInputError(code: string, message: string): ProviderIngressError {
+  const error = new Error(message) as ProviderIngressError;
+  error.code = code;
+  error.retryable = false;
+  return error;
+}
+
 function processingError(code: string): Error & { code: string } {
   const error = new Error("Durable signal ingress processing failed safely.") as Error & { code: string };
   error.code = code;
@@ -43,9 +52,17 @@ function processingError(code: string): Error & { code: string } {
 }
 
 function durableSignal(input: SignalEventInput, provider: SignalProvider, now: number): SignalEventInput {
-  const normalized = normalizeSignal(input, now);
+  let normalized: ReturnType<typeof normalizeSignal>;
+  try {
+    normalized = normalizeSignal(input, now);
+  } catch {
+    throw providerInputError("invalid_signal", "The provider signal payload is invalid.");
+  }
   if (normalized.source !== provider || !PROVIDER_PARSERS[provider].test(normalized.parserVersion)) {
-    throw new Error("Durable signal ingress requires the configured provider parser contract.");
+    throw providerInputError(
+      "provider_parser_mismatch",
+      "Durable signal ingress requires the configured provider parser contract."
+    );
   }
   return {
     schemaVersion: normalized.schemaVersion,
@@ -100,19 +117,38 @@ export class DurableSignalIngressService {
     const channelId = String(envelope?.channelId || "");
     try {
       if (envelope?.contractVersion !== SIGNAL_PROVIDER_CONTRACT_VERSION || !PROVIDERS.has(provider)) {
-        throw new Error("The signal provider envelope contract is invalid.");
+        throw providerInputError("invalid_provider_envelope", "The signal provider envelope contract is invalid.");
       }
       const payload = durableSignal(envelope.signal, provider, now);
       if (provider === "trackalacker") {
-        if (channelId) throw new Error("TrackaLacker ingress does not accept a provider channel binding.");
+        if (channelId) {
+          throw providerInputError(
+            "unexpected_provider_channel",
+            "TrackaLacker ingress does not accept a provider channel binding."
+          );
+        }
       } else {
-        const channel = this.providers.requireActiveChannel(channelId, provider);
+        let channel: ReturnType<SignalProviderRepository["requireActiveChannel"]>;
+        try {
+          channel = this.providers.requireActiveChannel(channelId, provider);
+        } catch (error) {
+          throw providerInputError(
+            "provider_channel_unavailable",
+            error instanceof Error ? error.message : "The provider channel is unavailable."
+          );
+        }
         if (channel.sourceConnectionId !== payload.sourceConnectionId) {
-          throw new Error("The signal source connection does not match the configured provider channel.");
+          throw providerInputError(
+            "source_connection_mismatch",
+            "The signal source connection does not match the configured provider channel."
+          );
         }
         const observedAt = new Date(payload.observedAt).getTime();
         if (observedAt < now - channel.replayWindowSeconds * 1_000) {
-          throw new Error("The provider signal is outside this channel's replay window.");
+          throw providerInputError(
+            "provider_replay_window_exceeded",
+            "The provider signal is outside this channel's replay window."
+          );
         }
       }
       return this.acceptNormalizedProvider(provider, channelId, payload, now);
@@ -145,13 +181,16 @@ export class DurableSignalIngressService {
         receipts.push({
           index,
           accepted: true,
+          retryable: false,
           signalId: receipt.signalId,
           duplicate: receipt.duplicate,
           processingState: receipt.processingState,
           errorCode: ""
         });
       } catch (error) {
-        const errorCode = (error instanceof Error ? error.message : "signal_rejected")
+        const retryable = (error as { retryable?: unknown } | null)?.retryable !== false;
+        const errorCode = (String((error as { code?: unknown } | null)?.code || "")
+          || (error instanceof Error ? error.message : "signal_rejected"))
           .toLocaleLowerCase("en-US")
           .replace(/[^a-z0-9_]+/g, "_")
           .replace(/^_+|_+$/g, "")
@@ -159,6 +198,7 @@ export class DurableSignalIngressService {
         receipts.push({
           index,
           accepted: false,
+          retryable,
           signalId: String(envelope?.signal?.signalId ?? "").slice(0, 160),
           duplicate: false,
           processingState: "rejected",

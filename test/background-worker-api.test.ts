@@ -15,6 +15,7 @@ test("the admin worker API exposes safe controls without lease capability materi
   const db = new YoinkDatabase();
   const tasks = new BackgroundTaskRepository(db);
   const now = Date.now();
+  let restartCount = 0;
   const schedules = runWithRequestScope(LOCAL_REQUEST_SCOPE, () => tasks.ensureDefaultSchedules(now));
   const server = createYoinkServer({
     db,
@@ -28,7 +29,8 @@ test("the admin worker API exposes safe controls without lease capability materi
       lastErrorCode: "",
       deploymentAttested: true,
       deploymentContractVersion: 3
-    })
+    }),
+    backgroundWorkerRestart: async () => { restartCount += 1; }
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -53,6 +55,33 @@ test("the admin worker API exposes safe controls without lease capability materi
     assert.equal(health.asyncBackgroundWorkerContract, true);
     assert.equal(health.standaloneBackgroundWorkerProcessReady, true);
     assert.equal(health.productionWorkerFleetReady, false);
+
+    const userHealthResponse = await fetch(`${baseUrl}/api/v1/user/health`);
+    assert.equal(userHealthResponse.status, 200);
+    assert.equal(userHealthResponse.headers.get("x-yoink-api-surface"), "user");
+    const userHealth = await userHealthResponse.json() as {
+      contractVersion: number;
+      version: string;
+      worker: { state: string; healthy: boolean; lastHeartbeatAt: string };
+      counts: { onlineDevices: number; watchQueue: number; sourceAttention: number; connectorFailures: number };
+      diagnosticBundle: Record<string, unknown>;
+    };
+    assert.equal(userHealth.contractVersion, 1);
+    assert.equal(userHealth.version, "background-worker-api-test");
+    assert.equal(userHealth.worker.state, "running");
+    assert.equal(userHealth.worker.healthy, true);
+    assert.deepEqual({
+      containsSecrets: userHealth.diagnosticBundle.containsSecrets,
+      containsUrls: userHealth.diagnosticBundle.containsUrls,
+      containsDom: userHealth.diagnosticBundle.containsDom,
+      containsAccountOrPaymentData: userHealth.diagnosticBundle.containsAccountOrPaymentData
+    }, {
+      containsSecrets: false,
+      containsUrls: false,
+      containsDom: false,
+      containsAccountOrPaymentData: false
+    });
+    assert.equal(JSON.stringify(userHealth).includes("capabilityToken"), false);
 
     const initialResponse = await fetch(`${baseUrl}/api/v1/admin/workers`);
     assert.equal(initialResponse.status, 200);
@@ -211,6 +240,23 @@ test("the admin worker API exposes safe controls without lease capability materi
     });
     assert.equal(repeatedSignalRetry.status, 409);
     assert.equal((await repeatedSignalRetry.json() as { error: string }).error, "hosted_inbox_state_conflict");
+
+    const restarted = await fetch(`${baseUrl}/api/v1/admin/workers/restart`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: "{}"
+    });
+    assert.equal(restarted.status, 200);
+    assert.equal(restartCount, 1);
+    const restartedBody = await restarted.json() as {
+      restarted: boolean;
+      worker: { state: string; healthy: boolean; runtimeKind: string; lastHeartbeatAt: string };
+    };
+    assert.equal(restartedBody.restarted, true);
+    assert.equal(restartedBody.worker.state, "running");
+    assert.equal(restartedBody.worker.healthy, true);
+    assert.equal(restartedBody.worker.runtimeKind, "local_in_process");
+    assert.ok(Number.isFinite(new Date(restartedBody.worker.lastHeartbeatAt).getTime()));
 
     const page = await fetch(`${baseUrl}/admin`).then((response) => response.text());
     const script = await fetch(`${baseUrl}/app.js`).then((response) => response.text());

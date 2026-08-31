@@ -684,3 +684,246 @@ test("quick add creates one defaulted plan through server preflight without open
     browser.close();
   }
 });
+
+test("Calls combines source feedback, queue-open facts, affiliate routing, and profile-based bulk quick add", async () => {
+  const webRoot = join(process.cwd(), "apps", "web");
+  const html = readFileSync(join(webRoot, "user.html"), "utf8");
+  const script = readFileSync(join(webRoot, "user.js"), "utf8");
+  const dom = new JSDOM(html, {
+    url: "http://127.0.0.1:32991/#calls",
+    runScripts: "outside-only",
+    pretendToBeVisual: true
+  });
+  const browser = dom.window;
+  const createdListingIds = new Set<string>();
+  const preflights: Array<Record<string, unknown>> = [];
+  const posts: Array<Record<string, unknown>> = [];
+  const feedback: Array<Record<string, unknown>> = [];
+  let falsePositiveReported = false;
+  let workerRestarts = 0;
+  const profile = {
+    id: "profile_calls_fixture",
+    name: "Guarded shipping",
+    isDefault: false,
+    targetQuantity: 2,
+    priceMode: "fixed_cap",
+    maxUnitPriceCents: 2500,
+    msrpOffsetPercent: null,
+    actionCeiling: "add_to_cart",
+    cooldownSeconds: 120
+  };
+  const listings = [
+    {
+      variantId: "variant_calls_signal",
+      listingId: "listing_calls_signal",
+      retailerId: "target",
+      retailerName: "Target",
+      retailerSku: "94972381",
+      canonicalUrl: "https://www.target.com/p/-/A-94972381",
+      currentPriceCents: 1999
+    },
+    {
+      variantId: "variant_calls_queue",
+      listingId: "listing_calls_queue",
+      retailerId: "walmart",
+      retailerName: "Walmart",
+      retailerSku: "20252562938",
+      canonicalUrl: "https://www.walmart.com/ip/20252562938",
+      currentPriceCents: 2497
+    }
+  ].map((item) => ({
+    ...item,
+    status: "in_stock",
+    executionSupported: true,
+    msrpCents: 2999,
+    currency: "USD",
+    priceObservedAt: "2026-08-30T08:00:00.000Z",
+    updatedAt: "2026-08-30T08:00:00.000Z"
+  }));
+  const groups = listings.map((listing) => ({
+    variantId: listing.variantId,
+    familyId: `family_${listing.variantId}`,
+    title: listing.retailerId === "target" ? "Signal fixture" : "Queue fixture",
+    brand: "",
+    imageUrl: "",
+    variantAttributes: {},
+    createdAt: "2026-08-30T07:00:00.000Z",
+    storeCount: 1,
+    listingCount: 1,
+    availableListingCount: 1,
+    bestPriceCents: listing.currentPriceCents,
+    currency: "USD",
+    lastActivityAt: "2026-08-30T08:00:00.000Z",
+    listings: [listing]
+  }));
+  const calls = () => [{
+    id: "signal:signal_calls_fixture",
+    kind: "signal",
+    listingId: listings[0]!.listingId,
+    retailerId: "target",
+    retailerSku: "94972381",
+    canonicalUrl: listings[0]!.canonicalUrl,
+    title: "Signal fixture",
+    occurredAt: "2026-08-30T08:00:00.000Z",
+    status: "in_stock",
+    unitPriceCents: 1999,
+    currency: "USD",
+    source: "Collector alerts",
+    sourceChannelId: "provider_channel_calls_fixture",
+    falsePositiveReported
+  }, {
+    id: "drop:drop_window_item_calls_fixture",
+    kind: "queue_open",
+    listingId: listings[1]!.listingId,
+    retailerId: "walmart",
+    retailerSku: "20252562938",
+    canonicalUrl: listings[1]!.canonicalUrl,
+    title: "Queue fixture",
+    occurredAt: "2026-08-30T09:00:00.000Z",
+    status: "scheduled",
+    unitPriceCents: null,
+    currency: "USD",
+    source: "drop_window",
+    dropWindowItemId: "drop_window_item_calls_fixture",
+    closesAt: "2026-08-30T12:00:00.000Z",
+    earlyAccess: { membership: "Walmart+", queueExpected: true }
+  }];
+  const overview = {
+    settings: { actionsPaused: false, executionMode: "live", taxBps: 0, storeAllowancesCents: {} },
+    counts: { products: 2, purchaseIntents: createdListingIds.size, actions: 0, pendingCatalogProposals: 0 },
+    sources: [],
+    permissions: ["worker.manage"],
+    spend: {
+      activeReservationCount: 0,
+      activeReservedCents: 0,
+      spentTodayCents: 0,
+      policy: { revision: 1, perOrderCapCents: null, dailyCapCents: null, monthlyCapCents: null }
+    },
+    walmartDraws: { latestScan: null, items: [] }
+  };
+  Object.defineProperty(browser, "confirm", { configurable: true, value: () => true });
+  Object.defineProperty(browser, "fetch", {
+    configurable: true,
+    value: async (path: string, options: { method?: string; body?: string } = {}) => {
+      if (path === "/api/v1/user/source-feedback/false-positive" && options.method === "POST") {
+        feedback.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
+        falsePositiveReported = true;
+        return { ok: true, status: 200, json: async () => ({ recorded: true }) };
+      }
+      if (path === "/api/v1/admin/workers/restart" && options.method === "POST") {
+        workerRestarts += 1;
+        return { ok: true, status: 200, json: async () => ({ restarted: true }) };
+      }
+      if (path === "/api/v1/user/purchase-intents/preflight" && options.method === "POST") {
+        const requested = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
+        preflights.push(requested);
+        return { ok: true, status: 200, json: async () => ({ preflight: {
+          contractVersion: 1,
+          noPurchasePlanSaved: true,
+          draft: { ...requested },
+          preflightFingerprint: "c".repeat(64),
+          preflightedAt: "2026-08-30T08:01:00.000Z"
+        } }) };
+      }
+      if (path === "/api/v1/user/purchase-intents" && options.method === "POST") {
+        const requested = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
+        posts.push(requested);
+        createdListingIds.add(String(requested.listingId));
+        return { ok: true, status: 201, json: async () => ({ created: true, purchaseIntent: {} }) };
+      }
+      if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => overview };
+      if (path.startsWith("/api/v1/user/library/products")) {
+        return { ok: true, status: 200, json: async () => ({ items: groups, total: groups.length }) };
+      }
+      if (path === "/api/v1/user/purchase-intents?limit=200&offset=0") {
+        return { ok: true, status: 200, json: async () => ({ items: listings
+          .filter((listing) => createdListingIds.has(listing.listingId))
+          .map((listing) => ({ id: `mission_${listing.listingId}`, variantId: listing.variantId })) }) };
+      }
+      if (path === "/api/v1/user/purchase-profiles") {
+        return { ok: true, status: 200, json: async () => ({ items: [profile] }) };
+      }
+      if (path === "/api/v1/user/calls") {
+        return { ok: true, status: 200, json: async () => ({ items: calls() }) };
+      }
+      if (path === "/api/v1/user/health") return { ok: true, status: 200, json: async () => ({
+        contractVersion: 1,
+        generatedAt: "2026-08-30T08:02:00.000Z",
+        version: "calls-health-fixture",
+        worker: { state: "running", healthy: true, lastHeartbeatAt: "2026-08-30T08:01:59.000Z" },
+        counts: { onlineDevices: 1, watchQueue: 1, sourceAttention: 0, connectorFailures: 0 },
+        readiness: [],
+        sources: [],
+        connectors: [],
+        diagnosticBundle: {
+          containsSecrets: false,
+          containsUrls: false,
+          containsDom: false,
+          containsAccountOrPaymentData: false,
+          workerState: "running",
+          workerErrorCode: "",
+          deviceStates: []
+        }
+      }) };
+      if (path === "/api/v1/user/privacy") return { ok: true, status: 200, json: async () => ({ inventory: {
+        totalRecords: 0, credentialMaterialsExcluded: true, categories: []
+      } }) };
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    }
+  });
+  Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
+
+  try {
+    browser.eval(`${script}\n//# sourceURL=user-dashboard-calls-test.js`);
+    await eventually(() => assert.equal(browser.document.querySelectorAll("[data-call-select]").length, 2));
+    const callText = browser.document.querySelector("#callList")?.textContent ?? "";
+    assert.match(callText, /Queue open/);
+    assert.match(callText, /Walmart\+/);
+    assert.match(callText, /Queue Expected/);
+    assert.match(callText, /Observation remains read-only/);
+    const outbound = new URL((browser.document.querySelector("#callList a.canonical") as HTMLAnchorElement).href);
+    assert.equal(outbound.origin, "https://howl.link");
+    assert.equal(outbound.searchParams.get("publisher_slug"), "collectwithdodo");
+    assert.match(browser.document.querySelector("#healthSummary")?.textContent ?? "", /1 companion online · worker healthy/);
+    assert.match(browser.document.querySelector("#healthDetails")?.textContent ?? "", /calls-health-fixture/);
+    assert.equal((browser.document.querySelector("#restartWorker") as HTMLButtonElement).hidden, false);
+
+    (browser.document.querySelector("[data-false-positive]") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(feedback.length, 1));
+    assert.deepEqual(feedback[0], {
+      channelId: "provider_channel_calls_fixture",
+      signalId: "signal_calls_fixture",
+      confirmation: "REPORT_FALSE_POSITIVE"
+    });
+    await eventually(() => assert.match(browser.document.querySelector("#callList")?.textContent ?? "", /False positive reported/));
+
+    const selections = [...browser.document.querySelectorAll("[data-call-select]")] as HTMLInputElement[];
+    for (const input of selections) input.checked = true;
+    selections[0]!.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    const profileSelect = browser.document.querySelector("#callBulkProfile") as HTMLSelectElement;
+    profileSelect.value = profile.id;
+    const bulk = browser.document.querySelector("#callBulkAdd") as HTMLButtonElement;
+    assert.equal(bulk.disabled, false);
+    bulk.click();
+    await eventually(() => assert.equal(posts.length, 2));
+    assert.deepEqual(preflights.map((item) => item.listingId).sort(), [
+      "listing_calls_queue", "listing_calls_signal"
+    ]);
+    for (const created of posts) {
+      assert.equal(created.quickAddProfileId, profile.id);
+      assert.equal(created.targetQuantity, 2);
+      assert.equal(created.maxUnitPriceCents, 2500);
+      assert.equal(created.maxAllInCents, 5000);
+      assert.equal(created.actionCeiling, "add_to_cart");
+      assert.equal(created.fulfillment, "shipping");
+      assert.equal(created.confirmation, "CREATE_EXACT_PURCHASE_PLAN");
+    }
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /2 exact products added/));
+    await eventually(() => assert.equal(browser.document.querySelectorAll("#callList .tag.good").length >= 2, true));
+    (browser.document.querySelector("#restartWorker") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(workerRestarts, 1));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Background worker restarted/));
+  } finally {
+    browser.close();
+  }
+});

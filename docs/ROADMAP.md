@@ -1,8 +1,8 @@
 # Yoink roadmap
 
-## Shipped through 1.15.0
+## Shipped through 1.16.0
 
-### Provider-neutral calls and stagger-proof drop watch (1.15.0)
+### Provider-neutral calls and stagger-proof drop watch (1.16.0)
 
 - Adds one versioned provider envelope over the existing `signal_event_v1`
   durable inbox, structured Discord intake, batch receipts, per-channel trust,
@@ -17,7 +17,8 @@
   baselines, fresh signed-in readiness, and head-of-line-safe drains
 - Adds a user Calls feed with inline Quick add and bulk profile application,
   deployment-bound Carted / Needs-you / Missed connectors, privacy-bounded exact
-  order-confirmation observation, and per-store qualification/version warnings
+  order-confirmation observation across all four guarded retailers, idempotent
+  false-positive feedback, and per-store qualification/version warnings
 - Adds funnel, hit-rate, spend/cap, latency, and MSRP-coverage analytics with a
   CSV export; restock-pattern support for admin authoring; a sanitized health
   bundle and worker restart control; and Chrome settings for permission,
@@ -25,6 +26,9 @@
 - Publishes a privacy policy and change notice while preserving first-party,
   exact-SKU, quantity-one, Shipping-default or explicit-Pickup, fresh-DOM,
   no-evasion, no-click qualification, and manual-checkout boundaries
+- Adds one explicit all-lane no-click reverification workflow, restart-safe
+  extension watch leases, per-item batch retry classification, verified local
+  deletion read-back, and deterministic daylight-saving spend-period resets
 
 ### Action close-out, latency, and readiness (1.14.0)
 

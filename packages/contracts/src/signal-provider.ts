@@ -33,6 +33,8 @@ export interface SignalProviderBatchReceipt {
   receipts: Array<{
     index: number;
     accepted: boolean;
+    /** Whether the exact item should remain queued for a later delivery cycle. */
+    retryable: boolean;
     signalId: string;
     duplicate: boolean;
     processingState: "queued" | "processed" | "dead_letter" | "rejected";

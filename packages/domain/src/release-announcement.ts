@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-15-action-platform",
-  version: "1.15.0",
+  id: "yoink-1-16-action-speed",
+  version: "1.16.0",
   publishedAt: "2026-08-30T00:00:00.000Z",
-  title: "Drop watch and action readiness",
-  summary: "Yoink can now stage exact drop windows, keep each opted-in item under bounded observation, and show what is ready before a signal becomes a cart action.",
+  title: "Faster cart handoffs and store readiness",
+  summary: "Yoink now carries each exact call through a faster, restart-safe Chrome path and makes cart-ready, source, queue, and store-lane state immediately actionable.",
   highlights: [
-    "Provider-neutral signals add per-channel trust, Discord intake, batching, and replay-safe source health.",
-    "Drop windows create an exact read-only watch queue that handles staggered releases without clicking a retailer control.",
-    "Calls, readiness, connector handoffs, privacy receipts, health details, and action analytics now share one user action platform."
+    "Cart-ready notification, badge, optional sound, popup state, adaptive dashboard handoff, and Got it or Missed it close-out now share one measured path.",
+    "Batch retry, warm readiness, reusable store tabs, restart-safe watch leases, and all-lane no-click reverification remove avoidable cold-path and arming delays.",
+    "Calls now combines queue-open facts, bulk profiles, affiliate routing, false-positive feedback, source replay, all-store confirmation observation, and sanitized health controls."
   ],
   docsUrl: "/docs"
 });

@@ -1020,7 +1020,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           unitPriceCents: signal.unitPriceCents ?? null,
           currency: String(signal.currency ?? "USD"),
           actionJobId: String(signal.actionJobId ?? ""),
-          source: String(signal.source ?? "")
+          source: String(signal.source ?? ""),
+          sourceChannelId: String(signal.sourceChannelId ?? ""),
+          falsePositiveReported: Number(signal.falsePositiveReported ?? 0) === 1
         }));
         const windowCalls = dropWindows.list(now, false).flatMap((window) => window.items.map((item) => ({
           id: `drop:${item.id}`,
@@ -1047,6 +1049,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime())
           .slice(0, 200);
         json(response, 200, { items, generatedAt: new Date(now).toISOString() });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/source-feedback/false-positive") {
+        const body = await readJson(request);
+        if (body.confirmation !== "REPORT_FALSE_POSITIVE") {
+          throw new Error("Explicit false-positive feedback confirmation is required.");
+        }
+        json(response, 200, signalProviders.reportSignalFalsePositive(String(body.channelId ?? ""), body.signalId));
         return;
       }
 
@@ -1337,6 +1348,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
                 .map((consent) => consent.retailerId)
             }
           });
+          return;
+        }
+        if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/readiness/reverification-plan") {
+          json(response, 200, { plan: retailerReadiness.reverifyPlan() });
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/credential-rotation/begin") {

@@ -120,8 +120,8 @@ function record(row: ChannelRow): SignalProviderChannel {
       ? null : Math.max(0, Math.round(Number(row.p95ObservedToReceivedMs))),
     matchRateBps: signalCount ? Math.round(Number(row.matchedSignalCount) * 10_000 / signalCount) : null,
     qualifiedRateBps: signalCount ? Math.round(Number(row.qualifiedSignalCount) * 10_000 / signalCount) : null,
-    accuracyBps: acceptedEventCount
-      ? Math.max(0, Math.round((acceptedEventCount - falsePositiveCount) * 10_000 / acceptedEventCount))
+    accuracyBps: signalCount
+      ? Math.max(0, Math.round((signalCount - falsePositiveCount) * 10_000 / signalCount))
       : null,
     health
   };
@@ -349,19 +349,65 @@ export class SignalProviderRepository {
     );
   }
 
-  reportFalsePositive(id: string, now = Date.now()): SignalProviderChannel {
+  reportSignalFalsePositive(
+    id: string,
+    signalIdValue: unknown,
+    now = Date.now()
+  ): { channel: SignalProviderChannel; recorded: boolean; signalId: string } {
     const safeId = channelId(id);
-    if (!this.getChannel(safeId)) throw new Error("The signal provider channel does not exist.");
-    this.db.run(
-      `UPDATE signal_provider_channels
-       SET false_positive_count = false_positive_count + 1, updated_at = ?
-       WHERE id = ? AND tenant_id = ? AND user_id = ?`,
-      nowIso(now),
-      safeId,
-      currentRequestScope().tenantId,
-      currentRequestScope().userId
-    );
-    return this.getChannel(safeId) as SignalProviderChannel;
+    const signalId = cleanText(signalIdValue, 160);
+    if (!signalId) throw new Error("The exact signal ID is required for false-positive feedback.");
+    const scope = currentRequestScope();
+    const result = this.db.transaction(() => {
+      const event = this.db.get<{ signalEventId: string }>(
+        `SELECT event.id AS signalEventId
+         FROM signal_events event
+         JOIN signal_provider_channels channel
+           ON channel.source_connection_id = event.source_connection_id
+          AND channel.tenant_id = event.tenant_id
+          AND channel.user_id = event.user_id
+         WHERE channel.id = ? AND event.signal_id = ?
+           AND event.tenant_id = ? AND event.user_id = ? AND event.test = 0`,
+        safeId, signalId, scope.tenantId, scope.userId
+      );
+      if (!event) throw new Error("The signal does not belong to this source channel.");
+      const correlationId = stableHash(
+        "yoink_signal_false_positive_v1",
+        scope.tenantId,
+        scope.userId,
+        safeId,
+        signalId
+      );
+      const recorded = Boolean(this.db.get<{ id: string }>(
+        `SELECT id FROM audit_events
+         WHERE tenant_id = ? AND user_id = ? AND correlation_id = ?
+           AND event_type = 'provider_signal_false_positive_reported'
+         LIMIT 1`,
+        scope.tenantId, scope.userId, correlationId
+      ));
+      if (!recorded) {
+        this.db.run(
+          `UPDATE signal_provider_channels
+           SET false_positive_count = false_positive_count + 1, updated_at = ?
+           WHERE id = ? AND tenant_id = ? AND user_id = ?`,
+          nowIso(now), safeId, scope.tenantId, scope.userId
+        );
+        this.audit.record({
+          correlationId,
+          aggregateType: "signal_provider_feedback",
+          eventType: "provider_signal_false_positive_reported",
+          reasonCode: "user_reported_false_positive",
+          message: "The user marked one exact source signal as a false positive.",
+          data: { channelId: safeId, signalId, feedbackType: "false_positive" }
+        }, now);
+      }
+      return !recorded;
+    });
+    return {
+      channel: this.getChannel(safeId) as SignalProviderChannel,
+      recorded: result,
+      signalId
+    };
   }
 
   private withPercentiles(channel: SignalProviderChannel): SignalProviderChannel {

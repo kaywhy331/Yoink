@@ -1033,6 +1033,14 @@ export class SignalRepository {
     return this.db.all(
       `SELECT se.signal_id AS signalId, se.source, se.event_type AS eventType,
               se.test, se.observed_at AS observedAt,
+              spc.id AS sourceChannelId,
+              CASE WHEN EXISTS(
+                SELECT 1 FROM audit_events feedback
+                WHERE feedback.tenant_id = se.tenant_id AND feedback.user_id = se.user_id
+                  AND feedback.event_type = 'provider_signal_false_positive_reported'
+                  AND json_extract(feedback.data_json, '$.channelId') = spc.id
+                  AND json_extract(feedback.data_json, '$.signalId') = se.signal_id
+              ) THEN 1 ELSE 0 END AS falsePositiveReported,
               se.resolution_status AS resolutionStatus,
               rd.method AS resolutionMethod, rd.reason AS resolutionReason,
               md.outcome AS missionDecision, md.reason AS missionReason,
@@ -1055,6 +1063,7 @@ export class SignalRepository {
        LEFT JOIN listings l ON l.id = si.listing_id
        LEFT JOIN variants v ON v.id = l.variant_id
        LEFT JOIN action_jobs aj ON aj.incident_id = si.id AND aj.user_id = se.user_id
+       LEFT JOIN signal_provider_channels spc ON spc.source_connection_id = se.source_connection_id
        WHERE se.user_id = ? AND (? = ''
          OR se.signal_id LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR se.source LIKE ? ESCAPE '\\' COLLATE NOCASE

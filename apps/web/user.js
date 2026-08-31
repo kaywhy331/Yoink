@@ -935,6 +935,8 @@ function renderCalls() {
         ${eligible ? `<button class="button primary" data-quick-add="${escapeHtml(call.listingId)}" type="button">Quick add</button>` : planned ? '<span class="tag good">Plan ready</span>' : ""}
         ${call.dropWindowItemId && !watch ? `<button class="button secondary" data-watch-enroll="${escapeHtml(call.dropWindowItemId)}" type="button">Watch window</button>` : ""}
         ${watchActive ? `<button class="button quiet" data-watch-cancel="${escapeHtml(watch.id)}" type="button">Stop watching</button>` : ""}
+        ${call.kind === "signal" && call.sourceChannelId && !call.falsePositiveReported ? `<button class="button quiet" data-false-positive="${escapeHtml(call.id)}" type="button">Report false positive</button>` : ""}
+        ${call.falsePositiveReported ? '<span class="tag warn">False positive reported</span>' : ""}
         ${call.canonicalUrl ? `<a class="canonical" href="${escapeHtml(howlAffiliateUrl(call.canonicalUrl, call.title))}" target="_blank" rel="noopener noreferrer sponsored">Store page ↗</a>` : ""}
       </div></div>
     </article>`;
@@ -963,7 +965,7 @@ function renderActionPlatform() {
     const warning = lane.qualification?.warning;
     return `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(lane.retailerId))}</strong><small>${(lane.checklist || []).map((check) => `${check.ready ? "✓" : "○"} ${check.label}`).join(" · ")}</small></span><span class="tag ${ready ? "good" : "warn"}">${ready ? "Ready" : warning && warning !== "none" ? words(warning) : "Needs setup"}</span></div>`;
   }).join("") || '<div class="mini-row"><span>No guarded store lanes are configured.</span></div>';
-  $("#sourceScorecards").innerHTML = (platform.sources || []).map((source) => `<div class="mini-row"><span><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(words(source.provider))} · ${Number(source.acceptedEventCount || 0).toLocaleString()} accepted · p95 ${duration(source.p95ObservedToReceivedMs)}</small></span><span class="tag ${source.health === "healthy" ? "good" : source.health === "attention" ? "warn" : ""}">${escapeHtml(words(source.health || source.status))}</span></div>`).join("") || '<div class="mini-row"><span>No source channels yet.</span></div>';
+  $("#sourceScorecards").innerHTML = (platform.sources || []).map((source) => `<div class="mini-row"><span><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(words(source.provider))} · ${Number(source.signalCount || 0).toLocaleString()} signals · ${source.accuracyBps === null || source.accuracyBps === undefined ? "accuracy pending" : `${(Number(source.accuracyBps) / 100).toFixed(1)}% accuracy`} · ${Number(source.falsePositiveCount || 0).toLocaleString()} false positive${Number(source.falsePositiveCount || 0) === 1 ? "" : "s"} · p95 ${duration(source.p95ObservedToReceivedMs)}</small></span><span class="tag ${source.health === "healthy" ? "good" : source.health === "attention" ? "warn" : ""}">${escapeHtml(words(source.health || source.status))}</span></div>`).join("") || '<div class="mini-row"><span>No source channels yet.</span></div>';
   renderConnectors();
 }
 
@@ -1564,6 +1566,25 @@ document.addEventListener("click", async (event) => {
       await refresh();
       setTab("calls");
       toast("Watch stopped. No store action was taken.");
+    }
+    if (button.dataset.falsePositive) {
+      const call = state.calls.find((item) => item.id === button.dataset.falsePositive);
+      if (!call?.sourceChannelId || !call.id.startsWith("signal:")) {
+        throw new Error("Refresh before reporting this signal.");
+      }
+      if (!confirm("Report this exact source signal as a false positive? This updates the channel scorecard and does not change your purchase plan.")) return;
+      button.disabled = true;
+      await api("/api/v1/user/source-feedback/false-positive", {
+        method: "POST",
+        body: JSON.stringify({
+          channelId: call.sourceChannelId,
+          signalId: call.id.slice("signal:".length),
+          confirmation: "REPORT_FALSE_POSITIVE"
+        })
+      });
+      await refresh();
+      setTab("calls");
+      toast("False positive recorded for this source channel.");
     }
     if (button.dataset.connectorTest) {
       button.disabled = true;

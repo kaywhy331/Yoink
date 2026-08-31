@@ -59,6 +59,9 @@ const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
 const RETAILER_ACTION_TABS_KEY = "yoinkRetailerActionTabsV1";
 const WARM_READINESS_CURSOR_KEY = "yoinkWarmReadinessCursorV1";
+const WATCH_QUEUE_STATE_KEY = "yoinkWatchQueueStateV1";
+const WATCH_QUEUE_LEASE_KEY = "yoinkWatchQueueLeaseV1";
+const REVERIFICATION_STATE_KEY = "yoinkRetailerReverificationStateV1";
 const ORDER_HANDOFF_KEY = "yoinkOrderHandoffsV1";
 const CART_READY_SOUND_KEY = "yoinkCartReadySoundEnabledV1";
 const TRACKALACKER_PUSH_STATE_KEY = "yoinkTrackalackerPushStateV1";
@@ -1884,6 +1887,7 @@ function normalizeTrackalackerState(value = {}) {
     "push_subscribe_failed", "push_silent_migration_failed", "silent_push_unavailable",
     "missing_subscription", "incomplete_subscription", "subscription_fingerprint_failed",
     "page_bridge_failed", "network_error", "http_error", "signal_delivery_rejected",
+    "signal_delivery_retryable",
     "signal_delivery_http", "local_app_unreachable"
   ]);
   const errorCode = String(value.errorCode || "");
@@ -2007,7 +2011,9 @@ async function sendTrackalackerBatch(envelopes) {
       status: 202,
       acceptedIds: receipts.filter((receipt) => receipt?.accepted === true)
         .map((receipt) => envelopes[Number(receipt.index)]?.signalId).filter(Boolean),
-      rejectedIds: receipts.filter((receipt) => receipt?.accepted !== true)
+      rejectedIds: receipts.filter((receipt) => receipt?.accepted !== true && receipt?.retryable !== true)
+        .map((receipt) => envelopes[Number(receipt.index)]?.signalId).filter(Boolean),
+      retryableIds: receipts.filter((receipt) => receipt?.accepted !== true && receipt?.retryable === true)
         .map((receipt) => envelopes[Number(receipt.index)]?.signalId).filter(Boolean)
     };
   } catch (error) {
@@ -2022,19 +2028,23 @@ async function drainTrackalackerQueue() {
     const state = await readTrackalackerState();
     if (!state.enabled) return { delivered: 0 };
     let delivered = 0;
+    const attemptedIds = new Set();
     while (true) {
       const queue = await readTrackalackerQueue();
-      const batch = queue.slice(0, 20);
+      const batch = queue.filter((entry) => !attemptedIds.has(entry.signalId)).slice(0, 20);
       if (!batch.length) break;
       const result = await sendTrackalackerBatch(batch);
       if (result.delivered) {
         const completed = new Set([...(result.acceptedIds || []), ...(result.rejectedIds || [])]);
+        for (const signalId of result.retryableIds || []) attemptedIds.add(signalId);
         await mutateTrackalackerQueue((current) => current.filter((entry) => !completed.has(entry.signalId)));
         delivered += result.acceptedIds?.length || 0;
         await updateTrackalackerState({
           lastDeliveryAt: new Date().toISOString(),
           lastHttpStatus: result.status,
-          errorCode: result.rejectedIds?.length ? "signal_delivery_rejected" : ""
+          errorCode: result.retryableIds?.length
+            ? "signal_delivery_retryable"
+            : result.rejectedIds?.length ? "signal_delivery_rejected" : ""
         });
         continue;
       }
@@ -2048,7 +2058,7 @@ async function drainTrackalackerQueue() {
         errorCode: result.status ? "signal_delivery_http" : "local_app_unreachable",
         lastHttpStatus: result.status
       });
-      break;
+      for (const entry of batch) attemptedIds.add(entry.signalId);
     }
     const next = await readTrackalackerState();
     return { delivered, state: next };
@@ -2591,6 +2601,17 @@ async function deleteLocalCompanionData(confirmation) {
     .then((subscription) => subscription?.unsubscribe?.()).catch(() => undefined);
   await chrome.storage.local.clear();
   await chrome.storage.session.clear();
+  const [retainedLocal, retainedSession] = await Promise.all([
+    chrome.storage.local.get(null),
+    chrome.storage.session.get(null)
+  ]);
+  const retainedKeys = [
+    ...Object.keys(retainedLocal || {}).map((key) => `local:${key}`),
+    ...Object.keys(retainedSession || {}).map((key) => `session:${key}`)
+  ];
+  if (retainedKeys.length) {
+    throw new Error("Chrome retained local Yoink data. Close other Yoink extension pages and try again.");
+  }
   await Promise.all([
     chrome.action.setBadgeText({ text: "" }),
     chrome.action.setTitle({ title: "Yoink Companion · Not paired" })
@@ -2605,7 +2626,7 @@ async function deleteLocalCompanionData(confirmation) {
           contractVersion: 1,
           localCleared: true,
           sessionCleared: true,
-          retainedKeys: []
+          retainedKeys
         })
       }, EVIDENCE_REQUEST_TIMEOUT_MS);
       verified = true;
@@ -2616,12 +2637,21 @@ async function deleteLocalCompanionData(confirmation) {
   return { deleted: true, verified };
 }
 
-async function inspectTargetTab() {
+async function operationTab(tabId = null) {
+  if (Number.isInteger(tabId)) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) throw new Error("The exact retailer tab is no longer available.");
+    return tab;
+  }
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0] || null;
+}
+
+async function inspectTargetTab(tabId = null) {
   if (!await targetShadowAccess()) throw new Error("Allow Target page access, then try again.");
   const device = await storedDevice();
   if (!device?.id || !device?.token) throw new Error("Pair this Chrome companion before inspecting Target.");
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
+  const tab = await operationTab(tabId);
   if (!Number.isInteger(tab?.id) || !exactTargetProductUrl(tab.url)) {
     throw new Error("Open an exact Target product page in the active tab, then try again.");
   }
@@ -2728,11 +2758,10 @@ async function inspectWalmartDrawHubTab() {
   return { state: await checkHealth(), scan: response.scan };
 }
 
-async function inspectRetailerTab() {
+async function inspectRetailerTab(tabId = null) {
   const device = await storedDevice();
   if (!device?.id || !device?.token) throw new Error("Pair this Chrome companion before inspecting a retailer.");
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
+  const tab = await operationTab(tabId);
   const identity = Number.isInteger(tab?.id) ? canonicalRetailerIdentity(tab.url) : null;
   if (!identity || !Object.hasOwn(RETAILER_ORIGINS, identity.retailerId)) {
     throw new Error("Open an exact supported retailer product page in the active tab, then try again.");
@@ -2992,12 +3021,11 @@ function targetRehearsalJob(observation) {
   };
 }
 
-async function rehearseTargetTab(existingInspection = null) {
-  const inspection = existingInspection || await inspectTargetTab();
+async function rehearseTargetTab(existingInspection = null, tabId = null) {
+  const inspection = existingInspection || await inspectTargetTab(tabId);
   const observation = inspection.observation;
   const job = targetRehearsalJob(observation);
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
+  const tab = await operationTab(tabId);
   if (!Number.isInteger(tab?.id)
     || targetSkuFromUrl(tab.url) !== observation.retailerSku) {
     throw new Error("Keep the inspected Target product page active while the no-click rehearsal runs.");
@@ -3059,12 +3087,11 @@ function walmartRehearsalJob(observation) {
   };
 }
 
-async function rehearseWalmartTab(existingInspection = null) {
-  const inspection = existingInspection || await inspectRetailerTab();
+async function rehearseWalmartTab(existingInspection = null, tabId = null) {
+  const inspection = existingInspection || await inspectRetailerTab(tabId);
   const observation = inspection.observation;
   const job = walmartRehearsalJob(observation);
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
+  const tab = await operationTab(tabId);
   const identity = canonicalRetailerIdentity(tab?.url);
   if (!Number.isInteger(tab?.id)
     || identity?.retailerId !== "walmart"
@@ -3129,8 +3156,8 @@ function amazonRehearsalJob(observation) {
   };
 }
 
-async function rehearseAmazonTab(existingInspection = null) {
-  const inspection = existingInspection || await inspectRetailerTab();
+async function rehearseAmazonTab(existingInspection = null, tabId = null) {
+  const inspection = existingInspection || await inspectRetailerTab(tabId);
   const observation = inspection.observation;
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Amazon.");
@@ -3159,8 +3186,7 @@ async function rehearseAmazonTab(existingInspection = null) {
     ));
     throw error;
   }
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
+  const tab = await operationTab(tabId);
   const identity = canonicalRetailerIdentity(tab?.url);
   if (!Number.isInteger(tab?.id)
     || identity?.retailerId !== "amazon"
@@ -3246,8 +3272,8 @@ function bestBuyRehearsalJob(observation) {
   };
 }
 
-async function rehearseBestBuyTab(existingInspection = null) {
-  const inspection = existingInspection || await inspectRetailerTab();
+async function rehearseBestBuyTab(existingInspection = null, tabId = null) {
+  const inspection = existingInspection || await inspectRetailerTab(tabId);
   const observation = inspection.observation;
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Best Buy.");
@@ -3279,8 +3305,7 @@ async function rehearseBestBuyTab(existingInspection = null) {
     ));
     throw error;
   }
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
+  const tab = await operationTab(tabId);
   const identity = canonicalRetailerIdentity(tab?.url);
   if (!Number.isInteger(tab?.id)
     || identity?.retailerId !== "bestbuy"
@@ -3323,10 +3348,10 @@ async function rehearseBestBuyTab(existingInspection = null) {
   };
 }
 
-async function inspectAndQualifyActiveTab() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const popupPage = PopupState.classifyPageContext(tabs[0]?.url);
-  const identity = canonicalRetailerIdentity(tabs[0]?.url);
+async function inspectAndQualifyActiveTab(tabId = null) {
+  const tab = await operationTab(tabId);
+  const popupPage = PopupState.classifyPageContext(tab?.url);
+  const identity = canonicalRetailerIdentity(tab?.url);
   if (!identity || popupPage.kind !== "product"
     || popupPage.retailerId !== identity.retailerId
     || popupPage.sku !== identity.retailerSku) {
@@ -3339,8 +3364,8 @@ async function inspectAndQualifyActiveTab() {
     bestbuy: rehearseBestBuyTab
   };
   const inspection = identity.retailerId === "target"
-    ? await inspectTargetTab()
-    : await inspectRetailerTab();
+    ? await inspectTargetTab(tab?.id)
+    : await inspectRetailerTab(tab?.id);
   const rehearsal = guardedRehearsals[identity.retailerId];
   if (!rehearsal) {
     return {
@@ -3359,7 +3384,7 @@ async function inspectAndQualifyActiveTab() {
   }
   try {
     return {
-      ...await rehearsal(inspection),
+      ...await rehearsal(inspection, tab?.id),
       productIdentity: inspection.productIdentity || null,
       retailerId: identity.retailerId,
       workflow: "qualification",
@@ -3379,6 +3404,121 @@ async function inspectAndQualifyActiveTab() {
       message: error instanceof Error ? error.message : "The current offer did not qualify."
     };
   }
+}
+
+function normalizedReverificationPlan(value) {
+  const lanes = [];
+  for (const item of Array.isArray(value?.lanes) ? value.lanes.slice(0, 4) : []) {
+    const retailerId = String(item?.retailerId || "");
+    const candidateIdentity = canonicalRetailerIdentity(item?.candidate?.canonicalUrl);
+    const candidate = candidateIdentity?.retailerId === retailerId
+      && candidateIdentity.retailerSku === String(item?.candidate?.retailerSku || "").toUpperCase()
+      ? {
+        retailerSku: candidateIdentity.retailerSku,
+        canonicalUrl: candidateIdentity.canonicalUrl,
+        title: String(item.candidate.title || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 160),
+        trialObservedAt: String(item.candidate.trialObservedAt || "").slice(0, 40)
+      } : null;
+    if (!ADD_LANES[retailerId] || lanes.some((lane) => lane.retailerId === retailerId)) continue;
+    lanes.push({
+      retailerId,
+      expectedAdapterVersion: String(item.expectedAdapterVersion || "").slice(0, 80),
+      qualification: {
+        status: ["qualified", "suspended", "retired", "missing"].includes(String(item.qualification?.status || ""))
+          ? String(item.qualification.status) : "missing",
+        warning: ["none", "expiring", "expired", "version_changed"].includes(String(item.qualification?.warning || ""))
+          ? String(item.qualification.warning) : "none",
+        expiresAt: String(item.qualification?.expiresAt || "").slice(0, 40)
+      },
+      candidate
+    });
+  }
+  return { createdAt: String(value?.createdAt || "").slice(0, 40), lanes };
+}
+
+async function getReverificationPlan() {
+  const device = await storedDevice();
+  if (!device?.token) throw new Error("Pair this Chrome companion before re-verifying store lanes.");
+  const payload = await request("/devices/self/readiness/reverification-plan", {
+    headers: { Authorization: `Bearer ${device.token}` }
+  }, EVIDENCE_REQUEST_TIMEOUT_MS);
+  return normalizedReverificationPlan(payload?.plan);
+}
+
+async function saveReverificationState(state, results = []) {
+  const value = {
+    schemaVersion: 1,
+    state: ["running", "complete", "partial", "error"].includes(state) ? state : "error",
+    results: results.slice(0, 4).map((result) => ({
+      retailerId: String(result.retailerId || "").slice(0, 40),
+      retailerSku: String(result.retailerSku || "").slice(0, 80),
+      outcome: ["passed", "blocked", "missing_candidate", "access_missing", "error"].includes(result.outcome)
+        ? result.outcome : "error",
+      reasonCode: safeReasonCode(result.reasonCode || result.outcome)
+    })),
+    updatedAt: new Date().toISOString()
+  };
+  await chrome.storage.local.set({ [REVERIFICATION_STATE_KEY]: value });
+  return value;
+}
+
+async function runRetailerReverification(retailerIds = []) {
+  if (await activeJob().catch(() => null)) {
+    throw new Error("Wait for the current guarded cart action to finish before re-verifying store lanes.");
+  }
+  const requested = [...new Set((Array.isArray(retailerIds) ? retailerIds : [])
+    .map((value) => String(value || "")).filter((value) => ADD_LANES[value]))].slice(0, 4);
+  if (!requested.length) throw new Error("Choose at least one supported store lane to re-verify.");
+  const plan = await getReverificationPlan();
+  const results = [];
+  await saveReverificationState("running", results);
+  for (const retailerId of requested) {
+    const lane = plan.lanes.find((item) => item.retailerId === retailerId);
+    if (!lane?.candidate) {
+      results.push({ retailerId, retailerSku: "", outcome: "missing_candidate", reasonCode: "qualification_candidate_missing" });
+      await saveReverificationState("running", results);
+      continue;
+    }
+    const origins = retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[retailerId];
+    if (!origins || !await chrome.permissions.contains({ origins })) {
+      results.push({
+        retailerId,
+        retailerSku: lane.candidate.retailerSku,
+        outcome: "access_missing",
+        reasonCode: "retailer_access_missing"
+      });
+      await saveReverificationState("running", results);
+      continue;
+    }
+    let tabId = null;
+    try {
+      const tab = await chrome.tabs.create({ url: lane.candidate.canonicalUrl, active: false });
+      if (!Number.isInteger(tab?.id)) throw new Error("qualification_tab_unavailable");
+      tabId = tab.id;
+      await waitForExactProductTab(tabId, retailerId, lane.candidate.retailerSku);
+      const verified = await inspectAndQualifyActiveTab(tabId);
+      const passed = verified?.rehearsal?.ok === true;
+      results.push({
+        retailerId,
+        retailerSku: lane.candidate.retailerSku,
+        outcome: passed ? "passed" : "blocked",
+        reasonCode: passed ? "verified" : safeReasonCode(verified?.rehearsal?.reason || "qualification_blocked")
+      });
+    } catch (error) {
+      results.push({
+        retailerId,
+        retailerSku: lane.candidate.retailerSku,
+        outcome: "error",
+        reasonCode: safeReasonCode(error instanceof Error ? error.message : "qualification_failed")
+      });
+    } finally {
+      if (Number.isInteger(tabId)) await chrome.tabs.remove(tabId).catch(() => undefined);
+    }
+    await saveReverificationState("running", results);
+  }
+  const state = results.every((result) => result.outcome === "passed") ? "complete" : "partial";
+  const persisted = await saveReverificationState(state, results);
+  return { plan, ...persisted };
 }
 
 async function persistPopupResult(result) {
@@ -4385,7 +4525,19 @@ async function executeLeasedRetailerJob(
       await clearActiveJob();
       return { confirmed: false, tabId: active.tabId, continueCycle: true };
     }
-    await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "passed", "complete", "verified", active.runnerJob.fulfillment);
+    // A successful structural diagnostic is useful telemetry, but it must not
+    // sit on the cart hot path. The exact offer proof below remains the
+    // authoritative action gate; diagnostic delivery is best-effort and the
+    // durable diagnostic outbox handles retryable delivery failures.
+    void recordTabOperationDiagnostic(
+      active.tabId,
+      retailerId,
+      "live_add",
+      "passed",
+      "complete",
+      "verified",
+      active.runnerJob.fulfillment
+    ).catch(() => undefined);
     active.proof = prepared.proof;
     active.authorizationId = prepared.authorizationId;
     markJobTiming(active, "offerVerifiedAt");
@@ -4636,6 +4788,69 @@ async function postWatchObservation(device, lease, observation = null, reasonCod
   }, EVIDENCE_REQUEST_TIMEOUT_MS);
 }
 
+function normalizedWatchLease(value) {
+  if (!value || value.contractVersion !== 1 || value.readOnly !== true || value.quantity !== 1
+    || !/^watch_item_[a-f0-9]{32}$/.test(String(value.id || ""))
+    || !/^[A-Za-z0-9_-]{20,100}$/.test(String(value.capabilityToken || ""))) return null;
+  const leaseExpiresAt = String(value.leaseExpiresAt || "");
+  if (!leaseExpiresAt || new Date(leaseExpiresAt).getTime() <= Date.now()) return null;
+  const identity = canonicalRetailerIdentity(value.canonicalUrl);
+  if (!identity || identity.retailerId !== value.retailerId
+    || identity.retailerSku !== String(value.retailerSku || "").toUpperCase()) return null;
+  return {
+    contractVersion: 1,
+    id: String(value.id),
+    capabilityToken: String(value.capabilityToken),
+    leaseExpiresAt,
+    retailerId: identity.retailerId,
+    retailerSku: identity.retailerSku,
+    canonicalUrl: identity.canonicalUrl,
+    readOnly: true,
+    quantity: 1
+  };
+}
+
+function watchQueuePublicState(state, lease = null, reason = "") {
+  return {
+    schemaVersion: 1,
+    state: ["idle", "leased", "observing", "reported", "retrying", "error"].includes(state) ? state : "error",
+    watchItemId: String(lease?.id || "").slice(0, 80),
+    retailerId: String(lease?.retailerId || "").slice(0, 40),
+    retailerSku: String(lease?.retailerSku || "").slice(0, 80),
+    leaseExpiresAt: String(lease?.leaseExpiresAt || "").slice(0, 40),
+    reasonCode: safeReasonCode(reason),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function saveWatchLease(lease) {
+  const normalized = normalizedWatchLease(lease);
+  if (!normalized) throw new Error("watch_lease_invalid");
+  await Promise.all([
+    chrome.storage.session.set({ [WATCH_QUEUE_LEASE_KEY]: normalized }),
+    chrome.storage.local.set({ [WATCH_QUEUE_STATE_KEY]: watchQueuePublicState("leased", normalized, "leased") })
+  ]);
+  return normalized;
+}
+
+async function readWatchLease() {
+  const stored = await chrome.storage.session.get(WATCH_QUEUE_LEASE_KEY);
+  const lease = normalizedWatchLease(stored[WATCH_QUEUE_LEASE_KEY]);
+  if (!lease && stored[WATCH_QUEUE_LEASE_KEY]) await chrome.storage.session.remove(WATCH_QUEUE_LEASE_KEY);
+  return lease;
+}
+
+async function updateWatchQueueState(state, lease = null, reason = "") {
+  await chrome.storage.local.set({ [WATCH_QUEUE_STATE_KEY]: watchQueuePublicState(state, lease, reason) });
+}
+
+async function finishWatchLease(lease, reason) {
+  await Promise.all([
+    chrome.storage.session.remove(WATCH_QUEUE_LEASE_KEY),
+    updateWatchQueueState("reported", lease, reason)
+  ]);
+}
+
 async function collectWatchObservation(tabId, lease) {
   if (lease.retailerId === "target") {
     await chrome.scripting.executeScript({
@@ -4697,23 +4912,29 @@ async function runWatchQueueCycle() {
     const device = await storedDevice();
     if (!device?.token) return { observed: false, reason: "device_unavailable" };
     if (await activeJob().catch(() => null)) return { observed: false, reason: "action_job_active" };
-    const response = await request("/devices/self/watch-queue/next", {
-      headers: { Authorization: `Bearer ${device.token}` }
-    });
-    const lease = response?.item;
-    if (!lease?.readOnly || lease.contractVersion !== 1 || lease.quantity !== 1
-      || !/^[A-Za-z0-9_-]{20,100}$/.test(String(lease.capabilityToken || ""))) {
-      return { observed: false, reason: String(response?.reason || "no_watch_items") };
+    let lease = await readWatchLease();
+    if (!lease) {
+      const response = await request("/devices/self/watch-queue/next", {
+        headers: { Authorization: `Bearer ${device.token}` }
+      });
+      if (!response?.item) {
+        await updateWatchQueueState("idle", null, String(response?.reason || "no_watch_items"));
+        return { observed: false, reason: String(response?.reason || "no_watch_items") };
+      }
+      lease = await saveWatchLease(response.item);
     }
+    await updateWatchQueueState("observing", lease, "read_only_observation");
     const identity = canonicalRetailerIdentity(lease.canonicalUrl);
     if (!identity || identity.retailerId !== lease.retailerId
       || identity.retailerSku !== String(lease.retailerSku || "").toUpperCase()) {
       await postWatchObservation(device, lease, null, "listing_identity_invalid");
+      await finishWatchLease(lease, "listing_identity_invalid");
       return { observed: true, reason: "listing_identity_invalid" };
     }
     const origins = lease.retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[lease.retailerId];
     if (!origins || !await chrome.permissions.contains({ origins })) {
       await postWatchObservation(device, lease, null, "access_missing");
+      await finishWatchLease(lease, "access_missing");
       return { observed: true, reason: "access_missing" };
     }
     let tabId = null;
@@ -4726,10 +4947,14 @@ async function runWatchQueueCycle() {
       await postWatchObservation(device, lease, observation,
         observation.securityChallenge ? "security_challenge"
           : observation.interactiveBlock ? `interactive_${observation.interactiveBlock}` : "observed");
+      await finishWatchLease(lease, observation.availability);
       return { observed: true, reason: observation.availability };
     } catch (error) {
       const reason = safeReasonCode(error instanceof Error ? error.message : "observation_failed");
-      await postWatchObservation(device, lease, null, reason).catch(() => undefined);
+      const reported = await postWatchObservation(device, lease, null, reason)
+        .then(() => true).catch(() => false);
+      if (reported) await finishWatchLease(lease, reason);
+      else await updateWatchQueueState("retrying", lease, reason);
       return { observed: true, reason };
     } finally {
       if (Number.isInteger(tabId)) await chrome.tabs.remove(tabId).catch(() => undefined);
@@ -5245,13 +5470,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const extensionUpdate = message?.type === "yoink:check-update";
   const cartReadyOpen = message?.type === "yoink:open-cart-ready";
   const localDataDeletion = message?.type === "yoink:delete-local-data";
+  const reverificationPlan = message?.type === "yoink:get-reverification-plan";
+  const retailerReverification = message?.type === "yoink:reverify-retailer-lanes";
   const contentOperation = [
     "yoink:resolve-trackalacker-listing",
     "yoink:trackalacker-sync-progress",
     "yoink:trackalacker-sync-item",
     "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
-  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || localDataDeletion || contentOperation;
+  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || localDataDeletion || reverificationPlan || retailerReverification || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : message?.type === "yoink:pair-device"
@@ -5286,6 +5513,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   ? focusCartReady(message.jobId)
                 : localDataDeletion
                   ? deleteLocalCompanionData(message.confirmation)
+                : reverificationPlan
+                  ? getReverificationPlan().then((plan) => ({ plan }))
+                : retailerReverification
+                  ? runRetailerReverification(message.retailerIds)
                 : message?.type === "yoink:resolve-trackalacker-listing"
                   ? resolveTrackalackerListing(message, sender)
                   : message?.type === "yoink:trackalacker-sync-progress"

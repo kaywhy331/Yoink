@@ -44,6 +44,26 @@ test("extension settings manage exact store permissions and verified local delet
           if (message.type === "yoink:delete-local-data") {
             return { ok: true, deleted: true, verified: true };
           }
+          if (message.type === "yoink:get-reverification-plan") {
+            return {
+              ok: true,
+              plan: {
+                lanes: [
+                  { retailerId: "target", qualification: { status: "retired", warning: "version_changed" }, candidate: { retailerSku: "94972381" } },
+                  { retailerId: "walmart", qualification: { status: "qualified", warning: "expiring" }, candidate: { retailerSku: "20252562938" } }
+                ]
+              }
+            };
+          }
+          if (message.type === "yoink:reverify-retailer-lanes") {
+            return {
+              ok: true,
+              results: [
+                { retailerId: "target", outcome: "passed" },
+                { retailerId: "walmart", outcome: "passed" }
+              ]
+            };
+          }
           return { ok: false };
         }
       },
@@ -71,10 +91,10 @@ test("extension settings manage exact store permissions and verified local delet
   await window.eval(`(async () => { ${OPTIONS} })()`);
 
   assert.equal(window.document.querySelector("#pairState")?.textContent, "Paired · Ready");
-  assert.equal(window.document.querySelectorAll(".permission-row").length, 13);
+  assert.equal(window.document.querySelectorAll("#permissionList .permission-row").length, 13);
   assert.equal((window.document.querySelector("#openYoink") as HTMLAnchorElement).href, "http://127.0.0.1:32991/");
 
-  const target = [...window.document.querySelectorAll(".permission-row")]
+  const target = [...window.document.querySelectorAll("#permissionList .permission-row")]
     .find((row) => row.querySelector("strong")?.textContent === "Target");
   assert.ok(target);
   click(window, target.querySelector("button") as HTMLButtonElement);
@@ -82,13 +102,32 @@ test("extension settings manage exact store permissions and verified local delet
   assert.deepEqual(JSON.parse(JSON.stringify(removed)), [["https://www.target.com/*"]]);
   assert.equal(target.querySelector("button")?.textContent, "Allow");
 
-  const walmart = [...window.document.querySelectorAll(".permission-row")]
+  const walmart = [...window.document.querySelectorAll("#permissionList .permission-row")]
     .find((row) => row.querySelector("strong")?.textContent === "Walmart");
   assert.ok(walmart);
   click(window, walmart.querySelector("button") as HTMLButtonElement);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(JSON.parse(JSON.stringify(requested)), [["https://*.walmart.com/*"]]);
   assert.equal(walmart.querySelector("button")?.textContent, "Remove");
+
+  assert.equal(window.document.querySelector("#laneReadinessState")?.textContent, "2 of 2 available");
+  click(window, window.document.querySelector("#reverifyLanes") as HTMLButtonElement);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(JSON.parse(JSON.stringify(requested.at(-1))), [
+    "https://www.target.com/*",
+    "https://*.walmart.com/*"
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(
+    messages.find((message) => message.type === "yoink:reverify-retailer-lanes")
+  )), {
+    type: "yoink:reverify-retailer-lanes",
+    retailerIds: ["target", "walmart"]
+  });
+  assert.equal(
+    window.document.querySelector("#reverificationResult")?.textContent,
+    "2 of 2 lanes passed the no-click rehearsal."
+  );
 
   click(window, window.document.querySelector("#deleteLocalData") as HTMLButtonElement);
   await new Promise((resolve) => setTimeout(resolve, 0));

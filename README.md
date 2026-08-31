@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.15.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.16.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -16,7 +16,7 @@ exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
 
-Version 1.15.0 adds a provider-neutral action platform around the existing
+Version 1.16.0 completes the provider-neutral action platform around the existing
 bounded signal-to-cart path. Structured Discord channels and future adapters
 enter through one versioned signal contract with explicit per-channel trust,
 replay limits, health, and scorecards; TrackaLacker retains its byte-identical
@@ -27,7 +27,10 @@ until it appears in stock or the window closes; observation itself never clicks
 a retailer control. The user Calls feed, bulk profile actions, readiness
 checklists, deployment-bound Carted/Needs-you/Missed connectors, exact
 confirmation observations, privacy receipts, analytics/CSV, and a sanitized
-health bundle make the path visible and operable. Signal batching, bounded
+health bundle make the path visible and operable. Source false-positive
+feedback is idempotent and feeds the same operator scorecard, while all-lane
+no-click reverification and restart-safe watch leases remove setup dead ends.
+Signal batching, bounded
 long-polling, in-process wakeups, coalesced progress, lease heartbeats, warm cart
 baselines, and session checks reduce avoidable cold-path delay. First-party,
 exact-SKU, quantity-one, Shipping-default/explicit-Pickup, fresh-DOM,

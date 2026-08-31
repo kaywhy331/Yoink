@@ -11,6 +11,7 @@ const RETAILER_NAMES = {
   macys: "Macy's", pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center"
 };
 const $ = (selector) => document.querySelector(selector);
+let reverificationPlan = { lanes: [] };
 
 async function renderHealth() {
   const response = await chrome.runtime.sendMessage({ type: "yoink:check-health" }).catch(() => null);
@@ -60,7 +61,75 @@ async function renderPermissions() {
   $("#permissionList").replaceChildren(...rows);
 }
 
+function laneStatus(lane) {
+  if (!lane.candidate) return "No prior candidate";
+  const warning = String(lane.qualification?.warning || "none");
+  if (warning === "version_changed") return "Version changed";
+  if (warning === "expired") return "Expired";
+  if (warning === "expiring") return "Expiring soon";
+  return lane.qualification?.status === "qualified" ? "Qualified" : "Ready to verify";
+}
+
+async function renderReverificationPlan() {
+  const response = await chrome.runtime.sendMessage({ type: "yoink:get-reverification-plan" }).catch(() => null);
+  if (!response?.ok || !Array.isArray(response.plan?.lanes)) {
+    reverificationPlan = { lanes: [] };
+    $("#laneReadinessState").textContent = "Unavailable";
+    $("#laneReadinessList").replaceChildren();
+    $("#reverifyLanes").disabled = true;
+    return;
+  }
+  reverificationPlan = response.plan;
+  const rows = response.plan.lanes.map((lane) => {
+    const row = document.createElement("div");
+    row.className = "permission-row";
+    const identity = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = RETAILER_NAMES[lane.retailerId] || lane.retailerId;
+    const detail = document.createElement("small");
+    detail.textContent = lane.candidate
+      ? `${lane.candidate.retailerSku} · ${laneStatus(lane)}`
+      : laneStatus(lane);
+    identity.append(name, detail);
+    const status = document.createElement("span");
+    status.textContent = lane.candidate ? "Available" : "Needs candidate";
+    row.append(identity, status);
+    return row;
+  });
+  $("#laneReadinessList").replaceChildren(...rows);
+  const available = response.plan.lanes.filter((lane) => lane.candidate);
+  $("#laneReadinessState").textContent = `${available.length} of ${response.plan.lanes.length} available`;
+  $("#reverifyLanes").disabled = available.length === 0;
+}
+
 $("#openYoink").href = PopupState.appDestinationUrl(runtime.appOrigin, "dashboard");
+$("#reverifyLanes").addEventListener("click", async () => {
+  const button = $("#reverifyLanes");
+  const retailerIds = reverificationPlan.lanes.filter((lane) => lane.candidate).map((lane) => lane.retailerId);
+  const origins = [...new Set(retailerIds.flatMap((retailerId) => PopupState.RETAILER_ORIGINS[retailerId] || []))];
+  if (!retailerIds.length || !origins.length) return;
+  button.disabled = true;
+  $("#reverificationResult").textContent = "Waiting for store access…";
+  try {
+    const granted = await chrome.permissions.request({ origins });
+    if (!granted) throw new Error("Store access was not approved. No checks ran.");
+    $("#reverificationResult").textContent = "Re-verifying prior products without clicking Add to cart…";
+    const response = await chrome.runtime.sendMessage({
+      type: "yoink:reverify-retailer-lanes",
+      retailerIds
+    });
+    if (!response?.ok || !Array.isArray(response.results)) {
+      throw new Error(response?.message || "Store lanes could not be re-verified.");
+    }
+    const passed = response.results.filter((result) => result.outcome === "passed").length;
+    $("#reverificationResult").textContent = `${passed} of ${response.results.length} lane${response.results.length === 1 ? "" : "s"} passed the no-click rehearsal.`;
+    await renderReverificationPlan();
+  } catch (error) {
+    $("#reverificationResult").textContent = error instanceof Error ? error.message : "Store lanes could not be re-verified.";
+  } finally {
+    button.disabled = reverificationPlan.lanes.every((lane) => !lane.candidate);
+  }
+});
 $("#deleteLocalData").addEventListener("click", async () => {
   const approved = confirm("Delete all data stored by Yoink Companion in this Chrome profile?\n\nThis removes pairing credentials, cached evidence, handoffs, queues, and extension settings. It does not delete your Yoink account data.");
   if (!approved) return;
@@ -84,4 +153,4 @@ $("#deleteLocalData").addEventListener("click", async () => {
   }
 });
 
-await Promise.all([renderHealth(), renderPermissions()]);
+await Promise.all([renderHealth(), renderPermissions(), renderReverificationPlan()]);

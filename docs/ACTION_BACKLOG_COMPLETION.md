@@ -1,0 +1,70 @@
+# Yoink action backlog completion
+
+Release target: **1.16.0**
+
+This matrix records the implementation and automated proof for backlog items
+Y01–Y30. “Complete” means the user-visible path, its bounded server or Chrome
+contract, and its failure behavior are implemented. The retailer safety
+boundary remains unchanged: first-party exact offer, quantity one per guarded
+Add attempt, Shipping unless Pickup was explicitly selected and is currently
+available, fresh DOM evidence, independently qualified retailer lanes, and
+manual checkout/order submission.
+
+## Now · Y01–Y10
+
+| ID | Status | Implementation | Primary automated proof |
+| --- | --- | --- | --- |
+| Y01 | Complete | `apps/extension/background.js` and `packages/extension-ui/src/popup-state.ts` persist a sanitized Cart-ready handoff, set the badge, show a local notification, optionally play sound, and revalidate/focus the existing cart tab. | `test/extension-runtime.test.ts`, `test/extension-popup-state.test.ts`, `test/extension-popup-ui.test.ts` |
+| Y02 | Complete | TrackaLacker notification and status reporting are fire-and-forget before provider dispatch; failures remain bounded diagnostics. | `test/extension-runtime.test.ts` (“dispatch is not blocked”) |
+| Y03 | Complete | One health/access preflight serves each bounded drain, clean pre-click rejection advances to the next queued job, and success diagnostics no longer delay confirmation. | `test/extension-runtime.test.ts` (“remaining clean queue continues”, “diagnostics do not delay”) |
+| Y04 | Complete | A bounded MutationObserver/navigation settle is armed before the click and replaces the unconditional 1.5-second sleep; exact cart delta proof is still mandatory. | `test/extension-runtime.test.ts`, all four retailer action tests |
+| Y05 | Complete | Got it/Missed it is available on the user action surface; Got it binds a reviewed item total to spend and one mission unit, while Missed it commits neither. Manual-review states render as Needs you. | `test/signal-engine.test.ts`, `test/user-dashboard.test.ts` |
+| Y06 | Complete | The dashboard polls only action activity at 2s/5s/20s based on authoritative stages, pauses while hidden, shows the checkout banner, decision reason, and stage counters. | `apps/web/user.js`, `test/signal-engine.test.ts`, `test/user-dashboard.test.ts` |
+| Y07 | Complete | Per-job timestamps produce observed→received, received→job, job→lease, lease→cart, click→settle, and click→cart breadcrumbs with p50/p95 aggregates. | `packages/database/src/signal-repository.ts`, `packages/database/src/action-analytics-repository.ts`, `test/signal-engine.test.ts`, `test/execution-repository.test.ts` |
+| Y08 | Complete | One domain status model generates UI/API glossary copy; release announcements, `/docs`, and `/llms.txt` are published. | `packages/domain/src/action-status.ts`, `packages/domain/src/release-announcement.ts`, `test/user-docs.test.ts` |
+| Y09 | Complete | Yoink-created retailer tabs persist per lane, the shared-classifier inspect command is declared, sound is opt-in, reduced-motion/high-contrast settings are local, and outbound server connectors declare a Yoink user agent. | `test/extension-runtime.test.ts`, `test/extension-options-ui.test.ts`, connector/witness dispatch tests |
+| Y10 | Complete | Current Shipping-first qualification candidates are exposed on user plans; local owner authorization includes `qualification.manage`; readiness headlines and user-side Needs-you resolution remove arming dead ends. | `test/shadow-observation-repository.test.ts`, `test/purchase-automation-readiness.test.ts`, `test/user-dashboard.test.ts`, authorization tests |
+
+## Next · Y11–Y20
+
+| ID | Status | Implementation | Primary automated proof |
+| --- | --- | --- | --- |
+| Y11 | Complete | `signal_event_v1` has one versioned provider-neutral envelope, batch receipt, and durable receiver shared by current and future adapters. | `packages/contracts/src/signal-provider.ts`, `packages/engine/src/signal-ingress.ts`, `test/signal-provider.test.ts` |
+| Y12 | Complete | Structured Discord channel intake stores no author/message content, applies per-channel trust and replay bounds, and preserves exact retailer identity. | `packages/sources/src/discord.ts`, `packages/database/src/signal-provider-repository.ts`, `test/signal-provider.test.ts` |
+| Y13 | Complete | Admin-authored drop-window/queue-open signals bind retailer, exact product set, time, spread, confidence, and supersession semantics. | `packages/database/src/drop-window-repository.ts`, API/admin UI, `test/action-platform-repository.test.ts` |
+| Y14 | Complete | Users can enroll exact items into a per-item watch queue; the extension stores only sanitized local state and a session-scoped lease capability, then resumes an unexpired lease after service-worker restart. | `apps/extension/background.js`, `test/action-platform-repository.test.ts`, `test/extension-runtime.test.ts` |
+| Y15 | Complete | At T−15 the companion performs bounded jittered, inactive-tab, read-only observations independently until exact stock is seen or each item/window closes. | `packages/database/src/drop-window-repository.ts`, `apps/extension/background.js`, `test/extension-runtime.test.ts` |
+| Y16 | Complete | Signal acceptance triggers an in-process worker wake and the extension uses bounded job long-polling; alarms remain recovery fallback. | `packages/engine/src/background-worker-runtime.ts`, `apps/extension/background.js`, worker and extension runtime tests |
+| Y17 | Complete | Provider signals are delivered in batches with per-item terminal/retryable classification; one failed item cannot block later items and only retryable items remain queued. | `packages/contracts/src/signal-provider.ts`, `packages/engine/src/signal-ingress.ts`, `test/signal-provider.test.ts`, `test/extension-runtime.test.ts` |
+| Y18 | Complete | Job events are coalesced into batch reports, leases receive explicit heartbeats, and the server validates the real execution budget instead of a fixed guessed TTL. | `apps/extension/background.js`, `packages/database/src/execution-repository.ts`, `test/extension-runtime.test.ts`, `test/execution-repository.test.ts` |
+| Y19 | Complete | One explicit settings action loads a fresh lane plan, requests optional host access only from that gesture, replays prior passing SKUs through all four existing no-click rehearsals, stores sanitized results, and leaves activation governed/manual. | `apps/extension/options.*`, `apps/extension/background.js`, `test/extension-options-ui.test.ts`, `test/extension-runtime.test.ts` |
+| Y20 | Complete | Chrome rotates warm readiness across Target, Walmart, Amazon, and Best Buy, reuses a ≤5-minute privacy-bounded cart baseline, and reports fresh signed-in state without crossing an Add boundary. | `apps/extension/background.js`, `test/extension-runtime.test.ts` |
+
+## Action platform · Y21–Y30
+
+| ID | Status | Implementation | Primary automated proof |
+| --- | --- | --- | --- |
+| Y21 | Complete | Deployment-bound Discord, Slack, or webhook connectors support Carted, Needs you, Missed, and Test events while storing only opaque endpoint references. | `packages/database/src/user-action-connector-repository.ts`, `packages/engine/src/user-action-connector-dispatch.ts`, `test/user-action-connector-dispatch.test.ts` |
+| Y22 | Complete | Calls combines live signals and scheduled windows, inline Quick add, multi-select profile application, queued-drop visibility, and Howl-attributed store links. | `apps/web/user.js`, `test/user-dashboard.test.ts` (“Calls combines…”) |
+| Y23 | Complete | A read-only observer recognizes exact confirmation-page classes for all four guarded retailers and reports only action binding, retailer, page class, and timestamp—never order/query/page details. | `packages/database/src/order-confirmation-repository.ts`, `apps/extension/background.js`, `test/extension-runtime.test.ts` |
+| Y24 | Complete | Privacy policy/change notice are published; local deletion clears local and session storage, reads both areas back, and emits a verified receipt only when no keys remain. | `packages/database/src/privacy-compliance-repository.ts`, `apps/web/privacy.html`, `test/extension-runtime.test.ts`, privacy API/repository tests |
+| Y25 | Complete | Per-channel scorecards show unique signal count, latency, accuracy, and idempotent user-reported false positives bound to the exact source signal. | `packages/database/src/signal-provider-repository.ts`, `packages/database/src/signal-repository.ts`, `apps/web/user.js`, `apps/web/app.js`, `test/signal-provider.test.ts`, `test/user-dashboard.test.ts` |
+| Y26 | Complete | Admin source management can create, pause/activate, change trust, inspect health, and replay only dead letters belonging to the exact channel. | API/admin UI, `packages/database/src/signal-provider-repository.ts`, `test/signal-provider.test.ts` |
+| Y27 | Complete | Restock-pattern aggregates feed drop-window authoring; spend periods use IANA zones and deterministic daylight-saving gap/repeat handling. | `packages/database/src/restock-pattern-repository.ts`, `packages/domain/src/time-period.ts`, `test/action-platform-repository.test.ts`, `test/time-period.test.ts` |
+| Y28 | Complete | Queue-open is a first-class signal/call kind; membership and queue expectations appear as facts, while per-retailer readiness renders a current checklist. | `packages/database/src/drop-window-repository.ts`, `apps/web/user.js`, `test/action-platform-repository.test.ts`, `test/user-dashboard.test.ts` |
+| Y29 | Complete | User analytics expose stage funnel, hit rate, reported spend versus caps, MSRP savings coverage, per-retailer results, latency, and CSV export. | `packages/database/src/action-analytics-repository.ts`, API/user UI, `test/signal-engine.test.ts` |
+| Y30 | Complete | The user health card exposes version, heartbeat, readiness/source/connector aggregates, a sanitized diagnostic bundle, and permission-gated embedded-worker restart. | API/user UI, `test/background-worker-api.test.ts`, `test/user-dashboard.test.ts` |
+
+## Deliberate boundaries
+
+- Lane reverification records current no-click evidence; it does not activate or
+  renew retailer mutation authority automatically.
+- Order-confirmation observation is a cue for user review, not proof of item,
+  amount, payment, or order contents.
+- Drop-watch observation cannot click a retailer control. A resulting stock
+  signal must still pass every plan, spend, seller, fulfillment, permission,
+  device, and lane gate.
+- Connectors and diagnostics receive bounded operational fields only. Retailer
+  page content, credentials, cookies, cart capabilities, and payment/account
+  data remain outside those contracts.
+

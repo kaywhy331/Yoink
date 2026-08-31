@@ -85,6 +85,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname.startsWith("/api/v1/user/drop-windows") || pathname.startsWith("/api/v1/user/watch-queue")) {
     return method === "GET" ? "user.read" : "user.intent.manage";
   }
+  if (pathname.startsWith("/api/v1/user/source-feedback")) return "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/connectors")) {
     return method === "GET" ? "user.read" : "user.settings.manage";
   }
@@ -116,6 +117,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname.startsWith("/api/v1/user/action-platform")
     || pathname.startsWith("/api/v1/user/drop-windows")
     || pathname.startsWith("/api/v1/user/watch-queue")
+    || pathname.startsWith("/api/v1/user/source-feedback")
     || pathname.startsWith("/api/v1/user/connectors")
     || pathname.startsWith("/api/v1/user/readiness")
     || pathname.startsWith("/api/v1/user/analytics")
@@ -201,7 +203,8 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     health: "settings",
     calls: "signals",
     "drop-windows": "signals",
-    "watch-queue": "signals"
+    "watch-queue": "signals",
+    "source-feedback": "signals"
   }),
   admin: Object.freeze({
     snapshot: "snapshot",

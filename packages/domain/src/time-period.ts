@@ -14,6 +14,8 @@ interface DateParts {
   second: number;
 }
 
+const formatterCache = new Map<string, Intl.DateTimeFormat>();
+
 export function validTimezone(value: unknown): string {
   const timezone = String(value ?? "UTC").trim().slice(0, 64);
   try {
@@ -25,16 +27,21 @@ export function validTimezone(value: unknown): string {
 }
 
 function partsAt(timestamp: number, timezone: string): DateParts {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(timestamp);
+  let formatter = formatterCache.get(timezone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23"
+    });
+    formatterCache.set(timezone, formatter);
+  }
+  const parts = formatter.formatToParts(timestamp);
   const value = (type: Intl.DateTimeFormatPartTypes): number => Number(parts.find((part) => part.type === type)?.value ?? 0);
   return {
     year: value("year"),
@@ -48,22 +55,30 @@ function partsAt(timestamp: number, timezone: string): DateParts {
 
 function localToUtc(parts: DateParts, timezone: string): number {
   const desired = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
-  let guess = desired;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const observed = partsAt(guess, timezone);
-    const observedAsUtc = Date.UTC(
-      observed.year,
-      observed.month - 1,
-      observed.day,
-      observed.hour,
-      observed.minute,
-      observed.second
-    );
-    const correction = desired - observedAsUtc;
-    guess += correction;
-    if (correction === 0) break;
+  const localOrdinal = (value: DateParts): number => Date.UTC(
+    value.year, value.month - 1, value.day, value.hour, value.minute, value.second
+  );
+  const exact = (value: DateParts): boolean => localOrdinal(value) === desired;
+  const probeOffsets = new Set([-36, -12, 0, 12, 36].map((hours) => {
+    const probe = desired + hours * 60 * 60_000;
+    return localOrdinal(partsAt(probe, timezone)) - probe;
+  }));
+  const candidates = [...probeOffsets].map((offset) => desired - offset);
+  const exactCandidates = candidates.filter((candidate) => exact(partsAt(candidate, timezone)));
+  if (exactCandidates.length) {
+    // A repeated wall-clock time at fall-back starts at its first occurrence.
+    return Math.min(...exactCandidates);
   }
-  return guess;
+
+  // A spring-forward reset hour may not exist. Resolve it to the first real
+  // instant whose local wall time is after the requested boundary, rather
+  // than oscillating between the two sides of the daylight-saving gap.
+  const start = Math.min(...candidates) - 2 * 60 * 60_000;
+  const end = Math.max(...candidates) + 26 * 60 * 60_000;
+  for (let candidate = start; candidate <= end; candidate += 60_000) {
+    if (localOrdinal(partsAt(candidate, timezone)) >= desired) return candidate;
+  }
+  throw new Error("The timezone spending boundary could not be resolved.");
 }
 
 export function zonedPeriodStarts(now: number, timezoneValue: unknown, resetHourValue: unknown): ZonedPeriodStarts {

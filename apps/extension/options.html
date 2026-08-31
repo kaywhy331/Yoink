@@ -19,6 +19,13 @@
       <p>Yoink asks for access only after you choose a store action. You can review or remove granted access here.</p>
       <div id="permissionList" class="permission-list"></div>
     </section>
+    <section id="lane-readiness" aria-labelledby="laneReadinessTitle">
+      <div class="heading"><div><p class="eyebrow">No-click checks</p><h2 id="laneReadinessTitle">Store lane verification</h2></div><span id="laneReadinessState" class="state">Checking…</span></div>
+      <p>Re-run the guarded no-click rehearsal on each store’s prior passing product. This never clicks Add to cart.</p>
+      <div id="laneReadinessList" class="permission-list"></div>
+      <button class="button" id="reverifyLanes" type="button" disabled>Re-verify available lanes</button>
+      <p id="reverificationResult" class="result" role="status" aria-live="polite"></p>
+    </section>
     <section aria-labelledby="privacyTitle">
       <div class="heading"><div><p class="eyebrow">Privacy</p><h2 id="privacyTitle">Local companion data</h2></div></div>
       <p>Delete pairing credentials, cached evidence, handoffs, queues, and settings stored by this extension. Server-side account data is not deleted.</p>

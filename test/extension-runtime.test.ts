@@ -510,6 +510,7 @@ interface HarnessOptions {
   visibleTrackalackerFallback?: boolean;
   trackalackerStatusDelayMs?: number;
   trackalackerNotificationDelayMs?: number;
+  trackalackerBatchReceipts?: Array<Array<{ accepted: boolean; retryable?: boolean; errorCode?: string }>>;
   amazonHydrationRetry?: boolean;
   amazonSemanticRecovery?: boolean;
   observerRepairLandmark?: boolean;
@@ -529,12 +530,15 @@ interface HarnessOptions {
     | "invalid_contract";
   adapterDiagnosticFailures?: number;
   adapterDiagnosticFailureStatus?: number;
+  adapterDiagnosticDelayMs?: number;
   queuedAdapterDiagnostics?: Array<Record<string, unknown>>;
   observerRecipeDistribution?: Record<string, unknown>;
   observerRecipeRoot?: Record<string, unknown>;
   observerRecipeTrustState?: Record<string, unknown>;
   observerRecipeEvaluation?: Record<string, unknown>;
   watchLease?: Record<string, unknown>;
+  reverificationPlan?: Record<string, unknown>;
+  localDeletionResidual?: boolean;
 }
 
 async function waitFor(
@@ -696,6 +700,7 @@ function harness(options: HarnessOptions = {}) {
   let jobLeaseRequests = 0;
   let jobsLeased = 0;
   let jobsConfirmed = 0;
+  let trackalackerBatchRequestCount = 0;
   let completeJob: (() => void) | undefined;
   const jobCompleted = new Promise<void>((resolve) => { completeJob = resolve; });
   let completeNotification: (() => void) | undefined;
@@ -734,7 +739,11 @@ function harness(options: HarnessOptions = {}) {
     },
     storage: {
       local: {
-        get: async (key: string) => ({ [key]: storage[key] }),
+        get: async (key: string | string[] | null) => {
+          if (key === null) return options.localDeletionResidual ? { retainedFixture: true } : { ...storage };
+          if (Array.isArray(key)) return Object.fromEntries(key.map((item) => [item, storage[item]]));
+          return { [key]: storage[key] };
+        },
         set: async (value: Record<string, unknown>) => {
           Object.assign(storage, value);
           if (Object.hasOwn(value, "yoinkAdapterDiagnosticQueueV1")) {
@@ -750,7 +759,11 @@ function harness(options: HarnessOptions = {}) {
         setAccessLevel: async () => undefined
       },
       session: {
-        get: async (key: string) => ({ [key]: storage[key] }),
+        get: async (key: string | string[] | null) => {
+          if (key === null) return options.localDeletionResidual ? { retainedFixture: true } : { ...storage };
+          if (Array.isArray(key)) return Object.fromEntries(key.map((item) => [item, storage[item]]));
+          return { [key]: storage[key] };
+        },
         set: async (value: Record<string, unknown>) => { Object.assign(storage, value); },
         remove: async (key: string) => { delete storage[key]; },
         clear: async () => { for (const key of Object.keys(storage)) delete storage[key]; },
@@ -1279,6 +1292,9 @@ function harness(options: HarnessOptions = {}) {
         ? { reason: "leased", item: options.watchLease }
         : { reason: "no_watch_items", item: null }), { status: 200 });
     }
+    if (url.endsWith("/devices/self/readiness/reverification-plan")) {
+      return new Response(JSON.stringify({ plan: options.reverificationPlan ?? { createdAt: new Date().toISOString(), lanes: [] } }), { status: 200 });
+    }
     if (/\/devices\/self\/watch-queue\/watch_item_[a-f0-9]{32}\/observations$/.test(url)) {
       return new Response(JSON.stringify({ item: { state: "seen_in_stock" }, signal: null }), { status: 202 });
     }
@@ -1295,9 +1311,16 @@ function harness(options: HarnessOptions = {}) {
       const body = JSON.parse(String(requestOptions.body)) as { signals?: Array<Record<string, unknown>> };
       const signals = Array.isArray(body.signals) ? body.signals : [];
       deliveredTrackalackerSignals.push(...signals);
+      const plannedReceipts = options.trackalackerBatchReceipts?.[trackalackerBatchRequestCount];
+      trackalackerBatchRequestCount += 1;
       return new Response(JSON.stringify({
         contractVersion: 1,
-        receipts: signals.map((_, index) => ({ index, accepted: true, reasonCode: "accepted" }))
+        receipts: signals.map((_, index) => ({
+          index,
+          accepted: plannedReceipts?.[index]?.accepted ?? true,
+          retryable: plannedReceipts?.[index]?.retryable ?? false,
+          errorCode: plannedReceipts?.[index]?.errorCode ?? ""
+        }))
       }), { status: 202 });
     }
     if (url.endsWith("/devices/self/sources/trackalacker/signals")) {
@@ -1397,6 +1420,9 @@ function harness(options: HarnessOptions = {}) {
       }), { status: 201 });
     }
     if (url.includes("/devices/self/adapter-diagnostics/")) {
+      if (options.adapterDiagnosticDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.adapterDiagnosticDelayMs));
+      }
       if (adapterDiagnosticFailuresRemaining > 0) {
         adapterDiagnosticFailuresRemaining -= 1;
         throw new Error(`RAW_NETWORK_ERROR token=${TOKEN} secret=DO_NOT_SEND`);
@@ -2862,6 +2888,18 @@ test("the service worker runs one leased Walmart add through its own cart and ru
   assert.equal("activeTargetJob" in runtime.storage, false);
 });
 
+test("successful adapter diagnostics do not delay the guarded add hot path", async () => {
+  const runtime = harness({ walmartJob: true, adapterDiagnosticDelayMs: 750 });
+  const startedAt = Date.now();
+  runtime.fireJobAlarm();
+  await Promise.race([
+    runtime.jobCompleted,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("The guarded add waited for diagnostic delivery.")), 650))
+  ]);
+  assert.ok(Date.now() - startedAt < 650);
+  assert.equal(runtime.jobStates.at(-1), "confirmed");
+});
+
 test("the service worker runs one leased Amazon add through its own cart and isolated runner", async () => {
   const runtime = harness({ amazonJob: true });
   runtime.fireJobAlarm();
@@ -2954,6 +2992,48 @@ test("a cold worker drains one durable TrackaLacker signal exactly once", async 
   runtime.fireStartup();
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(runtime.deliveredTrackalackerSignals.length, 1);
+});
+
+test("a retryable signal receipt is retained without blocking later batch items", async () => {
+  const runtime = harness({
+    queuedTrackalackerSignal: true,
+    trackalackerBatchReceipts: [[
+      { accepted: false, retryable: true, errorCode: "storage_temporarily_unavailable" },
+      { accepted: false, retryable: false, errorCode: "invalid_signal" },
+      { accepted: true }
+    ]]
+  });
+  const initial = (runtime.storage.yoinkTrackalackerPushQueueV1 as Array<Record<string, unknown>>)[0]!;
+  const notification = initial.notification as Record<string, unknown>;
+  runtime.storage.yoinkTrackalackerPushQueueV1 = [
+    { ...initial, signalId: "push:trackalacker:retryable-fixture" },
+    { ...initial, signalId: "push:trackalacker:rejected-fixture", notification: { ...notification, sourceListingId: "991123" } },
+    { ...initial, signalId: "push:trackalacker:accepted-fixture", notification: { ...notification, sourceListingId: "991124" } }
+  ];
+  runtime.fireStartup();
+  await waitFor(
+    () => (runtime.storage.yoinkTrackalackerPushQueueV1 as unknown[]).length === 1,
+    "The mixed signal batch did not settle."
+  );
+  assert.equal(runtime.deliveredTrackalackerSignals.length, 3);
+  assert.equal(
+    (runtime.storage.yoinkTrackalackerPushQueueV1 as Array<{ signalId: string }>)[0]?.signalId,
+    "push:trackalacker:retryable-fixture"
+  );
+  assert.equal(
+    (runtime.storage.yoinkTrackalackerPushStateV1 as { errorCode: string }).errorCode,
+    "signal_delivery_retryable"
+  );
+
+  runtime.fireHealthAlarm();
+  await waitFor(
+    () => (runtime.storage.yoinkTrackalackerPushQueueV1 as unknown[]).length === 0,
+    "The next delivery cycle did not retry the retained signal."
+  );
+  assert.equal(runtime.deliveredTrackalackerSignals.length, 4);
+  assert.equal(runtime.deliveredTrackalackerSignals.filter(
+    (entry) => entry.signalId === "push:trackalacker:retryable-fixture"
+  ).length, 2);
 });
 
 test("TrackaLacker push stays silent when supported and exposes no signed click token", async () => {
@@ -3241,6 +3321,39 @@ test("warm readiness captures one inactive five-minute cart baseline without cro
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
 });
 
+test("warm readiness rotates across every guarded retailer with bounded baselines", async () => {
+  const runtime = harness({ permission: true });
+  const warmed = [];
+  for (let index = 0; index < 4; index += 1) {
+    warmed.push(await runtime.invokeBackground("runWarmReadinessCycle()"));
+  }
+  assert.deepEqual(JSON.parse(JSON.stringify(warmed.map((item) => ({
+    retailerId: (item as Record<string, unknown>).retailerId,
+    warmed: (item as Record<string, unknown>).warmed
+  })))), [
+    { retailerId: "target", warmed: true },
+    { retailerId: "walmart", warmed: true },
+    { retailerId: "amazon", warmed: true },
+    { retailerId: "bestbuy", warmed: true }
+  ]);
+  const readinessPosts = runtime.fetchCalls.filter((entry) =>
+    /\/devices\/self\/readiness\/(target|walmart|amazon|bestbuy)$/.test(entry.url));
+  assert.equal(readinessPosts.length, 4);
+  for (const post of readinessPosts) {
+    const body = JSON.parse(String(post.options.body)) as Record<string, unknown>;
+    assert.equal(body.cartBaselineState, "ready");
+    const observedAt = new Date(String(body.baselineObservedAt)).getTime();
+    const expiresAt = new Date(String(body.expiresAt)).getTime();
+    assert.ok(Number.isFinite(observedAt));
+    assert.ok(expiresAt > observedAt);
+    assert.ok(expiresAt <= observedAt + 5 * 60_000);
+  }
+  const stored = runtime.storage.yoinkRetailerActionTabsV1 as { tabs: Record<string, unknown> };
+  assert.deepEqual(Object.keys(stored.tabs).sort(), ["amazon", "bestbuy", "target", "walmart"]);
+  const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
+});
+
 test("drop-window observation is exact, read-only, bounded, and closes its inactive tab", async () => {
   const watchId = `watch_item_${"a".repeat(32)}`;
   const runtime = harness({
@@ -3249,6 +3362,7 @@ test("drop-window observation is exact, read-only, bounded, and closes its inact
       contractVersion: 1,
       id: watchId,
       capabilityToken: "W".repeat(43),
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
       retailerId: "target",
       retailerSku: "1011483414",
       canonicalUrl: PRODUCT_URL,
@@ -3267,31 +3381,123 @@ test("drop-window observation is exact, read-only, bounded, and closes its inact
   assert.equal(body.availability, "in_stock");
   assert.equal(JSON.stringify(body).includes(PRODUCT_URL), false);
   assert.equal(runtime.tabRemovals.length, 1);
+  assert.equal(runtime.storage.yoinkWatchQueueLeaseV1, undefined);
+  const publicWatchState = runtime.storage.yoinkWatchQueueStateV1 as Record<string, unknown>;
+  assert.equal(publicWatchState.state, "reported");
+  assert.equal(publicWatchState.watchItemId, watchId);
+  assert.equal(JSON.stringify(publicWatchState).includes("W".repeat(43)), false);
+  assert.equal(JSON.stringify(publicWatchState).includes(PRODUCT_URL), false);
   const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
 });
 
-test("confirmation observation reports only a bound page class and never order-page details", async () => {
-  const runtime = harness();
-  runtime.storage.yoinkOrderHandoffsV1 = [{
-    jobId: "job_target_fixture",
+test("one explicit request replays prior products across all four lanes without clicking", async () => {
+  const runtime = harness({
+    permission: true,
+    reverificationPlan: {
+      createdAt: new Date().toISOString(),
+      lanes: [
+        ["target", "1011483414", PRODUCT_URL],
+        ["walmart", "17354421975", WALMART_PRODUCT_URL],
+        ["amazon", "B0GYTRYV7P", AMAZON_PRODUCT_URL],
+        ["bestbuy", "6588149", BESTBUY_PRODUCT_URL]
+      ].map(([retailerId, retailerSku, canonicalUrl]) => ({
+        retailerId,
+        expectedAdapterVersion: "fixture-current",
+        qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
+        candidate: { retailerSku, canonicalUrl, title: `${retailerId} fixture`, trialObservedAt: new Date().toISOString() }
+      }))
+    }
+  });
+  const response = await runtime.send({
+    type: "yoink:reverify-retailer-lanes",
+    retailerIds: ["target", "walmart", "amazon", "bestbuy"]
+  });
+  assert.equal(response.ok, true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(
+      (response.results as Array<Record<string, unknown>>).map((result) => [result.retailerId, result.outcome])
+    )),
+    [["target", "passed"], ["walmart", "passed"], ["amazon", "passed"], ["bestbuy", "passed"]]
+  );
+  assert.equal(runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length, 4);
+  assert.equal(runtime.tabRemovals.length, 4);
+  const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
+  const state = runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown>;
+  assert.equal(state.state, "complete");
+  assert.equal(JSON.stringify(state).includes(TOKEN), false);
+  assert.equal(JSON.stringify(state).includes("https://"), false);
+});
+
+test("a service-worker restart resumes its persisted read-only watch lease", async () => {
+  const watchId = `watch_item_${"b".repeat(32)}`;
+  const runtime = harness({ permission: true });
+  runtime.storage.yoinkWatchQueueLeaseV1 = {
+    contractVersion: 1,
+    id: watchId,
+    capabilityToken: "L".repeat(43),
+    leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    retailerId: "target",
+    retailerSku: "1011483414",
+    canonicalUrl: PRODUCT_URL,
+    readOnly: true,
+    quantity: 1
+  };
+  const result = await runtime.invokeBackground("runWatchQueueCycle()");
+  assert.equal((result as { observed?: boolean }).observed, true);
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/watch-queue/next")), false);
+  assert.equal(runtime.fetchCalls.some((entry) =>
+    entry.url.endsWith(`/devices/self/watch-queue/${watchId}/observations`)), true);
+  assert.equal(runtime.storage.yoinkWatchQueueLeaseV1, undefined);
+});
+
+test("confirmation observation is exact-store bound across every guarded retailer and never reports order-page details", async () => {
+  const cases = [
+    ["target", "https://www.target.com/co-order-confirmation?orderId=DO_NOT_SEND"],
+    ["walmart", "https://www.walmart.com/checkout/thank-you?orderId=DO_NOT_SEND"],
+    ["amazon", "https://www.amazon.com/gp/buy/thankyou?orderId=DO_NOT_SEND"],
+    ["bestbuy", "https://www.bestbuy.com/checkout/order-confirmation?orderId=DO_NOT_SEND"]
+  ] as const;
+
+  for (const [retailerId, url] of cases) {
+    const runtime = harness();
+    runtime.storage.yoinkOrderHandoffsV1 = [{
+      jobId: `job_${retailerId}_fixture`,
+      retailerId,
+      tabId: 17,
+      recordedAt: new Date().toISOString()
+    }];
+    const observed = await runtime.invokeBackground(
+      `observeOrderConfirmation(17, ${JSON.stringify(url)})`
+    );
+    assert.equal(observed, true, `${retailerId} confirmation page should close its exact handoff`);
+    const request = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/order-confirmations"));
+    assert.ok(request);
+    const body = JSON.parse(String(request.options.body)) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(body).sort(), [
+      "actionJobId", "contractVersion", "observedAt", "pageClass", "retailerId"
+    ]);
+    assert.equal(body.actionJobId, `job_${retailerId}_fixture`);
+    assert.equal(body.retailerId, retailerId);
+    assert.equal(body.pageClass, "confirmation");
+    assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
+    assert.deepEqual(runtime.storage.yoinkOrderHandoffsV1, []);
+  }
+
+  const mismatch = harness();
+  mismatch.storage.yoinkOrderHandoffsV1 = [{
+    jobId: "job_target_mismatch",
     retailerId: "target",
     tabId: 17,
     recordedAt: new Date().toISOString()
   }];
-  const observed = await runtime.invokeBackground(
-    'observeOrderConfirmation(17, "https://www.target.com/co-order-confirmation?orderId=DO_NOT_SEND")'
+  const ignored = await mismatch.invokeBackground(
+    'observeOrderConfirmation(17, "https://www.walmart.com/checkout/thank-you?orderId=DO_NOT_SEND")'
   );
-  assert.equal(observed, true);
-  const request = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/order-confirmations"));
-  assert.ok(request);
-  const body = JSON.parse(String(request.options.body)) as Record<string, unknown>;
-  assert.deepEqual(Object.keys(body).sort(), [
-    "actionJobId", "contractVersion", "observedAt", "pageClass", "retailerId"
-  ]);
-  assert.equal(body.pageClass, "confirmation");
-  assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
-  assert.deepEqual(runtime.storage.yoinkOrderHandoffsV1, []);
+  assert.equal(ignored, false);
+  assert.equal(mismatch.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/order-confirmations")), false);
+  assert.equal((mismatch.storage.yoinkOrderHandoffsV1 as unknown[]).length, 1);
 });
 
 test("verified local deletion clears both extension storage areas before posting its receipt", async () => {
@@ -3313,6 +3519,18 @@ test("verified local deletion clears both extension storage areas before posting
     sessionCleared: true,
     retainedKeys: []
   });
+});
+
+test("local deletion never emits a verified receipt when Chrome reports retained keys", async () => {
+  const runtime = harness({ cartReadySound: true, localDeletionResidual: true });
+  const result = await runtime.send({
+    type: "yoink:delete-local-data",
+    confirmation: "DELETE_ALL_LOCAL_YOINK_DATA"
+  });
+  assert.equal(result.ok, false);
+  assert.match(String(result.message), /retained local Yoink data/);
+  assert.equal(runtime.fetchCalls.some((entry) =>
+    entry.url.endsWith("/devices/self/privacy/local-deletion")), false);
 });
 
 test("local deletion succeeds without pairing and does not invent a remote receipt", async () => {
