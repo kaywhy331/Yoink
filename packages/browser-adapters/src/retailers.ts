@@ -420,7 +420,11 @@ function text(value: Element | Document | null | undefined, maximum = 2_000): st
   return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
 }
 
-function observableText(value: Element | Document | null | undefined, maximum = 2_000): string {
+function observableText(
+  value: Element | Document | null | undefined,
+  maximum = 2_000,
+  renderedOnly = false
+): string {
   if (!value || maximum < 1) return "";
   const fragments: string[] = [];
   let length = 0;
@@ -441,7 +445,8 @@ function observableText(value: Element | Document | null | undefined, maximum = 
     if (node.nodeType === 1) {
       const element = node as Element;
       if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName)
-        || element.classList.contains("aok-hidden") || !visible(element)) return;
+        || element.classList.contains("aok-hidden")
+        || !(renderedOnly ? renderedVisible(element) : visible(element))) return;
     }
     for (const child of [...node.childNodes]) visit(child);
   };
@@ -478,6 +483,22 @@ function visible(element: Element | null): element is Element {
   return true;
 }
 
+function renderedVisible(element: Element | null): element is Element {
+  if (!visible(element)) return false;
+  const view = element.ownerDocument.defaultView;
+  if (!view?.getComputedStyle) return true;
+  let current: Element | null = element;
+  while (current) {
+    const computed = view.getComputedStyle(current);
+    if (computed.display === "none"
+      || computed.visibility === "hidden"
+      || computed.visibility === "collapse"
+      || computed.opacity === "0") return false;
+    current = current.parentElement;
+  }
+  return true;
+}
+
 function actionable(element: Element | null): element is Element {
   return visible(element)
     && !element.hasAttribute("disabled")
@@ -488,6 +509,14 @@ function actionable(element: Element | null): element is Element {
 function queryVisible(root: ParentNode, selectors: string[]): Element | null {
   for (const selector of selectors) {
     const found = [...root.querySelectorAll(selector)].find(visible);
+    if (found) return found;
+  }
+  return null;
+}
+
+function queryRendered(root: ParentNode, selectors: string[]): Element | null {
+  for (const selector of selectors) {
+    const found = [...root.querySelectorAll(selector)].find(renderedVisible);
     if (found) return found;
   }
   return null;
@@ -635,10 +664,19 @@ export function canonicalRetailerProductUrl(
   }
 }
 
-export function retailerSecurityChallenge(document: Document): boolean {
+export function retailerSecurityChallenge(
+  document: Document,
+  retailerId?: Exclude<SupportedRetailerId, "target">
+): boolean {
   const title = String(document.title || "").replace(/\s+/g, " ").trim();
   if (/^(?:access denied(?:\s*-\s*.*)?|just a moment(?:\.\.\.)?)$/i.test(title)) return true;
-  return Boolean(queryVisible(document, [
+  const queryChallenge = retailerId === "bestbuy" ? queryRendered : queryVisible;
+  const challengeText = observableText(
+    document.body,
+    80_000,
+    retailerId === "bestbuy"
+  );
+  return Boolean(queryChallenge(document, [
     "iframe[src*='captcha' i]",
     "iframe[src*='_Incapsula_Resource' i]",
     "[data-testid*='captcha' i]",
@@ -647,7 +685,7 @@ export function retailerSecurityChallenge(document: Document): boolean {
     "#challenge-running",
     "#challenge-stage",
     "[class*='cf-chl-' i]"
-  ])) || /verify you are human|robot or human|activate and hold the button|unusual traffic|security challenge|additional security check is required|protected and accelerated by imperva|enter the characters you see|checking your browser|performing security verification|enable javascript and cookies to continue|sorry, you have been blocked/i.test(observableText(document.body, 80_000));
+  ])) || /verify you are human|robot or human|activate and hold the button|unusual traffic|security challenge|additional security check is required|protected and accelerated by imperva|enter the characters you see|checking your browser|performing security verification|enable javascript and cookies to continue|sorry, you have been blocked/i.test(challengeText);
 }
 
 function retailerUnavailableShell(document: Document): boolean {
@@ -658,13 +696,6 @@ function retailerUnavailableShell(document: Document): boolean {
 }
 
 export function retailerInteractiveBlock(document: Document, urlValue: string): LiveOfferObservation["interactiveBlock"] {
-  const page = observableText(document.body, 100_000);
-  if (retailerUnavailableShell(document)) return "unknown";
-  if (queryVisible(document, ["input[autocomplete='one-time-code']", "input[name*='otp' i]"])) return "mfa";
-  if (queryVisible(document, ["form[action*='login' i] input[type='password']", "input[autocomplete='current-password']"])) return "auth";
-  const dialog = queryVisible(document, ["[role='dialog']", "dialog[open]"]);
-  const dialogText = text(dialog, 12_000);
-  if (dialog && /choose|select|set/i.test(dialogText) && /store|location|zip code/i.test(dialogText)) return "location";
   const bestBuyPage = (() => {
     try {
       const url = new URL(urlValue);
@@ -673,6 +704,16 @@ export function retailerInteractiveBlock(document: Document, urlValue: string): 
       return false;
     }
   })();
+  const queryBlock = bestBuyPage ? queryRendered : queryVisible;
+  const page = observableText(document.body, 100_000, bestBuyPage);
+  if (retailerUnavailableShell(document)) return "unknown";
+  if (queryBlock(document, ["input[autocomplete='one-time-code']", "input[name*='otp' i]"])) return "mfa";
+  if (queryBlock(document, ["form[action*='login' i] input[type='password']", "input[autocomplete='current-password']"])) return "auth";
+  if (bestBuyPage && /\baccount required\b/i.test(page)
+    && /\ban account is required to (?:purchase|buy|reserve) this item\b/i.test(page)) return "auth";
+  const dialog = queryBlock(document, ["[role='dialog']", "dialog[open]"]);
+  const dialogText = text(dialog, 12_000);
+  if (dialog && /choose|select|set/i.test(dialogText) && /store|location|zip code/i.test(dialogText)) return "location";
   if (bestBuyPage && /\b(?:available\s+)?in[ -]store only\b/i.test(page)
     && genericAddIntentControls(document).length === 0) return "location";
   const membershipEvidence = dialogText || page;
@@ -681,7 +722,7 @@ export function retailerInteractiveBlock(document: Document, urlValue: string): 
     || /\bjoin (?:walmart\+|prime)\b.{0,80}\b(?:to|in order to)\b.{0,80}\b(?:add|buy|purchase|continue)\b/i.test(page)) return "membership";
   if (/you(?:’|')?re in line|virtual queue|waiting room|place in line/i.test(page)
     || (() => { try { return new URL(urlValue).pathname === "/qp"; } catch { return false; } })()) return "queue";
-  const bestBuyDemandGate = bestBuyPage ? queryVisible(document, [
+  const bestBuyDemandGate = bestBuyPage ? queryRendered(document, [
     "[role='dialog']",
     "dialog[open]",
     "[data-testid*='high-demand-gate' i]",
@@ -696,7 +737,7 @@ export function retailerInteractiveBlock(document: Document, urlValue: string): 
       || /\b(?:continue|verify|access|try again|temporarily unavailable|reserve)\b/i.test(bestBuyDemandGateText))) {
     return "high_demand";
   }
-  if (retailerSecurityChallenge(document)) return "unknown";
+  if (retailerSecurityChallenge(document, bestBuyPage ? "bestbuy" : undefined)) return "unknown";
   return "";
 }
 
@@ -1239,7 +1280,7 @@ function amazonLayoutEvidence(
   const scopedControlCount = pageSku === expectedSku
     ? controls.map((candidate) => amazonOfferScope(candidate, retailer, expectedSku)).filter(Boolean).length
     : 0;
-  const securityChallenge = retailerSecurityChallenge(document);
+  const securityChallenge = retailerSecurityChallenge(document, "amazon");
   const interactiveBlock = retailerInteractiveBlock(document, urlValue);
   const genericAddIntentCount = boundedCount(genericAddIntentControls(document).length);
   const priceCandidateCount = visibleSelectorCount(evidenceRoot, retailer.priceSelectors.join(", "));
@@ -1307,7 +1348,7 @@ export function retailerAdapterLayoutEvidence(
     ? selectedControl(document, retailer, "either", expectedSku)
     : { control: null, fulfillment: "unknown" as const, offerRoot: null };
   const root: Element | Document = selected.offerRoot || control?.closest("form, main") || document;
-  const securityChallenge = retailerSecurityChallenge(document);
+  const securityChallenge = retailerSecurityChallenge(document, retailerId);
   const interactiveBlock = retailerInteractiveBlock(document, urlValue);
   const genericAddIntentCount = boundedCount(genericAddIntentControls(document).length);
   const priceCandidateCount = selected.structuredOffer
@@ -1949,7 +1990,7 @@ export function observeRetailerOffer(
     sellerType: seller.sellerType,
     fulfillment: blocked && !retainBoundManualEvidence ? "unknown" : selected.fulfillment,
     addControlActionable: canAdd,
-    securityChallenge: retailerSecurityChallenge(document),
+    securityChallenge: retailerSecurityChallenge(document, retailerId),
     interactiveBlock: blocked
   };
 }

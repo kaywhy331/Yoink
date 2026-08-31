@@ -1350,7 +1350,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional fail-closed coverage; bestbuy-add-v9 rejects every marketplace seller.",
+        detail: "Optional fail-closed coverage; bestbuy-add-v10 rejects every marketplace seller.",
         required: 1,
         requiredForQualification: false
       },

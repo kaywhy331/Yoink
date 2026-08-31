@@ -51,7 +51,7 @@ var YoinkRetailerShadowModule = (() => {
   var WALMART_OBSERVER_VERSION = "walmart-observer-v6";
   var WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
   var AMAZON_OBSERVER_VERSION = "amazon-observer-v8";
-  var BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v9";
+  var BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v10";
   var DISNEY_OBSERVER_VERSION = "disney-observer-v1";
   var RAVENSBURGER_OBSERVER_VERSION = "ravensburger-observer-v1";
   var RIOT_OBSERVER_VERSION = "riot-observer-v1";
@@ -548,7 +548,7 @@ var YoinkRetailerShadowModule = (() => {
   function text(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function observableText(value, maximum = 2e3) {
+  function observableText(value, maximum = 2e3, renderedOnly = false) {
     if (!value || maximum < 1) return "";
     const fragments = [];
     let length = 0;
@@ -568,7 +568,7 @@ var YoinkRetailerShadowModule = (() => {
       }
       if (node.nodeType === 1) {
         const element = node;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !visible2(element)) return;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !(renderedOnly ? renderedVisible(element) : visible2(element))) return;
       }
       for (const child of [...node.childNodes]) visit(child);
     };
@@ -599,12 +599,31 @@ var YoinkRetailerShadowModule = (() => {
     }
     return true;
   }
+  function renderedVisible(element) {
+    if (!visible2(element)) return false;
+    const view = element.ownerDocument.defaultView;
+    if (!view?.getComputedStyle) return true;
+    let current = element;
+    while (current) {
+      const computed = view.getComputedStyle(current);
+      if (computed.display === "none" || computed.visibility === "hidden" || computed.visibility === "collapse" || computed.opacity === "0") return false;
+      current = current.parentElement;
+    }
+    return true;
+  }
   function actionable(element) {
     return visible2(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text(element, 300));
   }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
       const found = [...root.querySelectorAll(selector)].find(visible2);
+      if (found) return found;
+    }
+    return null;
+  }
+  function queryRendered(root, selectors) {
+    for (const selector of selectors) {
+      const found = [...root.querySelectorAll(selector)].find(renderedVisible);
       if (found) return found;
     }
     return null;
@@ -722,10 +741,16 @@ var YoinkRetailerShadowModule = (() => {
       return "";
     }
   }
-  function retailerSecurityChallenge(document) {
+  function retailerSecurityChallenge(document, retailerId) {
     const title = String(document.title || "").replace(/\s+/g, " ").trim();
     if (/^(?:access denied(?:\s*-\s*.*)?|just a moment(?:\.\.\.)?)$/i.test(title)) return true;
-    return Boolean(queryVisible(document, [
+    const queryChallenge = retailerId === "bestbuy" ? queryRendered : queryVisible;
+    const challengeText = observableText(
+      document.body,
+      8e4,
+      retailerId === "bestbuy"
+    );
+    return Boolean(queryChallenge(document, [
       "iframe[src*='captcha' i]",
       "iframe[src*='_Incapsula_Resource' i]",
       "[data-testid*='captcha' i]",
@@ -734,7 +759,7 @@ var YoinkRetailerShadowModule = (() => {
       "#challenge-running",
       "#challenge-stage",
       "[class*='cf-chl-' i]"
-    ])) || /verify you are human|robot or human|activate and hold the button|unusual traffic|security challenge|additional security check is required|protected and accelerated by imperva|enter the characters you see|checking your browser|performing security verification|enable javascript and cookies to continue|sorry, you have been blocked/i.test(observableText(document.body, 8e4));
+    ])) || /verify you are human|robot or human|activate and hold the button|unusual traffic|security challenge|additional security check is required|protected and accelerated by imperva|enter the characters you see|checking your browser|performing security verification|enable javascript and cookies to continue|sorry, you have been blocked/i.test(challengeText);
   }
   function retailerUnavailableShell(document) {
     const title = String(document.title || "").replace(/\s+/g, " ").trim();
@@ -742,13 +767,6 @@ var YoinkRetailerShadowModule = (() => {
     return /\bpage you have attempted to access can not be displayed\b|\bpage (?:is|was) temporarily unavailable\b/i.test(text(document.body, 2e4));
   }
   function retailerInteractiveBlock(document, urlValue) {
-    const page = observableText(document.body, 1e5);
-    if (retailerUnavailableShell(document)) return "unknown";
-    if (queryVisible(document, ["input[autocomplete='one-time-code']", "input[name*='otp' i]"])) return "mfa";
-    if (queryVisible(document, ["form[action*='login' i] input[type='password']", "input[autocomplete='current-password']"])) return "auth";
-    const dialog = queryVisible(document, ["[role='dialog']", "dialog[open]"]);
-    const dialogText = text(dialog, 12e3);
-    if (dialog && /choose|select|set/i.test(dialogText) && /store|location|zip code/i.test(dialogText)) return "location";
     const bestBuyPage = (() => {
       try {
         const url = new URL(urlValue);
@@ -757,6 +775,15 @@ var YoinkRetailerShadowModule = (() => {
         return false;
       }
     })();
+    const queryBlock = bestBuyPage ? queryRendered : queryVisible;
+    const page = observableText(document.body, 1e5, bestBuyPage);
+    if (retailerUnavailableShell(document)) return "unknown";
+    if (queryBlock(document, ["input[autocomplete='one-time-code']", "input[name*='otp' i]"])) return "mfa";
+    if (queryBlock(document, ["form[action*='login' i] input[type='password']", "input[autocomplete='current-password']"])) return "auth";
+    if (bestBuyPage && /\baccount required\b/i.test(page) && /\ban account is required to (?:purchase|buy|reserve) this item\b/i.test(page)) return "auth";
+    const dialog = queryBlock(document, ["[role='dialog']", "dialog[open]"]);
+    const dialogText = text(dialog, 12e3);
+    if (dialog && /choose|select|set/i.test(dialogText) && /store|location|zip code/i.test(dialogText)) return "location";
     if (bestBuyPage && /\b(?:available\s+)?in[ -]store only\b/i.test(page) && genericAddIntentControls(document).length === 0) return "location";
     const membershipEvidence = dialogText || page;
     if (/membership (?:is )?(?:required|needed)|invitation[- ]only|invite required|(?:prime|walmart\+) members? only|requires? (?:a )?(?:prime|walmart\+) membership/i.test(membershipEvidence) || dialog && /\bjoin (?:walmart\+|prime)\b/i.test(dialogText) || /\bjoin (?:walmart\+|prime)\b.{0,80}\b(?:to|in order to)\b.{0,80}\b(?:add|buy|purchase|continue)\b/i.test(page)) return "membership";
@@ -767,7 +794,7 @@ var YoinkRetailerShadowModule = (() => {
         return false;
       }
     })()) return "queue";
-    const bestBuyDemandGate = bestBuyPage ? queryVisible(document, [
+    const bestBuyDemandGate = bestBuyPage ? queryRendered(document, [
       "[role='dialog']",
       "dialog[open]",
       "[data-testid*='high-demand-gate' i]",
@@ -779,7 +806,7 @@ var YoinkRetailerShadowModule = (() => {
     if (bestBuyDemandGate && /\b(?:high[ -]demand product|this item is (?:currently )?in high demand|due to high demand)\b/i.test(bestBuyDemandGateText) && (bestBuyDemandGate.matches("[role='dialog'], dialog[open]") || /\b(?:continue|verify|access|try again|temporarily unavailable|reserve)\b/i.test(bestBuyDemandGateText))) {
       return "high_demand";
     }
-    if (retailerSecurityChallenge(document)) return "unknown";
+    if (retailerSecurityChallenge(document, bestBuyPage ? "bestbuy" : void 0)) return "unknown";
     return "";
   }
   function sellerEvidence(document, control, retailer, boundRoot = null) {
@@ -1218,7 +1245,7 @@ var YoinkRetailerShadowModule = (() => {
     const alternateInputs = [...identityRoot.querySelectorAll(AMAZON_ALTERNATE_OFFER_INPUT_SELECTOR)];
     const alternateOffers = new Set(alternateInputs.map((element) => cleanAmazonOfferId(element.value)).filter(Boolean));
     const scopedControlCount = pageSku === expectedSku ? controls.map((candidate) => amazonOfferScope(candidate, retailer, expectedSku)).filter(Boolean).length : 0;
-    const securityChallenge = retailerSecurityChallenge(document);
+    const securityChallenge = retailerSecurityChallenge(document, "amazon");
     const interactiveBlock = retailerInteractiveBlock(document, urlValue);
     const genericAddIntentCount = boundedCount(genericAddIntentControls(document).length);
     const priceCandidateCount = visibleSelectorCount(evidenceRoot, retailer.priceSelectors.join(", "));
@@ -1274,7 +1301,7 @@ var YoinkRetailerShadowModule = (() => {
     const control = controls.length === 1 ? controls[0] ?? null : null;
     const selected = pageSku === expectedSku ? selectedControl(document, retailer, "either", expectedSku) : { control: null, fulfillment: "unknown", offerRoot: null };
     const root = selected.offerRoot || control?.closest("form, main") || document;
-    const securityChallenge = retailerSecurityChallenge(document);
+    const securityChallenge = retailerSecurityChallenge(document, retailerId);
     const interactiveBlock = retailerInteractiveBlock(document, urlValue);
     const genericAddIntentCount = boundedCount(genericAddIntentControls(document).length);
     const priceCandidateCount = selected.structuredOffer ? 1 : visibleSelectorCount(root, retailer.priceSelectors.join(", "));
@@ -1738,7 +1765,7 @@ var YoinkRetailerShadowModule = (() => {
       sellerType: seller2.sellerType,
       fulfillment: blocked && !retainBoundManualEvidence ? "unknown" : selected.fulfillment,
       addControlActionable: canAdd,
-      securityChallenge: retailerSecurityChallenge(document),
+      securityChallenge: retailerSecurityChallenge(document, retailerId),
       interactiveBlock: blocked
     };
   }

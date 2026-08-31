@@ -110,7 +110,7 @@ const TARGET_OBSERVER_VERSION = "target-observer-v5";
 const RETAILER_OBSERVER_VERSIONS = {
   walmart: "walmart-observer-v6",
   amazon: "amazon-observer-v8",
-  bestbuy: "bestbuy-observer-v9",
+  bestbuy: "bestbuy-observer-v10",
   disney: "disney-observer-v1",
   ravensburger: "ravensburger-observer-v1",
   riot: "riot-observer-v1",
@@ -144,7 +144,7 @@ const TARGET_ADD_ADAPTER_VERSION = "target-add-v7";
 const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v7";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
-const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v9";
+const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v10";
 const TARGET_CART_URL = "https://www.target.com/cart";
 const WALMART_CART_URL = "https://www.walmart.com/cart";
 const AMAZON_CART_URL = "https://www.amazon.com/gp/cart/view.html";
@@ -3244,6 +3244,18 @@ function bestBuyRehearsalJob(observation) {
     || observation.sellerName !== "Best Buy") {
     if (observation?.interactiveBlock === "high_demand" || observation?.interactiveBlock === "queue") {
       throw new Error("Best Buy high-demand or queue evidence was recorded, but automated demand-gate handling remains closed.");
+    }
+    if (observation?.securityChallenge) {
+      throw new Error("Complete the visible Best Buy security check in this tab, then retry qualification.");
+    }
+    if (observation?.interactiveBlock === "auth") {
+      throw new Error("Sign in to Best Buy in this tab, confirm your location, then retry qualification.");
+    }
+    if (observation?.interactiveBlock === "mfa") {
+      throw new Error("Complete Best Buy account verification in this tab, then retry qualification.");
+    }
+    if (observation?.interactiveBlock === "location") {
+      throw new Error("Confirm your Best Buy location and select Shipping, then retry qualification.");
     }
     if (observation?.availability === "preorder") {
       throw new Error("Best Buy preorder evidence was recorded, but preorder adds remain closed. Use an in-stock Best Buy-sold offer with Shipping selected.");

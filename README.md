@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.17.1 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.17.2 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,6 +15,14 @@ new lane. Every lane is restricted to first-party offers, quantity one, and the
 exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.17.2 distinguishes Best Buy's current visible `Account Required`
+high-demand state from a rendered security challenge. CSS-hidden CAPTCHA
+scaffolding cannot block an otherwise exact signed-in offer, while visible
+account, MFA, location, queue, reservation-gate, and security states continue
+to stop before any click and now provide the specific next step. The Best Buy
+observer and action contracts advance together, so the prior lane is retired
+until fresh no-click evidence is reviewed and explicitly activated.
 
 Version 1.17.1 recognizes Target's current direct-fulfillment product shell,
 including exact TCIN-bound `shippingButton` and generic Add controls inside an
@@ -2837,13 +2845,13 @@ pre-click check. Only the Add-to-Cart control can be clicked; Buy Now navigation
 is never used. The resulting cart must show exactly one authorized quantity
 added while every baseline quantity remains unchanged.
 
-Best Buy's separately gated `bestbuy-add-v9` runner requires an exact numeric
+Best Buy's separately gated `bestbuy-add-v10` runner requires an exact numeric
 SKU from a current or legacy product URL, explicit visible `Sold by Best Buy`
 evidence in the same bounded offer scope as one Add-to-Cart control and price,
 an exact Shipping or explicitly configured Pickup selection, and quantity one.
 `Sold & shipped by` marketplace offers, mismatched fulfillment, high-demand
 queues, location/account/security blocks, and ambiguous or conflicting SKU
-evidence stop before mutation. Observer v9
+evidence stop before mutation. Observer v10
 recognizes current Best Buy test/automation attributes and safely reports when
 a native Add-intent control exists outside the known selector set, allowing the
 sanitized repair queue to distinguish selector drift from a genuinely missing
@@ -2851,7 +2859,8 @@ control. It also binds a seller name represented by bounded accessibility
 metadata inside the exact seller element. Explicit in-store-only products are
 manual/local evidence with unknown global availability rather than false
 out-of-stock evidence. Migration 53 retires inherited qualifications for all
-four stores, requiring fresh evidence and current-runner rehearsal before
+four stores, and migration 57 retires the prior Best Buy lane after the
+rendered-security change, requiring fresh evidence and current-runner rehearsal before
 explicit activation. Its bounded baseline, at-most-once receipt, immediate offer
 revalidation, and exact cart-delta proof match the other guarded lanes. A historical
 repair group is superseded only by a strictly newer packaged adapter's later

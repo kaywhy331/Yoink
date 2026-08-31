@@ -10,7 +10,7 @@ and submit qualification.
 The current Yoink companion has only loopback access as a required host
 permission. Retailer access is optional. Generic `retailerMutation` remains
 forced false, while the independently versioned `target-add-v7`,
-`walmart-add-v7`, `amazon-add-v9`, and `bestbuy-add-v9` capabilities can be declared and qualified
+`walmart-add-v7`, `amazon-add-v9`, and `bestbuy-add-v10` capabilities can be declared and qualified
 only for their narrow add-only scopes.
 
 ## Source-to-target map
@@ -170,13 +170,17 @@ not retain raw errors, URLs, DOM, or any value outside the diagnostic contract.
 
 ## Current Best Buy boundary
 
-`bestbuy-observer-v9` binds one exact numeric SKU, price, first-party seller,
+`bestbuy-observer-v10` binds one exact numeric SKU, price, first-party seller,
 an exact selected Shipping or Pickup state, and Add control inside a bounded offer scope. It
 supports current and legacy product routes plus current test/automation and
 accessible native-button layouts. Its diagnostic reports a sanitized generic
 Add-intent count when an unknown selector exists, allowing immediate repair
-queue classification without storing page text or DOM. The separate
-`bestbuy-add-v9` runner preserves the bounded-baseline, durable pre-click receipt,
+queue classification without storing page text or DOM. CSS-hidden Best Buy
+CAPTCHA scaffolding is excluded using computed visibility, while a rendered
+challenge remains manual. A visible `Account Required` state is classified as
+authentication so the user receives a sign-in instruction rather than a false
+security alert. The separate
+`bestbuy-add-v10` runner preserves the bounded-baseline, durable pre-click receipt,
 at-most-once click, exact cart-delta proof, queue/interactive restraint, and
 marketplace/fulfillment-mismatch rejection boundaries. Accessibility-backed seller names are
 read only inside the already-bound seller element, and in-store-only products
@@ -184,11 +188,12 @@ remain manual/local evidence with unknown global availability. A single-control
 split shell may bind sibling commerce regions only when the exact page has one
 Add control, one distinct price, one seller class, quantity one, selected
 fulfillment, and no competing SKU. Migration 53
-retires prior qualifications for all four add stores; observer-version binding also excludes
-pre-v9 evidence from current qualification. Preorders and actual high-demand
+retires prior qualifications for all four add stores, and migration 57 retires
+the prior Best Buy lane after its rendered-challenge boundary changes;
+observer-version binding also excludes pre-v10 evidence from current qualification. Preorders and actual high-demand
 gates are retained as read-only evidence but cannot satisfy or execute the
 in-stock lane; a passive demand badge does not close an otherwise exact offer.
-Activation requires a fresh v8 dossier,
+Activation requires a fresh v10 dossier,
 no-click rehearsal, capable companion, exact evidence hash, and local
 confirmation.
 

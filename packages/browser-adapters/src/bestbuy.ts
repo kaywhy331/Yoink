@@ -201,7 +201,7 @@ export function observeBestBuyCart(documentValue: Document, observedAt = new Dat
 }
 
 export function bestBuySecurityChallenge(documentValue: Document): boolean {
-  return retailerSecurityChallenge(documentValue);
+  return retailerSecurityChallenge(documentValue, "bestbuy");
 }
 
 export function bestBuyInteractiveBlock(documentValue: Document, urlValue: string): LiveOfferObservation["interactiveBlock"] {

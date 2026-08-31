@@ -1942,7 +1942,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_BESTBUY_ADD_V9"
+          confirmation: "ENABLE_BESTBUY_ADD_V10"
         })
       });
       await refresh();

@@ -1,6 +1,17 @@
 # Yoink roadmap
 
-## Shipped through 1.17.1
+## Shipped through 1.17.2
+
+### Best Buy account and rendered-security readiness (1.17.2)
+
+- Ignores CAPTCHA/security scaffolding hidden by Best Buy's computed page styles
+  without weakening detection of a rendered challenge or challenge page
+- Classifies the current visible `Account Required` high-demand state as an
+  authentication step and gives the user a direct sign-in/location instruction
+- Preserves qualification for an exact signed-in Shipping offer with only a
+  passive demand badge; active reservation gates and queues remain manual
+- Advances the Best Buy observer/action contracts and retires prior Best Buy
+  qualification so the changed mutation-time check requires fresh evidence
 
 ### Target direct-fulfillment recovery (1.17.1)
 

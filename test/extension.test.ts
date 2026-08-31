@@ -111,6 +111,8 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /retailerMutation: false/);
   assert.match(background, /preorder_not_supported/);
   assert.match(background, /high_demand/);
+  assert.match(background, /Sign in to Best Buy in this tab, confirm your location/);
+  assert.match(background, /Complete the visible Best Buy security check/);
   assert.doesNotMatch(background, /\.click\s*\(|dispatchEvent\s*\(/);
   assert.match(popup, /chrome\.permissions\.request/);
   assert.doesNotMatch(popup, /chrome\.permissions\.remove/);

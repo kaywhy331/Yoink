@@ -961,6 +961,55 @@ test("Best Buy ignores challenge phrases in non-observable scripts but still blo
   assert.equal(blocked.diagnostic.reasonCode, "security_challenge");
 });
 
+test("Best Buy ignores CSS-hidden challenge scaffolding and reports its current account gate as authentication", () => {
+  const url = "https://www.bestbuy.com/product/2026-topps-flagship-football-mega-box/J3ZPGXX9RP/sku/6685081";
+  const loggedOut = fixture("bestbuy-single-split-shell.html", url);
+  loggedOut.head.insertAdjacentHTML("beforeend", `<style>
+    .bestbuy-runtime-captcha, .signed-in-only-copy { display: none; }
+  </style>`);
+  loggedOut.body.insertAdjacentHTML("afterbegin", `
+    <div id="captcha-runtime" class="bestbuy-runtime-captcha">Additional security check is required</div>
+    <div role="status">High Demand Product — this item is expected to sell out quickly.</div>
+    <section data-testid="account-required-gate">
+      <h2>Account Required</h2>
+      <p>An account is required to purchase this item.</p>
+      <a href="/identity/global/signin">Sign In</a>
+    </section>`);
+  assert.equal(retailerSecurityChallenge(loggedOut, "bestbuy"), false);
+  assert.equal(retailerInteractiveBlock(loggedOut, url), "auth");
+  const loggedOutAttempt = collectRetailerShadowAttempt(loggedOut, url, "bestbuy", "shipping");
+  assert.equal(loggedOutAttempt.observation.securityChallenge, false);
+  assert.equal(loggedOutAttempt.observation.interactiveBlock, "auth");
+  assert.equal(loggedOutAttempt.diagnostic.reasonCode, "interactive_auth");
+
+  const signedIn = fixture("bestbuy-single-split-shell.html", url);
+  signedIn.head.insertAdjacentHTML("beforeend", `<style>
+    .bestbuy-runtime-captcha, .account-required-gate { display: none; }
+  </style>`);
+  signedIn.body.insertAdjacentHTML("afterbegin", `
+    <div id="captcha-runtime" class="bestbuy-runtime-captcha">Additional security check is required</div>
+    <div role="status">High Demand Product — this item is expected to sell out quickly.</div>
+    <section class="account-required-gate">
+      <h2>Account Required</h2><p>An account is required to purchase this item.</p>
+    </section>`);
+  assert.equal(retailerSecurityChallenge(signedIn, "bestbuy"), false);
+  assert.equal(retailerInteractiveBlock(signedIn, url), "");
+  const signedInOffer = observeRetailerOffer(signedIn, url, "bestbuy", "6685081", "shipping", NOW);
+  assert.deepEqual({
+    availability: signedInOffer.availability,
+    price: signedInOffer.unitPriceCents,
+    seller: signedInOffer.sellerName,
+    fulfillment: signedInOffer.fulfillment,
+    actionable: signedInOffer.addControlActionable
+  }, {
+    availability: "in_stock",
+    price: 4999,
+    seller: "Best Buy",
+    fulfillment: "shipping",
+    actionable: true
+  });
+});
+
 test("Best Buy observer recognizes modern fulfillment while keeping pickup an explicit opt-in", () => {
   const shippingUrl = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const shippingDocument = fixture("bestbuy-modern-first-party.html", shippingUrl);
@@ -1017,7 +1066,7 @@ test("Best Buy observer recognizes modern fulfillment while keeping pickup an ex
   assert.equal(selectorMiss.diagnostic.reasonCode, "add_control_selector_miss");
 });
 
-test("Best Buy v9 distinguishes passive demand badges from real gates and preserves pickup opt-in", () => {
+test("Best Buy v10 distinguishes passive demand badges from real gates and preserves pickup opt-in", () => {
   const preorderUrl = "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-reality-fracture-play-booster-box-30-packs/JJ8VP7Z65T/sku/6678193";
   const preorderDocument = fixture("bestbuy-reality-fracture-preorder.html", preorderUrl);
   const preorder = observeRetailerOffer(preorderDocument, preorderUrl, "bestbuy", "6678193", "either", NOW);
@@ -1087,7 +1136,7 @@ test("Best Buy v9 distinguishes passive demand badges from real gates and preser
   }
 });
 
-test("Best Buy v9 binds one primary action when the same exact offer also renders a sticky duplicate", () => {
+test("Best Buy v10 binds one primary action when the same exact offer also renders a sticky duplicate", () => {
   const demandUrl = "https://www.bestbuy.com/product/riftbound-league-of-legends-trading-card-game-unleashed-champion-deck-vex/J3GWY59Q5Z/sku/6669286";
   const passiveDemand = fixture("bestbuy-passive-demand-badge.html", demandUrl);
   const demandObservation = observeRetailerOffer(passiveDemand, demandUrl, "bestbuy", "6669286", "shipping", NOW);
@@ -1144,7 +1193,7 @@ test("Best Buy v9 binds one primary action when the same exact offer also render
   ), null);
 });
 
-test("Best Buy v9 recovers one exact split-shell action without admitting page-level ambiguity", () => {
+test("Best Buy v10 recovers one exact split-shell action without admitting page-level ambiguity", () => {
   const url = "https://www.bestbuy.com/product/2026-topps-flagship-football-mega-box/J3ZPGXX9RP/sku/6685081";
   const document = fixture("bestbuy-single-split-shell.html", url);
   const observation = observeRetailerOffer(document, url, "bestbuy", "6685081", "shipping", NOW);

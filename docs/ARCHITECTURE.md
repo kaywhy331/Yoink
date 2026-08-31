@@ -1079,8 +1079,8 @@ gated, so SQLite retains runtime authority. See
 ## Constrained action-store layout recovery
 
 The current action contracts are `target-add-v7`, `walmart-add-v7`,
-`amazon-add-v9`, and `bestbuy-add-v9`, paired with observer versions 5, 6, 8,
-and 9 respectively. Packaged selectors remain authoritative when present.
+`amazon-add-v9`, and `bestbuy-add-v10`, paired with observer versions 5, 6, 8,
+and 10 respectively. Packaged selectors remain authoritative when present.
 When they drift, local packaged code may recover only one unique semantic Add
 control and one unique price landmark, after the existing exact identity,
 seller, fulfillment, quantity, price, offer-scope, and offer-token invariants
@@ -1091,7 +1091,10 @@ Walmart's split layout may use its exact local `__NEXT_DATA__` product state
 only when selected offer, condition, price, first-party seller, selected
 fulfillment, quantity, and one primary Add control agree. Duplicate candidates
 fail closed. Challenge phrases are evaluated only from observable page content,
-not retailer scripts, styles, templates, or hidden copy.
+not retailer scripts, styles, templates, or hidden copy. Best Buy additionally
+uses computed visibility for challenge and account-gate elements so CSS-hidden
+CAPTCHA scaffolding is inert, a visible `Account Required` panel becomes an
+authentication step, and a rendered challenge remains fail-closed.
 Remote/community observer recipes are still read-only shadow evidence and can
 never provide a mutation target.
 
