@@ -106,7 +106,7 @@ const RETAILER_ORIGINS = {
   pbandai: ["https://*.p-bandai.com/*"],
   pokemoncenter: ["https://*.pokemoncenter.com/*"]
 };
-const TARGET_OBSERVER_VERSION = "target-observer-v4";
+const TARGET_OBSERVER_VERSION = "target-observer-v5";
 const RETAILER_OBSERVER_VERSIONS = {
   walmart: "walmart-observer-v6",
   amazon: "amazon-observer-v8",
@@ -140,7 +140,7 @@ const SUPPORTED_RETAILER_DOMAINS = Object.freeze([
   "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
   "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
 ]);
-const TARGET_ADD_ADAPTER_VERSION = "target-add-v6";
+const TARGET_ADD_ADAPTER_VERSION = "target-add-v7";
 const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v7";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";

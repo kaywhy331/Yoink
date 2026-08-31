@@ -3852,5 +3852,16 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       BEFORE DELETE ON background_worker_deployment_events
       BEGIN SELECT RAISE(ABORT, 'background worker deployment events are append-only'); END;
     `
+  },
+  {
+    version: 56,
+    name: "target_v5_v7_direct_fulfillment_requalification_boundary",
+    sql: `
+      UPDATE retailers SET execution_supported = 0 WHERE id = 'target';
+      UPDATE listings SET execution_supported = 0 WHERE retailer_id = 'target';
+      UPDATE retailer_adapter_qualifications
+        SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE retailer_id = 'target';
+    `
   }
 ]);

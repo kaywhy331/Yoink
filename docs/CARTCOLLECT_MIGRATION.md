@@ -9,7 +9,7 @@ and submit qualification.
 
 The current Yoink companion has only loopback access as a required host
 permission. Retailer access is optional. Generic `retailerMutation` remains
-forced false, while the independently versioned `target-add-v6`,
+forced false, while the independently versioned `target-add-v7`,
 `walmart-add-v7`, `amazon-add-v9`, and `bestbuy-add-v9` capabilities can be declared and qualified
 only for their narrow add-only scopes.
 
@@ -68,7 +68,7 @@ confirm the exact retailer add-only scope in the control center.
 
 ## Current Target boundary
 
-`target-observer-v4` is a pure visible-DOM reader for exact Target TCINs. It
+`target-observer-v5` is a pure visible-DOM reader for exact Target TCINs. It
 observes product offer, seller type, fulfillment, cart inventory, bounded order
 total, manual blockers, and privacy-preserving checkout evidence. Its fixtures
 cover first-party and marketplace offers, hidden/recommended controls, wrong
@@ -76,7 +76,7 @@ SKUs, authentication/MFA/location/membership/queue/challenge states, changed
 or ambiguous cart deltas, and unsafe checkout choices.
 
 It contains no click, event-dispatch, fetch, navigation, or credential logic.
-The separate `target-add-v6` bundle owns Target's only commerce click function. It accepts
+The separate `target-add-v7` bundle owns Target's only commerce click function. It accepts
 only an immutable Target/add-to-cart/quantity-one/first-party job with exact
 Shipping or explicitly configured Pickup fulfillment, binds the exact current
 fulfillment region, and can select the matching available tile. Shipping may

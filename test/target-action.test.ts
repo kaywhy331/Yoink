@@ -69,7 +69,7 @@ test("Target rehearsal reaches the final click boundary without clicking", () =>
   assert.equal(clicks, 0);
 });
 
-test("Target v6 rehearses the current no-TCIN hydrated fulfillment action", () => {
+test("Target v7 rehearses the current no-TCIN hydrated fulfillment action", () => {
   const document = new JSDOM(`<body><main>
     <div data-test="product-price">$34.99</div>
     <section aria-label="Fulfillment" data-test="@web/AddToCart/FulfillmentSection" role="region">
@@ -84,6 +84,73 @@ test("Target v6 rehearses the current no-TCIN hydrated fulfillment action", () =
   assert.equal(result.ok, true);
   assert.equal(result.ok && result.wouldClick, true);
   assert.equal(clicks, 0);
+});
+
+test("Target v7 binds the current direct shipping shell without treating sticky or recommendation controls as the offer", async () => {
+  const document = new JSDOM(`<body>
+    <main>
+      <div data-test="product-price">$44.99</div>
+      <div id="above-the-fold-information">
+        <section aria-label="Fulfillment" data-test="@web/AddToCart/FulfillmentSection" role="region">
+          <div data-test="@web/AddToCart/Fulfillment/ShippingSection">
+            <p>Ship to 91722</p><p>Arrives by Monday</p><p>Ships free</p>
+            <button id="addToCartButtonOrTextIdFor1011483414" data-test="shippingButton">Add to cart</button>
+          </div>
+        </section>
+      </div>
+    </main>
+    <aside data-test="recommendations">Target Plus
+      <button id="addToCartButtonOrTextIdFor1011483414" data-test="chooseOptionsButton">Add to cart</button>
+    </aside>
+    <aside data-test="StickyAddToCartFulfillmentSection">
+      <button id="addToCartButtonOrTextIdFor1011483414" data-test="addToCartButton">Add to cart</button>
+    </aside>
+  </body>`, { url: PRODUCT_URL }).window.document;
+  const primary = document.querySelector<HTMLElement>("[aria-label='Fulfillment'] #addToCartButtonOrTextIdFor1011483414");
+  assert.ok(primary);
+  let clicks = 0;
+  primary.addEventListener("click", () => { clicks += 1; });
+
+  const directJob = job({ maxUnitPriceCents: 4499, maxOrderTotalCents: 4499 });
+  const rehearsal = rehearseTargetAdd(document, PRODUCT_URL, directJob, NOW);
+  assert.equal(rehearsal.ok, true);
+  assert.equal(rehearsal.ok && rehearsal.proof.sellerName, "Target");
+  assert.equal(rehearsal.ok && rehearsal.proof.fulfillment, "shipping");
+  assert.equal(clicks, 0);
+
+  const generic = new JSDOM(document.documentElement.outerHTML, { url: PRODUCT_URL }).window.document;
+  generic.querySelector("[aria-label='Fulfillment'] #addToCartButtonOrTextIdFor1011483414")
+    ?.setAttribute("data-test", "addToCartButton");
+  const genericRehearsal = rehearseTargetAdd(generic, PRODUCT_URL, directJob, NOW);
+  assert.equal(genericRehearsal.ok, true);
+  assert.equal(genericRehearsal.ok && genericRehearsal.proof.fulfillment, "shipping");
+
+  const prepared = prepareTargetAdd(document, PRODUCT_URL, directJob, NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  const committed = await commitTargetAdd(document, PRODUCT_URL, directJob, prepared.authorizationId, NOW + 100);
+  assert.equal(committed.ok, true);
+  assert.equal(clicks, 1);
+});
+
+test("Target v7 never treats a direct pickup shell as shipping and requires an explicit pickup job", () => {
+  const document = new JSDOM(`<body><main>
+    <div data-test="product-price">$24.99</div>
+    <section aria-label="Fulfillment" data-test="@web/AddToCart/FulfillmentSection" role="region">
+      <div data-test="@web/AddToCart/Fulfillment/PickupSection">
+        <p>Pickup available today</p>
+        <button id="addToCartButtonOrTextIdFor1011483414" data-test="addToCartButton">Add to cart</button>
+      </div>
+    </section>
+  </main></body>`, { url: PRODUCT_URL }).window.document;
+  const shippingJob = job({ maxUnitPriceCents: 2499, maxOrderTotalCents: 2499 });
+  assert.equal(prepareTargetAdd(document, PRODUCT_URL, shippingJob, NOW).ok, false);
+  const pickupJob = job({
+    fulfillment: "pickup",
+    maxUnitPriceCents: 2499,
+    maxOrderTotalCents: 2499
+  });
+  assert.equal(rehearseTargetAdd(document, PRODUCT_URL, pickupJob, NOW).ok, true);
 });
 
 test("Target add authorization clicks at most once and consumes its receipt before mutation", async () => {

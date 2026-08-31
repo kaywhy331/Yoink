@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-17-0-store-routing",
-  version: "1.17.0",
-  publishedAt: "2026-08-31T00:00:00.000Z",
-  title: "More reliable store checks and safer outbound routing",
-  summary: "Yoink now recognizes additional current retailer layouts, routes only approved Howl stores through affiliate links, and lets you safely delete obsolete purchase plans.",
+  id: "yoink-1-17-1-target-direct-fulfillment",
+  version: "1.17.1",
+  publishedAt: "2026-08-31T22:35:00.000Z",
+  title: "Target shipping-only products qualify correctly",
+  summary: "Yoink now recognizes Target's current direct-fulfillment product layout while preserving exact-item, Shipping-first, and no-click qualification safeguards.",
   highlights: [
-    "Target, Walmart, Amazon, and Best Buy checks handle additional current page structures while ambiguous evidence still stops safely before any Add control.",
-    "The admin Howl directory contains 160 exact website scopes; unlisted registered stores keep their direct retailer links.",
-    "Purchase plans can be deleted without erasing action or spend history, and challenged warm-readiness tabs no longer multiply in the background."
+    "Direct Shipping and same-day Delivery panels bind their exact TCIN-scoped Add control even when Target does not render selectable fulfillment tiles.",
+    "Sticky and recommendation controls remain excluded, and visible Target errors or ambiguous fulfillment still stop before any retailer control.",
+    "Pickup remains unavailable to Shipping-default plans and is eligible only when the user explicitly selected Pickup and the exact page offers it."
   ],
   docsUrl: "/docs"
 });

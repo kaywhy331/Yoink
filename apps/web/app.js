@@ -1885,7 +1885,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_TARGET_ADD_V6"
+          confirmation: "ENABLE_TARGET_ADD_V7"
         })
       });
       await refresh();

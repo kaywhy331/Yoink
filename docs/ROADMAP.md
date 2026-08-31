@@ -1,6 +1,17 @@
 # Yoink roadmap
 
-## Shipped through 1.17.0
+## Shipped through 1.17.1
+
+### Target direct-fulfillment recovery (1.17.1)
+
+- Recognizes Target's current direct Shipping and same-day Delivery sections
+  when the product page omits the older selectable fulfillment tiles
+- Binds only the exact TCIN-scoped primary Add control while continuing to
+  exclude sticky, recommendation, disabled, and ambiguous controls
+- Keeps Shipping as the default and permits direct Pickup only for an explicit
+  Pickup plan; visible page errors and security challenges remain fail-closed
+- Advances the Target observer/action contracts and retires prior Target
+  qualification so fresh evidence and explicit activation remain mandatory
 
 ### Exact affiliate routing and retailer-layout recovery (1.17.0)
 

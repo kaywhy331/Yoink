@@ -25,7 +25,7 @@ var YoinkTargetShadowModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var TARGET_OBSERVER_VERSION = "target-observer-v4";
+  var TARGET_OBSERVER_VERSION = "target-observer-v5";
   var SELECTED_OFFER_SCOPE_VERSION = 1;
 
   // packages/browser-safety/src/index.ts
@@ -335,6 +335,18 @@ var YoinkTargetShadowModule = (() => {
     const pickup = selected.some((value) => /pick it up|pickup|pick-up/i.test(value));
     return shipping === pickup ? "unknown" : shipping ? "shipping" : "pickup";
   }
+  function directControlFulfillment(control, root) {
+    const own = fulfillmentKind(control);
+    if (own !== "unknown") return own;
+    const methodScope = control.closest([
+      "[data-test*='AddToCart/Fulfillment/Shipping' i]",
+      "[data-test*='AddToCart/Fulfillment/Delivery' i]",
+      "[data-test*='AddToCart/Fulfillment/Pickup' i]",
+      "[data-fulfillment]",
+      "[data-fulfillment-type]"
+    ].join(", "));
+    return methodScope && root.contains(methodScope) ? fulfillmentKind(methodScope) : "unknown";
+  }
   function recommendationControl(candidate) {
     return Boolean(candidate.closest([
       "[data-test*='recommend' i]",
@@ -404,16 +416,20 @@ var YoinkTargetShadowModule = (() => {
     if (scoped.length !== 1 || !scoped[0]?.controls[0]) return emptyTargetAddBinding();
     const { root } = scoped[0];
     const control = scoped[0].controls[0];
-    const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter(visible2).map((fulfillmentControl) => ({
+    const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter((fulfillmentControl) => fulfillmentControl !== control && visible2(fulfillmentControl)).map((fulfillmentControl) => ({
       fulfillmentControl,
       fulfillment: fulfillmentKind(fulfillmentControl),
       selected: fulfillmentTileSelected(fulfillmentControl),
       available: fulfillmentTileAvailable(fulfillmentControl)
     })).filter((entry) => entry.fulfillment !== "unknown");
+    required = required === "pickup" ? "pickup" : "shipping";
+    if (tiles.length === 0) {
+      const directFulfillment = directControlFulfillment(control, root);
+      return directFulfillment === required ? { control, fulfillmentControl: null, fulfillment: required, selectionRequired: false, offerRoot: root } : emptyTargetAddBinding();
+    }
     const selected = tiles.filter((entry) => entry.selected);
     if (selected.length !== 1 || !selected[0]) return emptyTargetAddBinding();
     const selectedEntry = selected[0];
-    required = required === "pickup" ? "pickup" : "shipping";
     const alreadySelected = selectedEntry.fulfillment === required && selectedEntry.available;
     if (alreadySelected) {
       return { control, fulfillmentControl: selectedEntry.fulfillmentControl, fulfillment: required, selectionRequired: false, offerRoot: root };

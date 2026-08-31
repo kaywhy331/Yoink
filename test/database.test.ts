@@ -303,6 +303,59 @@ test("migration 53 retires every prior add lane before multi-item cart delta exe
   }
 });
 
+test("migration 56 retires prior Target qualification after the direct fulfillment action change", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-target-v7-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new YoinkDatabase(filePath);
+    legacy.run("DELETE FROM schema_migrations WHERE version = 56");
+    legacy.run("UPDATE retailers SET execution_supported = 1 WHERE id = 'target'");
+    legacy.exec(`
+      INSERT INTO product_families(id, title, brand, created_at, updated_at)
+        VALUES ('family_target_v7_fixture', 'Target v7 fixture', '', '2026-08-31T22:30:00.000Z', '2026-08-31T22:30:00.000Z');
+      INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+        VALUES ('variant_target_v7_fixture', 'family_target_v7_fixture', 'Target v7 fixture', '{}', '2026-08-31T22:30:00.000Z', '2026-08-31T22:30:00.000Z');
+      INSERT INTO listings(
+        id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+        execution_supported, currency, created_at, updated_at
+      ) VALUES (
+        'listing_target_v7_fixture', 'variant_target_v7_fixture', 'target', '95280894',
+        'https://www.target.com/p/-/A-95280894', 'in_stock', 1, 'USD',
+        '2026-08-31T22:30:00.000Z', '2026-08-31T22:30:00.000Z'
+      );
+      INSERT OR REPLACE INTO retailer_adapter_qualifications(
+        tenant_id, user_id, retailer_id, adapter_version, highest_action,
+        status, evidence_hash, qualified_at, updated_at
+      ) VALUES (
+        'tenant_local', 'user_local', 'target', 'target-add-v6', 'add_to_cart',
+        'qualified', 'target-v6-evidence', '2026-08-31T22:30:00.000Z', '2026-08-31T22:30:00.000Z'
+      );
+    `);
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ name: string }>(
+        "SELECT name FROM schema_migrations WHERE version = 56"
+      )?.name, "target_v5_v7_direct_fulfillment_requalification_boundary");
+      assert.equal(upgraded.get<{ execution_supported: number }>(
+        "SELECT execution_supported FROM retailers WHERE id = 'target'"
+      )?.execution_supported, 0);
+      assert.equal(upgraded.get<{ execution_supported: number }>(
+        "SELECT execution_supported FROM listings WHERE id = 'listing_target_v7_fixture'"
+      )?.execution_supported, 0);
+      assert.equal(upgraded.get<{ status: string }>(
+        "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'target'"
+      )?.status, "retired");
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("an existing 0.2 database upgrades transactionally to shadow observations and add rehearsals", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-db-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");

@@ -256,7 +256,7 @@ const selectedOffer = (childOfferKey: string, selectionState = "exact") => ({
 });
 
 const OBSERVATION = {
-  adapterVersion: "target-observer-v4",
+  adapterVersion: "target-observer-v5",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -602,7 +602,7 @@ function harness(options: HarnessOptions = {}) {
         lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
       } : null,
       runnerJob: {
-        adapterVersion: "target-add-v6",
+        adapterVersion: "target-add-v7",
         contractVersion: 1,
         jobId: "job_target_fixture",
         retailerId: "target",
@@ -1569,7 +1569,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : {
         contractVersion: 1,
-        adapterVersion: "target-add-v6",
+        adapterVersion: "target-add-v7",
         id: `job_target_fixture${jobSuffix}`,
         capabilityToken: "C".repeat(43),
         action: "add_to_cart",

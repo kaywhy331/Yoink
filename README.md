@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.17.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.17.1 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,6 +15,14 @@ new lane. Every lane is restricted to first-party offers, quantity one, and the
 exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.17.1 recognizes Target's current direct-fulfillment product shell,
+including exact TCIN-bound `shippingButton` and generic Add controls inside an
+explicit Shipping or same-day Delivery section. It excludes the Add control
+from fulfillment-tile selection, ignores sticky and recommendation controls,
+and still refuses visible page errors or ambiguous fulfillment. Pickup remains
+explicit opt-in only. The versioned Target lane is retired on upgrade and must
+be requalified with fresh no-click evidence before activation.
 
 Version 1.17.0 repairs false-negative qualification evidence across current
 Target, Walmart, Amazon, and Best Buy layouts without weakening any mutation
@@ -2784,7 +2792,7 @@ seller, fulfillment, quantity, price-cap, offer-scope, and offer-token checks
 all pass. Duplicate candidates fail closed. Remote observer recipes remain
 read-only shadow evidence and cannot supply click targets.
 
-Target's qualified `target-add-v6` runner requires:
+Target's qualified `target-add-v7` runner requires:
 
 - live execution mode, Actions unpaused, an online paired device, and a current
   adapter qualification;

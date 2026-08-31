@@ -842,7 +842,7 @@ async function insertOperationalRetentionFixtures(
          observed_at, received_at, validation_profile,
          oracle_evaluated_field_count, oracle_agreed_field_count,
          recipe_state_at_trial
-       ) VALUES ($1, $2, $3, $4, $5, 'target', $6, 'target-observer-v4',
+       ) VALUES ($1, $2, $3, $4, $5, 'target', $6, 'target-observer-v5',
                  $7, 'passed', 1, 1, 0, $8, $8,
                  'packaged_structured_oracle_v1', 1, 1, 'shadow')`,
       [

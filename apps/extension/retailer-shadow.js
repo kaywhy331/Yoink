@@ -47,7 +47,7 @@ var YoinkRetailerShadowModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var TARGET_OBSERVER_VERSION = "target-observer-v4";
+  var TARGET_OBSERVER_VERSION = "target-observer-v5";
   var WALMART_OBSERVER_VERSION = "walmart-observer-v6";
   var WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
   var AMAZON_OBSERVER_VERSION = "amazon-observer-v8";
