@@ -362,7 +362,8 @@ export class PurchasePolicyRepository {
     mission: MissionContext,
     evaluation: StrategyEvaluation,
     maximumAllInCents: number | null,
-    now = Date.now()
+    now = Date.now(),
+    options: { allowDeferredLiveOfferVerification?: boolean } = {}
   ): IntentActionDecision {
     const policy = this.ensureCurrent(mission.id, now);
     const target = policy.targets.find((candidate) => candidate.listingId === listing.id) ?? null;
@@ -384,21 +385,39 @@ export class PurchasePolicyRepository {
     if (fulfilled + evaluation.effectiveQuantity > policy.quantity) {
       return rejected("intent_quantity_exceeded", "The requested quantity exceeds the unfulfilled purchase intent quantity.");
     }
-    if (signal.offer.unitPriceCents === null) {
+    const priceVerificationDeferred = options.allowDeferredLiveOfferVerification === true
+      && evaluation.decisionSource === "purchase_intent"
+      && evaluation.effectiveAction === "add_to_cart"
+      && signal.offer.unitPriceCents === null
+      && Number.isSafeInteger(target.maxUnitPriceCents)
+      && Number(target.maxUnitPriceCents) > 0;
+    if (signal.offer.unitPriceCents === null && !priceVerificationDeferred) {
       return rejected("intent_price_required", "An exact numeric offer price is required before a purchase action.");
     }
-    if (target.maxUnitPriceCents !== null && signal.offer.unitPriceCents > target.maxUnitPriceCents) {
+    if (target.maxUnitPriceCents !== null && signal.offer.unitPriceCents !== null
+      && signal.offer.unitPriceCents > target.maxUnitPriceCents) {
       return rejected("intent_unit_cap_exceeded", "The selected offer exceeds the retailer-specific unit-price cap.");
     }
     if (policy.maxAllInCents !== null
       && (maximumAllInCents === null || maximumAllInCents > policy.maxAllInCents)) {
       return rejected("intent_all_in_cap_exceeded", "The bounded maximum order total exceeds the purchase intent all-in cap.");
     }
-    if (evaluation.sellerPolicy === "first_party_only" && signal.offer.sellerType !== "first_party") {
+    const sellerVerificationDeferred = options.allowDeferredLiveOfferVerification === true
+      && evaluation.decisionSource === "purchase_intent"
+      && evaluation.effectiveAction === "add_to_cart"
+      && signal.offer.sellerType === "unknown";
+    if (evaluation.sellerPolicy === "first_party_only"
+      && signal.offer.sellerType !== "first_party"
+      && !sellerVerificationDeferred) {
       return rejected("intent_seller_unverified", "A first-party seller must be explicitly verified for this purchase intent.");
     }
+    const fulfillmentVerificationDeferred = options.allowDeferredLiveOfferVerification === true
+      && evaluation.decisionSource === "purchase_intent"
+      && evaluation.effectiveAction === "add_to_cart"
+      && signal.offer.fulfillment === "unknown";
     if (!["either", "manual", "unknown"].includes(evaluation.fulfillment)
-      && signal.offer.fulfillment !== evaluation.fulfillment) {
+      && signal.offer.fulfillment !== evaluation.fulfillment
+      && !fulfillmentVerificationDeferred) {
       return rejected("intent_fulfillment_unverified", "The selected offer fulfillment does not match the purchase intent.");
     }
     if (policy.cooldownSeconds > 0) {

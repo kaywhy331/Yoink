@@ -478,7 +478,8 @@ export class SignalRepository {
     evaluation: StrategyEvaluation,
     settings: AppSettings,
     attribution: AttributionPlan,
-    now = Date.now()
+    now = Date.now(),
+    options: { allowDeferredLiveOfferVerification?: boolean } = {}
   ): JobRecord {
     const existing = this.jobForIncident(incident.id);
     if (existing) return existing;
@@ -516,7 +517,8 @@ export class SignalRepository {
         mission,
         evaluation,
         maxOrderTotal,
-        now
+        now,
+        options
       );
       if (!policyDecision.allowed) {
         effectiveAction = "notify";
@@ -670,7 +672,17 @@ export class SignalRepository {
         state === "shadow_ready"
           ? packagedMutationLane ? "Qualified shadow action job created." : "A closed-lane rehearsal record was created."
           : "Action job created.",
-        { jobId, incidentId: incident.id, listingId: listing.id, action: effectiveAction, intentRevision: policy.revision, policyBlocked },
+        {
+          jobId,
+          incidentId: incident.id,
+          listingId: listing.id,
+          action: effectiveAction,
+          intentRevision: policy.revision,
+          policyBlocked,
+          ...(options.allowDeferredLiveOfferVerification === true
+            ? { liveOfferVerificationDeferred: true }
+            : {})
+        },
         now
       );
       if (effectiveAction === "notify") {

@@ -399,7 +399,7 @@ export function buildPurchaseAutomationReadiness(
         ? "The control plane is in test mode; no retailer click can run."
         : context.actionsPaused ? "Global guarded actions are paused." : "Guarded actions are enabled."),
     check("runtime", "Fresh offer verification", "runtime",
-      "At action time Chrome must re-bind the exact item, price, first-party seller, saved Shipping or Pickup choice, quantity one, and usable add control. Checkout remains manual.")
+      "A trusted exact signal may start the check without carrying price, seller, or fulfillment. Before Add, Chrome must freshly re-bind the exact item, price, first-party seller, saved Shipping or Pickup choice, quantity one, and usable control. Checkout remains manual.")
   ];
 
   if (!policyTargetsSafe) {
@@ -456,6 +456,6 @@ export function buildPurchaseAutomationReadiness(
   }
   return result("guarded_add_armed", "ready", "add_to_cart", "guarded_add", readyForMonitoring,
     "Guarded add is armed",
-    `Yoink may add exactly one item at ${joinedStores(laneTargets)} only after a fresh exact first-party offer matches each target's saved Shipping or Pickup choice. Checkout stays manual.`,
+    `A fresh trusted exact signal may start the ${joinedStores(laneTargets)} check. Chrome adds exactly one item only after the live page proves the reviewed price, first-party seller, and saved Shipping or Pickup choice. Checkout stays manual.`,
     "wait_for_offer", "Wait for an exact match", addChecks, targetReadiness);
 }

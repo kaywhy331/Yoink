@@ -169,7 +169,8 @@ export function evaluatePurchaseIntent(
   signal: NormalizedSignal,
   listing: ListingContext,
   mission: MissionContext,
-  now = Date.now()
+  now = Date.now(),
+  options: { allowDeferredLiveOfferVerification?: boolean } = {}
 ): StrategyEvaluation {
   const rejected = (reason: string, state: StrategyEvaluation["state"] = "unmatched"): StrategyEvaluation => ({
     state,
@@ -202,13 +203,23 @@ export function evaluatePurchaseIntent(
   const sellerPolicy: SellerPolicy = target.sellerPolicy === "allow_third_party"
     ? "allow_third_party"
     : "first_party_only";
-  if (sellerPolicy === "first_party_only" && signal.offer.sellerType !== "first_party") {
+  const sellerVerificationDeferred = options.allowDeferredLiveOfferVerification === true
+    && sellerPolicy === "first_party_only"
+    && signal.offer.sellerType === "unknown";
+  if (sellerPolicy === "first_party_only"
+    && signal.offer.sellerType !== "first_party"
+    && !sellerVerificationDeferred) {
     return rejected("The exact purchase plan requires the retailer itself to be explicitly verified as seller.");
   }
   const fulfillment = target.fulfillment === "pickup"
     ? "pickup"
     : target.fulfillment === "manual" ? "manual" : "shipping";
-  if (["shipping", "pickup"].includes(fulfillment) && signal.offer.fulfillment !== fulfillment) {
+  const fulfillmentVerificationDeferred = options.allowDeferredLiveOfferVerification === true
+    && ["shipping", "pickup"].includes(fulfillment)
+    && signal.offer.fulfillment === "unknown";
+  if (["shipping", "pickup"].includes(fulfillment)
+    && signal.offer.fulfillment !== fulfillment
+    && !fulfillmentVerificationDeferred) {
     return rejected("The observed fulfillment does not match the exact purchase plan.");
   }
   const unitCap = target.maxUnitPriceCents;
@@ -219,7 +230,13 @@ export function evaluatePurchaseIntent(
   const effectiveUnitCapCents = unitCap === null
     ? signalPrice
     : signalPrice === null ? unitCap : Math.min(unitCap, signalPrice);
-  if (signalPrice === null || (policy.actionCeiling !== "notify" && unitCap === null)) {
+  const priceVerificationDeferred = options.allowDeferredLiveOfferVerification === true
+    && policy.actionCeiling === "add_to_cart"
+    && signalPrice === null
+    && Number.isSafeInteger(unitCap)
+    && Number(unitCap) > 0;
+  if ((signalPrice === null && !priceVerificationDeferred)
+    || (policy.actionCeiling !== "notify" && unitCap === null)) {
     return {
       state: "needs_price",
       reason: "The exact purchase plan matched, but the source did not provide a numeric price that can be verified against the reviewed maximum.",
@@ -237,6 +254,8 @@ export function evaluatePurchaseIntent(
     state: "matched",
     reason: policy.actionCeiling === "notify"
       ? "The fresh exact offer matched the reviewed notification plan."
+      : priceVerificationDeferred || sellerVerificationDeferred || fulfillmentVerificationDeferred
+        ? "The fresh trusted exact signal matched the reviewed cart plan; Chrome must verify the current price, first-party seller, and exact fulfillment before Add."
       : "The fresh exact offer matched the reviewed cart plan; live Chrome verification is still required.",
     strategy: null,
     decisionSource: "purchase_intent",

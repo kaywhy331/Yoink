@@ -3100,21 +3100,61 @@ test("TrackaLacker signal dispatch is not blocked by notification or status repo
   assert.equal(runtime.shownTrackalackerNotifications.length, 1);
 });
 
-test("a delivered TrackaLacker signal gets one delayed action-job handoff without waiting for the alarm", async () => {
-  const runtime = harness({ liveJob: true, trackalackerPush: true, jobAvailableAfterPolls: 1 });
-  await Promise.race([
-    runtime.firePush({
-      title: "IN STOCK at Target!",
-      body: "Runtime Fixture Product\nAvailable for $59.99",
-      url: "https://www.trackalacker.com/products/showcase/runtime-fixture?utm_term=138022"
-    }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error("Signal action handoff did not complete.")), 7_000))
-  ]);
-  await waitFor(() => runtime.jobStates.includes("confirmed"), "The signal-triggered job was not confirmed.");
-  assert.equal(runtime.deliveredTrackalackerSignals.length, 1);
-  assert.equal(runtime.jobLeaseRequests(), 3);
-  assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 1);
-  assert.equal(runtime.tabUrls().filter((url) => url === "https://www.target.com/cart").length, 1);
+test("a delivered TrackaLacker signal reaches one guarded cart add on every supported store without waiting for the alarm", async () => {
+  const fixtures = [
+    {
+      name: "Target",
+      options: { liveJob: true },
+      cartUrl: "https://www.target.com/cart",
+      commitOperation: "commitTargetAdd"
+    },
+    {
+      name: "Walmart",
+      options: { walmartJob: true },
+      cartUrl: "https://www.walmart.com/cart",
+      commitOperation: "commitWalmartAdd"
+    },
+    {
+      name: "Amazon",
+      options: { amazonJob: true },
+      cartUrl: "https://www.amazon.com/gp/cart/view.html",
+      commitOperation: "commitAmazonAdd"
+    },
+    {
+      name: "Best Buy",
+      options: { bestBuyJob: true },
+      cartUrl: "https://www.bestbuy.com/cart",
+      commitOperation: "commitBestBuyAdd"
+    }
+  ] as const;
+  for (const fixture of fixtures) {
+    const runtime = harness({
+      ...fixture.options,
+      trackalackerPush: true,
+      jobAvailableAfterPolls: 1
+    });
+    await Promise.race([
+      runtime.firePush({
+        title: `IN STOCK at ${fixture.name}!`,
+        body: "Runtime Fixture Product\nAvailable for $59.99",
+        url: "https://www.trackalacker.com/products/showcase/runtime-fixture?utm_term=138022"
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error(
+        `${fixture.name} signal action handoff did not complete.`
+      )), 7_000))
+    ]);
+    await waitFor(
+      () => runtime.jobStates.includes("confirmed"),
+      `${fixture.name} signal-triggered job was not confirmed.`
+    );
+    assert.equal(runtime.deliveredTrackalackerSignals.length, 1);
+    assert.equal(runtime.jobLeaseRequests(), 3);
+    assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 1);
+    assert.equal(runtime.tabUrls().filter((url) => url === fixture.cartUrl).length, 1);
+    assert.equal(runtime.injections.filter(
+      (entry) => (entry.args as unknown[] | undefined)?.[0] === fixture.commitOperation
+    ).length, 1);
+  }
 });
 
 test("legacy visible-push fallback shows one TrackaLacker notification while delivering one signal", async () => {

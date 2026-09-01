@@ -141,3 +141,69 @@ test("pickup is eligible only after an exact pickup configuration and observatio
   assert.equal(evaluatePurchaseIntent(policy("pickup"), signal("pickup"), LISTING, MISSION, NOW).fulfillment, "pickup");
   assert.equal(evaluatePurchaseIntent(policy("pickup"), signal("shipping"), LISTING, MISSION, NOW).state, "unmatched");
 });
+
+test("trusted exact cart triggers may defer missing fulfillment to Chrome but never override a conflict", () => {
+  const unknown = signal("unknown");
+  unknown.offer.sellerName = "";
+  unknown.offer.sellerType = "unknown";
+
+  assert.equal(evaluatePurchaseIntent(policy("either"), unknown, LISTING, MISSION, NOW).state, "unmatched");
+  const deferredShipping = evaluatePurchaseIntent(
+    policy("either"),
+    unknown,
+    LISTING,
+    MISSION,
+    NOW,
+    { allowDeferredLiveOfferVerification: true }
+  );
+  assert.equal(deferredShipping.state, "matched");
+  assert.equal(deferredShipping.effectiveAction, "add_to_cart");
+  assert.equal(deferredShipping.fulfillment, "shipping");
+  assert.match(deferredShipping.reason, /Chrome must verify/);
+
+  const noPrice = signal("unknown");
+  noPrice.offer.unitPriceCents = null;
+  noPrice.offer.sellerName = "";
+  noPrice.offer.sellerType = "unknown";
+  const deferredPrice = evaluatePurchaseIntent(
+    policy("either"),
+    noPrice,
+    LISTING,
+    MISSION,
+    NOW,
+    { allowDeferredLiveOfferVerification: true }
+  );
+  assert.equal(deferredPrice.state, "matched");
+  assert.equal(deferredPrice.effectiveUnitCapCents, 539);
+
+  const deferredPickup = evaluatePurchaseIntent(
+    policy("pickup"),
+    unknown,
+    LISTING,
+    MISSION,
+    NOW,
+    { allowDeferredLiveOfferVerification: true }
+  );
+  assert.equal(deferredPickup.state, "matched");
+  assert.equal(deferredPickup.fulfillment, "pickup");
+
+  const thirdParty = signal("unknown");
+  thirdParty.offer.sellerName = "Marketplace seller";
+  thirdParty.offer.sellerType = "third_party";
+  assert.equal(evaluatePurchaseIntent(
+    policy("either"),
+    thirdParty,
+    LISTING,
+    MISSION,
+    NOW,
+    { allowDeferredLiveOfferVerification: true }
+  ).state, "unmatched");
+  assert.equal(evaluatePurchaseIntent(
+    policy("pickup"),
+    signal("shipping"),
+    LISTING,
+    MISSION,
+    NOW,
+    { allowDeferredLiveOfferVerification: true }
+  ).state, "unmatched");
+});

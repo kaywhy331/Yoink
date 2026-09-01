@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-17-2-bestbuy-account-readiness",
-  version: "1.17.2",
-  publishedAt: "2026-08-31T23:25:00.000Z",
-  title: "Best Buy account gates report the right next step",
-  summary: "Yoink now distinguishes Best Buy's visible account requirement from an actual rendered security challenge on current high-demand product pages.",
+  id: "yoink-1-18-0-trusted-signal-cart-trigger",
+  version: "1.18.0",
+  publishedAt: "2026-09-01T01:30:00.000Z",
+  title: "Exact signals now start guarded cart checks",
+  summary: "Trusted exact signals can now trigger the reviewed cart plan across all four supported stores even when the provider omits live-offer fields.",
   highlights: [
-    "CSS-hidden CAPTCHA scaffolding no longer masquerades as a visible Best Buy security check.",
-    "A visible Account Required gate now asks the user to sign in and confirm location before retrying qualification.",
-    "Passive high-demand messaging may qualify after sign-in, while real reservation gates, queues, and rendered security challenges remain fail-closed."
+    "Target, Walmart, Amazon, and Best Buy signals enter the same immediate guarded job handoff.",
+    "Missing source price, seller, or fulfillment remains unknown until Chrome verifies the live exact offer.",
+    "First-party, price-cap, Shipping-default or explicit-Pickup, quantity-one, exact-cart-proof, and manual-checkout limits are unchanged."
   ],
   docsUrl: "/docs"
 });

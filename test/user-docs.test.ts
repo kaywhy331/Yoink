@@ -11,7 +11,7 @@ test("the user docs, machine guide, and release announcement share the current b
   const server = createYoinkServer({
     db,
     webRoot: join(process.cwd(), "apps", "web"),
-    version: "1.17.2"
+    version: "1.18.0"
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -36,8 +36,8 @@ test("the user docs, machine guide, and release announcement share the current b
       announcement: { id: string; version: string; docsUrl: string; highlights: string[] };
       qualificationCandidates: unknown[];
     };
-    assert.equal(overview.announcement.id, "yoink-1-17-2-bestbuy-account-readiness");
-    assert.equal(overview.announcement.version, "1.17.2");
+    assert.equal(overview.announcement.id, "yoink-1-18-0-trusted-signal-cart-trigger");
+    assert.equal(overview.announcement.version, "1.18.0");
     assert.equal(overview.announcement.docsUrl, "/docs");
     assert.equal(overview.announcement.highlights.length, 3);
     assert.deepEqual(overview.qualificationCandidates, []);

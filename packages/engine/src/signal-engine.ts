@@ -222,7 +222,23 @@ export class SignalEngine {
         outcome = "affiliate_route_unavailable";
         reason = evaluation.reason;
       }
-      const job = this.signals.createActionJob(signal, listing, mission, incident, evaluation, settings, attribution, now);
+      const allowDeferredLiveOfferVerification = sourceConnection.trustLevel === "trusted_exact"
+        && evaluation.decisionSource === "purchase_intent"
+        && evaluation.effectiveAction === "add_to_cart"
+        && (signal.offer.unitPriceCents === null
+          || signal.offer.sellerType === "unknown"
+          || signal.offer.fulfillment === "unknown");
+      const job = this.signals.createActionJob(
+        signal,
+        listing,
+        mission,
+        incident,
+        evaluation,
+        settings,
+        attribution,
+        now,
+        { allowDeferredLiveOfferVerification }
+      );
       if (job.policyBlocked) {
         evaluation = {
           ...evaluation,

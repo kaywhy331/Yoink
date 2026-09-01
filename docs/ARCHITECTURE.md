@@ -75,6 +75,16 @@ Fresh TrackaLacker delivery triggers an immediate job check and one bounded
 30-second alarm retained as fallback. This changes scheduling latency only and
 does not widen any retailer action contract.
 
+For a user-reviewed `add_to_cart` purchase plan, a `trusted_exact` signal may
+trigger that Chrome check even when its source payload omits price, seller, or
+fulfillment. Trigger and proof remain separate: the stored source observation
+keeps those fields unknown, the job is bounded by the user's reviewed cap and
+exact fulfillment, and Chrome must freshly prove price, first-party seller,
+Shipping or explicitly configured Pickup, quantity one, and the exact Add
+control. Explicit source conflicts still reject before lease. Informational
+sources, strategy-owned decisions, and notification plans cannot opt into this
+deferred live-offer verification.
+
 Yoink 0.6 adds an extension-owned TrackaLacker Web Push path. A user gesture
 grants optional TrackaLacker page access, the extension creates a real silent
 PushSubscription with TrackaLacker's published application-server key, and a

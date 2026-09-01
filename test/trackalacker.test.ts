@@ -104,6 +104,15 @@ test("TrackaLacker signal conversion enforces idempotency and exposes only canon
     retailerSku: "6571234",
     canonicalUrl: "https://www.bestbuy.com/site/example/6571234.p"
   });
+  const guardedStores = [
+    ["https://www.target.com/p/example/-/A-94972381?preselect=94972381", "target", "94972381", "https://www.target.com/p/-/A-94972381"],
+    ["https://www.walmart.com/ip/example/20252562938?from=/search", "walmart", "20252562938", "https://www.walmart.com/ip/20252562938"],
+    ["https://www.amazon.com/example/dp/B00E4AMFKK/ref=signal", "amazon", "B00E4AMFKK", "https://www.amazon.com/dp/B00E4AMFKK"],
+    ["https://www.bestbuy.com/product/2026-topps-flagship-football-mega-box/J3ZPGXX9RP/sku/6685081?ref=signal", "bestbuy", "6685081", "https://www.bestbuy.com/product/2026-topps-flagship-football-mega-box/J3ZPGXX9RP/sku/6685081"]
+  ] as const;
+  for (const [url, retailerId, retailerSku, canonicalUrl] of guardedStores) {
+    assert.deepEqual(trackalackerCanonicalIdentity(url), { retailerId, retailerSku, canonicalUrl });
+  }
   const additional = [
     ["https://www.disneystore.com/dumbo-jeweled-figurine-409914998395.html?CMP=tracking", "disney", "409914998395", "https://www.disneystore.com/dumbo-jeweled-figurine-409914998395.html"],
     ["https://www.ravensburger.us/en-US/products/games/oh-my-pigeons-22893?tracking=1", "ravensburger", "22893", "https://www.ravensburger.us/en-US/products/games/oh-my-pigeons-22893"],

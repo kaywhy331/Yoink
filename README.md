@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
 commerce control plane whose only retailer-session executor is a paired Chrome
 extension.
 
-Yoink 1.17.2 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.18.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one mission per variant,
 evaluates ordered user strategies, deduplicates competing source events, and
@@ -15,6 +15,16 @@ new lane. Every lane is restricted to first-party offers, quantity one, and the
 exact saved fulfillment choice: Shipping by default or explicit Pickup.
 Amazon additionally requires a unique ASIN-bound offer token that remains only
 in page memory. Buy Now, checkout, and order submission are not authorized.
+
+Version 1.18.0 closes the signal-to-cart trigger gap across Target, Walmart,
+Amazon, and Best Buy. A fresh `trusted_exact` signal matched to an explicit
+add-to-cart purchase plan may now start the guarded Chrome check even when the
+source omits price, seller, or fulfillment. Missing source fields remain
+unknown and never become authorization: Chrome must still prove the reviewed
+price cap, first-party seller, exact Shipping or explicitly selected Pickup,
+quantity one, and an exact +1 cart delta on the live retailer page. Explicit
+third-party, fulfillment-conflict, over-cap, stale, and inexact signals remain
+fail-closed. Notification-only plans and informational sources are unchanged.
 
 Version 1.17.2 distinguishes Best Buy's current visible `Account Required`
 high-demand state from a rendered security challenge. CSS-hidden CAPTCHA

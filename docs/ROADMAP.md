@@ -1,6 +1,23 @@
 # Yoink roadmap
 
-## Shipped through 1.17.2
+## Shipped through 1.18.0
+
+### Trusted exact signal-to-cart trigger (1.18.0)
+
+- Lets a fresh trusted-exact signal start an explicitly reviewed add-to-cart
+  plan when the provider omits price, seller, or fulfillment
+- Keeps every omitted source fact unknown and requires Chrome to freshly prove
+  the configured price cap, first-party seller, Shipping or explicit Pickup,
+  quantity one, usable Add control, and exact +1 cart delta before success
+- Rejects explicit third-party, fulfillment-conflict, over-cap, stale, and
+  inexact evidence before lease; informational sources and notification plans
+  cannot use deferred verification
+- Adds four-store vertical regression coverage from current TrackaLacker URL
+  parsing through guarded job creation, capability lease, immediate push
+  handoff, one retailer Add boundary, and confirmed cart navigation
+- Does not advance an adapter contract or qualification version because none of
+  the four retailer mutation runners changed; every existing lane activation
+  and manual-checkout boundary remains intact
 
 ### Best Buy account and rendered-security readiness (1.17.2)
 

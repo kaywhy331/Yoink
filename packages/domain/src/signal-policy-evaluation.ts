@@ -73,7 +73,10 @@ export function evaluateSignalPolicySnapshot(
   now = Date.now()
 ): SignalPolicyEvaluationSnapshot {
   let evaluation = policy.decisionMode === "purchase_intent"
-    ? evaluatePurchaseIntent(policy, signal, listing, mission, now)
+    ? evaluatePurchaseIntent(policy, signal, listing, mission, now, {
+        allowDeferredLiveOfferVerification: sourceTrustLevel === "trusted_exact"
+          && policy.actionCeiling === "add_to_cart"
+      })
     : evaluateStrategies(strategies, signal, listing, mission, now);
   const sourceActionRestricted = evaluation.decisionSource === "purchase_intent"
     && evaluation.effectiveAction !== "notify"

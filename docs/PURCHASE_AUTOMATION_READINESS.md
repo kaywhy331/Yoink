@@ -50,8 +50,12 @@ not a current stock claim.
 
 “Guarded add is armed” means the static prerequisites are present. It does not
 mean a product is currently available and it is not a promise that a click will
-occur. At action time the production runner must still prove all of the
-following from a fresh exact page:
+occur. A fresh event from a `trusted_exact` source may trigger the guarded page
+check even when the source does not carry price, seller, or fulfillment. Those
+missing fields are never filled in or treated as evidence; the immutable source
+snapshot remains unknown. Informational sources, advanced strategies, and
+notification-only plans cannot use this deferred check. At action time the
+production runner must still prove all of the following from a fresh exact page:
 
 1. exact retailer and item identity;
 2. first-party seller;
@@ -64,6 +68,10 @@ following from a fresh exact page:
 
 Any mismatch stops before mutation. Checkout, payment, drawing entry, Buy Now,
 and order submission remain closed.
+
+An explicit source conflict is not deferrable. A reported third-party seller,
+the wrong fulfillment mode, an over-cap numeric price, a stale event, or an
+inexact product identity is rejected before a cart job is leased.
 
 After a click, Yoink accepts success only when every baseline SKU quantity is
 unchanged and the authorized SKU increased by exactly one. This permits several
