@@ -102,8 +102,12 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /One source of truth, never dual write/);
     assert.match(adminPageBody, /Howl affiliate stores/);
     assert.match(adminPageBody, /Only destinations matching this directory use the Howl protocol/);
+    assert.match(adminPageBody, /Signal simulator/);
+    assert.match(adminPageBody, /Exact product URL/);
+    assert.match(adminPageBody, /Always test-only: records the dry-run decision/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
+    assert.match(adminScript, /\/api\/v1\/admin\/signals\/simulate/);
     assert.match(adminScript, /renderOperationalTelemetry/);
     assert.match(adminScript, /\/api\/v1\/admin\/change-requests/);
     assert.match(adminScript, /renderAdminChanges/);

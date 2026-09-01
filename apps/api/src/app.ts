@@ -211,6 +211,7 @@ import {
   UserPrivacyRepository
 } from "../../../packages/database/src/user-privacy-repository.js";
 import { SignalEngine } from "../../../packages/engine/src/signal-engine.js";
+import { AdminSignalSimulator } from "../../../packages/engine/src/admin-signal-simulator.js";
 import { DurableSignalIngressService } from "../../../packages/engine/src/signal-ingress.js";
 import { newId, stableHash } from "../../../packages/domain/src/ids.js";
 import { BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION } from "../../../packages/domain/src/background-worker-deployment.js";
@@ -553,6 +554,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const offerIdentity = new OfferIdentityRepository(db);
   const spendLedger = new SpendLedgerRepository(db);
   const engine = new SignalEngine(db);
+  const adminSignalSimulator = new AdminSignalSimulator(db, engine);
   const signalIngress = new DurableSignalIngressService(db, dependencies.backgroundWorkerWake);
   const devices = new DeviceRepository(db);
   const execution = new ExecutionRepository(db);
@@ -3105,6 +3107,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/catalog/listings") {
         const body = await readJson(request);
         json(response, 202, catalogGovernance.proposeListing(body as unknown as CatalogListingInput));
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/admin/signals/simulate") {
+        const body = await readJson(request);
+        json(response, 200, { simulation: adminSignalSimulator.simulate(body) });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/signals") {

@@ -71,6 +71,17 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
       headers: { "X-Test-Principal": "user" }
     });
     assert.equal(deniedWorkers.status, 403);
+    const deniedSignalSimulation = await fetch(`${baseUrl}/api/v1/admin/signals/simulate`, {
+      method: "POST",
+      headers: {
+        "X-Test-Principal": "user",
+        "Content-Type": "application/json",
+        Origin: baseUrl
+      },
+      body: JSON.stringify({ url: "https://www.target.com/p/-/A-95280894", price: "44.99" })
+    });
+    assert.equal(deniedSignalSimulation.status, 403);
+    assert.equal((await deniedSignalSimulation.json() as { error: string }).error, "permission_denied");
     const deniedTrustInstall = await fetch(`${baseUrl}/api/v1/admin/observer-recipes/trust-manifests`, {
       method: "POST",
       headers: {

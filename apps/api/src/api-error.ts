@@ -9,6 +9,7 @@ import { CatalogLinkError } from "../../../packages/database/src/catalog-link-re
 import { BackgroundTaskError } from "../../../packages/database/src/background-task-repository.js";
 import { HostedDeliveryError } from "../../../packages/database/src/hosted-delivery-repository.js";
 import { ObserverRecipeRecoveryReviewError } from "../../../packages/database/src/observer-recipe-repository.js";
+import { AdminSignalSimulationError } from "../../../packages/engine/src/admin-signal-simulator.js";
 
 export interface ApiErrorPayload {
   error: string;
@@ -28,6 +29,12 @@ export class ApiError extends Error {
 }
 
 export function apiErrorPayload(error: unknown, correlationId: string): { status: number; payload: ApiErrorPayload } {
+  if (error instanceof AdminSignalSimulationError) {
+    return {
+      status: error.status,
+      payload: { error: error.code, message: error.message, correlationId }
+    };
+  }
   if (error instanceof AuthorizationError) {
     return {
       status: error.status,

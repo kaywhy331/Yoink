@@ -1,6 +1,20 @@
 # Yoink roadmap
 
-## Shipped through 1.18.0
+## Shipped through 1.18.1
+
+### Admin exact-signal simulator (1.18.1)
+
+- Adds a compact URL-and-price simulator to the admin Opportunities workspace
+- Accepts only canonicalizable exact product pages for registered retailers and
+  converts USD input to integer cents without floating-point rounding
+- Runs the production signal normalizer and resolver with `test: true` enforced
+  on the server; browser input cannot select a live signal path
+- Rolls back the complete simulation if catalog, offer-observation, mission,
+  incident, action-job, notification, or spend-reservation counts change
+- Preserves the browser source's real health fields and records only the
+  sanitized dry-run signal, resolution, decision, audit, and outbox history
+- Requires the admin `source.manage` permission and includes route, API,
+  authorization, exact-price, and rendered-interaction regression coverage
 
 ### Trusted exact signal-to-cart trigger (1.18.0)
 

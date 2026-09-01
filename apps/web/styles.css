@@ -243,6 +243,15 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 80
 .admin-grid-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .inline-admin-form label, .admin-grid-form label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 750; }
 .admin-grid-form .wide { grid-column: 1 / -1; }
+.signal-simulator-panel { margin-bottom: 18px; }
+.signal-simulator-panel .panel-heading p { max-width: 720px; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.signal-simulator-form { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(150px, 190px) auto; gap: 12px; align-items: end; }
+.signal-simulator-form label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 750; }
+.signal-simulator-result { display: grid; gap: 5px; margin-top: 14px; padding: 13px 14px; border: 1px solid rgba(85,230,177,.24); border-radius: 12px; background: rgba(85,230,177,.06); }
+.signal-simulator-result.error { border-color: rgba(255,117,136,.34); background: rgba(255,117,136,.07); }
+.signal-simulator-result strong, .signal-simulator-result p { margin: 0; }
+.signal-simulator-result p { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.signal-simulator-result .signal-simulation-boundary { color: var(--subtle); font-size: 10px; }
 
 input, select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 10px; outline: none; color: var(--text); background: #0d1018; }
 input, select { height: 40px; padding: 0 11px; }
@@ -295,6 +304,7 @@ dialog form { padding: 22px; }
   .strategy-actions { grid-column: 1 / -1; justify-content: start; }
   .form-grid { grid-template-columns: 1fr; }
   .inline-admin-form, .admin-grid-form { grid-template-columns: 1fr; }
+  .signal-simulator-form { grid-template-columns: 1fr; }
   .community-summary, .community-scope-fields { grid-template-columns: 1fr; }
   .form-grid .wide { grid-column: auto; }
   .admin-grid-form .wide { grid-column: auto; }

@@ -2451,6 +2451,45 @@ $("#signalForm").addEventListener("submit", async (event) => {
   } catch (error) { toast(error.message || "Signal could not be sent.", true); }
 });
 
+$("#signalSimulationForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = $("#simulateSignalButton");
+  const resultElement = $("#signalSimulationResult");
+  const values = formObject(form);
+  form.setAttribute("aria-busy", "true");
+  button.disabled = true;
+  button.textContent = "Simulating…";
+  resultElement.hidden = false;
+  resultElement.classList.remove("error");
+  resultElement.textContent = "Running the dry-run signal…";
+  try {
+    const response = await api("/api/v1/admin/signals/simulate", {
+      method: "POST",
+      body: JSON.stringify({ url: values.url, price: values.price })
+    });
+    const simulation = response.simulation;
+    const identity = simulation.catalog?.matched
+      ? simulation.catalog.title
+      : `${simulation.retailerName} product`;
+    resultElement.innerHTML = `<strong>Dry-run recorded</strong>
+      <p>${escapeHtml(identity)} · ${escapeHtml(simulation.retailerSku)} · ${escapeHtml(formatMoney(simulation.unitPriceCents, simulation.currency))}</p>
+      <p>${simulation.catalog?.matched ? "Matched the existing catalog listing." : "The exact URL was recognized; no catalog listing was created."}</p>
+      <p class="signal-simulation-boundary">No mission · No action job · No retailer action · No cart change</p>`;
+    await loadSignals(true);
+    renderSignals();
+    toast("Dry-run signal recorded.");
+  } catch (error) {
+    resultElement.classList.add("error");
+    resultElement.innerHTML = `<strong>Simulation stopped safely</strong><p>${escapeHtml(error.message || "The signal could not be simulated.")}</p>`;
+    toast(error.message || "Signal could not be simulated.", true);
+  } finally {
+    form.removeAttribute("aria-busy");
+    button.disabled = false;
+    button.textContent = "Simulate signal";
+  }
+});
+
 window.addEventListener("hashchange", () => setView(location.hash.slice(1) || "overview"));
 
 try {

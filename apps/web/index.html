@@ -112,8 +112,21 @@
     <section class="view" id="view-signals" data-view-panel="signals">
       <div class="page-heading">
         <div><p class="eyebrow">Signals → incidents → decisions</p><h1>Opportunities</h1><p>Every accepted signal explains how it resolved and why Yoink did or did not qualify it.</p></div>
-        <button class="button primary" id="sendSignalButton" type="button">Send test signal</button>
+        <button class="button secondary" id="sendSignalButton" type="button">Advanced signal</button>
       </div>
+      <section class="panel signal-simulator-panel" aria-labelledby="signalSimulatorTitle">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Safe pipeline check</p><h2 id="signalSimulatorTitle">Signal simulator</h2><p>Submit one exact product URL and observed price through Yoink's real signal normalizer and resolver.</p></div>
+          <span class="mode-chip">DRY RUN</span>
+        </div>
+        <form id="signalSimulationForm" class="signal-simulator-form">
+          <label class="signal-simulator-url"><span>Exact product URL</span><input name="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="https://www.target.com/p/-/A-12345678" aria-describedby="signalSimulationBoundary" required></label>
+          <label><span>Observed price</span><div class="money-input"><span>$</span><input name="price" inputmode="decimal" autocomplete="off" maxlength="10" placeholder="44.99" aria-label="Observed price in US dollars" required></div></label>
+          <button class="button primary" id="simulateSignalButton" type="submit">Simulate signal</button>
+        </form>
+        <p class="fine-print" id="signalSimulationBoundary">Always test-only: records the dry-run decision, but creates no catalog item, mission, incident, action job, notification, spend reservation, retailer click, or cart change.</p>
+        <div class="signal-simulation-result" id="signalSimulationResult" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+      </section>
       <div class="filter-bar"><input id="signalSearch" type="search" placeholder="Search product, source, retailer, SKU, or decision" aria-label="Search opportunities"><span id="signalCount"></span></div>
       <div class="timeline full-timeline" id="signalList"></div>
       <div class="collection-more"><button class="button secondary" id="signalMoreButton" type="button" hidden>Load more opportunities</button></div>

@@ -11,6 +11,7 @@ test("action-platform routes keep their intended surface and least-privilege per
     ["POST", "/api/v1/user/source-feedback/false-positive", "/api/v1/user/source-feedback/false-positive", "user", "user.intent.manage"],
     ["POST", "/api/v1/admin/drop-windows", "/api/v1/admin/drop-windows", "admin", "source.manage"],
     ["GET", "/api/v1/admin/restock-patterns", "/api/v1/admin/restock-patterns", "admin", "admin.read"],
+    ["POST", "/api/v1/admin/signals/simulate", "/api/v1/admin/signals/simulate", "admin", "source.manage"],
     ["PATCH", "/api/v1/admin/workers/schedules/background_schedule_123", "/api/v1/workers/schedules/background_schedule_123", "admin", "worker.manage"],
     ["POST", "/api/v1/admin/workers/restart", "/api/v1/admin/workers/restart", "admin", "worker.manage"],
     ["POST", "/api/v1/devices/self/readiness/target", "/api/v1/devices/self/readiness/target", "device", "device.self"]

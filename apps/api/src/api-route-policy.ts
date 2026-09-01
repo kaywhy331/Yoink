@@ -53,6 +53,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 
   if (pathname.startsWith("/api/v1/admin/drop-windows")) return method === "GET" ? "admin.read" : "source.manage";
   if (pathname.startsWith("/api/v1/admin/restock-patterns")) return method === "GET" ? "admin.read" : "source.manage";
+  if (pathname === "/api/v1/admin/signals/simulate") return "source.manage";
   if (pathname === "/api/v1/admin/workers/restart") return "worker.manage";
 
   if (pathname === "/api/v1/snapshot") return "admin.read";
@@ -136,6 +137,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname === "/api/v1/admin/attribution-policies"
     || pathname.startsWith("/api/v1/admin/drop-windows")
     || pathname.startsWith("/api/v1/admin/restock-patterns")
+    || pathname === "/api/v1/admin/signals/simulate"
     || pathname === "/api/v1/admin/workers/restart") {
     return { pathname, requestedSurface: "admin" };
   }
@@ -224,6 +226,7 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     "attribution-policies": "attribution",
     "change-requests": "change_control",
     workers: "workers",
+    signals: "signals",
     "drop-windows": "sources",
     "restock-patterns": "sources"
   }),
