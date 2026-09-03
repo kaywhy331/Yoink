@@ -150,6 +150,30 @@ export class QualificationRepository {
     this.auditEvents = new AuditRepository(db);
   }
 
+  private addQualified(
+    retailerId: "target" | "walmart" | "amazon" | "bestbuy",
+    adapterVersion: string,
+    now: number
+  ): boolean {
+    const row = this.db.get<{
+      adapter_version: string;
+      highest_action: string;
+      status: string;
+      expires_at: string;
+    }>(
+      `SELECT adapter_version, highest_action, status, expires_at
+       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = ?`,
+      currentRequestScope().userId,
+      retailerId
+    );
+    const expiresAt = new Date(row?.expires_at ?? "").getTime();
+    return row?.status === "qualified"
+      && row.adapter_version === adapterVersion
+      && row.highest_action === "add_to_cart"
+      && Number.isFinite(expiresAt)
+      && expiresAt > now;
+  }
+
   recordTargetAddRehearsal(
     deviceId: string,
     input: TargetAddRehearsalInput,
@@ -207,7 +231,7 @@ export class QualificationRepository {
       || shadow.sellerName !== "Target"
       || shadow.fulfillment !== "shipping"
     )) {
-      throw new Error("Target add v4 rehearsals require a Target-sold shipping offer.");
+      throw new Error(`${TARGET_ADD_ADAPTER_VERSION} rehearsals require a Target-sold shipping offer.`);
     }
     const existing = this.db.get<TrialRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
@@ -364,7 +388,7 @@ export class QualificationRepository {
       || shadow.sellerName !== "Walmart"
       || shadow.fulfillment !== "shipping"
     )) {
-      throw new Error("Walmart add v5 rehearsals require a Walmart-sold shipping offer.");
+      throw new Error(`${WALMART_ADD_ADAPTER_VERSION} rehearsals require a Walmart-sold shipping offer.`);
     }
     const existing = this.db.get<TrialRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
@@ -523,7 +547,7 @@ export class QualificationRepository {
       || shadow.fulfillment !== "shipping"
       || shadow.purchaseRouteReady !== 1
     )) {
-      throw new Error("Amazon add v7 rehearsals require an Amazon.com-sold shipping offer with an exact ephemeral offer binding.");
+      throw new Error(`${AMAZON_ADD_ADAPTER_VERSION} rehearsals require an Amazon.com-sold shipping offer with an exact ephemeral offer binding.`);
     }
     const existing = this.db.get<TrialRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
@@ -680,7 +704,7 @@ export class QualificationRepository {
       || shadow.sellerName !== "Best Buy"
       || shadow.fulfillment !== "shipping"
     )) {
-      throw new Error("Best Buy add v5 rehearsals require an explicitly Best Buy-sold, selected-shipping offer.");
+      throw new Error(`${BESTBUY_ADD_ADAPTER_VERSION} rehearsals require an explicitly Best Buy-sold, selected-shipping offer.`);
     }
     const existing = this.db.get<TrialRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
@@ -780,48 +804,20 @@ export class QualificationRepository {
     return trial;
   }
 
-  targetAddQualified(): boolean {
-    const row = this.db.get<{ adapter_version: string; highest_action: string; status: string }>(
-      `SELECT adapter_version, highest_action, status
-       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'target'`,
-      currentRequestScope().userId
-    );
-    return row?.status === "qualified"
-      && row.adapter_version === TARGET_ADD_ADAPTER_VERSION
-      && row.highest_action === "add_to_cart";
+  targetAddQualified(now = Date.now()): boolean {
+    return this.addQualified("target", TARGET_ADD_ADAPTER_VERSION, now);
   }
 
-  walmartAddQualified(): boolean {
-    const row = this.db.get<{ adapter_version: string; highest_action: string; status: string }>(
-      `SELECT adapter_version, highest_action, status
-       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'walmart'`,
-      currentRequestScope().userId
-    );
-    return row?.status === "qualified"
-      && row.adapter_version === WALMART_ADD_ADAPTER_VERSION
-      && row.highest_action === "add_to_cart";
+  walmartAddQualified(now = Date.now()): boolean {
+    return this.addQualified("walmart", WALMART_ADD_ADAPTER_VERSION, now);
   }
 
-  amazonAddQualified(): boolean {
-    const row = this.db.get<{ adapter_version: string; highest_action: string; status: string }>(
-      `SELECT adapter_version, highest_action, status
-       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'amazon'`,
-      currentRequestScope().userId
-    );
-    return row?.status === "qualified"
-      && row.adapter_version === AMAZON_ADD_ADAPTER_VERSION
-      && row.highest_action === "add_to_cart";
+  amazonAddQualified(now = Date.now()): boolean {
+    return this.addQualified("amazon", AMAZON_ADD_ADAPTER_VERSION, now);
   }
 
-  bestBuyAddQualified(): boolean {
-    const row = this.db.get<{ adapter_version: string; highest_action: string; status: string }>(
-      `SELECT adapter_version, highest_action, status
-       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'bestbuy'`,
-      currentRequestScope().userId
-    );
-    return row?.status === "qualified"
-      && row.adapter_version === BESTBUY_ADD_ADAPTER_VERSION
-      && row.highest_action === "add_to_cart";
+  bestBuyAddQualified(now = Date.now()): boolean {
+    return this.addQualified("bestbuy", BESTBUY_ADD_ADAPTER_VERSION, now);
   }
 
   activateTargetAdd(
@@ -852,7 +848,7 @@ export class QualificationRepository {
       || new Date(device.last_seen_at).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
       || capabilities.targetAddOnly !== true
       || capabilities.targetAddAdapterVersion !== TARGET_ADD_ADAPTER_VERSION) {
-      throw new Error("A recently connected Chrome companion with Target add v4 is required.");
+      throw new Error(`A recently connected Chrome companion with ${TARGET_ADD_ADAPTER_VERSION} is required.`);
     }
 
     const promotedJobs = this.db.transaction(() => {
@@ -879,6 +875,12 @@ export class QualificationRepository {
         timestamp,
         expiresAt
       );
+      // Adapter-version migrations deliberately close the shared catalog lane so
+      // stale evidence cannot authorize new cart jobs. A successful, current
+      // qualification must reopen both halves of that lane atomically; otherwise
+      // Target remains monitoring-only even though the user just qualified it.
+      this.db.run("UPDATE retailers SET execution_supported = 1, updated_at = ? WHERE id = 'target'", timestamp);
+      this.db.run("UPDATE listings SET execution_supported = 1, updated_at = ? WHERE retailer_id = 'target'", timestamp);
       this.db.run(
         `UPDATE app_settings SET execution_mode = 'live', actions_paused = 0,
            pause_reason = '', updated_at = ? WHERE user_id = ?`,
@@ -910,7 +912,7 @@ export class QualificationRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_adapter_qualified",
         reasonCode: "explicit_target_add_v1_activation",
-        message: "Target add v4 was explicitly enabled for Target-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.",
+        message: `${TARGET_ADD_ADAPTER_VERSION} was explicitly enabled for Target-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.`,
         data: {
           retailerId: "target",
           adapterVersion: TARGET_ADD_ADAPTER_VERSION,
@@ -955,7 +957,7 @@ export class QualificationRepository {
       || new Date(device.last_seen_at).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
       || capabilities.walmartAddOnly !== true
       || capabilities.walmartAddAdapterVersion !== WALMART_ADD_ADAPTER_VERSION) {
-      throw new Error("A recently connected Chrome companion with Walmart add v5 is required.");
+      throw new Error(`A recently connected Chrome companion with ${WALMART_ADD_ADAPTER_VERSION} is required.`);
     }
 
     const promotedJobs = this.db.transaction(() => {
@@ -1014,7 +1016,7 @@ export class QualificationRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_adapter_qualified",
         reasonCode: "explicit_walmart_add_v1_activation",
-        message: "Walmart add v5 was explicitly enabled for Walmart-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.",
+        message: `${WALMART_ADD_ADAPTER_VERSION} was explicitly enabled for Walmart-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.`,
         data: {
           retailerId: "walmart",
           adapterVersion: WALMART_ADD_ADAPTER_VERSION,
@@ -1059,7 +1061,7 @@ export class QualificationRepository {
       || new Date(device.last_seen_at).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
       || capabilities.amazonAddOnly !== true
       || capabilities.amazonAddAdapterVersion !== AMAZON_ADD_ADAPTER_VERSION) {
-      throw new Error("A recently connected Chrome companion with Amazon add v5 is required.");
+      throw new Error(`A recently connected Chrome companion with ${AMAZON_ADD_ADAPTER_VERSION} is required.`);
     }
 
     const promotedJobs = this.db.transaction(() => {
@@ -1118,7 +1120,7 @@ export class QualificationRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_adapter_qualified",
         reasonCode: "explicit_amazon_add_v1_activation",
-        message: "Amazon add v7 was explicitly enabled for Amazon.com-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.",
+        message: `${AMAZON_ADD_ADAPTER_VERSION} was explicitly enabled for Amazon.com-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.`,
         data: {
           retailerId: "amazon",
           adapterVersion: AMAZON_ADD_ADAPTER_VERSION,
@@ -1163,7 +1165,7 @@ export class QualificationRepository {
       || new Date(device.last_seen_at).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
       || capabilities.bestBuyAddOnly !== true
       || capabilities.bestBuyAddAdapterVersion !== BESTBUY_ADD_ADAPTER_VERSION) {
-      throw new Error("A recently connected Chrome companion with Best Buy add v5 is required.");
+      throw new Error(`A recently connected Chrome companion with ${BESTBUY_ADD_ADAPTER_VERSION} is required.`);
     }
 
     const promotedJobs = this.db.transaction(() => {
@@ -1222,7 +1224,7 @@ export class QualificationRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_adapter_qualified",
         reasonCode: "explicit_bestbuy_add_v1_activation",
-        message: "Best Buy add v5 was explicitly enabled for Best Buy-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.",
+        message: `${BESTBUY_ADD_ADAPTER_VERSION} was explicitly enabled for Best Buy-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.`,
         data: {
           retailerId: "bestbuy",
           adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,

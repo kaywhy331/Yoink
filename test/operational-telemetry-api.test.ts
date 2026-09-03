@@ -47,6 +47,23 @@ test("the admin telemetry read model receives classified request failures withou
     assert.equal(deviceHeartbeat.status, 401);
     assert.equal((await deviceHeartbeat.json() as { error: string }).error, "device_unauthorized");
 
+    const handoffWatch = await fetch(
+      `${baseUrl}/api/v1/user/action-handoff?wait=750&version=0`,
+      { headers: { "X-Request-ID": "request_handoff_watch_raw_001" } }
+    );
+    assert.equal(handoffWatch.status, 200);
+    assert.equal((await handoffWatch.json() as { availabilityVersion: number }).availabilityVersion, 0);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const recorded = db.get<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM operational_request_rollups WHERE route_key = 'user.actions'"
+      );
+      if (Number(recorded?.count ?? 0) > 0) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.equal(Number(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM operational_request_rollups WHERE route_key = 'user.actions'"
+    )?.count ?? 0), 1);
+
     const telemetryResponse = await fetch(`${baseUrl}/api/v1/admin/operations/telemetry?window=1h`);
     assert.equal(telemetryResponse.status, 200);
     assert.equal(telemetryResponse.headers.get("x-yoink-api-surface"), "admin");
@@ -69,11 +86,17 @@ test("the admin telemetry read model receives classified request failures withou
     assert.equal(telemetry.containsRequestBodies, false);
     assert.equal(telemetry.containsRawUrls, false);
     assert.equal(telemetry.containsProductIdentifiers, false);
-    assert.equal(telemetry.totals.requests, 4);
+    assert.equal(telemetry.totals.requests, 5);
     assert.equal(telemetry.totals.clientErrors, 3);
+    const handoffLatency = db.get<{ maxDurationMs: number }>(
+      `SELECT MAX(max_duration_ms) AS maxDurationMs
+       FROM operational_request_rollups WHERE route_key = 'user.actions' AND method = 'GET'`
+    );
+    assert.ok(Number(handoffLatency?.maxDurationMs ?? 1_000) < 500,
+      "Intentional handoff wait time must not be reported as API service latency.");
     assert.deepEqual(
       new Set(telemetry.routes.map((item) => item.routeKey)),
-      new Set(["public.health", "user.purchase_intents", "admin.operations", "device.heartbeat"])
+      new Set(["public.health", "user.purchase_intents", "admin.operations", "device.heartbeat", "user.actions"])
     );
     assert.deepEqual(
       new Set(telemetry.errorCodes.map((item) => item.errorCode)),
@@ -89,7 +112,7 @@ test("the admin telemetry read model receives classified request failures withou
       counts: Record<string, number>;
       capabilities: Record<string, boolean>;
     };
-    assert.ok(Number(snapshot.counts.operationalRollupRows ?? 0) >= 5);
+    assert.ok(Number(snapshot.counts.operationalRollupRows ?? 0) >= 6);
     assert.equal(snapshot.counts.operationalErrorEvents, 3);
     assert.equal(snapshot.capabilities.privacyBoundedOperationalTelemetry, true);
     assert.equal(snapshot.capabilities.rawRequestCapture, false);

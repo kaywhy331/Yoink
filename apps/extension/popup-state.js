@@ -34,7 +34,9 @@ var YoinkPopupStateModule = (() => {
     derivePopupView: () => derivePopupView,
     drawingsPopupResult: () => drawingsPopupResult,
     errorPopupResult: () => errorPopupResult,
+    popupPurchaseOpportunity: () => popupPurchaseOpportunity,
     popupUpdateHandoff: () => popupUpdateHandoff,
+    preferredActionHandoff: () => preferredActionHandoff,
     qualificationPopupResult: () => qualificationPopupResult
   });
 
@@ -593,10 +595,11 @@ var YoinkPopupStateModule = (() => {
   var POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
   var CART_READY_STORAGE_KEY = "yoinkCartReadyV1";
   var APP_DESTINATION_ROUTES = {
-    dashboard: { pathname: "/", hash: "" },
-    connections: { pathname: "/", hash: "connections" },
-    operations: { pathname: "/", hash: "health" },
-    settings: { pathname: "/", hash: "preferences" }
+    dashboard: { pathname: "/", hash: "home" },
+    actions: { pathname: "/", hash: "activity" },
+    insights: { pathname: "/", hash: "activity/insights" },
+    connections: { pathname: "/", hash: "settings/chrome" },
+    settings: { pathname: "/", hash: "settings" }
   };
   function appDestinationUrl(appOrigin, destination = "dashboard") {
     const route = APP_DESTINATION_ROUTES[destination];
@@ -745,12 +748,20 @@ var YoinkPopupStateModule = (() => {
       return Number.isSafeInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 60 * 6e4 ? milliseconds : void 0;
     };
     const leaseToCartReadyMs = duration(candidate.leaseToCartReadyMs);
+    const leaseToBaselineMs = duration(candidate.leaseToBaselineMs);
+    const baselineToOfferMs = duration(candidate.baselineToOfferMs);
+    const offerToClickMs = duration(candidate.offerToClickMs);
     const clickToSettleMs = duration(candidate.clickToSettleMs);
     const clickToCartReadyMs = duration(candidate.clickToCartReadyMs);
+    const settleToCartReadyMs = duration(candidate.settleToCartReadyMs);
     return {
       ...leaseToCartReadyMs !== void 0 ? { leaseToCartReadyMs } : {},
+      ...leaseToBaselineMs !== void 0 ? { leaseToBaselineMs } : {},
+      ...baselineToOfferMs !== void 0 ? { baselineToOfferMs } : {},
+      ...offerToClickMs !== void 0 ? { offerToClickMs } : {},
       ...clickToSettleMs !== void 0 ? { clickToSettleMs } : {},
-      ...clickToCartReadyMs !== void 0 ? { clickToCartReadyMs } : {}
+      ...clickToCartReadyMs !== void 0 ? { clickToCartReadyMs } : {},
+      ...settleToCartReadyMs !== void 0 ? { settleToCartReadyMs } : {}
     };
   }
   function cartReadyState(value, now = Date.now()) {
@@ -761,13 +772,17 @@ var YoinkPopupStateModule = (() => {
       const candidate = record(raw);
       const retailerId = String(candidate.retailerId || "");
       const retailer = CART_READY_RETAILERS[retailerId];
+      const kind = candidate.kind === "needs_you" ? "needs_you" : "cart_ready";
       const jobId = cleanResultText(candidate.jobId, 120);
       const retailerSku = cleanResultText(candidate.retailerSku, 120).toLocaleUpperCase("en-US");
       const tabId = Number(candidate.tabId);
       const recordedAt = new Date(String(candidate.recordedAt || "")).getTime();
+      const openedAt = new Date(String(candidate.openedAt || "")).getTime();
+      const reviewedMaximumCents = Number(candidate.reviewedMaximumCents);
       if (candidate.schemaVersion !== 1 || !retailer || !/^[A-Za-z0-9_-]{3,120}$/.test(jobId) || !/^[A-Z0-9-]{3,120}$/.test(retailerSku) || !Number.isSafeInteger(tabId) || tabId < 0 || !Number.isFinite(recordedAt) || recordedAt > now + 6e4 || now - recordedAt >= 24 * 60 * 6e4) continue;
       unique.set(jobId, {
         schemaVersion: 1,
+        kind,
         jobId,
         retailerId,
         retailerName: retailer.name,
@@ -775,10 +790,41 @@ var YoinkPopupStateModule = (() => {
         retailerSku,
         tabId,
         recordedAt: new Date(recordedAt).toISOString(),
+        ...Number.isFinite(openedAt) && openedAt >= recordedAt && openedAt <= now + 6e4 && now - openedAt < 24 * 60 * 6e4 ? { openedAt: new Date(openedAt).toISOString() } : {},
+        ...Number.isSafeInteger(reviewedMaximumCents) && reviewedMaximumCents > 0 && reviewedMaximumCents <= 1e8 ? { reviewedMaximumCents } : {},
+        ...kind === "needs_you" && /^[a-z][a-z0-9_]{1,79}$/.test(String(candidate.reasonCode || "")) ? { reasonCode: String(candidate.reasonCode) } : {},
         latency: cartReadyLatency(candidate.latency)
       });
     }
     return { schemaVersion: 1, items: [...unique.values()].slice(-10) };
+  }
+  function preferredActionHandoff(value, now = Date.now(), ranking = "pending_outcome_first") {
+    const items = cartReadyState(value, now).items;
+    const newest = (kind, opened) => items.filter((item) => item.kind === kind && Boolean(item.openedAt) === opened).at(-1) ?? null;
+    const tiers = ranking === "unopened_first" ? [false, true] : [true, false];
+    for (const opened of tiers) {
+      const item = newest("needs_you", opened) ?? newest("cart_ready", opened);
+      if (item) return item;
+    }
+    return null;
+  }
+  function popupPurchaseOpportunity(value, now = Date.now()) {
+    const candidate = record(value);
+    const deliveryId = cleanResultText(candidate.deliveryId, 160);
+    const retailerSku = cleanResultText(candidate.retailerSku, 32);
+    const expiry = new Date(String(candidate.expiresAt || "")).getTime();
+    if (candidate.schemaVersion !== 1 || candidate.kind !== "walmart_review_order" || candidate.retailerId !== "walmart" || !/^[A-Za-z0-9_-]{3,160}$/.test(deliveryId) || !/^\d{5,20}$/.test(retailerSku) || !Number.isFinite(expiry) || expiry <= now || expiry > now + 5 * 6e4) return null;
+    return {
+      schemaVersion: 1,
+      deliveryId,
+      kind: "walmart_review_order",
+      retailerId: "walmart",
+      retailerName: "Walmart",
+      identityLabel: "Item",
+      retailerSku,
+      title: cleanResultText(candidate.title, 160) || `Walmart item ${retailerSku}`,
+      expiresAt: new Date(expiry).toISOString()
+    };
   }
   function safeErrorText(value) {
     return cleanResultText(value, 600).replace(/https?:\/\/\S+/gi, "[redacted URL]").replace(/\b(authorization|bearer|cookie|csrf|secret|session|token)\s*[:=]?\s*[^\s·,;]+/gi, "$1 [redacted]").replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[redacted]").slice(0, 300);
@@ -837,15 +883,12 @@ var YoinkPopupStateModule = (() => {
     if (observation.purchaseRouteReady === true) lines.push("Exact offer binding verified");
     const qualification = response.workflow === "qualification";
     if (!qualification) {
-      lines.push("Read-only inspection completed; no retailer control was clicked.");
       return persistedResult(page.key, "inspected", `Inspected \xB7 ${price}`, lines.join(" \xB7 "), now, productTitle);
     }
     if (rehearsal.ok === true) {
-      lines.push("Rehearsal passed \u2014 no retailer control was clicked.");
-      return persistedResult(page.key, "qualified", `Qualified \xB7 ${price} \xB7 ${fulfillment}`, lines.join(" \xB7 "), now, productTitle);
+      return persistedResult(page.key, "qualified", `Check passed \xB7 ${price} \xB7 ${fulfillment}`, lines.join(" \xB7 "), now, productTitle);
     }
     const reason = safeErrorText(response.message || resultTitleCase(rehearsal.reason || "Offer not verified"));
-    lines.push("Qualification stopped safely before any retailer control was clicked.");
     return persistedResult(page.key, "blocked", `Blocked \xB7 ${reason}`, `${lines.join(" \xB7 ")} \xB7 ${reason}`, now, productTitle);
   }
   function drawingsPopupResult(value, page, now = Date.now()) {
@@ -855,7 +898,7 @@ var YoinkPopupStateModule = (() => {
     const items = Array.isArray(scan.items) ? scan.items : [];
     const active = items.filter((item) => record(item).drawState === "active").length;
     const summary = `Inspected \xB7 ${active} active drawing${active === 1 ? "" : "s"}`;
-    const details = `${items.length} exact drawing item${items.length === 1 ? "" : "s"} observed. Entry remains manual; no entry, address, payment, or account state was collected.`;
+    const details = `${items.length} exact drawing item${items.length === 1 ? "" : "s"} observed.`;
     return persistedResult(page.key, "drawings", summary, details, now);
   }
   function errorPopupResult(contextKey, error, blocked = false, now = Date.now()) {
@@ -880,10 +923,10 @@ var YoinkPopupStateModule = (() => {
   function operationLabel(action, stage) {
     if (stage === "requesting_access") return "Requesting access\u2026";
     if (stage === "inspecting") return action === "inspect_drawings" ? "Inspecting drawings\u2026" : "Inspecting\u2026";
-    if (stage === "qualifying") return "Qualifying\u2026";
+    if (stage === "qualifying") return "Checking offer\u2026";
     if (stage === "pairing") return "Pairing\u2026";
     if (stage === "reconnecting") return "Reconnecting\u2026";
-    if (stage === "opening_cart") return "Opening cart\u2026";
+    if (stage === "opening_cart") return action === "open_purchase" ? "Opening Walmart\u2026" : "Opening cart\u2026";
     if (stage === "updating") return "Checking update\u2026";
     if (stage === "sharing") return "Sharing\u2026";
     return null;
@@ -896,13 +939,19 @@ var YoinkPopupStateModule = (() => {
   function signalsLabel(health, now) {
     const count = Number(health.popupSummary?.followedCount);
     const updatedAt = new Date(String(health.popupSummary?.followedCountUpdatedAt || "")).getTime();
-    return Number.isSafeInteger(count) && count >= 0 && Number.isFinite(updatedAt) && now - updatedAt < 10 * 6e4 ? `Signals live \xB7 ${count.toLocaleString("en-US")} followed` : "Signals live";
+    return Number.isSafeInteger(count) && count >= 0 && Number.isFinite(updatedAt) && now - updatedAt < 10 * 6e4 ? `Calls live \xB7 ${count.toLocaleString("en-US")} followed` : "Calls live";
   }
   function resultStateLabel(result) {
-    if (result.outcome === "qualified") return "Qualified";
+    if (result.outcome === "qualified") return "Check passed";
     if (result.outcome === "blocked") return "Blocked";
     if (result.outcome === "error") return "Error";
     return "Inspected";
+  }
+  function resultStateTone(result) {
+    if (result.outcome === "qualified") return "success";
+    if (result.outcome === "blocked") return "warning";
+    if (result.outcome === "error") return "danger";
+    return "neutral";
   }
   function resultSupporting(result) {
     const separator = result.summary.indexOf(" \xB7 ");
@@ -932,8 +981,13 @@ var YoinkPopupStateModule = (() => {
     const matchedResult = input.lastResult?.schemaVersion === 1 && input.lastResult.contextKey === input.page.key ? input.lastResult : null;
     const handoffRecordedAt = new Date(String(input.updateHandoff?.recordedAt || "")).getTime();
     const readyUpdateHandoff = input.updateHandoff?.schemaVersion === 1 && compareVersions(input.updateHandoff.releaseVersion, health.version) === 0 && Number.isFinite(handoffRecordedAt) && handoffRecordedAt <= now + 6e4 && now - handoffRecordedAt < 24 * 60 * 6e4 ? input.updateHandoff : null;
-    const readyCarts = cartReadyState(input.cartReady, now).items;
-    const newestReadyCart = readyCarts.at(-1) ?? null;
+    const actionHandoffs = cartReadyState(input.cartReady, now).items;
+    const needsYouHandoffs = actionHandoffs.filter((item) => item.kind === "needs_you");
+    const cartReadyHandoffs = actionHandoffs.filter((item) => item.kind === "cart_ready");
+    const requestedOutcomeJobId = cleanResultText(input.cartOutcome?.jobId, 120);
+    const requestedOutcomeHandoff = /^[A-Za-z0-9_-]{3,120}$/.test(requestedOutcomeJobId) ? actionHandoffs.find((item) => item.jobId === requestedOutcomeJobId) ?? null : null;
+    const preferredHandoff = requestedOutcomeHandoff ?? preferredActionHandoff({ schemaVersion: 1, items: actionHandoffs }, now);
+    const purchaseOpportunity = popupPurchaseOpportunity(input.purchaseOpportunity, now);
     let hardBlocker = null;
     let context = {
       visible: false,
@@ -959,7 +1013,7 @@ var YoinkPopupStateModule = (() => {
         visible: true,
         eyebrow: "BROWSER",
         title: "Pair this browser",
-        supporting: "Enter the one-time code from Yoink \u2192 Connections.",
+        supporting: "Enter the code from Yoink \u203A Settings \u203A Chrome.",
         pairing: true
       };
       primaryAction = { id: "pair", label: "Pair browser", disabled: false };
@@ -969,20 +1023,20 @@ var YoinkPopupStateModule = (() => {
         context = {
           visible: true,
           eyebrow: readyUpdateHandoff.channel === "managed" ? "UPDATE READY" : "UPDATE DOWNLOADED",
-          title: readyUpdateHandoff.channel === "managed" ? "Restart companion" : "Replace extension files",
+          title: readyUpdateHandoff.channel === "managed" ? "Reload Chrome companion" : "Replace extension files",
           supporting: readyUpdateHandoff.channel === "managed" ? `Reload to finish installing Yoink ${readyUpdateHandoff.releaseVersion}.` : `Use the Yoink ${readyUpdateHandoff.releaseVersion} files, then reload.`,
           pairing: false
         };
-        primaryAction = { id: "reload_companion", label: "Reload companion", disabled: false };
+        primaryAction = { id: "reload_companion", label: "Reload Chrome companion", disabled: false };
       } else {
         context = {
           visible: true,
           eyebrow: "UPDATE REQUIRED",
-          title: "Update companion",
-          supporting: `Yoink ${health.version || ""} requires the matching companion.`,
+          title: "Update Chrome companion",
+          supporting: `Yoink ${health.version || ""} requires the matching Chrome companion.`,
           pairing: false
         };
-        primaryAction = { id: "update_companion", label: "Update companion", disabled: false };
+        primaryAction = { id: "update_companion", label: "Update Chrome companion", disabled: false };
       }
     } else if (versionDifference < 0) {
       hardBlocker = "app_update";
@@ -990,26 +1044,45 @@ var YoinkPopupStateModule = (() => {
         visible: true,
         eyebrow: "VERSION MISMATCH",
         title: "Update Yoink",
-        supporting: "The companion is newer than the running Yoink app.",
+        supporting: "The Chrome companion is newer than the running Yoink app.",
         pairing: false
       };
       primaryAction = { id: "open_yoink", label: "Open Yoink", disabled: false };
-    } else if (newestReadyCart) {
+    } else if (preferredHandoff) {
       status = "attention";
-      context = {
-        visible: true,
-        eyebrow: "CART READY",
-        title: readyCarts.length === 1 ? `${newestReadyCart.retailerName} cart ready` : `${readyCarts.length} carts ready`,
-        supporting: readyCarts.length === 1 ? `${newestReadyCart.identityLabel} ${newestReadyCart.retailerSku} \xB7 Checkout stays manual` : "Checkout stays manual",
-        pairing: false
-      };
-      primaryAction = { id: "open_cart", label: "Open cart", disabled: false };
+      if (preferredHandoff.kind === "needs_you") {
+        context = {
+          visible: true,
+          eyebrow: "NEEDS YOU",
+          title: needsYouHandoffs.length === 1 ? `${preferredHandoff.retailerName} needs review` : `${needsYouHandoffs.length} actions need review`,
+          supporting: needsYouHandoffs.length === 1 ? `${preferredHandoff.identityLabel} ${preferredHandoff.retailerSku} \xB7 Check the store cart or session` : "Check the open store tabs",
+          pairing: false
+        };
+        primaryAction = {
+          id: "open_cart",
+          label: preferredHandoff.openedAt ? "Return to store" : "Review store",
+          disabled: false
+        };
+      } else {
+        context = {
+          visible: true,
+          eyebrow: "CART READY",
+          title: cartReadyHandoffs.length === 1 ? `${preferredHandoff.retailerName} cart ready` : `${cartReadyHandoffs.length} carts ready`,
+          supporting: cartReadyHandoffs.length === 1 ? `${preferredHandoff.identityLabel} ${preferredHandoff.retailerSku}` : "Open the store cart",
+          pairing: false
+        };
+        primaryAction = {
+          id: "open_cart",
+          label: preferredHandoff.openedAt ? "Return to cart" : "Open cart",
+          disabled: false
+        };
+      }
     } else if (input.confirmation === "share_evidence" && input.page.kind === "product") {
       context = {
         visible: true,
         eyebrow: "COMMUNITY EVIDENCE",
         title: `Share ${input.page.retailerName} evidence?`,
-        supporting: "Shares one sanitized stock assertion. No account or page text is included.",
+        supporting: "Shares one stock update. No account or page text is included.",
         pairing: false
       };
       primaryAction = { id: "confirm_share_evidence", label: "Share evidence", disabled: false };
@@ -1025,7 +1098,7 @@ var YoinkPopupStateModule = (() => {
       };
       primaryAction = {
         id: "inspect_product",
-        label: matchedResult ? resultStateLabel(matchedResult) : "Inspect product",
+        label: matchedResult ? "Inspect again" : "Inspect product",
         disabled: false
       };
     } else if (input.page.kind === "walmart_draw") {
@@ -1038,36 +1111,46 @@ var YoinkPopupStateModule = (() => {
       };
       primaryAction = {
         id: "inspect_drawings",
-        label: matchedResult ? resultStateLabel(matchedResult) : "Inspect drawings",
+        label: matchedResult ? "Inspect again" : "Inspect drawings",
         disabled: false
       };
+    } else if (purchaseOpportunity) {
+      status = "attention";
+      context = {
+        visible: true,
+        eyebrow: "WALMART",
+        title: purchaseOpportunity.title,
+        supporting: `${purchaseOpportunity.identityLabel} ${purchaseOpportunity.retailerSku} \xB7 Ready to add`,
+        pairing: false
+      };
+      primaryAction = { id: "open_purchase", label: "Buy at Walmart", disabled: false };
     } else if (!trackalackerReady) {
       context = {
         visible: true,
         eyebrow: "TRACKALACKER",
-        title: "Signals disconnected",
-        supporting: "Reconnect to receive product signals.",
+        title: "TrackaLacker disconnected",
+        supporting: "Reconnect to receive calls.",
         pairing: false
       };
       primaryAction = { id: "reconnect_trackalacker", label: "Reconnect", disabled: false };
     } else if (health.actionsPaused === true) {
       context = {
         visible: true,
-        eyebrow: "RETAILER ACTIONS",
-        title: "Retailer actions paused",
-        supporting: "Monitoring continues.",
+        eyebrow: "STORE ACTIONS",
+        title: "Store actions paused",
+        supporting: "Monitoring continues. Resume from Home.",
         pairing: false
       };
-      primaryAction = { id: "review_pause", label: "Review paused actions", disabled: false };
+      primaryAction = { id: "review_pause", label: "Open Home", disabled: false };
     } else if (monitoringOnly) {
       context = {
         visible: true,
-        eyebrow: "RETAILER ACTIONS",
+        eyebrow: "STORE ACTIONS",
         title: health.executionMode !== "live" ? "Test mode" : "Monitoring only",
-        supporting: "Retailer clicks are off.",
+        supporting: "Store clicks are off. Details are under Insights.",
         pairing: false
       };
-      primaryAction = { id: "review_mode", label: "Review action mode", disabled: false };
+      primaryAction = { id: "review_mode", label: "Open Insights", disabled: false };
     }
     const operation = input.operation?.contextKey === input.page.key || hardBlocker !== null ? input.operation : null;
     if (primaryAction && operation && operation.stage !== "idle") {
@@ -1075,8 +1158,15 @@ var YoinkPopupStateModule = (() => {
       if (label) primaryAction = { ...primaryAction, label, disabled: true };
     }
     let activity = null;
+    if (purchaseOpportunity && hardBlocker === null) status = "attention";
     if (hardBlocker !== null) {
       activity = null;
+    } else if (pageActionable && purchaseOpportunity) {
+      activity = {
+        id: "purchase",
+        label: `Walmart ${purchaseOpportunity.identityLabel} ${purchaseOpportunity.retailerSku} ready \xB7 Open`,
+        action: "open_purchase"
+      };
     } else if (runningSync(health, now)) {
       const processed = Math.max(0, Number(health.trackalackerSync?.processed) || 0);
       const discovered = Math.max(0, Number(health.trackalackerSync?.discovered) || 0);
@@ -1084,11 +1174,11 @@ var YoinkPopupStateModule = (() => {
     } else if (pageActionable && !trackalackerReady) {
       activity = { id: "reconnect", label: "TrackaLacker disconnected \xB7 Reconnect", action: "reconnect_trackalacker" };
     } else if (pageActionable && health.actionsPaused === true) {
-      activity = { id: "pause", label: "Retailer actions paused \xB7 Review", action: "review_pause" };
+      activity = { id: "pause", label: "Store actions paused \xB7 Open Home", action: "review_pause" };
     } else if (pageActionable && monitoringOnly) {
       activity = {
         id: "mode",
-        label: `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 Review`,
+        label: `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 Open Insights`,
         action: "review_mode"
       };
     } else if (trackalackerReady) {
@@ -1097,6 +1187,14 @@ var YoinkPopupStateModule = (() => {
     const retailerActions = health.actionsPaused === true ? "Paused" : health.executionMode !== "live" ? "Test mode" : health.chromeMutationEnabled === true ? "Enabled" : "Monitoring";
     const storeAccess = pageActionable ? input.pageAccessGranted === true ? "Available" : "Requires approval" : "On demand";
     const sharingRetailers = new Set(Array.isArray(health.communitySharingRetailers) ? health.communitySharingRetailers : []);
+    const requestedOutcomeStage = ["choice", "amount", "submitting"].includes(String(input.cartOutcome?.stage || "")) ? input.cartOutcome?.stage : null;
+    const outcomeHandoff = requestedOutcomeHandoff ?? (preferredHandoff?.openedAt ? preferredHandoff : null);
+    const cartOutcome = hardBlocker === null && outcomeHandoff?.openedAt ? {
+      jobId: outcomeHandoff.jobId,
+      stage: requestedOutcomeStage ?? "choice",
+      reviewedMaximumCents: outcomeHandoff.reviewedMaximumCents ?? null,
+      error: cleanResultText(input.cartOutcome?.error, 180)
+    } : null;
     return {
       status,
       statusLabel: statusLabel(status),
@@ -1104,19 +1202,24 @@ var YoinkPopupStateModule = (() => {
       context,
       primaryAction,
       activity,
-      result: newestReadyCart ? null : matchedResult,
-      cartReady: newestReadyCart,
+      resultStatus: preferredHandoff || !matchedResult ? null : {
+        label: resultStateLabel(matchedResult),
+        tone: resultStateTone(matchedResult)
+      },
+      result: preferredHandoff ? null : matchedResult,
+      cartReady: preferredHandoff,
+      cartOutcome,
+      purchaseOpportunity,
       details: [
         { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },
         { label: "TrackaLacker", value: trackalackerReady ? "Connected" : "Disconnected" },
-        { label: "Retailer actions", value: retailerActions },
+        { label: "Store actions", value: retailerActions },
         { label: "Store access", value: storeAccess },
         { label: "Checked", value: health.checkedAt || "Not checked" }
       ],
       menu: {
         syncProducts: health.connected === true && health.paired === true,
         shareEvidence: hardBlocker === null && input.page.kind === "product" && sharingRetailers.has(input.page.retailerId),
-        manageStoreAccess: true,
         checkUpdates: !input.production && health.connected === true
       }
     };

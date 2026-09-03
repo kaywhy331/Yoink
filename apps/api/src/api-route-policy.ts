@@ -14,6 +14,10 @@ export interface ApiRoutePolicy {
 
 const ADMIN_PERMISSIONS = new Set<AuthorizationPermission>([
   "admin.read",
+  "admin.users.read",
+  "admin.users.support",
+  "admin.users.manage",
+  "admin.maintainer",
   "support.read",
   "catalog.review",
   "catalog.identity.propose",
@@ -53,10 +57,19 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 
   if (pathname.startsWith("/api/v1/admin/drop-windows")) return method === "GET" ? "admin.read" : "source.manage";
   if (pathname.startsWith("/api/v1/admin/restock-patterns")) return method === "GET" ? "admin.read" : "source.manage";
+  if (["/api/v1/admin/notifications", "/api/v1/admin/attribution-receipts"].includes(pathname)) return "admin.read";
   if (pathname === "/api/v1/admin/signals/simulate") return "source.manage";
   if (pathname === "/api/v1/admin/workers/restart") return "worker.manage";
+  if (pathname.startsWith("/api/v1/admin/analytics")) return "admin.read";
 
   if (pathname === "/api/v1/snapshot") return "admin.read";
+  if (pathname === "/api/v1/users") return method === "GET" ? "admin.users.read" : "admin.users.manage";
+  if (/^\/api\/v1\/users\/[A-Za-z0-9_-]{3,120}\/(?:pairing-code|pause-actions)$/.test(pathname)) {
+    return "admin.users.support";
+  }
+  if (/^\/api\/v1\/users\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
+    return method === "GET" ? "admin.users.read" : "admin.users.manage";
+  }
   if (pathname === "/api/v1/operations/telemetry") return "admin.read";
   if (pathname === "/api/v1/workers") return "admin.read";
   if (pathname.startsWith("/api/v1/workers/")) return method === "GET" ? "admin.read" : "worker.manage";
@@ -77,7 +90,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/alerts") return "admin.read";
   if (pathname.startsWith("/api/v1/alerts/")) return method === "GET" ? "admin.read" : "alert.manage";
 
-  if (pathname === "/api/v1/user/overview" || pathname === "/api/v1/user/authorization") return "user.read";
+  if (pathname === "/api/v1/user/overview" || pathname === "/api/v1/user/authorization"
+    || pathname === "/api/v1/user/action-handoff") return "user.read";
   if (pathname.startsWith("/api/v1/user/purchase-intents")) return "user.intent.manage";
   if (pathname === "/api/v1/user/spend" || pathname === "/api/v1/user/spend-ledger") return "user.read";
   if (pathname === "/api/v1/user/spend-policy") return "user.settings.manage";
@@ -91,6 +105,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
     return method === "GET" ? "user.read" : "user.intent.manage";
   }
   if (pathname.startsWith("/api/v1/user/source-feedback")) return "user.intent.manage";
+  if (pathname.startsWith("/api/v1/user/purchase-handoffs")) return "user.intent.manage";
+  if (pathname.startsWith("/api/v1/user/store-link-clicks")) return "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/connectors")) {
     return method === "GET" ? "user.read" : "user.settings.manage";
   }
@@ -115,6 +131,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 
 function canonicalPath(pathname: string): { pathname: string; requestedSurface: ApiSurface | null } {
   if (pathname === "/api/v1/user/overview" || pathname === "/api/v1/user/authorization"
+    || pathname === "/api/v1/user/action-handoff"
     || pathname.startsWith("/api/v1/user/privacy")
     || pathname.startsWith("/api/v1/user/catalog/")
     || pathname.startsWith("/api/v1/user/purchase-intents")
@@ -123,6 +140,8 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname.startsWith("/api/v1/user/drop-windows")
     || pathname.startsWith("/api/v1/user/watch-queue")
     || pathname.startsWith("/api/v1/user/source-feedback")
+    || pathname.startsWith("/api/v1/user/purchase-handoffs")
+    || pathname.startsWith("/api/v1/user/store-link-clicks")
     || pathname.startsWith("/api/v1/user/connectors")
     || pathname.startsWith("/api/v1/user/readiness")
     || pathname.startsWith("/api/v1/user/analytics")
@@ -137,8 +156,11 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname === "/api/v1/admin/attribution-policies"
     || pathname.startsWith("/api/v1/admin/drop-windows")
     || pathname.startsWith("/api/v1/admin/restock-patterns")
+    || pathname === "/api/v1/admin/notifications"
+    || pathname === "/api/v1/admin/attribution-receipts"
     || pathname === "/api/v1/admin/signals/simulate"
-    || pathname === "/api/v1/admin/workers/restart") {
+    || pathname === "/api/v1/admin/workers/restart"
+    || pathname.startsWith("/api/v1/admin/analytics")) {
     return { pathname, requestedSurface: "admin" };
   }
   if (pathname.startsWith("/api/v1/admin/")) {
@@ -187,6 +209,7 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
   }),
   user: Object.freeze({
     overview: "overview",
+    "action-handoff": "actions",
     authorization: "authorization",
     catalog: "catalog",
     "purchase-intents": "purchase_intents",
@@ -211,10 +234,13 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     calls: "signals",
     "drop-windows": "signals",
     "watch-queue": "signals",
-    "source-feedback": "signals"
+    "source-feedback": "signals",
+    "purchase-handoffs": "actions",
+    "store-link-clicks": "actions"
   }),
   admin: Object.freeze({
     snapshot: "snapshot",
+    users: "authorization",
     operations: "operations",
     authorization: "authorization",
     catalog: "catalog",
@@ -227,8 +253,11 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     "change-requests": "change_control",
     workers: "workers",
     signals: "signals",
+    notifications: "notifications",
+    "attribution-receipts": "attribution",
     "drop-windows": "sources",
-    "restock-patterns": "sources"
+    "restock-patterns": "sources",
+    analytics: "analytics"
   }),
   device: Object.freeze({
     heartbeat: "heartbeat",

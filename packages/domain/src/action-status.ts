@@ -21,27 +21,27 @@ export const ACTION_STATUS_GLOSSARY = Object.freeze({
   notify_only: {
     label: "Notified",
     stage: "closed",
-    summary: "Yoink sent the opportunity without requesting a retailer action."
+    summary: "Yoink sent the call without requesting a store action."
   },
   shadow_ready: {
     label: "Checked only",
     stage: "closed",
-    summary: "Yoink evaluated the opportunity without requesting a retailer click."
+    summary: "Yoink evaluated the call without requesting a store click."
   },
   awaiting_executor: {
     label: "Queued",
     stage: "queued",
-    summary: "The exact bounded cart action is waiting for the paired Chrome companion."
+    summary: "The cart check is waiting for the paired Chrome companion."
   },
   leased: {
     label: "Starting",
     stage: "checking",
-    summary: "Chrome accepted the bounded action lease."
+    summary: "Chrome started the cart check."
   },
   navigating: {
     label: "Opening store",
     stage: "checking",
-    summary: "Chrome is opening the exact cart or product page."
+    summary: "Chrome is opening the store cart or product page."
   },
   verifying_listing: {
     label: "Checking offer",
@@ -51,27 +51,27 @@ export const ACTION_STATUS_GLOSSARY = Object.freeze({
   offer_verified: {
     label: "Offer verified",
     stage: "checking",
-    summary: "The live first-party offer passed the bounded action contract."
+    summary: "The item, price, seller, and delivery choice match your plan."
   },
   add_authorized: {
     label: "Ready to add",
     stage: "checking",
-    summary: "Chrome prepared one exact Add control for final revalidation."
+    summary: "Chrome found Add to cart and is checking it once more."
   },
   adding: {
     label: "Adding",
     stage: "checking",
-    summary: "Chrome crossed the one-click Add boundary and will not retry it."
+    summary: "Chrome clicked Add to cart once and will not retry it."
   },
   cart_verified: {
     label: "Verifying cart",
     stage: "checking",
-    summary: "Chrome proved the exact cart quantity change."
+    summary: "Chrome confirmed that one item was added to the cart."
   },
   checkout_review: {
     label: "Needs you",
     stage: "needs_you",
-    summary: "Review the retailer checkout yourself before continuing."
+    summary: "Review the store checkout yourself before continuing."
   },
   submit_authorized: {
     label: "Needs you",
@@ -81,17 +81,17 @@ export const ACTION_STATUS_GLOSSARY = Object.freeze({
   submitting: {
     label: "Needs you",
     stage: "needs_you",
-    summary: "Review the retailer session because the final result is not yet settled."
+    summary: "Review the store session because the final result is not yet settled."
   },
   confirmed: {
     label: "Ready to check out",
     stage: "ready_to_checkout",
-    summary: "The exact item is in the retailer cart; checkout remains manual."
+    summary: "The item is in the store cart."
   },
   expired: {
     label: "Expired",
     stage: "closed",
-    summary: "The bounded opportunity ended before a retailer action completed."
+    summary: "The call ended before a store action completed."
   },
   cancelled: {
     label: "Closed",
@@ -101,17 +101,17 @@ export const ACTION_STATUS_GLOSSARY = Object.freeze({
   offer_rejected: {
     label: "Did not qualify",
     stage: "closed",
-    summary: "The live offer failed a required safety check before the Add boundary."
+    summary: "The live offer failed a required safety check before Add to cart was clicked."
   },
   manual_review: {
     label: "Needs you",
     stage: "needs_you",
-    summary: "Check the retailer cart because Chrome cannot safely infer the result."
+    summary: "Check the store cart because Chrome cannot safely infer the result."
   },
   submission_uncertain: {
     label: "Needs you",
     stage: "needs_you",
-    summary: "Check the retailer session because the final result is uncertain."
+    summary: "Check the store session because the final result is uncertain."
   }
 } satisfies Readonly<Record<JobState, ActionStatusDefinition>>);
 

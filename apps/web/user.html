@@ -3,76 +3,105 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Yoink · My products</title>
+  <title>Yoink · Purchase assistant</title>
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/components.css">
   <link rel="stylesheet" href="/user.css">
+  <link rel="stylesheet" href="/dialogs.css">
+  <link rel="stylesheet" href="/status.css">
 </head>
 <body>
   <header class="app-header">
-    <a class="brand" href="/" aria-label="Yoink home"><span class="brand-mark">Y</span><span><strong>Yoink</strong><small>My purchase assistant</small></span></a>
+    <div class="header-row">
+    <a class="brand" href="/" aria-label="Yoink home"><span class="brand-mark">Y</span><span><strong>Yoink</strong><small>Purchase assistant</small></span></a>
     <div class="header-actions">
-      <a class="admin-link" id="adminLink" href="/admin" hidden>Admin</a>
-      <span class="mode-pill" id="modePill">Loading</span>
-      <button class="button quiet" id="pauseButton" type="button">Pause actions</button>
+      <span class="mode-pill" id="modePill" data-mobile-label="Loading">Loading</span>
+      <button class="data-freshness" id="userDataFreshness" type="button" aria-live="polite" hidden>Updates paused · Retry</button>
+      <button class="button quiet" id="pauseButton" type="button" aria-describedby="pauseReason">Pause actions</button>
+      <details class="account-menu" id="userAccountMenu">
+        <summary aria-label="Open account menu"><span class="account-avatar" id="userAccountAvatar" aria-hidden="true">Y</span><span class="account-summary"><strong id="userAccountName">Loading…</strong><small id="userAccountRole">Account</small></span></summary>
+        <div class="account-menu-popover">
+          <div class="account-menu-context"><strong id="userAccountTenant">Yoink</strong><span id="userAccountSession">Session</span></div>
+          <a class="admin-link" id="adminLink" href="/admin" hidden>Admin dashboard</a>
+          <a href="/docs">Docs</a>
+          <a href="/privacy">Privacy</a>
+          <a id="userSignOutLink" hidden>Sign out</a>
+        </div>
+      </details>
+    </div>
+    </div>
+    <div class="header-strip">
+      <span class="header-boundary">Checkout stays manual. <a href="/docs#safety-boundaries">Details</a></span>
+      <span class="header-action-reason" id="pauseReason" hidden></span>
     </div>
   </header>
 
   <main>
-    <section class="hero">
-      <div>
-        <p class="eyebrow">Products, price, and purchase preferences</p>
-        <h1>Tell Yoink what you want. Keep every action bounded.</h1>
-        <p>Choose an exact product, select the stores you trust, and set the most you will pay. Yoink handles the tracking and browser details without hiding the final limits from you. Store links are affiliate links, so Yoink may earn a commission after a qualifying purchase.</p>
-      </div>
-      <div class="hero-state" id="heroState" aria-live="polite"></div>
-    </section>
-
-    <section class="setup-guide" id="setupGuide" aria-labelledby="setupGuideTitle" hidden>
-      <div class="setup-guide-intro">
-        <p class="eyebrow">Guided setup</p>
-        <h2 id="setupGuideTitle">Your next safe step</h2>
-        <h3 id="setupGuideHeadline">Loading your setup…</h3>
-        <p id="setupGuideCopy">Yoink is checking the pieces needed for your purchase preferences.</p>
-        <div class="setup-progress" id="setupProgress" role="progressbar" aria-label="Setup progress" aria-valuemin="0" aria-valuemax="5" aria-valuenow="0"><i id="setupProgressBar"></i></div>
-        <small id="setupProgressCopy">0 of 5 steps ready</small>
-      </div>
-      <div class="setup-steps" id="setupSteps"></div>
-      <p class="setup-safety"><strong>Always manual:</strong> checkout, payment, raffle entry, and order submission.</p>
-    </section>
-
-    <section class="metrics" id="metrics" aria-label="Your Yoink totals"></section>
-
-    <section class="release-announcement" id="releaseAnnouncement" aria-labelledby="releaseAnnouncementTitle" hidden>
-      <div><p class="eyebrow" id="releaseAnnouncementVersion"></p><h2 id="releaseAnnouncementTitle"></h2><p id="releaseAnnouncementSummary"></p></div>
-      <div class="release-announcement-actions"><a class="button quiet" id="releaseAnnouncementLink" href="/docs">What changed</a><button class="button quiet" id="dismissReleaseAnnouncement" type="button" aria-label="Dismiss this announcement">Dismiss</button></div>
-    </section>
-
     <nav class="tabs" aria-label="Workspace">
-      <button class="tab active" data-tab="products" type="button">Products</button>
+      <button class="tab active" data-tab="home" type="button">Home</button>
+      <button class="tab" data-tab="products" type="button">Products</button>
       <button class="tab" data-tab="calls" type="button">Calls</button>
-      <button class="tab" data-tab="drawings" type="button">Walmart drawings</button>
-      <button class="tab" data-tab="plans" type="button">Purchase plans</button>
-      <button class="tab" data-tab="activity" type="button">Recent actions</button>
-      <button class="tab" data-tab="insights" type="button">Insights</button>
-      <button class="tab" data-tab="preferences" type="button">Preferences</button>
+      <button class="tab" data-tab="plans" type="button">Plans</button>
+      <button class="tab" data-tab="activity" type="button">Activity</button>
+      <button class="tab" data-tab="preferences" type="button">Settings</button>
     </nav>
 
-    <section class="workspace active" data-panel="products">
+    <section class="workspace home-workspace active" data-panel="home">
+      <section class="release-announcement" id="releaseAnnouncement" aria-labelledby="releaseAnnouncementTitle" hidden>
+        <div class="release-announcement-copy"><span id="releaseAnnouncementVersion"></span><strong id="releaseAnnouncementTitle"></strong></div>
+        <div class="release-announcement-actions"><a id="releaseAnnouncementLink" href="/docs">What changed</a><button class="release-announcement-dismiss" id="dismissReleaseAnnouncement" type="button" aria-label="Dismiss this announcement"><span aria-hidden="true">×</span></button></div>
+      </section>
+
+      <section class="home-summary-section home-now" id="homeNow" aria-label="Now">
+        <section class="action-handoff home-action-handoff" id="homeActionHandoff" aria-live="polite" hidden>
+          <div><p class="eyebrow" id="homeActionHandoffEyebrow"></p><h3 id="homeActionHandoffTitle"></h3><p id="homeActionHandoffCopy"></p></div>
+          <div class="inline-actions" id="homeActionHandoffActions"></div>
+        </section>
+        <section class="hero home-hero" id="homeFallback">
+          <div>
+            <p class="eyebrow">Now</p>
+            <h1 id="homeHeadline">Yoink is checking what needs you.</h1>
+            <p id="homeSummary"></p>
+          </div>
+          <div class="hero-state" id="heroState" aria-live="polite"></div>
+        </section>
+      </section>
+
+      <section class="upcoming-drop-strip home-next" id="homeUpcomingDrops" aria-labelledby="homeUpcomingDropsTitle" hidden>
+        <div class="upcoming-drop-heading"><h2 id="homeUpcomingDropsTitle">Next</h2><button class="button quiet" data-tab="calls" type="button">Calls</button></div>
+        <div class="upcoming-drop-list" data-upcoming-drop-list></div>
+      </section>
+
+      <section class="home-summary-section" id="homeRecent" aria-labelledby="homeRecentTitle">
+        <div class="home-section-heading"><h2 id="homeRecentTitle">Recent</h2><button class="button quiet" data-tab="activity" type="button">Activity</button></div>
+        <div class="home-summary-list" id="homeRecentList" aria-live="polite"></div>
+      </section>
+
+      <section class="home-summary-section" id="homeLimits" aria-labelledby="homeLimitsTitle">
+        <div class="home-section-heading"><h2 id="homeLimitsTitle">Limits</h2><button class="button quiet" data-tab="preferences" type="button">Settings</button></div>
+        <div class="home-limit-grid" id="homeLimitGrid" aria-live="polite"></div>
+      </section>
+    </section>
+
+    <section class="workspace" data-panel="products">
       <div class="section-heading">
-        <div><p class="eyebrow">Exact catalog matches</p><h2>Products</h2><p>Each product gathers every store offering it. Review one plan per product; its price caps and rules apply across every store you enable.</p></div>
-        <div class="section-actions"><button class="button secondary" id="addProductButton" type="button">Add product link</button><label class="search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label></div>
+        <div><h2>Products</h2></div>
+        <div class="section-actions"><div class="product-view-toggle" role="group" aria-label="Product layout"><button data-product-view="grid" type="button" aria-pressed="true">Grid</button><button data-product-view="list" type="button" aria-pressed="false">List</button></div><button class="button secondary" id="addProductButton" type="button">Add product link</button><label class="search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label></div>
       </div>
+      <details class="filter-drawer">
+        <summary>Filters <span class="browse-count" id="browseCount" role="status"></span></summary>
       <div class="browse-toolbar" aria-label="Browse and filter products">
         <label><span>Store</span><select id="browseStore"><option value="">All stores</option></select></label>
         <label><span>Availability</span><select id="browseAvailability">
-          <option value="">Any availability</option>
-          <option value="available">Available now</option>
+          <option value="">Any</option>
+          <option value="in_stock">In stock</option>
           <option value="preorder">Preorder</option>
-          <option value="unavailable">Out of stock</option>
+          <option value="out_of_stock">Out of stock</option>
         </select></label>
         <label><span>Plans</span><select id="browsePlan">
-          <option value="">All products</option>
-          <option value="planned">With a purchase plan</option>
-          <option value="unplanned">Without a plan</option>
+          <option value="">All</option>
+          <option value="planned">Planned</option>
+          <option value="unplanned">Unplanned</option>
         </select></label>
         <label><span>Price</span><select id="browsePrice">
           <option value="">Any price</option>
@@ -89,119 +118,178 @@
           <option value="active">Recently active</option>
           <option value="title">Name · A to Z</option>
         </select></label>
-        <span class="browse-count" id="browseCount" role="status"></span>
       </div>
-      <div class="card-grid" id="productList"></div>
+      </details>
+      <section class="upcoming-drop-strip" id="productReviewStatus" aria-labelledby="productReviewStatusTitle" hidden>
+        <div class="upcoming-drop-heading"><h3 id="productReviewStatusTitle">In review</h3></div>
+        <div class="mini-list" id="productReviewList"></div>
+      </section>
+      <div class="card-grid" id="productList" data-product-view="grid"></div>
+      <div class="load-more-row"><button class="button quiet" id="loadMoreProducts" type="button" hidden>Load more products</button></div>
     </section>
 
     <section class="workspace" data-panel="calls" id="calls">
       <div class="section-heading">
-        <div><p class="eyebrow">Signals and scheduled drops</p><h2>Calls</h2><p>Act on exact product calls, or place scheduled drops in the bounded read-only watch queue.</p></div>
-        <div class="section-actions call-bulk-actions"><label><span>Watch mode</span><select id="watchQueueMode" aria-describedby="watchQueueModeStatus"><option value="manual">Manual opt-in</option><option value="auto_armed">Auto-watch armed plans</option></select><small id="watchQueueModeStatus">Choose which scheduled drops enter read-only observation.</small></label><label><span>Apply profile</span><select id="callBulkProfile"><option value="">System default</option></select></label><button class="button secondary" id="callBulkAdd" type="button" disabled>Quick add selected</button></div>
+        <div><h2>Calls</h2><p id="callCount" role="status">0 calls</p></div>
       </div>
-      <div class="stack" id="callList"></div>
-    </section>
-
-    <section class="workspace" data-panel="drawings">
-      <div class="section-heading"><div><p class="eyebrow">Time-limited, exact item matches</p><h2>Walmart Collectibles Draw</h2><p>Yoink can identify current drawings and match their exact Walmart item IDs to your plans. Entry stays manual because a winning entry automatically places and charges an order.</p></div></div>
-      <div class="stack" id="walmartDrawSummary"></div>
-      <div class="card-grid" id="walmartDrawList"></div>
+      <div class="call-filter-row" role="group" aria-label="Call type">
+        <button class="call-filter active" data-call-filter="all" type="button" aria-pressed="true">All</button>
+        <button class="call-filter" data-call-filter="products" type="button" aria-pressed="false">Products</button>
+        <button class="call-filter" data-call-filter="drawings" type="button" aria-pressed="false">Drawings</button>
+      </div>
+      <div id="callProductResults">
+        <section class="call-selection-toolbar" id="callSelectionToolbar" aria-label="Selected calls" hidden>
+          <strong id="callSelectionCount" role="status" aria-live="polite">0 selected</strong>
+          <label><span>Apply setup</span><select id="callBulkProfile"><option value="">Notify-only setup</option></select></label>
+          <button class="button secondary" id="callBulkAdd" type="button" disabled>Quick add selected</button>
+          <button class="button quiet" id="callBulkClear" type="button">Clear</button>
+        </section>
+        <section class="upcoming-drop-strip calls-upcoming-drops" id="callsUpcomingDrops" aria-labelledby="callsUpcomingDropsTitle" hidden>
+          <div class="upcoming-drop-heading"><div><p class="eyebrow">Upcoming</p><h3 id="callsUpcomingDropsTitle">Drop windows</h3></div></div>
+          <div class="upcoming-drop-list" data-upcoming-drop-list></div>
+        </section>
+        <div class="stack" id="callList"></div>
+        <div class="load-more-row"><button class="button quiet" id="showMoreCalls" type="button" hidden>Show older calls</button></div>
+      </div>
+      <section class="call-drawing-results" id="callDrawingResults" aria-labelledby="callDrawingTitle" hidden>
+        <div class="call-drawing-heading"><h3 id="callDrawingTitle">Walmart Collectibles Draw</h3><p>Entry stays manual on Walmart; a win may trigger an automatic charge and order.</p></div>
+        <div class="stack" id="walmartDrawSummary"></div>
+        <div class="card-grid" id="walmartDrawList"></div>
+      </section>
     </section>
 
     <section class="workspace" data-panel="plans">
-      <div class="section-heading"><div><p class="eyebrow">Your private intent</p><h2>Purchase plans</h2><p>Price caps, seller choice, fulfillment, and quantity stay explicit per product and store.</p></div></div>
-      <section class="plan-transition" id="legacyPlanTransition" aria-live="polite" hidden>
-        <div><p class="eyebrow">One-time plan update</p><h3 id="legacyPlanTransitionTitle">Imported plans need review</h3><p id="legacyPlanTransitionCopy"></p></div>
-        <button class="button secondary" id="reviewLegacyPlanTransitionButton" type="button">Review transition</button>
+      <div class="section-heading">
+        <div><p class="eyebrow">Your products</p><h2>Plans</h2><p id="planSummary" role="status">Limits by product.</p><div id="planSummaryNotices" aria-live="polite"></div></div>
+        <div class="section-actions" id="planFilterControl" hidden>
+          <label class="compact-select"><span>Show</span><select id="planFilter">
+            <option value="all">All plans</option>
+            <option value="attention">Needs attention</option>
+            <option value="ready">Cart ready</option>
+            <option value="monitoring">Monitoring only</option>
+          </select></label>
+          <button class="button quiet" id="togglePlanBulk" type="button" hidden>Select plans</button>
+        </div>
+      </div>
+      <section class="plan-bulk-bar" id="planBulkBar" aria-label="Apply a Quick add setup to purchase plans" hidden>
+        <label class="check"><input id="planBulkSelectVisible" type="checkbox"><span>Select shown</span></label>
+        <label class="compact-select"><span>Quick add setup</span><select id="planBulkProfile"><option value="">Choose setup…</option></select></label>
+        <button class="button primary" id="applyPlanBulkProfile" type="button" disabled>Apply setup</button>
       </section>
       <div class="stack" id="planList"></div>
     </section>
 
     <section class="workspace" data-panel="activity">
-      <div class="section-heading"><div><p class="eyebrow">What Yoink did</p><h2>Recent actions</h2><p>Each action shows the product, store, cap, and current outcome.</p></div></div>
+      <nav class="subtabs" aria-label="Activity views"><button class="subtab active" data-tab="activity" type="button">Recent</button><button class="subtab" data-tab="insights" type="button">Insights</button></nav>
+      <div class="section-heading"><div><p class="eyebrow">What Yoink did</p><h2>Recent</h2></div></div>
       <section class="action-handoff" id="actionHandoff" aria-live="polite" hidden>
         <div><p class="eyebrow" id="actionHandoffEyebrow">Ready to check out</p><h3 id="actionHandoffTitle"></h3><p id="actionHandoffCopy"></p></div>
-        <button class="button secondary" id="viewCheckoutActions" type="button">Review actions</button>
       </section>
       <div class="action-stage-summary" id="actionStageSummary" aria-label="Action stages"></div>
-      <p class="action-latency-summary" id="actionLatencySummary"></p>
       <div class="stack" id="actionList"></div>
-      <details class="status-glossary" id="actionStatusGlossary">
-        <summary>What these statuses mean</summary>
-        <div class="mini-list" id="actionStatusGlossaryList"></div>
+      <div class="load-more-row"><button class="button quiet" id="showMoreActions" type="button" hidden>Show older actions</button></div>
+      <details class="status-glossary" id="actionActivityDetails">
+        <summary>Status help</summary>
+       <div id="actionStatusGlossary">
+          <a class="status-glossary-link" id="actionStatusGlossaryLink" href="/docs#statuses">Open status glossary ↗</a>
+        </div>
       </details>
     </section>
 
     <section class="workspace" data-panel="insights" id="health">
-      <div class="section-heading"><div><p class="eyebrow">Outcomes and readiness</p><h2>Insights</h2><p>Measure the action funnel, latency, store readiness, and source quality without collecting checkout or payment data.</p></div><a class="button secondary" id="analyticsCsv" href="/api/v1/user/analytics.csv" download>Download CSV</a></div>
+      <nav class="subtabs" aria-label="Activity views"><button class="subtab" data-tab="activity" type="button">Recent</button><button class="subtab active" data-tab="insights" type="button">Insights</button></nav>
+      <div class="section-heading"><div><p class="eyebrow">Outcomes and readiness</p><h2>Insights</h2></div><a class="button secondary" id="analyticsCsv" href="/api/v1/user/analytics.csv" download>Download CSV</a></div>
       <section class="metrics" id="analyticsMetrics" aria-label="Action analytics"></section>
       <div class="insight-grid">
-        <article class="preference-card"><div><h3>Store readiness</h3><p>Qualification, companion state, sign-in evidence, and the warm cart baseline are tracked independently.</p><div class="mini-list" id="readinessList"></div></div></article>
-        <article class="preference-card"><div><h3>Retailer outcomes</h3><p>Carted and user-confirmed results by store.</p><div class="mini-list" id="retailerAnalytics"></div></div></article>
-        <article class="preference-card"><div><h3>Action latency</h3><p>Measured p50 and p95 for each available signal-to-cart hop.</p><div class="mini-list" id="analyticsLatency"></div></div></article>
-        <article class="preference-card"><div><h3>Signal sources</h3><p>Accuracy and observed-to-received latency stay visible per channel.</p><div class="mini-list" id="sourceScorecards"></div></div></article>
+        <article class="preference-card"><div><h3>Store readiness</h3><div class="mini-list" id="readinessList"></div></div></article>
+        <article class="preference-card"><div><h3>Store outcomes</h3><div class="mini-list" id="retailerAnalytics"></div></div></article>
       </div>
     </section>
 
     <section class="workspace" data-panel="preferences">
-      <div class="section-heading"><div><p class="eyebrow">Simple global controls</p><h2>Preferences</h2><p>Retailer-specific price and seller choices belong to each purchase plan.</p></div></div>
+      <div class="section-heading"><div><p class="eyebrow">Account and defaults</p><h2>Settings</h2></div></div>
+      <nav class="settings-tabs" aria-label="Settings categories">
+        <button class="subtab active" data-settings-view="purchase" type="button">Purchase defaults</button>
+        <button class="subtab" data-settings-view="chrome" type="button">Chrome</button>
+        <button class="subtab" data-settings-view="notifications" type="button">Notifications</button>
+        <button class="subtab" data-settings-view="privacy" type="button">Privacy</button>
+      </nav>
       <div class="preference-grid">
-        <article class="preference-card"><span class="icon">Ⅱ</span><div><h3>Action state</h3><p id="actionStateCopy">Loading your action state…</p><button class="button secondary" id="preferencePauseButton" type="button">Change action state</button></div></article>
-        <article class="preference-card"><span class="icon">✓</span><div><h3>Catalog review</h3><p id="proposalCopy">Checking your pending product suggestions…</p><div class="mini-list" id="proposalList"></div></div></article>
-        <article class="preference-card budget-card"><span class="icon">$</span><div><h3>Spending limits</h3><p id="spendSummary">Loading your private spending limits…</p><form id="spendForm"><input name="revision" type="hidden"><div class="budget-fields"><label><span>Per order</span><input name="perOrder" inputmode="decimal" placeholder="Optional"></label><label><span>Per day</span><input name="daily" inputmode="decimal" placeholder="Optional"></label><label><span>Per month</span><input name="monthly" inputmode="decimal" placeholder="Optional"></label><label><span>Spend timezone</span><input name="timezone" maxlength="64" required></label><label><span>Period resets at</span><select name="periodResetHour"></select></label></div><button class="button secondary" type="submit">Save spending limits</button></form></div></article>
-        <article class="preference-card"><span class="icon">⌁</span><div><h3>Chrome companion</h3><p>Pair Chrome with a one-time code. The extension remains the only component allowed to perform a qualified retailer click.</p><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><div class="pairing" id="pairing" hidden></div></div></article>
-        <article class="preference-card connector-card" id="connections"><span class="icon">↗</span><div><h3>Action connectors</h3><p>Send Carted, Needs you, Missed, or Test updates to a deployment-approved Discord, Slack, or webhook destination.</p><div class="mini-list" id="connectorList"></div><form id="connectorForm">
-          <div class="profile-fields"><label><span>Name</span><input name="name" maxlength="80" required></label><label><span>Type</span><select name="kind"><option value="discord">Discord</option><option value="slack">Slack</option><option value="webhook">Webhook</option></select></label><label><span>Deployment reference</span><input name="endpointReference" maxlength="120" autocomplete="off" required></label></div>
+        <article class="preference-card budget-card" data-settings-panel="purchase"><div><h3>Spending limits</h3><p id="spendSummary">Loading…</p><form id="spendForm"><input name="revision" type="hidden"><div class="budget-fields"><label><span>Order</span><input name="perOrder" inputmode="decimal" placeholder="Optional"></label><label><span>Day</span><input name="daily" inputmode="decimal" placeholder="Optional"></label><label><span>Month</span><input name="monthly" inputmode="decimal" placeholder="Optional"></label><label><span>Timezone</span><select name="timezone" required><option value="">Loading…</option></select></label><label><span>Reset hour</span><select name="periodResetHour"></select></label></div><button class="button secondary" type="submit">Save limits</button></form></div></article>
+        <article class="preference-card" data-settings-panel="purchase"><div><h3>Scheduled drop watching</h3><label class="watch-mode-setting"><span>Watch mode</span><select id="watchQueueMode" aria-describedby="watchQueueModeStatus"><option value="manual">Watch only when I choose</option><option value="auto_armed">Watch drops for active plans</option></select><small id="watchQueueModeStatus">Choose which scheduled drops Yoink watches without adding to cart.</small></label></div></article>
+        <article class="preference-card" data-settings-panel="chrome"><div><h3>Chrome companion</h3><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><div class="pairing" id="pairing" hidden></div></div></article>
+        <article class="preference-card connector-card" data-settings-panel="notifications" id="notifications"><div><h3>Send updates to Discord, Slack or a webhook</h3><div class="mini-list" id="connectorList"></div><form id="connectorForm">
+          <div class="profile-fields"><label><span>Name</span><input name="name" maxlength="80" required></label><label><span>Type</span><select name="kind"><option value="discord">Discord</option><option value="slack">Slack</option><option value="webhook">Webhook</option></select></label><label><span>Source key</span><input name="endpointReference" maxlength="120" autocomplete="off" aria-describedby="connectorKeyHelp" required><small class="field-help" id="connectorKeyHelp">Enter the key provided by your Yoink administrator. Webhook URLs and secrets are never entered here.</small></label></div>
           <fieldset class="connector-events"><legend>Updates</legend><label class="check"><input name="events" type="checkbox" value="carted" checked><span>Carted</span></label><label class="check"><input name="events" type="checkbox" value="needs_you" checked><span>Needs you</span></label><label class="check"><input name="events" type="checkbox" value="missed" checked><span>Missed</span></label><label class="check"><input name="events" type="checkbox" value="test" checked><span>Test</span></label></fieldset>
-          <button class="button secondary" type="submit">Add connector</button>
+          <button class="button secondary" type="submit">Add destination</button>
         </form></div></article>
-        <article class="preference-card health-card"><span class="icon">◌</span><div><h3>System health</h3><p id="healthSummary">Checking companion and worker health…</p><div class="mini-list" id="healthDetails"></div><div class="inline-actions"><button class="button quiet" id="downloadDiagnostics" type="button">Download diagnostics</button><button class="button secondary" id="restartWorker" type="button" hidden>Restart worker</button></div></div></article>
-        <article class="preference-card profile-card"><span class="icon">⚡</span><div><h3>Quick-add profiles</h3><p>Quick add creates a plan in one click using the built-in default: one item, first-party seller, shipping, the current store price as the cap, notifications only. Save profiles for your own one-click configurations.</p><div class="mini-list" id="profileList"></div><form id="profileForm">
-          <input name="id" type="hidden">
-          <div class="profile-fields">
-            <label><span>Profile name</span><input name="name" type="text" maxlength="60" placeholder="e.g. Grab two under MSRP" required></label>
-            <label><span>Quantity</span><input name="targetQuantity" type="number" min="1" max="99" value="1" required></label>
-            <label><span>Item price cap</span><select name="priceMode"><option value="store_price">Current store price</option><option value="fixed_cap">Fixed maximum</option><option value="msrp">MSRP</option><option value="msrp_offset_percent">MSRP ± percent</option></select></label>
-            <label><span>Fixed maximum</span><input name="maxUnitPrice" inputmode="decimal" placeholder="$"></label>
-            <label><span>MSRP offset %</span><input name="msrpOffsetPercent" type="number" min="-90" max="90" step="1" placeholder="e.g. -15 or 10"></label>
-            <label><span>After a hit</span><select name="actionCeiling"><option value="notify">Notify me only</option><option value="add_to_cart">Add to cart</option></select></label>
-            <label><span>Wait between attempts (min)</span><input name="cooldownMinutes" type="number" min="0" max="43200" value="0"></label>
-            <label class="check"><input name="isDefault" type="checkbox"><span>Use as the default for the bare Quick add button</span></label>
-          </div>
-          <div class="inline-actions"><button class="button secondary" type="submit" id="saveProfileButton">Save profile</button><button class="button quiet" type="button" id="resetProfileButton" hidden>Cancel edit</button></div>
-        </form></div></article>
-        <article class="preference-card recovery-review-card"><span class="icon">?</span><div><h3>Help improve store reading</h3><p id="recoveryReviewSummary">Checking whether Yoink has any store details for you to review…</p><div class="recovery-review-list" id="recoveryReviewList"></div><p class="privacy-boundary">Your answer only labels quarantined evidence; it never fills a field, changes a purchase plan, qualifies a store, or clicks anything. Hosted account and coarse-region checks happen automatically when available; local reviews remain private and never count as independent public quorum.</p></div></article>
-        <article class="preference-card privacy-card"><span class="icon">↓</span><div><h3>My data</h3><p id="privacySummary">Checking the data Yoink keeps for you…</p><div class="mini-list privacy-list" id="privacyCategories"></div><p class="privacy-boundary" id="privacyBoundary">Credential material and other users’ records are excluded.</p><div class="inline-actions"><a class="button quiet" id="privacyPolicyLink" href="/privacy" target="_blank" rel="noopener">Privacy policy</a><button class="button quiet" id="acknowledgePrivacyChange" type="button" hidden>Acknowledge update</button><a class="button secondary" id="privacyExportLink" href="/api/v1/user/privacy/export" download>Download my data</a></div></div></article>
+        <article class="preference-card profile-card" data-settings-panel="purchase"><div><div class="card-top"><h3>Quick add setups</h3><button class="button secondary" id="newProfileButton" type="button">New setup</button></div><div class="mini-list" id="profileList"></div></div></article>
+        <article class="preference-card privacy-card" data-settings-panel="privacy"><div><h3>My data</h3><p id="privacySummary">Checking…</p><div class="mini-list privacy-list" id="privacyCategories"></div><p class="privacy-boundary" id="privacyBoundary">Private records excluded.</p><div class="inline-actions"><a class="button quiet" id="privacyPolicyLink" href="/privacy" target="_blank" rel="noopener">Privacy</a><button class="button quiet" id="acknowledgePrivacyChange" type="button" hidden>Acknowledge</button><a class="button secondary" id="privacyExportLink" href="/api/v1/user/privacy/export" download>Download data</a></div></div></article>
       </div>
     </section>
   </main>
 
   <div id="quickAddMenu" class="quick-menu" hidden></div>
 
+  <dialog id="profileDialog" class="compact-dialog profile-dialog" aria-labelledby="profileDialogTitle">
+    <form id="profileForm">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Quick add setup</p><h2 id="profileDialogTitle">New setup</h2></div>
+        <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
+      </div>
+      <input name="id" type="hidden">
+      <div class="profile-fields">
+        <label><span>Name</span><input name="name" type="text" maxlength="60" placeholder="Two under MSRP" required></label>
+        <label><span>Quantity</span><input name="targetQuantity" type="number" min="1" max="99" value="1" required></label>
+        <label><span>Price cap</span><select name="priceMode"><option value="store_price">Store price</option><option value="fixed_cap">Fixed maximum</option><option value="msrp">MSRP</option><option value="msrp_offset_percent">MSRP ± percent</option></select></label>
+        <label><span>Fixed maximum</span><input name="maxUnitPrice" inputmode="decimal" placeholder="$"></label>
+        <label><span>MSRP offset %</span><input name="msrpOffsetPercent" type="number" min="-90" max="90" step="1" placeholder="e.g. -15 or 10"></label>
+        <label><span>Action</span><select name="actionCeiling"><option value="notify">Notify only</option><option value="add_to_cart">Add to cart</option></select></label>
+        <label><span>Delivery</span><select name="fulfillment"><option value="shipping">Shipping</option><option value="pickup">Pickup</option></select></label>
+        <label><span>Wait (min)</span><input name="cooldownMinutes" type="number" min="0" max="43200" value="0"></label>
+        <label class="check"><input name="isDefault" type="checkbox"><span>Use as default</span></label>
+      </div>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit" id="saveProfileButton">Save setup</button></div>
+    </form>
+  </dialog>
+
   <dialog id="productDialog" class="product-detail-dialog">
     <form method="dialog">
       <div class="dialog-heading">
-        <div><p class="eyebrow">One product · every store</p><h2 id="productDialogTitle">Product</h2></div>
+        <div><p class="eyebrow">Store offers</p><h2 id="productDialogTitle">Product</h2></div>
         <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
       </div>
       <div id="productDialogBody"></div>
     </form>
   </dialog>
 
+  <dialog id="signalConnectDialog" class="compact-dialog" aria-labelledby="signalConnectDialogTitle">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">TrackaLacker</p><h2 id="signalConnectDialogTitle">Connect this source</h2></div>
+        <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
+      </div>
+      <ol class="dialog-steps"><li>Pin the Chrome companion.</li><li>Open its popup.</li><li>Choose Reconnect.</li></ol>
+      <p class="boundary-note" id="signalConnectStatus" role="status" aria-live="polite">Then re-check.</p>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Close</button><button class="button primary" id="recheckSignalConnection" type="button">Re-check</button></div>
+    </form>
+  </dialog>
+
   <dialog id="productLinkDialog" class="product-link-dialog">
     <form id="productLinkForm">
       <div class="dialog-heading">
-        <div><p class="eyebrow">Exact item intake</p><h2>Add a product link</h2></div>
+        <div><p class="eyebrow">Product</p><h2>Add a product link</h2></div>
         <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
       </div>
-      <p class="dialog-copy">Paste the product page itself—not a search, category, raffle hub, or sign-in page. Yoink will extract the store and exact item ID before anything is submitted.</p>
+
+      <p class="dialog-copy">Paste a store product page.</p>
       <div class="link-fields">
-        <label><span>Store product page</span><input name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://www.example.com/product/..." required></label>
-        <label><span>Product name shown on that page</span><input name="title" type="text" maxlength="300" autocomplete="off" placeholder="Exact product name" required></label>
+        <label><span>Product page</span><input name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://www.example.com/product/..." required></label>
+        <label><span>Product name</span><input name="title" type="text" maxlength="300" autocomplete="off" placeholder="Product name" required></label>
       </div>
-      <div class="link-check-actions"><button class="button secondary" id="checkProductLinkButton" type="button">Check exact link</button></div>
+      <div class="link-check-actions"><button class="button secondary" id="checkProductLinkButton" type="button">Check link</button></div>
       <section class="link-preview" id="productLinkPreview" aria-live="polite" hidden></section>
-      <label class="review-confirm" id="productLinkConfirm" hidden><input name="confirmed" type="checkbox"><span>I confirmed this is the exact product page I want independently reviewed. This does not report stock, create a purchase plan, or authorize a store action.</span></label>
+      <label class="review-confirm" id="productLinkConfirm" hidden><input name="confirmed" type="checkbox"><span>I reviewed this product page.</span></label>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="submitProductLinkButton" type="submit" disabled>Send for review</button></div>
     </form>
   </dialog>
@@ -209,7 +297,7 @@
   <dialog id="setupDialog" class="setup-dialog">
     <form id="setupForm">
       <div class="dialog-heading">
-        <div><p class="eyebrow">Review before anything is enabled</p><h2>Set up this purchase</h2></div>
+        <div><p class="eyebrow">Review</p><h2>Set up this purchase</h2></div>
         <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
       </div>
       <input name="listingId" type="hidden">
@@ -218,99 +306,127 @@
         <div class="setup-fields">
           <fieldset class="setup-section">
             <legend><span>1</span> Item and price</legend>
-            <p>These limits apply only to the exact store item shown above.</p>
+
             <div class="form-row three">
-              <label><span>Quantity wanted</span><input name="targetQuantity" type="number" min="1" max="99" value="1" required></label>
+              <label><span>Quantity wanted</span><input name="targetQuantity" type="number" min="1" max="99" value="1" aria-describedby="setupQuantityHelp" required><small id="setupQuantityHelp" aria-live="polite"></small></label>
               <label><span>Maximum price per item</span><span class="money-field"><b>$</b><input name="maxUnitPrice" inputmode="decimal" placeholder="0.00" required></span></label>
               <label><span>Maximum total for all items</span><span class="money-field"><b>$</b><input name="maxAllIn" inputmode="decimal" placeholder="0.00" required></span></label>
             </div>
-            <small>Quantity is your overall target. Every guarded cart attempt adds exactly one item. Yoink rejects a price above either limit; taxes, shipping, and discounts are never guessed.</small>
+
           </fieldset>
 
           <fieldset class="setup-section">
-            <legend><span>2</span> Store and delivery</legend>
-            <div class="store-commitment">
+            <legend><span>2</span> When it matches</legend>
+            <div class="setup-store-line">
               <div><small>Store</small><strong id="setupStore">—</strong></div>
-              <div><small>Seller</small><strong>The retailer itself</strong></div>
-              <div><small>Substitutions</small><strong>Exact item only</strong></div>
+              <div class="tags" id="setupStoreChoices"></div>
+              <button class="button quiet" id="changeSetupStore" type="button">Change</button>
             </div>
-            <label><span>How should it be available?</span><select name="fulfillment"><option value="shipping">Shipping (default)</option><option value="pickup">Pickup (explicit opt-in)</option><option value="manual">I will choose manually</option></select></label>
-          </fieldset>
-
-          <fieldset class="setup-section">
-            <legend><span>3</span> When this exact offer matches</legend>
-            <div class="action-choices">
-              <label class="action-choice"><input name="actionCeiling" type="radio" value="notify" checked><span><strong>Tell me when it matches</strong><small>No store button is clicked.</small></span></label>
-              <label class="action-choice" id="addChoice"><input name="actionCeiling" type="radio" value="add_to_cart"><span><strong>Add to cart</strong><small>Only a qualified first-party offer matching your exact Shipping or Pickup choice. Checkout stays manual.</small></span></label>
+            <div class="setup-match-controls">
+              <label><span>Delivery</span><select name="fulfillment" aria-describedby="setupFulfillmentHelp"><option value="shipping">Shipping</option><option value="pickup">Pickup</option></select><small class="select-help" id="setupFulfillmentHelp">Shipping is the default. Pickup is opt-in.</small></label>
+              <div><span class="field-label">Action</span><div class="action-choices" role="radiogroup" aria-label="Action when matched">
+                <label class="action-choice"><input name="actionCeiling" type="radio" value="notify" checked><span><strong>Notify only</strong></span></label>
+                <label class="action-choice" id="addChoice"><input name="actionCeiling" type="radio" value="add_to_cart"><span><strong>Add to cart</strong></span></label>
+              </div></div>
             </div>
-            <p class="boundary-note" id="setupExecutionNote"></p>
           </fieldset>
 
           <details class="setup-advanced">
-            <summary>Timing preferences</summary>
+            <summary>Advanced</summary>
             <div class="form-row">
-              <label><span>Wait between automatic attempts (minutes)</span><input name="cooldownMinutes" type="number" min="0" max="43200" step="1" value="15"></label>
+              <label><span>Minutes between attempts</span><input name="cooldownMinutes" type="number" min="0" max="43200" step="1" value="15"></label>
               <label><span>Stop watching after</span><input name="expiresAt" type="datetime-local"></label>
             </div>
           </details>
         </div>
 
         <aside class="plan-review" aria-label="Purchase plan summary">
-          <p class="eyebrow">Your plan</p>
-          <h3 id="setupReviewTitle">Exact product</h3>
+          <p class="eyebrow">Plan</p>
+          <h3 id="setupReviewTitle">Summary</h3>
           <div id="setupReviewRows"></div>
           <section class="setup-preflight checking" id="setupPreflight" aria-live="polite">
-            <div><span>Server check</span><strong>Waiting for complete limits</strong></div>
-            <p>Yoink will validate this exact plan without saving it.</p>
+            <div><span>Price check</span><strong>Waiting for complete limits</strong></div>
+
           </section>
-          <p class="review-boundary"><strong>Always manual:</strong> checkout, payment, and order submission.</p>
+
         </aside>
       </div>
-      <label class="review-confirm"><input name="reviewed" type="checkbox" required disabled><span>I reviewed the server-checked exact item, store, quantity, price limits, and allowed action above.</span></label>
+      <p class="setup-boundary-line" id="setupExecutionNote" aria-live="polite"></p>
+      <label class="review-confirm"><input name="reviewed" type="checkbox" required disabled><span>I reviewed these limits</span></label>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="createPlanButton" type="submit" disabled>Create purchase plan</button></div>
     </form>
   </dialog>
 
   <dialog id="planDialog">
     <form id="planForm">
-      <div class="dialog-heading"><div><p class="eyebrow">Purchase preferences</p><h2 id="planDialogTitle">Product</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="dialog-heading"><div><p class="eyebrow">Plan</p><h2 id="planDialogTitle">Product</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <input name="id" type="hidden">
       <div class="form-row">
-        <label><span>Plan state</span><select name="status"><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option></select></label>
-        <label><span>Quantity wanted</span><input name="targetQuantity" type="number" min="1" max="99" required></label>
+        <label><span>Plan state</span><select name="status"><option value="active">Active</option><option value="paused">Paused</option></select></label>
+        <label><span>Quantity wanted</span><input name="targetQuantity" type="number" min="1" max="99" aria-describedby="planQuantityHelp" required><small id="planQuantityHelp" aria-live="polite"></small></label>
       </div>
-      <p class="field-help">Quantity is the overall amount you want. A qualified guarded cart attempt always adds exactly one item.</p>
+
       <div class="form-row">
         <label><span>Maximum all-in total</span><input name="maxAllIn" inputmode="decimal" placeholder="Optional"></label>
-        <label><span>When it matches</span><select name="actionCeiling"><option value="notify">Notify me only</option><option value="add_to_cart">Add to cart</option></select></label>
+        <label><span>When it matches</span><select name="actionCeiling"><option value="notify">Notify only</option><option value="add_to_cart">Add to cart</option></select></label>
       </div>
-      <p class="boundary-note good" id="planExecutionNote">Fresh exact matches create notifications. No retailer control is clicked.</p>
-      <div class="form-row">
-        <label><span>Substitutions</span><select name="substitutionPolicy"><option value="exact_only">Exact item only</option><option value="verified_equivalent" disabled>Verified equivalents (not available yet)</option></select></label>
-        <label><span>Cooldown between attempts (minutes)</span><input name="cooldownMinutes" type="number" min="0" max="43200" step="1" value="0"></label>
-      </div>
-      <div class="plan-preparation-actions"><button class="button secondary" id="prepareGuardedPlanButton" type="button">Prepare guarded cart draft</button></div>
-      <div class="form-row">
-        <label><span>Plan expires</span><input name="expiresAt" type="datetime-local"></label>
-        <div class="field-note"><strong id="planModeTitle">This plan decides directly; advanced strategies are optional.</strong><span id="planModeCopy">Checkout stays manual. These limits can authorize only qualified add-only actions and never authorize checkout or order submission.</span></div>
-      </div>
+      <p class="boundary-note good" id="planExecutionNote">Fresh matches create notifications. No store control is clicked.</p>
+      <div class="plan-preparation-actions"><button class="button secondary" id="prepareGuardedPlanButton" type="button">Switch to cart mode</button></div>
       <div class="target-list" id="targetEditors"></div>
-      <div class="dialog-actions"><button class="button danger" id="deletePlanButton" type="button">Delete plan</button><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save preferences</button></div>
+      <small class="select-help target-help" id="planFulfillmentHelp">Shipping is the default. Pickup is opt-in.</small>
+      <details class="setup-advanced plan-advanced">
+        <summary>Advanced</summary>
+        <div class="form-row">
+          <label><span>Minutes between attempts</span><input name="cooldownMinutes" type="number" min="0" max="43200" step="1" value="0"></label>
+          <label><span>Plan expires</span><input name="expiresAt" type="datetime-local"></label>
+        </div>
+        <div class="field-note"><strong id="planModeTitle"></strong><span id="planModeCopy">Cart actions require current store checks.</span></div>
+      </details>
+      <div class="dialog-actions"><button class="button danger" id="deletePlanButton" type="button">Delete plan</button><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save plan</button></div>
     </form>
   </dialog>
 
-  <dialog id="legacyPlanTransitionDialog" class="compact-dialog">
-    <form id="legacyPlanTransitionForm">
-      <div class="dialog-heading"><div><p class="eyebrow">One-time plan update</p><h2>Make imported plans monitoring-ready</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
-      <p class="dialog-copy" id="legacyPlanTransitionSummary"></p>
-      <div class="mini-list" id="legacyPlanTransitionSamples"></div>
-      <p class="boundary-note good"><strong>No store action is authorized.</strong> Every selected plan becomes notification-only. Price caps, guarded cart actions, checkout, payment, and ordering are not inferred or enabled.</p>
-      <label class="review-confirm"><input name="reviewed" type="checkbox" required><span>I understand this converts the current preview to user-controlled notification-only plans.</span></label>
-      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="transitionLegacyPlansButton" type="submit" disabled>Make plans monitoring-ready</button></div>
+  <dialog id="cartOutcomeDialog" class="compact-dialog cart-outcome-dialog" aria-labelledby="cartOutcomeDialogTitle">
+    <form id="cartOutcomeForm">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Checkout result</p><h2 id="cartOutcomeDialogTitle">Record purchase</h2></div>
+        <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
+      </div>
+      <p class="dialog-copy" id="cartOutcomeSummary"></p>
+      <input name="actionId" type="hidden">
+      <label class="cart-outcome-amount"><span>Amount charged for this item</span><span class="money-field"><b>$</b><input name="actualTotal" inputmode="decimal" autocomplete="off" placeholder="0.00" required aria-describedby="cartOutcomeHelp cartOutcomeLimit"></span></label>
+      <small id="cartOutcomeHelp">Include this item’s tax and shipping.</small>
+      <p class="boundary-note good" id="cartOutcomeLimit"></p>
+      <p class="outcome-status" id="cartOutcomeStatus" role="status" aria-live="polite" hidden></p>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Record purchase</button></div>
     </form>
   </dialog>
 
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <dialog id="planBulkApplyDialog" class="compact-dialog">
+    <form id="planBulkApplyForm">
+      <div class="dialog-heading"><div><p class="eyebrow">Apply Quick add setup</p><h2 id="planBulkApplyTitle">Review selected plans</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <p class="dialog-copy" id="planBulkApplySummary"></p>
+      <div class="mini-list" id="planBulkApplySamples"></div>
+      <p class="boundary-note" id="planBulkApplyBoundary"></p>
+      <label class="review-confirm"><input name="reviewed" type="checkbox" required><span id="planBulkApplyReviewCopy">I reviewed this Quick add setup and the selected plans.</span></label>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="confirmPlanBulkApply" type="submit" disabled>Apply setup</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmDialogTitle" aria-describedby="confirmDialogSummary" aria-modal="true">
+    <form id="confirmDialogForm" novalidate>
+      <div class="confirm-dialog-heading"><p class="eyebrow">Please review</p><h2 id="confirmDialogTitle">Confirm action</h2></div>
+      <p class="confirm-dialog-summary" id="confirmDialogSummary"></p>
+      <ul class="confirm-dialog-scope" id="confirmDialogScope" hidden></ul>
+      <label class="confirm-dialog-note" id="confirmDialogNoteField" hidden><span id="confirmDialogNoteLabel">Note</span><textarea id="confirmDialogNote" maxlength="800" aria-describedby="confirmDialogNoteHelp confirmDialogError"></textarea><small id="confirmDialogNoteHelp"></small></label>
+      <p class="confirm-dialog-error" id="confirmDialogError" role="alert" hidden></p>
+      <div class="dialog-actions"><button class="button quiet" id="confirmDialogCancel" type="button">Cancel</button><button class="button primary" id="confirmDialogSubmit" type="submit">Confirm</button></div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" aria-label="Notifications" aria-live="polite"></div>
+  <script src="/dialogs.js"></script>
+  <script src="/status.js"></script>
   <script type="module" src="/user.js"></script>
 </body>
 </html>

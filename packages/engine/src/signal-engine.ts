@@ -104,6 +104,11 @@ export class SignalEngine {
       }
 
       this.signals.recordOfferObservation(signal, listing, now);
+      // A user may have linked a cart profile before the first trustworthy
+      // price arrived. Reconcile that exact plan after the durable offer write
+      // and before evaluation so this same fresh signal can use the reviewed
+      // authority instead of getting stranded as notification-only.
+      this.control.reconcilePurchaseProfileForListing(listing.id, now);
       const settings = this.control.settings();
       const semanticKey = this.signals.semanticKey(signal, listing);
       const cutoff = new Date(new Date(signal.observedAt).getTime() - settings.dedupeWindowSeconds * 1_000).toISOString();

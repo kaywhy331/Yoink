@@ -1,6 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { cleanText } from "../../domain/src/normalize.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
+import {
+  deriveWalmartPurchaseHandoff,
+  type WalmartHowlAttribution,
+  type WalmartPurchaseHandoff
+} from "../../domain/src/walmart-purchase-handoff.js";
 import { type YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 
@@ -27,11 +32,16 @@ export interface NotificationLease {
   action: string;
   expiresAt: string;
   leaseExpiresAt: string;
+  purchaseHandoff: WalmartPurchaseHandoff | null;
 }
 
 export type NotificationLeaseResult =
-  | { notification: NotificationLease; reason: "leased" }
-  | { notification: null; reason: "no_notifications" | "device_unavailable" };
+  | { notification: NotificationLease; reason: "leased"; closedDeliveryIds: string[] }
+  | {
+      notification: null;
+      reason: "no_notifications" | "device_unavailable";
+      closedDeliveryIds: string[];
+    };
 
 interface DeliveryCandidate {
   id: string;
@@ -41,9 +51,25 @@ interface DeliveryCandidate {
   canonical_url: string;
   attribution_url: string;
   action: string;
+  state: string;
   unit_price_cents: number | null;
   currency: string;
   expires_at: string;
+  max_unit_price_cents: number | null;
+  seller_policy: string;
+  fulfillment: string;
+  attribution_provider: string;
+  attribution_metadata_json: string;
+  snapshot_availability: string | null;
+  snapshot_unit_price_cents: number | null;
+  snapshot_currency: string | null;
+  snapshot_seller_name: string | null;
+  snapshot_seller_type: string | null;
+  snapshot_fulfillment: string | null;
+  snapshot_observed_at: string | null;
+  snapshot_expires_at: string | null;
+  source_trust_level: string | null;
+  qualification_reason: string | null;
 }
 
 function capabilityHash(token: string): string {
@@ -69,6 +95,54 @@ function notificationMessage(candidate: DeliveryCandidate): string {
     ? new Intl.NumberFormat("en-US", { style: "currency", currency: candidate.currency }).format(Number(candidate.unit_price_cents) / 100)
     : "price unavailable";
   return `${retailer} · ${price} · ${candidate.action.replaceAll("_", " ")}`.slice(0, 240);
+}
+
+function parsedHowlAttribution(candidate: DeliveryCandidate): WalmartHowlAttribution | null {
+  if (candidate.attribution_provider !== "howl") return null;
+  try {
+    const metadata = JSON.parse(candidate.attribution_metadata_json) as Record<string, unknown>;
+    return {
+      publisherSlug: metadata.publisherSlug,
+      articleName: candidate.title,
+      articleUrl: metadata.articleUrl
+    };
+  } catch {
+    return null;
+  }
+}
+
+function earliestExpiry(candidate: DeliveryCandidate): string {
+  const expiries = [candidate.expires_at, candidate.snapshot_expires_at]
+    .map((value) => new Date(String(value ?? "")).getTime())
+    .filter(Number.isFinite);
+  return expiries.length ? new Date(Math.min(...expiries)).toISOString() : "";
+}
+
+function walmartPurchaseHandoff(candidate: DeliveryCandidate, now: number): WalmartPurchaseHandoff | null {
+  if (!candidate.snapshot_observed_at || !candidate.snapshot_expires_at) return null;
+  return deriveWalmartPurchaseHandoff({
+    retailerId: candidate.retailer_id,
+    retailerSku: candidate.retailer_sku,
+    canonicalUrl: candidate.canonical_url,
+    availability: candidate.snapshot_availability,
+    observedAt: candidate.snapshot_observed_at,
+    unitPriceCents: candidate.snapshot_unit_price_cents,
+    currency: candidate.snapshot_currency,
+    sellerName: candidate.snapshot_seller_name,
+    sellerType: candidate.snapshot_seller_type,
+    fulfillment: candidate.snapshot_fulfillment,
+    sourceTrustLevel: candidate.source_trust_level,
+    missionDecision: ["purchase_intent_qualified", "strategy_qualified"].includes(candidate.qualification_reason ?? "")
+      ? "qualified"
+      : "blocked",
+    effectiveUnitCapCents: candidate.max_unit_price_cents,
+    actionJobAction: candidate.action,
+    actionJobState: candidate.state,
+    actionJobExpiresAt: earliestExpiry(candidate),
+    actionJobMaxUnitPriceCents: candidate.max_unit_price_cents,
+    actionJobSellerPolicy: candidate.seller_policy,
+    actionJobFulfillment: candidate.fulfillment
+  }, now, parsedHowlAttribution(candidate));
 }
 
 export class NotificationRepository {
@@ -103,36 +177,63 @@ export class NotificationRepository {
         normalizedDeviceId,
         currentRequestScope().userId
       );
-      if (!device) return { notification: null, reason: "device_unavailable" };
+      if (!device) return { notification: null, reason: "device_unavailable", closedDeliveryIds: [] };
       let capabilities: Record<string, unknown> = {};
       try { capabilities = JSON.parse(device.capabilities_json) as Record<string, unknown>; } catch { capabilities = {}; }
-      if (capabilities.notifications !== true) return { notification: null, reason: "device_unavailable" };
+      if (capabilities.notifications !== true) {
+        return { notification: null, reason: "device_unavailable", closedDeliveryIds: [] };
+      }
 
       const timestamp = nowIso(now);
       this.recoverExpired(now);
+      const closedDeliveryIds = this.db.all<{ id: string }>(
+        `SELECT id FROM notification_deliveries
+         WHERE tenant_id = ? AND user_id = ? AND assigned_device_id = ?
+           AND state IN ('clicked', 'dismissed') AND interaction_at <> ''
+         ORDER BY interaction_at DESC, id DESC LIMIT 100`,
+        currentRequestScope().tenantId,
+        currentRequestScope().userId,
+        normalizedDeviceId
+      ).map((row) => row.id);
 
       const candidate = this.db.get<DeliveryCandidate>(
         `SELECT nd.id, v.title, l.retailer_id, l.retailer_sku,
-                aj.canonical_url, aj.attribution_url, aj.action,
-                si.unit_price_cents, aj.currency, aj.expires_at
+                aj.canonical_url, aj.attribution_url, aj.action, aj.state,
+                si.unit_price_cents, aj.currency, aj.expires_at,
+                aj.max_unit_price_cents, aj.seller_policy, aj.fulfillment,
+                aj.attribution_provider, aj.attribution_metadata_json,
+                os.availability AS snapshot_availability,
+                os.unit_price_cents AS snapshot_unit_price_cents,
+                os.currency AS snapshot_currency,
+                os.seller_name AS snapshot_seller_name,
+                os.seller_type AS snapshot_seller_type,
+                os.fulfillment AS snapshot_fulfillment,
+                os.observed_at AS snapshot_observed_at,
+                os.expires_at AS snapshot_expires_at,
+                sc.trust_level AS source_trust_level,
+                (SELECT ae.reason_code FROM action_events ae
+                 WHERE ae.job_id = aj.id ORDER BY ae.created_at, ae.id LIMIT 1) AS qualification_reason
          FROM notification_deliveries nd
          JOIN action_jobs aj ON aj.id = nd.job_id
          JOIN listings l ON l.id = aj.listing_id
          JOIN variants v ON v.id = l.variant_id
          LEFT JOIN signal_incidents si ON si.id = aj.incident_id
+         LEFT JOIN offer_snapshots os ON os.id = aj.offer_snapshot_id
+         LEFT JOIN offer_observations oo ON oo.id = os.source_observation_id
+         LEFT JOIN source_connections sc ON sc.id = oo.source_connection_id
          WHERE nd.user_id = ? AND nd.state = 'pending' AND aj.expires_at > ?
          ORDER BY nd.created_at, nd.id LIMIT 1`,
         currentRequestScope().userId,
         timestamp
       );
-      if (!candidate) return { notification: null, reason: "no_notifications" };
+      if (!candidate) return { notification: null, reason: "no_notifications", closedDeliveryIds };
       if (!SAFE_RETAILERS.has(candidate.retailer_id)) {
         this.db.run(
           "UPDATE notification_deliveries SET state = 'failed', failure_code = 'unsupported_retailer', updated_at = ? WHERE id = ?",
           timestamp,
           candidate.id
         );
-        return { notification: null, reason: "no_notifications" };
+        return { notification: null, reason: "no_notifications", closedDeliveryIds };
       }
 
       const capabilityToken = randomBytes(32).toString("base64url");
@@ -147,9 +248,12 @@ export class NotificationRepository {
         timestamp,
         candidate.id
       );
-      if (Number(updated.changes) !== 1) return { notification: null, reason: "no_notifications" };
+      if (Number(updated.changes) !== 1) {
+        return { notification: null, reason: "no_notifications", closedDeliveryIds };
+      }
       return {
         reason: "leased",
+        closedDeliveryIds,
         notification: {
           id: candidate.id,
           capabilityToken,
@@ -163,7 +267,8 @@ export class NotificationRepository {
           currency: candidate.currency,
           action: candidate.action,
           expiresAt: candidate.expires_at,
-          leaseExpiresAt
+          leaseExpiresAt,
+          purchaseHandoff: walmartPurchaseHandoff(candidate, now)
         }
       };
     });
@@ -275,6 +380,27 @@ export class NotificationRepository {
     return { id: deliveryId, state: Number(result.changes) === 1 ? interaction : "unchanged" };
   }
 
+  acknowledgeClosedDeliveries(deviceId: string, deliveryIds: string[], now = Date.now()): Record<string, unknown> {
+    const normalizedDeviceId = cleanText(deviceId, 120);
+    const ids = [...new Set(Array.isArray(deliveryIds) ? deliveryIds : [])]
+      .map((value) => cleanText(value, 160))
+      .filter((value) => DELIVERY_ID_PATTERN.test(value))
+      .slice(0, 100);
+    if (!normalizedDeviceId || ids.length === 0) return { acknowledged: 0 };
+    const slots = ids.map(() => "?").join(", ");
+    const result = this.db.run(
+      `UPDATE notification_deliveries SET assigned_device_id = NULL, updated_at = ?
+       WHERE tenant_id = ? AND user_id = ? AND assigned_device_id = ?
+         AND state IN ('clicked', 'dismissed') AND id IN (${slots})`,
+      nowIso(now),
+      currentRequestScope().tenantId,
+      currentRequestScope().userId,
+      normalizedDeviceId,
+      ...ids
+    );
+    return { acknowledged: Number(result.changes) };
+  }
+
   counts(): Record<string, number> {
     const row = this.db.get<Record<string, number>>(
       `SELECT COUNT(*) AS totalNotifications,
@@ -287,7 +413,11 @@ export class NotificationRepository {
     return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, Number(value ?? 0)]));
   }
 
-  listRecent(limit = 100): Array<Record<string, unknown>> {
+  listRecent(limit = 100, offset = 0, search = ""): Array<Record<string, unknown>> {
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const query = cleanText(search, 200);
+    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
     return this.db.all(
       `SELECT nd.id, nd.state, nd.attempts, nd.failure_code AS failureCode,
               nd.delivered_at AS deliveredAt, nd.interaction_at AS interactionAt,
@@ -297,9 +427,51 @@ export class NotificationRepository {
        JOIN action_jobs aj ON aj.id = nd.job_id
        JOIN listings l ON l.id = aj.listing_id
        JOIN variants v ON v.id = l.variant_id
-       WHERE nd.user_id = ? ORDER BY nd.created_at DESC LIMIT ?`,
+       WHERE nd.user_id = ? AND (? = ''
+         OR nd.id LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR nd.state LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR COALESCE(nd.failure_code, '') LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR l.retailer_id LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)
+       ORDER BY nd.created_at DESC, nd.id DESC LIMIT ? OFFSET ?`,
       currentRequestScope().userId,
-      Math.max(1, Math.min(1_000, Math.floor(limit)))
+      query,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      safeLimit,
+      safeOffset
     );
+  }
+
+  recentCount(search = ""): number {
+    const query = cleanText(search, 200);
+    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+    return Number(this.db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM notification_deliveries nd
+       JOIN action_jobs aj ON aj.id = nd.job_id
+       JOIN listings l ON l.id = aj.listing_id
+       JOIN variants v ON v.id = l.variant_id
+       WHERE nd.user_id = ? AND (? = ''
+         OR nd.id LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR nd.state LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR COALESCE(nd.failure_code, '') LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR l.retailer_id LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)`,
+      currentRequestScope().userId,
+      query,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern
+    )?.count ?? 0);
   }
 }

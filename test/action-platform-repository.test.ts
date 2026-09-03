@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   TARGET_ADD_ADAPTER_VERSION
 } from "../packages/contracts/src/index.js";
-import { YoinkDatabase } from "../packages/database/src/database.js";
+import { LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { DropWindowRepository } from "../packages/database/src/drop-window-repository.js";
 import { OrderConfirmationRepository } from "../packages/database/src/order-confirmation-repository.js";
@@ -248,6 +248,68 @@ test("auto-watch backfills armed plans and drop-window supersession closes only 
     assert.equal(disabled.mode, "manual");
     assert.equal(disabled.previousMode, "auto_armed");
     assert.equal(disabled.newlyEnrolledCount, 0);
+    db.assertIntegrity();
+  } finally {
+    db.close();
+  }
+});
+
+test("scheduled drop windows expose details, recalculate on edit, and cancel watches without touching jobs", () => {
+  const db = new YoinkDatabase();
+  try {
+    seedListing(db);
+    const device = pair(db);
+    const jobId = seedConfirmedActionJob(db, device.id);
+    const repository = new DropWindowRepository(db);
+    const created = repository.create({
+      contractVersion: 1,
+      kind: "drop_window",
+      retailerId: "target",
+      title: "Target midnight cards",
+      startsAt: new Date(NOW + 30 * 60_000).toISOString(),
+      closesAt: new Date(NOW + 90 * 60_000).toISOString(),
+      spreadSeconds: 0,
+      confidenceBps: 6000,
+      timezone: "America/Los_Angeles",
+      products: [{ listingId: "listing_action_platform" }]
+    }, NOW);
+    const watch = repository.enroll(created.items[0]!.id, NOW + 1_000);
+
+    const updated = repository.update(created.id, {
+      title: "Target cards confirmed",
+      startsAt: new Date(NOW + 45 * 60_000).toISOString(),
+      closesAt: new Date(NOW + 120 * 60_000).toISOString(),
+      spreadSeconds: 300,
+      confidenceBps: 10_000,
+      timezone: "America/New_York",
+      earlyAccessNote: "Circle members may see stock first."
+    }, NOW + 2_000);
+    assert.equal(updated.title, "Target cards confirmed");
+    assert.equal(updated.confidenceBps, 10_000);
+    assert.equal(updated.timezone, "America/New_York");
+    assert.equal(updated.optInCount, 1);
+    assert.equal(updated.items[0]?.optInCount, 1);
+    assert.equal(updated.items[0]?.watchStateCounts.queued, 1);
+    assert.deepEqual(updated.optedInUsers, [{ userId: LOCAL_USER_ID, displayName: "Local user" }]);
+    assert.equal(repository.list(NOW + 2_001).find((window) => window.id === created.id)?.optInCount, 1,
+      "the list projection reports the same active opt-in count as the detail");
+    assert.equal(updated.items[0]?.earlyAccess.note, "Circle members may see stock first.");
+    assert.equal(updated.items[0]?.expectedAt, new Date(NOW + 45 * 60_000).toISOString());
+    assert.equal(repository.listWatchQueue(NOW + 2_001)[0]?.observationClosesAt, new Date(NOW + 120 * 60_000).toISOString());
+
+    const cancelled = repository.cancelWindow(created.id, "incorrect_schedule", NOW + 3_000);
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.optInCount, 0, "cancelled watches are not opt-ins");
+    assert.equal(cancelled.items[0]?.optInCount, 0);
+    assert.equal(cancelled.items[0]?.watchStateCounts.cancelled, 1);
+    assert.deepEqual(cancelled.optedInUsers, []);
+    assert.equal(repository.list(NOW + 3_001).find((window) => window.id === created.id)?.optInCount, 0);
+    assert.equal(repository.listWatchQueue(NOW + 3_001).find((item) => item.id === watch.id)?.state, "cancelled");
+    assert.equal(db.get<{ state: string }>("SELECT state FROM action_jobs WHERE id = ?", jobId)?.state, "confirmed");
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'drop_window_cancelled' AND reason_code = 'incorrect_schedule'"
+    )?.count, 1);
+    assert.throws(() => repository.update(created.id, { title: "Too late" }, NOW + 4_000), /scheduled/i);
     db.assertIntegrity();
   } finally {
     db.close();

@@ -62,6 +62,9 @@ function name(value: unknown): string {
 
 function externalReferenceHash(value: unknown, source: string): string {
   const normalized = cleanText(value, 180);
+  if (source === "discord" && !/^\d{17,20}$/.test(normalized)) {
+    throw new Error("Enter the 17–20 digit Discord channel ID.");
+  }
   if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{1,179}$/.test(normalized)) {
     throw new Error("A bounded provider channel reference is required.");
   }

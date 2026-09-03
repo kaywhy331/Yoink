@@ -218,6 +218,11 @@ test("required attribution fails closed to notification instead of browser mutat
     assert.equal(job?.attribution_url, "https://www.target.com/p/-/A-95280894");
     assert.equal(job?.attribution_provider, "canonical");
     assert.equal(db.get<{ outcome: string }>("SELECT outcome FROM attribution_receipts WHERE job_id = ?", result.actionJobId)?.outcome, "required_route_unavailable");
+    const attribution = new AttributionRepository(db);
+    assert.equal(attribution.listReceipts(10, 0, "required attribution").length, 1);
+    assert.equal(attribution.listReceipts(10, 1).length, 0);
+    assert.equal(attribution.receiptCount("required_route_unavailable"), 1);
+    assert.equal(attribution.receiptCount("howl_enabled"), 0);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM notification_deliveries")?.count, 1);
   } finally {
     db.close();

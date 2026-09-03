@@ -77,6 +77,38 @@ test("hosted scope signatures bind method, path, tenant, user, actor, timestamp,
   }
 });
 
+test("disabled users cannot establish a fresh signed hosted session", () => {
+  const db = new YoinkDatabase();
+  try {
+    db.run("UPDATE users SET status = 'disabled' WHERE id = ?", LOCAL_USER_ID);
+    const resolve = createHostedRequestScopeResolver(db, { proxySecret: SECRET });
+    const issuedAt = Math.floor(Date.now() / 1_000);
+    const userScope: RequestScope = {
+      tenantId: LOCAL_TENANT_ID,
+      userId: LOCAL_USER_ID,
+      actorKind: "user",
+      actorId: LOCAL_USER_ID
+    };
+    const headers = signHostedRequestScope(SECRET, {
+      method: "GET",
+      path: "/api/v1/user/overview",
+      scope: userScope,
+      issuedAt,
+      nonce: "disabled_user_nonce_abcdefghijk"
+    });
+    assert.throws(
+      () => resolve(request("GET", "/api/v1/user/overview", headers)),
+      /principal is unavailable/
+    );
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM hosted_request_nonces WHERE user_id = ?",
+      LOCAL_USER_ID
+    )?.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
 test("hosted service capabilities are singular, server-derived, and deny unconfigured actors", () => {
   const db = new YoinkDatabase();
   try {

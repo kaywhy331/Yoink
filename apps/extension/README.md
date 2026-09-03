@@ -4,12 +4,12 @@ The checked-in Manifest V3 extension uses Yoink's local runtime profile and
 pairs with the loopback control plane. The same reviewed source can be packaged
 under an explicit production profile. Both profiles report an authenticated
 readiness heartbeat, receive TrackaLacker Web Push,
-support explicit inspection for thirteen exact retailers, run separate Target,
+support explicit inspection for thirteen supported stores, run separate Target,
 Walmart, Amazon, and Best Buy no-click qualification rehearsals, and execute
 only those four independently activated guarded add-only contracts. Disney
 Store, Ravensburger, Riot Games Merch, Books-A-Million, Fanatics, Kohl's,
-Macy's, Premium Bandai, and Pokémon Center remain catalog/read-only
-integrations. Amazon inspection
+Macy's, Premium Bandai, and Pokémon Center remain catalog-only
+sources. Amazon inspection
 also validates one exact ASIN-bound offer token entirely in page memory. It has
 no persistent content scripts, cookie API access,
 notification interception, checkout, or order capability. Page access is
@@ -33,7 +33,7 @@ be shared as an out-of-stock observation.
 
 After an exact product identity and optional host permission are confirmed,
 observer startup/runtime failures are reported immediately to the local repair
-queue using only a stable reason code, observer version, exact retailer/SKU,
+queue using only a stable reason code, observer version, exact store/SKU,
 timestamp, and zero-valued structural counts. Raw Chrome errors, query-bearing
 URLs, DOM, and page text are not sent. Identity failures and permission denials
 remain entirely local.
@@ -85,13 +85,13 @@ To load it for development:
 1. Start Yoink with `npm run dev`.
 2. Open `chrome://extensions` and enable **Developer mode**.
 3. Choose **Load unpacked** and select this `apps/extension` directory.
-4. Open Yoink → **Preferences** and create a one-time pairing code (or use
-   **Connections** in the `/admin` control center).
+4. Open Yoink › **Settings › Chrome** and create a one-time pairing code (or
+   issue one from **Settings › Users** in `/admin`).
 5. Open the Yoink toolbar popup, enter the code, and choose **Pair browser**.
 
 For a Target, Walmart, Amazon, or Best Buy qualification check:
 
-1. Open an exact product page for the retailer.
+1. Open an exact product page for the store.
 2. Open the Yoink popup.
 3. Choose **Inspect product** and approve that store's optional permission if
    Chrome requests it.
@@ -100,18 +100,18 @@ For a Target, Walmart, Amazon, or Best Buy qualification check:
 
 To inspect Walmart drawings, open
 `https://www.walmart.com/shop/collectibles/draw`, choose **Inspect
-drawings**, and review the exact current cards in Yoink's Walmart drawings view
-or `/admin` → Connections. This is observation only and performs no rehearsal
+drawings**, and review the exact current cards in Yoink's **Calls › Drawings**
+view. This is observation only and performs no rehearsal
 or entry.
 
 The rehearsal runs the production offer verifier to its final click boundary,
 then discards the authorization without clicking. After explicit activation in
 Yoink, the background runner checks only the local job queue. A cycle performs
-one health, live/pause, optional store-access, and device preflight, then
+one health, live/pause, optional store-access, and Chrome companion preflight, then
 processes at most four freshly server-validated leases, one at a time. It
 continues after a clean pre-click rejection but stops on any mutation-uncertain
 or manual-review result. A Yoink-created tab may be reused only for the same
-retailer during that cycle; different stores retain separate cart tabs. For
+store during that cycle; different stores retain separate cart tabs. For
 each qualified Target, Walmart, Amazon, or Best
 Buy job the runner binds up to 25 existing
 SKU-and-quantity lines, revalidates exact SKU, first-party seller, the saved
@@ -129,24 +129,74 @@ explicit in-store-only product becomes manual/local evidence with unknown
 global availability. The paired add runner is v8, and upgrading retires every
 earlier Best Buy qualification.
 
-After Chrome delivers a valid TrackaLacker push to the durable inbox, the
-companion checks immediately, then uses bounded 250/750/1500/2500 ms follow-up
-probes until the worker produces a lease. Visible notification and status
-updates do not delay that handoff; the recurring 30-second alarm remains a
-fallback. A clean rejection before mutation may yield to another queued job,
-but an uncertain result stops the bounded drain and no click is retried.
+For a valid TrackaLacker push, Chrome starts durable call delivery and the
+bounded 25-second action-job watch concurrently. The lease is still entirely
+server-authoritative; opening the watch early only removes a serial network
+round trip. The server wakes it as soon as durable evaluation yields an action,
+before the rest of the in-process worker cycle finishes. Fresh ingress also
+arms a 2.5-second call-only shared-database window at 250 ms for a separately
+supervised worker, then returns to the one-second idle fallback. The recurring
+30-second alarm remains a recovery path. After the server accepts ingress,
+Chrome opens a parallel bounded notification watch on the same availability
+pulse; notify-only results no longer wait for that alarm. Ready deliveries
+drain through the full 20-item ingress-batch bound, while overlapping alarm and
+call requests coalesce. Retryable or rejected receipts do not start the
+watch. An in-stock drop-window observation uses the same shared job and
+notification wake after its call is queued. Visible notification and status
+updates do not delay the guarded-job handoff. A clean rejection before mutation may yield
+to another queued job, but an uncertain result stops the bounded drain and no
+click is retried. The server selects only currently qualified, session-eligible
+lanes before queue ordering, so an older unavailable store cannot delay a later
+eligible store. Qualification activation and retirement both wake the bounded
+job watch immediately. Each lease request also advertises only the optional
+store origins Chrome currently grants. The server treats this solely as a
+narrowing hint beneath its authoritative Chrome companion and adapter checks, preserving
+jobs for stores whose optional page access is not currently available.
+
+Warm readiness rotates across two guarded stores per health cycle and keeps
+only a privacy-bounded cart inventory for at most five minutes. If the
+25-second priority job watch overlaps the health alarm, the warm request is
+coalesced and runs immediately after job work settles instead of being dropped.
+It never runs beside an active Add and never invokes a store mutation
+operation. A fresh `signed_out` or `challenged` result from this exact Chrome
+companion temporarily defers only that store's queued jobs; it does not consume them or block other
+stores. Reporting a recovered session immediately wakes the bounded job watch.
+When an exact store page finishes loading, Chrome coalesces one read-only
+session recheck: a still-rendered challenge remains blocked, while a completed
+sign-in or security check clears the stale blocker and resumes the preserved
+job watch immediately. Unknown, stale, and prior-adapter session evidence
+remains non-blocking.
 
 Exact cart confirmation stores only a bounded local handoff, updates the
 extension badge, and raises a Chrome **Cart ready** notification. The popup
 shows the same state. Opening it revalidates and focuses the existing exact
-retailer cart tab, acknowledges that one handoff, and never creates a checkout
+store cart tab, acknowledges that one handoff, and never creates a checkout
 or order action. A fresh, exact post-add cart inventory may become the next
 same-lane job's in-memory baseline; ordinary post-click delta proof remains
 mandatory. Bounded lease-to-cart and click-to-cart durations accompany the
 sanitized evidence.
 
-The popup overflow can also offer **Share evidence** after the user enables
-that retailer in Yoink's Community view and opens an eligible exact page. A
+A separately qualified Walmart notify-only call can include a manual
+**Buy at Walmart** notification handoff. Clicking it opens the exact,
+expiry-bound review-order route, optionally through Howl with Yoink's `u1`
+tracking ID. An invalid affiliate wrapper falls back to the raw Walmart route;
+stale or invalid offer evidence opens the exact product page instead. Merely
+receiving the notification never navigates to Walmart or changes the cart.
+Until that call is opened or dismissed, the popup offers the same
+one-use action. The review-order URL remains private to the service worker: the
+popup receives only sanitized item identity and expiry, and the worker
+revalidates and consumes the route before opening it. If the same handoff is
+opened first from Home or Calls, the bounded notification watch removes its
+local popup route and OS notification without navigating.
+
+If no warm baseline exists, the exact product and an inactive temporary cart
+tab load concurrently. The temporary tab performs only the allowlisted
+read-only baseline inspection and closes before Add; the visible product tab
+still waits for durable authorization, and the final exact cart-delta proof is
+unchanged on every guarded store.
+
+The popup overflow can also offer **Share evidence** after that store is
+enabled for evidence sharing in Yoink and the user opens an eligible exact page. A
 visible confirmation is still required, and sharing is never automatic. The
 extension sends only IDs for a sanitized observation/diagnostic the server
 already accepted; the server reconstructs the exact SKU, variant, seller,
@@ -169,20 +219,20 @@ authoritative.
 For TrackaLacker:
 
 1. Sign in to TrackaLacker in the same Chrome profile.
-2. Open the Yoink popup and choose **Reconnect** when signals need attention.
+2. Open the Yoink popup and choose **Reconnect** when calls need attention.
 3. Optionally choose **Sync products** from the overflow menu for one bounded
    catalog pass.
 
 Enrollment uses the page's legitimate cookies and runtime CSRF token only in a
 MAIN-world same-origin request. The real subscription endpoint, p256dh, and auth
-key are never hardcoded, logged, or stored. The durable signal queue contains
+key are never hardcoded, logged, or stored. The durable call queue contains
 only sanitized notification text and exact public product/listing identities.
 The library pass includes unavailable and unsupported-store records and never
 becomes a recurring stock watcher.
 
 Chrome 121+ uses a silent companion subscription so the ordinary TrackaLacker
 browser alert remains visible. If the runtime requires a visible fallback, the
-popup reports that an additional alert can appear; signal and action dedupe are
+popup reports that an additional alert can appear; call and action dedupe are
 still enforced by Yoink.
 
 For a local source update, build `npm run package:extension` from the repository
@@ -194,12 +244,12 @@ storage preserves the pairing and bridge state.
 
 The popup is a single context-aware action surface. Its header summarizes
 health; clicking it reveals browser, TrackaLacker, action-mode, store-access,
-and last-check details. Exact retailer pages expose one **Inspect product**
+and last-check details. Exact store pages expose one **Inspect product**
 action, Walmart Draw exposes **Inspect drawings**, and healthy idle pages expose
 no invented primary action. One secondary activity row carries the highest
 priority background state. Secondary controls live in overflow, while the
 extension action context menu is limited to Open Yoink, the exact current-page
-action when eligible, Reconnect when needed, Sync products, and Settings. Every
+action when eligible, Reconnect when needed, Sync products, and Extension settings. Every
 context-menu selection revalidates the current tab and health before work
 starts; its visible label is never treated as authorization.
 
@@ -220,5 +270,5 @@ assign that ID.
 
 Periodic requests remain restricted to the single package-owned control-plane
 origin: loopback in the local profile or exact HTTPS in production. They cover
-health, heartbeat, notification, durable signal-drain, and qualified-job checks
-and do not poll TrackaLacker or any retailer.
+health, heartbeat, notification, durable call-drain, and qualified-job checks
+and do not poll TrackaLacker or any store.

@@ -97,7 +97,8 @@ export class DurableSignalIngressService {
 
   constructor(
     private readonly db: YoinkDatabase,
-    private readonly wakeWorker: (() => void | Promise<void>) | undefined = undefined
+    private readonly wakeWorker: (() => void | Promise<void>) | undefined = undefined,
+    private readonly onSignalQueued: (() => void | Promise<void>) | undefined = undefined
   ) {
     this.delivery = new HostedDeliveryRepository(db);
     this.tasks = new BackgroundTaskRepository(db);
@@ -281,6 +282,9 @@ export class DurableSignalIngressService {
       if (channelId) this.providers.recordIngress(channelId, true, "", String(payload.observedAt), now);
       if (receipt.processingState === "queued" && this.wakeWorker) {
         void Promise.resolve().then(() => this.wakeWorker?.()).catch(() => undefined);
+      }
+      if (receipt.processingState === "queued" && this.onSignalQueued) {
+        void Promise.resolve().then(() => this.onSignalQueued?.()).catch(() => undefined);
       }
       return receipt;
     });

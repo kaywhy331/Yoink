@@ -48,6 +48,7 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
   const browser = dom.window;
   const requests: Array<{ path: string; method: string; body: Record<string, unknown> }> = [];
   let proposals: Array<Record<string, unknown>> = [];
+  let libraryItems: Array<Record<string, unknown>> = [];
   const setupSteps = [
     {
       id: "companion", title: "Install and pair Chrome", state: "current",
@@ -132,7 +133,11 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
         reviewAffectsApplication: false,
         fieldFillEnabled: false
       });
-      if (path.startsWith("/api/v1/user/library")) return response({ items: [] });
+      if (path.startsWith("/api/v1/user/library")) return response({
+        items: libraryItems,
+        total: libraryItems.length,
+        facets: { stores: libraryItems.length ? [{ retailerId: "target", retailerName: "Target", productCount: 1 }] : [] }
+      });
       if (path.startsWith("/api/v1/user/purchase-intents")) return response({ items: [] });
       if (path.startsWith("/api/v1/user/jobs")) return response({ items: [] });
       if (path.startsWith("/api/v1/user/catalog/proposals")) return response({ items: proposals });
@@ -151,21 +156,55 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
 
   try {
     browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=user-onboarding-dashboard-test.js`);
-    await eventually(() => assert.equal((browser.document.querySelector("#setupGuide") as HTMLElement).hidden, false));
-    assert.match(browser.document.querySelector("#setupGuideHeadline")?.textContent ?? "", /Start with the Chrome companion/);
-    assert.match(browser.document.querySelector("#setupGuide")?.textContent ?? "", /Always manual.*checkout, payment, raffle entry, and order submission/s);
+    await eventually(() => assert.match(browser.document.querySelector("#homeHeadline")?.textContent ?? "", /Start with the Chrome companion/));
+    assert.equal(browser.document.querySelectorAll("#heroState [data-home-setup]").length, 1);
+    assert.match(browser.document.querySelector("#heroState")?.textContent ?? "", /Install and pair Chrome/);
+    assert.match(browser.document.querySelector("#heroState")?.textContent ?? "", /Step 1 of 5/);
+    assert.equal(browser.document.querySelector(".header-boundary")?.textContent?.trim(), "Checkout stays manual. Details");
+    assert.doesNotMatch(browser.document.querySelector("#heroState")?.textContent ?? "", /checkout stays manual/i);
+    assert.equal(browser.document.querySelector("#metrics"), null, "Home omits cumulative vanity counters");
+    await eventually(() => assert.match(browser.document.querySelector("#homeRecentList")?.textContent ?? "", /No checkout outcomes yet/));
     assert.equal((browser.document.querySelector("#companionDownloadLink") as HTMLAnchorElement).pathname, "/api/v1/extension/release/download");
     assert.equal((browser.document.querySelector("#companionDownloadLink") as HTMLAnchorElement).hidden, false);
     overview.setup.companion.downloadUrl = "";
     await browser.eval("refresh()");
     await eventually(() => assert.equal((browser.document.querySelector("#companionDownloadLink") as HTMLAnchorElement).hidden, true));
-    assert.match(browser.document.querySelector("#setupGuide")?.textContent ?? "", /installation is managed by your Yoink administrator/);
-    assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /8 records/);
-    assert.match(browser.document.querySelector("#privacyBoundary")?.textContent ?? "", /Device tokens.*excluded/s);
+    assert.match(browser.document.querySelector("#heroState")?.textContent ?? "", /installation is managed by your Yoink administrator/);
+    assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /Checking/);
 
     (browser.document.querySelector('[data-setup-action="pair_companion"]') as HTMLButtonElement).click();
     await eventually(() => assert.match(browser.document.querySelector("#pairing")?.textContent ?? "", /ABCD-EFGH/));
     assert.equal(browser.document.querySelector('[data-panel="preferences"]')?.classList.contains("active"), true);
+    assert.equal((browser.document.querySelector('[data-settings-panel="chrome"]') as HTMLElement).hidden, false);
+    assert.equal(browser.document.querySelector('[data-settings-view="chrome"]')?.getAttribute("aria-pressed"), "true");
+    assert.equal(browser.location.hash, "#settings/chrome");
+    assert.equal(browser.document.activeElement?.id, "pairing");
+    await eventually(() => assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /8 records/));
+    assert.match(browser.document.querySelector("#privacyBoundary")?.textContent ?? "", /Chrome companion tokens.*excluded/s);
+
+    setupSteps[0]!.state = "complete";
+    setupSteps[1]!.state = "current";
+    overview.setup.completedSteps = 1;
+    overview.setup.headline = "Connect your product signals";
+    (browser.document.querySelector('[data-tab="home"]') as HTMLButtonElement).click();
+    await browser.eval("refresh()");
+    await eventually(() => assert.match(browser.document.querySelector("#heroState")?.textContent ?? "", /Step 2 of 5/));
+    (browser.document.querySelector('[data-setup-action="connect_signal"]') as HTMLButtonElement).click();
+    const signalDialog = browser.document.querySelector("#signalConnectDialog") as HTMLDialogElement;
+    assert.equal(signalDialog.hasAttribute("open"), true);
+    assert.deepEqual(
+      [...signalDialog.querySelectorAll(".dialog-steps li")].map((step) => step.textContent?.trim()),
+      ["Pin the Chrome companion.", "Open its popup.", "Choose Reconnect."]
+    );
+    assert.doesNotMatch(signalDialog.textContent ?? "", /extension/i);
+    assert.match(browser.document.querySelector("#signalConnectStatus")?.textContent ?? "", /Finish the three steps, then re-check\./);
+    assert.equal(browser.document.querySelector("#recheckSignalConnection")?.textContent?.trim(), "Re-check");
+    setupSteps[1]!.state = "complete";
+    setupSteps[2]!.state = "current";
+    overview.setup.completedSteps = 2;
+    (browser.document.querySelector("#recheckSignalConnection") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(signalDialog.hasAttribute("open"), false));
+    assert.match(browser.document.querySelector("#heroState")?.textContent ?? "", /Step 3 of 5/);
 
     (browser.document.querySelector("#addProductButton") as HTMLButtonElement).click();
     const dialog = browser.document.querySelector("#productLinkDialog") as HTMLDialogElement;
@@ -197,12 +236,50 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
       confirmation: "PROPOSE_EXACT_PRODUCT_LINK"
     });
     assert.equal(requests.some((item) => item.path === "/api/v1/user/purchase-intents" && item.method === "POST"), false);
-    await eventually(() => assert.match(browser.document.querySelector("#proposalCopy")?.textContent ?? "", /1 product suggestion is waiting/));
-    assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /No stock claim, purchase plan, or store action was created/);
+    assert.equal(browser.document.querySelector('[data-panel="products"]')?.classList.contains("active"), true);
+    assert.equal((browser.document.querySelector("#productReviewStatus") as HTMLElement).hidden, false);
+    assert.match(browser.document.querySelector("#productReviewStatus")?.textContent ?? "", /Card Game Family Travel Kids.*In review/s);
+    assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /No stock claim, plan, or store action was created/);
+
+    libraryItems = [{
+      variantId: "variant_target_onboarding",
+      title: "Target Card Game",
+      currency: "USD",
+      storeCount: 1,
+      inStockListingCount: 1,
+      preorderListingCount: 0,
+      outOfStockListingCount: 0,
+      listings: [{
+        listingId: "listing_target_onboarding",
+        retailerId: "target",
+        retailerName: "Target",
+        retailerSku: "94972381",
+        canonicalUrl: "https://www.target.com/p/-/A-94972381",
+        status: "in_stock",
+        currentPriceCents: 3999,
+        currency: "USD",
+        executionSupported: true
+      }]
+    }];
+    setupSteps[2]!.state = "complete";
+    setupSteps[3]!.state = "current";
+    overview.setup.completedSteps = 3;
+    overview.counts.products = 1;
+    proposals[0]!.status = "approved";
+    proposals[0]!.appliedListingId = "listing_target_onboarding";
+    await browser.eval("refresh()");
+    await eventually(() => assert.match(browser.document.querySelector("#productReviewStatus")?.textContent ?? "", /Card Game Family Travel Kids.*Available in Products.*Approved/s));
+    (browser.document.querySelector('[data-tab="home"]') as HTMLButtonElement).click();
+    await browser.eval("refresh()");
+    await eventually(() => assert.match(browser.document.querySelector("#heroState")?.textContent ?? "", /Step 4 of 5/));
+    (browser.document.querySelector('[data-setup-action="choose_product"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.document.activeElement?.textContent?.trim(), "Quick add"));
+    assert.equal(browser.document.querySelector('[data-panel="products"]')?.classList.contains("active"), true);
+    assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Choose “Quick add” to create your first plan/);
 
     (browser.document.querySelector("#pauseButton") as HTMLButtonElement).click();
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Resume request sent for independent approval/));
-    assert.match(browser.document.querySelector("#pauseButton")?.textContent ?? "", /Resume qualified actions/);
+    assert.equal(browser.document.querySelector("#pauseButton")?.textContent, "Resume actions");
     assert.equal(overview.settings.actionsPaused, true);
   } finally {
     browser.close();

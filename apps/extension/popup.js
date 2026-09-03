@@ -33,11 +33,10 @@ const PRODUCTION_PROFILE = POPUP_RUNTIME_CONFIG.profile === "production";
 const INSTALLED_VERSION = chrome.runtime.getManifest().version;
 const UPDATE_HANDOFF_KEY = PopupState.POPUP_UPDATE_HANDOFF_STORAGE_KEY;
 const CART_READY_SOUND_KEY = "yoinkCartReadySoundEnabledV1";
+const CART_OUTCOME_DRAFT_KEY = "yoinkCartOutcomeDraftV1";
+const NOTIFICATION_ROUTES_KEY = "yoinkNotificationRoutesV1";
 const TRACKALACKER_ORIGINS = ["https://trackalacker.com/*", "https://www.trackalacker.com/*"];
-const TRACKALACKER_SYNC_ORIGINS = [...new Set([
-  ...TRACKALACKER_ORIGINS,
-  ...Object.values(PopupState.RETAILER_ORIGINS).flat()
-])];
+const TRACKALACKER_SYNC_ORIGINS = TRACKALACKER_ORIGINS;
 const $ = (selector) => document.querySelector(selector);
 
 const ui = {
@@ -48,6 +47,9 @@ const ui = {
   result: null,
   updateHandoff: null,
   cartReady: null,
+  cartOutcome: null,
+  cartOutcomeDraft: null,
+  purchaseOpportunity: null,
   cartReadySoundEnabled: false,
   confirmation: null,
   notice: "",
@@ -63,6 +65,36 @@ function cleanText(value, maximum = 360) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maximum);
+}
+
+function sanitizedCartOutcomeDraft(value, now = Date.now()) {
+  const candidate = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const jobId = cleanText(candidate.jobId, 120);
+  const amount = cleanText(candidate.amount, 32);
+  const recordedAt = new Date(String(candidate.recordedAt || "")).getTime();
+  if (candidate.schemaVersion !== 1
+    || !/^[A-Za-z0-9_-]{3,120}$/.test(jobId)
+    || !Number.isFinite(recordedAt)
+    || recordedAt > now + 60_000
+    || now - recordedAt >= 24 * 60 * 60_000) return null;
+  return { schemaVersion: 1, jobId, amount, recordedAt: new Date(recordedAt).toISOString() };
+}
+
+async function persistCartOutcomeDraft(jobId, amount) {
+  const draft = sanitizedCartOutcomeDraft({
+    schemaVersion: 1,
+    jobId,
+    amount,
+    recordedAt: new Date().toISOString()
+  });
+  if (!draft) return;
+  ui.cartOutcomeDraft = draft;
+  await chrome.storage.session.set({ [CART_OUTCOME_DRAFT_KEY]: draft });
+}
+
+async function clearCartOutcomeDraft() {
+  ui.cartOutcomeDraft = null;
+  await chrome.storage.session.remove(CART_OUTCOME_DRAFT_KEY).catch(() => undefined);
 }
 
 function errorMessage(error, fallback = "The request could not be completed.") {
@@ -88,10 +120,8 @@ function openYoink(destination = "dashboard") {
   return chrome.tabs.create({ url: appUrl(destination), active: true });
 }
 
-function openExtensionSettings(fragment = "") {
-  const url = new URL(chrome.runtime.getURL("options.html"));
-  if (fragment) url.hash = fragment;
-  return chrome.tabs.create({ url: url.href, active: true });
+function openExtensionSettings() {
+  return chrome.tabs.create({ url: chrome.runtime.getURL("options.html"), active: true });
 }
 
 function announce(message) {
@@ -124,6 +154,8 @@ function deriveView() {
     lastResult: resultForView(),
     updateHandoff: ui.updateHandoff,
     cartReady: ui.cartReady,
+    cartOutcome: ui.cartOutcome,
+    purchaseOpportunity: ui.purchaseOpportunity,
     confirmation: ui.confirmation,
     notice: ui.notice
   });
@@ -156,20 +188,48 @@ function render() {
   $("#contextTitle").textContent = view.context.title;
   $("#contextSupporting").textContent = view.context.supporting;
   $("#contextSupporting").hidden = !view.context.supporting;
+  $("#contextResultStatus").textContent = view.resultStatus?.label || "";
+  $("#contextResultStatus").dataset.tone = view.resultStatus?.tone || "";
+  $("#contextResultStatus").hidden = !view.resultStatus;
   $("#pairFields").hidden = !view.context.pairing;
 
   const primary = $("#primaryAction");
-  primary.hidden = !view.primaryAction;
+  const cartOutcomeOwnsPrimary = ["amount", "submitting"].includes(view.cartOutcome?.stage);
+  primary.hidden = !view.primaryAction || cartOutcomeOwnsPrimary;
   primary.textContent = view.primaryAction?.label || "";
   primary.disabled = view.primaryAction?.disabled === true;
   primary.dataset.action = view.primaryAction?.id || "";
-  primary.dataset.outcome = view.result?.outcome || "";
-  const repeatAction = view.primaryAction?.id === "inspect_product" || view.primaryAction?.id === "inspect_drawings";
-  const repeatLabel = view.primaryAction?.id === "inspect_drawings" ? "Inspect drawings again" : "Inspect product again";
-  primary.setAttribute("aria-label", view.result && view.primaryAction && repeatAction
-    ? `${view.primaryAction.label}. ${repeatLabel}.` : view.primaryAction?.label || "Primary action");
-  primary.title = view.result && view.primaryAction && repeatAction ? repeatLabel : "";
+  primary.setAttribute("aria-label", view.primaryAction?.label || "Primary action");
+  primary.title = "";
   $("#cancelContext").hidden = ui.confirmation === null;
+
+  const cartOutcome = view.cartOutcome;
+  const cartOutcomePanel = $("#cartOutcome");
+  const amountStage = ["amount", "submitting"].includes(cartOutcome?.stage);
+  cartOutcomePanel.hidden = !cartOutcome;
+  $("#cartOutcomeChoices").hidden = !cartOutcome || amountStage;
+  $("#cartOutcomeForm").hidden = !cartOutcome || !amountStage;
+  const cartOutcomeAmount = $("#cartOutcomeAmount");
+  if (cartOutcome && amountStage && cartOutcomeAmount.dataset.jobId !== cartOutcome.jobId) {
+    cartOutcomeAmount.dataset.jobId = cartOutcome.jobId;
+    cartOutcomeAmount.value = ui.cartOutcomeDraft?.jobId === cartOutcome.jobId
+      ? ui.cartOutcomeDraft.amount
+      : Number.isSafeInteger(cartOutcome.reviewedMaximumCents)
+        ? (cartOutcome.reviewedMaximumCents / 100).toFixed(2) : "";
+  }
+  const reviewedMaximum = Number.isSafeInteger(cartOutcome?.reviewedMaximumCents)
+    ? `$${(cartOutcome.reviewedMaximumCents / 100).toFixed(2)}` : "";
+  $("#cartOutcomeLimit").textContent = reviewedMaximum
+    ? `Reviewed maximum: ${reviewedMaximum}`
+    : "Enter the exact amount charged.";
+  const submittingOutcome = cartOutcome?.stage === "submitting";
+  $("#cartOutcomeGotIt").disabled = submittingOutcome;
+  $("#cartOutcomeMissedIt").disabled = submittingOutcome;
+  $("#cartOutcomeConfirm").disabled = submittingOutcome;
+  $("#cartOutcomeBack").disabled = submittingOutcome;
+  $("#cartOutcomeConfirm").textContent = submittingOutcome ? "Recording…" : "Record purchase";
+  $("#cartOutcomeError").textContent = cartOutcome?.error || "";
+  $("#cartOutcomeError").hidden = !cartOutcome?.error;
 
   const showResult = ui.confirmation === null && Boolean(view.result?.details);
   const detailsButton = $("#resultDetailsButton");
@@ -191,7 +251,6 @@ function render() {
 
   $("#syncProducts").hidden = !view.menu.syncProducts;
   $("#shareEvidence").hidden = !view.menu.shareEvidence;
-  $("#manageStoreAccess").hidden = !view.menu.manageStoreAccess;
   $("#checkUpdate").hidden = !view.menu.checkUpdates;
   $("#cartReadySound").setAttribute("aria-checked", String(ui.cartReadySoundEnabled));
   $("#cartReadySound").querySelector(".menu-check").textContent = ui.cartReadySoundEnabled ? "On" : "Off";
@@ -258,7 +317,7 @@ function togglePanel(panelSelector, opener) {
 
 async function requestRetailerAccess() {
   if (ui.page.kind !== "product" && ui.page.kind !== "walmart_draw") {
-    throw new Error("Open an exact supported retailer page first.");
+    throw new Error("Open a supported store product page first.");
   }
   if (ui.pageAccessGranted) return;
   const origins = PopupState.RETAILER_ORIGINS[ui.page.retailerId];
@@ -360,19 +419,19 @@ async function updateCompanion() {
       ui.updateHandoff = update.handoff;
       await chrome.storage.session.set({ [UPDATE_HANDOFF_KEY]: update.handoff });
       render();
-      announce(update.handoff.channel === "managed" ? "Companion update ready." : "Companion update downloaded.");
+      announce(update.handoff.channel === "managed" ? "Chrome companion update ready." : "Chrome companion update downloaded.");
     } else if (update.downloadStarted) {
-      showToast("Update downloaded. Reopen Yoink Companion to finish.");
+      showToast("Update downloaded. Reopen the Chrome companion to finish.");
     } else if (update.managedByBrowser) {
       showToast(update.managedStatus === "throttled"
         ? "Chrome will check again automatically."
-        : "Chrome found no companion update yet.");
+        : "No Chrome companion update yet.");
     } else if (update.updateAvailable && !update.packageReady) {
-      showToast("The companion update package is still being prepared.", true);
+      showToast("The Chrome companion update is still being prepared.", true);
     } else if (update.updateAvailable) {
-      showToast("A companion update is available. Retry the download.", true);
+      showToast("A Chrome companion update is available. Retry the download.", true);
     } else {
-      showToast("The companion is current.");
+      showToast("The Chrome companion is current.");
     }
   } catch (error) {
     showToast(errorMessage(error), true);
@@ -383,7 +442,7 @@ async function updateCompanion() {
 
 async function reloadCompanion() {
   await chrome.storage.session.remove(UPDATE_HANDOFF_KEY).catch(() => undefined);
-  announce("Reloading companion.");
+  announce("Reloading the Chrome companion.");
   chrome.runtime.reload();
 }
 
@@ -398,12 +457,92 @@ async function openCartReady() {
     });
     if (!response?.ok || response.opened !== true) throw new Error(response?.message || "The cart tab could not be opened.");
     ui.cartReady = PopupState.cartReadyState(response.cartReady);
+    if (response.pending !== true) {
+      ui.cartOutcome = { jobId: item.jobId, stage: "choice", error: "" };
+    }
     announce(response.pending === true
       ? `${item.retailerName} is finishing another cart check.`
-      : `${item.retailerName} cart opened.`);
+      : item.kind === "needs_you"
+        ? `${item.retailerName} opened for review.`
+        : `${item.retailerName} cart opened.`);
   } catch (error) {
     showToast(errorMessage(error, "The cart tab could not be opened."), true);
   } finally {
+    setOperation("idle");
+  }
+}
+
+function amountCents(value) {
+  const match = /^(0|[1-9]\d{0,6})(?:\.(\d{1,2}))?$/.exec(String(value || "").trim());
+  if (!match) return null;
+  const cents = Number(match[1]) * 100 + Number(String(match[2] || "").padEnd(2, "0"));
+  return Number.isSafeInteger(cents) && cents > 0 && cents <= 100_000_000 ? cents : null;
+}
+
+async function reportCartOutcome(outcome, actualTotalCents = null) {
+  const current = ui.view?.cartOutcome;
+  if (!current?.jobId || !["got_it", "missed_it"].includes(outcome)) return;
+  const returnStage = outcome === "got_it" ? "amount" : "choice";
+  ui.cartOutcome = { jobId: current.jobId, stage: "submitting", error: "" };
+  render();
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "yoink:report-cart-outcome",
+      jobId: current.jobId,
+      outcome,
+      actualTotalCents,
+      confirmation: "I_REVIEWED_CHECKOUT_RESULT"
+    });
+    if (!response?.ok) throw new Error(response?.message || "The checkout result could not be recorded.");
+    ui.cartReady = PopupState.cartReadyState(response.cartReady);
+    ui.cartOutcome = null;
+    await clearCartOutcomeDraft();
+    const message = outcome === "got_it" ? "Purchase recorded." : "Cart action closed as Missed it.";
+    showToast(message);
+    announce(message);
+  } catch (error) {
+    ui.cartOutcome = {
+      jobId: current.jobId,
+      stage: returnStage,
+      error: errorMessage(error, "The checkout result could not be recorded.")
+    };
+  }
+  render();
+}
+
+async function refreshPurchaseOpportunity({ rerender = true } = {}) {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "yoink:get-purchase-opportunity" });
+    ui.purchaseOpportunity = response?.ok ? response.opportunity || null : null;
+  } catch {
+    ui.purchaseOpportunity = null;
+  }
+  if (rerender) render();
+  return ui.purchaseOpportunity;
+}
+
+async function openPurchaseOpportunity() {
+  const opportunity = ui.view?.purchaseOpportunity;
+  if (!opportunity?.deliveryId) return;
+  const pageActionOwnsPrimary = ui.page.kind === "product" || ui.page.kind === "walmart_draw";
+  setOperation("opening_cart", pageActionOwnsPrimary ? "purchase-opportunity" : ui.page.key);
+  const activityButton = $("#activityAction");
+  if (pageActionOwnsPrimary) activityButton.disabled = true;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "yoink:open-purchase-opportunity",
+      deliveryId: opportunity.deliveryId
+    });
+    if (!response?.ok || response.opened !== true) {
+      throw new Error(response?.message || "The Walmart cart link could not be opened.");
+    }
+    ui.purchaseOpportunity = response.opportunity || null;
+    announce("Walmart opened. Review the cart before checkout.");
+  } catch (error) {
+    await refreshPurchaseOpportunity({ rerender: false });
+    showToast(errorMessage(error, "The Walmart cart link could not be opened."), true);
+  } finally {
+    activityButton.disabled = false;
     setOperation("idle");
   }
 }
@@ -415,7 +554,7 @@ async function syncProducts() {
   showToast("Starting product sync…");
   try {
     const granted = await chrome.permissions.request({ origins: TRACKALACKER_SYNC_ORIGINS });
-    if (!granted) throw new Error("TrackaLacker and store access wasn’t approved.");
+    if (!granted) throw new Error("TrackaLacker access wasn’t approved.");
     const response = await chrome.runtime.sendMessage({ type: "yoink:sync-trackalacker" });
     if (!response?.ok) throw new Error(response?.message || "Product sync could not start.");
     showToast(response.alreadyRunning ? "Product sync is already running." : "Product sync started.");
@@ -455,11 +594,13 @@ async function handlePrimaryAction() {
   if (action === "update_companion") return updateCompanion();
   if (action === "reload_companion") return reloadCompanion();
   if (action === "open_cart") return openCartReady();
+  if (action === "open_purchase") return openPurchaseOpportunity();
   if (action === "open_yoink") return openYoink();
   if (action === "inspect_product") return inspectProduct();
   if (action === "inspect_drawings") return inspectDrawings();
   if (action === "reconnect_trackalacker") return reconnectTrackalacker();
-  if (action === "review_pause" || action === "review_mode") return openYoink("settings");
+  if (action === "review_pause") return openYoink("dashboard");
+  if (action === "review_mode") return openYoink("insights");
   if (action === "confirm_share_evidence") return shareEvidence();
 }
 
@@ -494,19 +635,54 @@ function bindEvents() {
   $("#menuButton").addEventListener("click", (event) => togglePanel("#overflowPanel", event.currentTarget));
   $("#overflowPanel").addEventListener("keydown", handleMenuKeys);
   $("#primaryAction").addEventListener("click", () => { void handlePrimaryAction(); });
+  $("#cartOutcomeGotIt").addEventListener("click", () => {
+    const jobId = ui.view?.cartOutcome?.jobId;
+    if (!jobId) return;
+    ui.cartOutcome = { jobId, stage: "amount", error: "" };
+    render();
+    void persistCartOutcomeDraft(jobId, $("#cartOutcomeAmount").value);
+    $("#cartOutcomeAmount").focus();
+    $("#cartOutcomeAmount").select();
+  });
+  $("#cartOutcomeMissedIt").addEventListener("click", () => { void reportCartOutcome("missed_it"); });
+  $("#cartOutcomeBack").addEventListener("click", () => {
+    const jobId = ui.view?.cartOutcome?.jobId;
+    if (!jobId) return;
+    ui.cartOutcome = { jobId, stage: "choice", error: "" };
+    $("#cartOutcomeAmount").dataset.jobId = "";
+    $("#cartOutcomeAmount").value = "";
+    void clearCartOutcomeDraft();
+    render();
+    $("#cartOutcomeGotIt").focus();
+  });
+  $("#cartOutcomeForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const cents = amountCents($("#cartOutcomeAmount").value);
+    if (cents === null) {
+      const jobId = ui.view?.cartOutcome?.jobId;
+      if (!jobId) return;
+      ui.cartOutcome = { jobId, stage: "amount", error: "Enter a valid amount charged." };
+      render();
+      $("#cartOutcomeAmount").focus();
+      return;
+    }
+    void reportCartOutcome("got_it", cents);
+  });
+  $("#cartOutcomeAmount").addEventListener("input", (event) => {
+    const jobId = ui.view?.cartOutcome?.jobId;
+    if (jobId) void persistCartOutcomeDraft(jobId, event.currentTarget.value);
+  });
   $("#cancelContext").addEventListener("click", cancelContext);
   $("#openYoink").addEventListener("click", () => { void openYoink(); });
-  $("#statusDiagnostics").addEventListener("click", () => { void openYoink("operations"); });
-  $("#diagnostics").addEventListener("click", () => { void openYoink("operations"); });
-  $("#settings").addEventListener("click", () => { void openExtensionSettings(); });
-  $("#manageStoreAccess").addEventListener("click", () => { void openExtensionSettings("store-access"); });
+  $("#statusConnections").addEventListener("click", () => { void openYoink("connections"); });
+  $("#extensionSettings").addEventListener("click", () => { void openExtensionSettings(); });
   $("#syncProducts").addEventListener("click", () => { void syncProducts(); });
   $("#checkUpdate").addEventListener("click", () => { closePanels(false); void updateCompanion(); });
   $("#cartReadySound").addEventListener("click", async () => {
     ui.cartReadySoundEnabled = !ui.cartReadySoundEnabled;
     await chrome.storage.local.set({ [CART_READY_SOUND_KEY]: ui.cartReadySoundEnabled });
     render();
-    showToast(ui.cartReadySoundEnabled ? "Cart-ready sound on" : "Cart-ready sound off");
+    showToast(ui.cartReadySoundEnabled ? "Action handoff sound on" : "Action handoff sound off");
   });
   $("#shareEvidence").addEventListener("click", () => {
     closePanels(false);
@@ -517,8 +693,10 @@ function bindEvents() {
   });
   $("#activityAction").addEventListener("click", () => {
     const action = ui.view?.activity?.action;
+    if (action === "open_purchase") void openPurchaseOpportunity();
     if (action === "reconnect_trackalacker") void reconnectTrackalacker();
-    if (action === "review_pause" || action === "review_mode") void openYoink("settings");
+    if (action === "review_pause") void openYoink("dashboard");
+    if (action === "review_mode") void openYoink("insights");
   });
   $("#resultDetailsButton").addEventListener("click", (event) => {
     const expanded = event.currentTarget.getAttribute("aria-expanded") === "true";
@@ -532,6 +710,14 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (ui.openPanel) { event.preventDefault(); closePanels(true); return; }
+    if (["amount", "submitting"].includes(ui.view?.cartOutcome?.stage)) {
+      if (ui.view?.cartOutcome?.stage === "submitting") return;
+      event.preventDefault();
+      ui.cartOutcome = { jobId: ui.view.cartOutcome.jobId, stage: "choice", error: "" };
+      render();
+      $("#cartOutcomeGotIt").focus();
+      return;
+    }
     if ($("#resultDetailsButton").getAttribute("aria-expanded") === "true") {
       event.preventDefault();
       $("#resultDetailsButton").click();
@@ -559,6 +745,9 @@ function bindEvents() {
       ui.cartReadySoundEnabled = changes[CART_READY_SOUND_KEY].newValue === true;
       render();
     }
+    if (areaName === "local" && changes[NOTIFICATION_ROUTES_KEY]) {
+      void refreshPurchaseOpportunity();
+    }
     if (areaName === "session" && changes[PopupState.POPUP_RESULT_STORAGE_KEY]?.newValue) {
       ui.result = changes[PopupState.POPUP_RESULT_STORAGE_KEY].newValue;
       render();
@@ -569,6 +758,10 @@ function bindEvents() {
     }
     if (areaName === "session" && changes[PopupState.CART_READY_STORAGE_KEY]) {
       ui.cartReady = PopupState.cartReadyState(changes[PopupState.CART_READY_STORAGE_KEY].newValue);
+      if (ui.cartOutcome && !ui.cartReady.items.some((item) => item.jobId === ui.cartOutcome.jobId)) {
+        ui.cartOutcome = null;
+        void clearCartOutcomeDraft();
+      }
       render();
     }
   });
@@ -576,12 +769,14 @@ function bindEvents() {
 
 async function initializePopup() {
   bindEvents();
-  const [tabs, storedLocal, storedResult, storedUpdateHandoff, storedCartReady] = await Promise.all([
+  const [tabs, storedLocal, storedResult, storedUpdateHandoff, storedCartReady, storedCartOutcomeDraft, purchaseOpportunity] = await Promise.all([
     chrome.tabs.query({ active: true, currentWindow: true }),
     chrome.storage.local.get(["readiness", CART_READY_SOUND_KEY]),
     chrome.storage.session.get(PopupState.POPUP_RESULT_STORAGE_KEY),
     chrome.storage.session.get(UPDATE_HANDOFF_KEY),
-    chrome.storage.session.get(PopupState.CART_READY_STORAGE_KEY)
+    chrome.storage.session.get(PopupState.CART_READY_STORAGE_KEY),
+    chrome.storage.session.get(CART_OUTCOME_DRAFT_KEY),
+    chrome.runtime.sendMessage({ type: "yoink:get-purchase-opportunity" }).catch(() => null)
   ]);
   ui.page = PopupState.classifyPageContext(tabs[0]?.url);
   ui.health = storedLocal.readiness || null;
@@ -589,6 +784,13 @@ async function initializePopup() {
   ui.result = storedResult[PopupState.POPUP_RESULT_STORAGE_KEY] || null;
   ui.updateHandoff = storedUpdateHandoff[UPDATE_HANDOFF_KEY] || null;
   ui.cartReady = PopupState.cartReadyState(storedCartReady[PopupState.CART_READY_STORAGE_KEY]);
+  ui.cartOutcomeDraft = sanitizedCartOutcomeDraft(storedCartOutcomeDraft[CART_OUTCOME_DRAFT_KEY]);
+  if (ui.cartOutcomeDraft && ui.cartReady.items.some((item) => item.jobId === ui.cartOutcomeDraft.jobId && item.openedAt)) {
+    ui.cartOutcome = { jobId: ui.cartOutcomeDraft.jobId, stage: "amount", error: "" };
+  } else if (ui.cartOutcomeDraft) {
+    await clearCartOutcomeDraft();
+  }
+  ui.purchaseOpportunity = purchaseOpportunity?.ok ? purchaseOpportunity.opportunity || null : null;
   ui.pageAccessGranted = await pageAccess();
   render();
   void refreshHealth();

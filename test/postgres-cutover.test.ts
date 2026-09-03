@@ -151,9 +151,9 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.equal(first.contractVersion, POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION);
   assert.equal(first.tableCount, 105);
   assert.equal(first.foreignKeyCount, 275);
-  assert.equal(first.indexCount, 202);
-  assert.equal(first.defaultExpressionCount, 324);
-  assert.equal(first.checkConstraintCount, 394);
+  assert.equal(first.indexCount, 203);
+  assert.equal(first.defaultExpressionCount, 326);
+  assert.equal(first.checkConstraintCount, 396);
   assert.equal(first.triggerCount, 50);
   assert.equal(first.directTenantTableCount, 79);
   assert.equal(first.inheritedTenantPathTableCount, 14);

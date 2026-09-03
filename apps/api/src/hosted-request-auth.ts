@@ -233,11 +233,11 @@ export function createHostedRequestScopeResolver(
       throw new Error("The authenticated request scope signature is invalid.");
     }
     const principal = db.get<{ found: number }>(
-      `SELECT 1 AS found FROM users WHERE id = ? AND tenant_id = ?`,
+      `SELECT 1 AS found FROM users WHERE id = ? AND tenant_id = ? AND status = 'active'`,
       scope.userId,
       scope.tenantId
     );
-    if (!principal) throw new Error("The authenticated tenant/user principal does not exist.");
+    if (!principal) throw new Error("The authenticated tenant/user principal is unavailable.");
 
     const timestamp = nowIso(now);
     const nonceHash = stableHash("yoink_hosted_request_nonce_v1", scope.tenantId, nonce);

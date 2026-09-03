@@ -8,7 +8,8 @@ test("pickup stays inside exact add-only authorization while checkout and submit
   const db = new YoinkDatabase();
   try {
     const repository = new MutationLaneRepository(db);
-    const initial = repository.readiness();
+    const now = Date.now();
+    const initial = repository.readiness(now);
     assert.equal(initial.policyVersion, "advanced-mutation-gates-v1");
     assert.equal(initial.mutationAuthorized, false);
     assert.equal(initial.lanes.length, 8);
@@ -22,19 +23,23 @@ test("pickup stays inside exact add-only authorization while checkout and submit
     db.run(
       `INSERT INTO retailer_adapter_qualifications(
          tenant_id, user_id, retailer_id, adapter_version, highest_action,
-         status, evidence_hash, qualified_at, updated_at
-       ) VALUES (?, ?, 'target', ?, 'add_to_cart', 'qualified', 'test', ?, ?)`,
+         status, evidence_hash, qualified_at, updated_at, expires_at
+       ) VALUES (?, ?, 'target', ?, 'add_to_cart', 'qualified', 'test', ?, ?, ?)`,
       LOCAL_TENANT_ID,
       LOCAL_USER_ID,
       TARGET_ADD_ADAPTER_VERSION,
       timestamp,
-      timestamp
+      timestamp,
+      new Date(now + 60_000).toISOString()
     );
-    const updated = repository.readiness();
+    const updated = repository.readiness(now);
     const targetPrepare = updated.lanes.find((lane) => lane.id === "target_prepare_checkout");
     assert.equal(targetPrepare?.requirements.find((requirement) => requirement.id === "add_lane")?.met, true);
     assert.equal(targetPrepare?.mutationAuthorized, false);
     assert.equal(targetPrepare?.requirements.find((requirement) => requirement.id === "packaged_adapter")?.met, false);
+    const expired = repository.readiness(now + 60_001);
+    assert.equal(expired.lanes.find((lane) => lane.id === "target_prepare_checkout")
+      ?.requirements.find((requirement) => requirement.id === "add_lane")?.met, false);
   } finally {
     db.close();
   }

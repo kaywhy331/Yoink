@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { createYoinkServer } from "./app.js";
+import { createActionJobAvailabilityPulse } from "./action-job-availability.js";
 import { loadConfig } from "./config.js";
 import { YoinkDatabase } from "../../../packages/database/src/database.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
@@ -67,6 +68,7 @@ const userActionConnectorDispatch = new UserActionConnectorDispatchService(
     ? new BoundUserActionWebhookTransport(config.userActionWebhookRegistry, process.env)
     : undefined
 );
+const actionJobAvailability = createActionJobAvailabilityPulse();
 const backgroundWorkerStore = new SqliteBackgroundWorkerStore(db, {
   principalMode: config.hosted ? "all" : "fixed"
 });
@@ -77,13 +79,17 @@ backgroundWorkerStore.configureDeploymentExpectation(
 );
 const backgroundWorker = new BackgroundWorkerRuntime({
   store: backgroundWorkerStore,
-    handler: new BackgroundMaintenanceHandler(db, observerRecipeWitnessRefresh
-    ? { observerRecipeWitnessRefresh, operatorAlertConnectorDispatch, userActionConnectorDispatch }
-    : { operatorAlertConnectorDispatch, userActionConnectorDispatch }),
+  handler: new BackgroundMaintenanceHandler(db, {
+    ...(observerRecipeWitnessRefresh ? { observerRecipeWitnessRefresh } : {}),
+    operatorAlertConnectorDispatch,
+    userActionConnectorDispatch,
+    onActionJobsCreated: () => { actionJobAvailability.notify(); }
+  }),
   version: config.version,
   deploymentFingerprint: workerDeploymentFingerprint,
   runtimeKind: "local_in_process",
-  workerId: "background_worker_embedded"
+  workerId: "background_worker_embedded",
+  onCycleComplete: () => { actionJobAvailability.notify(); }
 });
 const hostedDependencies = config.hosted ? {
   requestScopeResolver: createHostedRequestScopeResolver(db, {
@@ -113,6 +119,7 @@ const server = createYoinkServer({
   operatorAlertConnectorBindings: config.operatorAlertWebhookRegistry.bindings,
   userActionConnectorBindings: config.userActionWebhookRegistry.bindings,
   backgroundWorkerWake: () => backgroundWorker.wake(),
+  actionJobAvailability,
   ...(config.backgroundWorkerMode === "embedded"
     ? { backgroundWorkerRestart: async () => backgroundWorker.restart() }
     : {}),

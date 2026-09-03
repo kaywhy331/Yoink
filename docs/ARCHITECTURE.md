@@ -65,15 +65,45 @@ expiry or uncertain result after the boundary locks the job for manual review
 and cannot trigger an automatic retry. Checkout and submit states remain
 unqualified.
 
+On a cold guarded add, Chrome loads the exact product in the visible
+Yoink-owned tab while an inactive temporary tab captures the read-only cart
+baseline. Both loads must settle successfully before offer verification, and
+the temporary tab is then closed before the Add boundary. Warm baselines still
+use the same-lane tab fast path. In either case, the durable pre-click receipt
+and independent post-click exact `+1` cart proof are unchanged.
+
 The Chrome orchestrator may drain at most four fresh guarded-add leases per
-cycle, sequentially. It repeats health, pairing, live/pause, mutation-enable,
-store-access, credential, and lease checks before every job and advances only
-after exact cart confirmation. A tab created by that cycle may be reused only
-for another job at the same retailer; another retailer receives its own tab.
-Fresh TrackaLacker delivery triggers an immediate job check and one bounded
-2.5-second follow-up for asynchronous worker evaluation, with the recurring
-30-second alarm retained as fallback. This changes scheduling latency only and
-does not widen any retailer action contract.
+cycle, sequentially. The authenticated lease atomically rechecks pairing,
+live/pause state, mutation capability, adapter qualification, spend, expiry,
+single-device ownership, and fresh exact-device retailer-session blockers;
+periodic health and heartbeat refresh therefore
+stay off the signal-to-lease hot path. One local store-access preflight serves
+the bounded drain, which advances only after exact cart confirmation. A tab
+created by that cycle may be reused only for another job at the same retailer;
+another retailer receives its own tab. A valid TrackaLacker push starts its
+durable signal delivery and bounded 25-second action-job watch concurrently,
+removing the ingress-response round trip from the serial path. The lease remains
+fully server-authoritative and can wait for asynchronous worker evaluation,
+with a 28-second client timeout below Chrome's 30-second fetch ceiling and the
+recurring 30-second alarm retained as fallback.
+Durable evaluation pulses that watch as soon as it yields an action instead of
+waiting for the rest of the worker maintenance cycle. A one-second database
+recheck also observes jobs written by the separately supervised worker, whose
+process cannot share the API's in-memory pulse. Fresh durable signal ingress
+arms a bounded 2.5-second rapid window: only action-job watches recheck at 250
+ms during that window, then return to the one-second fallback. This covers the
+external worker's bounded poll without turning ordinary idle watches into a
+database busy-poll.
+Already-queued follow-up leases use a zero-wait drain. This changes scheduling
+latency only and does not widen any retailer action contract. Candidate
+selection joins the current per-store qualification before ordering the queue,
+so an expired/retired lane or a fresh session blocker cannot head-of-line block
+a later eligible store. Deferred jobs remain untouched for safe requalification
+or normal signal-window expiry. Chrome also sends its currently granted optional
+store origins as a lease-narrowing hint. The server intersects that hint with
+the paired device's version-bound capabilities; it can never authorize a lane,
+but it prevents missing host access from leasing and cancelling an otherwise
+preservable job.
 
 For a user-reviewed `add_to_cart` purchase plan, a `trusted_exact` signal may
 trigger that Chrome check even when its source payload omits price, seller, or
@@ -816,11 +846,47 @@ otherwise identical to strategy-driven jobs.
 
 Changing a direct plan to cart mode is revalidated transactionally after the
 complete target set is staged. Every enabled target must be executable,
-first-party-only, shipping, and capped, and the intent all-in maximum must cover
-the worst enabled target at requested quantity plus the configured tax and
-retailer allowance. Any failure rolls back mission, target, and revision
-changes. This mode remains limited to notify/add-to-cart; it cannot request
-checkout or order submission.
+first-party-only, capped, and bound to Shipping or an explicit Pickup opt-in,
+and the intent all-in maximum must cover the worst enabled target at requested
+quantity plus the configured tax and retailer allowance. Any failure rolls
+back mission, target, and revision changes. This mode remains limited to
+notify/add-to-cart; it cannot request checkout or order submission.
+
+Quick-add profiles carry the same fulfillment boundary. Missing legacy profile
+fulfillment normalizes only to Shipping; Pickup is never inferred. Saving a
+linked profile atomically re-derives its plans' quantity, price caps, selected
+Shipping/Pickup fulfillment, first-party seller policy, action ceiling, and
+all-in safety reserve. If saved profiles exist without an explicit default,
+the primary Quick add control becomes a chooser instead of silently using the
+built-in notification-only configuration.
+
+Existing plans are never silently attached to a new profile. The user can
+enter selection mode in Plans, choose one saved profile, review the exact
+selection and action/fulfillment summary, and submit the confirmation-bound
+bulk apply contract. The repository verifies tenant ownership and active or
+paused state for the complete set before writing. Cart profiles skip a plan if
+any enabled target lacks a packaged execution mapping; missing price/MSRP or
+missing enabled targets also keep prior limits. Successful plans receive one
+new immutable intent revision, and unleased jobs tied to an older revision are
+cancelled through the shared transition boundary.
+
+Retailer qualification activation is also a profile-reconciliation boundary.
+The activation transaction first reopens only the exact current retailer
+mapping, then retries add-to-cart profiles linked to active or paused plans
+that use that retailer. This closes the timing gap where a user reviewed a
+profile before the lane was qualified. Reconciliation consumes no new user
+authority: it uses only the already linked profile, still requires complete
+price and target evidence, and records its own audit event.
+
+Fresh actionable signals form the complementary evidence-reconciliation
+boundary. `SignalEngine` durably records the exact offer first, then asks the
+control repository to retry only the linked plan for that listing before
+policy evaluation. This lets a store-price cart profile skipped for missing
+price use the first priced signal itself. The inverse transition is fail-safe:
+changing a linked profile to notification-only immediately reduces the intent
+ceiling even if its chosen price mode cannot currently resolve; the previous
+target cap is retained rather than allowing missing evidence to preserve cart
+authority.
 
 Yoink 0.28.0 makes the user creation boundary explicit without adding a second
 intent model. `PurchaseIntentCreateInput` version 1 names one existing exact
@@ -1144,24 +1210,134 @@ signal window expires; only explicit browser-state review can release them.
 
 ## Confirmed-cart handoff
 
-The Chrome executor owns the final handoff. After the server accepts an exact
+The Chrome executor owns the final handoff. After Chrome proves an exact
 post-click cart delta, the service worker stores a bounded sanitized Cart ready
 record in session storage, raises a local notification, and derives the badge
-from the pending-record count. The popup consumes that same record. A user
+from the pending-record count without waiting for control-plane reporting. The
+popup consumes that same record. A user
 opening the handoff causes the worker to re-read state and revalidate the saved
-tab ID and exact retailer cart URL before focusing it and acknowledging the
-record. It never opens a replacement retailer tab and never invokes checkout.
+tab ID and exact retailer cart URL before focusing it. Opening marks the record
+seen and clears its local notification, but the popup handoff and badge remain
+until explicit dashboard close-out, an observed order confirmation, server
+reconciliation, or retailer-tab closure removes it. It never opens a replacement
+retailer tab and never invokes checkout.
+When several handoffs are pending, the shared pure selector presents the newest
+unseen Needs-you item, then the newest unseen ready cart, before returning to
+already-opened items. The popup and hotkey consume that same selector so one
+persistent handoff cannot hide the rest.
 
-Signal delivery starts job probes without waiting for informational status or
-visible-notification requests. Probes use bounded delays and the durable alarm
-remains the recovery path. Each bounded drain performs one device/control-plane
-preflight; every lease remains server-authoritative. A clean pre-click
-rejection may yield to another queued job, while any mutation-uncertain state
-stops the drain. A verified post-add cart inventory may serve as a short-lived
+Once the control plane acknowledges `confirmed`, `manual_review`, or
+`submission_uncertain`, Chrome starts a versioned, bounded 25-second
+reconciliation watch only while a local handoff remains. Dashboard Got it /
+Missed it and exact order-confirmation closure wake that watch through the same
+in-process availability pulse used by action jobs. A cold or stale Chrome
+version bootstraps from the authoritative version and reissues the watch once;
+the recurring 30-second job alarm remains the recovery fallback. This changes
+cross-surface close-out latency only and never authorizes a retailer action.
+The user dashboard holds its own bounded five-second handoff watch. Its cursor
+combines a random API-process epoch with a monotonic version, and every browser
+request has a local sequence. The reducer accepts a higher version within the
+same epoch, accepts a restarted process only from a non-older request, and
+rejects late responses from the replaced process. This prevents asynchronous
+overview and long-poll responses from hiding or resurrecting a cart handoff.
+On a cold Home open, one zero-wait compact request starts before overview and
+attribution. If an urgent handoff exists, the shared renderer exposes its exact
+store action immediately with a validated direct link; the normal overview
+then reconciles through the same cursor and upgrades the link when attribution
+becomes available. An empty compact response does not invent healthy/setup
+state before the authoritative overview arrives.
+When a hidden dashboard becomes visible outside Activity, it starts this compact
+watch before refreshing the overview and active workspace. On Activity, it
+instead starts the bounded job-list request first and reuses that response in
+the broader refresh. A cold deep link to Activity uses the same priority path:
+validated direct checkout links can render while overview and attribution are
+still loading, then upgrade to affiliate routes when routing arrives. A local
+request sequence prevents a late older job response from replacing a newer
+action list. Slow secondary workspace reads therefore cannot hold a newly
+available checkout handoff behind the full page refresh, while the post-refresh
+rearm still recalculates the stage-adaptive interval.
+
+Activity keeps the retailer handoff as the dominant action. Each closeable row
+has only compact Got it and Missed it controls: Got it opens one reusable modal
+that requires the exact reviewed item total and enforces the action's recorded
+all-in maximum before submitting; Missed it closes the action in one click and
+commits no spend. Both use the same typed server confirmation contract. A
+successful mutation is treated as authoritative even if the following Activity
+refresh fails, so the row remains disabled and reports that only the view is
+stale instead of incorrectly offering the close-out again.
+
+Valid push ingestion and the bounded action-job watch start concurrently,
+without waiting for the durable signal response, informational status, or
+visible-notification requests. The in-process
+availability pulse wakes that watch as soon as the worker creates a job; the
+durable alarm remains the recovery path. Once ingress is durably accepted,
+Chrome also opens a bounded notification lease watch on the same pulse. This
+lets notify-only jobs—including validated Walmart direct-cart handoffs—reach
+Chrome without waiting up to 30 seconds for an alarm. A coalesced drain
+preserves the strongest pending wait and immediately leases up to the complete
+20-signal ingress-batch bound. A retryable or rejected ingress receipt never
+opens that notification watch. Exact in-stock drop-window observations use the
+same shared job-and-notification handoff after the server confirms that it
+queued a signal. Server-originated providers such as Discord or internal API
+delivery have no local Chrome push to start that path, so every recurring job
+alarm holds a parallel 25-second notification lease watch after dispatching the
+job lease; cold startup establishes the same pair. This covers most of the
+30-second alarm interval while retaining the alarm as recovery if Chrome
+suspends a bounded request. On the recovery alarm, the job lease is dispatched
+before secondary handoff reconciliation or notification polling.
+Each bounded drain
+performs one local store-access preflight; every lease remains
+server-authoritative, while general health and heartbeat refresh stay on the
+minute cycle. Navigation and exact-offer inspection may run while their
+corresponding progress acknowledgements are in flight, but both required
+branches fully settle before advancing. The durable `adding` acknowledgement
+still precedes the single Add click, and the post-click heartbeat still
+precedes exact cart proof. A clean pre-click rejection may yield to another
+queued job, while any mutation-uncertain state stops the drain. A verified
+post-add cart inventory may serve as a short-lived
 in-memory baseline for the next same-retailer job only when it passes the same
 bounded SKU/quantity grammar. The next post-click delta proof is unchanged.
-Sanitized monotonic latency evidence includes only lease-to-cart-ready and
-click-to-cart-ready durations.
+Without a warm baseline, the exact product load and inactive read-only cart
+baseline load start concurrently; both must finish before verification and the
+temporary cart tab closes before Add. This removes one serial full-page load
+from the cold path without moving any authorization or mutation boundary. Cold
+baseline capture and post-click proof each run through one isolated, allowlisted
+read-only page-world call instead of fixed background sleeps and repeated
+browser injections. A document mutation triggers a quiet 60 ms
+recheck; one 250 ms in-page fallback covers property or shadow-root changes
+that do not reach the document observer. The original 1.5-second baseline,
+2.25-second proof, and 350 ms warm-readiness ceilings remain fail-closed. Only
+the lane's packaged baseline and cart-proof methods are accepted; prepare and
+commit operations cannot enter this retry path.
+Sanitized monotonic latency evidence contains only fixed, bounded durations:
+signal observed-to-received, received-to-job, job-to-lease, lease-to-cart-ready,
+and click-to-cart-ready totals, plus lease-to-baseline, baseline-to-exact-offer,
+offer-to-authorized-click, click-to-settle, and settle-to-cart-proof phases.
+The five Chrome phases exactly decompose lease-to-cart-ready; click-to-settle
+plus settle-to-cart-proof decomposes click-to-cart-ready. Unknown evidence keys
+are discarded at both the Chrome handoff and database boundary. Activity shows
+the Chrome total and slowest measured phase, while the detailed Insights view
+and CSV expose ordered p50/p95 aggregates without retailer page content or
+browser identity.
+
+Warm readiness runs beneath the action-job priority lane. Each health cycle
+requests at most one coalesced warm pass covering two retailer lanes. If the
+25-second job watch is active, the request waits for that promise to settle and
+then runs; it is not discarded merely because the 30-second and one-minute
+alarms aligned. The cursor therefore reaches all four guarded retailers while
+the five-minute baseline remains useful, without competing with a real Add.
+Fresh `signed_out` or `challenged` evidence for the exact paired device and
+current store adapter defers that store's jobs without consuming them. Unknown,
+stale, or prior-adapter evidence remains non-authoritative so guest-capable
+stores are not blocked. A readiness recovery pulses the bounded job watch and
+the preserved job can lease immediately. A completed exact retailer page also
+performs a coalesced, read-only account/challenge recheck. It keeps a rendered
+challenge blocked, but after the user signs in or clears the check it replaces
+the stale blocker and resumes the preserved job watch without waiting for the
+next warm rotation. The same per-device evidence feeds the
+pure purchase-plan readiness projection: a plan stays armed when any capable
+online device remains session-eligible, while an all-device blocker becomes one
+truthful **Open store in Chrome** action using the normal affiliate-aware link.
 
 ## Affiliate routing
 
@@ -1174,7 +1350,55 @@ routing, the user dashboard, and the admin directory table. Matching requires
 HTTPS, an exact normalized hostname, and the listed locale path when present;
 lookalike domains, unlisted stores, and out-of-scope locale paths never receive a
 Howl prefix. The browser fetches this directory once per page session rather
-than adding it to recurring status snapshots.
+than adding it to recurring status snapshots. User-facing retailer links first
+validate their direct HTTPS destination against the four guarded retailer hosts
+or the server-provided registered-retailer directory, then attempt attribution.
+If the directory request or Howl configuration is unavailable, the validated
+direct destination remains visible; an arbitrary HTTPS host never becomes a
+fallback. Affiliate availability therefore cannot remove the manual cart or
+store-page escape path.
+
+Qualified Walmart notification jobs may expose a separate manual purchase
+handoff. The domain layer extracts the exact numeric item ID and builds
+`/affil/cart/reviewOrder?items={id}&cn=nc&veh=aff` only while the immutable
+offer snapshot is fresh, in stock, within the reviewed unit cap, Walmart-sold,
+shipping-compatible, trusted-exact, and tied to a qualified notify-only event.
+When that job's Howl policy is valid, the review-order destination is wrapped
+with the documented Howl protocol and `u1=walmart_{id}`; Yoink never stores or
+synthesizes Impact click parameters. Chrome opens this route only after the
+user clicks **Buy at Walmart** or its durable notification. It persists an
+expiry-bound route record so invalid Howl data falls back to raw reviewOrder,
+while expired or invalid direct-cart evidence falls back to the exact PDP. The
+notification handler starts the validated tab navigation before its loopback
+interaction receipt, so slow or unavailable telemetry cannot delay checkout.
+While that evidence remains live, the popup can recover the same opportunity
+without receiving or rendering its route: the service worker exposes only the
+sanitized Walmart identity and expiry, then re-reads and consumes the trusted
+route when the user invokes **Buy at Walmart**. On an idle page this is the
+popup's sole dominant action; on an exact supported product or drawings page it
+is the one secondary activity row so page-specific inspection keeps priority.
+Route consumption is serialized and one-use across popup and notification
+clicks, preventing concurrent gestures from opening reviewOrder twice.
+Dismissing the notification also removes popup recovery.
+The interaction and notification cleanup still settle independently. Home
+fills its otherwise-idle compact action slot with the newest validated Walmart
+handoff; an existing Cart ready or Needs you handoff always outranks it. Home
+and Calls apply the same route hierarchy: they accept an exact
+server-generated Howl wrapper, can wrap a validated raw route from the current
+dashboard policy, and otherwise use the separately validated raw fallback. A
+bounded expiry timer removes the direct-cart control in place when its evidence
+ages out, leaving the affiliate-aware PDP link instead of a stale cart action.
+Opening either dashboard action sends a non-blocking, keepalive click receipt without
+waiting before retailer navigation. The user-scoped server re-derives the
+current handoff from immutable offer evidence before accepting that receipt,
+then atomically writes one deterministic audit/outbox event per job. Later
+receipts return that original result instead of authorizing another route. The
+first click also closes any pending, leased, or delivered Chrome notification;
+the existing notification watch promptly removes the matching local route and
+OS notification from its assigned device. The
+receipt stores only the Walmart item ID, internal `u1` tracking ID, route kind,
+and surface; it never stores the destination URL or Howl/Impact click parameters.
+The guarded add runner remains independent and this handoff never races it.
 
 Raw Amazon offer IDs are volatile. Yoink may retain a one-way fingerprint for
 dedupe, but it does not write the token into SQLite, diagnostics, or audit data.

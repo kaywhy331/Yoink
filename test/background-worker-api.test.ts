@@ -261,12 +261,12 @@ test("the admin worker API exposes safe controls without lease capability materi
     const page = await fetch(`${baseUrl}/admin`).then((response) => response.text());
     const script = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(page, /Durable maintenance/);
-    assert.match(page, /Durable evaluation with closed browser mutation/);
-    assert.match(page, /package version, closed task registry, and public witness configuration attest/);
+    assert.match(page, /Background work totals/);
+    assert.match(page, /Recovery queue/);
     assert.match(script, /renderBackgroundWork/);
     assert.match(script, /data-worker-task-retry/);
     assert.match(script, /data-signal-inbox-retry/);
-    assert.match(script, /CONFIG MISMATCH/);
+    assert.match(script, /deploymentMismatch \|\| activeProblems \? "Attention"/);
   } finally {
     server.close();
     await once(server, "close");

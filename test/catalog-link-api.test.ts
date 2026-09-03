@@ -46,6 +46,7 @@ test("exact product-link API previews identity and queues review without catalog
     const proposalResponse = await post("/api/v1/user/catalog/link-proposals", {
       url: "https://www.amazon.com/Card-Game/dp/B0DCGQ6CJD/ref=tracking",
       title: "Card Game Family Travel Kids",
+      msrpCents: 2499,
       confirmation: PROPOSE_EXACT_PRODUCT_LINK_CONFIRMATION
     });
     assert.equal(proposalResponse.status, 202);
@@ -56,6 +57,7 @@ test("exact product-link API previews identity and queues review without catalog
     assert.equal(proposal.disposition, "created");
     assert.equal(proposal.proposal.status, "pending");
     assert.equal(proposal.proposal.payload.canonicalUrl, "https://www.amazon.com/dp/B0DCGQ6CJD");
+    assert.equal(proposal.proposal.payload.msrpCents, 2499);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM listings")?.count, 0);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count, 0);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM offer_observations")?.count, 0);

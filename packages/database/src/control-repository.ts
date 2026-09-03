@@ -8,6 +8,7 @@ import {
   LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION,
   LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION,
   PURCHASE_INTENT_DELETE_CONFIRMATION,
+  PURCHASE_PROFILE_APPLY_CONFIRMATION,
   type LegacyPurchaseIntentTransitionInput,
   type MissionContext,
   type PurchaseIntentCreateInput,
@@ -19,9 +20,12 @@ import {
   type PurchaseIntentPolicyUpdateInput,
   type MissionUpdateInput,
   type PurchaseProfile,
+  type PurchaseProfileApplyInput,
+  type PurchaseProfileApplyResult,
   type PurchaseProfileInput,
   type PurchaseProfilePropagationSkip,
   type PurchaseProfilePropagationSummary,
+  type PurchaseProfileRetailerReconciliationResult,
   type PurchaseProfileSaveResult,
   type SellerPolicy,
   type StrategyDefinition
@@ -345,7 +349,15 @@ export class ControlRepository {
     try {
       const parsed = JSON.parse(row.purchase_profiles_json) as unknown;
       if (!Array.isArray(parsed)) return [];
-      return parsed.filter((value): value is PurchaseProfile => Boolean(value) && typeof value === "object");
+      return parsed
+        .filter((value): value is PurchaseProfile => Boolean(value) && typeof value === "object")
+        .map((profile) => ({
+          ...profile,
+          // Profiles pre-dating explicit fulfillment were shipping-only in
+          // every quick-add call site. Preserve that behavior while upgrading
+          // their projected contract without a migration or silent pickup.
+          fulfillment: profile.fulfillment === "pickup" ? "pickup" : "shipping"
+        }));
     } catch {
       return [];
     }
@@ -366,6 +378,7 @@ export class ControlRepository {
       throw new Error("Profile quantity must be 1 through 99.");
     }
     const actionCeiling = input?.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify";
+    const fulfillment = input?.fulfillment === "pickup" ? "pickup" : "shipping";
     const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent"].includes(String(input?.priceMode))
       ? (input?.priceMode as PurchaseProfile["priceMode"])
       : "store_price";
@@ -396,6 +409,7 @@ export class ControlRepository {
       name,
       targetQuantity,
       actionCeiling,
+      fulfillment,
       priceMode,
       maxUnitPriceCents,
       msrpOffsetPercent,
@@ -498,15 +512,27 @@ export class ControlRepository {
       : null;
   }
 
-  private propagatePurchaseProfile(profile: PurchaseProfile, now: number): PurchaseProfilePropagationSummary {
+  private propagatePurchaseProfile(
+    profile: PurchaseProfile,
+    now: number,
+    missionIds?: readonly string[]
+  ): PurchaseProfilePropagationSummary {
     const scope = currentRequestScope();
+    if (missionIds && !missionIds.length) {
+      return { matchedMissionCount: 0, updatedMissionCount: 0, skipped: [] };
+    }
+    const missionFilter = missionIds
+      ? ` AND m.id IN (${missionIds.map(() => "?").join(", ")})`
+      : "";
     const missions = this.db.all<{ id: string; title: string; targetQuantity: number }>(
       `SELECT m.id, v.title, m.target_quantity AS targetQuantity
        FROM missions m JOIN variants v ON v.id = m.variant_id
-       WHERE m.tenant_id = ? AND m.user_id = ? AND m.quick_add_profile_id = ?`,
+       WHERE m.tenant_id = ? AND m.user_id = ? AND m.quick_add_profile_id = ?
+         AND m.status IN ('active', 'paused')${missionFilter}`,
       scope.tenantId,
       scope.userId,
-      profile.id
+      profile.id,
+      ...(missionIds ?? [])
     );
     if (!missions.length) return { matchedMissionCount: 0, updatedMissionCount: 0, skipped: [] };
     const settings = this.settings();
@@ -517,11 +543,12 @@ export class ControlRepository {
         id: string;
         retailerId: string;
         executionSupported: number;
+        maxUnitPriceCents: number | null;
         msrpCents: number | null;
         currentPriceCents: number | null;
       }>(
         `SELECT mt.id, l.retailer_id AS retailerId, l.execution_supported AS executionSupported,
-                l.msrp_cents AS msrpCents,
+                mt.max_unit_price_cents AS maxUnitPriceCents, l.msrp_cents AS msrpCents,
                 (SELECT oo.unit_price_cents FROM offer_observations oo
                  WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
                  ORDER BY oo.observed_at DESC LIMIT 1) AS currentPriceCents
@@ -533,7 +560,17 @@ export class ControlRepository {
         skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "no_enabled_target" });
         continue;
       }
-      const resolved: Array<{ id: string; retailerId: string; executionSupported: boolean; maxUnitPriceCents: number }> = [];
+      if (profile.actionCeiling === "add_to_cart"
+        && targets.some((target) => Number(target.executionSupported) !== 1)) {
+        skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "unsupported_target" });
+        continue;
+      }
+      const resolved: Array<{
+        id: string;
+        retailerId: string;
+        executionSupported: boolean;
+        maxUnitPriceCents: number | null;
+      }> = [];
       let missingReason: "msrp_unavailable" | "price_unavailable" | null = null;
       for (const target of targets) {
         const unit = this.resolveProfileUnitPriceCents(profile, {
@@ -541,56 +578,301 @@ export class ControlRepository {
           currentPriceCents: target.currentPriceCents === null ? null : Number(target.currentPriceCents)
         });
         if (unit === null) {
-          missingReason = profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent"
-            ? "msrp_unavailable"
-            : "price_unavailable";
-          break;
+          if (profile.actionCeiling === "add_to_cart") {
+            missingReason = profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent"
+              ? "msrp_unavailable"
+              : "price_unavailable";
+            break;
+          }
         }
         resolved.push({
           id: target.id,
           retailerId: target.retailerId,
           executionSupported: Number(target.executionSupported) === 1,
-          maxUnitPriceCents: unit
+          // Reducing a profile to notification-only must never be blocked by
+          // missing price evidence. Preserve the prior target cap until fresh
+          // evidence can safely re-derive it.
+          maxUnitPriceCents: unit ?? (target.maxUnitPriceCents === null ? null : Number(target.maxUnitPriceCents))
         });
       }
       if (missingReason) {
         skipped.push({ missionId: mission.id, title: mission.title, reasonCode: missingReason });
         continue;
       }
-      const executable = resolved.every((target) => target.executionSupported);
-      const actionCeiling = profile.actionCeiling === "add_to_cart" && executable ? "add_to_cart" : "notify";
+      const actionCeiling = profile.actionCeiling;
       const taxBps = actionCeiling === "add_to_cart" ? Math.max(0, settings.taxBps) : 0;
-      const requiredAllInCents = Math.max(...resolved.map((target) => {
-        const itemTotal = target.maxUnitPriceCents * Number(mission.targetQuantity);
-        const storeReserve = actionCeiling === "add_to_cart"
-          ? Math.max(0, Number(settings.storeAllowancesCents[target.retailerId] ?? 0))
-          : 0;
-        return Math.ceil(itemTotal * (10_000 + taxBps) / 10_000) + storeReserve;
-      }));
-      if (!Number.isSafeInteger(requiredAllInCents) || requiredAllInCents <= 0) {
-        skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "no_enabled_target" });
-        continue;
+      let requiredAllInCents: number | undefined;
+      if (actionCeiling === "add_to_cart") {
+        requiredAllInCents = Math.max(...resolved.map((target) => {
+          const itemTotal = Number(target.maxUnitPriceCents) * profile.targetQuantity;
+          const storeReserve = Math.max(0, Number(settings.storeAllowancesCents[target.retailerId] ?? 0));
+          return Math.ceil(itemTotal * (10_000 + taxBps) / 10_000) + storeReserve;
+        }));
+        if (!Number.isSafeInteger(requiredAllInCents) || requiredAllInCents <= 0) {
+          skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "no_enabled_target" });
+          continue;
+        }
+      } else if (resolved.every((target) => target.maxUnitPriceCents !== null)) {
+        requiredAllInCents = Math.max(...resolved.map((target) => Number(target.maxUnitPriceCents) * profile.targetQuantity));
       }
       const timestamp = nowIso(now);
+      this.db.run(
+        "UPDATE missions SET target_quantity = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND user_id = ?",
+        profile.targetQuantity,
+        timestamp,
+        mission.id,
+        scope.tenantId,
+        scope.userId
+      );
       for (const target of resolved) {
-        this.db.run(
-          "UPDATE mission_targets SET max_unit_price_cents = ?, updated_at = ? WHERE id = ? AND mission_id = ?",
-          target.maxUnitPriceCents,
-          timestamp,
-          target.id,
-          mission.id
-        );
+        if (actionCeiling === "add_to_cart") {
+          this.db.run(
+            `UPDATE mission_targets
+             SET max_unit_price_cents = ?, seller_policy = 'first_party_only', fulfillment = ?, updated_at = ?
+             WHERE id = ? AND mission_id = ?`,
+            target.maxUnitPriceCents,
+            profile.fulfillment,
+            timestamp,
+            target.id,
+            mission.id
+          );
+        } else {
+          this.db.run(
+            "UPDATE mission_targets SET max_unit_price_cents = ?, updated_at = ? WHERE id = ? AND mission_id = ?",
+            target.maxUnitPriceCents,
+            timestamp,
+            target.id,
+            mission.id
+          );
+        }
       }
-      this.purchasePolicies.revise(mission.id, {
-        maxAllInCents: requiredAllInCents,
+      const intentPolicy = this.purchasePolicies.revise(mission.id, {
+        ...(requiredAllInCents === undefined ? {} : { maxAllInCents: requiredAllInCents }),
         actionCeiling,
         decisionMode: "purchase_intent",
         cooldownSeconds: profile.cooldownSeconds,
-        changeReason: `Quick-add profile "${profile.name}" was updated; this plan's limits were automatically re-derived.`
+        changeReason: `Quick-add profile "${profile.name}" was applied or updated; this plan's limits were automatically re-derived.`
       }, now);
+      const stalePendingJobs = this.db.all<{ id: string }>(
+        `SELECT id FROM action_jobs
+         WHERE mission_id = ? AND tenant_id = ? AND user_id = ?
+           AND intent_revision_id IS NOT NULL AND intent_revision_id <> ?
+           AND state IN ('shadow_ready', 'awaiting_executor')
+         ORDER BY created_at, id`,
+        mission.id,
+        scope.tenantId,
+        scope.userId,
+        intentPolicy.id
+      );
+      for (const job of stalePendingJobs) {
+        this.signals.transitionJob(
+          job.id,
+          "cancelled",
+          "intent_revision_superseded",
+          "The purchase profile changed before the action was leased; the stale job and reservation were cancelled.",
+          { intentRevision: intentPolicy.revision, purchaseProfileId: profile.id },
+          now
+        );
+      }
       updatedMissionCount += 1;
     }
     return { matchedMissionCount: missions.length, updatedMissionCount, skipped };
+  }
+
+  applyPurchaseProfileToMissions(
+    input: PurchaseProfileApplyInput,
+    now = Date.now()
+  ): PurchaseProfileApplyResult {
+    if (input?.confirmation !== PURCHASE_PROFILE_APPLY_CONFIRMATION) {
+      throw new PurchaseSafetyError(
+        "purchase_profile_apply_confirmation_required",
+        400,
+        "Review and confirm the saved setup before applying it to purchase plans."
+      );
+    }
+    const profileId = cleanText(input?.profileId, 120);
+    const missionIds = Array.isArray(input?.missionIds)
+      ? [...new Set(input.missionIds.map((id) => cleanText(id, 120)))]
+      : [];
+    if (!/^[A-Za-z0-9_-]{3,120}$/.test(profileId)) {
+      throw new PurchaseSafetyError("purchase_profile_invalid", 400, "Choose a current saved purchase profile.");
+    }
+    if (!missionIds.length || missionIds.length > 200
+      || missionIds.some((id) => !/^[A-Za-z0-9_-]{3,120}$/.test(id))) {
+      throw new PurchaseSafetyError(
+        "purchase_profile_plan_selection_invalid",
+        400,
+        "Choose between one and 200 current purchase plans."
+      );
+    }
+
+    return this.db.transaction(() => {
+      const scope = currentRequestScope();
+      const profile = this.listPurchaseProfiles().find((candidate) => candidate.id === profileId);
+      if (!profile) {
+        throw new PurchaseSafetyError("purchase_profile_not_found", 404, "That saved purchase profile no longer exists.");
+      }
+      const placeholders = missionIds.map(() => "?").join(", ");
+      const missions = this.db.all<{ id: string; status: string }>(
+        `SELECT id, status FROM missions
+         WHERE tenant_id = ? AND user_id = ? AND status <> 'deleted'
+           AND id IN (${placeholders})`,
+        scope.tenantId,
+        scope.userId,
+        ...missionIds
+      );
+      if (missions.length !== missionIds.length) {
+        throw new PurchaseSafetyError(
+          "purchase_profile_plan_selection_stale",
+          409,
+          "One or more selected purchase plans changed. Refresh and review the selection again."
+        );
+      }
+      if (missions.some((mission) => !["active", "paused"].includes(mission.status))) {
+        throw new PurchaseSafetyError(
+          "purchase_profile_plan_status_invalid",
+          409,
+          "Saved setups can be applied only to active or paused purchase plans."
+        );
+      }
+      const timestamp = nowIso(now);
+      let linkedMissionCount = 0;
+      for (const missionId of missionIds) {
+        const linked = this.db.run(
+          `UPDATE missions SET quick_add_profile_id = ?, updated_at = ?
+           WHERE id = ? AND tenant_id = ? AND user_id = ? AND status IN ('active', 'paused')`,
+          profile.id,
+          timestamp,
+          missionId,
+          scope.tenantId,
+          scope.userId
+        );
+        linkedMissionCount += Number(linked.changes ?? 0);
+      }
+      const propagation = this.propagatePurchaseProfile(profile, now, missionIds);
+      this.auditEvents.record({
+        correlationId: profile.id,
+        aggregateType: "purchase_profile",
+        eventType: "purchase_profile_applied",
+        reasonCode: "user_confirmed",
+        message: "The user applied one saved purchase setup to an explicit set of current plans.",
+        data: {
+          profileId: profile.id,
+          profileName: profile.name,
+          actionCeiling: profile.actionCeiling,
+          fulfillment: profile.fulfillment,
+          selectedMissionCount: missionIds.length,
+          linkedMissionCount,
+          updatedMissionCount: propagation.updatedMissionCount,
+          skippedMissionCount: propagation.skipped.length
+        }
+      }, now);
+      return {
+        profile,
+        selectedMissionCount: missionIds.length,
+        linkedMissionCount,
+        propagation
+      };
+    });
+  }
+
+  reconcilePurchaseProfilesForRetailer(
+    retailerId: string,
+    now = Date.now()
+  ): PurchaseProfileRetailerReconciliationResult {
+    const normalizedRetailerId = cleanText(retailerId, 40) as PurchaseProfileRetailerReconciliationResult["retailerId"];
+    if (!["target", "walmart", "amazon", "bestbuy"].includes(normalizedRetailerId)) {
+      throw new Error("A guarded retailer is required for purchase-profile reconciliation.");
+    }
+    return this.db.transaction(() => {
+      const scope = currentRequestScope();
+      const profiles = new Map(this.listPurchaseProfiles()
+        .filter((profile) => profile.actionCeiling === "add_to_cart")
+        .map((profile) => [profile.id, profile]));
+      const rows = this.db.all<{ missionId: string; profileId: string }>(
+        `SELECT DISTINCT m.id AS missionId, m.quick_add_profile_id AS profileId
+         FROM missions m
+         JOIN mission_targets mt ON mt.mission_id = m.id AND mt.enabled = 1
+         JOIN listings l ON l.id = mt.listing_id
+         WHERE m.tenant_id = ? AND m.user_id = ? AND m.status IN ('active', 'paused')
+           AND m.quick_add_profile_id <> '' AND l.retailer_id = ?
+         ORDER BY m.id`,
+        scope.tenantId,
+        scope.userId,
+        normalizedRetailerId
+      ).filter((row) => profiles.has(row.profileId));
+      const missionIdsByProfile = new Map<string, string[]>();
+      for (const row of rows) {
+        const ids = missionIdsByProfile.get(row.profileId) ?? [];
+        ids.push(row.missionId);
+        missionIdsByProfile.set(row.profileId, ids);
+      }
+      let updatedMissionCount = 0;
+      const skipped: PurchaseProfilePropagationSkip[] = [];
+      for (const [profileId, missionIds] of missionIdsByProfile) {
+        const profile = profiles.get(profileId);
+        if (!profile) continue;
+        const propagation = this.propagatePurchaseProfile(profile, now, missionIds);
+        updatedMissionCount += propagation.updatedMissionCount;
+        skipped.push(...propagation.skipped);
+      }
+      const result: PurchaseProfileRetailerReconciliationResult = {
+        retailerId: normalizedRetailerId,
+        matchedProfileCount: missionIdsByProfile.size,
+        matchedMissionCount: rows.length,
+        updatedMissionCount,
+        skipped
+      };
+      if (rows.length) {
+        this.auditEvents.record({
+          correlationId: normalizedRetailerId,
+          aggregateType: "retailer_qualification",
+          eventType: "purchase_profiles_reconciled",
+          reasonCode: "retailer_lane_activated",
+          message: "Previously reviewed saved setups were revalidated after a guarded retailer lane became executable.",
+          data: {
+            ...result,
+            skippedMissionCount: skipped.length
+          }
+        }, now);
+      }
+      return result;
+    });
+  }
+
+  reconcilePurchaseProfileForListing(
+    listingId: string,
+    now = Date.now()
+  ): PurchaseProfilePropagationSummary {
+    const id = cleanText(listingId, 120);
+    if (!/^[A-Za-z0-9_-]{3,120}$/.test(id)) {
+      return { matchedMissionCount: 0, updatedMissionCount: 0, skipped: [] };
+    }
+    const scope = currentRequestScope();
+    const linked = this.db.get<{
+      missionId: string;
+      profileId: string;
+      missionUpdatedAt: string;
+    }>(
+      `SELECT m.id AS missionId, m.quick_add_profile_id AS profileId, m.updated_at AS missionUpdatedAt
+       FROM missions m
+       JOIN mission_targets mt ON mt.mission_id = m.id
+       WHERE m.tenant_id = ? AND m.user_id = ? AND m.status IN ('active', 'paused')
+         AND m.quick_add_profile_id <> '' AND mt.listing_id = ?
+       LIMIT 1`,
+      scope.tenantId,
+      scope.userId,
+      id
+    );
+    if (!linked) return { matchedMissionCount: 0, updatedMissionCount: 0, skipped: [] };
+    const profile = this.listPurchaseProfiles().find((candidate) => candidate.id === linked.profileId);
+    if (!profile) return { matchedMissionCount: 0, updatedMissionCount: 0, skipped: [] };
+    const current = this.currentPurchaseIntentPolicy(linked.missionId, now);
+    const profileChangedAfterMission = new Date(profile.updatedAt).getTime() > new Date(linked.missionUpdatedAt).getTime();
+    if (current.actionCeiling === profile.actionCeiling && !profileChangedAfterMission) {
+      return { matchedMissionCount: 1, updatedMissionCount: 0, skipped: [] };
+    }
+    return this.db.transaction(() => this.propagatePurchaseProfile(profile, now, [linked.missionId]));
   }
 
   listStrategies(): StrategyDefinition[] {
@@ -753,11 +1035,11 @@ export class ControlRepository {
       throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Guided purchase plans require the retailer itself and the exact selected item.");
     }
     if (!["shipping", "pickup", "either", "manual"].includes(String(input?.fulfillment))) {
-      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Choose Shipping, Pickup, or manual fulfillment.");
+      throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Choose Shipping or Pickup.");
     }
     const fulfillment = input.fulfillment === "pickup"
       ? "pickup"
-      : input.fulfillment === "manual" ? "manual" : "shipping";
+      : "shipping";
     if (input.actionCeiling === "add_to_cart" && !["shipping", "pickup"].includes(fulfillment)) {
       throw new PurchaseSafetyError("purchase_intent_invalid", 400, "Automatic cart actions require an exact Shipping or Pickup choice.");
     }
@@ -1292,7 +1574,7 @@ export class ControlRepository {
         id: targetId,
         enabled: target.enabled,
         maxUnitPriceCents: cap,
-        sellerPolicy: target.sellerPolicy,
+        sellerPolicy: String(target.sellerPolicy),
         fulfillment: target.fulfillment
       };
     });
@@ -1504,7 +1786,7 @@ export class ControlRepository {
     const missions = this.db.all<Record<string, unknown>>(
       `SELECT m.id, m.status, m.origin, m.target_quantity AS targetQuantity,
               m.fulfilled_quantity AS fulfilledQuantity, v.id AS variantId,
-              v.title, COUNT(mt.id) AS targetCount,
+              v.title, m.quick_add_profile_id AS quickAddProfileId, COUNT(mt.id) AS targetCount,
               SUM(CASE WHEN mt.enabled = 1 THEN 1 ELSE 0 END) AS enabledTargetCount,
               (SELECT ir.revision FROM mission_intent_revisions ir
                WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS intentRevision,
@@ -1529,6 +1811,10 @@ export class ControlRepository {
                JOIN listings l2 ON l2.id = mt2.listing_id
                WHERE mt2.mission_id = m.id AND mt2.enabled = 1
                ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryRetailerSku,
+              (SELECT l2.canonical_url FROM mission_targets mt2
+               JOIN listings l2 ON l2.id = mt2.listing_id
+               WHERE mt2.mission_id = m.id AND mt2.enabled = 1
+               ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryCanonicalUrl,
               (SELECT mt2.max_unit_price_cents FROM mission_targets mt2
                WHERE mt2.mission_id = m.id AND mt2.enabled = 1
                ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryMaxUnitPriceCents,

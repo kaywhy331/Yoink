@@ -55,11 +55,17 @@ test("provider-neutral ingress gives every Discord channel isolated trust, repla
   const db = new YoinkDatabase();
   try {
     const providers = new SignalProviderRepository(db);
+    assert.throws(() => providers.createChannel({
+      provider: "discord",
+      name: "Invalid reference",
+      externalReference: "discord-channel-name",
+      trustLevel: "informational"
+    }, NOW), /17–20 digit Discord channel ID/);
     const ingress = new DurableSignalIngressService(db);
     const channel = providers.createChannel({
       provider: "discord",
       name: "West Coast drops",
-      externalReference: "discord-channel-998877665544332211",
+      externalReference: "998877665544332211",
       trustLevel: "informational",
       replayWindowSeconds: 300
     }, NOW);
@@ -211,7 +217,7 @@ test("accepted provider ingress wakes the in-process worker without delaying its
     const channel = providers.createChannel({
       provider: "discord",
       name: "Wake fixture",
-      externalReference: "discord-channel-wake-fixture",
+      externalReference: "887766554433221100",
       trustLevel: "informational",
       replayWindowSeconds: 300
     }, NOW);

@@ -1,13 +1,19 @@
 import { randomBytes } from "node:crypto";
 import type {
+  DropWindowCancelReason,
   DropWindowInput,
   DropWindowKind,
   DropWindowStatus,
+  DropWindowUpdateInput,
   WatchQueueMode,
   WatchQueueObservationInput,
   WatchQueueState
 } from "../../contracts/src/action-platform.js";
-import { DROP_WINDOW_CONTRACT_VERSION, WATCH_QUEUE_CONTRACT_VERSION } from "../../contracts/src/action-platform.js";
+import {
+  DROP_WINDOW_CANCEL_REASONS,
+  DROP_WINDOW_CONTRACT_VERSION,
+  WATCH_QUEUE_CONTRACT_VERSION
+} from "../../contracts/src/action-platform.js";
 import type { SignalEventInput, SupportedRetailerId } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText, normalizeRetailerSku, positiveCents } from "../../domain/src/normalize.js";
@@ -25,6 +31,7 @@ const ACTIVE_WATCH_STATES = ["queued", "observing"] as const;
 const OBSERVATION_LEASE_MS = 45_000;
 const OBSERVATION_LEAD_MS = 15 * 60_000;
 const MAX_PRODUCTS = 50;
+type DropWindowAccessScope = "user" | "tenant";
 
 interface ListingRow {
   listingId: string;
@@ -92,8 +99,25 @@ interface WatchRow extends WindowItemRow {
 export interface DropWindowRecord extends Omit<WindowRow, "supersedesId" | "supersededById"> {
   supersedesId: string;
   supersededById: string;
+  /** Watches still active for this window (queued or observing); cancelled and closed watches do not count. */
+  optInCount: number;
   items: Array<WindowItemRow & { earlyAccess: Record<string, unknown>; watch: WatchQueueRecord | null }>;
 }
+
+export interface DropWindowOptedInUser {
+  userId: string;
+  displayName: string;
+}
+
+export interface DropWindowDetailRecord extends Omit<DropWindowRecord, "items"> {
+  optInCount: number;
+  optedInUsers: DropWindowOptedInUser[];
+  items: Array<DropWindowRecord["items"][number] & {
+    optInCount: number;
+    watchStateCounts: Record<WatchQueueState, number>;
+  }>;
+}
+
 
 export interface WatchQueueRecord {
   id: string;
@@ -312,7 +336,7 @@ export class DropWindowRepository {
     const supersedesId = input.supersedesId
       ? safeId(input.supersedesId, WINDOW_ID, "The superseded drop window")
       : "";
-    const previous = supersedesId ? this.requireWindow(supersedesId) : null;
+    const previous = supersedesId ? this.requireWindow(supersedesId, "tenant") : null;
     if (previous && (previous.retailerId !== input.retailerId || !["scheduled", "active"].includes(previous.status))) {
       throw new Error("Only an active or scheduled window for the same retailer can be superseded.");
     }
@@ -346,14 +370,14 @@ export class DropWindowRepository {
       if (previous) {
         this.db.run(
           `UPDATE drop_windows SET status = 'superseded', superseded_by_id = ?, updated_at = ?
-           WHERE id = ? AND tenant_id = ? AND user_id = ?`,
-          windowId, createdAt, previous.id, scope.tenantId, scope.userId
+           WHERE id = ? AND tenant_id = ?`,
+          windowId, createdAt, previous.id, scope.tenantId
         );
         this.db.run(
           `UPDATE watch_queue_items SET state = 'cancelled', closed_reason = 'window_superseded',
              observation_capability_hash = '', lease_expires_at = '', updated_at = ?
-           WHERE drop_window_id = ? AND state IN ('queued', 'observing')`,
-          createdAt, previous.id
+           WHERE drop_window_id = ? AND tenant_id = ? AND state IN ('queued', 'observing')`,
+          createdAt, previous.id, scope.tenantId
         );
       }
       listings.forEach((listing, ordinal) => {
@@ -397,16 +421,280 @@ export class DropWindowRepository {
     return { ...saved, signals: this.windowSignals(saved, channel, now) };
   }
 
-  list(now = Date.now(), includeClosed = true): DropWindowRecord[] {
-    this.refreshWindowStates(now);
+  list(now = Date.now(), includeClosed = true, accessScope: DropWindowAccessScope = "user"): DropWindowRecord[] {
+    this.refreshWindowStates(now, accessScope);
     const scope = currentRequestScope();
+    const ownership = accessScope === "tenant" ? "" : " AND window.user_id = ?";
+    const parameters = accessScope === "tenant"
+      ? [scope.tenantId, includeClosed ? 1 : 0]
+      : [scope.tenantId, scope.userId, includeClosed ? 1 : 0];
     return this.db.all<WindowRow>(
       `${WINDOW_SELECT}
-       WHERE window.tenant_id = ? AND window.user_id = ?
+       WHERE window.tenant_id = ?${ownership}
          AND (? = 1 OR window.status IN ('scheduled', 'active'))
        ORDER BY window.starts_at DESC, window.id DESC`,
-      scope.tenantId, scope.userId, includeClosed ? 1 : 0
-    ).map((row) => this.hydrateWindow(row));
+      ...parameters
+    ).map((row) => this.hydrateWindow(row, accessScope));
+  }
+
+  detail(id: string, now = Date.now(), accessScope: DropWindowAccessScope = "user"): DropWindowDetailRecord | null {
+    this.refreshWindowStates(now, accessScope);
+    const window = this.get(id, accessScope);
+    if (!window) return null;
+    const scope = currentRequestScope();
+    const counts = this.db.all<{ itemId: string; state: WatchQueueState; count: number }>(
+      `SELECT drop_window_item_id AS itemId, state, COUNT(*) AS count
+       FROM watch_queue_items
+       WHERE drop_window_id = ? AND tenant_id = ?
+       GROUP BY drop_window_item_id, state`,
+      window.id, scope.tenantId
+    );
+    const byItem = new Map<string, Record<WatchQueueState, number>>();
+    for (const row of counts) {
+      const current = byItem.get(row.itemId) ?? {
+        queued: 0,
+        observing: 0,
+        seen_in_stock: 0,
+        window_closed: 0,
+        cancelled: 0
+      };
+      current[row.state] = Number(row.count);
+      byItem.set(row.itemId, current);
+    }
+    const items = window.items.map((item) => {
+      const watchStateCounts = byItem.get(item.id) ?? {
+        queued: 0,
+        observing: 0,
+        seen_in_stock: 0,
+        window_closed: 0,
+        cancelled: 0
+      };
+      return {
+        ...item,
+        optInCount: watchStateCounts.queued + watchStateCounts.observing,
+        watchStateCounts
+      };
+    });
+    const optedInUsers = this.db.all<DropWindowOptedInUser>(
+      `SELECT DISTINCT watch.user_id AS userId,
+              COALESCE(person.display_name, 'Unknown user') AS displayName
+       FROM watch_queue_items watch
+       LEFT JOIN users person ON person.id = watch.user_id AND person.tenant_id = watch.tenant_id
+       WHERE watch.drop_window_id = ? AND watch.tenant_id = ?
+         AND watch.state IN ('queued', 'observing')
+       ORDER BY displayName COLLATE NOCASE, watch.user_id`,
+      window.id, scope.tenantId
+    ).map((row) => ({ userId: row.userId, displayName: row.displayName }));
+    return {
+      ...window,
+      optInCount: items.reduce((sum, item) => sum + item.optInCount, 0),
+      optedInUsers,
+      items
+    };
+  }
+
+  update(
+    id: string,
+    input: DropWindowUpdateInput,
+    now = Date.now(),
+    accessScope: DropWindowAccessScope = "user"
+  ): DropWindowDetailRecord {
+    const windowId = safeId(id, WINDOW_ID, "The drop window");
+    this.refreshWindowStates(now, accessScope);
+    const current = this.requireWindow(windowId, accessScope);
+    if (current.status !== "scheduled") {
+      throw new Error("Only a scheduled drop window can be edited.");
+    }
+    const observing = this.db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM watch_queue_items
+       WHERE drop_window_id = ? AND tenant_id = ? AND state = 'observing'`,
+      windowId, currentRequestScope().tenantId
+    )?.count ?? 0;
+    if (Number(observing) > 0) {
+      throw new Error("This drop window is already being observed and can no longer be edited.");
+    }
+
+    const title = input.title === undefined ? current.title : cleanText(input.title, 160);
+    if (title.length < 2) throw new Error("A drop-window title is required.");
+    const starts = input.startsAt === undefined
+      ? { iso: current.startsAt, time: new Date(current.startsAt).getTime() }
+      : exactTimestamp(input.startsAt, "The drop-window start");
+    const closes = input.closesAt === undefined
+      ? { iso: current.closesAt, time: new Date(current.closesAt).getTime() }
+      : exactTimestamp(input.closesAt, "The drop-window close");
+    if (closes.time <= starts.time || closes.time - starts.time > 7 * 24 * 60 * 60_000) {
+      throw new Error("A drop window must close after it starts and within seven days.");
+    }
+    if (starts.time < now - 60 * 60_000 || starts.time > now + 366 * 24 * 60 * 60_000) {
+      throw new Error("The drop-window start is outside the supported scheduling range.");
+    }
+    const spreadSeconds = input.spreadSeconds === undefined
+      ? Number(current.spreadSeconds)
+      : boundedInteger(input.spreadSeconds, "The drop stagger", 0, 86_400);
+    if (spreadSeconds * 1_000 > closes.time - starts.time) {
+      throw new Error("The drop stagger cannot exceed the window duration.");
+    }
+    const confidenceBps = input.confidenceBps === undefined
+      ? Number(current.confidenceBps)
+      : boundedInteger(input.confidenceBps, "The confidence", 0, 10_000);
+    const windowTimezone = input.timezone === undefined ? current.timezone : timezone(input.timezone);
+    const authorNote = input.authorNote === undefined ? current.authorNote : cleanText(input.authorNote, 500);
+    const updateEarlyAccessNote = Object.prototype.hasOwnProperty.call(input, "earlyAccessNote");
+    const earlyAccessNote = updateEarlyAccessNote ? cleanText(input.earlyAccessNote, 240) : "";
+    const timestamp = nowIso(now);
+    const scope = currentRequestScope();
+    const itemOwnership = accessScope === "tenant" ? "" : " AND user_id = ?";
+    const itemParameters = accessScope === "tenant"
+      ? [windowId, scope.tenantId]
+      : [windowId, scope.tenantId, scope.userId];
+    const items = this.db.all<{ id: string; ordinal: number; earlyAccessJson: string }>(
+      `SELECT id, ordinal, early_access_json AS earlyAccessJson
+       FROM drop_window_items
+       WHERE drop_window_id = ? AND tenant_id = ?${itemOwnership}
+       ORDER BY ordinal`,
+      ...itemParameters
+    );
+
+    this.db.transaction(() => {
+      const windowOwnership = accessScope === "tenant" ? "" : " AND user_id = ?";
+      const windowParameters = accessScope === "tenant"
+        ? [title, starts.iso, closes.iso, spreadSeconds, confidenceBps,
+            windowTimezone, authorNote, timestamp, windowId, scope.tenantId]
+        : [title, starts.iso, closes.iso, spreadSeconds, confidenceBps,
+            windowTimezone, authorNote, timestamp, windowId, scope.tenantId, scope.userId];
+      const updateResult = this.db.run(
+        `UPDATE drop_windows
+         SET title = ?, starts_at = ?, closes_at = ?, spread_seconds = ?,
+             confidence_bps = ?, timezone = ?, author_note = ?, updated_at = ?
+         WHERE id = ? AND tenant_id = ?${windowOwnership} AND status = 'scheduled'`,
+        ...windowParameters
+      );
+      if (updateResult.changes !== 1) {
+        throw new Error("The scheduled drop window changed before this edit could be saved.");
+      }
+      items.forEach((item, index) => {
+        const expectedOffset = items.length <= 1
+          ? 0
+          : Math.round((spreadSeconds * 1_000 * index) / (items.length - 1));
+        const access = parsedObject(item.earlyAccessJson);
+        if (updateEarlyAccessNote) {
+          if (earlyAccessNote) access.note = earlyAccessNote;
+          else delete access.note;
+        }
+        const updateItemParameters = accessScope === "tenant"
+          ? [nowIso(starts.time + expectedOffset), JSON.stringify(access), item.id,
+              windowId, scope.tenantId]
+          : [nowIso(starts.time + expectedOffset), JSON.stringify(access), item.id,
+              windowId, scope.tenantId, scope.userId];
+        this.db.run(
+          `UPDATE drop_window_items SET expected_at = ?, early_access_json = ?
+           WHERE id = ? AND drop_window_id = ? AND tenant_id = ?${itemOwnership}`,
+          ...updateItemParameters
+        );
+      });
+      const watches = this.db.all<{ id: string; ordinal: number; jitterSeconds: number }>(
+        `SELECT watch.id, item.ordinal, watch.jitter_seconds AS jitterSeconds
+         FROM watch_queue_items watch
+         JOIN drop_window_items item ON item.id = watch.drop_window_item_id
+         WHERE watch.drop_window_id = ? AND watch.tenant_id = ? AND watch.state = 'queued'`,
+        windowId, scope.tenantId
+      );
+      for (const watch of watches) {
+        const observationStartsAt = Math.max(now, starts.time - OBSERVATION_LEAD_MS);
+        const nextObservationAt = Math.min(
+          closes.time,
+          observationStartsAt + ((Number(watch.ordinal) * Number(watch.jitterSeconds)) % 120) * 1_000
+        );
+        this.db.run(
+          `UPDATE watch_queue_items
+           SET observation_starts_at = ?, observation_closes_at = ?, next_observation_at = ?, updated_at = ?
+           WHERE id = ? AND tenant_id = ? AND state = 'queued'`,
+          nowIso(observationStartsAt), nowIso(closes.time), nowIso(nextObservationAt),
+          timestamp, watch.id, scope.tenantId
+        );
+      }
+      this.audit.record({
+        correlationId: windowId,
+        aggregateType: "drop_window",
+        eventType: "drop_window_updated",
+        reasonCode: "scheduled_window_edited",
+        message: "An administrator updated a scheduled drop window.",
+        data: {
+          dropWindowId: windowId,
+          productCount: items.length,
+          spreadSeconds,
+          confidenceBps
+        }
+      }, now);
+    });
+    const saved = this.detail(windowId, now, accessScope);
+    if (!saved) throw new Error("The updated drop window could not be loaded.");
+    return saved;
+  }
+
+  cancelWindow(
+    id: string,
+    reasonCode: DropWindowCancelReason,
+    now = Date.now(),
+    accessScope: DropWindowAccessScope = "user"
+  ): DropWindowDetailRecord {
+    const windowId = safeId(id, WINDOW_ID, "The drop window");
+    if (!DROP_WINDOW_CANCEL_REASONS.includes(reasonCode)) {
+      throw new Error("Choose a valid reason for cancelling the drop window.");
+    }
+    this.refreshWindowStates(now, accessScope);
+    const current = this.requireWindow(windowId, accessScope);
+    if (current.status === "cancelled") {
+      const cancelled = this.detail(windowId, now, accessScope);
+      if (!cancelled) throw new Error("The cancelled drop window could not be loaded.");
+      return cancelled;
+    }
+    if (!["scheduled", "active"].includes(current.status)) {
+      throw new Error("Only an open drop window can be cancelled.");
+    }
+    const scope = currentRequestScope();
+    const timestamp = nowIso(now);
+    const watches = this.db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM watch_queue_items
+       WHERE drop_window_id = ? AND tenant_id = ? AND state IN ('queued', 'observing')`,
+      windowId, scope.tenantId
+    )?.count ?? 0;
+    this.db.transaction(() => {
+      const windowOwnership = accessScope === "tenant" ? "" : " AND user_id = ?";
+      const windowParameters = accessScope === "tenant"
+        ? [timestamp, windowId, scope.tenantId]
+        : [timestamp, windowId, scope.tenantId, scope.userId];
+      const cancelResult = this.db.run(
+        `UPDATE drop_windows SET status = 'cancelled', updated_at = ?
+         WHERE id = ? AND tenant_id = ?${windowOwnership} AND status IN ('scheduled', 'active')`,
+        ...windowParameters
+      );
+      if (cancelResult.changes !== 1) {
+        throw new Error("The open drop window changed before it could be cancelled.");
+      }
+      this.db.run(
+        `UPDATE watch_queue_items
+         SET state = 'cancelled', closed_reason = 'window_cancelled', assigned_device_id = NULL,
+             observation_capability_hash = '', lease_expires_at = '', updated_at = ?
+         WHERE drop_window_id = ? AND tenant_id = ? AND state IN ('queued', 'observing')`,
+        timestamp, windowId, scope.tenantId
+      );
+      this.audit.record({
+        correlationId: windowId,
+        aggregateType: "drop_window",
+        eventType: "drop_window_cancelled",
+        reasonCode,
+        message: "An administrator cancelled a drop window and its remaining read-only watches.",
+        data: {
+          dropWindowId: windowId,
+          cancelledWatchCount: Number(watches),
+          actionJobsTouched: 0
+        }
+      }, now);
+    });
+    const saved = this.detail(windowId, now, accessScope);
+    if (!saved) throw new Error("The cancelled drop window could not be loaded.");
+    return saved;
   }
 
   watchQueueMode(): WatchQueueMode {
@@ -489,14 +777,18 @@ export class DropWindowRepository {
     return { mode, previousMode, newlyEnrolledCount };
   }
 
-  get(id: string): DropWindowRecord | null {
+  get(id: string, accessScope: DropWindowAccessScope = "user"): DropWindowRecord | null {
     const safeWindowId = safeId(id, WINDOW_ID, "The drop window");
     const scope = currentRequestScope();
+    const ownership = accessScope === "tenant" ? "" : " AND window.user_id = ?";
+    const parameters = accessScope === "tenant"
+      ? [safeWindowId, scope.tenantId]
+      : [safeWindowId, scope.tenantId, scope.userId];
     const row = this.db.get<WindowRow>(
-      `${WINDOW_SELECT} WHERE window.id = ? AND window.tenant_id = ? AND window.user_id = ?`,
-      safeWindowId, scope.tenantId, scope.userId
+      `${WINDOW_SELECT} WHERE window.id = ? AND window.tenant_id = ?${ownership}`,
+      ...parameters
     );
-    return row ? this.hydrateWindow(row) : null;
+    return row ? this.hydrateWindow(row, accessScope) : null;
   }
 
   enroll(dropWindowItemId: string, now = Date.now()): WatchQueueRecord {
@@ -701,28 +993,36 @@ export class DropWindowRepository {
     return row;
   }
 
-  private requireWindow(id: string): WindowRow {
+  private requireWindow(id: string, accessScope: DropWindowAccessScope = "user"): WindowRow {
     const scope = currentRequestScope();
+    const ownership = accessScope === "tenant" ? "" : " AND window.user_id = ?";
+    const parameters = accessScope === "tenant"
+      ? [id, scope.tenantId]
+      : [id, scope.tenantId, scope.userId];
     const row = this.db.get<WindowRow>(
-      `${WINDOW_SELECT} WHERE window.id = ? AND window.tenant_id = ? AND window.user_id = ?`,
-      id, scope.tenantId, scope.userId
+      `${WINDOW_SELECT} WHERE window.id = ? AND window.tenant_id = ?${ownership}`,
+      ...parameters
     );
     if (!row) throw new Error("The drop window does not exist.");
     return row;
   }
 
-  private hydrateWindow(row: WindowRow): DropWindowRecord {
+  private hydrateWindow(row: WindowRow, accessScope: DropWindowAccessScope = "user"): DropWindowRecord {
     const scope = currentRequestScope();
+    const ownership = accessScope === "tenant" ? "" : " AND item.user_id = ?";
+    const parameters = accessScope === "tenant"
+      ? [row.id, scope.tenantId]
+      : [row.id, scope.tenantId, scope.userId];
     const items = this.db.all<WindowItemRow>(
       `${WINDOW_ITEM_SELECT}
-       WHERE item.drop_window_id = ? AND item.tenant_id = ? AND item.user_id = ?
+       WHERE item.drop_window_id = ? AND item.tenant_id = ?${ownership}
        ORDER BY item.ordinal`,
-      row.id, scope.tenantId, scope.userId
+      ...parameters
     ).map((item) => ({
       ...item,
       ordinal: Number(item.ordinal),
       earlyAccess: parsedObject(item.earlyAccessJson),
-      watch: this.watchForWindowItem(item.id)
+      watch: this.watchForWindowItem(item.id, accessScope)
     }));
     return {
       ...row,
@@ -730,6 +1030,7 @@ export class DropWindowRepository {
       confidenceBps: Number(row.confidenceBps),
       supersedesId: row.supersedesId ?? "",
       supersededById: row.supersededById ?? "",
+      optInCount: items.filter((item) => item.watch && (ACTIVE_WATCH_STATES as readonly WatchQueueState[]).includes(item.watch.state)).length,
       items
     };
   }
@@ -793,12 +1094,17 @@ export class DropWindowRepository {
     );
   }
 
-  private watchForWindowItem(itemId: string): WatchQueueRecord | null {
+  private watchForWindowItem(itemId: string, accessScope: DropWindowAccessScope = "user"): WatchQueueRecord | null {
     const scope = currentRequestScope();
+    const ownership = accessScope === "tenant" ? "" : " AND watch.user_id = ?";
+    const parameters = accessScope === "tenant"
+      ? [itemId, scope.tenantId]
+      : [itemId, scope.tenantId, scope.userId];
     const row = this.db.get<WatchRow>(
       `${WATCH_SELECT}
-       WHERE watch.drop_window_item_id = ? AND watch.tenant_id = ? AND watch.user_id = ?`,
-      itemId, scope.tenantId, scope.userId
+       WHERE watch.drop_window_item_id = ? AND watch.tenant_id = ?${ownership}
+       ORDER BY watch.updated_at DESC, watch.id DESC LIMIT 1`,
+      ...parameters
     );
     return row ? watchRecord(row) : null;
   }
@@ -830,28 +1136,32 @@ export class DropWindowRepository {
     )?.hash ?? "";
   }
 
-  private refreshWindowStates(now: number): void {
+  private refreshWindowStates(now: number, accessScope: DropWindowAccessScope = "user"): void {
     const scope = currentRequestScope();
     const timestamp = nowIso(now);
+    const ownership = accessScope === "tenant" ? "" : " AND user_id = ?";
+    const scopedParameters = () => accessScope === "tenant"
+      ? [scope.tenantId]
+      : [scope.tenantId, scope.userId];
     this.db.transaction(() => {
       this.db.run(
         `UPDATE drop_windows SET status = 'active', updated_at = ?
-         WHERE tenant_id = ? AND user_id = ? AND status = 'scheduled'
+         WHERE tenant_id = ?${ownership} AND status = 'scheduled'
            AND starts_at <= ? AND closes_at > ?`,
-        timestamp, scope.tenantId, scope.userId, timestamp, timestamp
+        timestamp, ...scopedParameters(), timestamp, timestamp
       );
       this.db.run(
         `UPDATE drop_windows SET status = 'closed', updated_at = ?
-         WHERE tenant_id = ? AND user_id = ? AND status IN ('scheduled', 'active')
+         WHERE tenant_id = ?${ownership} AND status IN ('scheduled', 'active')
            AND closes_at <= ?`,
-        timestamp, scope.tenantId, scope.userId, timestamp
+        timestamp, ...scopedParameters(), timestamp
       );
       this.db.run(
         `UPDATE watch_queue_items SET state = 'window_closed', closed_reason = 'window_closed',
            assigned_device_id = NULL, observation_capability_hash = '', lease_expires_at = '', updated_at = ?
-         WHERE tenant_id = ? AND user_id = ? AND state IN ('queued', 'observing')
+         WHERE tenant_id = ?${ownership} AND state IN ('queued', 'observing')
            AND observation_closes_at <= ?`,
-        timestamp, scope.tenantId, scope.userId, timestamp
+        timestamp, ...scopedParameters(), timestamp
       );
     });
   }

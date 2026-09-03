@@ -1,24 +1,40 @@
 # Yoink
 
-Yoink is a first-party, Chrome-mediated product signal and bounded cart-action system.
+Yoink turns product calls from trusted sources into bounded cart actions in a paired Chrome companion.
 
 User documentation: /docs
-User dashboard: /
-Diagnostics and administration: /admin#diagnostics
+User dashboard: /#home
+Chrome companion settings: /#settings/chrome
+Running version: {{YOINK_VERSION}}
+
+Canonical shopper routes:
+- /#home
+- /#products
+- /#calls
+- /#calls/drawings
+- /#plans
+- /#activity
+- /#activity/insights
+- /#settings
+- /#settings/chrome
+- /#settings/notifications
+- /#settings/privacy
+
+Legacy aliases #preferences, #connections, #health, and #diagnostics are canonicalized by the dashboard.
 
 Current action boundary:
 - Provider-neutral signal_event_v1 intake with configured per-channel trust and replay bounds.
-- Opt-in drop-window queues with bounded read-only observation in the paired Chrome session.
-- Trusted signal to exact retailer product identity.
-- Saved price, seller, fulfillment, quantity, spend, and lane constraints.
+- Opt-in drop-window watches that only observe the store page in the paired Chrome session and never click.
+- Each trusted call must match one exact store product.
+- Saved price, seller, delivery, quantity, and spending limits.
 - Fresh DOM revalidation in the user's paired Chrome session.
-- At most one exact Add-to-cart click for qualified Target, Walmart, Amazon, or Best Buy lanes.
+- At most one Add-to-cart click after Target, Walmart, Amazon, or Best Buy store checks pass.
 - Exact cart +1 proof before a cart-ready handoff.
-- Manual checkout, payment, order submission, raffles, and challenge handling.
+- Checkout stays manual; payment, order submission, raffles, and challenge handling require the user.
 
 Explicitly unsupported:
 - CAPTCHA or queue evasion.
-- Proxy or request-mode retailer mutations.
+- Proxy or request-mode store mutations.
 - Third-party seller cart actions.
 - Automatic checkout or order submission.
 
@@ -30,4 +46,4 @@ Primary user action stages:
 - closed
 
 Machine API prefix: /api/v1
-The API is authenticated and permission-scoped. Device routes require a paired Chrome companion credential and approved extension origin.
+The API is authenticated and permission-scoped. Chrome companion routes require a paired Chrome companion credential and approved extension origin.

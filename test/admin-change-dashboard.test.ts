@@ -79,37 +79,49 @@ test("the admin Approvals workspace reviews an exact request without applying it
     pretendToBeVisual: true
   });
   const browser = dom.window;
+  const requests: string[] = [];
   Object.defineProperty(browser, "fetch", {
     configurable: true,
-    value: (path: string, options: RequestInit = {}) => fetch(new URL(path, baseUrl), {
-      ...options,
-      headers: {
-        ...(options.method && options.method !== "GET" ? { Origin: baseUrl } : {}),
-        ...(options.headers || {})
-      }
-    })
+    value: (path: string, options: RequestInit = {}) => {
+      requests.push(String(path));
+      return fetch(new URL(path, baseUrl), {
+        ...options,
+        headers: {
+          ...(options.method && options.method !== "GET" ? { Origin: baseUrl } : {}),
+          ...(options.headers || {})
+        }
+      });
+    }
   });
   Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
   Object.defineProperty(browser, "scrollTo", { configurable: true, value: () => undefined });
-  Object.defineProperty(browser, "confirm", { configurable: true, value: () => true });
+  Object.defineProperty(browser, "confirm", { configurable: true, value: () => { throw new Error("Native confirm must not run."); } });
+  Object.defineProperty(browser, "YoinkDialogs", {
+    configurable: true,
+    value: { confirmDialog: async () => ({ confirmed: true, note: "" }) }
+  });
   Object.defineProperty(browser, "CSS", {
     configurable: true,
     value: { escape: (value: string) => String(value).replace(/[^A-Za-z0-9_-]/g, "\\$&") }
+  });
+  Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.setAttribute("open", ""); }
+  });
+  Object.defineProperty(browser.HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.removeAttribute("open"); }
   });
 
   try {
     const script = readFileSync(join(webRoot, "app.js"), "utf8");
     await browser.eval(`(async () => { ${script}\n })()`);
-    await eventually(() => assert.match(browser.document.querySelector("#changeAssuranceTitle")?.textContent ?? "", /Trusted local control center/));
-    await eventually(() => assert.equal(browser.document.querySelectorAll("#howlStoreDirectory tr").length, 160));
-    assert.match(browser.document.querySelector("#howlStoreCount")?.textContent ?? "", /160 STORES/);
-    assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Target/);
-    assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Walmart Canada/);
-    const howlFilter = browser.document.querySelector("#howlStoreFilter") as HTMLInputElement;
-    howlFilter.value = "lenovo";
-    howlFilter.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    assert.equal(browser.document.querySelectorAll("#howlStoreDirectory tr").length, 2);
-    assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Lenovo CA/);
+    await eventually(() => assert.match(browser.document.querySelector("#changeAssuranceSummary")?.textContent ?? "", /1 waiting · 0 ready to retry · Local session can review/));
+    assert.equal(browser.document.querySelector("#adminAccountName")?.textContent, "Local user");
+    assert.equal(browser.document.querySelector("#adminChangeMetricGrid"), null);
+    assert.equal(browser.document.querySelector("#changeAssuranceBanner"), null);
+    assert.equal(requests.includes("/api/v1/affiliate-routing"), false);
+    assert.equal(requests.includes("/api/v1/admin/snapshot?view=approvals"), true);
     await eventually(() => assert.match(browser.document.querySelector("#adminChangeRequestList")?.textContent ?? "", /Dashboard requester/));
     assert.match(browser.document.querySelector("#adminChangeRequestList")?.textContent ?? "", /Waiting for a different authorized person/);
     assert.equal(protectedExecutions, 0);
@@ -122,8 +134,37 @@ test("the admin Approvals workspace reviews an exact request without applying it
       runWithRequestScope(LOCAL_REQUEST_SCOPE, () => changes.detail(pending.request.id).status),
       "approved"
     ));
-    await eventually(() => assert.match(browser.document.querySelector("#adminChangeRequestList")?.textContent ?? "", /Approved\. Retry the exact original action/));
+    await eventually(() => assert.match(browser.document.querySelector("#adminChangeRequestList")?.textContent ?? "", /Approved\. Retry the original action/));
     assert.equal(protectedExecutions, 0);
+
+    (browser.document.querySelector('[data-admin-group="settings"]') as HTMLButtonElement).click();
+    await eventually(() => assert.ok(browser.document.querySelector('[data-view="settings"]')));
+    (browser.document.querySelector('[data-view="settings"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.document.querySelectorAll("#howlStoreDirectory tr").length, 25));
+    assert.equal(requests.includes("/api/v1/affiliate-routing"), true);
+    assert.equal(requests.includes("/api/v1/admin/snapshot?view=settings"), true);
+    assert.match(browser.document.querySelector("#howlStoreCount")?.textContent ?? "", /25 of 160 shown · 160 total/);
+    assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Target/);
+    assert.equal(browser.document.querySelector("#attributionForm"), null);
+    assert.equal(browser.document.querySelectorAll("#attributionPolicyEditors tr").length, 13);
+    (browser.document.querySelector('[data-attribution-edit="target"]') as HTMLButtonElement).click();
+    const policyDialog = browser.document.querySelector("#attributionPolicyDialog") as HTMLDialogElement;
+    assert.equal(policyDialog.hasAttribute("open"), true);
+    assert.equal(browser.document.querySelector("#attributionPolicyDialogTitle")?.textContent, "Target");
+    assert.ok((policyDialog.querySelector('[name="provider"]') as HTMLSelectElement).value);
+    (policyDialog.querySelector("#attributionPolicyForm") as HTMLFormElement).dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
+    await eventually(() => assert.equal(policyDialog.hasAttribute("open"), false));
+    assert.ok(requests.includes("/api/v1/admin/attribution-policies"));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Store affiliate policy saved/));
+    (browser.document.querySelector("#howlStoreShowAll") as HTMLButtonElement).click();
+    assert.equal(browser.document.querySelectorAll("#howlStoreDirectory tr").length, 160);
+    assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Walmart Canada/);
+    const howlFilter = browser.document.querySelector("#howlStoreFilter") as HTMLInputElement;
+    howlFilter.value = "lenovo";
+    howlFilter.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    assert.equal(browser.document.querySelectorAll("#howlStoreDirectory tr").length, 2);
+    assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Lenovo CA/);
+    assert.equal((browser.document.querySelector("#howlStoreShowAll") as HTMLElement).hidden, true);
   } finally {
     browser.close();
     server.close();

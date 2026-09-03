@@ -32,6 +32,7 @@ import type { UserActionConnectorDispatchService } from "./user-action-connector
 export type BackgroundTaskHandler = BackgroundWorkerTaskHandler;
 
 export interface BackgroundMaintenanceHandlerOptions {
+  onActionJobsCreated?: (count: number) => void | Promise<void>;
   observerRecipeWitnessRefresh?: Pick<ObserverRecipeWitnessRefreshService, "execute">;
   principalBoundObserverRecipeWitnessRefresh?: Pick<
     PrincipalBoundObserverRecipeWitnessRefreshService,
@@ -150,10 +151,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
           ? this.options.notificationRecovery.recover(context.principal, now)
           : this.notifications.recoverExpired(now);
       case "hosted_delivery_recovery":
-        return {
-          ...this.hostedDelivery.recoverExpiredLeases(now),
-          ...this.signalIngress.processBatch(now)
-        };
+        return this.processHostedDelivery(now);
       case "adapter_alert_reconciliation":
         return {
           ...(this.options.operatorAlertReconciliation
@@ -231,5 +229,21 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
         };
       }
     }
+  }
+
+  private processHostedDelivery(now: number): BackgroundTaskResult {
+    const recovery = this.hostedDelivery.recoverExpiredLeases(now);
+    const signals = this.signalIngress.processBatch(now);
+    if (signals.signalActionJobsCreated > 0 && this.options.onActionJobsCreated) {
+      try {
+        void Promise.resolve(this.options.onActionJobsCreated(
+          signals.signalActionJobsCreated
+        )).catch(() => undefined);
+      } catch {
+        // Availability notification is a latency optimization. The API's
+        // bounded database recheck remains authoritative if it cannot fire.
+      }
+    }
+    return { ...recovery, ...signals };
   }
 }

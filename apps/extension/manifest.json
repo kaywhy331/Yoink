@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Yoink Companion",
-  "version": "1.18.1",
-  "description": "Connects TrackaLacker push to local Yoink, observes thirteen exact retailers plus Walmart Draw, reports privacy-classified adapter alerts, and packages four independently qualification-gated add-only lanes.",
+  "version": "1.19.0",
+  "description": "Watches product pages at supported stores and adds one item to your cart when your plan allows. Checkout stays manual.",
   "minimum_chrome_version": "120",
   "permissions": [
     "activeTab",
@@ -49,7 +49,7 @@
       "suggested_key": {
         "default": "Alt+Shift+Y"
       },
-      "description": "Inspect and qualify the current Yoink page"
+      "description": "Open the Yoink handoff that needs you, or inspect the current page"
     }
   }
 }

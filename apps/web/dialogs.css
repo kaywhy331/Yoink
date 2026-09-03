@@ -1,0 +1,45 @@
+.confirm-dialog {
+  width: min(520px, calc(100% - 28px));
+}
+.confirm-dialog form {
+  display: grid;
+  gap: 16px;
+}
+.confirm-dialog-heading h2 {
+  margin: 0;
+}
+.confirm-dialog-summary,
+.confirm-dialog-note small {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.confirm-dialog-scope {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 16px 14px 34px;
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-soft);
+}
+[data-product-surface="admin"] .confirm-dialog-scope {
+  border-left-color: var(--color-admin-accent);
+  background: var(--color-admin-accent-soft);
+}
+.confirm-dialog-note {
+  display: grid;
+  gap: 7px;
+}
+.confirm-dialog-note textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+.confirm-dialog-error {
+  margin: 0;
+  color: var(--danger, var(--color-bad));
+  font-weight: 700;
+}
+.confirm-dialog .dialog-actions {
+  margin-top: 2px;
+}

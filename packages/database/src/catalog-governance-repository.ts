@@ -4,8 +4,8 @@ import { cleanText } from "../../domain/src/normalize.js";
 import { AuditRepository } from "./audit-repository.js";
 import { AuthorizationRepository } from "./authorization-repository.js";
 import { CatalogRepository, type CatalogUpsertResult } from "./catalog-repository.js";
-import type { YoinkDatabase } from "./database.js";
-import { currentRequestScope, runWithRequestScope } from "./request-scope.js";
+import { LOCAL_USER_ID, type YoinkDatabase } from "./database.js";
+import { LOCAL_REQUEST_SCOPE, currentRequestScope, runWithRequestScope } from "./request-scope.js";
 
 export const APPROVE_CATALOG_PROPOSAL_CONFIRMATION = "APPROVE_CATALOG_PROPOSAL";
 export const REJECT_CATALOG_PROPOSAL_CONFIRMATION = "REJECT_CATALOG_PROPOSAL";
@@ -22,6 +22,7 @@ export interface CatalogChangeProposal {
   id: string;
   tenantId: string;
   proposerUserId: string;
+  proposerDisplayName: string;
   proposerActorKind: string;
   proposerActorId: string;
   proposalKind: "listing_upsert";
@@ -42,6 +43,7 @@ interface ProposalRow {
   id: string;
   tenantId: string;
   proposerUserId: string;
+  proposerDisplayName: string;
   proposerActorKind: string;
   proposerActorId: string;
   proposalKind: "listing_upsert";
@@ -59,20 +61,28 @@ interface ProposalRow {
 }
 
 const SELECT_PROPOSAL = `
-  SELECT id, tenant_id AS tenantId, proposer_user_id AS proposerUserId,
-         proposer_actor_kind AS proposerActorKind, proposer_actor_id AS proposerActorId,
-         proposal_kind AS proposalKind, retailer_id AS retailerId, retailer_sku AS retailerSku,
-         payload_json AS payloadJson, payload_hash AS payloadHash, status,
-         review_note AS reviewNote, reviewed_by_actor_id AS reviewedByActorId,
-         decided_at AS decidedAt, applied_listing_id AS appliedListingId,
-         created_at AS createdAt, updated_at AS updatedAt
-  FROM catalog_change_proposals`;
+  SELECT proposal.id, proposal.tenant_id AS tenantId,
+         proposal.proposer_user_id AS proposerUserId,
+         COALESCE(proposer.display_name, 'Unknown user') AS proposerDisplayName,
+         proposal.proposer_actor_kind AS proposerActorKind,
+         proposal.proposer_actor_id AS proposerActorId,
+         proposal.proposal_kind AS proposalKind,
+         proposal.retailer_id AS retailerId, proposal.retailer_sku AS retailerSku,
+         proposal.payload_json AS payloadJson, proposal.payload_hash AS payloadHash,
+         proposal.status, proposal.review_note AS reviewNote,
+         proposal.reviewed_by_actor_id AS reviewedByActorId,
+         proposal.decided_at AS decidedAt, proposal.applied_listing_id AS appliedListingId,
+         proposal.created_at AS createdAt, proposal.updated_at AS updatedAt
+  FROM catalog_change_proposals proposal
+  LEFT JOIN users proposer
+    ON proposer.tenant_id = proposal.tenant_id AND proposer.id = proposal.proposer_user_id`;
 
 function proposalFromRow(row: ProposalRow): CatalogChangeProposal {
   return {
     id: row.id,
     tenantId: row.tenantId,
     proposerUserId: row.proposerUserId,
+    proposerDisplayName: row.proposerDisplayName,
     proposerActorKind: row.proposerActorKind,
     proposerActorId: row.proposerActorId,
     proposalKind: row.proposalKind,
@@ -118,7 +128,7 @@ export class CatalogGovernanceRepository {
     const payloadJson = JSON.stringify(payload);
     const payloadHash = stableHash("yoink_catalog_proposal_v1", payloadJson);
     const existing = this.db.get<ProposalRow>(
-      `${SELECT_PROPOSAL} WHERE tenant_id = ? AND payload_hash = ? AND status = 'pending'`,
+      `${SELECT_PROPOSAL} WHERE proposal.tenant_id = ? AND proposal.payload_hash = ? AND proposal.status = 'pending'`,
       scope.tenantId,
       payloadHash
     );
@@ -168,13 +178,34 @@ export class CatalogGovernanceRepository {
     const page = boundedPage(limit, offset);
     return this.db.all<ProposalRow>(
       `${SELECT_PROPOSAL}
-       WHERE tenant_id = ? AND proposer_user_id = ?
-       ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+       WHERE proposal.tenant_id = ? AND proposal.proposer_user_id = ?
+       ORDER BY proposal.created_at DESC, proposal.id DESC LIMIT ? OFFSET ?`,
       scope.tenantId,
       scope.userId,
       page.limit,
       page.offset
     ).map(proposalFromRow);
+  }
+
+  /**
+   * Display names for actor ids recorded on governance rows, resolved through the tenant's users
+   * table (the local control-center actor maps to the local user). Unknown ids are omitted.
+   */
+  actorDisplayNames(actorIds: Iterable<string>): Record<string, string> {
+    const ids = [...new Set([...actorIds].map((id) => cleanText(id, 120)).filter(Boolean))];
+    if (!ids.length) return {};
+    const userIdFor = (actorId: string) => (actorId === LOCAL_REQUEST_SCOPE.actorId ? LOCAL_USER_ID : actorId);
+    const userIds = [...new Set(ids.map(userIdFor))];
+    const rows = this.db.all<{ id: string; displayName: string }>(
+      `SELECT id, display_name AS displayName FROM users
+       WHERE tenant_id = ? AND id IN (${userIds.map(() => "?").join(", ")})`,
+      currentRequestScope().tenantId,
+      ...userIds
+    );
+    const byUserId = new Map(rows.map((row) => [row.id, row.displayName]));
+    return Object.fromEntries(
+      ids.map((id) => [id, byUserId.get(userIdFor(id)) ?? ""]).filter(([, name]) => name)
+    );
   }
 
   listForReview(status: CatalogProposalStatus | "all" = "pending", limit = 100, offset = 0): CatalogChangeProposal[] {
@@ -184,8 +215,9 @@ export class CatalogGovernanceRepository {
     const normalizedStatus = ["pending", "approved", "rejected", "withdrawn"].includes(status) ? status : "all";
     return this.db.all<ProposalRow>(
       `${SELECT_PROPOSAL}
-       WHERE tenant_id = ? AND (? = 'all' OR status = ?)
-       ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at, id
+       WHERE proposal.tenant_id = ? AND (? = 'all' OR proposal.status = ?)
+       ORDER BY CASE proposal.status WHEN 'pending' THEN 0 ELSE 1 END,
+                proposal.created_at, proposal.id
        LIMIT ? OFFSET ?`,
       scope.tenantId,
       normalizedStatus,
@@ -213,7 +245,7 @@ export class CatalogGovernanceRepository {
     const note = cleanText(input.note, 500);
     if (outcome === "reject" && !note) throw new Error("A rejection note is required.");
     const proposal = this.db.get<ProposalRow>(
-      `${SELECT_PROPOSAL} WHERE id = ? AND tenant_id = ?`,
+      `${SELECT_PROPOSAL} WHERE proposal.id = ? AND proposal.tenant_id = ?`,
       proposalId,
       scope.tenantId
     );
@@ -301,7 +333,7 @@ export class CatalogGovernanceRepository {
   private requireProposal(id: string): CatalogChangeProposal {
     const scope = currentRequestScope();
     const row = this.db.get<ProposalRow>(
-      `${SELECT_PROPOSAL} WHERE id = ? AND tenant_id = ?`,
+      `${SELECT_PROPOSAL} WHERE proposal.id = ? AND proposal.tenant_id = ?`,
       id,
       scope.tenantId
     );

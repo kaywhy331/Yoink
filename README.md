@@ -1,28 +1,41 @@
 # Yoink
 
-Yoink is the ground-up successor to CartCollect: a local-first, signal-driven
-commerce control plane whose only retailer-session executor is a paired Chrome
-extension.
+Yoink is the ground-up successor to CartCollect: a local-first, call-driven
+commerce control plane. Its only store session runs inside a paired Chrome
+companion.
 
-Yoink 1.18.1 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.19.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
-resolves exact product/listing identity, creates one mission per variant,
-evaluates ordered user strategies, deduplicates competing source events, and
-records every decision in SQLite. Target, Walmart, Amazon, and Best Buy now have
-separate, exact-version add-to-cart lanes. Each lane requires its own current evidence,
-no-click rehearsal, and explicit local activation; upgrading never activates a
-new lane. Every lane is restricted to first-party offers, quantity one, and the
-exact saved fulfillment choice: Shipping by default or explicit Pickup.
-Amazon additionally requires a unique ASIN-bound offer token that remains only
-in page memory. Buy Now, checkout, and order submission are not authorized.
+resolves exact product/listing identity, creates one plan per product,
+evaluates ordered rules, deduplicates competing source events, and records
+every decision in SQLite. Target, Walmart, Amazon, and Best Buy each have a
+separate, exact-version add-to-cart lane. Each lane requires its own current
+evidence, no-click rehearsal, and explicit local activation; upgrading never
+activates a new lane. Every lane is restricted to first-party offers, quantity
+one, and the exact saved fulfillment choice: Shipping by default or explicit
+Pickup. Amazon additionally requires a unique ASIN-bound offer token that
+remains only in page memory. Buy Now, checkout, and order submission are not
+authorized.
 
-Version 1.18.1 adds an admin-only signal simulator to Opportunities. An
-operator can paste one exact supported retailer product URL and observed USD
-price, then run the production signal normalizer and resolver through a
-server-enforced dry-run. The simulator records the test decision while a
-transactional safety invariant prevents catalog, mission, incident, action-job,
-notification, spend-reservation, retailer-action, and cart mutations. It also
-preserves the browser source's real connection health and rejects category,
+Version 1.19.0 ships the context-first action and interface pass. The Chrome
+popup derives one relevant action from current page, handoff, and health state;
+Cart ready and Needs you remain recoverable across popup reopen and store-tab
+closure. Admin and shopper workspaces consolidate scattered controls, preserve
+loaded pages during background refresh, refresh the visible Products, Plans,
+and Calls views, and expose a clear retry state instead of silently showing
+stale data. Validated Walmart purchase handoffs prefer its review-order route,
+then fall back through raw direct-cart and product-page destinations without
+manufacturing affiliate parameters. The first-party, exact-item, price-limit,
+Shipping-default or explicit-Pickup, quantity-one, and manual-checkout
+boundaries are unchanged.
+
+Version 1.18.1 adds an admin-only call simulator under Settings › Operations ›
+Tools in `/admin`. An operator can paste one exact supported store product URL
+and observed USD price, then run the production call normalizer and resolver
+through a server-enforced dry-run. The simulator records the test decision
+while a transactional safety invariant prevents catalog, plan, incident,
+action-job, notification, spend-reservation, store-action, and cart mutations.
+It also preserves the browser source's real health and rejects category,
 search, drawing-hub, sign-in, malformed, or credential-bearing URLs.
 
 Version 1.18.0 closes the signal-to-cart trigger gap across Target, Walmart,
@@ -119,12 +132,13 @@ same-lane job. Mutation-uncertain results still stop and lock. Sanitized
 lease-to-cart and click-to-cart durations make the path measurable, while the
 dashboard now exposes the latest bounded decision reason.
 
-Version 1.12.2 gives every extension navigation option a distinct, validated
-destination. Open Yoink reaches the user dashboard; Manage store access opens
-Admin Connections; Diagnostics opens Admin Operations; and Settings opens
-Admin Settings. The popup and right-click menu share one allowlisted route
-resolver, so labels cannot silently degrade into aliases of the default
-dashboard.
+Version 1.12.2 gave every extension navigation option a distinct, validated
+destination through one allowlisted route resolver shared by the popup and
+right-click menu, so labels cannot silently degrade into aliases of the default
+dashboard. The items it introduced (Manage store access, Diagnostics, and an
+admin Settings link) have since been replaced: the current popup offers
+Settings › Chrome from its status panel, Extension settings from its overflow
+menu, and Open Yoink in its footer.
 
 Version 1.12.1 removes the recurring-alarm wait between already queued guarded
 adds. One Chrome cycle may lease and execute at most four jobs, strictly one at
@@ -220,6 +234,26 @@ no recorded MSRP), a single default profile that the bare Quick-add button
 uses, and live propagation: migration 50 links each quick-added purchase plan
 to its profile, and saving a profile re-derives every linked plan's caps
 through the existing audited safety validation, reporting skipped plans. The
+current profile contract also binds Shipping or an explicit Pickup opt-in and
+propagates the saved quantity, fulfillment, caps, and action atomically. When
+profiles exist but none is marked default, bare Quick add opens the profile
+chooser instead of silently creating a notification-only plan; the built-in
+notify-only setup remains an explicit choice. The
+Plans workspace also supports an explicit multi-select **Apply setup** flow for
+existing active or paused plans. The server revalidates the complete selected
+set in one transaction, links each plan to the saved profile, updates only
+plans with sufficient price evidence and compatible store targets, reports
+every skip, and cancels any stale pre-lease job whose intent revision changed.
+This is the reviewed migration path for imported notification-only plans; it
+does not silently widen plans when a profile is merely created. If a reviewed
+cart profile was linked while a retailer lane was still closed, successful
+activation of that exact lane automatically retries the linked plans against
+the now-current mapping. Unsupported or evidence-incomplete plans remain
+unchanged and reported. A linked store-price cart profile is also retried
+inside the first fresh priced signal transaction, after durable offer capture
+and before policy evaluation, so that same signal can produce a guarded cart
+job. Reducing a profile to notification-only never waits on missing price
+evidence and preserves the prior cap until it can be safely re-derived. The
 user surface drops all operator vocabulary — the Signal connections card,
 signal/TrackaLacker copy in the hero, toasts, and the server-generated setup
 guide now speak in product-tracking terms — and purchase plans render as one
@@ -1964,8 +1998,8 @@ invoke Chrome. See
 [recovery-evidence retention](docs/OBSERVER_RECIPE_RECOVERY_RETENTION.md).
 
 Version 0.52.0 gives each contributor a simple, owner-scoped way to review the
-quarantined normalized store details introduced in 0.51. The Preferences
-workspace asks whether the exact public value was correct, incorrect, or
+quarantined normalized store details introduced in 0.51. The Settings
+workspace (then called Preferences) asks whether the exact public value was correct, incorrect, or
 whether an earlier confirmation should be withdrawn. Requests accept only a
 fixed decision and its exact confirmation phrase; free text and page/account
 context are not part of the contract.
@@ -2611,13 +2645,13 @@ qualified work. Local data is stored under `data/` unless `YOINK_DATA_DIR`
 points to another explicit directory.
 
 The durable local worker starts embedded with the API and is visible under
-**Admin → Operations → Background work**. For an intentional maintenance stop,
+**Settings › Operations › Workers** in `/admin`. For an intentional maintenance stop,
 set `YOINK_BACKGROUND_WORKER_MODE=disabled`; health then reports `disabled`,
 schedules and queued tasks remain durable, and no task handler runs until the
 worker is re-enabled. Signal intake still returns a durable queued receipt, but
 evaluation waits for the worker. Disabling the worker does not cancel an
-already leased retailer action—use the user-facing **Pause Actions** control
-for retailer mutation. The legacy
+already leased store action—use the user-facing **Pause actions** control
+for store cart changes. The legacy
 `YOINK_BACKGROUND_WORKER=1|0` switch remains compatible but cannot be combined
 with the mode setting.
 
@@ -2678,18 +2712,18 @@ record.
 1. Open `chrome://extensions` and enable **Developer mode**.
 2. Select **Load unpacked**.
 3. Choose `apps/extension` from this repository.
-4. Open Yoink → **Preferences** and create a one-time pairing code (or use
-   **Connections** in `/admin`).
+4. Open Yoink › **Settings › Chrome** and create a one-time pairing code (or
+   use **Settings › Users** in `/admin`).
 5. Enter the code in the extension popup within five minutes.
 
-Pairing stores a hashed device credential in Yoink and the runtime credential in
-Chrome extension storage. The extension has no cookie API access and no
-persistent retailer content script.
+Pairing stores a hashed Chrome companion credential in Yoink and the runtime
+credential in Chrome extension storage. The Chrome companion has no cookie API
+access and no persistent store content script.
 
 ## Connect TrackaLacker
 
 Stay signed in on a normal TrackaLacker tab, open the Yoink popup, and choose
-**Reconnect** when signals need attention. The extension creates a real PushSubscription and
+**Reconnect** when calls need attention. The extension creates a real PushSubscription and
 a minimal MAIN-world function submits the confirmed nested device contract from
 the signed-in TrackaLacker origin. Push endpoint/key material, cookies, CSRF
 values, Cloudflare/session values, and signed notification URLs never enter the
@@ -2698,63 +2732,63 @@ Yoink database, queue, telemetry, or logs.
 Chrome 121+ supports a silent extension subscription, so TrackaLacker's normal
 browser notification remains the visible alert. If Chrome reports that silent
 push is unavailable, the popup states that the fallback can produce an extra
-visible notification. Yoink still deduplicates signal incidents and action jobs
+visible notification. Yoink still deduplicates calls and action jobs
 independently of desktop toast presentation.
 
 Choose **Sync products** from the popup overflow for a user-requested catalog pass. It has no
-application product or mission-count limit and imports every source listing
+application product or plan-count limit and imports every source listing
 returned by TrackaLacker, including out-of-stock, Best Buy, unsupported-store,
-and alternate same-retailer records. Progress and per-product receipts are
+and alternate same-store records. Progress and per-product receipts are
 durable. This is catalog synchronization, not stock polling; live inventory
 events continue to arrive through Web Push.
 
 ## Configure behavior
 
-The user dashboard stays focused on guided setup, exact products, purchase
-plans, recent actions, and preferences. If the product is not yet approved,
+The user dashboard stays focused on guided setup, exact products, plans,
+Activity, and Settings. If the product is not yet approved,
 choose **Add product link**, paste the store's exact product page and product
 name, verify the extracted store/SKU, and explicitly send it for independent
 review. That suggestion carries no stock or price claim and creates no plan.
-For an approved listing, choose **Set up purchase**,
+For an approved listing, choose **Create purchase plan**,
 then review the item/SKU, store-as-seller, fulfillment, quantity, unit and total
 caps, timing, and allowed action before anything is created. Notifications are
 the default; add-to-cart is offered only for a qualified mapping, requires an
 explicit shipping choice and a total that covers the current conservative tax
 and store-fee safety bound, and still leaves checkout manual. Later changes use
 the same revisioned plan editor. Reviewed plans decide exact matches directly;
-advanced ordered strategies remain available as defaults for source-created
-missions and specialist routing. Catalog
+advanced ordered rules remain available as defaults for source-created
+plans and specialist routing. Catalog
 suggestions remain pending until reviewed in the admin control center. Detailed
-source health, diagnostics, privacy-classified operator alerts, retailer
+source health, diagnostics, privacy-classified operator alerts, store
 qualification, recipes, affiliate setup, catalog review, reversible
 merge/split/compensation history, and role membership are intentionally
 isolated under `/admin`.
 
-There is no separate Signals start switch:
+There is no separate Calls start switch:
 
-- Connected sources continuously ingest signals.
+- Connected sources continuously ingest calls.
 - A reviewed user plan directly produces its saved notification or qualified
-  cart decision for a fresh exact offer; it does not require a hidden strategy.
-- The default catchall strategy produces notifications for strategy-owned
-  source/import missions.
-- An exact trusted signal can create a new mission and attach all known retailer
+  cart decision for a fresh exact offer; it does not require a hidden rule.
+- The default catchall rule produces notifications for rule-owned
+  source/import plans.
+- An exact trusted call can create a new plan and attach all known store
   listings without overwriting user settings.
-- A retailer listing discovered after a mission exists is attached disabled
-  until the user explicitly includes it in a new intent revision.
-- For strategy-owned missions, higher strategy rows win. Empty keywords mean
+- A store listing discovered after a plan exists is attached disabled
+  until the user explicitly includes it in a new plan revision.
+- For rule-owned plans, higher rule rows win. Empty keywords mean
   catchall; quoted phrases, `+` terms, alternatives, and exclusions are
   supported.
 - MSRP policies are maximums and include every lower price.
-- Seller policy, allowed seller names, fulfillment, quantity, signal age, price
+- Seller policy, allowed seller names, fulfillment, quantity, call age, price
   cap, and exact source/store selections are evaluated before a job is created.
-- **Pause Actions** persists and prevents new purchase jobs and leases while
-  signal intake and history continue.
+- **Pause actions** persists and prevents new purchase jobs and leases while
+  call intake and history continue.
 
 When two stores or sources report the same product, one active purchase job
-claims the mission. Corroborating signals are recorded but cannot create a
+claims the plan. Corroborating calls are recorded but cannot create a
 second purchase. A verified rejection or pre-mutation cancellation releases the
-claim for a legitimate later re-signal. A potentially mutated or uncertain job
-stays locked until the user explicitly reviews the retailer session.
+claim for a legitimate later repeat call. A potentially mutated or uncertain job
+stays locked until the user explicitly reviews the store session.
 
 ## Retailer safety
 

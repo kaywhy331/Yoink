@@ -26,29 +26,48 @@
 
     <section class="popover status-panel" id="statusPanel" aria-label="System status" hidden>
       <dl id="statusDetails"></dl>
-      <button class="panel-link" id="statusDiagnostics" type="button">Diagnostics <span aria-hidden="true">→</span></button>
+      <button class="panel-link" id="statusConnections" type="button">Settings › Chrome <span aria-hidden="true">›</span></button>
     </section>
 
     <section class="popover overflow-panel" id="overflowPanel" role="menu" aria-label="More options" hidden>
       <button id="syncProducts" type="button" role="menuitem">Sync products</button>
       <button id="shareEvidence" type="button" role="menuitem" hidden>Share evidence</button>
-      <button id="manageStoreAccess" type="button" role="menuitem">Manage store access</button>
       <button id="checkUpdate" type="button" role="menuitem" hidden>Check for updates</button>
-      <button id="cartReadySound" type="button" role="menuitemcheckbox" aria-checked="false"><span>Cart-ready sound</span><span class="menu-check" aria-hidden="true">Off</span></button>
+      <button id="cartReadySound" type="button" role="menuitemcheckbox" aria-checked="false"><span>Action handoff sound</span><span class="menu-check" aria-hidden="true">Off</span></button>
       <span class="menu-separator" role="separator"></span>
-      <button id="diagnostics" type="button" role="menuitem">Diagnostics</button>
-      <button id="settings" type="button" role="menuitem">Settings</button>
+      <button id="extensionSettings" type="button" role="menuitem">Extension settings</button>
     </section>
 
     <section class="context-surface" id="contextSurface" aria-live="polite" hidden>
       <p class="eyebrow" id="contextEyebrow"></p>
       <h1 id="contextTitle"></h1>
       <p class="supporting" id="contextSupporting" hidden></p>
+      <p class="result-status" id="contextResultStatus" role="status" aria-live="polite" hidden></p>
       <div class="pair-fields" id="pairFields" hidden>
         <label class="sr-only" for="pairCode">One-time pairing code</label>
         <input id="pairCode" inputmode="text" autocomplete="off" maxlength="20" placeholder="XXXX-XXXX-XXXX">
       </div>
-      <button class="primary-action" id="primaryAction" type="button" hidden></button>
+      <button class="button primary popup-cta" id="primaryAction" type="button" hidden></button>
+      <section class="cart-outcome" id="cartOutcome" aria-labelledby="cartOutcomePrompt" hidden>
+        <p id="cartOutcomePrompt">Did you check out?</p>
+        <div class="cart-outcome-choices" id="cartOutcomeChoices">
+          <button class="button secondary popup-choice" type="button" id="cartOutcomeGotIt">Got it</button>
+          <button class="button secondary popup-choice" type="button" id="cartOutcomeMissedIt">Missed it</button>
+        </div>
+        <form id="cartOutcomeForm" hidden>
+          <label for="cartOutcomeAmount">Amount charged</label>
+          <div class="money-field">
+            <span aria-hidden="true">$</span>
+            <input id="cartOutcomeAmount" name="amount" inputmode="decimal" autocomplete="off" required>
+          </div>
+          <p class="field-hint" id="cartOutcomeLimit"></p>
+          <div class="cart-outcome-form-actions">
+            <button class="button primary popup-cta" id="cartOutcomeConfirm" type="submit">Record purchase</button>
+            <button class="text-action" id="cartOutcomeBack" type="button">Back</button>
+          </div>
+        </form>
+        <p class="field-error" id="cartOutcomeError" role="alert" hidden></p>
+      </section>
       <button class="text-action" id="cancelContext" type="button" hidden>Cancel</button>
       <button class="details-button" id="resultDetailsButton" type="button" aria-expanded="false" aria-controls="resultDetails" hidden>View details</button>
       <p class="result-details" id="resultDetails" hidden></p>
@@ -60,7 +79,8 @@
     <p class="activity-row activity-status" id="activityStatus" hidden></p>
 
     <footer>
-      <button id="openYoink" class="footer-link" type="button">Open Yoink <span aria-hidden="true">→</span></button>
+      <p class="footer-boundary">Checkout stays manual.</p>
+      <button id="openYoink" class="footer-link" type="button">Open Yoink <span aria-hidden="true">›</span></button>
     </footer>
 
     <output class="toast" id="toast" role="status" aria-live="polite" hidden></output>

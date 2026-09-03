@@ -470,14 +470,14 @@ export class SpendLedgerRepository {
         return reservation;
       }
       if (reservation.status !== "released"
-        || reservation.releaseReason !== "add_to_cart_confirmed_without_order"
-        || actualAmountCents > reservation.reservedAmountCents) {
+        || reservation.releaseReason !== "add_to_cart_confirmed_without_order") {
         throw new PurchaseSafetyError(
-          "user_reported_order_outside_reservation",
+          "user_reported_order_reservation_invalid",
           409,
-          "The reported item amount must remain within the exact cart action's reviewed all-in reservation."
+          "The reported item amount can be attached only to the released reservation for this exact cart action."
         );
       }
+      const overCapAmountCents = Math.max(0, actualAmountCents - reservation.reservedAmountCents);
       const timestamp = nowIso(now);
       this.db.run(
         `UPDATE spend_reservations
@@ -503,11 +503,16 @@ export class SpendLedgerRepository {
         correlationId: reservation.actionJobId,
         aggregateType: "spend_reservation",
         eventType: "user_reported_spend_committed",
-        reasonCode: "user_reported_order_committed",
-        message: "The user reported completing manual checkout within the reviewed cart reservation.",
+        reasonCode: overCapAmountCents ? "user_reported_order_over_cap" : "user_reported_order_committed",
+        message: overCapAmountCents
+          ? "The user reported actual manual-checkout spend above the reviewed cart reservation."
+          : "The user reported completing manual checkout within the reviewed cart reservation.",
         data: {
           reservationId: reservation.id,
           actualAmountCents,
+          reviewedAmountCents: reservation.reservedAmountCents,
+          overCap: overCapAmountCents > 0,
+          overCapAmountCents,
           quantity: reservation.quantity,
           evidenceSource: "user_reported"
         }

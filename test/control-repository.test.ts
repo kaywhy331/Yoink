@@ -120,7 +120,7 @@ test("guided purchase setup creates one reviewed revision with only the chosen e
       maxAllInCents: 15_000,
       actionCeiling: "add_to_cart",
       sellerPolicy: "first_party_only",
-      fulfillment: "shipping",
+      fulfillment: "manual",
       substitutionPolicy: "exact_only",
       expiresAt: new Date(now + 86_400_000).toISOString(),
       cooldownSeconds: 900,

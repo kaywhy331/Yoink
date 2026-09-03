@@ -52,6 +52,7 @@ export interface BackgroundWorkerRuntimeOptions {
   maximumTasksPerCycle?: number;
   maximumTasksPerPrincipal?: number;
   unrefTimer?: boolean;
+  onCycleComplete?: (result: Readonly<BackgroundWorkerCycleResult>) => void;
 }
 
 function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
@@ -92,8 +93,10 @@ export class BackgroundWorkerRuntime {
   private readonly maximumTasksPerCycle: number;
   private readonly maximumTasksPerPrincipal: number;
   private readonly unrefTimer: boolean;
+  private readonly onCycleComplete: ((result: Readonly<BackgroundWorkerCycleResult>) => void) | undefined;
   private timer: NodeJS.Timeout | null = null;
   private wakeScheduled = false;
+  private wakePending = false;
   private cyclePromise: Promise<BackgroundWorkerCycleResult> | null = null;
   private runtimeState: BackgroundWorkerRuntimeState = "stopped";
   private principalCursor = "";
@@ -121,6 +124,7 @@ export class BackgroundWorkerRuntime {
     this.maximumTasksPerCycle = boundedInteger(options.maximumTasksPerCycle, 100, 1, 1_000);
     this.maximumTasksPerPrincipal = boundedInteger(options.maximumTasksPerPrincipal, 20, 1, 100);
     this.unrefTimer = options.unrefTimer !== false;
+    this.onCycleComplete = options.onCycleComplete;
     if (!this.store || !this.handler || !BACKGROUND_TASK_KINDS.length
       || !/^[a-f0-9]{64}$/.test(this.deploymentFingerprint)) {
       throw new Error("The background worker runtime contract is incomplete.");
@@ -151,6 +155,7 @@ export class BackgroundWorkerRuntime {
   async stop(now = Date.now()): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.wakePending = false;
     if (this.runtimeState === "stopped") return;
     this.runtimeState = "stopping";
     if (this.cyclePromise) {
@@ -169,21 +174,54 @@ export class BackgroundWorkerRuntime {
     const operation = this.executeCycle(now);
     this.cyclePromise = operation;
     try {
-      return await operation;
+      const result = await operation;
+      try {
+        this.onCycleComplete?.(result);
+      } catch {
+        // Availability notification is an optimization; the bounded poll remains authoritative.
+      }
+      return result;
     } finally {
       if (this.cyclePromise === operation) this.cyclePromise = null;
     }
   }
 
   wake(): void {
-    if (!["running", "starting"].includes(this.runtimeState) || this.wakeScheduled) return;
+    if (!["running", "starting"].includes(this.runtimeState)) return;
+    this.wakePending = true;
+    this.scheduleWake();
+  }
+
+  private scheduleWake(): void {
+    if (this.wakeScheduled || !this.wakePending
+      || !["running", "starting"].includes(this.runtimeState)) return;
     this.wakeScheduled = true;
-    setImmediate(() => {
-      this.wakeScheduled = false;
-      void this.runOnce().catch(() => {
+    const immediate = setImmediate(() => {
+      void this.drainWake().catch(() => {
         // The next bounded poll remains the recovery path for a failed wake.
+      }).finally(() => {
+        this.wakeScheduled = false;
+        if (this.wakePending) this.scheduleWake();
       });
-    }).unref?.();
+    });
+    immediate.unref?.();
+  }
+
+  private async drainWake(): Promise<void> {
+    if (!this.wakePending || !["running", "starting"].includes(this.runtimeState)) return;
+    this.wakePending = false;
+    const activeCycle = this.cyclePromise;
+    if (activeCycle) {
+      try {
+        await activeCycle;
+      } catch {
+        // A fresh bounded cycle still gets one chance after the failed active cycle.
+      }
+    }
+    if (!["running", "starting"].includes(this.runtimeState)) return;
+    // Coalesce every wake received while the active cycle was settling into this follow-up cycle.
+    this.wakePending = false;
+    await this.runOnce();
   }
 
   async restart(now = Date.now()): Promise<void> {

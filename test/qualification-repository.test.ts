@@ -237,6 +237,34 @@ test("explicit activation requires two Target-sold shipping samples, one rehears
       evidenceHash: "0".repeat(64),
       confirmation: TARGET_ADD_ACTIVATION_CONFIRMATION
     }, NOW + 9_000), /changed or is incomplete/);
+    const catalogTimestamp = new Date(NOW).toISOString();
+    db.run(
+      "INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES (?, ?, '', ?, ?)",
+      "family_target_activation_test",
+      "Target activation fixture",
+      catalogTimestamp,
+      catalogTimestamp
+    );
+    db.run(
+      "INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?)",
+      "variant_target_activation_test",
+      "family_target_activation_test",
+      "Target activation fixture",
+      catalogTimestamp,
+      catalogTimestamp
+    );
+    db.run(
+      `INSERT INTO listings(
+         id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+         execution_supported, currency, created_at, updated_at
+       ) VALUES (?, ?, 'target', ?, ?, 'active', 0, 'USD', ?, ?)`,
+      "listing_target_activation_test",
+      "variant_target_activation_test",
+      "1011483414",
+      "https://www.target.com/p/-/A-1011483414",
+      catalogTimestamp,
+      catalogTimestamp
+    );
     const activated = repository.activateTargetAdd({
       adapterVersion: TARGET_ADD_ADAPTER_VERSION,
       evidenceHash: ready.qualificationEvidenceHash,
@@ -245,6 +273,12 @@ test("explicit activation requires two Target-sold shipping samples, one rehears
     assert.equal(activated.promotedJobs, 0);
     assert.equal(activated.readiness.addToCartQualified, true);
     assert.equal(activated.readiness.mutationAuthorized, true);
+    assert.equal(db.get<{ execution_supported: number }>(
+      "SELECT execution_supported FROM retailers WHERE id = 'target'"
+    )?.execution_supported, 1);
+    assert.equal(db.get<{ execution_supported: number }>(
+      "SELECT execution_supported FROM listings WHERE id = 'listing_target_activation_test'"
+    )?.execution_supported, 1);
     assert.deepEqual(new ControlRepository(db).settings(), {
       actionsPaused: false,
       pauseReason: "",
@@ -254,7 +288,18 @@ test("explicit activation requires two Target-sold shipping samples, one rehears
       taxBps: 1200,
       storeAllowancesCents: { target: 3000, walmart: 3000, amazon: 3000, bestbuy: 3000 }
     });
-    assert.equal(repository.targetAddQualified(), true);
+    assert.equal(repository.targetAddQualified(NOW + 10_000), true);
+    const qualificationExpiresAt = new Date(activated.readiness.qualification?.expiresAt ?? "").getTime();
+    assert.equal(Number.isFinite(qualificationExpiresAt), true);
+    const expiring = shadows.targetQualificationReadiness(qualificationExpiresAt - 6 * 24 * 60 * 60_000);
+    assert.equal(expiring.addToCartQualified, true);
+    assert.equal(expiring.qualification?.warning, "expiring");
+    const expired = shadows.targetQualificationReadiness(qualificationExpiresAt);
+    assert.equal(expired.addToCartQualified, false);
+    assert.equal(expired.mutationAuthorized, false);
+    assert.equal(expired.qualification?.warning, "expired");
+    assert.match(expired.nextStep, /qualification expired/i);
+    assert.equal(repository.targetAddQualified(qualificationExpiresAt), false);
     const durable = JSON.stringify(db.all("SELECT * FROM audit_events"));
     assert.equal(durable.includes(device.token), false);
   } finally {
@@ -309,7 +354,7 @@ test("Walmart activation is independent, evidence-bound, and preserves the globa
     }, NOW + 9_000);
     assert.equal(activated.readiness.addToCartQualified, true);
     assert.equal(activated.readiness.mutationAuthorized, false);
-    assert.equal(repository.walmartAddQualified(), true);
+    assert.equal(repository.walmartAddQualified(NOW + 10_000), true);
     assert.equal(db.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'walmart'")?.execution_supported, 1);
     assert.deepEqual(new ControlRepository(db).settings(), {
       actionsPaused: true,
@@ -376,7 +421,7 @@ test("Amazon activation requires exact ephemeral-route evidence and preserves th
     }, NOW + 9_000);
     assert.equal(activated.readiness.addToCartQualified, true);
     assert.equal(activated.readiness.mutationAuthorized, false);
-    assert.equal(repository.amazonAddQualified(), true);
+    assert.equal(repository.amazonAddQualified(NOW + 10_000), true);
     assert.equal(db.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'amazon'")?.execution_supported, 1);
     assert.deepEqual(new ControlRepository(db).settings(), {
       actionsPaused: true,
@@ -441,7 +486,7 @@ test("Best Buy activation requires two explicitly first-party selected-shipping 
     }, NOW + 9_000);
     assert.equal(activated.readiness.addToCartQualified, true);
     assert.equal(activated.readiness.mutationAuthorized, false);
-    assert.equal(repository.bestBuyAddQualified(), true);
+    assert.equal(repository.bestBuyAddQualified(NOW + 10_000), true);
     assert.equal(db.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 1);
     assert.equal(new ControlRepository(db).settings().actionsPaused, true);
   } finally {

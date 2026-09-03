@@ -33,7 +33,8 @@ function normalizedRuntimeConfig(value) {
 const RUNTIME_CONFIG = normalizedRuntimeConfig(globalThis.YoinkRuntimeConfig);
 const PopupState = globalThis.YoinkPopupStateModule;
 if (!PopupState?.classifyPageContext || !PopupState?.qualificationPopupResult
-  || !PopupState?.appDestinationUrl || !PopupState?.cartReadyState || !PopupState?.CART_READY_STORAGE_KEY) {
+  || !PopupState?.appDestinationUrl || !PopupState?.cartReadyState
+  || !PopupState?.preferredActionHandoff || !PopupState?.CART_READY_STORAGE_KEY) {
   throw new Error("Yoink Companion has no packaged popup state model.");
 }
 const API_ROOT = `${RUNTIME_CONFIG.apiOrigin}/api/v1`;
@@ -44,16 +45,29 @@ const HEALTH_ALARM = "yoink-health";
 const JOB_ALARM = "yoink-jobs";
 const WATCH_QUEUE_ALARM = "yoink-watch-queue";
 const MAX_ACTION_JOBS_PER_CYCLE = 4;
-const SIGNAL_JOB_HANDOFF_RETRY_DELAYS_MS = Object.freeze([250, 750, 1_500, 2_500]);
+const ACTION_JOB_WAIT_MS = 25_000;
+const ACTION_JOB_REQUEST_TIMEOUT_MS = 28_000;
+const ACTION_HANDOFF_WAIT_MS = 25_000;
+const ACTION_HANDOFF_REQUEST_TIMEOUT_MS = 28_000;
+const NOTIFICATION_WAIT_MS = 25_000;
+const NOTIFICATION_REQUEST_TIMEOUT_MS = 28_000;
+const MAX_NOTIFICATIONS_PER_CYCLE = 20;
 const POST_CLICK_SETTLE_MAX_MS = 1_500;
 const POST_CLICK_SETTLE_QUIET_MS = 125;
 const POST_CLICK_SETTLE_MIN_MS = 300;
+const CART_DOM_RETRY_QUIET_MS = 60;
+const CART_DOM_RETRY_FALLBACK_MS = 250;
+const CART_BASELINE_WAIT_MAX_MS = 1_500;
+const CART_PROOF_WAIT_MAX_MS = 2_250;
+const WARM_CART_BASELINE_WAIT_MAX_MS = 350;
 const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
+const WARM_READINESS_LANES_PER_CYCLE = 2;
 const POST_CLICK_SETTLE_STATE_KEY = "__yoinkPostClickSettleV1";
 const READINESS_KEY = "readiness";
 const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
 const POPUP_UPDATE_HANDOFF_STORAGE_KEY = PopupState.POPUP_UPDATE_HANDOFF_STORAGE_KEY;
 const CART_READY_STORAGE_KEY = PopupState.CART_READY_STORAGE_KEY;
+const ACTION_HANDOFF_AVAILABILITY_VERSION_KEY = "yoinkActionHandoffAvailabilityVersionV1";
 const DEVICE_KEY = "pairedDevice";
 const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
@@ -70,6 +84,7 @@ const TRACKALACKER_SYNC_STATE_KEY = "yoinkTrackalackerSyncStateV1";
 const NOTIFICATION_HISTORY_KEY = "yoinkNotificationHistoryV1";
 const NOTIFICATION_ROUTES_KEY = "yoinkNotificationRoutesV1";
 const CART_READY_NOTIFICATION_PREFIX = "yoink-cart-ready:";
+const NEEDS_YOU_NOTIFICATION_PREFIX = "yoink-needs-you:";
 const COMMUNITY_CONTRIBUTION_TIMES_KEY = "yoinkCommunityContributionTimesV1";
 const LEGACY_OBSERVER_RECIPE_KEY_PIN = "yoinkObserverRecipeKeyPinV1";
 const OBSERVER_RECIPE_TRUST_STATE_KEY = "yoinkObserverRecipeTrustStateV1";
@@ -201,13 +216,19 @@ const ObserverRecipeRoot = globalThis.YoinkObserverRecipeRoot;
 let jobCyclePromise = null;
 let watchQueueCyclePromise = null;
 let warmReadinessCyclePromise = null;
+let warmReadinessRequestPromise = null;
 let signalJobHandoffPromise = null;
 let notificationCyclePromise = null;
+let notificationCyclePendingWaitMs = -1;
+let notificationRouteActionQueue = Promise.resolve();
 let trackalackerEnrollmentPromise = null;
 let trackalackerDrainPromise = null;
 let trackalackerStateQueue = Promise.resolve();
 let trackalackerQueueQueue = Promise.resolve();
 let cartReadyStateQueue = Promise.resolve();
+let actionHandoffReconciliationPromise = null;
+let actionHandoffReconciliationPendingWaitMs = 0;
+const retailerSessionRefreshes = new Map();
 let offscreenDocumentPromise = null;
 let adapterDiagnosticDrainPromise = null;
 let adapterDiagnosticQueueLock = Promise.resolve();
@@ -1191,12 +1212,31 @@ async function request(path, options = {}, timeoutMs = 3000) {
     return payload;
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error("Yoink did not acknowledge the companion request before its safety timeout.");
+      throw new Error("Yoink did not acknowledge the Chrome companion request before its safety timeout.");
     }
     throw error;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function settleRequiredWork(...promises) {
+  const results = await Promise.allSettled(promises);
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) throw failure.reason;
+  return results.map((result) => result.value);
+}
+
+function actionJobLeaseRequest(index, accessibleRetailers = null) {
+  const waitMs = index === 0 ? ACTION_JOB_WAIT_MS : 0;
+  const retailers = Array.isArray(accessibleRetailers)
+    ? [...new Set(accessibleRetailers.map((value) => String(value || "").toLowerCase())
+      .filter((value) => Object.hasOwn(ADD_LANES, value)))].slice(0, 4)
+    : null;
+  return {
+    path: `/devices/self/jobs/next?wait=${waitMs}${retailers === null ? "" : `&retailers=${retailers.join(",")}`}`,
+    timeoutMs: waitMs > 0 ? ACTION_JOB_REQUEST_TIMEOUT_MS : 3_000
+  };
 }
 
 function base64urlBytes(value) {
@@ -1495,7 +1535,7 @@ function normalizedObserverRecipeEnvelope(value, key, retailerId) {
     || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(String(payload.minimumExtensionVersion || ""))
     || compareVersions(EXTENSION_VERSION, payload.minimumExtensionVersion) < 0
     || (payload.rollbackRecipeId && !/^[A-Za-z0-9_-]{3,120}$/.test(payload.rollbackRecipeId))) {
-    throw new Error("The signed observer recipe payload is incompatible with this companion.");
+    throw new Error("The signed observer recipe payload is incompatible with this Chrome companion.");
   }
   const issued = new Date(payload.issuedAt).getTime();
   const expires = new Date(payload.expiresAt).getTime();
@@ -2488,9 +2528,18 @@ async function startTrackalackerSync() {
   }
 }
 
+// Badge colours cannot read popup.css, so these mirror the dark-theme status
+// tokens in apps/web/tokens.css (--theme-good-dark, --theme-warning-dark,
+// --theme-bad-dark). Update both places together.
+const BADGE_COLORS = Object.freeze({
+  good: "#55e6b1",
+  warning: "#ffca6b",
+  bad: "#ff8a9a"
+});
+
 async function showBadge(state) {
-  if (await showCartReadyBadge(await readCartReadyState())) return;
-  const color = !state.connected ? "#BE5B4B" : state.paired ? "#1D9D77" : "#C89648";
+  if (await showActionHandoffBadge(await readCartReadyState())) return;
+  const color = !state.connected ? BADGE_COLORS.bad : state.paired ? BADGE_COLORS.good : BADGE_COLORS.warning;
   await chrome.action.setBadgeBackgroundColor({ color });
   await chrome.action.setBadgeText({ text: !state.connected ? "!" : state.paired ? "" : "?" });
   await chrome.action.setTitle({ title: !state.connected
@@ -2986,6 +3035,87 @@ async function executeAddAction(tabId, retailerId, operation, args = []) {
   return injections.find((entry) => entry.frameId === 0)?.result || { ok: false, reason: "runner_no_result" };
 }
 
+async function executeReadOnlyCartAction(tabId, retailerId, operation, args = [], timeoutMs = CART_BASELINE_WAIT_MAX_MS) {
+  const lane = ADD_LANES[retailerId];
+  if (!lane || ![lane.baselineOperation, lane.verifyCartOperation].includes(operation)) {
+    return { ok: false, reason: "runner_unavailable" };
+  }
+  const boundedTimeoutMs = Number.isSafeInteger(timeoutMs) && timeoutMs >= 0 && timeoutMs <= 3_000
+    ? timeoutMs : CART_BASELINE_WAIT_MAX_MS;
+  const injections = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    func: (operationName, operationArgs, globalName, waitMs, quietMs, fallbackMs) => new Promise((resolve) => {
+      const runner = globalThis[globalName];
+      const method = runner?.[operationName];
+      if (typeof method !== "function") {
+        resolve({ ok: false, reason: "runner_unavailable" });
+        return;
+      }
+      const transientReasons = new Set(["cart_unverified", "quantity_unavailable"]);
+      let finished = false;
+      let mutationTimer;
+      let fallbackTimer;
+      let deadlineTimer;
+      let observer;
+      const finish = (result) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(mutationTimer);
+        clearInterval(fallbackTimer);
+        clearTimeout(deadlineTimer);
+        observer?.disconnect?.();
+        resolve(result);
+      };
+      const inspect = (final = false) => {
+        if (finished) return;
+        let result;
+        try {
+          result = method(document, location.href, ...(operationArgs || []));
+        } catch {
+          result = { ok: false, reason: "runner_failed" };
+        }
+        if (!result || typeof result !== "object") result = { ok: false, reason: "runner_no_result" };
+        const retryable = result.ok !== true && transientReasons.has(String(result.reason || ""));
+        if (!retryable || final) finish(result);
+      };
+      const inspectAfterMutation = () => {
+        if (finished || mutationTimer) return;
+        mutationTimer = setTimeout(() => {
+          mutationTimer = undefined;
+          inspect(false);
+        }, quietMs);
+      };
+      try {
+        const root = document.documentElement || document;
+        observer = new MutationObserver(inspectAfterMutation);
+        observer.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
+      } catch {
+        observer = null;
+      }
+      // Mutation delivery is the fast path. A low-frequency in-page read is a
+      // bounded fallback for state reflected through DOM properties or shadow
+      // roots that do not notify the document observer.
+      fallbackTimer = setInterval(() => inspect(false), fallbackMs);
+      deadlineTimer = setTimeout(() => {
+        clearTimeout(mutationTimer);
+        mutationTimer = undefined;
+        inspect(true);
+      }, waitMs);
+      inspect(false);
+    }),
+    args: [
+      operation,
+      args,
+      lane.runnerGlobal,
+      boundedTimeoutMs,
+      CART_DOM_RETRY_QUIET_MS,
+      CART_DOM_RETRY_FALLBACK_MS
+    ]
+  });
+  return injections.find((entry) => entry.frameId === 0)?.result || { ok: false, reason: "runner_no_result" };
+}
+
 function safeReasonCode(value) {
   const reason = String(value || "rehearsal_failed").toLowerCase();
   return /^[a-z][a-z0-9_]{1,79}$/.test(reason) ? reason : "rehearsal_failed";
@@ -3450,7 +3580,7 @@ function normalizedReverificationPlan(value) {
 
 async function getReverificationPlan() {
   const device = await storedDevice();
-  if (!device?.token) throw new Error("Pair this Chrome companion before re-verifying store lanes.");
+  if (!device?.token) throw new Error("Pair this Chrome companion before checking stores again.");
   const payload = await request("/devices/self/readiness/reverification-plan", {
     headers: { Authorization: `Bearer ${device.token}` }
   }, EVIDENCE_REQUEST_TIMEOUT_MS);
@@ -3476,11 +3606,11 @@ async function saveReverificationState(state, results = []) {
 
 async function runRetailerReverification(retailerIds = []) {
   if (await activeJob().catch(() => null)) {
-    throw new Error("Wait for the current guarded cart action to finish before re-verifying store lanes.");
+    throw new Error("Wait for the current cart action to finish before checking stores again.");
   }
   const requested = [...new Set((Array.isArray(retailerIds) ? retailerIds : [])
     .map((value) => String(value || "")).filter((value) => ADD_LANES[value]))].slice(0, 4);
-  if (!requested.length) throw new Error("Choose at least one supported store lane to re-verify.");
+  if (!requested.length) throw new Error("Choose at least one supported store to check again.");
   const plan = await getReverificationPlan();
   const results = [];
   await saveReverificationState("running", results);
@@ -3666,6 +3796,9 @@ async function reportJob(active, state, reasonCode, message, evidence = {}) {
   });
   active.phase = payload.job?.state || state;
   await saveActiveJob(active);
+  if (["confirmed", "manual_review", "submission_uncertain"].includes(active.phase)) {
+    void reconcileActionHandoffs(ACTION_HANDOFF_WAIT_MS);
+  }
   return payload.job;
 }
 
@@ -3688,6 +3821,9 @@ async function reportJobBatch(active, events) {
   });
   active.phase = payload.job?.state || events.at(-1)?.state || active.phase;
   await saveActiveJob(active);
+  if (["confirmed", "manual_review", "submission_uncertain"].includes(active.phase)) {
+    void reconcileActionHandoffs(ACTION_HANDOFF_WAIT_MS);
+  }
   return payload.job;
 }
 
@@ -3946,12 +4082,31 @@ async function createPostClickSettle(tabId) {
   };
 }
 
-async function openRetailerTab(retailerId, url, expected) {
+async function openRetailerTab(retailerId, url, expected, active = true) {
   const lane = ADD_LANES[retailerId];
-  const tab = await chrome.tabs.create({ url, active: true });
+  const tab = await chrome.tabs.create({ url, active: active !== false });
   if (!Number.isInteger(tab?.id)) throw new Error(`Chrome could not open the ${lane?.name || "retailer"} execution tab.`);
   await waitForTab(tab.id, retailerId, expected);
   return tab.id;
+}
+
+async function captureRetailerCartContext(tabId, retailerId, lane, timeoutMs = CART_BASELINE_WAIT_MAX_MS) {
+  await injectAddAction(tabId, retailerId);
+  const [baseline, inspectedSignedInState] = await settleRequiredWork(
+    executeReadOnlyCartAction(
+      tabId,
+      retailerId,
+      lane.baselineOperation,
+      [],
+      timeoutMs
+    ),
+    inspectRetailerSessionState(tabId, retailerId).catch(() => "unknown")
+  );
+  return {
+    baseline,
+    signedInState: baseline?.reason === "manual_action_required"
+      ? "challenged" : inspectedSignedInState
+  };
 }
 
 async function navigateRetailerTab(tabId, retailerId, url, expected) {
@@ -4003,12 +4158,20 @@ function boundedLatency(start, end) {
 
 function cartReadyLatency(active, readyAt = Date.now()) {
   const leaseToCartReadyMs = boundedLatency(active?.timing?.leasedAt, readyAt);
+  const leaseToBaselineMs = boundedLatency(active?.timing?.leasedAt, active?.timing?.baselineReadyAt);
+  const baselineToOfferMs = boundedLatency(active?.timing?.baselineReadyAt, active?.timing?.offerVerifiedAt);
+  const offerToClickMs = boundedLatency(active?.timing?.offerVerifiedAt, active?.timing?.clickedAt);
   const clickToCartReadyMs = boundedLatency(active?.timing?.clickedAt, readyAt);
   const clickToSettleMs = boundedLatency(active?.timing?.clickedAt, active?.timing?.settledAt);
+  const settleToCartReadyMs = boundedLatency(active?.timing?.settledAt, readyAt);
   return {
     ...(leaseToCartReadyMs !== undefined ? { leaseToCartReadyMs } : {}),
+    ...(leaseToBaselineMs !== undefined ? { leaseToBaselineMs } : {}),
+    ...(baselineToOfferMs !== undefined ? { baselineToOfferMs } : {}),
+    ...(offerToClickMs !== undefined ? { offerToClickMs } : {}),
     ...(clickToCartReadyMs !== undefined ? { clickToCartReadyMs } : {}),
-    ...(clickToSettleMs !== undefined ? { clickToSettleMs } : {})
+    ...(clickToSettleMs !== undefined ? { clickToSettleMs } : {}),
+    ...(settleToCartReadyMs !== undefined ? { settleToCartReadyMs } : {})
   };
 }
 
@@ -4081,8 +4244,8 @@ async function inspectRetailerSessionState(tabId, retailerId) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "ISOLATED",
-    args: [retailerId],
-    func: (exactRetailerId) => {
+    args: ["inspectRetailerSessionState", retailerId],
+    func: (_operation, exactRetailerId) => {
       const visible = (element) => {
         if (!(element instanceof Element)) return false;
         const style = getComputedStyle(element);
@@ -4103,13 +4266,26 @@ async function inspectRetailerSessionState(tabId, retailerId) {
         amazon: ['a[href*="/ap/signin" i]'],
         bestbuy: ['a[href*="/identity/global/signin" i]', 'a[href*="/login" i]']
       }[exactRetailerId] || [];
+      const challenge = [
+        "iframe[src*='captcha' i]",
+        "iframe[title*='human verification' i]",
+        "[data-test*='captcha' i]",
+        "[data-testid*='captcha' i]",
+        "[id*='captcha' i]",
+        "[class*='captcha' i]"
+      ];
+      const challengeText = String(document.body?.innerText || "").slice(0, 50_000);
+      if (anyVisible(challenge)
+        || /verify you are human|robot or human|activate and hold the button|unusual traffic|security challenge|additional security check is required|checking your browser|performing security verification|enable javascript and cookies to continue|sorry, you have been blocked/i.test(challengeText)) {
+        return "challenged";
+      }
       if (anyVisible(ready)) return "ready";
       if (anyVisible(signedOut)) return "signed_out";
       return "unknown";
     }
   });
   const state = results.find((entry) => entry.frameId === 0)?.result;
-  return ["ready", "signed_out"].includes(state) ? state : "unknown";
+  return ["ready", "signed_out", "challenged"].includes(state) ? state : "unknown";
 }
 
 async function forgetRetailerActionTab(tabId) {
@@ -4153,20 +4329,108 @@ async function reportRetailerReadiness(retailerId, input = {}) {
   }, 3_000).catch(() => null);
 }
 
-async function showCartReadyBadge(state) {
-  const count = PopupState.cartReadyState(state).items.length;
+function retailerLanePageUrl(retailerId, value) {
+  const lane = ADD_LANES[retailerId];
+  if (!lane) return false;
+  try {
+    const url = new URL(String(value || ""));
+    const expectedHost = new URL(lane.cartUrl).hostname.replace(/^www\./, "");
+    return url.protocol === "https:" && !url.username && !url.password && !url.port
+      && (url.hostname === expectedHost || url.hostname.endsWith(`.${expectedHost}`));
+  } catch {
+    return false;
+  }
+}
+
+async function refreshRetailerSessionOnce(tabId, value) {
+  if (await activeJob().catch(() => null)) {
+    return { refreshed: false, reason: "action_job_active" };
+  }
+  const storedTabs = await readRetailerActionTabs();
+  const identity = canonicalRetailerIdentity(value);
+  const storedMatch = [...storedTabs].find(([, stored]) => stored.tabId === tabId);
+  const retailerId = Object.hasOwn(ADD_LANES, identity?.retailerId)
+    ? identity.retailerId : storedMatch?.[0] || "";
+  const stored = storedTabs.get(retailerId);
+  if (!retailerId || !retailerLanePageUrl(retailerId, value)
+    || (!identity && stored?.tabId !== tabId)
+    || !await addLaneAccess(retailerId)) {
+    return { refreshed: false, reason: "retailer_page_unavailable" };
+  }
+  const wasBlocked = ["signed_out", "challenged"].includes(stored?.signedInState);
+  const signedInState = await inspectRetailerSessionState(tabId, retailerId).catch(() => "unknown");
+  if (stored) {
+    await rememberRetailerActionTab(retailerId, stored.tabId, undefined, signedInState);
+  }
+  const cartBaseline = freshCartBaseline(stored?.cartBaseline, retailerId);
+  const readiness = await reportRetailerReadiness(retailerId, {
+    cartBaseline,
+    cartBaselineState: cartBaseline ? "ready" : "unavailable",
+    signedInState,
+    ...(["signed_out", "challenged"].includes(signedInState)
+      ? { errorCode: signedInState === "challenged" ? "security_challenge" : "signed_out" }
+      : {})
+  });
+  const recovered = Boolean(readiness) && wasBlocked
+    && !["signed_out", "challenged"].includes(signedInState);
+  if (recovered) void runSignalJobHandoff();
+  return { refreshed: Boolean(readiness), recovered, retailerId, signedInState };
+}
+
+function refreshRetailerSessionFromTab(tabId, value) {
+  if (!Number.isInteger(tabId) || tabId <= 0) return Promise.resolve({ refreshed: false, reason: "tab_unavailable" });
+  const existing = retailerSessionRefreshes.get(tabId);
+  if (existing) {
+    existing.pending = true;
+    existing.pendingValue = value;
+    return existing.promise;
+  }
+  const entry = { pending: false, pendingValue: "", promise: null };
+  entry.promise = (async () => {
+    let result = await refreshRetailerSessionOnce(tabId, value);
+    // Login and security flows can emit a second completed navigation while
+    // the first read-only inspection is settling. Coalesce that latest page
+    // into one follow-up instead of losing the recovery edge.
+    if (entry.pending) {
+      result = await refreshRetailerSessionOnce(tabId, entry.pendingValue);
+    }
+    return result;
+  })().catch(() => ({ refreshed: false, reason: "session_refresh_failed" }))
+    .finally(() => { retailerSessionRefreshes.delete(tabId); });
+  retailerSessionRefreshes.set(tabId, entry);
+  return entry.promise;
+}
+
+async function showActionHandoffBadge(state) {
+  const handoffs = PopupState.cartReadyState(state).items;
+  const count = handoffs.length;
   if (!count) return false;
+  const needsYou = handoffs.filter((item) => item.kind === "needs_you").length;
   await Promise.all([
-    chrome.action.setBadgeBackgroundColor({ color: "#1D9D77" }),
+    chrome.action.setBadgeBackgroundColor({ color: needsYou ? BADGE_COLORS.warning : BADGE_COLORS.good }),
     chrome.action.setBadgeText({ text: count > 9 ? "9+" : String(count) }),
-    chrome.action.setTitle({ title: `Yoink · ${count} cart${count === 1 ? "" : "s"} ready for checkout` })
+    chrome.action.setTitle({ title: needsYou
+      ? `Yoink · ${needsYou} action${needsYou === 1 ? "" : "s"} need review`
+      : `Yoink · ${count} cart${count === 1 ? "" : "s"} ready for checkout` })
   ]);
   return true;
 }
 
 async function refreshActionBadge() {
   const stored = await chrome.storage.local.get(READINESS_KEY);
-  await showBadge(stored[READINESS_KEY] || { connected: false, paired: false });
+  const readiness = stored[READINESS_KEY];
+  if (readiness && typeof readiness === "object") {
+    await showBadge(readiness);
+    return;
+  }
+  // An absent cache is not evidence that the companion is offline. This can
+  // occur before the first minute health cycle or after session data cleanup;
+  // keep the badge quiet until an actual health result establishes a state.
+  if (await showActionHandoffBadge(await readCartReadyState())) return;
+  await Promise.all([
+    chrome.action.setBadgeText({ text: "" }),
+    chrome.action.setTitle({ title: "Yoink" })
+  ]);
 }
 
 function mutateCartReadyState(mutator) {
@@ -4196,14 +4460,170 @@ function retailerCartTab(tab, retailerId) {
   }
 }
 
-async function acknowledgeCartReady(jobId) {
+async function clearActionHandoffNotifications(jobId) {
+  const id = String(jobId || "");
+  await Promise.all([
+    chrome.notifications?.clear?.(`${CART_READY_NOTIFICATION_PREFIX}${id}`).catch(() => undefined),
+    chrome.notifications?.clear?.(`${NEEDS_YOU_NOTIFICATION_PREFIX}${id}`).catch(() => undefined)
+  ]);
+}
+
+async function closeActionHandoff(jobId) {
   const id = String(jobId || "");
   const state = await mutateCartReadyState((current) => ({
     schemaVersion: 1,
     items: current.items.filter((item) => item.jobId !== id)
   }));
-  await chrome.notifications?.clear?.(`${CART_READY_NOTIFICATION_PREFIX}${id}`).catch(() => undefined);
+  const storedHandoffs = (await chrome.storage.session.get(ORDER_HANDOFF_KEY))[ORDER_HANDOFF_KEY];
+  if (Array.isArray(storedHandoffs)) {
+    await chrome.storage.session.set({
+      [ORDER_HANDOFF_KEY]: storedHandoffs.filter((entry) => entry?.jobId !== id)
+    });
+  }
+  await clearActionHandoffNotifications(id);
   return state;
+}
+
+async function markActionHandoffOpened(jobId, now = Date.now()) {
+  const id = String(jobId || "");
+  const openedAt = new Date(now).toISOString();
+  const state = await mutateCartReadyState((current) => ({
+    schemaVersion: 1,
+    items: current.items.map((item) => item.jobId === id
+      ? { ...item, openedAt: item.openedAt || openedAt }
+      : item)
+  }));
+  await clearActionHandoffNotifications(id);
+  return state;
+}
+
+function boundedActionHandoffWaitMs(value) {
+  return Math.max(0, Math.min(ACTION_HANDOFF_WAIT_MS, Math.floor(Number(value) || 0)));
+}
+
+function normalizedActionHandoffAvailabilityVersion(value) {
+  const version = Number(value);
+  return Number.isSafeInteger(version) && version >= 0 ? version : -1;
+}
+
+async function applyActionHandoffStatuses(knownIds, entries) {
+  const statuses = new Map((Array.isArray(entries) ? entries : []).flatMap((entry) => {
+    const jobId = String(entry?.jobId || "");
+    const status = String(entry?.status || "");
+    return knownIds.has(jobId) && ["cart_ready", "needs_you", "closed"].includes(status)
+      ? [[jobId, status]] : [];
+  }));
+  if (!statuses.size) return { checked: 0, closed: 0, open: true };
+  const closedIds = new Set([...statuses].filter(([, status]) => status === "closed").map(([jobId]) => jobId));
+  const changedIds = new Set();
+  const state = await mutateCartReadyState((current) => ({
+    schemaVersion: 1,
+    items: current.items.flatMap((item) => {
+      const status = statuses.get(item.jobId);
+      if (!status) return [item];
+      if (status === "closed") return [];
+      if (item.kind === status) return [item];
+      changedIds.add(item.jobId);
+      if (status === "needs_you") {
+        return [{ ...item, kind: status, reasonCode: item.reasonCode || "manual_review" }];
+      }
+      const { reasonCode: _reasonCode, ...withoutReason } = item;
+      return [{ ...withoutReason, kind: status }];
+    })
+  }));
+  if (closedIds.size) {
+    const storedHandoffs = (await chrome.storage.session.get(ORDER_HANDOFF_KEY))[ORDER_HANDOFF_KEY];
+    if (Array.isArray(storedHandoffs)) {
+      await chrome.storage.session.set({
+        [ORDER_HANDOFF_KEY]: storedHandoffs.filter((entry) => !closedIds.has(String(entry?.jobId || "")))
+      });
+    }
+  }
+  await Promise.all([...new Set([...closedIds, ...changedIds])].flatMap((jobId) => [
+    chrome.notifications?.clear?.(`${CART_READY_NOTIFICATION_PREFIX}${jobId}`).catch(() => undefined),
+    chrome.notifications?.clear?.(`${NEEDS_YOU_NOTIFICATION_PREFIX}${jobId}`).catch(() => undefined)
+  ]));
+  return {
+    checked: statuses.size,
+    closed: closedIds.size,
+    open: state.items.some((item) => knownIds.has(item.jobId))
+  };
+}
+
+async function performActionHandoffReconciliation(waitMs) {
+  const current = await readCartReadyState();
+  if (!current.items.length) return { checked: 0, closed: 0 };
+  const device = await storedDevice();
+  if (!device?.token) return { checked: 0, closed: 0 };
+  const jobIds = current.items.map((item) => item.jobId);
+  const knownIds = new Set(jobIds);
+  const storedVersion = (await chrome.storage.session.get(ACTION_HANDOFF_AVAILABILITY_VERSION_KEY))[
+    ACTION_HANDOFF_AVAILABILITY_VERSION_KEY
+  ];
+  let availabilityVersion = normalizedActionHandoffAvailabilityVersion(storedVersion);
+  const deadline = Date.now() + waitMs;
+  let checked = 0;
+  let closed = 0;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const remainingWaitMs = waitMs > 0 ? Math.max(0, deadline - Date.now()) : 0;
+    if (attempt > 0 && remainingWaitMs <= 0) break;
+    const sentVersion = availabilityVersion;
+    const response = await request("/devices/self/action-handoffs/reconcile", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${device.token}` },
+      body: JSON.stringify({
+        contractVersion: 1,
+        jobIds,
+        availabilityVersion: sentVersion,
+        waitMs: remainingWaitMs
+      })
+    }, remainingWaitMs > 0 ? ACTION_HANDOFF_REQUEST_TIMEOUT_MS : 3_000);
+    const receivedVersion = normalizedActionHandoffAvailabilityVersion(response?.availabilityVersion);
+    if (receivedVersion >= 0) {
+      availabilityVersion = receivedVersion;
+      await chrome.storage.session.set({ [ACTION_HANDOFF_AVAILABILITY_VERSION_KEY]: receivedVersion });
+    }
+    const applied = await applyActionHandoffStatuses(knownIds, response?.items);
+    checked = Math.max(checked, applied.checked);
+    closed = Math.max(closed, applied.closed);
+    if (waitMs <= 0 || !applied.open || attempt > 0
+      || receivedVersion < 0 || receivedVersion === sentVersion) break;
+  }
+  return { checked, closed };
+}
+
+function reconcileActionHandoffs(waitMs = 0) {
+  const boundedWaitMs = boundedActionHandoffWaitMs(waitMs);
+  if (actionHandoffReconciliationPromise) {
+    actionHandoffReconciliationPendingWaitMs = Math.max(
+      actionHandoffReconciliationPendingWaitMs,
+      boundedWaitMs
+    );
+    return actionHandoffReconciliationPromise;
+  }
+  actionHandoffReconciliationPromise = performActionHandoffReconciliation(boundedWaitMs)
+    .catch(() => ({ checked: 0, closed: 0 }))
+    .finally(() => {
+      actionHandoffReconciliationPromise = null;
+      const pendingWaitMs = actionHandoffReconciliationPendingWaitMs;
+      actionHandoffReconciliationPendingWaitMs = 0;
+      if (pendingWaitMs > 0) void reconcileActionHandoffs(pendingWaitMs);
+    });
+  return actionHandoffReconciliationPromise;
+}
+
+function retailerHandoffTab(tab, item) {
+  if (item?.kind !== "needs_you") return retailerCartTab(tab, item?.retailerId);
+  const lane = ADD_LANES[item?.retailerId];
+  if (!lane || !Number.isInteger(tab?.id)) return false;
+  try {
+    const actual = new URL(String(tab.url || ""));
+    const expected = new URL(lane.cartUrl);
+    return actual.protocol === "https:" && !actual.username && !actual.password
+      && actual.hostname === expected.hostname;
+  } catch {
+    return false;
+  }
 }
 
 async function focusCartReady(jobId = "") {
@@ -4211,25 +4631,100 @@ async function focusCartReady(jobId = "") {
   const requestedId = String(jobId || "");
   const item = requestedId
     ? current.items.find((candidate) => candidate.jobId === requestedId)
-    : current.items.at(-1);
+    : PopupState.preferredActionHandoff(current);
   if (!item) {
     await mutateCartReadyState(() => current);
-    throw new Error("This cart-ready handoff is no longer available.");
+    throw new Error("This action handoff is no longer available.");
   }
   const tab = await chrome.tabs.get(item.tabId).catch(() => null);
-  if (!retailerCartTab(tab, item.retailerId)) {
+  if (!retailerHandoffTab(tab, item)) {
     const running = await activeJob().catch(() => null);
     if (Number.isInteger(tab?.id) && running?.tabId === item.tabId
       && (running.retailerId || running.runnerJob?.retailerId) === item.retailerId) {
       await chrome.tabs.update(item.tabId, { active: true });
-      return { opened: true, pending: true, item, cartReady: current };
+      const state = await markActionHandoffOpened(item.jobId);
+      return {
+        opened: true,
+        pending: true,
+        item: state.items.find((candidate) => candidate.jobId === item.jobId) || item,
+        cartReady: state
+      };
     }
-    await acknowledgeCartReady(item.jobId);
-    throw new Error(`The ${item.retailerName} cart tab is no longer open.`);
+    const lane = ADD_LANES[item.retailerId];
+    if (!lane) throw new Error(`The ${item.retailerName} cart could not be reopened.`);
+    const replacement = await chrome.tabs.create({ url: lane.cartUrl, active: true }).catch(() => null);
+    if (!retailerHandoffTab(replacement, item)) {
+      throw new Error(`The ${item.retailerName} cart could not be reopened.`);
+    }
+    const state = await mutateCartReadyState((currentState) => ({
+      schemaVersion: 1,
+      items: currentState.items.map((candidate) => candidate.jobId === item.jobId
+        ? { ...candidate, tabId: replacement.id, openedAt: candidate.openedAt || new Date().toISOString() }
+        : candidate)
+    }));
+    const storedHandoffs = (await chrome.storage.session.get(ORDER_HANDOFF_KEY))[ORDER_HANDOFF_KEY];
+    const rebound = {
+      jobId: item.jobId,
+      retailerId: item.retailerId,
+      tabId: replacement.id,
+      recordedAt: item.recordedAt,
+      kind: item.kind
+    };
+    await chrome.storage.session.set({
+      [ORDER_HANDOFF_KEY]: [
+        ...(Array.isArray(storedHandoffs)
+          ? storedHandoffs.filter((entry) => entry?.jobId !== item.jobId)
+          : []),
+        rebound
+      ].slice(-20)
+    });
+    await clearActionHandoffNotifications(item.jobId);
+    return {
+      opened: true,
+      reopened: true,
+      item: state.items.find((candidate) => candidate.jobId === item.jobId) || item,
+      cartReady: state
+    };
   }
   await chrome.tabs.update(item.tabId, { active: true });
-  const state = await acknowledgeCartReady(item.jobId);
-  return { opened: true, item, cartReady: state };
+  const state = await markActionHandoffOpened(item.jobId);
+  return {
+    opened: true,
+    item: state.items.find((candidate) => candidate.jobId === item.jobId) || item,
+    cartReady: state
+  };
+}
+
+async function reportCartOutcomeFromPopup(input = {}) {
+  const jobId = String(input.jobId || "");
+  const outcome = String(input.outcome || "");
+  if (!/^[A-Za-z0-9_-]{3,120}$/.test(jobId)
+    || !["got_it", "missed_it"].includes(outcome)
+    || input.confirmation !== "I_REVIEWED_CHECKOUT_RESULT") {
+    throw new Error("Review the checkout result before closing this cart action.");
+  }
+  const current = await readCartReadyState();
+  if (!current.items.some((item) => item.jobId === jobId)) {
+    throw new Error("This action handoff is no longer available.");
+  }
+  const actualTotalCents = outcome === "got_it" ? Number(input.actualTotalCents) : null;
+  if (outcome === "got_it" && (!Number.isSafeInteger(actualTotalCents)
+    || actualTotalCents <= 0 || actualTotalCents > 100_000_000)) {
+    throw new Error("Enter a valid amount charged.");
+  }
+  const device = await storedDevice();
+  if (!device?.token) throw new Error("Pair this browser before closing the cart action.");
+  const response = await request(`/devices/self/jobs/${encodeURIComponent(jobId)}/outcome`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({
+      outcome,
+      actualTotalCents,
+      confirmation: "I_REVIEWED_CHECKOUT_RESULT"
+    })
+  }, 5_000);
+  const cartReady = await closeActionHandoff(jobId);
+  return { outcome: response.outcome, cartReady };
 }
 
 async function ensureCartReadySoundDocument() {
@@ -4260,17 +4755,20 @@ async function playCartReadySound() {
   return true;
 }
 
-async function publishCartReady(active, readyAt = Date.now()) {
+async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Date.now()) {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
   const raw = {
     schemaVersion: 1,
+    kind: kind === "needs_you" ? "needs_you" : "cart_ready",
     jobId: active.id,
     retailerId,
     retailerSku: active.runnerJob?.retailerSku,
     tabId: active.tabId,
     recordedAt: new Date(readyAt).toISOString(),
-    latency: cartReadyLatency(active, readyAt)
+    reviewedMaximumCents: active.runnerJob?.maxOrderTotalCents,
+    ...(kind === "needs_you" ? { reasonCode: safeReasonCode(reasonCode || "manual_review") } : {}),
+    latency: kind === "cart_ready" ? cartReadyLatency(active, readyAt) : {}
   };
   const item = PopupState.cartReadyState({ schemaVersion: 1, items: [raw] }, readyAt).items[0];
   if (!lane || !item) return null;
@@ -4289,7 +4787,8 @@ async function publishCartReady(active, readyAt = Date.now()) {
         jobId: item.jobId,
         retailerId: item.retailerId,
         tabId: item.tabId,
-        recordedAt: item.recordedAt
+        recordedAt: item.recordedAt,
+        kind: item.kind
       }
     ].slice(-20)
   });
@@ -4297,17 +4796,30 @@ async function publishCartReady(active, readyAt = Date.now()) {
     schemaVersion: 1,
     items: [...current.items.filter((candidate) => candidate.jobId !== item.jobId), item]
   }));
-  await chrome.notifications?.create?.(`${CART_READY_NOTIFICATION_PREFIX}${item.jobId}`, {
+  const notificationPrefix = item.kind === "needs_you"
+    ? NEEDS_YOU_NOTIFICATION_PREFIX : CART_READY_NOTIFICATION_PREFIX;
+  await chrome.notifications?.clear?.(`${item.kind === "needs_you" ? CART_READY_NOTIFICATION_PREFIX : NEEDS_YOU_NOTIFICATION_PREFIX}${item.jobId}`).catch(() => undefined);
+  await chrome.notifications?.create?.(`${notificationPrefix}${item.jobId}`, {
     type: "basic",
     iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
-    title: `Cart ready at ${item.retailerName}`,
-    message: `${item.identityLabel} ${item.retailerSku} was added. Checkout remains manual.`,
+    title: item.kind === "needs_you" ? `Review ${item.retailerName} add` : `Cart ready at ${item.retailerName}`,
+    message: item.kind === "needs_you"
+      ? `${item.identityLabel} ${item.retailerSku} could not be verified after Add. Check the open retailer tab.`
+      : `${item.identityLabel} ${item.retailerSku} was added. Checkout remains manual.`,
     contextMessage: "Yoink needs you",
     priority: 2,
     requireInteraction: true
   }).catch(() => undefined);
   void playCartReadySound().catch(() => undefined);
   return item;
+}
+
+function publishCartReady(active, readyAt = Date.now()) {
+  return publishActionHandoff(active, "cart_ready", "", readyAt);
+}
+
+function publishNeedsYou(active, reasonCode, readyAt = Date.now()) {
+  return publishActionHandoff(active, "needs_you", reasonCode, readyAt);
 }
 
 function retailerConfirmationPage(retailerId, value) {
@@ -4359,9 +4871,12 @@ async function observeOrderConfirmation(tabId, url) {
       observedAt: new Date().toISOString()
     })
   }, EVIDENCE_REQUEST_TIMEOUT_MS);
-  await chrome.storage.session.set({
-    [ORDER_HANDOFF_KEY]: stored.filter((entry) => entry !== handoff)
-  });
+  await Promise.all([
+    chrome.storage.session.set({
+      [ORDER_HANDOFF_KEY]: stored.filter((entry) => entry !== handoff)
+    }),
+    closeActionHandoff(handoff.jobId)
+  ]);
   return true;
 }
 
@@ -4371,21 +4886,22 @@ async function verifyAddedCart(active) {
   if (!lane || !Number.isInteger(active.tabId) || !active.proof || !active.cartBaseline) {
     throw new Error("The retailer cart verification context is unavailable.");
   }
-  await heartbeatJob(active);
-  await navigateRetailerTab(active.tabId, retailerId, lane.cartUrl, "cart");
+  // Returning to cart is non-mutating, so overlap it with the required lease
+  // heartbeat. Both must settle successfully before cart proof begins.
+  await settleRequiredWork(
+    heartbeatJob(active),
+    navigateRetailerTab(active.tabId, retailerId, lane.cartUrl, "cart")
+  );
   await injectAddAction(active.tabId, retailerId);
-  let result = { ok: false, reason: "cart_unverified" };
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    result = await executeAddAction(
-      active.tabId,
-      retailerId,
-      lane.verifyCartOperation,
-      [active.runnerJob, active.proof, active.cartBaseline]
-    );
-    if (result?.ok || !["cart_unverified", "quantity_unavailable"].includes(result?.reason)) break;
-    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 750));
-  }
+  const result = await executeReadOnlyCartAction(
+    active.tabId,
+    retailerId,
+    lane.verifyCartOperation,
+    [active.runnerJob, active.proof, active.cartBaseline],
+    CART_PROOF_WAIT_MAX_MS
+  );
   if (!result?.ok) {
+    await publishNeedsYou(active, result?.reason || "cart_unverified").catch(() => undefined);
     await reportJob(active, "manual_review", result?.reason || "cart_unverified", `The exact ${lane.name} cart result could not be proven after Add; automatic retry is locked.`);
     await clearActiveJob();
     return { confirmed: false, cartBaseline: null };
@@ -4435,6 +4951,9 @@ async function verifyAddedCart(active) {
 async function failActiveJob(active, mutationPossible, reason = "extension_error") {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const name = ADD_LANES[retailerId]?.name || "retailer";
+  if (mutationPossible) {
+    await publishNeedsYou(active, reason).catch(() => undefined);
+  }
   try {
     await reportJob(
       active,
@@ -4470,6 +4989,7 @@ async function executeLeasedRetailerJob(
     timing: { leasedAt: Date.now() }
   };
   await saveActiveJob(active);
+  let productPageReady = false;
   try {
     if (!await addLaneAccess(retailerId)) {
       await reportJob(active, "cancelled", "retailer_access_missing", `${lane.name} add stopped before mutation because Chrome page access is not granted.`);
@@ -4482,26 +5002,99 @@ async function executeLeasedRetailerJob(
     if (cachedBaseline && retailerCartTab(reusableTab, retailerId)) {
       active.tabId = reusableTabId;
       active.cartBaseline = cachedBaseline;
-      active.signedInState = await inspectRetailerSessionState(active.tabId, retailerId).catch(
-        () => active.signedInState
+      const [, signedInState] = await settleRequiredWork(
+        reportJob(active, "navigating", "cart_baseline_reused", `Chrome reused the fresh, exact ${lane.name} cart baseline from the preceding verified add.`),
+        inspectRetailerSessionState(active.tabId, retailerId).catch(() => active.signedInState)
       );
+      active.signedInState = signedInState;
       markJobTiming(active, "baselineReadyAt");
-      await reportJob(active, "navigating", "cart_baseline_reused", `Chrome reused the fresh, exact ${lane.name} cart baseline from the preceding verified add.`);
-    } else {
-      await reportJob(active, "navigating", "cart_baseline_started", `Chrome opened ${lane.name} cart to bind the exact pre-add baseline.`);
-      active.tabId = await acquireRetailerTab(reusableTabId, retailerId, lane.cartUrl, "cart");
       await saveActiveJob(active);
-      await injectAddAction(active.tabId, retailerId);
-      let baseline = { ok: false, reason: "cart_unverified" };
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        baseline = await executeAddAction(active.tabId, retailerId, lane.baselineOperation);
-        if (baseline?.ok || !["cart_unverified", "quantity_unavailable"].includes(baseline?.reason)) break;
-        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500));
+    } else if (!reusableTab) {
+      let productTabId = null;
+      let baselineTabId = null;
+      let cartContext;
+      try {
+        const [, readyProductTabId, readyCartContext] = await settleRequiredWork(
+          reportJob(active, "navigating", "cold_context_started", `Chrome started the exact ${lane.name} product page and pre-add cart baseline in parallel.`),
+          openRetailerTab(retailerId, active.navigationUrl, active.runnerJob.retailerSku, true)
+            .then((tabId) => {
+              productTabId = tabId;
+              return tabId;
+            }),
+          (async () => {
+            baselineTabId = await openRetailerTab(retailerId, lane.cartUrl, "cart", false);
+            const context = await captureRetailerCartContext(
+              baselineTabId,
+              retailerId,
+              lane,
+              CART_BASELINE_WAIT_MAX_MS
+            );
+            return { ...context, tabId: baselineTabId, baselineReadyAt: Date.now() };
+          })()
+        );
+        productTabId = readyProductTabId;
+        cartContext = readyCartContext;
+      } catch (error) {
+        if (Number.isInteger(baselineTabId)) {
+          await chrome.tabs.remove(baselineTabId).catch(() => undefined);
+        }
+        if (Number.isInteger(productTabId)) {
+          active.tabId = productTabId;
+          await saveActiveJob(active).catch(() => undefined);
+        }
+        throw error;
       }
+      const baseline = cartContext?.baseline;
       if (!baseline?.ok || !baseline.proof) {
-        active.signedInState = baseline?.reason === "manual_action_required"
-          ? "challenged"
-          : await inspectRetailerSessionState(active.tabId, retailerId).catch(() => "unknown");
+        active.tabId = cartContext?.tabId || baselineTabId;
+        active.signedInState = cartContext?.signedInState || "unknown";
+        await saveActiveJob(active);
+        if (Number.isInteger(productTabId) && productTabId !== active.tabId) {
+          await chrome.tabs.remove(productTabId).catch(() => undefined);
+        }
+        if (Number.isInteger(active.tabId)) {
+          await chrome.tabs.update(active.tabId, { active: true }).catch(() => undefined);
+        }
+        void reportRetailerReadiness(retailerId, {
+          cartBaselineState: baseline?.reason === "cart_baseline_stale" ? "stale" : "unavailable",
+          signedInState: active.signedInState,
+          errorCode: baseline?.reason || "cart_unverified"
+        });
+        await reportJob(active, "cancelled", baseline?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the current cart baseline could not be proven.`);
+        await clearActiveJob();
+        return { confirmed: false, tabId: active.tabId, continueCycle: true, cartBaseline: null };
+      }
+      active.tabId = productTabId;
+      active.cartBaseline = baseline.proof;
+      active.signedInState = cartContext.signedInState;
+      markJobTiming(active, "baselineReadyAt", cartContext.baselineReadyAt);
+      await settleRequiredWork(
+        saveActiveJob(active),
+        Number.isInteger(baselineTabId)
+          ? chrome.tabs.remove(baselineTabId).catch(() => undefined)
+          : Promise.resolve()
+      );
+      productPageReady = true;
+      void reportRetailerReadiness(retailerId, {
+        cartBaseline: baseline.proof,
+        signedInState: active.signedInState
+      });
+    } else {
+      const [, tabId] = await settleRequiredWork(
+        reportJob(active, "navigating", "cart_baseline_started", `Chrome opened ${lane.name} cart to bind the exact pre-add baseline.`),
+        acquireRetailerTab(reusableTabId, retailerId, lane.cartUrl, "cart")
+      );
+      active.tabId = tabId;
+      await saveActiveJob(active);
+      const cartContext = await captureRetailerCartContext(
+        active.tabId,
+        retailerId,
+        lane,
+        CART_BASELINE_WAIT_MAX_MS
+      );
+      const baseline = cartContext.baseline;
+      if (!baseline?.ok || !baseline.proof) {
+        active.signedInState = cartContext.signedInState;
         void reportRetailerReadiness(retailerId, {
           cartBaselineState: baseline?.reason === "cart_baseline_stale" ? "stale" : "unavailable",
           signedInState: active.signedInState,
@@ -4512,7 +5105,7 @@ async function executeLeasedRetailerJob(
         return { confirmed: false, tabId: active.tabId, continueCycle: true, cartBaseline: null };
       }
       active.cartBaseline = baseline.proof;
-      active.signedInState = await inspectRetailerSessionState(active.tabId, retailerId).catch(() => "unknown");
+      active.signedInState = cartContext.signedInState;
       void reportRetailerReadiness(retailerId, {
         cartBaseline: baseline.proof,
         signedInState: active.signedInState
@@ -4521,10 +5114,16 @@ async function executeLeasedRetailerJob(
       await saveActiveJob(active);
     }
 
-    await navigateRetailerTab(active.tabId, retailerId, active.navigationUrl, active.runnerJob.retailerSku);
-    await reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`);
-    await injectAddAction(active.tabId, retailerId);
-    const prepared = await executeAddAction(active.tabId, retailerId, lane.prepareOperation, [active.runnerJob]);
+    if (!productPageReady) {
+      await navigateRetailerTab(active.tabId, retailerId, active.navigationUrl, active.runnerJob.retailerSku);
+    }
+    const [, prepared] = await settleRequiredWork(
+      reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`),
+      (async () => {
+        await injectAddAction(active.tabId, retailerId);
+        return executeAddAction(active.tabId, retailerId, lane.prepareOperation, [active.runnerJob]);
+      })()
+    );
     if (!prepared?.ok) {
       const reasonCode = safeReasonCode(prepared?.reason || "offer_unverified");
       await recordTabOperationDiagnostic(
@@ -4557,25 +5156,27 @@ async function executeLeasedRetailerJob(
     active.authorizationId = prepared.authorizationId;
     markJobTiming(active, "offerVerifiedAt");
     await saveActiveJob(active);
-    await reportJobBatch(active, [
-      {
-        state: "offer_verified",
-        reasonCode: "live_offer_verified",
-        message: `The exact ${lane.name} SKU, seller, price, stock, and fulfillment passed live verification.`,
-        evidence: safeOfferEvidence(active.proof)
-      },
-      {
-        state: "add_authorized",
-        reasonCode: "add_boundary_prepared",
-        message: `The exact ${lane.name} Add control is prepared for one final revalidation.`
-      },
-      {
-        state: "adding",
-        reasonCode: "add_receipt_armed",
-        message: "The durable at-most-once Add receipt was armed before the browser click."
-      }
-    ]);
-    const postClickSettle = await createPostClickSettle(active.tabId);
+    const [, postClickSettle] = await settleRequiredWork(
+      reportJobBatch(active, [
+        {
+          state: "offer_verified",
+          reasonCode: "live_offer_verified",
+          message: `The exact ${lane.name} SKU, seller, price, stock, and fulfillment passed live verification.`,
+          evidence: safeOfferEvidence(active.proof)
+        },
+        {
+          state: "add_authorized",
+          reasonCode: "add_boundary_prepared",
+          message: `The exact ${lane.name} Add control is prepared for one final revalidation.`
+        },
+        {
+          state: "adding",
+          reasonCode: "add_receipt_armed",
+          message: "The durable at-most-once Add receipt was armed before the browser click."
+        }
+      ]),
+      createPostClickSettle(active.tabId)
+    );
     const committed = await executeAddAction(active.tabId, retailerId, lane.commitOperation, [active.runnerJob, active.authorizationId]);
     active.authorizationId = "";
     await saveActiveJob(active);
@@ -4583,6 +5184,7 @@ async function executeLeasedRetailerJob(
       await postClickSettle.cancel();
       const reasonCode = safeReasonCode(committed?.reason || "click_uncertain");
       await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "failed", runnerFailureStage(reasonCode), reasonCode, active.runnerJob.fulfillment);
+      await publishNeedsYou(active, reasonCode).catch(() => undefined);
       await reportJob(active, "manual_review", committed?.reason || "click_uncertain", "The Add boundary did not return a confirmed click result; automatic retry is locked.");
       await clearActiveJob();
       return { confirmed: false, tabId: active.tabId, continueCycle: false };
@@ -4661,13 +5263,98 @@ function notificationRoute(value) {
   }
 }
 
+function exactWalmartReviewOrderRoute(value, retailerSku) {
+  try {
+    const url = new URL(String(value || ""));
+    const itemId = String(retailerSku || "");
+    const keys = [...url.searchParams.keys()];
+    if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash
+      || !["walmart.com", "www.walmart.com"].includes(url.hostname)
+      || url.pathname !== "/affil/cart/reviewOrder"
+      || !/^\d{5,20}$/.test(itemId)
+      || keys.length !== 3 || new Set(keys).size !== 3
+      || !keys.every((key) => ["items", "cn", "veh"].includes(key))
+      || url.searchParams.get("items") !== itemId
+      || url.searchParams.get("cn") !== "nc"
+      || url.searchParams.get("veh") !== "aff") return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function exactHowlWalmartReviewOrderRoute(value, retailerSku) {
+  try {
+    const url = new URL(String(value || ""));
+    const keys = [...url.searchParams.keys()];
+    if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash
+      || url.hostname !== "howl.link" || url.pathname !== "/link"
+      || keys.length !== 5 || new Set(keys).size !== 5
+      || !keys.every((key) => ["url", "publisher_slug", "article_name", "article_url", "u1"].includes(key))
+      || !/^[a-z0-9][a-z0-9_-]{1,79}$/.test(String(url.searchParams.get("publisher_slug") || ""))
+      || !String(url.searchParams.get("article_name") || "").trim()
+      || url.searchParams.get("u1") !== `walmart_${retailerSku}`
+      || !exactWalmartReviewOrderRoute(url.searchParams.get("url"), retailerSku)) return "";
+    const articleUrl = new URL(String(url.searchParams.get("article_url") || ""));
+    if (articleUrl.protocol !== "https:" || articleUrl.username || articleUrl.password || articleUrl.port) return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function normalizedWalmartNotificationHandoff(notification, now = Date.now()) {
+  const handoff = notification?.purchaseHandoff;
+  if (!handoff || typeof handoff !== "object" || handoff.kind !== "walmart_review_order"
+    || notification.retailerId !== "walmart"
+    || String(handoff.walmartItemId || "") !== String(notification.retailerSku || "")) return null;
+  const pdpFallbackRoute = exactRetailerNotificationUrl(
+    handoff.pdpFallbackUrl,
+    notification.retailerId,
+    notification.retailerSku
+  );
+  const canonicalUrl = exactRetailerNotificationUrl(
+    notification.canonicalUrl,
+    notification.retailerId,
+    notification.retailerSku
+  );
+  const directFallbackRoute = exactWalmartReviewOrderRoute(
+    handoff.directFallbackUrl,
+    notification.retailerSku
+  );
+  const expiresAt = String(handoff.expiresAt || "");
+  const expiry = new Date(expiresAt).getTime();
+  const notificationExpiry = new Date(String(notification.expiresAt || "")).getTime();
+  if (!pdpFallbackRoute || pdpFallbackRoute !== canonicalUrl || !directFallbackRoute
+    || !Number.isFinite(expiry) || !Number.isFinite(notificationExpiry)
+    || expiry <= now || expiry > notificationExpiry) return null;
+  const route = exactHowlWalmartReviewOrderRoute(handoff.destinationUrl, notification.retailerSku)
+    || exactWalmartReviewOrderRoute(handoff.destinationUrl, notification.retailerSku)
+    || directFallbackRoute;
+  return {
+    kind: "walmart_review_order",
+    retailerId: "walmart",
+    retailerSku: String(notification.retailerSku),
+    title: String(notification.title || "Walmart opportunity")
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160) || "Walmart opportunity",
+    route,
+    directFallbackRoute,
+    pdpFallbackRoute,
+    expiresAt
+  };
+}
+
 function normalizedNotificationLease(value) {
   const notification = value?.notification;
   if (!notification || typeof notification !== "object") return null;
   const id = String(notification.id || "");
   const capabilityToken = String(notification.capabilityToken || "");
   const expiresAt = String(notification.expiresAt || "");
-  const route = notificationRoute(notification);
+  const purchaseHandoff = normalizedWalmartNotificationHandoff(notification);
+  const route = purchaseHandoff?.route || notificationRoute(notification);
   if (!/^[A-Za-z0-9_-]{3,160}$/.test(id)
     || !/^[A-Za-z0-9_-]{40,100}$/.test(capabilityToken)
     || notification.action !== "notify"
@@ -4681,7 +5368,9 @@ function normalizedNotificationLease(value) {
     capabilityToken,
     title: String(notification.title || "Yoink opportunity").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 160) || "Yoink opportunity",
     message: String(notification.message || "A strategy matched.").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 240) || "A strategy matched.",
-    route
+    route,
+    storedRoute: purchaseHandoff || route,
+    contextMessage: purchaseHandoff ? "Buy at Walmart · opens cart" : "Yoink strategy match"
   };
 }
 
@@ -4696,8 +5385,20 @@ async function notificationRoutes() {
   const value = (await chrome.storage.local.get(NOTIFICATION_ROUTES_KEY))[NOTIFICATION_ROUTES_KEY];
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value)
-    .filter(([id, route]) => /^[A-Za-z0-9_-]{3,160}$/.test(id) && typeof route === "string" && route.length <= 4_096)
+    .filter(([id, route]) => /^[A-Za-z0-9_-]{3,160}$/.test(id)
+      && ((typeof route === "string" && route.length <= 4_096)
+        || (route && typeof route === "object" && !Array.isArray(route)
+          && JSON.stringify(route).length <= 13_000)))
     .slice(-100));
+}
+
+async function stageNotificationRoute(notification) {
+  const routes = await notificationRoutes();
+  const nextRoutes = Object.fromEntries([
+    ...Object.entries(routes).filter(([id]) => id !== notification.id),
+    [notification.id, notification.storedRoute]
+  ].slice(-100));
+  await chrome.storage.local.set({ [NOTIFICATION_ROUTES_KEY]: nextRoutes });
 }
 
 async function rememberNotification(notification) {
@@ -4706,7 +5407,7 @@ async function rememberNotification(notification) {
   const nextHistory = [...history.filter((id) => id !== notification.id), notification.id].slice(-200);
   const nextRoutes = Object.fromEntries([
     ...Object.entries(routes).filter(([id]) => id !== notification.id),
-    [notification.id, notification.route]
+    [notification.id, notification.storedRoute]
   ].slice(-100));
   await chrome.storage.local.set({
     [NOTIFICATION_HISTORY_KEY]: nextHistory,
@@ -4722,41 +5423,92 @@ async function acknowledgeNotification(device, notification, outcome, failureCod
   });
 }
 
-async function runNotificationCycle() {
-  if (notificationCyclePromise) return notificationCyclePromise;
-  notificationCyclePromise = (async () => {
-    const state = await checkHealth();
-    if (!state.connected || !state.paired) return;
-    const device = await storedDevice();
-    if (!device?.token) return;
-    const payload = await request("/devices/self/notifications/next", {
+function boundedNotificationWait(value) {
+  const waitMs = Math.floor(Number(value) || 0);
+  return Number.isSafeInteger(waitMs) ? Math.max(0, Math.min(NOTIFICATION_WAIT_MS, waitMs)) : 0;
+}
+
+async function runNotificationDrain(waitMs = 0) {
+  const device = await storedDevice();
+  if (!device?.token) return { delivered: 0, reason: "device_unavailable" };
+  let delivered = 0;
+  for (let index = 0; index < MAX_NOTIFICATIONS_PER_CYCLE; index += 1) {
+    const leaseWaitMs = index === 0 ? boundedNotificationWait(waitMs) : 0;
+    // The authenticated lease validates that the paired device is active and
+    // notification-capable. Only the first request may wait; ready deliveries
+    // then drain immediately without another alarm or another long poll.
+    const payload = await request(`/devices/self/notifications/next?wait=${leaseWaitMs}`, {
       headers: { Authorization: `Bearer ${device.token}` }
-    });
+    }, leaseWaitMs > 0 ? NOTIFICATION_REQUEST_TIMEOUT_MS : 3_000);
+    const closedDeliveryIds = normalizedClosedNotificationDeliveryIds(payload?.closedDeliveryIds);
+    const reconciled = await reconcileClosedNotificationRoutes(closedDeliveryIds);
+    const closureAcknowledgement = closedDeliveryIds.length
+      ? request("/devices/self/notifications/closures/ack", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${device.token}` },
+        body: JSON.stringify({ contractVersion: 1, deliveryIds: closedDeliveryIds })
+      }).catch(() => undefined)
+      : Promise.resolve();
     const notification = normalizedNotificationLease(payload);
-    if (!notification) return;
+    if (!notification) {
+      await closureAcknowledgement;
+      return {
+        delivered,
+        reconciled,
+        reason: String(payload?.reason || (delivered ? "drained" : "no_notifications"))
+      };
+    }
+    void closureAcknowledgement;
     const history = await notificationHistory();
     if (history.includes(notification.id)) {
       await acknowledgeNotification(device, notification, "delivered");
-      return;
+      continue;
     }
     let shown = false;
     try {
+      // Persist the validated click route before Chrome makes the notification
+      // interactive. A user can click immediately after create resolves.
+      await stageNotificationRoute(notification);
       await chrome.notifications.create(`yoink-opportunity:${notification.id}`, {
         type: "basic",
         iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
         title: notification.title,
         message: notification.message,
-        contextMessage: "Yoink strategy match",
+        contextMessage: notification.contextMessage,
         priority: 2
       });
       shown = true;
       await rememberNotification(notification);
       await acknowledgeNotification(device, notification, "delivered");
+      delivered += 1;
     } catch {
       if (!shown) await acknowledgeNotification(device, notification, "failed", "chrome_notification_failed").catch(() => undefined);
       throw new Error("Chrome notification delivery failed.");
     }
-  })().catch(() => undefined).finally(() => { notificationCyclePromise = null; });
+  }
+  return { delivered, reason: "cycle_limit" };
+}
+
+function runNotificationCycle(waitMs = 0) {
+  const requestedWaitMs = boundedNotificationWait(waitMs);
+  if (notificationCyclePromise) {
+    notificationCyclePendingWaitMs = Math.max(notificationCyclePendingWaitMs, requestedWaitMs);
+    return notificationCyclePromise;
+  }
+  notificationCyclePromise = (async () => {
+    let nextWaitMs = requestedWaitMs;
+    let delivered = 0;
+    let reason = "no_notifications";
+    do {
+      const result = await runNotificationDrain(nextWaitMs)
+        .catch(() => ({ delivered: 0, reason: "cycle_failed" }));
+      delivered += result.delivered;
+      reason = result.reason;
+      nextWaitMs = notificationCyclePendingWaitMs;
+      notificationCyclePendingWaitMs = -1;
+    } while (nextWaitMs >= 0);
+    return { delivered, reason };
+  })().finally(() => { notificationCyclePromise = null; });
   return notificationCyclePromise;
 }
 
@@ -4959,10 +5711,11 @@ async function runWatchQueueCycle() {
       tabId = tab.id;
       await waitForExactProductTab(tabId, identity.retailerId, identity.retailerSku);
       const observation = await collectWatchObservation(tabId, lease);
-      await postWatchObservation(device, lease, observation,
+      const reported = await postWatchObservation(device, lease, observation,
         observation.securityChallenge ? "security_challenge"
           : observation.interactiveBlock ? `interactive_${observation.interactiveBlock}` : "observed");
       await finishWatchLease(lease, observation.availability);
+      if (reported?.signal) await runSignalActionHandoff();
       return { observed: true, reason: observation.availability };
     } catch (error) {
       const reason = safeReasonCode(error instanceof Error ? error.message : "observation_failed");
@@ -4983,10 +5736,24 @@ async function runWarmReadinessCycle() {
   if (warmReadinessCyclePromise) return warmReadinessCyclePromise;
   warmReadinessCyclePromise = (async () => {
     if (jobCyclePromise || await activeJob().catch(() => null)) {
-      return { warmed: false, reason: "action_job_active" };
+      return {
+        warmed: false,
+        warmedCount: 0,
+        attemptedCount: 0,
+        reason: "action_job_active",
+        results: []
+      };
     }
     const device = await storedDevice();
-    if (!device?.token) return { warmed: false, reason: "device_unavailable" };
+    if (!device?.token) {
+      return {
+        warmed: false,
+        warmedCount: 0,
+        attemptedCount: 0,
+        reason: "device_unavailable",
+        results: []
+      };
+    }
     const [storedTabs, cartReady, cursorStorage] = await Promise.all([
       readRetailerActionTabs(),
       readCartReadyState(),
@@ -4997,7 +5764,9 @@ async function runWarmReadinessCycle() {
       ? cursorStorage[WARM_READINESS_CURSOR_KEY] % retailerIds.length : 0;
     const protectedTabs = new Set(cartReady.items.map((item) => item.tabId));
 
-    for (let offset = 0; offset < retailerIds.length; offset += 1) {
+    const results = [];
+    for (let offset = 0; offset < retailerIds.length && results.length < WARM_READINESS_LANES_PER_CYCLE; offset += 1) {
+      if (results.length && (jobCyclePromise || await activeJob().catch(() => null))) break;
       const index = (cursor + offset) % retailerIds.length;
       const retailerId = retailerIds[index];
       if (!await addLaneAccess(retailerId)) continue;
@@ -5011,12 +5780,13 @@ async function runWarmReadinessCycle() {
         await chrome.storage.session.set({
           [WARM_READINESS_CURSOR_KEY]: (index + 1) % retailerIds.length
         });
-        return {
+        results.push({
           warmed: false,
           retailerId,
           signedInState: "challenged",
           reason: "manual_action_required"
-        };
+        });
+        continue;
       }
       let createdTabId = null;
       try {
@@ -5027,19 +5797,22 @@ async function runWarmReadinessCycle() {
         }
         await waitForTab(tab.id, retailerId, "cart");
         if (jobCyclePromise || await activeJob().catch(() => null)) {
-          return { warmed: false, reason: "action_job_started" };
+          if (Number.isInteger(createdTabId)) await chrome.tabs.remove(createdTabId).catch(() => undefined);
+          results.push({ warmed: false, retailerId, signedInState: stored?.signedInState || "unknown", reason: "action_job_started" });
+          break;
         }
         let signedInState = await inspectRetailerSessionState(tab.id, retailerId).catch(() => "unknown");
         let cartBaseline = freshCartBaseline(stored?.cartBaseline, retailerId);
         let errorCode = "";
         if (!cartBaseline) {
           await injectAddAction(tab.id, retailerId);
-          let baseline = { ok: false, reason: "cart_unverified" };
-          for (let attempt = 0; attempt < 2; attempt += 1) {
-            baseline = await executeAddAction(tab.id, retailerId, lane.baselineOperation);
-            if (baseline?.ok || !["cart_unverified", "quantity_unavailable"].includes(baseline?.reason)) break;
-            if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 350));
-          }
+          const baseline = await executeReadOnlyCartAction(
+            tab.id,
+            retailerId,
+            lane.baselineOperation,
+            [],
+            WARM_CART_BASELINE_WAIT_MAX_MS
+          );
           cartBaseline = baseline?.ok ? freshCartBaseline(baseline.proof, retailerId) : null;
           errorCode = cartBaseline ? "" : safeReasonCode(baseline?.reason || "cart_unverified");
           if (baseline?.reason === "manual_action_required") signedInState = "challenged";
@@ -5054,12 +5827,12 @@ async function runWarmReadinessCycle() {
         await chrome.storage.session.set({
           [WARM_READINESS_CURSOR_KEY]: (index + 1) % retailerIds.length
         });
-        return {
+        results.push({
           warmed: Boolean(cartBaseline),
           retailerId,
           signedInState,
           reason: cartBaseline ? "baseline_ready" : errorCode || "cart_unverified"
-        };
+        });
       } catch (error) {
         const reason = safeReasonCode(error instanceof Error ? error.message : "warm_readiness_failed");
         const signedInState = Number.isInteger(tab?.id)
@@ -5076,28 +5849,68 @@ async function runWarmReadinessCycle() {
         if (Number.isInteger(createdTabId) && !retailerCartTab(tab, retailerId)) {
           await chrome.tabs.remove(createdTabId).catch(() => undefined);
         }
-        return { warmed: false, retailerId, signedInState, reason };
+        results.push({ warmed: false, retailerId, signedInState, reason });
       }
     }
-    return { warmed: false, reason: "retailer_access_missing" };
-  })().catch(() => ({ warmed: false, reason: "warm_readiness_failed" }))
+    const warmedCount = results.filter((result) => result.warmed).length;
+    return {
+      warmed: warmedCount > 0,
+      warmedCount,
+      attemptedCount: results.length,
+      reason: !results.length ? "retailer_access_missing"
+        : warmedCount === results.length ? "baselines_ready"
+          : warmedCount > 0 ? "partial" : results.at(-1)?.reason || "warm_readiness_failed",
+      results
+    };
+  })().catch(() => ({
+    warmed: false,
+    warmedCount: 0,
+    attemptedCount: 0,
+    reason: "warm_readiness_failed",
+    results: []
+  }))
     .finally(() => { warmReadinessCyclePromise = null; });
   return warmReadinessCyclePromise;
 }
 
-async function runJobCycle() {
-  if (jobCyclePromise) return jobCyclePromise;
+function requestWarmReadinessCycle() {
+  if (warmReadinessRequestPromise) return warmReadinessRequestPromise;
+  warmReadinessRequestPromise = (async () => {
+    let result = null;
+    // The 25-second action-job watch intentionally owns priority over
+    // background warming. Health and job alarms can align, so dropping the
+    // warm request here would repeatedly leave half the retailer lanes cold.
+    // Wait behind the current action cycle, then retry once for the narrow
+    // promise-finalization race without ever running beside a real add.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const activeCycle = jobCyclePromise;
+      if (activeCycle) await activeCycle.catch(() => undefined);
+      result = await runWarmReadinessCycle();
+      if (result?.reason !== "action_job_active") return result;
+    }
+    return result;
+  })().finally(() => { warmReadinessRequestPromise = null; });
+  return warmReadinessRequestPromise;
+}
+
+async function runJobCycle(onFirstLeaseDispatched = null) {
+  if (jobCyclePromise) {
+    if (typeof onFirstLeaseDispatched === "function") onFirstLeaseDispatched();
+    return jobCyclePromise;
+  }
   jobCyclePromise = (async () => {
     if (await resumeActiveRetailerJob()) {
       return { leased: 0, confirmed: 0, reason: "active_job_recovered" };
     }
     let leased = 0;
     let confirmed = 0;
-    const state = await checkHealth();
-    if (!state.connected || !state.paired || state.executionMode !== "live"
-      || state.actionsPaused || !state.chromeMutationEnabled) {
-      return { leased, confirmed, reason: "actions_unavailable" };
-    }
+    // The authenticated lease is the action preflight: the server rechecks
+    // live mode, pause, device status/capabilities, lane qualification, spend,
+    // job expiry, and single-device ownership atomically. General health and
+    // heartbeat refresh stay on their minute alarm instead of adding two
+    // unrelated round trips in front of every signal-triggered lease.
+    const device = await storedDevice();
+    if (!device?.token) return { leased, confirmed, reason: "device_unavailable" };
     const [targetAccess, walmartAccess, amazonAccess, bestBuyAccess] = await Promise.all([
       addLaneAccess("target"),
       addLaneAccess("walmart"),
@@ -5107,6 +5920,12 @@ async function runJobCycle() {
     if (!targetAccess && !walmartAccess && !amazonAccess && !bestBuyAccess) {
       return { leased, confirmed, reason: "retailer_access_missing" };
     }
+    const accessibleRetailers = [
+      ...(targetAccess ? ["target"] : []),
+      ...(walmartAccess ? ["walmart"] : []),
+      ...(amazonAccess ? ["amazon"] : []),
+      ...(bestBuyAccess ? ["bestbuy"] : [])
+    ];
     const [storedTabs, cartReady] = await Promise.all([
       readRetailerActionTabs(),
       readCartReadyState()
@@ -5115,12 +5934,15 @@ async function runJobCycle() {
     const reusableTabs = new Map([...storedTabs]
       .filter(([, stored]) => !protectedTabs.has(stored.tabId))
       .map(([retailerId, stored]) => [retailerId, stored]));
-    const device = await storedDevice();
-    if (!device?.token) return { leased, confirmed, reason: "device_unavailable" };
     for (let index = 0; index < MAX_ACTION_JOBS_PER_CYCLE; index += 1) {
-      const response = await request("/devices/self/jobs/next?wait=5000", {
+      const leaseRequest = actionJobLeaseRequest(index, accessibleRetailers);
+      const responsePromise = request(leaseRequest.path, {
         headers: { Authorization: `Bearer ${device.token}` }
-      });
+      }, leaseRequest.timeoutMs);
+      if (index === 0 && typeof onFirstLeaseDispatched === "function") {
+        onFirstLeaseDispatched();
+      }
+      const response = await responsePromise;
       const lease = normalizedLeaseJob(response);
       if (!lease) {
         const leaseReason = ["no_jobs", "actions_paused", "shadow_mode", "device_busy", "device_unavailable"]
@@ -5165,22 +5987,49 @@ async function runJobCycle() {
 
 function runSignalJobHandoff() {
   if (signalJobHandoffPromise) return signalJobHandoffPromise;
-  signalJobHandoffPromise = (async () => {
-    let result = await runJobCycle();
-    for (const delayMs of SIGNAL_JOB_HANDOFF_RETRY_DELAYS_MS) {
-      if (Number(result?.leased) > 0 || !["no_jobs", "jobs_unavailable"].includes(result?.reason)) return result;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      result = await runJobCycle();
-    }
-    return result;
-  })().finally(() => { signalJobHandoffPromise = null; });
+  signalJobHandoffPromise = runJobCycle()
+    .finally(() => { signalJobHandoffPromise = null; });
   return signalJobHandoffPromise;
 }
 
-async function runSignalDeliveryCycle() {
+function runSignalActionHandoff(existingJobHandoff = null) {
+  return Promise.allSettled([
+    existingJobHandoff || runSignalJobHandoff(),
+    runNotificationCycle(NOTIFICATION_WAIT_MS)
+  ]);
+}
+
+function runJobAlarmCycle() {
+  let secondaryStarted = false;
+  const startSecondaryWork = () => {
+    if (secondaryStarted) return;
+    secondaryStarted = true;
+    void reconcileActionHandoffs(ACTION_HANDOFF_WAIT_MS);
+    // Server-side providers do not necessarily have a local Chrome push event
+    // to start the notification watcher. Hold the notification lease beside
+    // the guarded-job lease across most of this 30-second alarm interval so a
+    // notify-only result can wake on the shared availability pulse instead of
+    // waiting for the next alarm. The alarm remains the durable recovery path
+    // if Chrome suspends either bounded request.
+    void runNotificationCycle(NOTIFICATION_WAIT_MS);
+  };
+  // Dispatch the time-sensitive cart lease before starting background
+  // reconciliation and notification polling. If local prerequisites stop the
+  // cycle before a lease, the finally path still runs both secondary tasks.
+  void runJobCycle(startSecondaryWork).finally(startSecondaryWork);
+}
+
+async function runSignalDeliveryCycle(startLeaseWatch = false) {
+  // A valid push already gives Chrome enough reason to open the authoritative
+  // server-side job watch. Starting it before the durable ingress response
+  // removes one serial network hop; the lease endpoint still performs every
+  // action, policy, qualification, spend, device, and expiry check.
+  const earlyHandoff = startLeaseWatch ? runSignalJobHandoff() : null;
   const delivery = await drainTrackalackerQueue();
   const status = delivery?.state ? postTrackalackerStatus(delivery.state) : Promise.resolve(false);
-  const handoff = delivery?.delivered > 0 ? runSignalJobHandoff() : Promise.resolve(null);
+  const handoff = delivery?.delivered > 0
+    ? runSignalActionHandoff(earlyHandoff)
+    : Promise.resolve(null);
   await Promise.allSettled([handoff, status]);
   return delivery;
 }
@@ -5213,7 +6062,7 @@ async function handleTrackalackerPushEvent(event) {
   await mutateTrackalackerQueue((current) => current.some((entry) => entry.signalId === envelope.signalId)
     ? current : [...current, envelope]);
   await updateTrackalackerState({ lastNotificationAt: receivedAt, errorCode: "" });
-  await Promise.allSettled([notification, runSignalDeliveryCycle()]);
+  await Promise.allSettled([notification, runSignalDeliveryCycle(true)]);
 }
 
 async function handleTrackalackerSubscriptionChange() {
@@ -5262,7 +6111,7 @@ async function ensureContextMenus() {
     },
     { id: CONTEXT_MENU_IDS.reconnect, title: "Reconnect TrackaLacker", contexts: ["action"], visible: false },
     { id: CONTEXT_MENU_IDS.sync, title: "Sync products", contexts: ["action"] },
-    { id: CONTEXT_MENU_IDS.settings, title: "Settings", contexts: ["action"] }
+    { id: CONTEXT_MENU_IDS.settings, title: "Extension settings", contexts: ["action"] }
   ];
   for (const definition of definitions) {
     await contextMenuCallback((done) => chrome.contextMenus.create(definition, done));
@@ -5326,11 +6175,7 @@ function contextMenuPermission(command, page) {
     return chrome.permissions.request({ origins: TRACKALACKER_ORIGINS });
   }
   if (command === "sync_products") {
-    const origins = [...new Set([
-      ...TRACKALACKER_ORIGINS,
-      ...Object.values(PopupState.RETAILER_ORIGINS).flat()
-    ])];
-    return chrome.permissions.request({ origins });
+    return chrome.permissions.request({ origins: TRACKALACKER_ORIGINS });
   }
   return Promise.resolve(true);
 }
@@ -5344,7 +6189,7 @@ async function currentContextMenuTab(tab) {
 }
 
 async function showContextMenuOutcome(result, error = false) {
-  if (await showCartReadyBadge(await readCartReadyState()).catch(() => null)) return;
+  if (await showActionHandoffBadge(await readCartReadyState()).catch(() => null)) return;
   const title = String(result?.summary || result?.message || (error ? "Action failed" : "Action complete"))
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
@@ -5352,7 +6197,7 @@ async function showContextMenuOutcome(result, error = false) {
     .slice(0, 120);
   await Promise.all([
     chrome.action.setTitle({ title: `Yoink · ${title}` }),
-    chrome.action.setBadgeBackgroundColor({ color: error ? "#BE5B4B" : "#1D9D77" }),
+    chrome.action.setBadgeBackgroundColor({ color: error ? BADGE_COLORS.bad : BADGE_COLORS.good }),
     chrome.action.setBadgeText({ text: error ? "!" : "✓" })
   ]).catch(() => undefined);
 }
@@ -5413,12 +6258,17 @@ async function initialize() {
   await chrome.alarms.create(WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 });
   await ensureContextMenus();
   await checkHealth();
+  await reconcileActionHandoffs();
+  void reconcileActionHandoffs(ACTION_HANDOFF_WAIT_MS);
   await drainAdapterDiagnosticQueue();
   const signalDelivery = await runSignalDeliveryCycle();
-  await runNotificationCycle();
-  if (!signalDelivery?.delivered) await runJobCycle();
+  // A cold worker may have server-originated Discord/API/admin work waiting
+  // even when its local TrackaLacker queue is empty. Establish both bounded
+  // watches together so startup has the same event-driven handoff semantics
+  // as a locally accepted signal.
+  if (!signalDelivery?.delivered) await runSignalActionHandoff();
   void runWatchQueueCycle();
-  void runWarmReadinessCycle();
+  void requestWarmReadinessCycle();
 }
 
 chrome.runtime.onInstalled.addListener(() => { void initialize(); });
@@ -5444,6 +6294,13 @@ if (chrome.contextMenus?.onClicked) {
 chrome.commands?.onCommand?.addListener((command) => {
   if (command !== "inspect-current-page") return;
   void (async () => {
+    // The shortcut rotates through unseen handoffs; the popup instead keeps an
+    // opened handoff first until its checkout outcome is recorded.
+    const handoff = PopupState.preferredActionHandoff(await readCartReadyState(), Date.now(), "unopened_first");
+    if (handoff) {
+      await focusCartReady(handoff.jobId);
+      return;
+    }
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tab = tabs[0];
     const page = PopupState.classifyPageContext(tab?.url);
@@ -5471,12 +6328,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEALTH_ALARM) {
     void checkHealth();
     void drainAdapterDiagnosticQueue();
-    void runSignalDeliveryCycle().finally(() => runWarmReadinessCycle());
+    void runSignalDeliveryCycle().finally(() => requestWarmReadinessCycle());
     void runNotificationCycle();
   }
   if (alarm.name === JOB_ALARM) {
-    void runNotificationCycle();
-    void runJobCycle();
+    runJobAlarmCycle();
   }
   if (alarm.name === WATCH_QUEUE_ALARM) {
     void runWatchQueueCycle();
@@ -5496,6 +6352,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const trackalackerSync = message?.type === "yoink:sync-trackalacker";
   const extensionUpdate = message?.type === "yoink:check-update";
   const cartReadyOpen = message?.type === "yoink:open-cart-ready";
+  const cartOutcomeReport = message?.type === "yoink:report-cart-outcome";
+  const purchaseOpportunityGet = message?.type === "yoink:get-purchase-opportunity";
+  const purchaseOpportunityOpen = message?.type === "yoink:open-purchase-opportunity";
   const localDataDeletion = message?.type === "yoink:delete-local-data";
   const reverificationPlan = message?.type === "yoink:get-reverification-plan";
   const retailerReverification = message?.type === "yoink:reverify-retailer-lanes";
@@ -5505,7 +6364,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     "yoink:trackalacker-sync-item",
     "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
-  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || localDataDeletion || reverificationPlan || retailerReverification || contentOperation;
+  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : message?.type === "yoink:pair-device"
@@ -5538,6 +6397,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   ? checkExtensionUpdate(message.download === true, message.requestManaged === true)
                 : cartReadyOpen
                   ? focusCartReady(message.jobId)
+                : cartOutcomeReport
+                  ? reportCartOutcomeFromPopup(message)
+                : purchaseOpportunityGet
+                  ? pendingPurchaseOpportunity().then((opportunity) => ({ opportunity }))
+                : purchaseOpportunityOpen
+                  ? openStoredNotificationRoute(message.deliveryId)
                 : localDataDeletion
                   ? deleteLocalCompanionData(message.confirmation)
                 : reverificationPlan
@@ -5555,7 +6420,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             : null;
   if (!operation) return false;
   operation.then((result) => sendResponse(pageOperation ? { ok: true, ...result } : { ok: true, state: result })).catch((error) => {
-    sendResponse({ ok: false, message: error instanceof Error ? error.message : "The companion request failed." });
+    sendResponse({ ok: false, message: error instanceof Error ? error.message : "The Chrome companion request failed." });
   });
   return true;
 });
@@ -5575,13 +6440,32 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(chrome.tabs.create({ url, active: true }));
 });
 
-function trustedStoredNotificationRoute(value) {
+function trustedStoredNotificationRoute(value, now = Date.now()) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const retailerSku = String(value.retailerSku || "");
+    const pdpFallbackRoute = exactRetailerNotificationUrl(
+      value.pdpFallbackRoute,
+      value.retailerId,
+      retailerSku
+    );
+    if (value.kind !== "walmart_review_order" || value.retailerId !== "walmart"
+      || !pdpFallbackRoute) return "";
+    const expiry = new Date(String(value.expiresAt || "")).getTime();
+    if (!Number.isFinite(expiry) || expiry <= now) return pdpFallbackRoute;
+    const directFallbackRoute = exactWalmartReviewOrderRoute(value.directFallbackRoute, retailerSku);
+    if (!directFallbackRoute) return pdpFallbackRoute;
+    return exactHowlWalmartReviewOrderRoute(value.route, retailerSku)
+      || exactWalmartReviewOrderRoute(value.route, retailerSku)
+      || directFallbackRoute;
+  }
   try {
     const url = new URL(String(value || ""));
     if (url.protocol !== "https:" || url.username || url.password) return "";
     const allowedRetailer = SUPPORTED_RETAILER_DOMAINS
       .some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
     if (allowedRetailer) {
+      if ((url.hostname === "walmart.com" || url.hostname.endsWith(".walmart.com"))
+        && url.pathname === "/affil/cart/reviewOrder") return "";
       if (url.hostname === "amazon.com" || url.hostname.endsWith(".amazon.com")) {
         const keys = [...url.searchParams.keys()];
         if (keys.length && (keys.length !== 1 || keys[0] !== "tag"
@@ -5592,6 +6476,8 @@ function trustedStoredNotificationRoute(value) {
     if (url.hostname !== "howl.link" || url.pathname !== "/link") return "";
     const destination = new URL(String(url.searchParams.get("url") || ""));
     if (destination.protocol !== "https:" || destination.username || destination.password) return "";
+    if ((destination.hostname === "walmart.com" || destination.hostname.endsWith(".walmart.com"))
+      && destination.pathname === "/affil/cart/reviewOrder") return "";
     const destinationAllowed = SUPPORTED_RETAILER_DOMAINS
       .some((domain) => destination.hostname === domain || destination.hostname.endsWith(`.${domain}`));
     return destinationAllowed ? url.href : "";
@@ -5600,10 +6486,141 @@ function trustedStoredNotificationRoute(value) {
   }
 }
 
+function popupPurchaseOpportunity(deliveryId, value, now = Date.now()) {
+  if (!/^[A-Za-z0-9_-]{3,160}$/.test(String(deliveryId || ""))
+    || !value || typeof value !== "object" || Array.isArray(value)
+    || value.kind !== "walmart_review_order"
+    || value.retailerId !== "walmart") return null;
+  const retailerSku = String(value.retailerSku || "");
+  const expiresAt = String(value.expiresAt || "");
+  const expiry = new Date(expiresAt).getTime();
+  const directRoute = exactWalmartReviewOrderRoute(value.directFallbackRoute, retailerSku);
+  const route = trustedStoredNotificationRoute(value, now);
+  if (!/^\d{5,20}$/.test(retailerSku)
+    || !Number.isFinite(expiry)
+    || expiry <= now
+    || expiry > now + 5 * 60_000
+    || !directRoute
+    || !route
+    || route === value.pdpFallbackRoute) return null;
+  return {
+    schemaVersion: 1,
+    deliveryId: String(deliveryId),
+    kind: "walmart_review_order",
+    retailerId: "walmart",
+    retailerName: "Walmart",
+    identityLabel: "Item",
+    retailerSku,
+    title: String(value.title || "Walmart opportunity")
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160) || `Walmart item ${retailerSku}`,
+    expiresAt: new Date(expiry).toISOString()
+  };
+}
+
+async function pendingPurchaseOpportunity(now = Date.now()) {
+  const routes = await notificationRoutes();
+  for (const [deliveryId, storedRoute] of Object.entries(routes).reverse()) {
+    const opportunity = popupPurchaseOpportunity(deliveryId, storedRoute, now);
+    if (opportunity) return opportunity;
+  }
+  return null;
+}
+
+function queuedNotificationRouteAction(operation) {
+  const task = notificationRouteActionQueue.then(operation);
+  notificationRouteActionQueue = task.catch(() => undefined);
+  return task;
+}
+
+function normalizedClosedNotificationDeliveryIds(value) {
+  return [...new Set(Array.isArray(value) ? value : [])]
+    .map((entry) => String(entry || ""))
+    .filter((entry) => /^[A-Za-z0-9_-]{3,160}$/.test(entry))
+    .slice(0, 100);
+}
+
+function reconcileClosedNotificationRoutes(value) {
+  const closedIds = normalizedClosedNotificationDeliveryIds(value);
+  if (!closedIds.length) return Promise.resolve(0);
+  return queuedNotificationRouteAction(async () => {
+    const closed = new Set(closedIds);
+    const routes = await notificationRoutes();
+    const retained = Object.fromEntries(
+      Object.entries(routes).filter(([deliveryId]) => !closed.has(deliveryId))
+    );
+    const removed = Object.keys(routes).length - Object.keys(retained).length;
+    if (removed > 0) {
+      await chrome.storage.local.set({ [NOTIFICATION_ROUTES_KEY]: retained });
+    }
+    void Promise.allSettled(closedIds.map((deliveryId) =>
+      chrome.notifications.clear(`yoink-opportunity:${deliveryId}`)));
+    return removed;
+  });
+}
+
+function forgetNotificationRoute(deliveryId) {
+  return queuedNotificationRouteAction(async () => {
+    if (!/^[A-Za-z0-9_-]{3,160}$/.test(String(deliveryId || ""))) return false;
+    const routes = await notificationRoutes();
+    if (!Object.hasOwn(routes, deliveryId)) return false;
+    await chrome.storage.local.set({
+      [NOTIFICATION_ROUTES_KEY]: Object.fromEntries(
+        Object.entries(routes).filter(([id]) => id !== deliveryId)
+      )
+    });
+    return true;
+  });
+}
+
+function openStoredNotificationRoute(deliveryId) {
+  return queuedNotificationRouteAction(async () => {
+    if (!/^[A-Za-z0-9_-]{3,160}$/.test(String(deliveryId || ""))) {
+      throw new Error("This product opportunity is invalid.");
+    }
+    const routes = await notificationRoutes();
+    const storedRoute = routes[deliveryId];
+    const route = trustedStoredNotificationRoute(storedRoute);
+    if (!route) throw new Error("This product opportunity is no longer available.");
+    const remainingRoutes = Object.fromEntries(
+      Object.entries(routes).filter(([id]) => id !== deliveryId)
+    );
+    // Consume the local route before navigation so a popup and OS-notification
+    // click cannot add the same reviewOrder item twice. The queue keeps this
+    // one-use boundary atomic within the service worker.
+    await chrome.storage.local.set({ [NOTIFICATION_ROUTES_KEY]: remainingRoutes });
+    try {
+      const tab = await chrome.tabs.create({ url: route, active: true });
+      void Promise.allSettled([
+        reportNotificationInteraction(deliveryId, "clicked"),
+        chrome.notifications.clear(`yoink-opportunity:${deliveryId}`)
+      ]);
+      return {
+        opened: true,
+        tabId: Number.isInteger(tab?.id) ? tab.id : null,
+        opportunity: await pendingPurchaseOpportunity()
+      };
+    } catch (error) {
+      const latest = await notificationRoutes();
+      if (!Object.hasOwn(latest, deliveryId)) {
+        await chrome.storage.local.set({
+          [NOTIFICATION_ROUTES_KEY]: Object.fromEntries([
+            ...Object.entries(latest),
+            [deliveryId, storedRoute]
+          ].slice(-100))
+        });
+      }
+      throw error;
+    }
+  });
+}
+
 chrome.notifications?.onClicked?.addListener((notificationId) => {
-  const cartReadyMatch = /^yoink-cart-ready:([A-Za-z0-9_-]{3,120})$/.exec(String(notificationId || ""));
-  if (cartReadyMatch) {
-    void focusCartReady(cartReadyMatch[1]).catch(async () => {
+  const handoffMatch = /^(?:yoink-cart-ready|yoink-needs-you):([A-Za-z0-9_-]{3,120})$/.exec(String(notificationId || ""));
+  if (handoffMatch) {
+    void focusCartReady(handoffMatch[1]).catch(async () => {
       await chrome.notifications.clear(notificationId).catch(() => undefined);
     });
     return;
@@ -5611,19 +6628,18 @@ chrome.notifications?.onClicked?.addListener((notificationId) => {
   const match = /^yoink-opportunity:([A-Za-z0-9_-]{3,160})$/.exec(String(notificationId || ""));
   if (!match) return;
   const deliveryId = match[1];
-  void (async () => {
-    const routes = await notificationRoutes();
-    const route = trustedStoredNotificationRoute(routes[deliveryId]);
-    await reportNotificationInteraction(deliveryId, "clicked");
-    if (route) await chrome.tabs.create({ url: route, active: true });
+  void openStoredNotificationRoute(deliveryId).catch(async () => {
     await chrome.notifications.clear(notificationId).catch(() => undefined);
-  })();
+  });
 });
 
 chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
   if (!byUser) return;
   const match = /^yoink-opportunity:([A-Za-z0-9_-]{3,160})$/.exec(String(notificationId || ""));
-  if (match) void reportNotificationInteraction(match[1], "dismissed");
+  if (match) void Promise.allSettled([
+    forgetNotificationRoute(match[1]),
+    reportNotificationInteraction(match[1], "dismissed")
+  ]);
 });
 
 chrome.tabs.onRemoved?.addListener((tabId) => {
@@ -5636,13 +6652,11 @@ chrome.tabs.onRemoved?.addListener((tabId) => {
       });
     }
   })().catch(() => undefined);
-  void mutateCartReadyState((current) => ({
-    schemaVersion: 1,
-    items: current.items.filter((item) => item.tabId !== tabId)
-  })).catch(() => undefined);
 });
 
 chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" && tab?.status !== "complete") return;
-  void observeOrderConfirmation(tabId, tab?.url || changeInfo.url).catch(() => undefined);
+  const url = tab?.url || changeInfo.url;
+  void observeOrderConfirmation(tabId, url).catch(() => undefined);
+  void refreshRetailerSessionFromTab(tabId, url).catch(() => undefined);
 });

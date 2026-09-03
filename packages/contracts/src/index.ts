@@ -1090,7 +1090,7 @@ export interface MissionTargetUpdateInput {
   id: string;
   enabled: boolean;
   maxUnitPriceCents: number | null;
-  sellerPolicy: SellerPolicy | "inherit";
+  sellerPolicy?: SellerPolicy | "inherit";
   fulfillment: Fulfillment | "inherit";
 }
 
@@ -1227,12 +1227,14 @@ export interface AppSettingsUpdateInput {
 }
 
 export type PurchaseProfilePriceMode = "store_price" | "fixed_cap" | "msrp" | "msrp_offset_percent";
+export type PurchaseProfileFulfillment = "shipping" | "pickup";
 
 export interface PurchaseProfile {
   id: string;
   name: string;
   targetQuantity: number;
   actionCeiling: "notify" | "add_to_cart";
+  fulfillment: PurchaseProfileFulfillment;
   priceMode: PurchaseProfilePriceMode;
   maxUnitPriceCents: number | null;
   msrpOffsetPercent: number | null;
@@ -1247,6 +1249,7 @@ export interface PurchaseProfileInput {
   name: string;
   targetQuantity: number;
   actionCeiling: "notify" | "add_to_cart";
+  fulfillment?: PurchaseProfileFulfillment;
   priceMode: PurchaseProfilePriceMode;
   maxUnitPriceCents?: number | null;
   msrpOffsetPercent?: number | null;
@@ -1257,7 +1260,8 @@ export interface PurchaseProfileInput {
 export const PURCHASE_PROFILE_PROPAGATION_SKIP_REASONS = [
   "msrp_unavailable",
   "price_unavailable",
-  "no_enabled_target"
+  "no_enabled_target",
+  "unsupported_target"
 ] as const;
 export type PurchaseProfilePropagationSkipReason = (typeof PURCHASE_PROFILE_PROPAGATION_SKIP_REASONS)[number];
 
@@ -1276,6 +1280,29 @@ export interface PurchaseProfilePropagationSummary {
 export interface PurchaseProfileSaveResult {
   profiles: PurchaseProfile[];
   propagation: PurchaseProfilePropagationSummary;
+}
+
+export const PURCHASE_PROFILE_APPLY_CONFIRMATION = "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS" as const;
+
+export interface PurchaseProfileApplyInput {
+  profileId: string;
+  missionIds: string[];
+  confirmation: typeof PURCHASE_PROFILE_APPLY_CONFIRMATION;
+}
+
+export interface PurchaseProfileApplyResult {
+  profile: PurchaseProfile;
+  selectedMissionCount: number;
+  linkedMissionCount: number;
+  propagation: PurchaseProfilePropagationSummary;
+}
+
+export interface PurchaseProfileRetailerReconciliationResult {
+  retailerId: "target" | "walmart" | "amazon" | "bestbuy";
+  matchedProfileCount: number;
+  matchedMissionCount: number;
+  updatedMissionCount: number;
+  skipped: PurchaseProfilePropagationSkip[];
 }
 
 export type AttributionProvider = "canonical" | "howl" | "amazon_associates";

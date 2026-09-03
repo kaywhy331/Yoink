@@ -37,6 +37,26 @@ export interface DropWindowInput {
   products: DropWindowProductInput[];
 }
 
+export interface DropWindowUpdateInput {
+  title?: string;
+  startsAt?: string;
+  closesAt?: string;
+  spreadSeconds?: number;
+  confidenceBps?: number;
+  timezone?: string;
+  authorNote?: string;
+  earlyAccessNote?: string;
+}
+
+export const DROP_WINDOW_CANCEL_REASONS = [
+  "incorrect_schedule",
+  "incorrect_products",
+  "source_retracted",
+  "duplicate",
+  "other"
+] as const;
+export type DropWindowCancelReason = typeof DROP_WINDOW_CANCEL_REASONS[number];
+
 export interface WatchQueueObservationInput {
   contractVersion: typeof WATCH_QUEUE_CONTRACT_VERSION;
   capabilityToken: string;

@@ -24,6 +24,7 @@ test("purchase profiles save, update, and delete with explicit validation", () =
     assert.ok(profile);
     assert.equal(profile.name, "Two under MSRP");
     assert.equal(profile.targetQuantity, 2);
+    assert.equal(profile.fulfillment, "shipping", "legacy-compatible profile fulfillment defaults to Shipping");
     assert.equal(profile.priceMode, "fixed_cap");
     assert.equal(profile.maxUnitPriceCents, 2500);
     assert.equal(profile.msrpOffsetPercent, null);
@@ -35,6 +36,7 @@ test("purchase profiles save, update, and delete with explicit validation", () =
       name: "Two under MSRP",
       targetQuantity: 3,
       actionCeiling: "add_to_cart",
+      fulfillment: "pickup",
       priceMode: "store_price",
       cooldownSeconds: 0
     });
@@ -42,7 +44,17 @@ test("purchase profiles save, update, and delete with explicit validation", () =
     assert.equal(updated.profiles[0]?.id, profile.id);
     assert.equal(updated.profiles[0]?.targetQuantity, 3);
     assert.equal(updated.profiles[0]?.actionCeiling, "add_to_cart");
+    assert.equal(updated.profiles[0]?.fulfillment, "pickup");
     assert.equal(updated.profiles[0]?.maxUnitPriceCents, null, "a store-price profile carries no fixed cap");
+
+    const legacyProfile = { ...updated.profiles[0] } as Record<string, unknown>;
+    delete legacyProfile.fulfillment;
+    db.run(
+      "UPDATE app_settings SET purchase_profiles_json = ?",
+      JSON.stringify([legacyProfile])
+    );
+    assert.equal(control.listPurchaseProfiles()[0]?.fulfillment, "shipping",
+      "profiles stored before fulfillment existed retain the historical Shipping behavior");
 
     const remaining = control.deletePurchaseProfile(profile.id);
     assert.deepEqual(remaining, []);
@@ -101,6 +113,14 @@ test("purchase profiles refuse reserved names, duplicates, and incomplete fixed 
       priceMode: "msrp_offset_percent",
       msrpOffsetPercent: 1.5
     }), /-90 through 90/);
+    const shippingFallback = control.savePurchaseProfile({
+      name: "Legacy shipping fallback",
+      targetQuantity: 1,
+      actionCeiling: "notify",
+      fulfillment: "courier" as "shipping",
+      priceMode: "store_price"
+    }).profiles.find((profile) => profile.name === "Legacy shipping fallback");
+    assert.equal(shippingFallback?.fulfillment, "shipping");
     control.savePurchaseProfile({
       name: "Original",
       targetQuantity: 1,
@@ -270,8 +290,9 @@ test("saving a linked purchase profile propagates re-derived caps to its mission
     const resaved = control.savePurchaseProfile({
       id: profile.id,
       name: "MSRP quick add",
-      targetQuantity: 1,
-      actionCeiling: "notify",
+      targetQuantity: 2,
+      actionCeiling: "add_to_cart",
+      fulfillment: "pickup",
       priceMode: "msrp_offset_percent",
       msrpOffsetPercent: -10,
       cooldownSeconds: 0
@@ -283,12 +304,21 @@ test("saving a linked purchase profile propagates re-derived caps to its mission
     assert.equal(resaved.propagation.skipped[0]?.reasonCode, "msrp_unavailable");
 
     const linkedDetail = control.missionDetail(linkedMission.mission.id) as {
+      targetQuantity: number;
       intentPolicy: Record<string, unknown>;
       targets: Array<Record<string, unknown>>;
     };
     const linkedTarget = linkedDetail.targets.find((target) => target.listingId === withMsrp.listing.id);
     assert.equal(linkedTarget?.maxUnitPriceCents, 4_500, "5000 MSRP cents at a -10% offset");
-    assert.equal(linkedDetail.intentPolicy.maxAllInCents, 4_500, "notify-only plans reserve no tax or store fee");
+    assert.equal(linkedTarget?.sellerPolicy, "first_party_only");
+    assert.equal(linkedTarget?.fulfillment, "pickup", "profile propagation preserves explicit Pickup opt-in");
+    assert.equal(linkedDetail.targetQuantity, 2, "profile propagation applies the explicitly saved target quantity");
+    const settings = control.settings();
+    const expectedAllInCents = Math.ceil(4_500 * 2 * (10_000 + settings.taxBps) / 10_000)
+      + Number(settings.storeAllowancesCents.target ?? 0);
+    assert.equal(linkedDetail.intentPolicy.maxAllInCents, expectedAllInCents,
+      "guarded-cart propagation retains tax and store-fee safety reserves");
+    assert.equal(linkedDetail.intentPolicy.actionCeiling, "add_to_cart");
     assert.equal(linkedDetail.intentPolicy.revision, 2, "propagation recorded a new audited policy revision");
 
     const skippedDetail = control.missionDetail(skippedMission.mission.id) as {
@@ -312,6 +342,213 @@ test("saving a linked purchase profile propagates re-derived caps to its mission
       4_500,
       "deleting the profile keeps the mission's last caps"
     );
+  } finally {
+    db.close();
+  }
+});
+
+test("one confirmed saved setup applies atomically to selected current plans and skips unsupported cart targets", () => {
+  const db = new YoinkDatabase();
+  const now = new Date("2026-09-01T16:00:00.000Z").getTime();
+  try {
+    const catalog = new CatalogRepository(db);
+    const control = new ControlRepository(db);
+    const supported = catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "bulk-profile-supported-product",
+      sourceListingId: "bulk-profile-supported-listing",
+      title: "Bulk Profile Supported Fixture",
+      retailerId: "target",
+      retailerSku: "95280913",
+      canonicalUrl: "https://www.target.com/p/-/A-95280913",
+      listingStatus: "in_stock",
+      executionSupported: true,
+      msrpCents: 5_000
+    }, now);
+    const unsupported = catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "bulk-profile-unsupported-product",
+      sourceListingId: "bulk-profile-unsupported-listing",
+      title: "Bulk Profile Unsupported Fixture",
+      retailerId: "walmart",
+      retailerSku: "19988614229",
+      canonicalUrl: "https://www.walmart.com/ip/fixture/19988614229",
+      listingStatus: "in_stock",
+      executionSupported: false,
+      msrpCents: 5_000
+    }, now);
+    const supportedMission = control.createConfiguredMission({
+      contractVersion: 1,
+      listingId: supported.listing.id,
+      targetQuantity: 1,
+      maxUnitPriceCents: 5_000,
+      maxAllInCents: 5_000,
+      actionCeiling: "notify",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, now);
+    const unsupportedMission = control.createConfiguredMission({
+      contractVersion: 1,
+      listingId: unsupported.listing.id,
+      targetQuantity: 1,
+      maxUnitPriceCents: 5_000,
+      maxAllInCents: 5_000,
+      actionCeiling: "notify",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, now);
+    const profile = control.savePurchaseProfile({
+      name: "Guarded shipping",
+      targetQuantity: 2,
+      actionCeiling: "add_to_cart",
+      fulfillment: "shipping",
+      priceMode: "fixed_cap",
+      maxUnitPriceCents: 4_500,
+      cooldownSeconds: 60
+    }, now).profiles[0];
+    assert.ok(profile);
+
+    assert.throws(() => control.applyPurchaseProfileToMissions({
+      profileId: profile.id,
+      missionIds: [supportedMission.mission.id],
+      confirmation: "wrong" as "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS"
+    }, now + 1), /review and confirm/i);
+    assert.equal(
+      db.get<{ profileId: string }>("SELECT quick_add_profile_id AS profileId FROM missions WHERE id = ?", supportedMission.mission.id)?.profileId,
+      "",
+      "a missing confirmation leaves the plan unlinked"
+    );
+
+    const applied = control.applyPurchaseProfileToMissions({
+      profileId: profile.id,
+      missionIds: [supportedMission.mission.id, unsupportedMission.mission.id],
+      confirmation: "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS"
+    }, now + 2);
+    assert.equal(applied.selectedMissionCount, 2);
+    assert.equal(applied.linkedMissionCount, 2);
+    assert.equal(applied.propagation.matchedMissionCount, 2);
+    assert.equal(applied.propagation.updatedMissionCount, 1);
+    assert.deepEqual(applied.propagation.skipped.map((item) => ({ id: item.missionId, reason: item.reasonCode })), [{
+      id: unsupportedMission.mission.id,
+      reason: "unsupported_target"
+    }]);
+
+    const updated = control.missionDetail(supportedMission.mission.id) as {
+      targetQuantity: number;
+      intentPolicy: { actionCeiling: string; cooldownSeconds: number };
+      targets: Array<{ maxUnitPriceCents: number; sellerPolicy: string; fulfillment: string }>;
+    };
+    assert.equal(updated.targetQuantity, 2);
+    assert.equal(updated.intentPolicy.actionCeiling, "add_to_cart");
+    assert.equal(updated.intentPolicy.cooldownSeconds, 60);
+    assert.equal(updated.targets[0]?.maxUnitPriceCents, 4_500);
+    assert.equal(updated.targets[0]?.sellerPolicy, "first_party_only");
+    assert.equal(updated.targets[0]?.fulfillment, "shipping");
+
+    const retained = control.missionDetail(unsupportedMission.mission.id) as {
+      targetQuantity: number;
+      intentPolicy: { actionCeiling: string; revision: number };
+    };
+    assert.equal(retained.targetQuantity, 1);
+    assert.equal(retained.intentPolicy.actionCeiling, "notify");
+    assert.equal(retained.intentPolicy.revision, 1, "a skipped plan keeps its prior authorization revision");
+    assert.equal(
+      db.get<{ profileId: string }>("SELECT quick_add_profile_id AS profileId FROM missions WHERE id = ?", unsupportedMission.mission.id)?.profileId,
+      profile.id,
+      "a skipped plan remains linked so a later profile save can retry after the store becomes supported"
+    );
+
+    db.run("UPDATE retailers SET execution_supported = 1 WHERE id = 'walmart'");
+    db.run("UPDATE listings SET execution_supported = 1 WHERE retailer_id = 'walmart'");
+    const reconciled = control.reconcilePurchaseProfilesForRetailer("walmart", now + 3);
+    assert.equal(reconciled.retailerId, "walmart");
+    assert.equal(reconciled.matchedProfileCount, 1);
+    assert.equal(reconciled.matchedMissionCount, 1);
+    assert.equal(reconciled.updatedMissionCount, 1);
+    assert.deepEqual(reconciled.skipped, []);
+    const afterLaneActivation = control.missionDetail(unsupportedMission.mission.id) as {
+      targetQuantity: number;
+      intentPolicy: { actionCeiling: string; revision: number };
+      targets: Array<{ fulfillment: string; sellerPolicy: string }>;
+    };
+    assert.equal(afterLaneActivation.targetQuantity, 2);
+    assert.equal(afterLaneActivation.intentPolicy.actionCeiling, "add_to_cart");
+    assert.equal(afterLaneActivation.intentPolicy.revision, 2);
+    assert.equal(afterLaneActivation.targets[0]?.fulfillment, "shipping");
+    assert.equal(afterLaneActivation.targets[0]?.sellerPolicy, "first_party_only");
+    assert.throws(() => control.reconcilePurchaseProfilesForRetailer("gamestop", now + 4), /guarded retailer/i);
+  } finally {
+    db.close();
+  }
+});
+
+test("changing a linked cart profile to notify-only never waits for missing price evidence", () => {
+  const db = new YoinkDatabase();
+  const now = new Date("2026-09-01T17:00:00.000Z").getTime();
+  try {
+    const catalog = new CatalogRepository(db);
+    const control = new ControlRepository(db);
+    const listing = catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "profile-downgrade-product",
+      sourceListingId: "profile-downgrade-listing",
+      title: "Profile Downgrade Fixture",
+      retailerId: "target",
+      retailerSku: "95280914",
+      canonicalUrl: "https://www.target.com/p/-/A-95280914",
+      listingStatus: "unknown",
+      executionSupported: true
+    }, now);
+    const profile = control.savePurchaseProfile({
+      name: "Initially cart",
+      targetQuantity: 1,
+      actionCeiling: "add_to_cart",
+      fulfillment: "shipping",
+      priceMode: "fixed_cap",
+      maxUnitPriceCents: 5_000
+    }, now).profiles[0];
+    assert.ok(profile);
+    const mission = control.createConfiguredMission({
+      contractVersion: 1,
+      listingId: listing.listing.id,
+      targetQuantity: 1,
+      maxUnitPriceCents: 5_000,
+      maxAllInCents: 8_960,
+      actionCeiling: "add_to_cart",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN",
+      quickAddProfileId: profile.id
+    }, now);
+
+    const downgraded = control.savePurchaseProfile({
+      id: profile.id,
+      name: "Initially cart",
+      targetQuantity: 1,
+      actionCeiling: "notify",
+      fulfillment: "shipping",
+      priceMode: "store_price"
+    }, now + 1_000);
+    assert.equal(downgraded.propagation.updatedMissionCount, 1);
+    assert.deepEqual(downgraded.propagation.skipped, []);
+    const detail = control.missionDetail(mission.mission.id) as {
+      intentPolicy: { actionCeiling: string; revision: number };
+      targets: Array<{ maxUnitPriceCents: number | null }>;
+    };
+    assert.equal(detail.intentPolicy.actionCeiling, "notify");
+    assert.equal(detail.intentPolicy.revision, 2);
+    assert.equal(detail.targets[0]?.maxUnitPriceCents, 5_000, "the prior cap remains until fresh price evidence exists");
   } finally {
     db.close();
   }

@@ -4,6 +4,79 @@ import { nowIso } from "./ids.js";
 import { canonicalRetailerUrl } from "./attribution.js";
 
 const AVAILABILITY = new Set<Availability>(["in_stock", "preorder", "out_of_stock", "unknown"]);
+const LIBRARY_PRODUCT_AVAILABILITY = new Set(["", "in_stock", "preorder", "out_of_stock"] as const);
+const LIBRARY_PRODUCT_PLAN = new Set(["", "planned", "unplanned"] as const);
+const LIBRARY_PRODUCT_SORT = new Set(["newest", "oldest", "price_asc", "price_desc", "active", "title"] as const);
+
+export type LibraryProductAvailabilityFilter = "" | "in_stock" | "preorder" | "out_of_stock";
+export type LibraryProductPlanFilter = "" | "planned" | "unplanned";
+export type LibraryProductSort = "newest" | "oldest" | "price_asc" | "price_desc" | "active" | "title";
+
+export interface LibraryProductFilterInput {
+  search?: unknown;
+  retailerId?: unknown;
+  availability?: unknown;
+  plan?: unknown;
+  priceMinCents?: unknown;
+  priceMaxCents?: unknown;
+  sort?: unknown;
+}
+
+export interface LibraryProductFilters {
+  search: string;
+  retailerId: string;
+  availability: LibraryProductAvailabilityFilter;
+  plan: LibraryProductPlanFilter;
+  priceMinCents: number | null;
+  priceMaxCents: number | null;
+  sort: LibraryProductSort;
+}
+
+function optionalLibraryPrice(value: unknown, label: string): number | null {
+  if (value === undefined || value === null || String(value).trim() === "") return null;
+  const cents = Number(value);
+  if (!Number.isSafeInteger(cents) || cents < 0 || cents > 100_000_000) {
+    throw new Error(`${label} must be a whole number of cents from zero through 100000000.`);
+  }
+  return cents;
+}
+
+export function normalizeLibraryProductFilters(input: LibraryProductFilterInput = {}): LibraryProductFilters {
+  const retailerId = cleanText(input.retailerId, 60).toLocaleLowerCase("en-US");
+  if (retailerId && !/^[a-z0-9][a-z0-9_-]{1,59}$/.test(retailerId)) {
+    throw new Error("Choose a valid product store filter.");
+  }
+  const availabilityInput = cleanText(input.availability, 30);
+  const availability = (availabilityInput === "unavailable" ? "out_of_stock" : availabilityInput) as LibraryProductAvailabilityFilter;
+  if (!LIBRARY_PRODUCT_AVAILABILITY.has(availability)) {
+    throw new Error("Choose In stock, Preorder, or Out of stock for the product availability filter.");
+  }
+  const plan = cleanText(input.plan, 30) as LibraryProductPlanFilter;
+  if (!LIBRARY_PRODUCT_PLAN.has(plan)) throw new Error("Choose a valid product-plan filter.");
+  const sortInput = cleanText(input.sort, 30) || "newest";
+  if (!LIBRARY_PRODUCT_SORT.has(sortInput as LibraryProductSort)) throw new Error("Choose a valid product sort order.");
+  const priceMinCents = optionalLibraryPrice(input.priceMinCents, "The minimum product price");
+  const priceMaxCents = optionalLibraryPrice(input.priceMaxCents, "The maximum product price");
+  if (priceMaxCents !== null && priceMaxCents === 0) {
+    throw new Error("The maximum product price must be greater than zero.");
+  }
+  if (priceMinCents !== null && priceMaxCents !== null && priceMaxCents <= priceMinCents) {
+    throw new Error("The maximum product price must be greater than the minimum product price.");
+  }
+  return {
+    search: cleanText(input.search, 200),
+    retailerId,
+    availability,
+    plan,
+    priceMinCents,
+    priceMaxCents,
+    sort: sortInput as LibraryProductSort
+  };
+}
+
+export function isPurchasableAvailability(value: unknown): boolean {
+  return value === "in_stock" || value === "preorder";
+}
 
 export interface NormalizedCatalogListing {
   sourceConnectionId: string;

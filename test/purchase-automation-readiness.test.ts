@@ -55,6 +55,7 @@ function context(overrides: Partial<PurchaseAutomationReadinessContext> = {}): P
     actionsPaused: false,
     sources: [{ source: "trackalacker", status: "connected" }],
     devices: [{
+      id: "device_current",
       status: "active",
       extensionVersion: "0.45.0",
       online: true,
@@ -109,7 +110,39 @@ test("mixed-store plans arm only the exact target whose lane and runner are both
   assert.equal(readiness.targets.length, 2);
   assert.equal(readiness.targets.find((target) => target.retailerId === "target")?.readyForGuardedAdd, true);
   assert.equal(readiness.targets.find((target) => target.retailerId === "amazon")?.readyForGuardedAdd, false);
-  assert.match(readiness.summary, /Target/);
+  assert.match(readiness.headline, /Target/);
+});
+
+test("fresh exact-device store blockers are truthful without becoming global or permanent", () => {
+  const blocker = {
+    deviceId: "device_current",
+    retailerId: "target" as const,
+    signedInState: "challenged" as const
+  };
+  const blocked = buildPurchaseAutomationReadiness(plan(), context({ sessionBlockers: [blocker] }));
+  assert.equal(blocked.state, "guarded_add_session_blocked");
+  assert.equal(blocked.readyForGuardedAdd, false);
+  assert.equal(blocked.effectiveAutomation, "notification");
+  assert.equal(blocked.nextAction, "open_chrome");
+  assert.equal(blocked.targets[0]?.sessionBlocked, true);
+  assert.equal(blocked.targets[0]?.reasonCode, "retailer_session_blocked");
+  assert.equal(blocked.checks.find((check) => check.id === "session")?.state, "waiting");
+
+  const paused = buildPurchaseAutomationReadiness(plan(), context({
+    actionsPaused: true,
+    sessionBlockers: [blocker]
+  }));
+  assert.equal(paused.state, "guarded_add_paused");
+
+  const anotherDeviceReady = buildPurchaseAutomationReadiness(plan(), context({
+    sessionBlockers: [blocker],
+    devices: [
+      ...(context().devices),
+      { ...context().devices[0], id: "device_second" }
+    ]
+  }));
+  assert.equal(anotherDeviceReady.state, "guarded_add_armed");
+  assert.equal(anotherDeviceReady.targets[0]?.sessionBlocked, false);
 });
 
 test("notification plans remain mapping-independent and explain an offline companion", () => {
@@ -149,4 +182,70 @@ test("readiness distinguishes unsafe policy, missing runner, test mode, pause, e
   assert.equal(buildPurchaseAutomationReadiness(plan(), context({ actionsPaused: true })).state, "guarded_add_paused");
   assert.equal(buildPurchaseAutomationReadiness(plan({ expiresAt: new Date(NOW - 1).toISOString() }), context()).state, "expired");
   assert.equal(buildPurchaseAutomationReadiness(plan({ decisionMode: "strategy" }), context()).state, "advanced_strategy");
+});
+
+test("all shopper-visible readiness copy stays actionable and free of internal execution terms", () => {
+  const notificationPlan = plan({ actionCeiling: "notify" });
+  const variants = [
+    buildPurchaseAutomationReadiness(plan({ status: "paused" }), context()),
+    buildPurchaseAutomationReadiness(plan({ expiresAt: new Date(NOW - 1).toISOString() }), context()),
+    buildPurchaseAutomationReadiness(plan({ decisionMode: "strategy" }), context()),
+    buildPurchaseAutomationReadiness(plan({ targets: [] }), context()),
+    buildPurchaseAutomationReadiness(notificationPlan, context({ sources: [] })),
+    buildPurchaseAutomationReadiness(notificationPlan, context({ devices: [] })),
+    buildPurchaseAutomationReadiness(notificationPlan, context({
+      devices: context().devices.map((device) => ({ ...device, online: false }))
+    })),
+    buildPurchaseAutomationReadiness(notificationPlan, context()),
+    buildPurchaseAutomationReadiness(plan({ targets: [{ ...TARGET, fulfillment: "either" }] }), context()),
+    buildPurchaseAutomationReadiness(plan({ targets: [{ ...TARGET, executionSupported: false }] }), context()),
+    buildPurchaseAutomationReadiness(plan(), context({
+      qualifications: { target: false, walmart: false, amazon: false, bestbuy: false }
+    })),
+    buildPurchaseAutomationReadiness(plan(), context({
+      devices: context().devices.map((device) => ({
+        ...device,
+        capabilities: { notifications: true, jobReconciliation: true }
+      }))
+    })),
+    buildPurchaseAutomationReadiness(plan(), context({
+      sessionBlockers: [{
+        deviceId: "device_current",
+        retailerId: "target",
+        signedInState: "signed_out"
+      }]
+    })),
+    buildPurchaseAutomationReadiness(plan(), context({ executionMode: "shadow" })),
+    buildPurchaseAutomationReadiness(plan(), context({ actionsPaused: true })),
+    buildPurchaseAutomationReadiness(plan(), context())
+  ];
+  const states = [...new Set(variants.map((readiness) => readiness.state))].sort();
+  assert.deepEqual(states, [
+    "advanced_strategy",
+    "companion_offline",
+    "expired",
+    "guarded_add_armed",
+    "guarded_add_device_incapable",
+    "guarded_add_lane_closed",
+    "guarded_add_paused",
+    "guarded_add_policy_incomplete",
+    "guarded_add_session_blocked",
+    "guarded_add_shadow",
+    "inactive",
+    "needs_current_companion",
+    "needs_signal",
+    "needs_target",
+    "notification_ready"
+  ]);
+  for (const readiness of variants) {
+    const visibleCopy = [
+      readiness.headline,
+      readiness.summary,
+      readiness.nextActionLabel,
+      ...readiness.checks.flatMap((item) => [item.label, item.detail]),
+      ...readiness.targets.map((target) => target.summary)
+    ].join(" ");
+    assert.doesNotMatch(visibleCopy, /\b(?:runner|lane|qualification)\b/i, readiness.state);
+    assert.match(readiness.technicalReason, /^readiness:[a-z_]+/);
+  }
 });

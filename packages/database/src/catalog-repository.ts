@@ -5,8 +5,17 @@ import type {
   SupportedRetailerId,
   TrackalackerCatalogItemInput
 } from "../../contracts/src/index.js";
-import { normalizeCatalogListing, hostnameAllowed } from "../../domain/src/catalog.js";
-import type { NormalizedCatalogListing } from "../../domain/src/catalog.js";
+import {
+  hostnameAllowed,
+  isPurchasableAvailability,
+  normalizeCatalogListing,
+  normalizeLibraryProductFilters
+} from "../../domain/src/catalog.js";
+import type {
+  LibraryProductFilterInput,
+  LibraryProductFilters,
+  NormalizedCatalogListing
+} from "../../domain/src/catalog.js";
 import { cleanText, positiveCents, safeHttpsUrl } from "../../domain/src/normalize.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
 import { YoinkDatabase } from "./database.js";
@@ -70,6 +79,129 @@ function listingContext(row: ListingRow): ListingContext {
     executionSupported: row.execution_supported === 1,
     msrpCents: row.msrp_cents === null ? null : Number(row.msrp_cents),
     currency: row.currency
+  };
+}
+
+interface LibraryProductQueryParts {
+  filters: LibraryProductFilters;
+  cte: string;
+  where: string;
+  parameters: Array<string | number>;
+  orderBy: string;
+}
+
+const LIBRARY_PRODUCT_ORDER: Record<LibraryProductFilters["sort"], string> = {
+  newest: "v.created_at DESC, v.title COLLATE NOCASE, v.id",
+  oldest: "v.created_at, v.title COLLATE NOCASE, v.id",
+  price_asc: "facts.bestPriceCents IS NULL, facts.bestPriceCents, v.title COLLATE NOCASE, v.id",
+  price_desc: "facts.bestPriceCents IS NULL, facts.bestPriceCents DESC, v.title COLLATE NOCASE, v.id",
+  active: "facts.lastActivityAt DESC, v.title COLLATE NOCASE, v.id",
+  title: "v.title COLLATE NOCASE, v.id"
+};
+
+function libraryProductQueryParts(input: LibraryProductFilterInput | string): LibraryProductQueryParts {
+  const filters = normalizeLibraryProductFilters(typeof input === "string" ? { search: input } : input);
+  const scope = currentRequestScope();
+  const where: string[] = [];
+  const parameters: Array<string | number> = [
+    filters.retailerId,
+    filters.retailerId,
+    filters.retailerId,
+    filters.retailerId,
+    filters.retailerId,
+    filters.retailerId
+  ];
+  if (filters.search) {
+    const pattern = `%${filters.search.replace(/[\\%_]/g, "\\$&")}%`;
+    where.push(`EXISTS (
+      SELECT 1 FROM listings search_listing
+      JOIN retailers search_retailer ON search_retailer.id = search_listing.retailer_id
+      WHERE search_listing.variant_id = v.id
+        AND (v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+          OR search_retailer.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+          OR search_listing.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)
+    )`);
+    parameters.push(pattern, pattern, pattern);
+  }
+  if (filters.retailerId) {
+    where.push("EXISTS (SELECT 1 FROM listings store_listing WHERE store_listing.variant_id = v.id AND store_listing.retailer_id = ?)");
+    parameters.push(filters.retailerId);
+  }
+  if (filters.availability === "in_stock" || filters.availability === "preorder") {
+    where.push(`EXISTS (
+      SELECT 1 FROM listings availability_listing
+      WHERE availability_listing.variant_id = v.id AND availability_listing.status = ?
+        ${filters.retailerId ? "AND availability_listing.retailer_id = ?" : ""}
+    )`);
+    parameters.push(filters.availability);
+    if (filters.retailerId) parameters.push(filters.retailerId);
+  } else if (filters.availability === "out_of_stock") {
+    where.push(`EXISTS (
+      SELECT 1 FROM listings unavailable_listing
+      WHERE unavailable_listing.variant_id = v.id AND unavailable_listing.status = 'out_of_stock'
+        ${filters.retailerId ? "AND unavailable_listing.retailer_id = ?" : ""}
+    )`);
+    if (filters.retailerId) parameters.push(filters.retailerId);
+    if (!filters.retailerId) {
+      where.push(`NOT EXISTS (
+        SELECT 1 FROM listings purchasable_listing
+        WHERE purchasable_listing.variant_id = v.id
+          AND purchasable_listing.status IN ('in_stock', 'preorder')
+      )`);
+    }
+  }
+  if (filters.plan === "planned") {
+    where.push(`EXISTS (
+      SELECT 1 FROM missions planned_mission
+      WHERE planned_mission.variant_id = v.id
+        AND planned_mission.tenant_id = ? AND planned_mission.user_id = ?
+        AND planned_mission.status <> 'deleted'
+    )`);
+    parameters.push(scope.tenantId, scope.userId);
+  } else if (filters.plan === "unplanned") {
+    where.push(`NOT EXISTS (
+      SELECT 1 FROM missions planned_mission
+      WHERE planned_mission.variant_id = v.id
+        AND planned_mission.tenant_id = ? AND planned_mission.user_id = ?
+        AND planned_mission.status <> 'deleted'
+    )`);
+    parameters.push(scope.tenantId, scope.userId);
+  }
+  if (filters.priceMinCents !== null) {
+    where.push("facts.bestPriceCents >= ?");
+    parameters.push(filters.priceMinCents);
+  }
+  if (filters.priceMaxCents !== null) {
+    where.push("facts.bestPriceCents < ?");
+    parameters.push(filters.priceMaxCents);
+  }
+  return {
+    filters,
+    cte: `WITH listing_facts AS (
+      SELECT l.variant_id AS variantId, l.retailer_id AS retailerId, l.status,
+             COALESCE((
+               SELECT observed.unit_price_cents FROM offer_observations observed
+               WHERE observed.listing_id = l.id AND observed.unit_price_cents IS NOT NULL
+               ORDER BY observed.observed_at DESC, observed.id DESC LIMIT 1
+             ), l.msrp_cents) AS effectivePriceCents,
+             MAX(l.updated_at, COALESCE((
+               SELECT activity.observed_at FROM offer_observations activity
+               WHERE activity.listing_id = l.id AND activity.unit_price_cents IS NOT NULL
+               ORDER BY activity.observed_at DESC, activity.id DESC LIMIT 1
+             ), '')) AS activityAt
+      FROM listings l
+    ), variant_facts AS (
+      SELECT variantId,
+             COALESCE(
+               MIN(CASE WHEN (? = '' OR retailerId = ?) AND status IN ('in_stock', 'preorder') THEN effectivePriceCents END),
+               MIN(CASE WHEN (? = '' OR retailerId = ?) THEN effectivePriceCents END)
+             ) AS bestPriceCents,
+             MAX(CASE WHEN (? = '' OR retailerId = ?) THEN activityAt END) AS lastActivityAt
+      FROM listing_facts GROUP BY variantId
+    )`,
+    where: where.length ? `WHERE ${where.join(" AND ")}` : "",
+    parameters,
+    orderBy: LIBRARY_PRODUCT_ORDER[filters.sort]
   };
 }
 
@@ -565,11 +697,14 @@ export class CatalogRepository {
     )?.count ?? 0);
   }
 
-  listLibraryProducts(limit = 100, offset = 0, search = ""): Array<Record<string, unknown>> {
-    const query = cleanText(search, 200);
-    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+  listLibraryProducts(
+    limit = 100,
+    offset = 0,
+    input: LibraryProductFilterInput | string = {}
+  ): Array<Record<string, unknown>> {
     const safeLimit = Math.max(1, Math.min(200, Math.floor(Number(limit) || 100)));
     const safeOffset = Number.isSafeInteger(Number(offset)) && Number(offset) >= 0 ? Math.floor(Number(offset)) : 0;
+    const query = libraryProductQueryParts(input);
     const variants = this.db.all<{
       variantId: string;
       familyId: string;
@@ -578,24 +713,20 @@ export class CatalogRepository {
       imageUrl: string;
       variantAttributesJson: string;
       createdAt: string;
+      bestPriceCents: number | null;
+      lastActivityAt: string | null;
     }>(
-      `SELECT v.id AS variantId, v.family_id AS familyId, v.title, f.brand,
-              v.image_url AS imageUrl,
-              v.attributes_json AS variantAttributesJson, v.created_at AS createdAt
+      `${query.cte}
+       SELECT v.id AS variantId, v.family_id AS familyId, v.title, f.brand,
+              v.image_url AS imageUrl, v.attributes_json AS variantAttributesJson,
+              v.created_at AS createdAt, facts.bestPriceCents, facts.lastActivityAt
        FROM variants v
        JOIN product_families f ON f.id = v.family_id
-       WHERE EXISTS (
-         SELECT 1 FROM listings l JOIN retailers r ON r.id = l.retailer_id
-         WHERE l.variant_id = v.id
-           AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
-             OR r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
-             OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE))
-       ORDER BY v.created_at DESC, v.title COLLATE NOCASE, v.id
+       JOIN variant_facts facts ON facts.variantId = v.id
+       ${query.where}
+       ORDER BY ${query.orderBy}
        LIMIT ? OFFSET ?`,
-      query,
-      pattern,
-      pattern,
-      pattern,
+      ...query.parameters,
       safeLimit,
       safeOffset
     );
@@ -629,6 +760,7 @@ export class CatalogRepository {
         retailerSku: row.retailerSku,
         canonicalUrl: row.canonicalUrl,
         status: row.status,
+        purchasable: isPurchasableAvailability(row.status),
         executionSupported: Number(row.executionSupported) === 1,
         msrpCents: row.msrpCents,
         currency: row.currency,
@@ -654,20 +786,10 @@ export class CatalogRepository {
         variantAttributes = {};
       }
       const listings = listingsByVariant.get(variant.variantId) ?? [];
-      const priceOf = (listing: Record<string, unknown>): number | null => {
-        const current = Number(listing.currentPriceCents);
-        if (Number.isFinite(current) && current > 0 && listing.currentPriceCents !== null) return current;
-        const msrp = Number(listing.msrpCents);
-        return Number.isFinite(msrp) && msrp > 0 && listing.msrpCents !== null ? msrp : null;
-      };
-      const available = listings.filter((listing) => ["in_stock", "preorder"].includes(String(listing.status)));
-      const priced = (available.length ? available : listings)
-        .map(priceOf)
-        .filter((cents): cents is number => cents !== null);
-      const activityTimes = listings
-        .flatMap((listing) => [listing.priceObservedAt, listing.updatedAt])
-        .map((value) => String(value ?? ""))
-        .filter((value) => value !== "");
+      const inStock = listings.filter((listing) => listing.status === "in_stock");
+      const preorder = listings.filter((listing) => listing.status === "preorder");
+      const outOfStock = listings.filter((listing) => listing.status === "out_of_stock");
+      const purchasable = listings.filter((listing) => isPurchasableAvailability(listing.status));
       return {
         variantId: variant.variantId,
         familyId: variant.familyId,
@@ -678,32 +800,38 @@ export class CatalogRepository {
         createdAt: variant.createdAt,
         storeCount: new Set(listings.map((listing) => String(listing.retailerId))).size,
         listingCount: listings.length,
-        availableListingCount: available.length,
-        bestPriceCents: priced.length ? Math.min(...priced) : null,
+        availableListingCount: purchasable.length,
+        inStockListingCount: inStock.length,
+        preorderListingCount: preorder.length,
+        outOfStockListingCount: outOfStock.length,
+        bestPriceCents: variant.bestPriceCents === null ? null : Number(variant.bestPriceCents),
         currency: String(listings[0]?.currency ?? "USD"),
-        lastActivityAt: activityTimes.length ? activityTimes.sort().at(-1) : null,
+        lastActivityAt: variant.lastActivityAt || null,
         listings
       };
     });
   }
 
-  libraryProductCount(search = ""): number {
-    const query = cleanText(search, 200);
-    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+  libraryProductCount(input: LibraryProductFilterInput | string = {}): number {
+    const query = libraryProductQueryParts(input);
     return Number(this.db.get<{ count: number }>(
-      `SELECT COUNT(*) AS count
+      `${query.cte}
+       SELECT COUNT(*) AS count
        FROM variants v
-       WHERE EXISTS (
-         SELECT 1 FROM listings l JOIN retailers r ON r.id = l.retailer_id
-         WHERE l.variant_id = v.id
-           AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
-             OR r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
-             OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE))`,
-      query,
-      pattern,
-      pattern,
-      pattern
+       JOIN variant_facts facts ON facts.variantId = v.id
+       ${query.where}`,
+      ...query.parameters
     )?.count ?? 0);
+  }
+
+  libraryProductStoreFacets(): Array<{ retailerId: string; retailerName: string; productCount: number }> {
+    return this.db.all<{ retailerId: string; retailerName: string; productCount: number }>(
+      `SELECT r.id AS retailerId, r.display_name AS retailerName,
+              COUNT(DISTINCT l.variant_id) AS productCount
+       FROM listings l JOIN retailers r ON r.id = l.retailer_id
+       GROUP BY r.id, r.display_name
+       ORDER BY r.display_name COLLATE NOCASE, r.id`
+    ).map((row) => ({ ...row, productCount: Number(row.productCount) }));
   }
 
   createListingFromExactSignal(signal: NormalizedSignal): CatalogUpsertResult | null {

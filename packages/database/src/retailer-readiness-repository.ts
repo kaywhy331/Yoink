@@ -22,7 +22,8 @@ type ActionRetailer = typeof ACTION_RETAILERS[number];
 const QUALIFICATION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 const QUALIFICATION_WARNING_MS = 7 * 24 * 60 * 60_000;
 const BASELINE_MAX_AGE_MS = 5 * 60_000;
-const SESSION_MAX_AGE_MS = 5 * 60_000;
+export const RETAILER_SESSION_MAX_AGE_MS = 5 * 60_000;
+export const RETAILER_SESSION_FUTURE_TOLERANCE_MS = 5 * 60_000;
 
 const LANE_VERSIONS: Record<ActionRetailer, { add: string; observer: string }> = {
   target: { add: TARGET_ADD_ADAPTER_VERSION, observer: TARGET_OBSERVER_VERSION },
@@ -31,7 +32,7 @@ const LANE_VERSIONS: Record<ActionRetailer, { add: string; observer: string }> =
   bestbuy: { add: BESTBUY_ADD_ADAPTER_VERSION, observer: BESTBUY_OBSERVER_VERSION }
 };
 
-interface ReadinessRow {
+export interface ReadinessRow {
   deviceId: string;
   retailerId: ActionRetailer;
   signedInState: "unknown" | "ready" | "signed_out" | "challenged";
@@ -41,6 +42,20 @@ interface ReadinessRow {
   adapterVersion: string;
   lastErrorCode: string;
   updatedAt: string;
+}
+
+export function retailerSessionBlocksGuardedAdd(
+  session: Pick<ReadinessRow, "signedInState" | "adapterVersion" | "updatedAt"> | null,
+  expectedAdapterVersion: string,
+  deviceActive: boolean,
+  now = Date.now()
+): boolean {
+  if (!session || !deviceActive || session.adapterVersion !== expectedAdapterVersion) return false;
+  if (session.signedInState !== "signed_out" && session.signedInState !== "challenged") return false;
+  const updatedAt = new Date(session.updatedAt).getTime();
+  return Number.isFinite(updatedAt)
+    && updatedAt >= now - RETAILER_SESSION_MAX_AGE_MS
+    && updatedAt <= now + RETAILER_SESSION_FUTURE_TOLERANCE_MS;
 }
 
 interface QualificationRow {
@@ -77,9 +92,16 @@ export interface RetailerLaneReadiness {
   readyForWarmObservation: boolean;
 }
 
+export interface RetailerSessionBlocker {
+  deviceId: string;
+  retailerId: ActionRetailer;
+  signedInState: "signed_out" | "challenged";
+  updatedAt: string;
+}
+
 function actionRetailer(value: unknown): ActionRetailer {
   const normalized = cleanText(value, 40).toLocaleLowerCase("en-US") as ActionRetailer;
-  if (!ACTION_RETAILERS.includes(normalized)) throw new Error("A supported guarded-add retailer is required.");
+  if (!ACTION_RETAILERS.includes(normalized)) throw new Error("A supported store is required.");
   return normalized;
 }
 
@@ -158,6 +180,39 @@ export class RetailerReadinessRepository {
     return ACTION_RETAILERS.map((retailerId) => this.lane(retailerId, now));
   }
 
+  freshSessionBlockers(now = Date.now()): RetailerSessionBlocker[] {
+    const scope = currentRequestScope();
+    return this.db.all<ReadinessRow>(
+      `SELECT readiness.device_id AS deviceId, readiness.retailer_id AS retailerId,
+              readiness.signed_in_state AS signedInState,
+              readiness.cart_baseline_state AS cartBaselineState,
+              readiness.baseline_observed_at AS baselineObservedAt,
+              readiness.expires_at AS expiresAt,
+              readiness.adapter_version AS adapterVersion,
+              readiness.last_error_code AS lastErrorCode,
+              readiness.updated_at AS updatedAt
+       FROM retailer_session_readiness readiness
+       JOIN extension_devices device ON device.id = readiness.device_id
+       WHERE readiness.tenant_id = ? AND readiness.user_id = ?
+         AND device.tenant_id = readiness.tenant_id AND device.user_id = readiness.user_id
+         AND device.status = 'active'
+         AND readiness.signed_in_state IN ('signed_out', 'challenged')
+         AND readiness.updated_at >= ? AND readiness.updated_at <= ?
+       ORDER BY readiness.updated_at DESC, readiness.device_id, readiness.retailer_id`,
+      scope.tenantId,
+      scope.userId,
+      nowIso(now - RETAILER_SESSION_MAX_AGE_MS),
+      nowIso(now + RETAILER_SESSION_FUTURE_TOLERANCE_MS)
+    ).flatMap((row) => row.adapterVersion === LANE_VERSIONS[row.retailerId].add
+      ? [{
+          deviceId: row.deviceId,
+          retailerId: row.retailerId,
+          signedInState: row.signedInState as "signed_out" | "challenged",
+          updatedAt: row.updatedAt
+        }]
+      : []);
+  }
+
   lane(retailerValue: string, now = Date.now()): RetailerLaneReadiness {
     const retailerId = actionRetailer(retailerValue);
     const versions = LANE_VERSIONS[retailerId];
@@ -206,12 +261,12 @@ export class RetailerReadinessRepository {
       `SELECT id FROM extension_devices
        WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'active'
          AND last_seen_at >= ?`,
-      session.deviceId, scope.tenantId, scope.userId, nowIso(now - SESSION_MAX_AGE_MS)
+      session.deviceId, scope.tenantId, scope.userId, nowIso(now - RETAILER_SESSION_MAX_AGE_MS)
     ));
     const sessionUpdatedAt = session?.updatedAt ? new Date(session.updatedAt).getTime() : Number.NaN;
     const sessionFresh = sessionDeviceActive && Number.isFinite(sessionUpdatedAt)
-      && sessionUpdatedAt >= now - SESSION_MAX_AGE_MS
-      && sessionUpdatedAt <= now + 5 * 60_000;
+      && sessionUpdatedAt >= now - RETAILER_SESSION_MAX_AGE_MS
+      && sessionUpdatedAt <= now + RETAILER_SESSION_FUTURE_TOLERANCE_MS;
     const signedIn = sessionFresh && session?.signedInState === "ready"
       && session.adapterVersion === versions.add;
     const baselineObservedAt = session?.baselineObservedAt
@@ -226,11 +281,17 @@ export class RetailerReadinessRepository {
       && baselineExpiresAt > now
       && baselineExpiresAt <= baselineObservedAt + BASELINE_MAX_AGE_MS
       && session.adapterVersion === versions.add;
+    const sessionBlocksAdd = retailerSessionBlocksGuardedAdd(
+      session,
+      versions.add,
+      sessionDeviceActive,
+      now
+    );
     const checklist = [
-      { id: "qualification", ready: qualified, label: qualified ? "Store lane qualified" : "Re-qualification required" },
-      { id: "device", ready: activeDevice, label: activeDevice ? "Companion online" : "Companion offline" },
-      { id: "signed_in", ready: signedIn, label: signedIn ? "Retailer session ready" : "Sign-in check needed" },
-      { id: "cart_baseline", ready: warmBaseline, label: warmBaseline ? "Fresh cart baseline" : "Cart baseline not warm" }
+      { id: "qualification", ready: qualified, label: qualified ? "Store checks passed" : "Store checks need a refresh" },
+      { id: "device", ready: activeDevice, label: activeDevice ? "Chrome companion online" : "Chrome companion offline" },
+      { id: "signed_in", ready: signedIn, label: signedIn ? "Signed in to the store in Chrome" : "Sign in to the store in Chrome" },
+      { id: "cart_baseline", ready: warmBaseline, label: warmBaseline ? "Cart warmed up" : "Cart not warmed up yet" }
     ];
     return {
       retailerId,
@@ -247,7 +308,7 @@ export class RetailerReadinessRepository {
       session,
       candidate,
       checklist,
-      readyForGuardedAdd: qualified && activeDevice,
+      readyForGuardedAdd: qualified && activeDevice && !sessionBlocksAdd,
       readyForWarmObservation: activeDevice && signedIn
     };
   }
@@ -272,7 +333,7 @@ export class RetailerReadinessRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_lane_retired",
         reasonCode,
-        message: "One retailer lane was retired without changing other store qualifications.",
+        message: "One store was retired without changing the other stores.",
         data: { retailerId, scope: "single_lane" }
       }, now);
     });

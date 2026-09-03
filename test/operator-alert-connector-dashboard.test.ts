@@ -90,19 +90,36 @@ test("the Alerts workspace binds only an opaque deployment connector reference",
     pretendToBeVisual: true
   });
   const browser = dom.window;
+  const confirmations: Array<Record<string, unknown>> = [];
+  const mutationBodies: Array<{ path: string; body: Record<string, unknown> }> = [];
   Object.defineProperty(browser, "fetch", {
     configurable: true,
-    value: (path: string, options: RequestInit = {}) => fetch(new URL(path, baseUrl), {
-      ...options,
-      headers: {
-        ...(options.method && options.method !== "GET" ? { Origin: baseUrl } : {}),
-        ...(options.headers || {})
-      }
-    })
+    value: (path: string, options: RequestInit = {}) => {
+      if (options.body) mutationBodies.push({ path: String(path), body: JSON.parse(String(options.body)) as Record<string, unknown> });
+      return fetch(new URL(path, baseUrl), {
+        ...options,
+        headers: {
+          ...(options.method && options.method !== "GET" ? { Origin: baseUrl } : {}),
+          ...(options.headers || {})
+        }
+      });
+    }
   });
   Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
   Object.defineProperty(browser, "scrollTo", { configurable: true, value: () => undefined });
-  Object.defineProperty(browser, "confirm", { configurable: true, value: () => true });
+  Object.defineProperty(browser, "confirm", { configurable: true, value: () => { throw new Error("Native confirm must not run."); } });
+  Object.defineProperty(browser, "YoinkDialogs", {
+    configurable: true,
+    value: { confirmDialog: async (options: Record<string, unknown>) => {
+      confirmations.push(options);
+      const title = String(options.title || "");
+      return {
+        confirmed: true,
+        note: title.startsWith("Acknowledge") ? "Investigating the bounded failure group."
+          : title.startsWith("Resolve") ? "Reviewed the repair and closed the incident." : ""
+      };
+    } }
+  });
   Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
     configurable: true,
     value() { this.open = true; }
@@ -172,6 +189,18 @@ test("the Alerts workspace binds only an opaque deployment connector reference",
       browser.document.querySelector("#operatorAlertConnectorDeliveryList")?.textContent ?? "",
       /Replay once/
     ));
+    assert.equal(browser.document.querySelector("#operatorAlertMetricGrid"), null);
+    assert.match(browser.document.querySelector("#operatorAlertSummary")?.textContent ?? "", /1 active/);
+    assert.deepEqual(
+      [...browser.document.querySelectorAll('[data-alerts-panel] .panel-heading p')].map((paragraph) => paragraph.textContent?.trim()),
+      [
+        "Review active failures and record the outcome.",
+        "Choose which failures open an incident.",
+        "Send incident updates through reviewed destinations.",
+        "See where incident updates went.",
+        "Retry a failed delivery without changing its message."
+      ]
+    );
     assert.match(browser.document.querySelector("#operatorAlertConnectorList")?.textContent ?? "", /critical/);
     (browser.document.querySelector("[data-operator-alert-connector-retry]") as HTMLButtonElement).click();
     await eventually(() => assert.equal(db.get<{ state: string }>(
@@ -185,6 +214,30 @@ test("the Alerts workspace binds only an opaque deployment connector reference",
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM operator_alert_connector_delivery_events WHERE reason_code = 'operator_manual_replay'"
     )?.count, 1);
+
+    const acknowledge = browser.document.querySelector("[data-operator-alert-acknowledge]") as HTMLButtonElement;
+    assert.ok(acknowledge);
+    acknowledge.click();
+    await eventually(() => assert.equal(db.get<{ status: string }>(
+      "SELECT status FROM operator_alert_incidents"
+    )?.status, "acknowledged"));
+    const acknowledgeRequest = mutationBodies.find((request) => request.path.endsWith("/acknowledge"));
+    assert.equal(acknowledgeRequest?.body.note, "Investigating the bounded failure group.");
+    assert.equal((confirmations.find((options) => String(options.title).startsWith("Acknowledge"))?.note as Record<string, unknown>)?.required, false);
+
+    await eventually(() => assert.ok(browser.document.querySelector("[data-operator-alert-resolve]")));
+    (browser.document.querySelector("[data-operator-alert-resolve]") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(db.get<{ status: string }>(
+      "SELECT status FROM operator_alert_incidents"
+    )?.status, "resolved"));
+    const resolveRequest = mutationBodies.find((request) => request.path.endsWith("/resolve"));
+    assert.equal(resolveRequest?.body.note, "Reviewed the repair and closed the incident.");
+    assert.equal((confirmations.find((options) => String(options.title).startsWith("Resolve"))?.note as Record<string, unknown>)?.required, true);
+    await eventually(() => {
+      assert.match(browser.document.querySelector("#operatorAlertIncidentList")?.textContent ?? "", /resolved/);
+      assert.equal(browser.document.querySelector("#operatorAlertSummary")?.textContent, "No active incidents.");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
   } finally {
     browser.close();
     server.close();

@@ -10,6 +10,9 @@ interface LibraryProduct {
   storeCount: number;
   listingCount: number;
   availableListingCount: number;
+  inStockListingCount: number;
+  preorderListingCount: number;
+  outOfStockListingCount: number;
   bestPriceCents: number | null;
   currency: string;
   createdAt: string;
@@ -94,6 +97,14 @@ test("the product library groups one exact product's listings across every store
     assert.equal(elite.listingCount, 3);
     assert.equal(elite.storeCount, 3);
     assert.equal(elite.availableListingCount, 2);
+    assert.equal(elite.inStockListingCount, 2);
+    assert.equal(elite.preorderListingCount, 0);
+    assert.equal(elite.outOfStockListingCount, 1);
+    assert.deepEqual(
+      elite.listings.map((listing) => [listing.status, listing.purchasable]).sort(),
+      [["in_stock", true], ["in_stock", true], ["out_of_stock", false]],
+      "each listing carries the purchasable flag the badge and filter share"
+    );
     assert.equal(elite.currency, "USD");
     assert.equal(
       new Set(elite.listings.map((listing) => String(listing.retailerId))).size,
@@ -107,6 +118,87 @@ test("the product library groups one exact product's listings across every store
     assert.equal(bundle.availableListingCount, 0);
     // With no available listing, the catalog price still yields a browsable price point.
     assert.equal(bundle.bestPriceCents, 2999);
+  } finally {
+    db.close();
+  }
+});
+
+test("product filters use exact store, stock state, and selected-store price before pagination", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    seedGroupedCatalog(catalog);
+    const inStock = catalog.listLibraryProducts(100, 0, { availability: "in_stock" }) as unknown as LibraryProduct[];
+    assert.deepEqual(inStock.map((product) => product.title), ["Grouped Elite Trainer Box"]);
+    const outOfStock = catalog.listLibraryProducts(100, 0, { availability: "out_of_stock" }) as unknown as LibraryProduct[];
+    assert.deepEqual(outOfStock.map((product) => product.title), ["Grouped Booster Bundle"]);
+    const unavailableAlias = catalog.listLibraryProducts(100, 0, { availability: "unavailable" }) as unknown as LibraryProduct[];
+    assert.deepEqual(unavailableAlias.map((product) => product.title), ["Grouped Booster Bundle"]);
+    const walmartOutOfStock = catalog.listLibraryProducts(100, 0, {
+      retailerId: "walmart",
+      availability: "out_of_stock",
+      sort: "price_asc"
+    }) as unknown as LibraryProduct[];
+    assert.deepEqual(walmartOutOfStock.map((product) => product.title), [
+      "Grouped Booster Bundle",
+      "Grouped Elite Trainer Box"
+    ]);
+    assert.equal(walmartOutOfStock[0]?.bestPriceCents, 2999);
+    assert.equal(walmartOutOfStock[1]?.bestPriceCents, 5599);
+    assert.equal(catalog.libraryProductCount({ retailerId: "walmart", priceMaxCents: 4000 }), 1);
+    assert.deepEqual(catalog.libraryProductStoreFacets(), [
+      { retailerId: "amazon", retailerName: "Amazon", productCount: 1 },
+      { retailerId: "target", retailerName: "Target", productCount: 1 },
+      { retailerId: "walmart", retailerName: "Walmart", productCount: 2 }
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+test("a store filter finds every matching product beyond the first 48 groups", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    const base = Date.now() - 10_000;
+    for (let index = 0; index < 2; index += 1) {
+      catalog.upsertListing({
+        sourceConnectionId: "source_trackalacker_local",
+        source: "trackalacker",
+        sourceProductId: `deep-walmart-${index}`,
+        sourceListingId: `deep-walmart-listing-${index}`,
+        title: `Deep Walmart Match ${index}`,
+        retailerId: "walmart",
+        retailerSku: String(5_600_000_000 + index),
+        canonicalUrl: `https://www.walmart.com/ip/${5_600_000_000 + index}`,
+        listingStatus: "in_stock",
+        executionSupported: true,
+        observedPriceCents: 2000 + index,
+        currency: "USD"
+      }, base + index);
+    }
+    for (let index = 0; index < 200; index += 1) {
+      catalog.upsertListing({
+        sourceConnectionId: "source_trackalacker_local",
+        source: "trackalacker",
+        sourceProductId: `deep-target-${index}`,
+        sourceListingId: `deep-target-listing-${index}`,
+        title: `Recent Target Product ${String(index).padStart(3, "0")}`,
+        retailerId: "target",
+        retailerSku: String(96_000_000 + index),
+        canonicalUrl: `https://www.target.com/p/-/A-${96_000_000 + index}`,
+        listingStatus: "in_stock",
+        executionSupported: true,
+        observedPriceCents: 3000 + index,
+        currency: "USD"
+      }, base + 100 + index);
+    }
+    const firstPage = catalog.listLibraryProducts(48, 0) as unknown as LibraryProduct[];
+    assert.equal(firstPage.some((product) => product.title.startsWith("Deep Walmart Match")), false);
+    const matches = catalog.listLibraryProducts(48, 0, { retailerId: "walmart" }) as unknown as LibraryProduct[];
+    assert.equal(matches.length, 2);
+    assert.equal(catalog.libraryProductCount({ retailerId: "walmart" }), 2);
+    assert.equal(matches.every((product) => product.listings.some((listing) => listing.retailerId === "walmart")), true);
   } finally {
     db.close();
   }

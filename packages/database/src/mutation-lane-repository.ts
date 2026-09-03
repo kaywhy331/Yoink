@@ -29,17 +29,17 @@ export interface FutureMutationLaneReadiness {
 export class MutationLaneRepository {
   constructor(private readonly db: YoinkDatabase) {}
 
-  readiness(_now = Date.now()): {
+  readiness(now = Date.now()): {
     policyVersion: "advanced-mutation-gates-v1";
     mutationAuthorized: false;
     lanes: FutureMutationLaneReadiness[];
   } {
     const qualifications = new QualificationRepository(this.db);
     const addQualified: Record<string, boolean> = {
-      target: qualifications.targetAddQualified(),
-      walmart: qualifications.walmartAddQualified(),
-      amazon: qualifications.amazonAddQualified(),
-      bestbuy: qualifications.bestBuyAddQualified()
+      target: qualifications.targetAddQualified(now),
+      walmart: qualifications.walmartAddQualified(now),
+      amazon: qualifications.amazonAddQualified(now),
+      bestbuy: qualifications.bestBuyAddQualified(now)
     };
     const lanes: FutureMutationLaneReadiness[] = [];
     for (const [retailerId, retailerName] of RETAILERS) {

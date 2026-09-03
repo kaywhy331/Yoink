@@ -254,6 +254,64 @@ test("a reviewed cart plan creates a bounded job without any signal strategy", (
   }
 });
 
+test("the first priced signal self-heals a linked store-price cart profile before evaluation", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const listingId = db.get<{ id: string }>(
+      "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+    )?.id;
+    assert.ok(listingId);
+    engine.control.replaceStrategies([], NOW);
+    const profile = engine.control.savePurchaseProfile({
+      name: "Fresh store price",
+      targetQuantity: 1,
+      actionCeiling: "add_to_cart",
+      fulfillment: "shipping",
+      priceMode: "store_price",
+      cooldownSeconds: 0
+    }, NOW).profiles[0];
+    assert.ok(profile);
+    const configured = engine.control.createConfiguredMission({
+      contractVersion: 1,
+      listingId,
+      targetQuantity: 1,
+      maxUnitPriceCents: 7_000,
+      maxAllInCents: 7_000,
+      actionCeiling: "notify",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN",
+      quickAddProfileId: profile.id
+    }, NOW);
+    const beforePrice = engine.control.applyPurchaseProfileToMissions({
+      profileId: profile.id,
+      missionIds: [configured.mission.id],
+      confirmation: "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS"
+    }, NOW + 1);
+    assert.equal(beforePrice.propagation.updatedMissionCount, 0);
+    assert.equal(beforePrice.propagation.skipped[0]?.reasonCode, "price_unavailable");
+
+    qualifyTargetAdd(db);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    const result = engine.process(trackalackerSignal({ externalEventId: "profile-self-heal-priced-signal" }), NOW + 2);
+    assert.equal(result.decision, "qualified");
+    assert.equal(result.actionJobState, "awaiting_executor");
+    const policy = engine.control.currentPurchaseIntentPolicy(configured.mission.id, NOW + 2);
+    assert.equal(policy.actionCeiling, "add_to_cart");
+    assert.equal(policy.revision, 2);
+    const job = db.get<{ action: string; maxUnitPriceCents: number }>(
+      "SELECT action, max_unit_price_cents AS maxUnitPriceCents FROM action_jobs WHERE id = ?",
+      result.actionJobId
+    );
+    assert.equal(job?.action, "add_to_cart");
+    assert.equal(job?.maxUnitPriceCents, 6_500);
+  } finally {
+    db.close();
+  }
+});
+
 test("a typed Got it close-out commits user-reported spend and satisfies only the intended quantity", () => {
   const { db, engine } = seededEngine();
   try {
@@ -282,18 +340,43 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
     assert.equal(spend.reservationForJob(created.actionJobId)?.status, "active");
     db.run("UPDATE action_jobs SET state = 'confirmed' WHERE id = ?", created.actionJobId);
     spend.releaseForJob(created.actionJobId, "add_to_cart_confirmed_without_order", NOW + 1_000);
+    const phaseLatency = {
+      leaseToCartReadyMs: 8_240,
+      leaseToBaselineMs: 2_500,
+      baselineToOfferMs: 4_000,
+      offerToClickMs: 110,
+      clickToSettleMs: 410,
+      clickToCartReadyMs: 1_630,
+      settleToCartReadyMs: 1_220
+    };
+    db.run(
+      `INSERT INTO action_events(id, job_id, state, reason_code, message, evidence_json, created_at)
+       VALUES ('action_event_phase_latency_fixture', ?, 'confirmed', 'target_add_confirmed',
+         'Fixture exact cart delta.', ?, ?)`,
+      created.actionJobId,
+      JSON.stringify({ latency: phaseLatency }),
+      new Date(NOW + 1_100).toISOString()
+    );
 
     const signals = new SignalRepository(db);
+    const reviewedMaximumCents = Number(db.get<{ maximum: number }>(
+      "SELECT max_order_total_cents AS maximum FROM action_jobs WHERE id = ?",
+      created.actionJobId
+    )?.maximum);
+    const reportedTotalCents = reviewedMaximumCents + 500;
     const recorded = signals.reportCartOutcome(
       created.actionJobId,
       "got_it",
       "I_REVIEWED_CHECKOUT_RESULT",
-      7_425,
+      reportedTotalCents,
       "Manual checkout complete",
       NOW + 2_000
     );
     assert.equal(recorded.disposition, "recorded");
     assert.equal(recorded.outcome, "got_it");
+    assert.equal(recorded.overCap, true);
+    assert.equal(recorded.overCapAmountCents, 500);
+    assert.equal(recorded.reviewedMaximumCents, reviewedMaximumCents);
     assert.equal(recorded.reservationStatus, "committed");
     assert.deepEqual({ ...db.get<{ fulfilled: number; status: string }>(
       "SELECT fulfilled_quantity AS fulfilled, status FROM missions WHERE id = ?",
@@ -303,7 +386,7 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
       `SELECT status, committed_amount_cents AS amount
        FROM spend_reservations WHERE action_job_id = ?`,
       created.actionJobId
-    ) }, { status: "committed", amount: 7_425 });
+    ) }, { status: "committed", amount: reportedTotalCents });
     assert.equal(db.get<{ reason: string }>(
       `SELECT reason_code AS reason FROM spend_ledger_entries
        WHERE action_job_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
@@ -311,28 +394,53 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
     )?.reason, "user_reported_order_committed");
     const analytics = new ActionAnalyticsRepository(db);
     const snapshot = analytics.snapshot(NOW + 2_001);
-    assert.equal(snapshot.spend.committedCents, 7_425);
+    assert.equal(snapshot.spend.committedCents, reportedTotalCents);
+    assert.equal(snapshot.spend.overCapCount, 1);
+    assert.equal(snapshot.spend.overCapAmountCents, 500);
     assert.equal(snapshot.spend.reportedOrders, 1);
     assert.equal(snapshot.spend.savingsCoveredOrders, 1);
     assert.equal(snapshot.spend.savingsCoverage, "complete");
     const csv = analytics.csv(NOW + 2_001);
     assert.match(csv, /^section,metric,retailer,value,unit,coverage/m);
     assert.match(csv, /funnel,closed,,1,actions,complete/);
-    assert.match(csv, /spend,committed_cents,,7425,cents,USD/);
+    assert.match(csv, new RegExp(`spend,committed_cents,,${reportedTotalCents},cents,USD`));
+    assert.match(csv, /spend,over_cap_orders,,1,orders,user_reported/);
+    assert.match(csv, /spend,over_cap_amount_cents,,500,cents,user_reported/);
     assert.match(csv, /savings,vs_msrp_cents,/);
     assert.match(csv, /latency,observedToReceivedMs_p50,/);
+    assert.match(csv, /latency,leaseToBaselineMs_p50,,2500,milliseconds,1 samples/);
+    assert.match(csv, /latency,settleToCartReadyMs_p95,,1220,milliseconds,1 samples/);
     assert.equal(db.get<{ reason: string }>(
       `SELECT reason_code AS reason FROM action_events
        WHERE job_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
       created.actionJobId
     )?.reason, "user_reported_order");
+    const reportedEvidence = db.get<{ overCap: number; overCapAmount: number; reviewedMaximum: number }>(
+      "SELECT json_extract(evidence_json, '$.overCap') AS overCap, json_extract(evidence_json, '$.overCapAmountCents') AS overCapAmount, json_extract(evidence_json, '$.reviewedMaximumCents') AS reviewedMaximum FROM action_events WHERE job_id = ? AND reason_code = 'user_reported_order'",
+      created.actionJobId
+    );
+    assert.deepEqual({ ...reportedEvidence }, {
+      overCap: 1,
+      overCapAmount: 500,
+      reviewedMaximum: reviewedMaximumCents
+    });
+    assert.equal(db.get<{ reason: string }>(
+      "SELECT reason_code AS reason FROM audit_events WHERE correlation_id = ? AND event_type = 'user_reported_spend_committed'",
+      created.actionJobId
+    )?.reason, "user_reported_order_over_cap");
     const listed = signals.listJobs(20).find((job) => job.id === created.actionJobId);
     assert.equal(listed?.statusLabel, "Got it");
     assert.equal(listed?.stage, "closed");
     assert.equal(listed?.userReportOutcome, "got_it");
-    assert.equal(listed?.userReportedTotalCents, 7_425);
+    assert.equal(listed?.userReportedTotalCents, reportedTotalCents);
     assert.equal(listed?.decisionReasonCode, "user_reported_order");
     assert.equal(typeof (listed?.latency as Record<string, unknown>)?.observedToReceivedMs, "number");
+    assert.deepEqual({ ...(listed?.latency as Record<string, unknown>) }, {
+      observedToReceivedMs: (listed?.latency as Record<string, unknown>)?.observedToReceivedMs,
+      receivedToJobMs: (listed?.latency as Record<string, unknown>)?.receivedToJobMs,
+      jobToLeaseMs: null,
+      ...phaseLatency
+    });
     const insights = signals.actionInsights() as {
       stages: Record<string, number>;
       latency: { hops: Record<string, { samples: number; p50Ms: number | null; p95Ms: number | null }> };
@@ -340,12 +448,16 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
     assert.equal(insights.stages.closed, 1);
     assert.equal(insights.latency.hops.observedToReceivedMs?.samples, 1);
     assert.equal(Number.isSafeInteger(insights.latency.hops.observedToReceivedMs?.p50Ms), true);
+    assert.deepEqual(insights.latency.hops.leaseToBaselineMs, { samples: 1, p50Ms: 2_500, p95Ms: 2_500 });
+    assert.deepEqual(insights.latency.hops.baselineToOfferMs, { samples: 1, p50Ms: 4_000, p95Ms: 4_000 });
+    assert.deepEqual(insights.latency.hops.offerToClickMs, { samples: 1, p50Ms: 110, p95Ms: 110 });
+    assert.deepEqual(insights.latency.hops.settleToCartReadyMs, { samples: 1, p50Ms: 1_220, p95Ms: 1_220 });
 
     const replay = signals.reportCartOutcome(
       created.actionJobId,
       "got_it",
       "I_REVIEWED_CHECKOUT_RESULT",
-      7_425,
+      reportedTotalCents,
       "",
       NOW + 3_000
     );
@@ -358,7 +470,7 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
       created.actionJobId,
       "got_it",
       "I_REVIEWED_CHECKOUT_RESULT",
-      7_500,
+      reportedTotalCents + 1,
       "",
       NOW + 4_000
     ), /different checkout result/);
@@ -687,6 +799,62 @@ test("closing an offer-mismatch incident permits a legitimate newer re-signal", 
     assert.notEqual(second.incidentId, first.incidentId);
     assert.notEqual(second.actionJobId, first.actionJobId);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 2);
+  } finally {
+    db.close();
+  }
+});
+
+test("the compact user action handoff tracks active stages, prioritizes review, and clears after close-out", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const created = engine.process(trackalackerSignal({ externalEventId: "compact-action-handoff" }), NOW);
+    const signals = new SignalRepository(db);
+
+    db.run("UPDATE action_jobs SET state = 'awaiting_executor' WHERE id = ?", created.actionJobId);
+    assert.deepEqual(signals.actionHandoffSummary(NOW + 1_000), {
+      contractVersion: 1,
+      generatedAt: new Date(NOW + 1_000).toISOString(),
+      counts: { queued: 1, checking: 0, readyToCheckout: 0, needsYou: 0 },
+      primary: null
+    });
+
+    db.run("UPDATE action_jobs SET state = 'adding' WHERE id = ?", created.actionJobId);
+    assert.deepEqual(signals.actionHandoffSummary(NOW + 2_000).counts, {
+      queued: 0,
+      checking: 1,
+      readyToCheckout: 0,
+      needsYou: 0
+    });
+
+    db.run("UPDATE action_jobs SET state = 'confirmed' WHERE id = ?", created.actionJobId);
+    const ready = signals.actionHandoffSummary(NOW + 3_000);
+    assert.equal(ready.counts.readyToCheckout, 1);
+    assert.equal(ready.primary?.id, created.actionJobId);
+    assert.equal(ready.primary?.stage, "ready_to_checkout");
+    assert.equal(ready.primary?.statusLabel, "Ready to check out");
+    assert.equal(ready.primary?.retailerId, "target");
+    assert.equal(ready.primary?.retailerSku, "95280894");
+    assert.equal(ready.primary?.title, "Pokemon Midnight Elite Trainer Box");
+
+    db.run("UPDATE action_jobs SET state = 'manual_review' WHERE id = ?", created.actionJobId);
+    const review = signals.actionHandoffSummary(NOW + 4_000);
+    assert.equal(review.counts.needsYou, 1);
+    assert.equal(review.primary?.stage, "needs_you");
+    assert.equal(review.primary?.statusLabel, "Needs you");
+
+    db.run(
+      `INSERT INTO action_events(id, job_id, state, reason_code, message, evidence_json, created_at)
+       VALUES ('action_event_compact_handoff_closed', ?, 'manual_review',
+         'user_reported_missed_it', 'Fixture close-out.', '{}', ?)`,
+      created.actionJobId,
+      new Date(NOW + 5_000).toISOString()
+    );
+    assert.deepEqual(signals.actionHandoffSummary(NOW + 6_000), {
+      contractVersion: 1,
+      generatedAt: new Date(NOW + 6_000).toISOString(),
+      counts: { queued: 0, checking: 0, readyToCheckout: 0, needsYou: 0 },
+      primary: null
+    });
   } finally {
     db.close();
   }

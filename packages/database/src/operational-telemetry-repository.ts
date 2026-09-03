@@ -33,6 +33,7 @@ export const OPERATIONAL_ROUTE_KEYS = Object.freeze([
   "user.identity",
   "user.attribution",
   "user.settings",
+  "user.actions",
   "user.privacy",
   "user.other",
   "admin.snapshot",

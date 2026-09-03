@@ -3,33 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Yoink Companion settings</title>
+  <title>Extension settings</title>
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <main>
     <header><img src="yoink-icon.svg" alt="" width="42" height="42"><div><p>Yoink Companion</p><h1>Extension settings</h1></div></header>
     <section aria-labelledby="connectionTitle">
-      <div class="heading"><div><p class="eyebrow">Connection</p><h2 id="connectionTitle">Browser pairing</h2></div><span id="pairState" class="state">Checking…</span></div>
+      <div class="heading"><div><p class="eyebrow">Chrome companion</p><h2 id="connectionTitle">Browser pairing</h2></div><span id="pairState" class="state">Checking…</span></div>
       <p>The pairing connects this Chrome profile to your local Yoink account. Store access is managed separately below.</p>
-      <a class="button quiet" id="openYoink" href="#">Open Yoink</a>
+      <a class="button quiet" id="openYoink" href="#" target="_blank" rel="noopener">Open Yoink</a>
     </section>
-    <section id="store-access" aria-labelledby="accessTitle">
+    <section aria-labelledby="accessTitle">
       <div class="heading"><div><p class="eyebrow">Permissions</p><h2 id="accessTitle">Store access</h2></div></div>
       <p>Yoink asks for access only after you choose a store action. You can review or remove granted access here.</p>
       <div id="permissionList" class="permission-list"></div>
     </section>
-    <section id="lane-readiness" aria-labelledby="laneReadinessTitle">
-      <div class="heading"><div><p class="eyebrow">No-click checks</p><h2 id="laneReadinessTitle">Store lane verification</h2></div><span id="laneReadinessState" class="state">Checking…</span></div>
-      <p>Re-run the guarded no-click rehearsal on each store’s prior passing product. This never clicks Add to cart.</p>
-      <div id="laneReadinessList" class="permission-list"></div>
-      <button class="button" id="reverifyLanes" type="button" disabled>Re-verify available lanes</button>
-      <p id="reverificationResult" class="result" role="status" aria-live="polite"></p>
+    <section aria-labelledby="laneReadinessTitle">
+      <div class="heading"><div><p class="eyebrow">No-click checks</p><h2 id="laneReadinessTitle">Store checks</h2></div><span class="state-actions"><span id="laneReadinessState" class="state">Checking…</span><button class="button quiet" id="laneReadinessRetry" type="button" hidden>Retry</button></span></div>
+      <p>Check one store at a time using its prior passing product.</p>
+      <div class="lane-readiness-head" aria-hidden="true"><span>Store</span><span>Status</span><span>Action</span></div>
+      <div id="laneReadinessList" class="lane-readiness-list"></div>
     </section>
     <section aria-labelledby="privacyTitle">
-      <div class="heading"><div><p class="eyebrow">Privacy</p><h2 id="privacyTitle">Local companion data</h2></div></div>
+      <div class="heading"><div><p class="eyebrow">Privacy</p><h2 id="privacyTitle">Local Chrome companion data</h2></div></div>
       <p>Delete pairing credentials, cached evidence, handoffs, queues, and settings stored by this extension. Server-side account data is not deleted.</p>
-      <button class="button danger" id="deleteLocalData" type="button">Delete local extension data</button>
+      <div class="delete-actions">
+        <button class="button danger" id="deleteLocalData" type="button">Delete local extension data</button>
+        <button class="button quiet" id="cancelDeleteLocalData" type="button" hidden>Cancel</button>
+      </div>
       <p id="deletionResult" class="result" role="status" aria-live="polite"></p>
     </section>
   </main>

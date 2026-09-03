@@ -76,7 +76,7 @@ async function eventually(assertion: () => void, attempts = 100): Promise<void> 
   throw lastError;
 }
 
-test("health and the admin Access workspace expose only safe workload capability state", async () => {
+test("health and scoped admin workspaces expose only safe workload capability state", async () => {
   const rawActorIds = ["delivery_worker_private", "eligibility_worker_private", "principal_worker_private"];
   const registry = loadInternalServiceCapabilityRegistry(JSON.stringify({
     [rawActorIds[0]!]: "internal.delivery",
@@ -114,7 +114,11 @@ test("health and the admin Access workspace expose only safe workload capability
   });
   Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
   Object.defineProperty(browser, "scrollTo", { configurable: true, value: () => undefined });
-  Object.defineProperty(browser, "confirm", { configurable: true, value: () => true });
+  Object.defineProperty(browser, "confirm", { configurable: true, value: () => { throw new Error("Native confirm must not run."); } });
+  Object.defineProperty(browser, "YoinkDialogs", {
+    configurable: true,
+    value: { confirmDialog: async () => ({ confirmed: true, note: "" }) }
+  });
   Object.defineProperty(browser, "CSS", {
     configurable: true,
     value: { escape: (value: string) => String(value).replace(/[^A-Za-z0-9_-]/g, "\\$&") }
@@ -352,14 +356,22 @@ test("health and the admin Access workspace expose only safe workload capability
     await browser.eval(`(async () => { ${script}\n })()`);
     await eventually(() => assert.match(
       browser.document.querySelector("#internalServiceGate")?.textContent ?? "",
-      /3 SCOPED/
+      /3 scoped/i
     ));
     const workloadText = browser.document.querySelector("#internalServiceList")?.textContent ?? "";
     assert.match(workloadText, /internal\.delivery/);
     assert.match(workloadText, /internal\.eligibility/);
     assert.match(workloadText, /internal\.principal/);
     assert.equal(rawActorIds.some((actorId) => workloadText.includes(actorId)), false);
-    assert.match(browser.document.querySelector("#postgresCutoverGate")?.textContent ?? "", /QUALIFICATION ONLY/);
+
+    (browser.document.querySelector('[data-admin-group="maintainer"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.location.hash, "#community/sharing"));
+    (browser.document.querySelector('[data-community-view="data"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.location.hash, "#community/data"));
+    await eventually(() => assert.match(
+      browser.document.querySelector("#postgresCutoverGate")?.textContent ?? "",
+      /Qualification only/i
+    ));
     const cutoverText = browser.document.querySelector("#postgresCutoverChecklist")?.textContent ?? "";
     assert.match(cutoverText, /One-shot archive import/);
     assert.match(cutoverText, /Tenant-scope classification/);
@@ -405,7 +417,7 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /partial graphs and inconsistent replays fail closed/);
     assert.match(cutoverText, /Server-bound actionable offer incidents/);
     assert.match(cutoverText, /Server-bound post-incident decisions/);
-    assert.match(cutoverText, /Server-bound signal mission binding/);
+    assert.match(cutoverText, /Server-side plan binding/);
     assert.match(cutoverText, /Server-bound strategy and purchase-policy evaluation/);
     assert.match(cutoverText, /ninth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /matched and price-required evaluations make a zero-write handoff/);
@@ -421,7 +433,7 @@ test("health and the admin Access workspace expose only safe workload capability
     assert.match(cutoverText, /fourteenth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /Server-bound Walmart, Amazon, and Best Buy qualification/);
     assert.match(cutoverText, /fifteenth independently inactive NOLOGIN boundary/);
-    assert.match(cutoverText, /Server-bound mission-policy revision/);
+    assert.match(cutoverText, /Server-side rule policy revision/);
     assert.match(cutoverText, /sixteenth independently inactive NOLOGIN boundary/);
     assert.match(cutoverText, /Server-bound TrackaLacker source status/);
     assert.match(cutoverText, /seventeenth independently inactive NOLOGIN boundary/);

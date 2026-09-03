@@ -43,6 +43,7 @@ test("catalog changes are normalized, deduplicated, reviewed, and only then appl
     const proposed = governance.proposeListing({ ...listing(), rawDom: "DO_NOT_PERSIST" } as never, NOW);
     assert.equal(proposed.disposition, "created");
     assert.equal(proposed.proposal.status, "pending");
+    assert.equal(proposed.proposal.proposerDisplayName, "Local user");
     assert.equal(JSON.stringify(proposed.proposal.payload).includes("DO_NOT_PERSIST"), false);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM listings")?.count, 0);
 
@@ -111,6 +112,31 @@ test("ordinary users may propose but cannot review catalog changes", () => {
     runWithRequestScope(USER_SCOPE, () => {
       assert.equal(governance.listForReview().length, 1);
     });
+  } finally {
+    db.close();
+  }
+});
+
+test("actor display names resolve through the tenant users table without a new table", () => {
+  const db = new YoinkDatabase();
+  try {
+    db.exec(`
+      INSERT INTO users(id, tenant_id, display_name, created_at, status)
+        VALUES ('user_reviewer_fixture', 'tenant_local', 'Reviewer Fixture', '2026-09-01T00:00:00.000Z', 'active');
+    `);
+    const governance = new CatalogGovernanceRepository(db);
+    const names = runWithRequestScope(LOCAL_REQUEST_SCOPE, () => governance.actorDisplayNames([
+      LOCAL_REQUEST_SCOPE.actorId,
+      "user_reviewer_fixture",
+      "user_reviewer_fixture",
+      "",
+      "actor_unknown"
+    ]));
+    assert.deepEqual(names, {
+      [LOCAL_REQUEST_SCOPE.actorId]: "Local user",
+      user_reviewer_fixture: "Reviewer Fixture"
+    });
+    assert.deepEqual(runWithRequestScope(USER_SCOPE, () => governance.actorDisplayNames([])), {});
   } finally {
     db.close();
   }

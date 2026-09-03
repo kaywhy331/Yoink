@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { once } from "node:events";
 import test from "node:test";
+import { createActionJobAvailabilityPulse } from "../apps/api/src/action-job-availability.js";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import { emptyInternalServiceCapabilityProjection } from "../apps/api/src/internal-service-capabilities.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
@@ -68,14 +69,14 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const page = await fetch(`${baseUrl}/`);
     assert.equal(page.status, 200);
     const pageBody = await page.text();
-    assert.match(pageBody, /My purchase assistant/);
-    assert.match(pageBody, /Purchase plans/);
-    assert.match(pageBody, /Products, price, and purchase preferences/);
+    assert.match(pageBody, /Purchase assistant/);
+    assert.match(pageBody, /<h2>Plans<\/h2>/);
+    assert.match(pageBody, /Yoink is checking what needs you/);
     assert.match(pageBody, /Spending limits/);
-    assert.match(pageBody, /Help improve store reading/);
-    assert.match(pageBody, /never fills a field, changes a purchase plan, qualifies a store, or clicks anything/);
-    assert.match(pageBody, /Review before anything is enabled/);
-    assert.match(pageBody, /Server check/);
+    assert.doesNotMatch(pageBody, /Store-reading review|Restart worker|Deployment reference/);
+    assert.match(pageBody, /Checkout stays manual/);
+    assert.match(pageBody, /<h2>Set up this purchase<\/h2>/);
+    assert.match(pageBody, /Price check/);
     assert.match(pageBody, /Create purchase plan/);
     assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
 
@@ -85,26 +86,19 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminPageBody, /Admin control center/);
     assert.match(adminPageBody, /Target add-only qualification/);
     assert.match(adminPageBody, /Adapter repair queue/);
-    assert.match(adminPageBody, /non-executable stable-attribute suggestion/);
     assert.match(adminPageBody, /Catalog review queue/);
     assert.match(adminPageBody, /Merge, split, and compensation/);
+    assert.match(adminPageBody, /Normalized missing-field previews/);
+    assert.match(adminPageBody, /Restart worker/);
     assert.match(adminPageBody, /Privacy-bounded service health/);
-    assert.match(adminPageBody, /raw URLs, request bodies, product identifiers/);
-    assert.match(adminPageBody, /High-risk change control/);
-    assert.match(adminPageBody, /Approval never applies a change by itself/);
+    assert.match(adminPageBody, /Loading protected changes/);
     assert.match(adminPageBody, /Durable maintenance/);
-    assert.match(adminPageBody, /Durable evaluation with closed browser mutation/);
-    assert.match(adminPageBody, /latest eligible assertion counts/);
-    assert.match(adminPageBody, /renews its credential without asking you to pair again/);
     assert.match(adminPageBody, /Internal service identities/);
-    assert.match(adminPageBody, /Unconfigured services are denied/);
     assert.match(adminPageBody, /PostgreSQL cutover/);
-    assert.match(adminPageBody, /One source of truth, never dual write/);
     assert.match(adminPageBody, /Howl affiliate stores/);
-    assert.match(adminPageBody, /Only destinations matching this directory use the Howl protocol/);
-    assert.match(adminPageBody, /Signal simulator/);
-    assert.match(adminPageBody, /Exact product URL/);
-    assert.match(adminPageBody, /Always test-only: records the dry-run decision/);
+    assert.match(adminPageBody, /Call simulator/);
+    assert.match(adminPageBody, /Product URL/);
+    assert.match(adminPageBody, /Test only: records the decision; creates no plan, action, spend, or cart change/);
     const adminScript = await fetch(`${baseUrl}/app.js`).then((response) => response.text());
     assert.match(adminScript, /\/api\/v1\/admin\/operations\/telemetry/);
     assert.match(adminScript, /\/api\/v1\/admin\/signals\/simulate/);
@@ -123,10 +117,16 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Observed range/);
     assert.match(adminScript, /Ready for candidate evaluation/);
     assert.match(adminScript, /worker-generated candidate/);
-    assert.match(adminPageBody, /may be compiled into one bounded multi-field recipe candidate/);
-    assert.match(adminPageBody, /availability, unit price, seller, fulfillment, and add control/);
     assert.match(adminScript, /deduplicated oracle passes/);
     assert.match(adminScript, /public anti-Sybil quorum pending/);
+    const statusScriptResponse = await fetch(`${baseUrl}/status.js`);
+    assert.equal(statusScriptResponse.status, 200);
+    assert.match(statusScriptResponse.headers.get("content-type") || "", /text\/javascript/);
+    assert.match(await statusScriptResponse.text(), /YoinkStatus/);
+    const statusStyleResponse = await fetch(`${baseUrl}/status.css`);
+    assert.equal(statusStyleResponse.status, 200);
+    assert.match(statusStyleResponse.headers.get("content-type") || "", /text\/css/);
+    assert.match(await statusStyleResponse.text(), /inline-status/);
     assert.match(adminScript, /multi-contributor regression SLO auto-kill/);
     assert.match(adminScript, /Next gate: 2 contributor-deduplicated clean passes on 2 exact SKUs/);
     assert.match(adminScript, /25% deterministic cohort/);
@@ -136,9 +136,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /Application: never/);
     assert.match(adminPageBody, /Normalized missing-field previews/);
     assert.match(adminPageBody, /Regional conflict operations/);
-    assert.match(adminPageBody, /Local identities never count as independent public accounts/);
+    assert.match(adminPageBody, /Fresh service-attested public evidence/);
     assert.match(adminScript, /Regional SLO:/);
-    assert.match(adminScript, /disable_read_only_distribution_only|read-only recipe/);
+    assert.match(adminScript, /regional conflict SLO/i);
     assert.match(adminScript, /promotionReady \? "" : "disabled"/);
     assert.match(adminScript, /automatic rotation enabled/);
     assert.match(adminScript, /pinned production transport/);
@@ -161,14 +161,15 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(adminScript, /missions, actions, and inbox lifecycle remain untouched/);
     assert.match(adminScript, /Server-bound post-incident decisions/);
     assert.match(adminScript, /Trusted exact sources project mission binding or creation requirements with zero writes/);
-    assert.match(adminScript, /Server-bound signal mission binding/);
+    assert.match(adminScript, /Server-side plan binding/);
+    assert.doesNotMatch(adminScript, /Server-bound signal mission binding|Server-bound mission-policy revision/);
     assert.match(adminScript, /byte-identical SQLite policy hashes/);
     assert.match(adminScript, /creates only a missing initial append-only intent policy/);
     assert.match(adminScript, /Server-bound bounded configuration writers/);
     assert.match(adminScript, /Server-bound Target qualification and settings activation/);
     assert.match(adminScript, /Server-bound source-trust configuration/);
     assert.match(adminScript, /Server-bound Walmart, Amazon, and Best Buy qualification/);
-    assert.match(adminScript, /Server-bound mission-policy revision/);
+    assert.match(adminScript, /Server-side rule policy revision/);
     assert.match(adminScript, /global action pause\/resume, guardrail settings, and periodic spend caps/);
     assert.match(adminScript, /twenty-six independently qualified signal boundaries proven/);
     assert.match(adminScript, /Server-bound TrackaLacker source sync/);
@@ -1003,7 +1004,6 @@ test("the loopback API serves the control center and processes a dry-run signal"
           id: target.id,
           enabled: true,
           maxUnitPriceCents: 6999,
-          sellerPolicy: "first_party_only",
           fulfillment: "shipping"
         }],
         policy: {
@@ -1012,7 +1012,6 @@ test("the loopback API serves the control center and processes a dry-run signal"
           actionCeiling: "add_to_cart",
           decisionMode: "purchase_intent",
           maxSignalAgeSeconds: 120,
-          substitutionPolicy: "exact_only",
           cooldownSeconds: 60,
           expiresAt: new Date(Date.now() + 86_400_000).toISOString()
         }
@@ -1020,11 +1019,16 @@ test("the loopback API serves the control center and processes a dry-run signal"
     });
     assert.equal(updateIntent.status, 200);
     const updatedIntent = await updateIntent.json() as {
-      purchaseIntent: { intentPolicy: { revision: number; maxAllInCents: number; decisionMode: string } };
+      purchaseIntent: {
+        intentPolicy: { revision: number; maxAllInCents: number; decisionMode: string; substitutionPolicy: string };
+        targets: Array<{ sellerPolicy: string }>;
+      };
     };
     assert.equal(updatedIntent.purchaseIntent.intentPolicy.revision, 2);
     assert.equal(updatedIntent.purchaseIntent.intentPolicy.maxAllInCents, 19_000);
     assert.equal(updatedIntent.purchaseIntent.intentPolicy.decisionMode, "purchase_intent");
+    assert.equal(updatedIntent.purchaseIntent.intentPolicy.substitutionPolicy, "exact_only");
+    assert.equal(updatedIntent.purchaseIntent.targets[0]?.sellerPolicy, "first_party_only");
     const staleUpdate = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(intentId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
@@ -1192,7 +1196,13 @@ test("the user API deletes a purchase plan only after explicit confirmation", as
     listing.listing.variantId,
     listing.listing.id
   ).mission.id;
-  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "0.1.0-test" });
+  const actionJobAvailability = createActionJobAvailabilityPulse();
+  const server = createYoinkServer({
+    db,
+    webRoot: join(process.cwd(), "apps", "web"),
+    version: "0.1.0-test",
+    actionJobAvailability
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address() as AddressInfo;
@@ -1205,6 +1215,7 @@ test("the user API deletes a purchase plan only after explicit confirmation", as
     });
     assert.equal(unconfirmed.status, 400);
     assert.equal((await unconfirmed.json() as { error: string }).error, "purchase_intent_delete_confirmation_required");
+    assert.equal(actionJobAvailability.currentVersion(), 0);
 
     const deleted = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(missionId)}`, {
       method: "DELETE",
@@ -1212,6 +1223,7 @@ test("the user API deletes a purchase plan only after explicit confirmation", as
       body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
     });
     assert.equal(deleted.status, 200);
+    assert.equal(actionJobAvailability.currentVersion(), 1);
     assert.deepEqual((await deleted.json() as { deletion: Record<string, unknown> }).deletion, {
       id: missionId,
       deleted: true,
@@ -1261,7 +1273,13 @@ test("the loopback API rejects a foreign browser origin for mutations", async ()
 
 test("Chrome pairing uses a one-time code and authenticated heartbeat", async () => {
   const db = new YoinkDatabase();
-  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "test" });
+  const actionJobAvailability = createActionJobAvailabilityPulse();
+  const server = createYoinkServer({
+    db,
+    webRoot: join(process.cwd(), "apps", "web"),
+    version: "test",
+    actionJobAvailability
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address() as AddressInfo;
@@ -1414,6 +1432,22 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     });
     assert.equal(nextJob.status, 200);
     assert.deepEqual(await nextJob.json(), { job: null, reason: "shadow_mode" });
+
+    const handoffReconciliation = await fetch(`${baseUrl}/api/v1/devices/self/action-handoffs/reconcile`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: extensionOrigin,
+        Authorization: `Bearer ${paired.token}`
+      },
+      body: JSON.stringify({ contractVersion: 1, jobIds: ["job_missing_fixture"] })
+    });
+    assert.equal(handoffReconciliation.status, 200);
+    assert.deepEqual(await handoffReconciliation.json(), {
+      contractVersion: 1,
+      availabilityVersion: 0,
+      items: []
+    });
 
     const catalogTimestamp = new Date().toISOString();
     db.run(
@@ -1701,6 +1735,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       };
     };
     assert.equal(readySnapshot.targetQualification.qualificationEvidenceReady, true);
+    const availabilityBeforeActivation = actionJobAvailability.currentVersion();
     const activation = await fetch(`${baseUrl}/api/v1/qualifications/target-add/activate`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
@@ -1711,9 +1746,14 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       })
     });
     assert.equal(activation.status, 200);
-    const activationBody = await activation.json() as { readiness: { mutationAuthorized: boolean; addToCartQualified: boolean } };
+    assert.equal(actionJobAvailability.currentVersion(), availabilityBeforeActivation + 1);
+    const activationBody = await activation.json() as {
+      readiness: { mutationAuthorized: boolean; addToCartQualified: boolean };
+      profileReconciliation: { retailerId: string };
+    };
     assert.equal(activationBody.readiness.addToCartQualified, true);
     assert.equal(activationBody.readiness.mutationAuthorized, true);
+    assert.equal(activationBody.profileReconciliation.retailerId, "target");
     const liveHealth = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(liveHealth.executionMode, "live");
     assert.equal(liveHealth.actionsPaused, false);
@@ -1796,9 +1836,11 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(walmartActivation.status, 200);
     const walmartActivationBody = await walmartActivation.json() as {
       readiness: { addToCartQualified: boolean; mutationAuthorized: boolean };
+      profileReconciliation: { retailerId: string };
     };
     assert.equal(walmartActivationBody.readiness.addToCartQualified, true);
     assert.equal(walmartActivationBody.readiness.mutationAuthorized, true);
+    assert.equal(walmartActivationBody.profileReconciliation.retailerId, "walmart");
     const dualLaneHealth = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(dualLaneHealth.targetAddExecutionEnabled, true);
     assert.equal(dualLaneHealth.walmartAddExecutionEnabled, true);
@@ -1870,9 +1912,11 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(amazonActivation.status, 200);
     const amazonActivationBody = await amazonActivation.json() as {
       readiness: { addToCartQualified: boolean; mutationAuthorized: boolean };
+      profileReconciliation: { retailerId: string };
     };
     assert.equal(amazonActivationBody.readiness.addToCartQualified, true);
     assert.equal(amazonActivationBody.readiness.mutationAuthorized, true);
+    assert.equal(amazonActivationBody.profileReconciliation.retailerId, "amazon");
     const tripleLaneHealth = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(tripleLaneHealth.amazonAddExecutionEnabled, true);
 
@@ -1940,9 +1984,11 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(bestBuyActivation.status, 200);
     const bestBuyActivationBody = await bestBuyActivation.json() as {
       readiness: { addToCartQualified: boolean; mutationAuthorized: boolean };
+      profileReconciliation: { retailerId: string };
     };
     assert.equal(bestBuyActivationBody.readiness.addToCartQualified, true);
     assert.equal(bestBuyActivationBody.readiness.mutationAuthorized, true);
+    assert.equal(bestBuyActivationBody.profileReconciliation.retailerId, "bestbuy");
     const fourLaneHealth = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(fourLaneHealth.bestBuyAddExecutionEnabled, true);
 

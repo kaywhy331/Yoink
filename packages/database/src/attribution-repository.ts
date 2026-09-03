@@ -206,7 +206,11 @@ export class AttributionRepository {
     }
   }
 
-  listReceipts(limit = 100): Array<Record<string, unknown>> {
+  listReceipts(limit = 100, offset = 0, search = ""): Array<Record<string, unknown>> {
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const query = cleanText(search, 200);
+    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
     return this.db.all(
       `SELECT ar.id, ar.job_id AS jobId, ar.retailer_id AS retailerId,
               ar.provider, ar.outcome, ar.reason_code AS reasonCode,
@@ -216,9 +220,55 @@ export class AttributionRepository {
        JOIN action_jobs aj ON aj.id = ar.job_id
        JOIN listings l ON l.id = aj.listing_id
        JOIN variants v ON v.id = l.variant_id
-       WHERE ar.user_id = ? ORDER BY ar.created_at DESC LIMIT ?`,
+       WHERE ar.user_id = ? AND (? = ''
+         OR ar.id LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR ar.retailer_id LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR ar.provider LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR ar.outcome LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR ar.reason_code LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)
+       ORDER BY ar.created_at DESC, ar.id DESC LIMIT ? OFFSET ?`,
       currentRequestScope().userId,
-      Math.max(1, Math.min(1_000, Math.floor(limit)))
+      query,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      safeLimit,
+      safeOffset
     );
+  }
+
+  receiptCount(search = ""): number {
+    const query = cleanText(search, 200);
+    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+    return Number(this.db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM attribution_receipts ar
+       JOIN action_jobs aj ON aj.id = ar.job_id
+       JOIN listings l ON l.id = aj.listing_id
+       JOIN variants v ON v.id = l.variant_id
+       WHERE ar.user_id = ? AND (? = ''
+         OR ar.id LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR ar.retailer_id LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR ar.provider LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR ar.outcome LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR ar.reason_code LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)`,
+      currentRequestScope().userId,
+      query,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern
+    )?.count ?? 0);
   }
 }

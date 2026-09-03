@@ -35,7 +35,13 @@ test("initial migration creates the normalized graph and safe local defaults", (
         'observer_recipe_lifecycle_events', 'inbox_messages',
         'hosted_delivery_receipts', 'hosted_request_nonces'
       )`)?.count, 16);
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM authorization_permissions")?.count, 28);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM authorization_permissions")?.count, 32);
+    assert.equal(db.get<{ status: string }>("SELECT status FROM users WHERE id = ?", LOCAL_USER_ID)?.status, "active");
+    assert.equal(db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM authorization_permissions
+      WHERE id IN ('admin.users.read', 'admin.users.support', 'admin.users.manage')`)?.count, 3);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM authorization_permissions WHERE id = 'admin.maintainer'"
+    )?.count, 1);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM authorization_roles")?.count, 7);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM authorization_memberships WHERE user_id = ? AND role_id = 'yoink_user' AND status = 'active'",
@@ -400,6 +406,76 @@ test("migration 57 retires prior Best Buy qualification after rendered challenge
       assert.equal(upgraded.get<{ status: string }>(
         "SELECT status FROM retailer_adapter_qualifications WHERE user_id = 'user_local' AND retailer_id = 'bestbuy'"
       )?.status, "retired");
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("migration 58 adds active user lifecycle state and scoped support permissions", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-admin-user-support-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new YoinkDatabase(filePath);
+    legacy.run(`DELETE FROM authorization_role_permissions
+      WHERE permission_id IN ('admin.users.read', 'admin.users.support', 'admin.users.manage')`);
+    legacy.run(`DELETE FROM authorization_permissions
+      WHERE id IN ('admin.users.read', 'admin.users.support', 'admin.users.manage')`);
+    legacy.run("ALTER TABLE users DROP COLUMN status");
+    legacy.run("DELETE FROM schema_migrations WHERE version = 58");
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ name: string }>(
+        "SELECT name FROM schema_migrations WHERE version = 58"
+      )?.name, "admin_user_support_and_lifecycle");
+      assert.equal(upgraded.get<{ status: string }>(
+        "SELECT status FROM users WHERE id = ?",
+        LOCAL_USER_ID
+      )?.status, "active");
+      assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count
+        FROM authorization_permissions
+        WHERE id IN ('admin.users.read', 'admin.users.support', 'admin.users.manage')`)?.count, 3);
+      assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count
+        FROM authorization_role_permissions
+        WHERE permission_id IN ('admin.users.read', 'admin.users.support', 'admin.users.manage')`)?.count, 7);
+      upgraded.assertIntegrity();
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("migration 59 backfills unknown audit actors and records the provenance index", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-audit-actor-upgrade-test-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const legacy = new YoinkDatabase(filePath);
+    legacy.run(`INSERT INTO audit_events(
+      id, tenant_id, user_id, correlation_id, event_type, reason_code, message, data_json, actor_kind, created_at
+    ) VALUES ('audit_upgrade_fixture', ?, ?, 'upgrade_fixture', 'upgrade_test', 'recorded', 'fixture', '{}', 'user', '2026-09-01T00:00:00.000Z')`,
+    LOCAL_TENANT_ID, LOCAL_USER_ID);
+    legacy.run("DROP INDEX audit_events_user_actor_time_idx");
+    legacy.run("ALTER TABLE audit_events DROP COLUMN actor_kind");
+    legacy.run("DELETE FROM schema_migrations WHERE version = 59");
+    legacy.close();
+
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{ name: string }>(
+        "SELECT name FROM schema_migrations WHERE version = 59"
+      )?.name, "audit_actor_provenance");
+      assert.equal(upgraded.get<{ actor_kind: string }>(
+        "SELECT actor_kind FROM audit_events WHERE id = 'audit_upgrade_fixture'"
+      )?.actor_kind, "unknown");
+      assert.equal(upgraded.get<{ count: number }>(`SELECT COUNT(*) AS count FROM sqlite_master
+        WHERE type = 'index' AND name = 'audit_events_user_actor_time_idx'`)?.count, 1);
       upgraded.assertIntegrity();
     } finally {
       upgraded.close();

@@ -3874,5 +3874,51 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE retailer_id = 'bestbuy';
     `
+  },
+  {
+    version: 58,
+    name: "admin_user_support_and_lifecycle",
+    sql: `
+      ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'disabled'));
+
+      INSERT INTO authorization_permissions(id, description, created_at) VALUES
+        ('admin.users.read', 'Read tenant user support summaries and details.', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('admin.users.support', 'Issue subject-bound pairing codes and pause a tenant user''s actions.', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('admin.users.manage', 'Create, enable, and disable tenant users.', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+      INSERT INTO authorization_role_permissions(role_id, permission_id, created_at) VALUES
+        ('support_readonly', 'admin.users.read', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('security_admin', 'admin.users.read', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('security_admin', 'admin.users.support', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('security_admin', 'admin.users.manage', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('tenant_admin', 'admin.users.read', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('tenant_admin', 'admin.users.support', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('tenant_admin', 'admin.users.manage', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+    `
+  },
+  {
+    version: 59,
+    name: "audit_actor_provenance",
+    sql: `
+      ALTER TABLE audit_events ADD COLUMN actor_kind TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (actor_kind IN ('maintainer', 'user', 'device', 'service', 'unknown'));
+      CREATE INDEX audit_events_user_actor_time_idx
+        ON audit_events(user_id, actor_kind, created_at DESC);
+    `
+  },
+  {
+    version: 60,
+    name: "permission_gated_maintainer_workspace",
+    sql: `
+      INSERT INTO authorization_permissions(id, description, created_at) VALUES
+        ('admin.maintainer', 'Open maintainer-only administration workspaces.', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+      INSERT INTO authorization_role_permissions(role_id, permission_id, created_at) VALUES
+        ('catalog_curator', 'admin.maintainer', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('retailer_maintainer', 'admin.maintainer', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('security_admin', 'admin.maintainer', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        ('tenant_admin', 'admin.maintainer', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+    `
   }
 ]);

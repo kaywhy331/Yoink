@@ -7,7 +7,9 @@ import {
   deriveContextMenuCommands,
   derivePopupView,
   errorPopupResult,
+  popupPurchaseOpportunity,
   popupUpdateHandoff,
+  preferredActionHandoff,
   qualificationPopupResult,
   type PopupHealthState,
   type PopupPageContext
@@ -17,14 +19,16 @@ test("extension app destinations resolve to distinct dashboard workspaces", () =
   const origin = "http://127.0.0.1:32991";
   assert.deepEqual({
     dashboard: appDestinationUrl(origin),
+    actions: appDestinationUrl(origin, "actions"),
+    insights: appDestinationUrl(origin, "insights"),
     connections: appDestinationUrl(origin, "connections"),
-    operations: appDestinationUrl(origin, "operations"),
     settings: appDestinationUrl(origin, "settings")
   }, {
-    dashboard: `${origin}/`,
-    connections: `${origin}/#connections`,
-    operations: `${origin}/#health`,
-    settings: `${origin}/#preferences`
+    dashboard: `${origin}/#home`,
+    actions: `${origin}/#activity`,
+    insights: `${origin}/#activity/insights`,
+    connections: `${origin}/#settings/chrome`,
+    settings: `${origin}/#settings`
   });
   assert.throws(
     () => appDestinationUrl(origin, "unknown" as never),
@@ -115,11 +119,14 @@ test("hard blockers override exact product context", () => {
   const unpaired = view({ ...READY, paired: false });
   assert.equal(unpaired.hardBlocker, "unpaired");
   assert.equal(unpaired.context.pairing, true);
+  assert.equal(unpaired.context.supporting, "Enter the code from Yoink › Settings › Chrome.");
   assert.equal(unpaired.activity, null);
 
   const mismatch = view({ ...READY, version: "1.9.2" });
   assert.equal(mismatch.hardBlocker, "companion_update");
   assert.equal(mismatch.primaryAction?.id, "update_companion");
+  assert.equal(mismatch.context.title, "Update Chrome companion");
+  assert.equal(mismatch.primaryAction?.label, "Update Chrome companion");
 });
 
 test("a sanitized cart-ready handoff becomes the pending action without weakening hard blockers", () => {
@@ -135,10 +142,16 @@ test("a sanitized cart-ready handoff becomes the pending action without weakenin
       retailerSku: "13331333",
       tabId: 17,
       recordedAt: "2026-08-29T18:00:30.000Z",
+      openedAt: "2026-08-29T18:00:45.000Z",
+      reviewedMaximumCents: 3_999,
       latency: {
         leaseToCartReadyMs: 8_240,
+        leaseToBaselineMs: 2_500,
+        baselineToOfferMs: 4_000,
+        offerToClickMs: 110,
         clickToSettleMs: 410,
         clickToCartReadyMs: 1_630,
+        settleToCartReadyMs: 1_220,
         secret: "discarded"
       }
     }, {
@@ -153,10 +166,17 @@ test("a sanitized cart-ready handoff becomes the pending action without weakenin
   assert.equal(cartReady.items.length, 1);
   assert.equal(cartReady.items[0]?.retailerName, "Target");
   assert.equal(cartReady.items[0]?.identityLabel, "TCIN");
+  assert.equal(cartReady.items[0]?.kind, "cart_ready");
+  assert.equal(cartReady.items[0]?.openedAt, "2026-08-29T18:00:45.000Z");
+  assert.equal(cartReady.items[0]?.reviewedMaximumCents, 3_999);
   assert.deepEqual(cartReady.items[0]?.latency, {
     leaseToCartReadyMs: 8_240,
+    leaseToBaselineMs: 2_500,
+    baselineToOfferMs: 4_000,
+    offerToClickMs: 110,
     clickToSettleMs: 410,
-    clickToCartReadyMs: 1_630
+    clickToCartReadyMs: 1_630,
+    settleToCartReadyMs: 1_220
   });
 
   const pending = derivePopupView({
@@ -169,9 +189,33 @@ test("a sanitized cart-ready handoff becomes the pending action without weakenin
   });
   assert.equal(pending.statusLabel, "Needs attention");
   assert.equal(pending.context.title, "Target cart ready");
-  assert.equal(pending.context.supporting, "TCIN 13331333 · Checkout stays manual");
+  assert.equal(pending.context.supporting, "TCIN 13331333");
   assert.equal(pending.primaryAction?.id, "open_cart");
+  assert.equal(pending.primaryAction?.label, "Return to cart");
   assert.equal(pending.cartReady?.jobId, "job_target_fixture");
+  assert.deepEqual(pending.cartOutcome, {
+    jobId: "job_target_fixture",
+    stage: "choice",
+    reviewedMaximumCents: 3_999,
+    error: ""
+  });
+
+  const closeout = derivePopupView({
+    health: READY,
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    cartReady,
+    cartOutcome: { jobId: "job_target_fixture", stage: "amount", error: "  Check\u0000 amount  " },
+    now
+  });
+  assert.equal(closeout.cartReady?.jobId, "job_target_fixture");
+  assert.deepEqual(closeout.cartOutcome, {
+    jobId: "job_target_fixture",
+    stage: "amount",
+    reviewedMaximumCents: 3_999,
+    error: "Check amount"
+  });
 
   const blocked = derivePopupView({
     health: { ...READY, connected: false },
@@ -179,10 +223,262 @@ test("a sanitized cart-ready handoff becomes the pending action without weakenin
     installedVersion: "1.9.1",
     production: false,
     cartReady,
+    cartOutcome: { jobId: "job_target_fixture", stage: "choice" },
     now
   });
   assert.equal(blocked.hardBlocker, "unavailable");
   assert.equal(blocked.primaryAction?.id, "retry");
+  assert.equal(blocked.cartOutcome, null);
+});
+
+test("a fresh Walmart purchase opportunity is primary only when the current page has no exact action", () => {
+  const now = new Date("2026-08-29T18:01:00.000Z").getTime();
+  const opportunity = popupPurchaseOpportunity({
+    schemaVersion: 1,
+    deliveryId: "notification_walmart_popup",
+    kind: "walmart_review_order",
+    retailerId: "walmart",
+    retailerName: "Spoofed retailer",
+    identityLabel: "Spoofed identity",
+    retailerSku: "19988614228",
+    title: "  Walmart\u0000 Direct Cart Fixture  ",
+    expiresAt: "2026-08-29T18:02:00.000Z"
+  }, now);
+  assert.deepEqual(opportunity, {
+    schemaVersion: 1,
+    deliveryId: "notification_walmart_popup",
+    kind: "walmart_review_order",
+    retailerId: "walmart",
+    retailerName: "Walmart",
+    identityLabel: "Item",
+    retailerSku: "19988614228",
+    title: "Walmart Direct Cart Fixture",
+    expiresAt: "2026-08-29T18:02:00.000Z"
+  });
+
+  const idle = derivePopupView({
+    health: READY,
+    page: IDLE,
+    installedVersion: "1.9.1",
+    production: false,
+    purchaseOpportunity: opportunity,
+    now
+  });
+  assert.equal(idle.status, "attention");
+  assert.equal(idle.primaryAction?.id, "open_purchase");
+  assert.equal(idle.primaryAction?.label, "Buy at Walmart");
+  assert.equal(idle.context.supporting, "Item 19988614228 · Ready to add");
+
+  const product = derivePopupView({
+    health: READY,
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    purchaseOpportunity: opportunity,
+    now
+  });
+  assert.equal(product.primaryAction?.id, "inspect_product");
+  assert.equal(product.activity?.id, "purchase");
+  assert.equal(product.activity?.action, "open_purchase");
+  assert.equal(product.status, "attention");
+
+  const blocked = derivePopupView({
+    health: { ...READY, connected: false },
+    page: IDLE,
+    installedVersion: "1.9.1",
+    production: false,
+    purchaseOpportunity: opportunity,
+    now
+  });
+  assert.equal(blocked.primaryAction?.id, "retry");
+  assert.equal(blocked.activity, null);
+  assert.equal(popupPurchaseOpportunity({ ...opportunity, expiresAt: "2026-08-29T18:00:59.999Z" }, now), null);
+});
+
+test("Needs-you handoffs outrank cart-ready handoffs without exposing raw failure detail", () => {
+  const now = new Date("2026-08-29T18:01:00.000Z").getTime();
+  const handoffs = cartReadyState({
+    schemaVersion: 1,
+    items: [{
+      schemaVersion: 1,
+      kind: "cart_ready",
+      jobId: "job_walmart_ready",
+      retailerId: "walmart",
+      retailerSku: "20252562938",
+      tabId: 21,
+      recordedAt: "2026-08-29T18:00:50.000Z"
+    }, {
+      schemaVersion: 1,
+      kind: "needs_you",
+      jobId: "job_target_review",
+      retailerId: "target",
+      retailerSku: "94972381",
+      tabId: 22,
+      recordedAt: "2026-08-29T18:00:30.000Z",
+      reasonCode: "cart_unverified",
+      message: "RAW PAGE TOKEN DO_NOT_SEND"
+    }]
+  }, now);
+  const pending = derivePopupView({
+    health: READY,
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    cartReady: handoffs,
+    now
+  });
+  assert.equal(pending.cartReady?.kind, "needs_you");
+  assert.equal(pending.context.eyebrow, "NEEDS YOU");
+  assert.equal(pending.context.title, "Target needs review");
+  assert.equal(pending.context.supporting, "TCIN 94972381 · Check the store cart or session");
+  assert.equal(pending.primaryAction?.label, "Review store");
+  assert.doesNotMatch(JSON.stringify(pending), /DO_NOT_SEND/);
+});
+
+test("an opened handoff awaiting its checkout outcome outranks newer unopened handoffs", () => {
+  const now = new Date("2026-08-29T18:01:00.000Z").getTime();
+  const handoffs = cartReadyState({
+    schemaVersion: 1,
+    items: [{
+      schemaVersion: 1,
+      kind: "cart_ready",
+      jobId: "job_cart_opened",
+      retailerId: "target",
+      retailerSku: "94972381",
+      tabId: 21,
+      recordedAt: "2026-08-29T18:00:10.000Z",
+      openedAt: "2026-08-29T18:00:20.000Z",
+      reviewedMaximumCents: 3_999
+    }, {
+      schemaVersion: 1,
+      kind: "cart_ready",
+      jobId: "job_cart_newer",
+      retailerId: "walmart",
+      retailerSku: "20252562938",
+      tabId: 22,
+      recordedAt: "2026-08-29T18:00:40.000Z"
+    }]
+  }, now);
+  assert.equal(preferredActionHandoff(handoffs, now)?.jobId, "job_cart_opened",
+    "A pending Did-you-check-out prompt must not hide behind a newer handoff.");
+  const pending = derivePopupView({
+    health: READY,
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    cartReady: handoffs,
+    now
+  });
+  assert.equal(pending.cartReady?.jobId, "job_cart_opened");
+  assert.equal(pending.primaryAction?.label, "Return to cart");
+  assert.deepEqual(pending.cartOutcome, {
+    jobId: "job_cart_opened",
+    stage: "choice",
+    reviewedMaximumCents: 3_999,
+    error: ""
+  });
+
+  const closed = {
+    schemaVersion: 1 as const,
+    items: handoffs.items.filter((item) => item.jobId !== "job_cart_opened")
+  };
+  assert.equal(preferredActionHandoff(closed, now)?.jobId, "job_cart_newer");
+  const next = derivePopupView({
+    health: READY,
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    cartReady: closed,
+    now
+  });
+  assert.equal(next.cartReady?.jobId, "job_cart_newer");
+  assert.equal(next.primaryAction?.label, "Open cart");
+  assert.equal(next.cartOutcome, null);
+});
+
+test("Needs-you priority holds within each tier and the shortcut ranking rotates unopened handoffs first", () => {
+  const now = new Date("2026-08-29T18:01:00.000Z").getTime();
+  const handoffs = cartReadyState({
+    schemaVersion: 1,
+    items: [{
+      schemaVersion: 1,
+      kind: "needs_you",
+      jobId: "job_review_seen",
+      retailerId: "target",
+      retailerSku: "94972381",
+      tabId: 21,
+      recordedAt: "2026-08-29T18:00:10.000Z",
+      openedAt: "2026-08-29T18:00:50.000Z",
+      reasonCode: "cart_unverified"
+    }, {
+      schemaVersion: 1,
+      kind: "cart_ready",
+      jobId: "job_cart_unseen",
+      retailerId: "walmart",
+      retailerSku: "20252562938",
+      tabId: 22,
+      recordedAt: "2026-08-29T18:00:20.000Z",
+      openedAt: "2026-08-29T18:00:00.000Z"
+    }, {
+      schemaVersion: 1,
+      kind: "needs_you",
+      jobId: "job_review_unseen",
+      retailerId: "bestbuy",
+      retailerSku: "6685081",
+      tabId: 23,
+      recordedAt: "2026-08-29T18:00:30.000Z",
+      reasonCode: "security_challenge"
+    }, {
+      schemaVersion: 1,
+      kind: "cart_ready",
+      jobId: "job_cart_seen",
+      retailerId: "amazon",
+      retailerSku: "B00E4AMFKK",
+      tabId: 24,
+      recordedAt: "2026-08-29T18:00:40.000Z",
+      openedAt: "2026-08-29T18:00:55.000Z"
+    }]
+  }, now);
+  assert.equal(handoffs.items.find((item) => item.jobId === "job_cart_unseen")?.openedAt, undefined,
+    "An opened timestamp before the handoff must be discarded.");
+  assert.equal(preferredActionHandoff(handoffs, now)?.jobId, "job_review_seen",
+    "The popup keeps the opened Needs-you handoff until its outcome is recorded.");
+  assert.equal(preferredActionHandoff(handoffs, now, "unopened_first")?.jobId, "job_review_unseen",
+    "The keyboard shortcut opens the newest unseen Needs-you handoff first.");
+
+  const afterReview = {
+    schemaVersion: 1 as const,
+    items: handoffs.items.map((item) => item.jobId === "job_review_unseen"
+      ? { ...item, openedAt: "2026-08-29T18:00:58.000Z" }
+      : item)
+  };
+  assert.equal(preferredActionHandoff(afterReview, now, "unopened_first")?.jobId, "job_cart_unseen",
+    "An unseen ready cart must remain reachable from the shortcut after the Needs-you item was opened.");
+  assert.equal(preferredActionHandoff(afterReview, now)?.jobId, "job_review_unseen",
+    "The popup moves to the newest opened Needs-you handoff.");
+  const viewAfterReview = derivePopupView({
+    health: READY,
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    cartReady: afterReview,
+    now
+  });
+  assert.equal(viewAfterReview.cartReady?.jobId, "job_review_unseen");
+  assert.equal(viewAfterReview.context.eyebrow, "NEEDS YOU");
+  assert.equal(viewAfterReview.primaryAction?.label, "Return to store");
+  assert.equal(viewAfterReview.cartOutcome?.jobId, "job_review_unseen");
+
+  const allOpened = {
+    schemaVersion: 1 as const,
+    items: afterReview.items.map((item) => item.jobId === "job_cart_unseen"
+      ? { ...item, openedAt: "2026-08-29T18:00:59.000Z" }
+      : item)
+  };
+  assert.equal(preferredActionHandoff(allOpened, now)?.jobId, "job_review_unseen",
+    "After all items are seen, the newest Needs-you handoff remains the fallback.");
+  assert.equal(preferredActionHandoff(allOpened, now, "unopened_first")?.jobId, "job_review_unseen",
+    "The shortcut falls back to the same opened Needs-you handoff.");
 });
 
 test("an exact, fresh update handoff replaces the mismatch action with explicit reload", () => {
@@ -198,6 +494,18 @@ test("an exact, fresh update handoff replaces the mismatch action with explicit 
   assert.equal(ready.hardBlocker, "companion_update");
   assert.equal(ready.context.title, "Replace extension files");
   assert.equal(ready.primaryAction?.id, "reload_companion");
+  assert.equal(ready.primaryAction?.label, "Reload Chrome companion");
+
+  const managed = derivePopupView({
+    health: { ...READY, version: "1.9.2" },
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: true,
+    updateHandoff: popupUpdateHandoff({ channel: "managed", releaseVersion: "1.9.2" }, new Date("2026-08-29T18:00:30.000Z").getTime()),
+    now: new Date("2026-08-29T18:01:00.000Z").getTime()
+  });
+  assert.equal(managed.context.title, "Reload Chrome companion");
+  assert.equal(managed.primaryAction?.label, "Reload Chrome companion");
 
   const wrongVersion = derivePopupView({
     health: { ...READY, version: "1.9.3" },
@@ -223,6 +531,7 @@ test("paused and test modes do not replace product inspection", () => {
   assert.equal(pausedProduct.status, "paused");
   assert.equal(pausedProduct.primaryAction?.id, "inspect_product");
   assert.equal(pausedProduct.activity?.action, "review_pause");
+  assert.equal(pausedProduct.activity?.label, "Store actions paused · Open Home");
 
   const testProduct = view({ ...READY, executionMode: "shadow" });
   assert.equal(testProduct.status, "monitoring");
@@ -232,16 +541,21 @@ test("paused and test modes do not replace product inspection", () => {
   const monitoringProduct = view({ ...READY, chromeMutationEnabled: false });
   assert.equal(monitoringProduct.status, "monitoring");
   assert.equal(monitoringProduct.primaryAction?.id, "inspect_product");
-  assert.equal(monitoringProduct.activity?.label, "Monitoring only · Review");
+  assert.equal(monitoringProduct.activity?.label, "Monitoring only · Open Insights");
+  assert.equal(testProduct.activity?.label, "Test mode · Open Insights");
 });
 
 test("idle pages prioritize background attention and keep healthy idle quiet", () => {
   const pausedIdle = view({ ...READY, actionsPaused: true }, IDLE);
   assert.equal(pausedIdle.primaryAction?.id, "review_pause");
-  assert.equal(pausedIdle.activity?.label, "Signals live");
+  assert.equal(pausedIdle.primaryAction?.label, "Open Home");
+  assert.equal(pausedIdle.context.title, "Store actions paused");
+  assert.equal(pausedIdle.activity?.label, "Calls live");
 
   const testIdle = view({ ...READY, executionMode: "shadow" }, IDLE);
   assert.equal(testIdle.primaryAction?.id, "review_mode");
+  assert.equal(testIdle.primaryAction?.label, "Open Insights");
+  assert.equal(testIdle.context.title, "Test mode");
 
   const disconnectedIdle = view({ ...READY, trackalackerPush: { ready: false, state: "error" } }, IDLE);
   assert.equal(disconnectedIdle.primaryAction?.id, "reconnect_trackalacker");
@@ -251,7 +565,7 @@ test("idle pages prioritize background attention and keep healthy idle quiet", (
   assert.equal(healthyIdle.status, "ready");
   assert.equal(healthyIdle.context.visible, false);
   assert.equal(healthyIdle.primaryAction, null);
-  assert.equal(healthyIdle.activity?.label, "Signals live");
+  assert.equal(healthyIdle.activity?.label, "Calls live");
 });
 
 test("community sharing is conditional on exact page eligibility and consent", () => {
@@ -285,9 +599,10 @@ test("persisted popup results are bounded, contextual, and redact untrusted erro
     rehearsal: { ok: true }
   }, PRODUCT, 1_788_037_200_000);
   assert.equal(result?.outcome, "qualified");
-  assert.equal(result?.summary, "Qualified · $5.39 · Shipping");
+  assert.equal(result?.summary, "Check passed · $5.39 · Shipping");
   assert.equal(result?.productTitle, "Bicycle Standard Playing Cards 2pk");
-  assert.match(result?.details || "", /Rehearsal passed — no retailer control was clicked/);
+  assert.equal(result?.details, "TCIN 13331333 · $5.39 · Target · Shipping · Availability: In Stock · Exact offer binding verified");
+  assert.doesNotMatch(result?.details || "", /store control/, "The boundary is stated once in the popup footer, not per result.");
   const identifiedView = derivePopupView({
     health: READY,
     page: PRODUCT,
@@ -297,6 +612,8 @@ test("persisted popup results are bounded, contextual, and redact untrusted erro
   });
   assert.equal(identifiedView.context.title, "Bicycle Standard Playing Cards 2pk");
   assert.equal(identifiedView.context.supporting, "TCIN 13331333 · $5.39 · Shipping");
+  assert.equal(identifiedView.primaryAction?.label, "Inspect again");
+  assert.deepEqual(identifiedView.resultStatus, { label: "Check passed", tone: "success" });
 
   const mismatchedIdentity = qualificationPopupResult({
     workflow: "inspection",
@@ -330,7 +647,18 @@ test("persisted popup results are bounded, contextual, and redact untrusted erro
   }, PRODUCT);
   assert.match(securityBlock?.details || "", /Security check on the page/);
   assert.doesNotMatch(securityBlock?.details || "", /Manual step: Unknown/);
-  assert.match(securityBlock?.details || "", /stopped safely/);
+  assert.doesNotMatch(securityBlock?.details || "", /stopped safely|store control/);
+  assert.match(securityBlock?.details || "", / · Manual Action Required$/);
+  assert.equal(securityBlock?.summary, "Blocked · Manual Action Required");
+  const blockedView = derivePopupView({
+    health: READY,
+    page: PRODUCT,
+    installedVersion: "1.9.1",
+    production: false,
+    lastResult: securityBlock
+  });
+  assert.equal(blockedView.primaryAction?.label, "Inspect again");
+  assert.deepEqual(blockedView.resultStatus, { label: "Blocked", tone: "warning" });
 
   const secret = "S".repeat(48);
   const error = errorPopupResult(PRODUCT.key, new Error(

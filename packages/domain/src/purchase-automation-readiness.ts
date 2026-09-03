@@ -19,6 +19,7 @@ export type PurchaseAutomationReadinessState =
   | "guarded_add_policy_incomplete"
   | "guarded_add_lane_closed"
   | "guarded_add_device_incapable"
+  | "guarded_add_session_blocked"
   | "guarded_add_shadow"
   | "guarded_add_paused"
   | "guarded_add_armed";
@@ -65,6 +66,11 @@ export interface PurchaseAutomationReadinessContext {
   sources: Array<Record<string, unknown>>;
   devices: Array<Record<string, unknown>>;
   qualifications: Partial<Record<GuardedRetailerId, boolean>>;
+  sessionBlockers?: Array<{
+    deviceId: string;
+    retailerId: GuardedRetailerId;
+    signedInState: "signed_out" | "challenged";
+  }>;
   now?: number;
 }
 
@@ -78,12 +84,14 @@ export interface PurchaseAutomationTargetReadiness {
   reviewedPolicy: boolean;
   laneQualified: boolean;
   companionCapable: boolean;
+  sessionBlocked: boolean;
   readyForGuardedAdd: boolean;
   reasonCode:
     | "mapping_unavailable"
     | "policy_incomplete"
     | "lane_not_qualified"
     | "companion_adapter_unavailable"
+    | "retailer_session_blocked"
     | "runtime_offer_required"
     | "armed_for_fresh_offer";
   summary: string;
@@ -99,6 +107,7 @@ export interface PurchaseAutomationReadiness {
   readyForGuardedAdd: boolean;
   headline: string;
   summary: string;
+  technicalReason: string;
   nextAction:
     | "review_plan"
     | "connect_signal"
@@ -179,6 +188,18 @@ function deviceSupportsRetailer(device: Record<string, unknown>, retailerId: str
     && capabilities[lane.versionCapability] === lane.adapterVersion;
 }
 
+function deviceSessionBlocked(
+  context: PurchaseAutomationReadinessContext,
+  device: Record<string, unknown>,
+  retailerId: string
+): boolean {
+  const id = guardedRetailer(retailerId);
+  const deviceId = String(device.id || "");
+  return Boolean(id && deviceId && context.sessionBlockers?.some((blocker) =>
+    blocker.deviceId === deviceId && blocker.retailerId === id
+      && (blocker.signedInState === "signed_out" || blocker.signedInState === "challenged")));
+}
+
 function targetLabel(target: PurchaseAutomationTargetInput): string {
   const id = guardedRetailer(target.retailerId);
   return String(target.retailerName || (id ? RETAILER_LANES[id].label : target.retailerId) || "Store");
@@ -214,6 +235,9 @@ function result(
   checks: PurchaseAutomationCheck[],
   targets: PurchaseAutomationTargetReadiness[]
 ): PurchaseAutomationReadiness {
+  const targetReasons = targets
+    .filter((target) => target.readyForGuardedAdd !== true)
+    .map((target) => `${target.retailerId}:${target.reasonCode}`);
   return {
     contractVersion: PURCHASE_AUTOMATION_READINESS_CONTRACT_VERSION,
     state,
@@ -224,6 +248,7 @@ function result(
     readyForGuardedAdd: state === "guarded_add_armed",
     headline,
     summary,
+    technicalReason: [`readiness:${state}`, ...targetReasons].join(" · "),
     nextAction,
     nextActionLabel,
     runtimeProof: "required_at_action_time",
@@ -267,30 +292,37 @@ export function buildPurchaseAutomationReadiness(
       && exactActionFulfillment(target.fulfillment);
     const packagedMapping = target.executionSupported === true && retailerId !== null;
     const laneQualified = retailerId !== null && context.qualifications[retailerId] === true;
-    const companionCapable = onlineCurrentDevices.some((device) => deviceSupportsRetailer(device, target.retailerId));
+    const capableDevices = onlineCurrentDevices.filter((device) => deviceSupportsRetailer(device, target.retailerId));
+    const companionCapable = capableDevices.length > 0;
+    const sessionBlocked = companionCapable
+      && capableDevices.every((device) => deviceSessionBlocked(context, device, target.retailerId));
     const globallyReady = active && !expired && directPlan && configuredAction === "add_to_cart"
       && connectedSignal && context.executionMode === "live" && !context.actionsPaused;
-    const readyForGuardedAdd = globallyReady && policyTargetsSafe && packagedMapping && laneQualified && companionCapable;
+    const readyForGuardedAdd = globallyReady && policyTargetsSafe && packagedMapping && laneQualified
+      && companionCapable && !sessionBlocked;
     let reasonCode: PurchaseAutomationTargetReadiness["reasonCode"];
     let summary: string;
     if (!packagedMapping) {
       reasonCode = "mapping_unavailable";
-      summary = "Yoink can monitor this exact item, but this store has no packaged add-only runner.";
+      summary = `Yoink can watch this item, but ${targetLabel(target)} is not available for cart adds yet.`;
     } else if (!reviewedPolicy) {
       reasonCode = "policy_incomplete";
-      summary = "Set a maximum item price, Store only seller, and an exact Shipping or Pickup choice before this target can be armed.";
+      summary = "Set a maximum item price, choose Store only, and select Shipping or Pickup.";
     } else if (!laneQualified) {
       reasonCode = "lane_not_qualified";
-      summary = `${targetLabel(target)} add-only execution has not completed its separate safety qualification.`;
+      summary = `${targetLabel(target)} is not switched on for cart adds yet.`;
     } else if (!companionCapable) {
       reasonCode = "companion_adapter_unavailable";
-      summary = `No online current Chrome companion has the qualified ${targetLabel(target)} add-only runner.`;
+      summary = `Update Yoink in Chrome to use ${targetLabel(target)} cart adds.`;
+    } else if (sessionBlocked) {
+      reasonCode = "retailer_session_blocked";
+      summary = `Sign in to ${targetLabel(target)} in Chrome or finish the security check, then retry.`;
     } else if (readyForGuardedAdd) {
       reasonCode = "armed_for_fresh_offer";
-      summary = "Armed for one guarded cart add after a fresh exact offer passes every live check.";
+      summary = `${targetLabel(target)} is ready. Yoink will recheck the item before adding one to your cart.`;
     } else {
       reasonCode = "runtime_offer_required";
-      summary = "The store lane is ready, but global setup must be ready and every action still needs a fresh exact offer.";
+      summary = `${targetLabel(target)} is ready. Finish the setup above so Yoink can recheck the item before a cart add.`;
     }
     return {
       targetId: String(target.targetId || target.id || ""),
@@ -302,6 +334,7 @@ export function buildPurchaseAutomationReadiness(
       reviewedPolicy,
       laneQualified,
       companionCapable,
+      sessionBlocked,
       readyForGuardedAdd,
       reasonCode,
       summary
@@ -312,17 +345,17 @@ export function buildPurchaseAutomationReadiness(
     check("plan", "Plan is active", active && !expired ? "pass" : "attention",
       active ? expired ? "This plan's end time has passed." : "The purchase plan is active." : "Turn the plan on before expecting monitoring or actions."),
     check("decision", "Reviewed decision", directPlan ? "pass" : "attention",
-      directPlan ? "This saved plan—not an advanced global strategy—sets the action boundary." : "Review and save this legacy strategy plan before relying on it from the user dashboard."),
+      directPlan ? "This saved plan sets the item, limit, and action." : "Review and save this older plan before relying on it."),
     check("targets", "Exact store item", enabledTargets.length ? "pass" : "attention",
-      enabledTargets.length ? `${enabledTargets.length} exact store target${enabledTargets.length === 1 ? " is" : "s are"} enabled.` : "Enable at least one exact store item."),
-    check("signal", "Product signal", connectedSignal ? "pass" : "waiting",
-      connectedSignal ? "A non-manual signal source is connected." : "Connect a supported signal source so Yoink can learn when the exact offer changes."),
+      enabledTargets.length ? `${enabledTargets.length} exact store item${enabledTargets.length === 1 ? " is" : "s are"} selected.` : "Select at least one exact store item."),
+    check("signal", "Product calls", connectedSignal ? "pass" : "waiting",
+      connectedSignal ? "A non-manual source is connected." : "Connect a supported source so Yoink can learn when the exact offer changes."),
     check("companion", "Current Chrome companion", notificationDevices.length
       ? onlineNotificationDevices.length ? "pass" : "waiting"
       : "attention",
     notificationDevices.length
       ? onlineNotificationDevices.length ? `Yoink ${context.version} is online.` : `Yoink ${context.version} is paired but Chrome is offline.`
-      : `Install and pair a notification-capable Yoink ${context.version} companion.`)
+      : `Install and pair Yoink ${context.version} in Chrome.`)
   ];
 
   const readyForMonitoring = active && !expired && directPlan && enabledTargets.length > 0
@@ -343,69 +376,74 @@ export function buildPurchaseAutomationReadiness(
   if (!directPlan) {
     return result("advanced_strategy", "attention", "advanced", "none", false,
       "Review this legacy automation plan",
-      "It still delegates decisions to advanced global strategies. Saving it from this dashboard converts it to an explicit user-controlled plan.",
+      "It still delegates decisions to admin-managed rules. Saving it from this dashboard converts it to an explicit user-controlled plan.",
       "review_plan", "Review plan", baseChecks, targetReadiness);
   }
   if (!enabledTargets.length) {
     return result("needs_target", "attention", configuredAction, "none", false,
       "Choose an exact store item",
-      "This plan has no enabled retailer target, so no signal can match it.",
+      "This plan has no enabled store item, so no call can match it.",
       "review_plan", "Choose store item", baseChecks, targetReadiness);
   }
 
   if (configuredAction === "notify") {
     if (!connectedSignal) {
       return result("needs_signal", "waiting", "notify", "none", false,
-        "Connect a product signal",
-        "The exact plan is saved, but Yoink needs a supported signal source before it can notify you.",
-        "connect_signal", "Connect signal", baseChecks, targetReadiness);
+        "Connect a call source",
+        "The exact plan is saved, but Yoink needs a supported source before it can notify you.",
+        "connect_signal", "Connect source", baseChecks, targetReadiness);
     }
     if (!notificationDevices.length) {
       return result("needs_current_companion", "attention", "notify", "none", false,
-        "Update and pair the Chrome companion",
-        `Notifications need an active Yoink ${context.version} companion with the current contract.`,
+        "Update and pair Yoink in Chrome",
+        `Install or update Yoink ${context.version} in Chrome to receive notifications.`,
         "update_companion", "Update companion", baseChecks, targetReadiness);
     }
     if (!onlineNotificationDevices.length) {
       return result("companion_offline", "waiting", "notify", "notification", true,
-        "Monitoring is configured; Chrome is offline",
-        "Yoink can retain incoming evidence, but open the paired browser for current page observations and prompt notification delivery.",
+        "Open Chrome to resume",
+        "Your plan stays saved. Open the paired browser to receive notifications.",
         "open_chrome", "Open Chrome", baseChecks, targetReadiness);
     }
     return result("notification_ready", "ready", "notify", "notification", true,
       "Notifications are ready",
-      "Yoink will notify only when a fresh exact offer matches this saved plan. No retailer control is clicked.",
+      "Yoink will notify only when a fresh exact offer matches this saved plan. No store control is clicked.",
       "wait_for_offer", "Wait for an exact match", baseChecks, targetReadiness);
   }
 
   const addChecks = [
     ...baseChecks,
-    check("policy", "Guarded store limits", policyTargetsSafe ? "pass" : "attention",
+    check("policy", "Store limits", policyTargetsSafe ? "pass" : "attention",
       policyTargetsSafe
-        ? "Every enabled target has a reviewed item cap, Store only seller, an exact Shipping or Pickup choice, and exact-item substitution."
-        : "Every enabled cart target needs a reviewed item cap, Store only seller, an exact Shipping or Pickup choice, and the exact item."),
-    check("lane", "Qualified store lane", targetReadiness.some((target) => target.laneQualified && target.packagedMapping)
+        ? "Each selected item has a price cap, Store only seller, and a Shipping or Pickup choice."
+        : "Set a price cap, choose Store only, and select Shipping or Pickup for every item."),
+    check("lane", "Store cart adds", targetReadiness.some((target) => target.laneQualified && target.packagedMapping)
       ? "pass" : "attention",
     targetReadiness.some((target) => target.laneQualified && target.packagedMapping)
-      ? "At least one enabled exact store target has a separately qualified add-only lane."
-      : "No enabled exact store target currently has a separately qualified add-only lane."),
-    check("runner", "Online add-only runner", targetReadiness.some((target) => target.laneQualified && target.companionCapable)
+      ? "At least one selected store is switched on for cart adds."
+      : `${joinedStores(enabledTargets)} is not switched on for cart adds yet.`),
+    check("runner", "Chrome support", targetReadiness.some((target) => target.laneQualified && target.companionCapable)
       ? "pass" : "waiting",
     targetReadiness.some((target) => target.laneQualified && target.companionCapable)
-      ? "A current online companion can run at least one qualified store adapter."
-      : "Open or update a companion that includes the qualified add-only runner."),
-    check("global", "Guarded actions enabled", context.executionMode === "live" && !context.actionsPaused ? "pass" : "waiting",
+      ? "Chrome can add to the cart at one or more selected stores."
+      : "Open or update Yoink in Chrome to add to the cart at the selected store."),
+    check("session", "Store session", targetReadiness.some((target) =>
+      target.laneQualified && target.companionCapable && !target.sessionBlocked) ? "pass" : "waiting",
+    targetReadiness.some((target) => target.laneQualified && target.companionCapable && !target.sessionBlocked)
+      ? "At least one selected store is signed in and ready."
+      : "Sign in to the store in Chrome or finish its security check."),
+    check("global", "Cart adds enabled", context.executionMode === "live" && !context.actionsPaused ? "pass" : "waiting",
       context.executionMode !== "live"
-        ? "The control plane is in test mode; no retailer click can run."
-        : context.actionsPaused ? "Global guarded actions are paused." : "Guarded actions are enabled."),
-    check("runtime", "Fresh offer verification", "runtime",
-      "A trusted exact signal may start the check without carrying price, seller, or fulfillment. Before Add, Chrome must freshly re-bind the exact item, price, first-party seller, saved Shipping or Pickup choice, quantity one, and usable control. Checkout remains manual.")
+        ? "Cart adds are in test mode. Review action mode to turn them on."
+        : context.actionsPaused ? "Cart adds are paused. Resume actions when you are ready." : "Cart adds are enabled."),
+    check("runtime", "Final item check", "runtime",
+      "Before adding, Chrome checks the exact item, current price, Store only seller, saved Shipping or Pickup choice, quantity one, and Add to cart button. You still complete checkout.")
   ];
 
   if (!policyTargetsSafe) {
     return result("guarded_add_policy_incomplete", "attention", "add_to_cart", "none", readyForMonitoring,
-      "Review this cart plan's store limits",
-      "One or more enabled targets is missing a requirement for safe add-only execution.",
+      "Review this plan's store limits",
+      "Complete the price, seller, and Shipping or Pickup choices for each selected item.",
       "review_plan", "Review limits", addChecks, targetReadiness);
   }
   const laneTargets = enabledTargets.filter((target) => {
@@ -414,48 +452,57 @@ export function buildPurchaseAutomationReadiness(
   });
   if (!laneTargets.length) {
     return result("guarded_add_lane_closed", "attention", "add_to_cart", "none", readyForMonitoring,
-      `${joinedStores(enabledTargets)} guarded add is not qualified yet`,
-      "Monitoring and notifications remain available, but this plan cannot create a retailer click until a separately verified lane is activated.",
+      `${joinedStores(enabledTargets)} is not switched on for cart adds yet`,
+      "Yoink will keep watching. Turn on cart adds for this store before expecting an item in your cart.",
       "review_plan", "Review plan", addChecks, targetReadiness);
   }
   if (!connectedSignal) {
     return result("needs_signal", "waiting", "add_to_cart", "none", false,
-      "Connect a product signal",
-      "The guarded store lane exists, but Yoink needs a supported signal source before an exact opportunity can arrive.",
-      "connect_signal", "Connect signal", addChecks, targetReadiness);
+      "Connect a call source",
+      "Yoink needs a supported source before it can recognize an exact match.",
+      "connect_signal", "Connect source", addChecks, targetReadiness);
   }
   if (!notificationDevices.length) {
     return result("needs_current_companion", "attention", "add_to_cart", "none", false,
-      "Update and pair the Chrome companion",
-      `Guarded actions need an active Yoink ${context.version} companion with the current contract.`,
+      "Update and pair Yoink in Chrome",
+      `Install or update Yoink ${context.version} in Chrome before using cart adds.`,
       "update_companion", "Update companion", addChecks, targetReadiness);
   }
   if (!onlineCurrentDevices.length) {
     return result("companion_offline", "waiting", "add_to_cart", "notification", readyForMonitoring,
-      "Your guarded plan is configured; Chrome is offline",
-      "Open the paired browser before expecting a store-page verification or cart action.",
+      "Open Chrome to resume",
+      "Your plan stays saved. Open the paired browser before expecting a cart add.",
       "open_chrome", "Open Chrome", addChecks, targetReadiness);
   }
   if (!laneTargets.some((target) => onlineCurrentDevices.some((device) => deviceSupportsRetailer(device, target.retailerId)))) {
     return result("guarded_add_device_incapable", "attention", "add_to_cart", "notification", readyForMonitoring,
-      `Update the Chrome companion for ${joinedStores(laneTargets)}`,
-      "The store lane is qualified, but no online current companion advertises its exact add-only adapter contract.",
+      `Update Yoink in Chrome for ${joinedStores(laneTargets)}`,
+      "The connected extension cannot add to the cart at this store yet.",
       "update_companion", "Update companion", addChecks, targetReadiness);
   }
   if (context.executionMode !== "live") {
     return result("guarded_add_shadow", "waiting", "add_to_cart", "notification", readyForMonitoring,
-      "Guarded clicks are in test mode",
-      "Yoink can evaluate exact matches, but the control plane is not permitting retailer clicks.",
-      "enable_live_mode", "Review execution mode", addChecks, targetReadiness);
+      "Cart adds are in test mode",
+      "Yoink can check exact matches, but it will not add to the cart until action mode is live.",
+      "enable_live_mode", "Review action mode", addChecks, targetReadiness);
   }
   if (context.actionsPaused) {
     return result("guarded_add_paused", "waiting", "add_to_cart", "notification", readyForMonitoring,
-      "Guarded actions are paused",
-      "Your exact plan and store qualification stay saved while all retailer clicks remain closed.",
+      "Cart adds are paused",
+      "Your plan stays saved. Resume actions when you want Yoink to add matched items.",
       "resume_actions", "Review pause", addChecks, targetReadiness);
   }
+  const sessionEligibleTargets = targetReadiness.filter((target) =>
+    target.laneQualified && target.companionCapable && !target.sessionBlocked);
+  if (!sessionEligibleTargets.length) {
+    return result("guarded_add_session_blocked", "waiting", "add_to_cart", "notification", readyForMonitoring,
+      `Sign in to ${joinedStores(laneTargets)} in Chrome`,
+      "Sign in or finish the security check, then retry. Your plan stays saved and monitored.",
+      "open_chrome", "Open store in Chrome", addChecks, targetReadiness);
+  }
   return result("guarded_add_armed", "ready", "add_to_cart", "guarded_add", readyForMonitoring,
-    "Guarded add is armed",
-    `A fresh trusted exact signal may start the ${joinedStores(laneTargets)} check. Chrome adds exactly one item only after the live page proves the reviewed price, first-party seller, and saved Shipping or Pickup choice. Checkout stays manual.`,
+    `${joinedStores(enabledTargets.filter((target) =>
+      sessionEligibleTargets.some((readyTarget) => readyTarget.retailerId === target.retailerId)))} is ready for cart adds`,
+    "Yoink rechecks the item, price, seller, and delivery choice before adding exactly one item. You still complete checkout.",
     "wait_for_offer", "Wait for an exact match", addChecks, targetReadiness);
 }

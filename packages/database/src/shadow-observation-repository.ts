@@ -38,6 +38,7 @@ const ROUTE_REASON_CODES = new Set([
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const MAX_OBSERVATION_AGE_MS = 10 * 60_000;
 const QUALIFICATION_EVIDENCE_WINDOW_MS = 30 * 24 * 60 * 60_000;
+const QUALIFICATION_WARNING_MS = 7 * 24 * 60 * 60_000;
 const RETENTION_LIMIT = 1_000;
 const EXACT_RETAILER_SKUS = new Set<SupportedRetailerId>([
   "target", "walmart", "amazon", "bestbuy", "ravensburger",
@@ -287,6 +288,20 @@ export interface TargetQualificationCheck {
   met: boolean;
 }
 
+export type AddQualificationWarning = "none" | "expiring" | "expired" | "version_changed";
+
+export interface AddQualificationRecord {
+  adapterVersion: string;
+  highestAction: string;
+  status: "qualified" | "suspended" | "retired";
+  qualifiedAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  expiresInMs: number | null;
+  currentVersion: boolean;
+  warning: AddQualificationWarning;
+}
+
 export interface TargetQualificationReadiness {
   retailerId: "target";
   adapterVersion: typeof TARGET_OBSERVER_VERSION;
@@ -301,13 +316,7 @@ export interface TargetQualificationReadiness {
   rehearsalCount: number;
   liveEvidenceHash: string;
   qualificationEvidenceHash: string;
-  qualification: null | {
-    adapterVersion: string;
-    highestAction: string;
-    status: "qualified" | "suspended" | "retired";
-    qualifiedAt: string;
-    updatedAt: string;
-  };
+  qualification: AddQualificationRecord | null;
   addToCartQualified: boolean;
   mutationAuthorized: boolean;
   nextStep: string;
@@ -333,13 +342,7 @@ export interface WalmartQualificationReadiness {
   rehearsalCount: number;
   liveEvidenceHash: string;
   qualificationEvidenceHash: string;
-  qualification: null | {
-    adapterVersion: string;
-    highestAction: string;
-    status: "qualified" | "suspended" | "retired";
-    qualifiedAt: string;
-    updatedAt: string;
-  };
+  qualification: AddQualificationRecord | null;
   addToCartQualified: boolean;
   mutationAuthorized: boolean;
   nextStep: string;
@@ -372,13 +375,7 @@ export interface AmazonQualificationReadiness {
   rehearsalCount: number;
   liveEvidenceHash: string;
   qualificationEvidenceHash: string;
-  qualification: null | {
-    adapterVersion: string;
-    highestAction: string;
-    status: "qualified" | "suspended" | "retired";
-    qualifiedAt: string;
-    updatedAt: string;
-  };
+  qualification: AddQualificationRecord | null;
   addToCartQualified: boolean;
   mutationAuthorized: boolean;
   nextStep: string;
@@ -404,13 +401,7 @@ export interface BestBuyQualificationReadiness {
   rehearsalCount: number;
   liveEvidenceHash: string;
   qualificationEvidenceHash: string;
-  qualification: null | {
-    adapterVersion: string;
-    highestAction: string;
-    status: "qualified" | "suspended" | "retired";
-    qualifiedAt: string;
-    updatedAt: string;
-  };
+  qualification: AddQualificationRecord | null;
   addToCartQualified: boolean;
   mutationAuthorized: boolean;
   nextStep: string;
@@ -496,6 +487,38 @@ interface QualificationRow {
   status: "qualified" | "suspended" | "retired";
   qualifiedAt: string;
   updatedAt: string;
+  expiresAt: string;
+}
+
+function qualificationState(
+  row: QualificationRow | null,
+  expectedAdapterVersion: string,
+  now: number
+): { qualification: AddQualificationRecord | null; addToCartQualified: boolean } {
+  if (!row) return { qualification: null, addToCartQualified: false };
+  const expirationTime = new Date(row.expiresAt).getTime();
+  const currentVersion = row.adapterVersion === expectedAdapterVersion;
+  const warning: AddQualificationWarning = !currentVersion
+    ? "version_changed"
+    : !Number.isFinite(expirationTime) || expirationTime <= now
+      ? "expired"
+      : expirationTime <= now + QUALIFICATION_WARNING_MS
+        ? "expiring"
+        : "none";
+  const actionRank: Record<string, number> = { notify: 0, add_to_cart: 1, prepare_checkout: 2, submit_order: 3 };
+  return {
+    qualification: {
+      ...row,
+      expiresInMs: Number.isFinite(expirationTime) ? Math.round(expirationTime - now) : null,
+      currentVersion,
+      warning
+    },
+    addToCartQualified: row.status === "qualified"
+      && currentVersion
+      && Number.isFinite(expirationTime)
+      && expirationTime > now
+      && Number(actionRank[row.highestAction] ?? -1) >= 1
+  };
 }
 
 interface QualificationTrialRow {
@@ -945,16 +968,18 @@ export class ShadowObservationRepository {
     const qualificationEvidenceHash = qualificationHashes.length
       ? stableHash("target-add-qualification-evidence-v1", TARGET_ADD_ADAPTER_VERSION, ...qualificationHashes)
       : "";
-    const qualification = this.db.get<QualificationRow>(
+    const qualificationRow = this.db.get<QualificationRow>(
       `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
-              status, qualified_at AS qualifiedAt, updated_at AS updatedAt
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
        FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'target'`,
       currentRequestScope().userId
     ) ?? null;
-    const actionRank: Record<string, number> = { notify: 0, add_to_cart: 1, prepare_checkout: 2, submit_order: 3 };
-    const addToCartQualified = qualification?.status === "qualified"
-      && qualification.adapterVersion === TARGET_ADD_ADAPTER_VERSION
-      && Number(actionRank[qualification.highestAction] ?? -1) >= 1;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      TARGET_ADD_ADAPTER_VERSION,
+      now
+    );
     const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
       "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
       currentRequestScope().userId
@@ -964,15 +989,19 @@ export class ShadowObservationRepository {
       && control.actions_paused === 0;
     const firstMissingLive = checks.find((check) => check.requiredForQualification
       && check.id !== "pre_click_rehearsal" && !check.met);
-    const nextStep = mutationAuthorized
-      ? "Guarded Target add-to-cart execution is active for Target-sold offers matching the saved Shipping or Pickup choice, quantity one."
-      : addToCartQualified
-        ? "Target add-to-cart is qualified but globally paused. Use Actions paused to resume it."
-      : !liveEvidenceReady
-        ? firstMissingLive?.detail ?? "Collect current Target read-only evidence before an add-to-cart rehearsal."
-        : !rehearsalReady
-          ? "Run one mutation-disabled Target add rehearsal from the Chrome companion."
-          : "The live dossier and no-click rehearsal are complete. Explicit add-only qualification review is the remaining gate.";
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged Target add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The Target add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded Target add-to-cart execution is active for Target-sold offers matching the saved Shipping or Pickup choice, quantity one."
+          : addToCartQualified
+            ? "Target add-to-cart is qualified but globally paused. Use Actions paused to resume it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current Target read-only evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled Target add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit add-only qualification review is the remaining gate.";
     return {
       retailerId: "target",
       adapterVersion: TARGET_OBSERVER_VERSION,
@@ -1099,16 +1128,18 @@ export class ShadowObservationRepository {
     const qualificationEvidenceHash = qualificationHashes.length
       ? stableHash("walmart-add-qualification-evidence-v1", WALMART_ADD_ADAPTER_VERSION, ...qualificationHashes)
       : "";
-    const qualification = this.db.get<QualificationRow>(
+    const qualificationRow = this.db.get<QualificationRow>(
       `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
-              status, qualified_at AS qualifiedAt, updated_at AS updatedAt
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
        FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'walmart'`,
       currentRequestScope().userId
     ) ?? null;
-    const actionRank: Record<string, number> = { notify: 0, add_to_cart: 1, prepare_checkout: 2, submit_order: 3 };
-    const addToCartQualified = qualification?.status === "qualified"
-      && qualification.adapterVersion === WALMART_ADD_ADAPTER_VERSION
-      && Number(actionRank[qualification.highestAction] ?? -1) >= 1;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      WALMART_ADD_ADAPTER_VERSION,
+      now
+    );
     const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
       "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
       currentRequestScope().userId
@@ -1118,15 +1149,19 @@ export class ShadowObservationRepository {
       && control.actions_paused === 0;
     const firstMissingLive = checks.find((check) => check.requiredForQualification
       && check.id !== "pre_click_rehearsal" && !check.met);
-    const nextStep = mutationAuthorized
-      ? "Guarded Walmart add-to-cart execution is active for Walmart-sold offers matching the saved Shipping or Pickup choice, quantity one."
-      : addToCartQualified
-        ? "Walmart add-to-cart is qualified but globally paused. Resume Actions to enable it."
-        : !liveEvidenceReady
-          ? firstMissingLive?.detail ?? "Collect current Walmart read-only evidence before an add-to-cart rehearsal."
-          : !rehearsalReady
-            ? "Run one mutation-disabled Walmart add rehearsal from the Chrome companion."
-            : "The live dossier and no-click rehearsal are complete. Explicit Walmart add-only qualification review is the remaining gate.";
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged Walmart add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The Walmart add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded Walmart add-to-cart execution is active for Walmart-sold offers matching the saved Shipping or Pickup choice, quantity one."
+          : addToCartQualified
+            ? "Walmart add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current Walmart read-only evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled Walmart add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit Walmart add-only qualification review is the remaining gate.";
     return {
       retailerId: "walmart",
       adapterVersion: WALMART_OBSERVER_VERSION,
@@ -1254,16 +1289,18 @@ export class ShadowObservationRepository {
     const qualificationEvidenceHash = qualificationHashes.length
       ? stableHash("amazon-add-qualification-evidence-v1", AMAZON_ADD_ADAPTER_VERSION, ...qualificationHashes)
       : "";
-    const qualification = this.db.get<QualificationRow>(
+    const qualificationRow = this.db.get<QualificationRow>(
       `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
-              status, qualified_at AS qualifiedAt, updated_at AS updatedAt
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
        FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'amazon'`,
       currentRequestScope().userId
     ) ?? null;
-    const actionRank: Record<string, number> = { notify: 0, add_to_cart: 1, prepare_checkout: 2, submit_order: 3 };
-    const addToCartQualified = qualification?.status === "qualified"
-      && qualification.adapterVersion === AMAZON_ADD_ADAPTER_VERSION
-      && Number(actionRank[qualification.highestAction] ?? -1) >= 1;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      AMAZON_ADD_ADAPTER_VERSION,
+      now
+    );
     const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
       "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
       currentRequestScope().userId
@@ -1273,15 +1310,19 @@ export class ShadowObservationRepository {
       && control.actions_paused === 0;
     const firstMissingLive = checks.find((check) => check.requiredForQualification
       && check.id !== "pre_click_rehearsal" && !check.met);
-    const nextStep = mutationAuthorized
-      ? "Guarded Amazon add-to-cart execution is active for Amazon.com-sold offers matching the saved Shipping or Pickup choice, quantity one."
-      : addToCartQualified
-        ? "Amazon add-to-cart is qualified but globally paused. Resume Actions to enable it."
-        : !liveEvidenceReady
-          ? firstMissingLive?.detail ?? "Collect current Amazon evidence before an add-to-cart rehearsal."
-          : !rehearsalReady
-            ? "Run one mutation-disabled Amazon add rehearsal from the Chrome companion."
-            : "The live dossier and no-click rehearsal are complete. Explicit Amazon add-only qualification review is the remaining gate.";
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged Amazon add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The Amazon add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded Amazon add-to-cart execution is active for Amazon.com-sold offers matching the saved Shipping or Pickup choice, quantity one."
+          : addToCartQualified
+            ? "Amazon add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current Amazon evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled Amazon add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit Amazon add-only qualification review is the remaining gate.";
     return {
       retailerId: "amazon",
       adapterVersion: AMAZON_OBSERVER_VERSION,
@@ -1408,16 +1449,18 @@ export class ShadowObservationRepository {
     const qualificationEvidenceHash = qualificationHashes.length
       ? stableHash("bestbuy-add-qualification-evidence-v1", BESTBUY_ADD_ADAPTER_VERSION, ...qualificationHashes)
       : "";
-    const qualification = this.db.get<QualificationRow>(
+    const qualificationRow = this.db.get<QualificationRow>(
       `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
-              status, qualified_at AS qualifiedAt, updated_at AS updatedAt
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
        FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'bestbuy'`,
       currentRequestScope().userId
     ) ?? null;
-    const actionRank: Record<string, number> = { notify: 0, add_to_cart: 1, prepare_checkout: 2, submit_order: 3 };
-    const addToCartQualified = qualification?.status === "qualified"
-      && qualification.adapterVersion === BESTBUY_ADD_ADAPTER_VERSION
-      && Number(actionRank[qualification.highestAction] ?? -1) >= 1;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      BESTBUY_ADD_ADAPTER_VERSION,
+      now
+    );
     const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
       "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
       currentRequestScope().userId
@@ -1427,15 +1470,19 @@ export class ShadowObservationRepository {
       && control.actions_paused === 0;
     const firstMissingLive = checks.find((check) => check.requiredForQualification
       && check.id !== "pre_click_rehearsal" && !check.met);
-    const nextStep = mutationAuthorized
-      ? "Guarded Best Buy add-to-cart execution is active for Best Buy-sold offers matching the saved Shipping or Pickup choice, quantity one."
-      : addToCartQualified
-        ? "Best Buy add-to-cart is qualified but globally paused. Resume Actions to enable it."
-        : !liveEvidenceReady
-          ? firstMissingLive?.detail ?? "Collect current Best Buy evidence before an add-to-cart rehearsal."
-          : !rehearsalReady
-            ? "Run one mutation-disabled Best Buy add rehearsal from the Chrome companion."
-            : "The live dossier and no-click rehearsal are complete. Explicit Best Buy add-only qualification review is the remaining gate.";
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged Best Buy add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The Best Buy add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded Best Buy add-to-cart execution is active for Best Buy-sold offers matching the saved Shipping or Pickup choice, quantity one."
+          : addToCartQualified
+            ? "Best Buy add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current Best Buy evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled Best Buy add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit Best Buy add-only qualification review is the remaining gate.";
     return {
       retailerId: "bestbuy",
       adapterVersion: BESTBUY_OBSERVER_VERSION,

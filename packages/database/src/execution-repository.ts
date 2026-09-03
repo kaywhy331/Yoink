@@ -12,6 +12,10 @@ import { jobIsTerminal, jobMayHaveMutated } from "../../domain/src/job-state.js"
 import { cleanText } from "../../domain/src/normalize.js";
 import { ControlRepository } from "./control-repository.js";
 import { YoinkDatabase } from "./database.js";
+import {
+  RETAILER_SESSION_FUTURE_TOLERANCE_MS,
+  RETAILER_SESSION_MAX_AGE_MS
+} from "./retailer-readiness-repository.js";
 import { currentRequestScope } from "./request-scope.js";
 import { SignalRepository } from "./signal-repository.js";
 import { SpendLedgerRepository } from "./spend-ledger-repository.js";
@@ -40,14 +44,7 @@ export const EXECUTION_RECOVERY_AFTER_MUTATION_MESSAGE =
 export const EXECUTION_RECOVERY_SIGNAL_WINDOW_REASON = "signal_window_expired";
 export const EXECUTION_RECOVERY_SIGNAL_WINDOW_MESSAGE =
   "The signal action window expired before Chrome leased the job; no retailer action occurred.";
-const ACTION_RANK: Record<string, number> = {
-  notify: 0,
-  add_to_cart: 1,
-  prepare_checkout: 2,
-  submit_order: 3
-};
-
-export type NoLeaseReason = "shadow_mode" | "actions_paused" | "device_unavailable" | "device_busy" | "no_jobs" | "adapter_unqualified";
+export type NoLeaseReason = "shadow_mode" | "actions_paused" | "device_unavailable" | "device_busy" | "no_jobs";
 
 export interface JobLease {
   contractVersion: typeof BROWSER_SAFETY_CONTRACT_VERSION;
@@ -91,6 +88,7 @@ interface CandidateRow {
   attribution_url: string;
   attribution_provider: string;
   attribution_metadata_json: string;
+  adapter_version: string;
   expires_at: string;
 }
 
@@ -101,6 +99,11 @@ export interface JobProgressInput {
   evidence: Record<string, unknown>;
 }
 
+export interface ActionHandoffStatus {
+  jobId: string;
+  status: "cart_ready" | "needs_you" | "closed";
+}
+
 interface ExpiredLeaseRow {
   id: string;
   state: JobState;
@@ -108,10 +111,6 @@ interface ExpiredLeaseRow {
 
 function capabilityHash(token: string): string {
   return stableHash("yoink-job-capability-v1", token);
-}
-
-function adapterAllows(action: string, highestAction: string): boolean {
-  return Number(ACTION_RANK[highestAction] ?? -1) >= Number(ACTION_RANK[action] ?? 99);
 }
 
 function deviceEvidence(value: Record<string, unknown>): Record<string, unknown> {
@@ -138,7 +137,10 @@ function deviceEvidence(value: Record<string, unknown>): Record<string, unknown>
   if (value.latency && typeof value.latency === "object" && !Array.isArray(value.latency)) {
     const input = value.latency as Record<string, unknown>;
     const latency: Record<string, number> = {};
-    for (const key of ["leaseToCartReadyMs", "clickToCartReadyMs", "clickToSettleMs"] as const) {
+    for (const key of [
+      "leaseToCartReadyMs", "leaseToBaselineMs", "baselineToOfferMs", "offerToClickMs",
+      "clickToSettleMs", "clickToCartReadyMs", "settleToCartReadyMs"
+    ] as const) {
       const milliseconds = Number(input[key]);
       if (Number.isSafeInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 60 * 60_000) {
         latency[key] = milliseconds;
@@ -188,6 +190,53 @@ export class ExecutionRepository {
     this.signals = new SignalRepository(db);
     this.control = new ControlRepository(db);
     this.spendLedger = new SpendLedgerRepository(db);
+  }
+
+  actionHandoffStatuses(deviceId: string, jobIds: string[]): ActionHandoffStatus[] {
+    if (!Array.isArray(jobIds) || jobIds.length < 1 || jobIds.length > 10) {
+      throw new Error("One through ten action handoff job IDs are required.");
+    }
+    const ids = [...new Set(jobIds.map((value) => cleanText(value, 120)))];
+    if (ids.some((value) => !/^[A-Za-z0-9_-]{3,120}$/.test(value))) {
+      throw new Error("Every action handoff job ID must be valid.");
+    }
+    const scope = currentRequestScope();
+    const rows = this.db.all<{
+      id: string;
+      state: JobState;
+      userReported: number;
+      confirmationObserved: number;
+    }>(
+      `SELECT aj.id, aj.state,
+              EXISTS(SELECT 1 FROM action_events ae
+                WHERE ae.job_id = aj.id
+                  AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')) AS userReported,
+              EXISTS(SELECT 1 FROM order_confirmation_observations observation
+                WHERE observation.action_job_id = aj.id
+                  AND observation.tenant_id = aj.tenant_id
+                  AND observation.user_id = aj.user_id
+                  AND observation.device_id = aj.assigned_device_id) AS confirmationObserved
+       FROM action_jobs aj
+       WHERE aj.tenant_id = ? AND aj.user_id = ? AND aj.assigned_device_id = ?
+         AND aj.action = 'add_to_cart'
+         AND aj.id IN (${ids.map(() => "?").join(", ")})`,
+      scope.tenantId,
+      scope.userId,
+      cleanText(deviceId, 120),
+      ...ids
+    );
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return ids.flatMap((jobId) => {
+      const row = byId.get(jobId);
+      if (!row) return [];
+      const status: ActionHandoffStatus["status"] = Number(row.userReported) === 1
+        || Number(row.confirmationObserved) === 1
+        ? "closed"
+        : ["manual_review", "submission_uncertain"].includes(row.state)
+          ? "needs_you"
+          : row.state === "confirmed" ? "cart_ready" : "closed";
+      return [{ jobId, status }];
+    });
   }
 
   recoverExpiredLeases(now = Date.now()): number {
@@ -251,19 +300,25 @@ export class ExecutionRepository {
     return expired.length;
   }
 
-  leaseNextJob(deviceId: string, now = Date.now()): LeaseResult {
+  leaseNextJob(
+    deviceId: string,
+    now = Date.now(),
+    accessibleRetailersHint?: readonly string[]
+  ): LeaseResult {
     const settings = this.control.settings();
     if (settings.executionMode !== "live") return { job: null, reason: "shadow_mode" };
     if (settings.actionsPaused) return { job: null, reason: "actions_paused" };
 
     return this.db.transaction(() => {
+      const safeDeviceId = cleanText(deviceId, 120);
+      const scope = currentRequestScope();
       this.recoverExpiredLeases(now);
       this.expirePendingJobs(now);
       this.spendLedger.releaseExpired(now);
       const device = this.db.get<{ capabilities_json: string }>(
         "SELECT capabilities_json FROM extension_devices WHERE id = ? AND user_id = ? AND status = 'active'",
-        cleanText(deviceId, 120),
-        currentRequestScope().userId
+        safeDeviceId,
+        scope.userId
       );
       if (!device) return { job: null, reason: "device_unavailable" };
       let capabilities: Record<string, unknown> = {};
@@ -279,7 +334,7 @@ export class ExecutionRepository {
            'add_authorized', 'adding', 'cart_verified', 'checkout_review',
            'submit_authorized', 'submitting'
          ) LIMIT 1`,
-        deviceId
+        safeDeviceId
       );
       if (active) return { job: null, reason: "device_busy" };
 
@@ -294,6 +349,24 @@ export class ExecutionRepository {
       if (!targetAddCapable && !walmartAddCapable && !amazonAddCapable && !bestBuyAddCapable) {
         return { job: null, reason: "device_unavailable" };
       }
+      // This device-supplied set is only a narrowing hint for optional Chrome
+      // host permissions. It can never grant a capability the paired device
+      // does not already possess, and omission preserves older clients.
+      const accessibleRetailers = accessibleRetailersHint === undefined
+        ? null
+        : new Set(accessibleRetailersHint.slice(0, 8).map((value) => cleanText(value, 40).toLowerCase())
+          .filter((value) => ["target", "walmart", "amazon", "bestbuy"].includes(value)));
+      const targetLeaseCapable = targetAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("target"));
+      const walmartLeaseCapable = walmartAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("walmart"));
+      const amazonLeaseCapable = amazonAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("amazon"));
+      const bestBuyLeaseCapable = bestBuyAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("bestbuy"));
+      if (!targetLeaseCapable && !walmartLeaseCapable && !amazonLeaseCapable && !bestBuyLeaseCapable) {
+        return { job: null, reason: "no_jobs" };
+      }
 
       const candidate = this.db.get<CandidateRow>(
         `SELECT aj.id, aj.action, aj.quantity,
@@ -301,9 +374,24 @@ export class ExecutionRepository {
                 aj.seller_policy, aj.expected_seller, aj.fulfillment,
                 l.retailer_id, l.retailer_sku, aj.canonical_url,
                 aj.attribution_url, aj.attribution_provider,
-                aj.attribution_metadata_json, aj.expires_at
+                aj.attribution_metadata_json,
+                qualification.adapter_version, aj.expires_at
          FROM action_jobs aj
          JOIN listings l ON l.id = aj.listing_id
+         JOIN retailer_adapter_qualifications qualification
+           ON qualification.tenant_id = aj.tenant_id
+          AND qualification.user_id = aj.user_id
+          AND qualification.retailer_id = l.retailer_id
+          AND qualification.status = 'qualified'
+          AND qualification.expires_at > ?
+          AND qualification.highest_action IN ('add_to_cart', 'prepare_checkout', 'submit_order')
+          AND qualification.adapter_version = CASE l.retailer_id
+            WHEN 'target' THEN ?
+            WHEN 'walmart' THEN ?
+            WHEN 'amazon' THEN ?
+            WHEN 'bestbuy' THEN ?
+            ELSE ''
+          END
          JOIN spend_reservations sr ON sr.id = aj.spend_reservation_id
          WHERE aj.user_id = ? AND aj.state = 'awaiting_executor'
            AND aj.expires_at > ? AND aj.max_unit_price_cents IS NOT NULL
@@ -313,6 +401,22 @@ export class ExecutionRepository {
            AND aj.intent_revision_id = (
              SELECT ir.id FROM mission_intent_revisions ir
              WHERE ir.mission_id = aj.mission_id ORDER BY ir.revision DESC LIMIT 1
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM retailer_session_readiness readiness
+             WHERE readiness.tenant_id = aj.tenant_id
+               AND readiness.user_id = aj.user_id
+               AND readiness.device_id = ?
+               AND readiness.retailer_id = l.retailer_id
+               AND readiness.signed_in_state IN ('signed_out', 'challenged')
+               AND readiness.updated_at >= ? AND readiness.updated_at <= ?
+               AND readiness.adapter_version = CASE l.retailer_id
+                 WHEN 'target' THEN ?
+                 WHEN 'walmart' THEN ?
+                 WHEN 'amazon' THEN ?
+                 WHEN 'bestbuy' THEN ?
+                 ELSE ''
+               END
            )
            AND (
              ? = 1 AND l.retailer_id = 'target' AND aj.action = 'add_to_cart'
@@ -329,13 +433,25 @@ export class ExecutionRepository {
                AND aj.fulfillment IN ('shipping', 'pickup')
            )
          ORDER BY aj.created_at LIMIT 1`,
-        currentRequestScope().userId,
+        nowIso(now),
+        TARGET_ADD_ADAPTER_VERSION,
+        WALMART_ADD_ADAPTER_VERSION,
+        AMAZON_ADD_ADAPTER_VERSION,
+        BESTBUY_ADD_ADAPTER_VERSION,
+        scope.userId,
         nowIso(now),
         nowIso(now),
-        targetAddCapable ? 1 : 0,
-        walmartAddCapable ? 1 : 0,
-        amazonAddCapable ? 1 : 0,
-        bestBuyAddCapable ? 1 : 0
+        safeDeviceId,
+        nowIso(now - RETAILER_SESSION_MAX_AGE_MS),
+        nowIso(now + RETAILER_SESSION_FUTURE_TOLERANCE_MS),
+        TARGET_ADD_ADAPTER_VERSION,
+        WALMART_ADD_ADAPTER_VERSION,
+        AMAZON_ADD_ADAPTER_VERSION,
+        BESTBUY_ADD_ADAPTER_VERSION,
+        targetLeaseCapable ? 1 : 0,
+        walmartLeaseCapable ? 1 : 0,
+        amazonLeaseCapable ? 1 : 0,
+        bestBuyLeaseCapable ? 1 : 0
       );
       if (!candidate) return { job: null, reason: "no_jobs" };
 
@@ -366,29 +482,6 @@ export class ExecutionRepository {
               : false;
       if (!deviceCanAttempt) return { job: null, reason: "device_unavailable" };
 
-      const qualification = this.db.get<{ adapter_version: string; highest_action: string; expires_at: string }>(
-        `SELECT adapter_version, highest_action, expires_at FROM retailer_adapter_qualifications
-         WHERE user_id = ? AND retailer_id = ? AND status = 'qualified' AND expires_at > ?`,
-        currentRequestScope().userId,
-        candidate.retailer_id,
-        nowIso(now)
-      );
-      if (!qualification || !adapterAllows(candidate.action, qualification.highest_action)) {
-        return { job: null, reason: "adapter_unqualified" };
-      }
-      if (candidate.retailer_id === "target" && qualification.adapter_version !== TARGET_ADD_ADAPTER_VERSION) {
-        return { job: null, reason: "adapter_unqualified" };
-      }
-      if (candidate.retailer_id === "walmart" && qualification.adapter_version !== WALMART_ADD_ADAPTER_VERSION) {
-        return { job: null, reason: "adapter_unqualified" };
-      }
-      if (candidate.retailer_id === "amazon" && qualification.adapter_version !== AMAZON_ADD_ADAPTER_VERSION) {
-        return { job: null, reason: "adapter_unqualified" };
-      }
-      if (candidate.retailer_id === "bestbuy" && qualification.adapter_version !== BESTBUY_ADD_ADAPTER_VERSION) {
-        return { job: null, reason: "adapter_unqualified" };
-      }
-
       const capabilityToken = randomBytes(32).toString("base64url");
       const leaseExpiresAt = nowIso(Math.min(new Date(candidate.expires_at).getTime(), now + LEASE_TTL_MS));
       this.signals.transitionJob(
@@ -396,14 +489,14 @@ export class ExecutionRepository {
         "leased",
         "device_lease",
         "A qualified paired Chrome device leased the action job.",
-        { deviceId },
+        { deviceId: safeDeviceId },
         now
       );
       this.db.run(
         `UPDATE action_jobs SET assigned_device_id = ?, capability_nonce_hash = ?,
            leased_at = ?, lease_expires_at = ?, updated_at = ?
          WHERE id = ? AND state = 'leased'`,
-        deviceId,
+        safeDeviceId,
         capabilityHash(capabilityToken),
         nowIso(now),
         leaseExpiresAt,
@@ -414,7 +507,7 @@ export class ExecutionRepository {
         reason: "leased",
         job: {
           contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
-          adapterVersion: qualification.adapter_version,
+          adapterVersion: candidate.adapter_version,
           id: candidate.id,
           capabilityToken,
           state: "leased",

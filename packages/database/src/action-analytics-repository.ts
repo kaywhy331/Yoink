@@ -20,6 +20,8 @@ export interface UserActionAnalytics {
     savingsVsMsrpCents: number | null;
     savingsCoveredOrders: number;
     reportedOrders: number;
+    overCapCount: number;
+    overCapAmountCents: number;
     savingsCoverage: "complete" | "partial" | "unavailable_without_msrp_evidence";
   };
   latency: Record<string, unknown>;
@@ -89,6 +91,16 @@ export class ActionAnalyticsRepository {
     );
     const reportedOrders = Number(savings?.reported ?? 0);
     const savingsCoveredOrders = Number(savings?.covered ?? 0);
+    const overCap = this.db.get<{ count: number; amount: number }>(
+      `SELECT COUNT(*) AS count,
+              COALESCE(SUM(CAST(json_extract(event.evidence_json, '$.overCapAmountCents') AS INTEGER)), 0) AS amount
+       FROM action_events event JOIN action_jobs job ON job.id = event.job_id
+       WHERE job.tenant_id = ? AND job.user_id = ?
+         AND event.reason_code = 'user_reported_order'
+         AND json_extract(event.evidence_json, '$.overCap') = 1`,
+      scope.tenantId,
+      scope.userId
+    );
     const retailers = this.db.all<{
       retailerId: string;
       actions: number;
@@ -141,6 +153,8 @@ export class ActionAnalyticsRepository {
         savingsVsMsrpCents: savingsCoveredOrders ? Number(savings?.amount ?? 0) : null,
         savingsCoveredOrders,
         reportedOrders,
+        overCapCount: Number(overCap?.count ?? 0),
+        overCapAmountCents: Number(overCap?.amount ?? 0),
         savingsCoverage: savingsCoveredOrders === 0
           ? "unavailable_without_msrp_evidence"
           : savingsCoveredOrders === reportedOrders ? "complete" : "partial"
@@ -172,6 +186,8 @@ export class ActionAnalyticsRepository {
       ["savings", "vs_msrp_cents", "", snapshot.spend.savingsVsMsrpCents ?? "", "cents", snapshot.spend.savingsCoverage],
       ["savings", "covered_orders", "", snapshot.spend.savingsCoveredOrders, "orders", snapshot.spend.savingsCoverage],
       ["savings", "reported_orders", "", snapshot.spend.reportedOrders, "orders", snapshot.spend.savingsCoverage],
+      ["spend", "over_cap_orders", "", snapshot.spend.overCapCount, "orders", "user_reported"],
+      ["spend", "over_cap_amount_cents", "", snapshot.spend.overCapAmountCents, "cents", "user_reported"],
       ...Object.entries(latency.hops || {}).flatMap(([hop, value]) => [
         ["latency", `${hop}_p50`, "", value.p50Ms ?? "", "milliseconds", `${Number(value.samples ?? 0)} samples`],
         ["latency", `${hop}_p95`, "", value.p95Ms ?? "", "milliseconds", `${Number(value.samples ?? 0)} samples`]

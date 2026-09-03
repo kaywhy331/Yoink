@@ -33,12 +33,28 @@ async function eventually(assertion: () => void, attempts = 100): Promise<void> 
 
 test("the Operations workspace pauses and runs one bounded maintenance schedule", async () => {
   const db = new YoinkDatabase();
+  let restartCount = 0;
   const tasks = new BackgroundTaskRepository(db);
   const schedules = runWithRequestScope(LOCAL_REQUEST_SCOPE, () => tasks.ensureDefaultSchedules());
   const schedule = schedules.find((item) => item.taskKind === "execution_recovery");
   assert.ok(schedule);
   const webRoot = join(process.cwd(), "apps", "web");
-  const server = createYoinkServer({ db, webRoot, version: "background-worker-dashboard-test" });
+  const server = createYoinkServer({
+    db,
+    webRoot,
+    version: "background-worker-dashboard-test",
+    backgroundWorkerRestart: async () => { restartCount += 1; },
+    backgroundWorkerStatus: () => ({
+      state: "running",
+      healthy: true,
+      runtimeKind: "local_in_process",
+      mode: "embedded",
+      lastHeartbeatAt: new Date().toISOString(),
+      lastErrorCode: "",
+      deploymentAttested: true,
+      deploymentContractVersion: 1
+    })
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address() as AddressInfo;
@@ -61,7 +77,11 @@ test("the Operations workspace pauses and runs one bounded maintenance schedule"
   });
   Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
   Object.defineProperty(browser, "scrollTo", { configurable: true, value: () => undefined });
-  Object.defineProperty(browser, "confirm", { configurable: true, value: () => true });
+  Object.defineProperty(browser, "confirm", { configurable: true, value: () => { throw new Error("Native confirm must not run."); } });
+  Object.defineProperty(browser, "YoinkDialogs", {
+    configurable: true,
+    value: { confirmDialog: async () => ({ confirmed: true, note: "" }) }
+  });
   Object.defineProperty(browser, "CSS", {
     configurable: true,
     value: { escape: (value: string) => String(value).replace(/[^A-Za-z0-9_-]/g, "\\$&") }
@@ -102,6 +122,11 @@ test("the Operations workspace pauses and runs one bounded maintenance schedule"
       /Action safety recovery/
     ));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /queued for one bounded run/));
+    const restart = browser.document.querySelector("#adminRestartWorkerButton") as HTMLButtonElement;
+    assert.equal(restart.hidden, false);
+    restart.click();
+    await eventually(() => assert.equal(restartCount, 1));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Background worker restarted/));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 0);
     assert.equal(db.get<{ count: number }>(

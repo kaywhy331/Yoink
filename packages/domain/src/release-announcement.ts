@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-18-0-trusted-signal-cart-trigger",
-  version: "1.18.0",
-  publishedAt: "2026-09-01T01:30:00.000Z",
-  title: "Exact signals now start guarded cart checks",
-  summary: "Trusted exact signals can now trigger the reviewed cart plan across all four supported stores even when the provider omits live-offer fields.",
+  id: "yoink-1-19-0-contextual-action-handoff",
+  version: "1.19.0",
+  publishedAt: "2026-09-02T23:57:23.000Z",
+  title: "The next action is easier to find",
+  summary: "Yoink now keeps the current product, cart handoff, and system attention state together without turning the popup or dashboards into settings pages.",
   highlights: [
-    "Target, Walmart, Amazon, and Best Buy signals enter the same immediate guarded job handoff.",
-    "Missing source price, seller, or fulfillment remains unknown until Chrome verifies the live exact offer.",
-    "First-party, price-cap, Shipping-default or explicit-Pickup, quantity-one, exact-cart-proof, and manual-checkout limits are unchanged."
+    "Cart ready and Needs you handoffs appear immediately and remain recoverable after the popup or store tab closes.",
+    "Background updates preserve loaded pages, refresh the visible workspace, and show a clear Retry control if data becomes stale.",
+    "Validated Walmart handoffs prefer the review-order route with affiliate-safe fallbacks; checkout and order submission remain manual."
   ],
   docsUrl: "/docs"
 });

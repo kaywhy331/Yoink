@@ -49,7 +49,8 @@ test("the Howl protocol builder wraps only directory destinations", () => {
     destinationUrl: "https://www.target.com/p/-/A-94972381",
     publisherSlug: "collectwithdodo",
     articleName: "Target product",
-    articleUrl: "https://yoink.example/products/target-product"
+    articleUrl: "https://yoink.example/products/target-product",
+    trackingId: "target_94972381"
   });
   const route = new URL(target);
   assert.equal(route.origin, "https://howl.link");
@@ -58,6 +59,7 @@ test("the Howl protocol builder wraps only directory destinations", () => {
   assert.equal(route.searchParams.get("publisher_slug"), "collectwithdodo");
   assert.equal(route.searchParams.get("article_name"), "Target product");
   assert.equal(route.searchParams.get("article_url"), "https://yoink.example/products/target-product");
+  assert.equal(route.searchParams.get("u1"), "target_94972381");
   assert.equal(buildHowlAffiliateRoute({
     destinationUrl: "https://www.amazon.com/dp/B0DCGQ6CJD",
     publisherSlug: "collectwithdodo",

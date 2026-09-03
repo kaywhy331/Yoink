@@ -5,6 +5,7 @@ import {
   BESTBUY_ADD_ADAPTER_VERSION,
   TARGET_ADD_ADAPTER_VERSION,
   WALMART_ADD_ADAPTER_VERSION,
+  type JobState,
   type SignalEventInput,
   type StrategyDefinition
 } from "../packages/contracts/src/index.js";
@@ -13,6 +14,8 @@ import { ControlRepository } from "../packages/database/src/control-repository.j
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { ExecutionRepository } from "../packages/database/src/execution-repository.js";
+import { RetailerReadinessRepository } from "../packages/database/src/retailer-readiness-repository.js";
+import { SignalRepository } from "../packages/database/src/signal-repository.js";
 import { UserActionConnectorRepository } from "../packages/database/src/user-action-connector-repository.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 
@@ -463,7 +466,16 @@ test("Amazon add-only leasing requires the exact adapter and sanitizes ASIN evid
         retailerId: "amazon",
         retailerSku: "B0AMZN0001",
         offerListingId: "DO_NOT_STORE",
-        latency: { leaseToCartReadyMs: 1_234, clickToCartReadyMs: 456, secret: "DO_NOT_STORE" }
+        latency: {
+          leaseToCartReadyMs: 1_234,
+          leaseToBaselineMs: 300,
+          baselineToOfferMs: 400,
+          offerToClickMs: 78,
+          clickToSettleMs: 56,
+          clickToCartReadyMs: 456,
+          settleToCartReadyMs: 400,
+          secret: "DO_NOT_STORE"
+        }
       },
       NOW + 3_000
     );
@@ -473,7 +485,15 @@ test("Amazon add-only leasing requires the exact adapter and sanitizes ASIN evid
       "SELECT evidence_json FROM action_events WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
       lease.job.id
     )?.evidence_json || "{}")) as Record<string, unknown>;
-    assert.deepEqual(evidence.latency, { leaseToCartReadyMs: 1_234, clickToCartReadyMs: 456 });
+    assert.deepEqual(evidence.latency, {
+      leaseToCartReadyMs: 1_234,
+      leaseToBaselineMs: 300,
+      baselineToOfferMs: 400,
+      offerToClickMs: 78,
+      clickToSettleMs: 56,
+      clickToCartReadyMs: 456,
+      settleToCartReadyMs: 400
+    });
   } finally {
     db.close();
   }
@@ -551,6 +571,148 @@ test("Target add-only leasing binds the exact adapter and expires safely before 
   }
 });
 
+test("fresh exact-device retailer session blockers defer a guarded add without consuming it", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db);
+    const readiness = new RetailerReadinessRepository(db);
+    readiness.record(deviceId, {
+      contractVersion: 1,
+      retailerId: "target",
+      signedInState: "signed_out",
+      cartBaselineState: "unknown",
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+      errorCode: "signed_out"
+    }, NOW + 1_500);
+
+    assert.deepEqual(readiness.freshSessionBlockers(NOW + 2_000).map((item) => ({
+      deviceId: item.deviceId,
+      retailerId: item.retailerId,
+      signedInState: item.signedInState
+    })), [{ deviceId, retailerId: "target", signedInState: "signed_out" }]);
+    assert.equal(readiness.lane("target", NOW + 2_000).readyForGuardedAdd, false);
+    assert.deepEqual(execution.leaseNextJob(deviceId, NOW + 2_000), { job: null, reason: "no_jobs" });
+    assert.equal(db.get<{ state: string }>(
+      "SELECT state FROM action_jobs ORDER BY created_at LIMIT 1"
+    )?.state, "awaiting_executor");
+
+    readiness.record(deviceId, {
+      contractVersion: 1,
+      retailerId: "target",
+      signedInState: "ready",
+      cartBaselineState: "unknown",
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION
+    }, NOW + 2_500);
+    assert.deepEqual(readiness.freshSessionBlockers(NOW + 3_000), []);
+    assert.equal(readiness.lane("target", NOW + 3_000).readyForGuardedAdd, true);
+    const lease = execution.leaseNextJob(deviceId, NOW + 3_000);
+    assert.equal(lease.reason, "leased");
+    assert.equal(lease.job?.retailerId, "target");
+  } finally {
+    db.close();
+  }
+});
+
+test("the Chrome host-access hint can only narrow lease selection and never consumes hidden-store work", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db);
+    assert.deepEqual(
+      execution.leaseNextJob(deviceId, NOW + 2_000, ["walmart", "unknown"]),
+      { job: null, reason: "no_jobs" }
+    );
+    assert.equal(db.get<{ state: string }>(
+      "SELECT state FROM action_jobs ORDER BY created_at LIMIT 1"
+    )?.state, "awaiting_executor");
+
+    const lease = execution.leaseNextJob(deviceId, NOW + 3_000, ["target", "unknown"]);
+    assert.equal(lease.reason, "leased");
+    assert.equal(lease.job?.retailerId, "target");
+  } finally {
+    db.close();
+  }
+});
+
+test("stale or adapter-mismatched session evidence cannot suppress a guarded add", () => {
+  for (const [label, adapterVersion, updatedAt] of [
+    ["stale", TARGET_ADD_ADAPTER_VERSION, NOW - 10 * 60_000],
+    ["old_adapter", "target-add-previous", NOW + 1_500]
+  ] as const) {
+    const db = new YoinkDatabase();
+    try {
+      const { execution, deviceId } = targetExecution(db);
+      new RetailerReadinessRepository(db).record(deviceId, {
+        contractVersion: 1,
+        retailerId: "target",
+        signedInState: "challenged",
+        cartBaselineState: "unknown",
+        adapterVersion,
+        errorCode: label
+      }, updatedAt);
+      const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
+      assert.equal(lease.reason, "leased", label);
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test("an unavailable earlier store cannot head-of-line block a qualified queued store", () => {
+  for (const blocker of ["unqualified", "session_blocked"] as const) {
+    const db = new YoinkDatabase();
+    try {
+      const target = targetExecution(db);
+      walmartExecution(db);
+      db.run(
+        "UPDATE extension_devices SET capabilities_json = ? WHERE id = ?",
+        JSON.stringify({
+          readiness: true,
+          jobReconciliation: true,
+          targetAddOnly: true,
+          targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION,
+          walmartAddOnly: true,
+          walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION
+        }),
+        target.deviceId
+      );
+      db.run(
+        `UPDATE action_jobs SET created_at = ?
+         WHERE listing_id IN (SELECT id FROM listings WHERE retailer_id = 'target')`,
+        new Date(NOW - 1_000).toISOString()
+      );
+      if (blocker === "unqualified") {
+        db.run(
+          "UPDATE retailer_adapter_qualifications SET status = 'retired' WHERE retailer_id = 'target'"
+        );
+      } else {
+        new RetailerReadinessRepository(db).record(target.deviceId, {
+          contractVersion: 1,
+          retailerId: "target",
+          signedInState: "challenged",
+          cartBaselineState: "unknown",
+          adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+          errorCode: "security_challenge"
+        }, NOW + 1_500);
+      }
+
+      const lease = target.execution.leaseNextJob(
+        target.deviceId,
+        NOW + 2_000,
+        ["target", "walmart"]
+      );
+      assert.equal(lease.reason, "leased", blocker);
+      assert.equal(lease.job?.retailerId, "walmart", blocker);
+      assert.equal(db.get<{ state: string }>(
+        `SELECT aj.state FROM action_jobs aj
+         JOIN listings listing ON listing.id = aj.listing_id
+         WHERE listing.retailer_id = 'target'`
+      )?.state, "awaiting_executor", blocker);
+    } finally {
+      db.close();
+    }
+  }
+});
+
 test("batched Chrome progress is atomic when a later transition is invalid", () => {
   const db = new YoinkDatabase();
   try {
@@ -611,6 +773,92 @@ test("lease heartbeat is capped by the action job's real remaining execution bud
       lease.job!.capabilityToken,
       budgetEnd
     ), /execution budget has expired/);
+  } finally {
+    db.close();
+  }
+});
+
+test("device-scoped action handoff reconciliation closes after an explicit dashboard outcome", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db);
+    const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
+    assert.equal(lease.reason, "leased");
+    assert.ok(lease.job);
+    for (const [index, state] of [
+      "navigating",
+      "verifying_listing",
+      "offer_verified",
+      "add_authorized",
+      "adding",
+      "cart_verified",
+      "confirmed"
+    ].entries()) {
+      execution.reconcileJob(
+        deviceId,
+        lease.job.id,
+        lease.job.capabilityToken,
+        state as JobState,
+        `fixture_${state}`,
+        `Fixture ${state}.`,
+        {},
+        NOW + 3_000 + index
+      );
+    }
+    assert.deepEqual(execution.actionHandoffStatuses(deviceId, [lease.job.id]), [{
+      jobId: lease.job.id,
+      status: "cart_ready"
+    }]);
+    assert.deepEqual(execution.actionHandoffStatuses("device_other", [lease.job.id]), []);
+    new SignalRepository(db).reportCartOutcome(
+      lease.job.id,
+      "missed_it",
+      "I_REVIEWED_CHECKOUT_RESULT",
+      null,
+      "",
+      NOW + 20_000
+    );
+    assert.deepEqual(execution.actionHandoffStatuses(deviceId, [lease.job.id]), [{
+      jobId: lease.job.id,
+      status: "closed"
+    }]);
+    assert.throws(() => execution.actionHandoffStatuses(deviceId, []), /One through ten/);
+    assert.throws(() => execution.actionHandoffStatuses(deviceId, ["invalid id"]), /must be valid/);
+  } finally {
+    db.close();
+  }
+});
+
+test("device-scoped action handoff reconciliation exposes mutation uncertainty as Needs you", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db);
+    const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
+    assert.equal(lease.reason, "leased");
+    assert.ok(lease.job);
+    for (const [index, state] of [
+      "navigating",
+      "verifying_listing",
+      "offer_verified",
+      "add_authorized",
+      "adding",
+      "manual_review"
+    ].entries()) {
+      execution.reconcileJob(
+        deviceId,
+        lease.job.id,
+        lease.job.capabilityToken,
+        state as JobState,
+        `fixture_${state}`,
+        `Fixture ${state}.`,
+        {},
+        NOW + 3_000 + index
+      );
+    }
+    assert.deepEqual(execution.actionHandoffStatuses(deviceId, [lease.job.id]), [{
+      jobId: lease.job.id,
+      status: "needs_you"
+    }]);
   } finally {
     db.close();
   }

@@ -487,12 +487,12 @@ function queuedRuntimeDiagnostic(retailerSku: string, observedAt: string, extras
 
 interface HarnessOptions {
   permission?: boolean;
+  permittedRetailers?: Array<"target" | "walmart" | "amazon" | "bestbuy">;
   permissionRequest?: boolean;
   activeUrl?: string;
   healthVersion?: string;
   liveJob?: boolean;
   queuedJobCount?: number;
-  jobAvailableAfterPolls?: number;
   walmartJob?: boolean;
   amazonJob?: boolean;
   bestBuyJob?: boolean;
@@ -501,7 +501,13 @@ interface HarnessOptions {
   cartReadySound?: boolean;
   cartBaselineHydrationRetry?: boolean;
   cartBaselineFailure?: boolean;
+  postClickVerificationFailure?: boolean;
   notification?: boolean;
+  notificationPayload?: Record<string, unknown>;
+  notificationPayloads?: Array<Record<string, unknown>>;
+  notificationClickDuringCreate?: boolean;
+  notificationInteractionDelayMs?: number;
+  closedNotificationDeliveryIds?: string[];
   releaseVersion?: string;
   releaseReady?: boolean;
   activeJob?: "pre_boundary" | "post_boundary";
@@ -509,6 +515,7 @@ interface HarnessOptions {
   trackalackerPush?: boolean;
   visibleTrackalackerFallback?: boolean;
   trackalackerStatusDelayMs?: number;
+  trackalackerSignalDelayMs?: number;
   trackalackerNotificationDelayMs?: number;
   trackalackerBatchReceipts?: Array<Array<{ accepted: boolean; retryable?: boolean; errorCode?: string }>>;
   amazonHydrationRetry?: boolean;
@@ -532,14 +539,24 @@ interface HarnessOptions {
   adapterDiagnosticFailureStatus?: number;
   adapterDiagnosticDelayMs?: number;
   confirmedJobEventDelayMs?: number;
+  hotPathControlDelayMs?: number;
+  tabLoadDelayMs?: number;
   queuedAdapterDiagnostics?: Array<Record<string, unknown>>;
   observerRecipeDistribution?: Record<string, unknown>;
   observerRecipeRoot?: Record<string, unknown>;
   observerRecipeTrustState?: Record<string, unknown>;
   observerRecipeEvaluation?: Record<string, unknown>;
   watchLease?: Record<string, unknown>;
+  watchObservationSignal?: boolean;
   reverificationPlan?: Record<string, unknown>;
   localDeletionResidual?: boolean;
+  handoffReconciliationStatus?: "cart_ready" | "needs_you" | "closed";
+  handoffReconciliationResponses?: Array<{
+    availabilityVersion: number;
+    status: "cart_ready" | "needs_you" | "closed";
+  }>;
+  retailerSessionState?: "ready" | "signed_out" | "challenged" | "unknown";
+  retailerSessionStates?: Array<"ready" | "signed_out" | "challenged" | "unknown">;
 }
 
 async function waitFor(
@@ -668,6 +685,7 @@ function harness(options: HarnessOptions = {}) {
   const injections: Array<Record<string, unknown>> = [];
   const jobStates: string[] = [];
   const shownNotifications: Array<{ id: string; options: Record<string, unknown> }> = [];
+  const clearedNotifications: string[] = [];
   const notificationInteractions: string[] = [];
   const deliveredTrackalackerSignals: Array<Record<string, unknown>> = [];
   const shownTrackalackerNotifications: Array<{ title: string; options: Record<string, unknown> }> = [];
@@ -677,6 +695,17 @@ function harness(options: HarnessOptions = {}) {
   const badgeTexts: string[] = [];
   const badgeColors: string[] = [];
   const tabUpdates: Array<{ id: number; url?: string; active?: boolean }> = [];
+  const tabCreates: Array<{ id: number; url: string; active: boolean }> = [];
+  const hotPathTimeline: string[] = [];
+  const hotPathControlDelayMs = Math.max(0, Math.min(1_000, Number(options.hotPathControlDelayMs || 0)));
+  const tabLoadDelayMs = Math.max(0, Math.min(1_000, Number(options.tabLoadDelayMs || 0)));
+  const traceControlAcknowledgement = async (stage: string) => {
+    hotPathTimeline.push(`control:${stage}:request`);
+    if (hotPathControlDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, hotPathControlDelayMs));
+    }
+    hotPathTimeline.push(`control:${stage}:response`);
+  };
   const tabRemovals: number[] = [];
   const runtimeMessages: Array<Record<string, unknown>> = [];
   let offscreenCreates = 0;
@@ -694,6 +723,11 @@ function harness(options: HarnessOptions = {}) {
   let contextMenuClickedListener: ((info: Record<string, unknown>, tab?: Record<string, unknown>) => void) | undefined;
   let commandListener: ((command: string) => void) | undefined;
   let tabRemovedListener: ((tabId: number) => void) | undefined;
+  const tabUpdatedListeners = new Set<(
+    tabId: number,
+    changeInfo: { status?: string; url?: string },
+    tab: { id: number; url: string; status: string }
+  ) => void>();
   const serviceWorkerListeners = new Map<string, (event: unknown) => void>();
   const expectedJobCount = liveJob
     ? Math.max(1, Math.min(8, Math.trunc(options.queuedJobCount ?? 1)))
@@ -702,11 +736,25 @@ function harness(options: HarnessOptions = {}) {
   let jobsLeased = 0;
   let jobsConfirmed = 0;
   let trackalackerBatchRequestCount = 0;
+  let handoffReconciliationRequestCount = 0;
+  let retailerSessionInspectionCount = 0;
   let completeJob: (() => void) | undefined;
   const jobCompleted = new Promise<void>((resolve) => { completeJob = resolve; });
   let completeNotification: (() => void) | undefined;
   const notificationCompleted = new Promise<void>((resolve) => { completeNotification = resolve; });
-  let notificationAcknowledged = false;
+  let notificationLeaseIndex = 0;
+  const fixtureNotificationPayloads = options.notificationPayloads || [options.notificationPayload || {
+    id: "notification_delivery_fixture",
+    capabilityToken: "N".repeat(43),
+    title: "Pokemon fixture opportunity",
+    message: "Target at $59.99 matched your strategy.",
+    retailerId: "target",
+    retailerSku: "1011483414",
+    canonicalUrl: PRODUCT_URL,
+    attributionUrl: PRODUCT_URL,
+    action: "notify",
+    expiresAt: new Date(Date.now() + 60_000).toISOString()
+  }];
   let amazonObservationAttempts = 0;
   let cartBaselineAttempts = 0;
   let adapterDiagnosticFailuresRemaining = Math.max(0, options.adapterDiagnosticFailures ?? 0);
@@ -775,7 +823,19 @@ function harness(options: HarnessOptions = {}) {
       createDocument: async () => { offscreenCreates += 1; }
     },
     permissions: {
-      contains: async () => options.permission !== false,
+      contains: async (request: { origins?: string[] } = {}) => {
+        if (options.permission === false) return false;
+        if (!Array.isArray(options.permittedRetailers)) return true;
+        const origin = String(request.origins?.[0] || "");
+        const retailerId = origin.includes("target.com") ? "target"
+          : origin.includes("walmart.com") ? "walmart"
+            : origin.includes("amazon.com") ? "amazon"
+              : origin.includes("bestbuy.com") ? "bestbuy"
+                : "";
+        return Boolean(retailerId && options.permittedRetailers.includes(
+          retailerId as "target" | "walmart" | "amazon" | "bestbuy"
+        ));
+      },
       request: async (request: { origins: string[] }) => {
         permissionRequests.push(request);
         return options.permissionRequest !== false;
@@ -784,8 +844,12 @@ function harness(options: HarnessOptions = {}) {
     tabs: {
       query: async () => [tabs.get(17)],
       get: async (id: number) => tabs.get(id),
-      create: async ({ url }: { url: string }) => {
+      create: async ({ url, active = true }: { url: string; active?: boolean }) => {
+        hotPathTimeline.push(`tab:${new URL(url).pathname}`);
         const tab = { id: ++nextTabId, url, status: "complete" };
+        tabCreates.push({ id: tab.id, url, active });
+        if (tabLoadDelayMs) await new Promise((resolve) => setTimeout(resolve, tabLoadDelayMs));
+        hotPathTimeline.push(`tab-complete:${new URL(url).pathname}`);
         tabs.set(tab.id, tab);
         return tab;
       },
@@ -793,16 +857,31 @@ function harness(options: HarnessOptions = {}) {
         const current = tabs.get(id);
         if (!current) throw new Error("Missing fixture tab.");
         tabUpdates.push({ id, ...update });
+        if (update.url) hotPathTimeline.push(`tab:${new URL(update.url).pathname}`);
+        if (update.url && tabLoadDelayMs) await new Promise((resolve) => setTimeout(resolve, tabLoadDelayMs));
+        if (update.url) hotPathTimeline.push(`tab-complete:${new URL(update.url).pathname}`);
         const tab = { ...current, url: update.url ?? current.url, status: "complete" };
         tabs.set(id, tab);
         return tab;
       },
       remove: async (id: number) => {
+        hotPathTimeline.push(`tab-removed:${id}`);
         tabRemovals.push(id);
         tabs.delete(id);
         tabRemovedListener?.(id);
       },
-      onUpdated: { addListener: () => undefined, removeListener: () => undefined },
+      onUpdated: {
+        addListener: (listener: (
+          tabId: number,
+          changeInfo: { status?: string; url?: string },
+          tab: { id: number; url: string; status: string }
+        ) => void) => { tabUpdatedListeners.add(listener); },
+        removeListener: (listener: (
+          tabId: number,
+          changeInfo: { status?: string; url?: string },
+          tab: { id: number; url: string; status: string }
+        ) => void) => { tabUpdatedListeners.delete(listener); }
+      },
       onRemoved: { addListener: (listener: typeof tabRemovedListener) => { tabRemovedListener = listener; } }
     },
     scripting: {
@@ -816,6 +895,16 @@ function harness(options: HarnessOptions = {}) {
           return [];
         }
         const args = injection.args as unknown[] | undefined;
+        if (typeof args?.[0] === "string") hotPathTimeline.push(`operation:${args[0]}`);
+        if (args?.[0] === "inspectRetailerSessionState") {
+          const states = options.retailerSessionStates || [];
+          const result = states[retailerSessionInspectionCount]
+            || states.at(-1)
+            || options.retailerSessionState
+            || "unknown";
+          retailerSessionInspectionCount += 1;
+          return [{ frameId: 0, result }];
+        }
         if (args?.[0] === "yoink_post_click_settle_arm") {
           return [{ frameId: 0, result: { armed: true, token: args[2] } }];
         }
@@ -848,7 +937,9 @@ function harness(options: HarnessOptions = {}) {
             return [{ frameId: 0, result: { ok: false, reason: "cart_unverified" } }];
           }
           if (options.cartBaselineHydrationRetry && cartBaselineAttempts === 1) {
-            return [{ frameId: 0, result: { ok: false, reason: "cart_unverified" } }];
+            // The real page-world helper performs its retry after a DOM
+            // mutation without another chrome.scripting round trip.
+            await new Promise((resolve) => setTimeout(resolve, 20));
           }
           return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
             contractVersion: 1, retailerId: "target", observedAt: new Date().toISOString(),
@@ -962,6 +1053,9 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: { ok: true, reason: "clicked", clicked: true, proof: { retailerId: "bestbuy", retailerSku: "6588149" } } }];
         }
         if (args?.[0] === "verifyTargetAddedCart") {
+          if (options.postClickVerificationFailure) {
+            return [{ frameId: 0, result: { ok: false, reason: "cart_delta_unverified" } }];
+          }
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
@@ -1200,9 +1294,15 @@ function harness(options: HarnessOptions = {}) {
     notifications: {
       create: async (id: string, notificationOptions: Record<string, unknown>) => {
         shownNotifications.push({ id, options: notificationOptions });
+        if (options.notificationClickDuringCreate && id.startsWith("yoink-opportunity:")) {
+          notificationClickedListener?.(id);
+        }
         return id;
       },
-      clear: async () => true,
+      clear: async (id: string) => {
+        clearedNotifications.push(id);
+        return true;
+      },
       onClicked: { addListener: (listener: typeof notificationClickedListener) => { notificationClickedListener = listener; } },
       onClosed: { addListener: (listener: typeof notificationClosedListener) => { notificationClosedListener = listener; } }
     }
@@ -1297,7 +1397,10 @@ function harness(options: HarnessOptions = {}) {
       return new Response(JSON.stringify({ plan: options.reverificationPlan ?? { createdAt: new Date().toISOString(), lanes: [] } }), { status: 200 });
     }
     if (/\/devices\/self\/watch-queue\/watch_item_[a-f0-9]{32}\/observations$/.test(url)) {
-      return new Response(JSON.stringify({ item: { state: "seen_in_stock" }, signal: null }), { status: 202 });
+      return new Response(JSON.stringify({
+        item: { state: "seen_in_stock" },
+        signal: options.watchObservationSignal ? { processingState: "queued" } : null
+      }), { status: 202 });
     }
     if (/\/devices\/self\/readiness\/(?:target|walmart|amazon|bestbuy)$/.test(url)) {
       return new Response(JSON.stringify({ readiness: JSON.parse(String(requestOptions.body)) }), { status: 200 });
@@ -1305,15 +1408,46 @@ function harness(options: HarnessOptions = {}) {
     if (url.endsWith("/devices/self/order-confirmations")) {
       return new Response(JSON.stringify({ observation: { id: "order_confirmation_fixture" } }), { status: 202 });
     }
+    if (url.endsWith("/devices/self/action-handoffs/reconcile")) {
+      const body = JSON.parse(String(requestOptions.body)) as { jobIds?: string[] };
+      const planned = options.handoffReconciliationResponses?.[handoffReconciliationRequestCount];
+      handoffReconciliationRequestCount += 1;
+      const latestJobState = jobStates.at(-1);
+      const inferredStatus = ["manual_review", "submission_uncertain"].includes(String(latestJobState || ""))
+        ? "needs_you" : "cart_ready";
+      return new Response(JSON.stringify({
+        contractVersion: 1,
+        availabilityVersion: planned?.availabilityVersion ?? 0,
+        items: (body.jobIds || []).map((jobId) => ({
+          jobId,
+          status: planned?.status || options.handoffReconciliationStatus || inferredStatus
+        }))
+      }), { status: 200 });
+    }
+    if (/\/devices\/self\/jobs\/[A-Za-z0-9_-]{3,120}\/outcome$/.test(url)) {
+      const body = JSON.parse(String(requestOptions.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        outcome: {
+          disposition: "recorded",
+          outcome: body.outcome,
+          actualTotalCents: body.actualTotalCents
+        }
+      }), { status: 200 });
+    }
     if (url.endsWith("/devices/self/privacy/local-deletion")) {
       return new Response(JSON.stringify({ compliance: { localDeletionVerified: true } }), { status: 200 });
     }
     if (url.endsWith("/devices/self/sources/trackalacker/signals/batch")) {
+      hotPathTimeline.push("signal:request");
       const body = JSON.parse(String(requestOptions.body)) as { signals?: Array<Record<string, unknown>> };
       const signals = Array.isArray(body.signals) ? body.signals : [];
       deliveredTrackalackerSignals.push(...signals);
       const plannedReceipts = options.trackalackerBatchReceipts?.[trackalackerBatchRequestCount];
       trackalackerBatchRequestCount += 1;
+      if (options.trackalackerSignalDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.trackalackerSignalDelayMs));
+      }
+      hotPathTimeline.push("signal:response");
       return new Response(JSON.stringify({
         contractVersion: 1,
         receipts: signals.map((_, index) => ({
@@ -1480,38 +1614,46 @@ function harness(options: HarnessOptions = {}) {
     if (url.endsWith("/devices/self/qualification-trials/bestbuy-add")) {
       return new Response(JSON.stringify({ trial: { id: "adapter_trial_bestbuy_fixture" } }), { status: 201 });
     }
-    if (url.endsWith("/devices/self/notifications/next")) {
-      return new Response(JSON.stringify(options.notification && !notificationAcknowledged ? {
+    const requestPath = new URL(url).pathname;
+    if (requestPath.endsWith("/devices/self/notifications/next")) {
+      const notificationPayload = fixtureNotificationPayloads[notificationLeaseIndex];
+      const delivery = (options.notification || options.notificationPayload
+        || options.notificationPayloads?.length) && notificationPayload ? {
         reason: "leased",
-        notification: {
-          id: "notification_delivery_fixture",
-          capabilityToken: "N".repeat(43),
-          title: "Pokemon fixture opportunity",
-          message: "Target at $59.99 matched your strategy.",
-          retailerId: "target",
-          retailerSku: "1011483414",
-          canonicalUrl: PRODUCT_URL,
-          attributionUrl: PRODUCT_URL,
-          action: "notify",
-          expiresAt: new Date(Date.now() + 60_000).toISOString()
-        }
-      } : { notification: null, reason: "no_notifications" }), { status: 200 });
+        notification: notificationPayload
+      } : { notification: null, reason: "no_notifications" };
+      return new Response(JSON.stringify({
+        ...delivery,
+        closedDeliveryIds: options.closedNotificationDeliveryIds || []
+      }), { status: 200 });
     }
-    if (url.endsWith("/devices/self/notifications/notification_delivery_fixture/ack")) {
+    if (requestPath.endsWith("/devices/self/notifications/closures/ack")) {
+      const body = JSON.parse(String(requestOptions.body)) as { deliveryIds?: string[] };
+      return new Response(JSON.stringify({
+        closures: { acknowledged: Array.isArray(body.deliveryIds) ? body.deliveryIds.length : 0 }
+      }), { status: 200 });
+    }
+    const notificationAckMatch = /\/devices\/self\/notifications\/([A-Za-z0-9_-]{3,160})\/ack$/.exec(requestPath);
+    if (notificationAckMatch) {
       const body = JSON.parse(String(requestOptions.body)) as { outcome: string };
-      notificationAcknowledged = body.outcome === "delivered";
+      const currentId = String(fixtureNotificationPayloads[notificationLeaseIndex]?.id || "");
+      if (body.outcome === "delivered" && notificationAckMatch[1] === currentId) notificationLeaseIndex += 1;
       completeNotification?.();
-      return new Response(JSON.stringify({ notification: { id: "notification_delivery_fixture", state: body.outcome } }), { status: 200 });
+      return new Response(JSON.stringify({ notification: { id: notificationAckMatch[1], state: body.outcome } }), { status: 200 });
     }
-    if (url.endsWith("/devices/self/notifications/notification_delivery_fixture/interaction")) {
+    const notificationInteractionMatch = /\/devices\/self\/notifications\/([A-Za-z0-9_-]{3,160})\/interaction$/.exec(requestPath);
+    if (notificationInteractionMatch) {
+      if (options.notificationInteractionDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.notificationInteractionDelayMs));
+      }
       const body = JSON.parse(String(requestOptions.body)) as { interaction: string };
       notificationInteractions.push(body.interaction);
-      return new Response(JSON.stringify({ notification: { id: "notification_delivery_fixture", state: body.interaction } }), { status: 200 });
+      return new Response(JSON.stringify({ notification: { id: notificationInteractionMatch[1], state: body.interaction } }), { status: 200 });
     }
-    if (new URL(url).pathname.endsWith("/devices/self/jobs/next")) {
+    if (requestPath.endsWith("/devices/self/jobs/next")) {
+      hotPathTimeline.push("lease:request");
       jobLeaseRequests += 1;
-      if (!liveJob || jobLeaseRequests <= Math.max(0, Math.trunc(options.jobAvailableAfterPolls ?? 0))
-        || jobsLeased >= expectedJobCount) {
+      if (!liveJob || jobsLeased >= expectedJobCount) {
         return new Response(JSON.stringify({ job: null, reason: liveJob ? "no_jobs" : "shadow_mode" }), { status: 200 });
       }
       jobsLeased += 1;
@@ -1591,11 +1733,15 @@ function harness(options: HarnessOptions = {}) {
       }), { status: 200 });
     }
     if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/heartbeat$/.test(url)) {
+      await traceControlAcknowledgement("heartbeat");
       return new Response(JSON.stringify({ heartbeat: { accepted: true } }), { status: 200 });
     }
     if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/events\/batch$/.test(url)) {
       const body = JSON.parse(String(requestOptions.body)) as { events?: Array<{ state: string }> };
       const events = Array.isArray(body.events) ? body.events : [];
+      if (events.some((event) => event.state === "adding")) {
+        await traceControlAcknowledgement("adding");
+      }
       if (events.some((event) => event.state === "confirmed") && options.confirmedJobEventDelayMs) {
         await new Promise((resolve) => setTimeout(resolve, options.confirmedJobEventDelayMs));
       }
@@ -1612,6 +1758,9 @@ function harness(options: HarnessOptions = {}) {
     }
     if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/events$/.test(url)) {
       const body = JSON.parse(String(requestOptions.body)) as { state: string };
+      if (["navigating", "verifying_listing"].includes(body.state)) {
+        await traceControlAcknowledgement(body.state);
+      }
       jobStates.push(body.state);
       if (body.state === "confirmed") {
         jobsConfirmed += 1;
@@ -1696,6 +1845,7 @@ function harness(options: HarnessOptions = {}) {
     jobCompleted,
     notificationCompleted,
     shownNotifications,
+    clearedNotifications,
     notificationInteractions,
     deliveredTrackalackerSignals,
     shownTrackalackerNotifications,
@@ -1723,12 +1873,23 @@ function harness(options: HarnessOptions = {}) {
       if (!current) throw new Error("Missing fixture tab.");
       tabs.set(17, { ...current, url });
     },
+    fireTabUpdated: (tabId: number, url?: string) => {
+      const current = tabs.get(tabId);
+      if (!current) throw new Error("Missing fixture tab.");
+      const tab = { ...current, url: url || current.url, status: "complete" };
+      tabs.set(tabId, tab);
+      for (const listener of [...tabUpdatedListeners]) {
+        listener(tabId, { status: "complete", ...(url ? { url } : {}) }, tab);
+      }
+    },
     contextMenuDefinitions,
     permissionRequests,
     actionTitles,
     badgeTexts,
     badgeColors,
     tabUpdates,
+    tabCreates,
+    hotPathTimeline,
     runtimeMessages,
     offscreenCreates: () => offscreenCreates,
     adapterDiagnosticQueueDrained,
@@ -2658,6 +2819,117 @@ test("the service worker records one sanitized Target add rehearsal without clic
   assert.equal(JSON.stringify(body).includes(TOKEN), false);
 });
 
+test("the read-only cart verifier wakes on DOM mutation in one injection and refuses mutation operations", async () => {
+  const runtime = harness();
+  const injectionCount = runtime.injections.length;
+  const disallowed = await runtime.invokeBackground(
+    'executeReadOnlyCartAction(17, "target", "commitTargetAdd", [], 500)'
+  ) as Record<string, unknown>;
+  assert.equal(disallowed.ok, false);
+  assert.equal(disallowed.reason, "runner_unavailable");
+  assert.equal(runtime.injections.length, injectionCount);
+
+  await runtime.invokeBackground(
+    'executeReadOnlyCartAction(17, "target", "inspectTargetCartBaseline", [], 500)'
+  );
+  const injection = runtime.injections.at(-1);
+  assert.equal((injection?.args as unknown[] | undefined)?.[0], "inspectTargetCartBaseline");
+  const injectedFunction = injection?.func;
+  assert.equal(typeof injectedFunction, "function");
+  const pageState = { ready: false, checks: 0, disconnected: false };
+  class FixtureMutationObserver {
+    readonly callback: () => void;
+
+    constructor(callback: () => void) {
+      this.callback = callback;
+    }
+
+    observe() {
+      setTimeout(() => {
+        pageState.ready = true;
+        this.callback();
+      }, 10);
+    }
+
+    disconnect() {
+      pageState.disconnected = true;
+    }
+  }
+  const pageContext = createContext({
+    YoinkTargetAction: {
+      inspectTargetCartBaseline: () => {
+        pageState.checks += 1;
+        return pageState.ready
+          ? { ok: true, reason: "verified", proof: { lineCount: 1 } }
+          : { ok: false, reason: "cart_unverified" };
+      }
+    },
+    document: { documentElement: {} },
+    location: { href: "https://www.target.com/cart" },
+    MutationObserver: FixtureMutationObserver,
+    Promise,
+    Set,
+    String,
+    Object,
+    Array,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval
+  });
+  const startedAt = Date.now();
+  const result = await runInContext(
+    `(${String(injectedFunction)})(...${JSON.stringify(injection?.args || [])})`,
+    pageContext
+  ) as Record<string, unknown>;
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    ok: true,
+    reason: "verified",
+    proof: { lineCount: 1 }
+  });
+  assert.equal(pageState.checks, 2);
+  assert.equal(pageState.disconnected, true);
+  assert.ok(Date.now() - startedAt < 250, "The mutation wake should beat the 250 ms fallback read.");
+
+  const timeoutState = { checks: 0, disconnected: false };
+  class QuietMutationObserver {
+    observe() {}
+
+    disconnect() {
+      timeoutState.disconnected = true;
+    }
+  }
+  const timeoutContext = createContext({
+    YoinkTargetAction: {
+      inspectTargetCartBaseline: () => {
+        timeoutState.checks += 1;
+        return { ok: false, reason: "cart_unverified" };
+      }
+    },
+    document: { documentElement: {} },
+    location: { href: "https://www.target.com/cart" },
+    MutationObserver: QuietMutationObserver,
+    Promise,
+    Set,
+    String,
+    Object,
+    Array,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval
+  });
+  const timedOut = await runInContext(
+    `(${String(injectedFunction)})(...${JSON.stringify([
+      "inspectTargetCartBaseline", [], "YoinkTargetAction", 50, 5, 20
+    ])})`,
+    timeoutContext
+  ) as Record<string, unknown>;
+  assert.deepEqual(JSON.parse(JSON.stringify(timedOut)), { ok: false, reason: "cart_unverified" });
+  assert.ok(timeoutState.checks >= 3, "The in-page fallback should preserve bounded hydration coverage.");
+  assert.equal(timeoutState.disconnected, true);
+});
+
 test("the service worker runs one leased Target add through baseline, click receipt, and exact cart delta proof", async () => {
   const runtime = harness({ liveJob: true, cartBaselineHydrationRetry: true, cartReadySound: true });
   runtime.fireJobAlarm();
@@ -2679,12 +2951,34 @@ test("the service worker runs one leased Target add through baseline, click rece
   ]);
   assert.equal(runtime.fetchCalls.some((entry) => {
     const url = new URL(entry.url);
-    return url.pathname.endsWith("/devices/self/jobs/next") && url.searchParams.get("wait") === "5000";
-  }), true, "Chrome should use the bounded job long-poll contract");
+    return url.pathname.endsWith("/devices/self/jobs/next")
+      && url.searchParams.get("wait") === "25000"
+      && url.searchParams.get("retailers") === "target,walmart,amazon,bestbuy";
+  }), true, "Chrome should hold the bounded job watch across most of the 30-second alarm interval");
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.endsWith("/health")), false,
+    "General health must not add a round trip before the authoritative job lease.");
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/heartbeat")), false,
+    "The periodic device heartbeat must stay off the signal-to-lease hot path.");
+  assert.equal(new URL(runtime.fetchCalls[0]?.url || "https://invalid.example").pathname.endsWith(
+    "/devices/self/jobs/next"
+  ), true, "The authenticated lease should be the first server request in a job cycle.");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(await runtime.invokeBackground(
+      `Promise.resolve([
+        actionJobLeaseRequest(0, ["target", "walmart", "amazon", "bestbuy"]),
+        actionJobLeaseRequest(1, ["target", "walmart", "amazon", "bestbuy"])
+      ])`
+    ))),
+    [
+      { path: "/devices/self/jobs/next?wait=25000&retailers=target,walmart,amazon,bestbuy", timeoutMs: 28_000 },
+      { path: "/devices/self/jobs/next?wait=0&retailers=target,walmart,amazon,bestbuy", timeoutMs: 3_000 }
+    ],
+    "The companion request timeout must outlive the server wait while remaining below Chrome's 30-second fetch limit."
+  );
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 2);
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 1);
   assert.equal(operations.filter((operation) => operation === "prepareTargetAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitTargetAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "yoink_post_click_settle_arm").length, 1);
@@ -2712,10 +3006,27 @@ test("the service worker runs one leased Target add through baseline, click rece
   };
   assert.equal(readyState.items.length, 1);
   assert.equal(readyState.items[0]?.jobId, "job_target_fixture");
-  assert.equal(Number.isSafeInteger(readyState.items[0]?.latency.leaseToCartReadyMs), true);
-  assert.equal(Number.isSafeInteger(readyState.items[0]?.latency.clickToSettleMs), true);
-  assert.equal(Number(readyState.items[0]?.latency.clickToSettleMs) < 1_000, true);
-  assert.equal(Number.isSafeInteger(readyState.items[0]?.latency.clickToCartReadyMs), true);
+  const localLatency = readyState.items[0]?.latency ?? {};
+  for (const hop of [
+    "leaseToCartReadyMs", "leaseToBaselineMs", "baselineToOfferMs", "offerToClickMs",
+    "clickToSettleMs", "clickToCartReadyMs", "settleToCartReadyMs"
+  ]) {
+    assert.equal(Number.isSafeInteger(localLatency[hop]), true, `${hop} should be a bounded integer.`);
+  }
+  assert.equal(Number(localLatency.clickToSettleMs) < 1_000, true);
+  assert.equal(
+    Number(localLatency.leaseToBaselineMs)
+      + Number(localLatency.baselineToOfferMs)
+      + Number(localLatency.offerToClickMs)
+      + Number(localLatency.clickToSettleMs)
+      + Number(localLatency.settleToCartReadyMs),
+    Number(localLatency.leaseToCartReadyMs),
+    "The privacy-bounded phase breadcrumbs should exactly decompose lease-to-cart latency."
+  );
+  assert.equal(
+    Number(localLatency.clickToSettleMs) + Number(localLatency.settleToCartReadyMs),
+    Number(localLatency.clickToCartReadyMs)
+  );
   assert.equal(runtime.badgeTexts.at(-1), "1");
   await waitFor(
     () => runtime.runtimeMessages.some((message) => message.type === "yoink:play-cart-ready-sound"),
@@ -2731,17 +3042,203 @@ test("the service worker runs one leased Target add through baseline, click rece
   })[0];
   assert.ok(confirmedEvent);
   const confirmedBody = confirmedEvent;
-  assert.equal(Number.isSafeInteger(confirmedBody.evidence.latency.leaseToCartReadyMs), true);
-  assert.equal(Number.isSafeInteger(confirmedBody.evidence.latency.clickToSettleMs), true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(confirmedBody.evidence.latency)),
+    JSON.parse(JSON.stringify(localLatency)),
+    "The server event should receive the same sanitized phase decomposition as the local handoff.");
 
   runtime.clickNotification("yoink-cart-ready:job_target_fixture");
   await waitFor(
-    () => (runtime.storage.yoinkCartReadyV1 as { items?: unknown[] })?.items?.length === 0,
-    "The cart-ready handoff was not acknowledged after focusing its tab."
+    () => Boolean((runtime.storage.yoinkCartReadyV1 as {
+      items?: Array<{ openedAt?: string }>;
+    })?.items?.[0]?.openedAt),
+    "The cart-ready handoff was not marked opened after focusing its tab."
   );
   assert.deepEqual(runtime.tabUpdates.at(-1), { id: readyState.items[0]?.tabId, active: true });
-  assert.equal(runtime.badgeTexts.at(-1), "");
+  assert.equal((runtime.storage.yoinkCartReadyV1 as { items?: unknown[] })?.items?.length, 1);
+  assert.equal(runtime.badgeTexts.at(-1), "1");
+  assert.equal(runtime.clearedNotifications.includes("yoink-cart-ready:job_target_fixture"), true);
+
+  runtime.closeTab(readyState.items[0]?.tabId as number);
+  await waitFor(
+    () => Array.isArray(runtime.storage.yoinkOrderHandoffsV1)
+      && (runtime.storage.yoinkOrderHandoffsV1 as unknown[]).length === 0,
+    "Closing the retailer tab did not detach its order-confirmation observer."
+  );
+  assert.equal((runtime.storage.yoinkCartReadyV1 as { items?: unknown[] })?.items?.length, 1,
+    "The checkout-result prompt must survive a retailer tab closing.");
+  assert.equal(runtime.badgeTexts.at(-1), "1");
+  const reopened = await runtime.send({
+    type: "yoink:open-cart-ready",
+    jobId: "job_target_fixture"
+  }) as { ok: boolean; reopened?: boolean; cartReady?: { items: Array<{ tabId: number }> } };
+  assert.equal(reopened.ok, true);
+  assert.equal(reopened.reopened, true);
+  assert.equal(runtime.tabCreates.at(-1)?.url, "https://www.target.com/cart");
+  assert.equal(reopened.cartReady?.items[0]?.tabId, runtime.tabCreates.at(-1)?.id);
+  assert.equal((runtime.storage.yoinkOrderHandoffsV1 as Array<{ tabId: number }>)[0]?.tabId,
+    runtime.tabCreates.at(-1)?.id);
   assert.equal("activeTargetJob" in runtime.storage, false);
+});
+
+test("the service worker advertises only currently granted store access when leasing", async () => {
+  const runtime = harness({ permittedRetailers: ["walmart"] });
+  runtime.fireJobAlarm();
+  await waitFor(
+    () => runtime.fetchCalls.some((entry) => new URL(entry.url).pathname.endsWith("/devices/self/jobs/next")),
+    "The access-scoped job lease was not dispatched."
+  );
+  const requestUrl = new URL(runtime.fetchCalls.find(
+    (entry) => new URL(entry.url).pathname.endsWith("/devices/self/jobs/next")
+  )?.url || "https://invalid.example");
+  assert.equal(requestUrl.searchParams.get("retailers"), "walmart");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(await runtime.invokeBackground(
+      "Promise.resolve(actionJobLeaseRequest(0, ['walmart', 'walmart', 'unsupported']))"
+    ))),
+    { path: "/devices/self/jobs/next?wait=25000&retailers=walmart", timeoutMs: 28_000 }
+  );
+});
+
+test("all four guarded stores overlap read-only browser work with control acknowledgements without moving the Add boundary", async () => {
+  const lanes = [
+    { options: {}, prepare: "prepareTargetAdd", commit: "commitTargetAdd", verify: "verifyTargetAddedCart" },
+    { options: { walmartJob: true }, prepare: "prepareWalmartAdd", commit: "commitWalmartAdd", verify: "verifyWalmartAddedCart" },
+    { options: { amazonJob: true }, prepare: "prepareAmazonAdd", commit: "commitAmazonAdd", verify: "verifyAmazonAddedCart" },
+    { options: { bestBuyJob: true }, prepare: "prepareBestBuyAdd", commit: "commitBestBuyAdd", verify: "verifyBestBuyAddedCart" }
+  ] as const;
+
+  for (const lane of lanes) {
+    const runtime = harness({
+      liveJob: true,
+      hotPathControlDelayMs: 120,
+      ...lane.options
+    });
+    runtime.fireJobAlarm();
+    await Promise.race([
+      runtime.jobCompleted,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(
+        `${lane.prepare} did not complete its delayed control-path fixture.`
+      )), 3_000))
+    ]);
+    const timeline = runtime.hotPathTimeline;
+    const position = (entry: string) => timeline.indexOf(entry);
+    const tabBefore = (limit: number, after = -1) => timeline.some(
+      (entry, index) => entry.startsWith("tab:") && index > after && index < limit
+    );
+    const navigatingResponse = position("control:navigating:response");
+    const verifyingResponse = position("control:verifying_listing:response");
+    const addingResponse = position("control:adding:response");
+    const heartbeatResponse = position("control:heartbeat:response");
+    const commit = position(`operation:${lane.commit}`);
+
+    assert.equal(tabBefore(navigatingResponse), true,
+      `${lane.prepare} should open the read-only cart while navigation progress is acknowledged.`);
+    assert.equal(position(`operation:${lane.prepare}`) < verifyingResponse, true,
+      `${lane.prepare} should inspect the exact offer while verification progress is acknowledged.`);
+    assert.equal(position("operation:yoink_post_click_settle_arm") < addingResponse, true,
+      `${lane.prepare} should arm only the passive DOM observer while the durable Add receipt is acknowledged.`);
+    assert.equal(addingResponse < commit, true,
+      `${lane.commit} must remain after the durable adding acknowledgement.`);
+    assert.equal(tabBefore(heartbeatResponse, commit), true,
+      `${lane.verify} should begin the non-mutating return to cart while the lease heartbeat is acknowledged.`);
+    assert.equal(heartbeatResponse < position(`operation:${lane.verify}`), true,
+      `${lane.verify} must remain after the required heartbeat acknowledgement.`);
+  }
+});
+
+test("cold guarded adds load the exact product and inactive cart baseline concurrently on all four stores", async () => {
+  const lanes = [
+    {
+      name: "Target",
+      options: {},
+      productUrl: PRODUCT_URL,
+      cartUrl: "https://www.target.com/cart",
+      prepare: "prepareTargetAdd"
+    },
+    {
+      name: "Walmart",
+      options: { walmartJob: true },
+      productUrl: WALMART_PRODUCT_URL,
+      cartUrl: "https://www.walmart.com/cart",
+      prepare: "prepareWalmartAdd"
+    },
+    {
+      name: "Amazon",
+      options: { amazonJob: true },
+      productUrl: AMAZON_PRODUCT_URL,
+      cartUrl: "https://www.amazon.com/gp/cart/view.html",
+      prepare: "prepareAmazonAdd"
+    },
+    {
+      name: "Best Buy",
+      options: { bestBuyJob: true },
+      productUrl: BESTBUY_PRODUCT_URL,
+      cartUrl: "https://www.bestbuy.com/cart",
+      prepare: "prepareBestBuyAdd"
+    }
+  ] as const;
+
+  for (const lane of lanes) {
+    const runtime = harness({
+      liveJob: true,
+      tabLoadDelayMs: 80,
+      ...lane.options
+    });
+    runtime.fireJobAlarm();
+    await Promise.race([
+      runtime.jobCompleted,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(
+        `${lane.name} did not complete its parallel cold-start fixture.`
+      )), 3_000))
+    ]);
+
+    const productTab = runtime.tabCreates.find((entry) => entry.active && entry.url !== lane.cartUrl);
+    const baselineTab = runtime.tabCreates.find((entry) => entry.url === lane.cartUrl);
+    assert.ok(productTab, `${lane.name} should create one visible exact-product tab.`);
+    assert.ok(baselineTab, `${lane.name} should create one temporary cart-baseline tab.`);
+    const productPath = new URL(productTab!.url).pathname;
+    const cartPath = new URL(baselineTab!.url).pathname;
+    const productStarted = runtime.hotPathTimeline.indexOf(`tab:${productPath}`);
+    const cartStarted = runtime.hotPathTimeline.indexOf(`tab:${cartPath}`);
+    const firstLoadCompleted = runtime.hotPathTimeline.findIndex((entry) => entry.startsWith("tab-complete:"));
+    assert.ok(productStarted >= 0 && productStarted < firstLoadCompleted,
+      `${lane.name} should start loading the exact product before either cold page completes.`);
+    assert.ok(cartStarted >= 0 && cartStarted < firstLoadCompleted,
+      `${lane.name} should start loading the read-only cart baseline before either cold page completes.`);
+
+    assert.equal(productTab?.active, true, `${lane.name} should keep the exact product visible.`);
+    assert.equal(baselineTab?.active, false, `${lane.name} should keep baseline capture out of the foreground.`);
+    assert.ok(Number.isInteger(baselineTab?.id) && runtime.tabRemovals.includes(baselineTab!.id),
+      `${lane.name} should close its temporary baseline tab before handoff.`);
+    assert.ok(
+      runtime.hotPathTimeline.indexOf(`tab-removed:${baselineTab!.id}`)
+        < runtime.hotPathTimeline.indexOf(`operation:${lane.prepare}`),
+      `${lane.name} should settle temporary baseline cleanup before exact-offer verification.`
+    );
+    assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 1);
+  }
+});
+
+test("hot-path synchronization settles every required branch before surfacing a failure", async () => {
+  const runtime = harness();
+  const result = await runtime.invokeBackground(`(async () => {
+    const order = [];
+    const delayed = new Promise((resolve) => setTimeout(() => {
+      order.push("delayed_work_settled");
+      resolve("done");
+    }, 40));
+    try {
+      await settleRequiredWork(Promise.reject(new Error("fixture_failure")), delayed);
+    } catch {
+      order.push("failure_surfaced");
+    }
+    return order;
+  })()`);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), [
+    "delayed_work_settled",
+    "failure_surfaced"
+  ]);
 });
 
 test("the cart-ready handoff does not wait for confirmed job-event reporting", async () => {
@@ -2753,12 +3250,45 @@ test("the cart-ready handoff does not wait for confirmed job-event reporting", a
     500
   );
   assert.equal(runtime.jobStates.includes("confirmed"), false);
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/action-handoffs/reconcile")), false,
+    "Reconciliation must not mistake the pre-confirmed server job for a closed handoff.");
   assert.equal(runtime.badgeTexts.at(-1), "1");
   await waitFor(
     () => runtime.jobStates.includes("confirmed"),
     "The delayed confirmed event was not eventually reported.",
     2_000
   );
+  await waitFor(
+    () => runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/action-handoffs/reconcile")),
+    "The authoritative confirmed transition did not start the bounded handoff watch."
+  );
+  const watch = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/action-handoffs/reconcile"));
+  assert.equal(Number(JSON.parse(String(watch?.options.body)).waitMs) > 0, true);
+});
+
+test("an uncertain post-click result raises an immediate local Needs-you handoff", async () => {
+  const runtime = harness({ liveJob: true, postClickVerificationFailure: true, cartReadySound: true });
+  runtime.fireJobAlarm();
+  await waitFor(
+    () => runtime.shownNotifications.some((notification) => notification.id === "yoink-needs-you:job_target_fixture"),
+    "The uncertain Add result did not produce a local Needs-you handoff."
+  );
+  const notification = runtime.shownNotifications.find(
+    (entry) => entry.id === "yoink-needs-you:job_target_fixture"
+  );
+  assert.equal(notification?.options.title, "Review Target add");
+  assert.equal(notification?.options.requireInteraction, true);
+  assert.match(String(notification?.options.message), /could not be verified after Add/);
+  const handoffState = runtime.storage.yoinkCartReadyV1 as {
+    items: Array<{ jobId: string; kind: string; reasonCode?: string }>;
+  };
+  assert.equal(handoffState.items.length, 1);
+  assert.equal(handoffState.items[0]?.jobId, "job_target_fixture");
+  assert.equal(handoffState.items[0]?.kind, "needs_you");
+  assert.equal(handoffState.items[0]?.reasonCode, "cart_delta_unverified");
+  assert.equal(runtime.badgeTexts.at(-1), "1");
+  assert.equal(runtime.badgeColors.at(-1), "#ffca6b");
+  assert.equal(runtime.jobStates.includes("manual_review"), true);
 });
 
 test("one alarm drains confirmed Target jobs immediately and reuses one Yoink-created store tab", async () => {
@@ -2877,7 +3407,7 @@ test("ambiguous cart baselines fail closed while the remaining clean queue conti
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 8);
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 2);
   assert.equal(operations.some((operation) => operation === "prepareTargetAdd"), false);
   assert.equal(operations.some((operation) => operation === "commitTargetAdd"), false);
   assert.equal(runtime.jobLeaseRequests(), 3);
@@ -3100,6 +3630,52 @@ test("TrackaLacker signal dispatch is not blocked by notification or status repo
   assert.equal(runtime.shownTrackalackerNotifications.length, 1);
 });
 
+test("a notify-only TrackaLacker signal opens an event-driven notification watch without an alarm", async () => {
+  const runtime = harness({ trackalackerPush: true, notification: true });
+  await runtime.firePush({
+    title: "IN STOCK at Target!",
+    body: "Runtime Fixture Product\nAvailable for $59.99",
+    url: "https://www.trackalacker.com/products/showcase/runtime-fixture?utm_term=138022"
+  });
+  await waitFor(
+    () => runtime.shownNotifications.length === 1,
+    "The accepted TrackaLacker signal did not wake durable notification delivery."
+  );
+  const signalIndex = runtime.fetchCalls.findIndex((entry) =>
+    entry.url.endsWith("/devices/self/sources/trackalacker/signals/batch"));
+  const notificationIndex = runtime.fetchCalls.findIndex((entry) =>
+    new URL(entry.url).pathname.endsWith("/devices/self/notifications/next"));
+  assert.ok(signalIndex >= 0 && notificationIndex > signalIndex);
+  assert.equal(new URL(runtime.fetchCalls[notificationIndex]!.url).searchParams.get("wait"), "25000");
+  assert.equal(runtime.shownNotifications[0]?.id, "yoink-opportunity:notification_delivery_fixture");
+});
+
+test("an early lease watch never treats a retryable signal receipt as retailer authorization", async () => {
+  const runtime = harness({
+    trackalackerPush: true,
+    trackalackerSignalDelayMs: 100,
+    trackalackerBatchReceipts: [[{
+      accepted: false,
+      retryable: true,
+      errorCode: "storage_temporarily_unavailable"
+    }]]
+  });
+  await runtime.firePush({
+    title: "IN STOCK at Target!",
+    body: "Runtime Fixture Product\nAvailable for $59.99",
+    url: "https://www.trackalacker.com/products/showcase/runtime-fixture?utm_term=138022"
+  });
+  assert.equal(runtime.jobLeaseRequests(), 1);
+  assert.equal(runtime.jobStates.length, 0);
+  assert.equal(runtime.injections.some(
+    (entry) => String((entry.args as unknown[] | undefined)?.[0] || "").startsWith("commit")
+  ), false);
+  assert.equal((runtime.storage.yoinkTrackalackerPushQueueV1 as unknown[]).length, 1);
+  assert.ok(runtime.hotPathTimeline.indexOf("lease:request") < runtime.hotPathTimeline.indexOf("signal:response"));
+  assert.equal(runtime.fetchCalls.some((entry) =>
+    new URL(entry.url).pathname.endsWith("/devices/self/notifications/next")), false);
+});
+
 test("a delivered TrackaLacker signal reaches one guarded cart add on every supported store without waiting for the alarm", async () => {
   const fixtures = [
     {
@@ -3131,7 +3707,7 @@ test("a delivered TrackaLacker signal reaches one guarded cart add on every supp
     const runtime = harness({
       ...fixture.options,
       trackalackerPush: true,
-      jobAvailableAfterPolls: 1
+      trackalackerSignalDelayMs: 200
     });
     await Promise.race([
       runtime.firePush({
@@ -3148,7 +3724,17 @@ test("a delivered TrackaLacker signal reaches one guarded cart add on every supp
       `${fixture.name} signal-triggered job was not confirmed.`
     );
     assert.equal(runtime.deliveredTrackalackerSignals.length, 1);
-    assert.equal(runtime.jobLeaseRequests(), 3);
+    assert.equal(runtime.jobLeaseRequests(), 2);
+    const signalDeliveryIndex = runtime.fetchCalls.findIndex((entry) =>
+      entry.url.endsWith("/devices/self/sources/trackalacker/signals/batch"));
+    const leaseIndex = runtime.fetchCalls.findIndex((entry) =>
+      new URL(entry.url).pathname.endsWith("/devices/self/jobs/next"));
+    assert.ok(signalDeliveryIndex >= 0 && leaseIndex >= 0);
+    assert.ok(runtime.hotPathTimeline.indexOf("lease:request") < runtime.hotPathTimeline.indexOf("signal:response"),
+      `${fixture.name} should open its authoritative lease watch before durable signal delivery is acknowledged.`);
+    assert.equal(runtime.fetchCalls.slice(0, leaseIndex).some((entry) =>
+      entry.url.endsWith("/health") || entry.url.endsWith("/devices/self/heartbeat")), false,
+    `${fixture.name} should lease without intervening health or heartbeat requests.`);
     assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 1);
     assert.equal(runtime.tabUrls().filter((url) => url === fixture.cartUrl).length, 1);
     assert.equal(runtime.injections.filter(
@@ -3169,13 +3755,19 @@ test("legacy visible-push fallback shows one TrackaLacker notification while del
   assert.equal(runtime.shownTrackalackerNotifications[0]?.title, "IN STOCK at Target!");
 });
 
-test("the service worker durably shows one Chrome notification and routes a recorded click", async () => {
+test("the recurring action alarm holds a notification watch for server-originated signals and routes a recorded click", async () => {
   const runtime = harness({ notification: true });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.notificationCompleted,
     new Promise((_, reject) => setTimeout(() => reject(new Error("Fixture notification was not acknowledged.")), 3_000))
   ]);
+  const notificationWatch = runtime.fetchCalls.find((entry) =>
+    new URL(entry.url).pathname.endsWith("/devices/self/notifications/next"));
+  assert.ok(notificationWatch);
+  assert.equal(new URL(notificationWatch.url).searchParams.get("wait"), "25000");
+  assert.equal(runtime.deliveredTrackalackerSignals.length, 0,
+    "A provider-originated notification must not require a local TrackaLacker delivery.");
   assert.equal(runtime.shownNotifications.length, 1);
   assert.equal(runtime.shownNotifications[0]?.id, "yoink-opportunity:notification_delivery_fixture");
   assert.equal(runtime.shownNotifications[0]?.options.iconUrl, `chrome-extension://${"a".repeat(32)}/yoink-icon.svg`);
@@ -3189,6 +3781,290 @@ test("the service worker durably shows one Chrome notification and routes a reco
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.deepEqual(runtime.notificationInteractions, ["clicked"]);
   assert.ok(runtime.tabUrls().includes(PRODUCT_URL));
+});
+
+test("a cold worker opens parallel bounded job and notification watches without a local signal", async () => {
+  const runtime = harness({ notification: true });
+  runtime.fireStartup();
+  await Promise.race([
+    runtime.notificationCompleted,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(
+      "Cold startup did not establish the notification watch."
+    )), 3_000))
+  ]);
+  const jobWatch = runtime.fetchCalls.find((entry) =>
+    new URL(entry.url).pathname.endsWith("/devices/self/jobs/next"));
+  const notificationWatch = runtime.fetchCalls.find((entry) =>
+    new URL(entry.url).pathname.endsWith("/devices/self/notifications/next"));
+  assert.ok(jobWatch);
+  assert.ok(notificationWatch);
+  assert.equal(new URL(jobWatch.url).searchParams.get("wait"), "25000");
+  assert.equal(new URL(notificationWatch.url).searchParams.get("wait"), "25000");
+  assert.equal(runtime.deliveredTrackalackerSignals.length, 0);
+});
+
+test("a notification click route is durable before Chrome exposes the notification", async () => {
+  const runtime = harness({ notification: true, notificationClickDuringCreate: true });
+  await runtime.invokeBackground("runNotificationCycle()");
+  await waitFor(
+    () => runtime.tabUrls().includes(PRODUCT_URL),
+    "An immediate notification click raced ahead of its durable route."
+  );
+  assert.deepEqual(runtime.notificationInteractions, ["clicked"]);
+});
+
+function targetNotificationPayload(id: string, title: string): Record<string, unknown> {
+  return {
+    id,
+    capabilityToken: `${id.slice(-1).toUpperCase() || "N"}`.repeat(43),
+    title,
+    message: "Target at $59.99 matched your strategy.",
+    retailerId: "target",
+    retailerSku: "1011483414",
+    canonicalUrl: PRODUCT_URL,
+    attributionUrl: PRODUCT_URL,
+    action: "notify",
+    expiresAt: new Date(Date.now() + 60_000).toISOString()
+  };
+}
+
+test("one notification cycle drains every ready delivery without waiting for another alarm", async () => {
+  const payloads = [1, 2, 3].map((index) => targetNotificationPayload(
+    `notification_delivery_fixture_${index}`,
+    `Opportunity ${index}`
+  ));
+  const runtime = harness({ notificationPayloads: payloads });
+  const result = await runtime.invokeBackground("runNotificationCycle()") as { delivered: number };
+  assert.equal(result.delivered, 3);
+  assert.deepEqual(runtime.shownNotifications.map((entry) => entry.id), [
+    "yoink-opportunity:notification_delivery_fixture_1",
+    "yoink-opportunity:notification_delivery_fixture_2",
+    "yoink-opportunity:notification_delivery_fixture_3"
+  ]);
+  assert.equal(runtime.fetchCalls.filter((entry) =>
+    new URL(entry.url).pathname.endsWith("/devices/self/notifications/next")).length, 4);
+  assert.equal(Object.keys(runtime.storage.yoinkNotificationRoutesV1 as Record<string, unknown>).length, 3);
+  await runtime.invokeBackground("runNotificationCycle()");
+  assert.equal(runtime.shownNotifications.length, 3);
+});
+
+test("an event-driven notification request coalesces behind an active cycle and preserves its wait", async () => {
+  const runtime = harness({ notification: true });
+  const result = await runtime.invokeBackground(
+    "Promise.all([runNotificationCycle(0), runNotificationCycle(25000)])"
+  ) as Array<{ delivered: number }>;
+  assert.equal(result[0]?.delivered, 1);
+  assert.equal(result[1]?.delivered, 1);
+  assert.equal(runtime.shownNotifications.length, 1);
+  const waits = runtime.fetchCalls.filter((entry) =>
+    new URL(entry.url).pathname.endsWith("/devices/self/notifications/next"))
+    .map((entry) => new URL(entry.url).searchParams.get("wait"));
+  assert.ok(waits.includes("25000"));
+});
+
+function walmartNotificationPayload(destinationUrl: string, expiresAt: string): Record<string, unknown> {
+  const walmartItemId = "17354421975";
+  const directFallbackUrl = `https://www.walmart.com/affil/cart/reviewOrder?items=${walmartItemId}&cn=nc&veh=aff`;
+  return {
+    id: "notification_delivery_fixture",
+    capabilityToken: "N".repeat(43),
+    title: "Walmart fixture opportunity",
+    message: "Walmart · $84.97 · notify",
+    retailerId: "walmart",
+    retailerSku: walmartItemId,
+    canonicalUrl: WALMART_PRODUCT_URL,
+    attributionUrl: WALMART_PRODUCT_URL,
+    action: "notify",
+    expiresAt,
+    purchaseHandoff: {
+      kind: "walmart_review_order",
+      walmartItemId,
+      destinationUrl,
+      directFallbackUrl,
+      pdpFallbackUrl: `https://www.walmart.com/ip/${walmartItemId}`,
+      trackingId: `walmart_${walmartItemId}`,
+      expiresAt
+    }
+  };
+}
+
+test("a qualified Walmart notification click opens the exact Howl-wrapped review-order route", async () => {
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const directRoute = "https://www.walmart.com/affil/cart/reviewOrder?items=17354421975&cn=nc&veh=aff";
+  const howlRoute = new URL("https://howl.link/link");
+  howlRoute.searchParams.set("url", directRoute);
+  howlRoute.searchParams.set("publisher_slug", "collectwithdodo");
+  howlRoute.searchParams.set("article_name", "Walmart fixture opportunity");
+  howlRoute.searchParams.set("article_url", "https://yoink.example/alerts/walmart-fixture");
+  howlRoute.searchParams.set("u1", "walmart_17354421975");
+  const runtime = harness({
+    notificationPayload: walmartNotificationPayload(howlRoute.href, expiresAt)
+  });
+  runtime.fireJobAlarm();
+  await runtime.notificationCompleted;
+  assert.equal(runtime.shownNotifications[0]?.options.contextMessage, "Buy at Walmart · opens cart");
+  runtime.clickNotification("yoink-opportunity:notification_delivery_fixture");
+  await waitFor(
+    () => runtime.tabUrls().includes(howlRoute.href),
+    "The Walmart notification did not open its Howl review-order route."
+  );
+  assert.deepEqual(runtime.notificationInteractions, ["clicked"]);
+});
+
+test("the popup can consume one fresh Walmart notification opportunity exactly once", async () => {
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const directRoute = "https://www.walmart.com/affil/cart/reviewOrder?items=17354421975&cn=nc&veh=aff";
+  const runtime = harness({
+    notificationPayload: walmartNotificationPayload(directRoute, expiresAt)
+  });
+  runtime.fireJobAlarm();
+  await runtime.notificationCompleted;
+
+  const pending = await runtime.send({ type: "yoink:get-purchase-opportunity" });
+  assert.equal(pending.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(pending.opportunity)), {
+    schemaVersion: 1,
+    deliveryId: "notification_delivery_fixture",
+    kind: "walmart_review_order",
+    retailerId: "walmart",
+    retailerName: "Walmart",
+    identityLabel: "Item",
+    retailerSku: "17354421975",
+    title: "Walmart fixture opportunity",
+    expiresAt
+  });
+
+  const [first, duplicate] = await Promise.all([
+    runtime.send({
+      type: "yoink:open-purchase-opportunity",
+      deliveryId: "notification_delivery_fixture"
+    }),
+    runtime.send({
+      type: "yoink:open-purchase-opportunity",
+      deliveryId: "notification_delivery_fixture"
+    })
+  ]);
+  assert.equal(first.ok, true);
+  assert.equal(first.opened, true);
+  assert.equal(first.opportunity, null);
+  assert.equal(duplicate.ok, false);
+  assert.equal(runtime.tabUrls().filter((url) => url === directRoute).length, 1,
+    "Concurrent popup and notification actions must not open reviewOrder twice.");
+  assert.equal(Object.keys(runtime.storage.yoinkNotificationRoutesV1 as Record<string, unknown>).length, 0);
+  await waitFor(
+    () => runtime.notificationInteractions.length === 1,
+    "The consumed popup opportunity did not record its notification interaction."
+  );
+});
+
+test("dismissing a Walmart notification removes its popup recovery action", async () => {
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const directRoute = "https://www.walmart.com/affil/cart/reviewOrder?items=17354421975&cn=nc&veh=aff";
+  const runtime = harness({
+    notificationPayload: walmartNotificationPayload(directRoute, expiresAt)
+  });
+  runtime.fireJobAlarm();
+  await runtime.notificationCompleted;
+  assert.ok((await runtime.send({ type: "yoink:get-purchase-opportunity" })).opportunity);
+
+  runtime.closeNotification("yoink-opportunity:notification_delivery_fixture");
+  await waitFor(
+    () => Object.keys(runtime.storage.yoinkNotificationRoutesV1 as Record<string, unknown>).length === 0,
+    "A dismissed notification retained its popup purchase route."
+  );
+  assert.equal((await runtime.send({ type: "yoink:get-purchase-opportunity" })).opportunity, null);
+  assert.equal(runtime.tabUrls().includes(directRoute), false);
+});
+
+test("a dashboard-consumed Walmart handoff clears the matching Chrome notification route", async () => {
+  const deliveryId = "notification_delivery_dashboard_consumed";
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const directRoute = "https://www.walmart.com/affil/cart/reviewOrder?items=17354421975&cn=nc&veh=aff";
+  const runtime = harness({ closedNotificationDeliveryIds: [deliveryId] });
+  runtime.storage.yoinkNotificationRoutesV1 = {
+    [deliveryId]: {
+      kind: "walmart_review_order",
+      retailerId: "walmart",
+      retailerSku: "17354421975",
+      title: "Dashboard-consumed fixture",
+      route: directRoute,
+      directFallbackRoute: directRoute,
+      pdpFallbackRoute: "https://www.walmart.com/ip/17354421975",
+      expiresAt
+    }
+  };
+
+  const result = await runtime.invokeBackground("runNotificationCycle()");
+  assert.equal((result as { delivered: number }).delivered, 0);
+  assert.deepEqual(runtime.storage.yoinkNotificationRoutesV1, {});
+  assert.equal(runtime.clearedNotifications.includes(`yoink-opportunity:${deliveryId}`), true);
+  const acknowledgement = runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith("/devices/self/notifications/closures/ack"));
+  assert.ok(acknowledgement);
+  assert.deepEqual(JSON.parse(String(acknowledgement.options.body)), {
+    contractVersion: 1,
+    deliveryIds: [deliveryId]
+  });
+  assert.equal((await runtime.send({ type: "yoink:get-purchase-opportunity" })).opportunity, null);
+  assert.equal(runtime.tabUrls().includes(directRoute), false);
+});
+
+test("a slow interaction receipt never delays the Walmart review-order tab", async () => {
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const directRoute = "https://www.walmart.com/affil/cart/reviewOrder?items=17354421975&cn=nc&veh=aff";
+  const runtime = harness({
+    notificationPayload: walmartNotificationPayload(directRoute, expiresAt),
+    notificationInteractionDelayMs: 250
+  });
+  runtime.fireJobAlarm();
+  await runtime.notificationCompleted;
+
+  runtime.clickNotification("yoink-opportunity:notification_delivery_fixture");
+  await waitFor(
+    () => runtime.tabUrls().includes(directRoute),
+    "The Walmart review-order tab waited for its interaction receipt.",
+    100
+  );
+  assert.deepEqual(runtime.notificationInteractions, [],
+    "The tab should open while the delayed receipt is still pending.");
+  await waitFor(
+    () => runtime.notificationInteractions.length === 1,
+    "The delayed notification interaction was not eventually recorded."
+  );
+});
+
+test("an invalid Walmart affiliate route falls back to the raw review-order route", async () => {
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const directRoute = "https://www.walmart.com/affil/cart/reviewOrder?items=17354421975&cn=nc&veh=aff";
+  const runtime = harness({
+    notificationPayload: walmartNotificationPayload("https://attacker.example/cart", expiresAt)
+  });
+  runtime.fireJobAlarm();
+  await runtime.notificationCompleted;
+  runtime.clickNotification("yoink-opportunity:notification_delivery_fixture");
+  await waitFor(
+    () => runtime.tabUrls().includes(directRoute),
+    "The invalid affiliate route did not fall back to Walmart reviewOrder."
+  );
+});
+
+test("an expired stored Walmart handoff falls back to the exact PDP instead of mutating the cart", async () => {
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const directRoute = "https://www.walmart.com/affil/cart/reviewOrder?items=17354421975&cn=nc&veh=aff";
+  const runtime = harness({
+    notificationPayload: walmartNotificationPayload(directRoute, expiresAt)
+  });
+  runtime.fireJobAlarm();
+  await runtime.notificationCompleted;
+  const routes = runtime.storage.yoinkNotificationRoutesV1 as Record<string, Record<string, unknown>>;
+  routes.notification_delivery_fixture!.expiresAt = new Date(Date.now() - 1).toISOString();
+  runtime.clickNotification("yoink-opportunity:notification_delivery_fixture");
+  const pdp = "https://www.walmart.com/ip/17354421975";
+  await waitFor(
+    () => runtime.tabUrls().includes(pdp),
+    "The stale Walmart handoff did not fall back to the exact PDP."
+  );
+  assert.equal(runtime.tabUrls().includes(directRoute), false);
 });
 
 test("the service worker checks the exact local release and starts one update download", async () => {
@@ -3270,6 +4146,7 @@ test("the extension action menu stays small and derives visibility from the shar
     "yoink-sync-products",
     "yoink-settings"
   ]);
+  assert.equal(runtime.contextMenuDefinitions.get("yoink-settings")?.title, "Extension settings");
   assert.equal(
     Array.from(runtime.contextMenuDefinitions.get("yoink-inspect-product")?.contexts as string[]).join(","),
     "action"
@@ -3294,13 +4171,30 @@ test("the extension action menu opens the dashboard and Settings workspace disti
   await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
   runtime.clickContextMenu("yoink-open");
   await waitFor(
-    () => runtime.tabUrls().includes("http://127.0.0.1:32991/"),
+    () => runtime.tabUrls().includes("http://127.0.0.1:32991/#home"),
     "The user dashboard was not opened."
   );
   runtime.clickContextMenu("yoink-settings");
   await waitFor(
     () => runtime.tabUrls().includes(`chrome-extension://${"a".repeat(32)}/options.html`),
     "The Settings workspace was not opened."
+  );
+});
+
+test("the context-menu product sync requests only TrackaLacker access", async () => {
+  const runtime = harness({
+    healthVersion: "0.3.0",
+    trackalackerPush: true,
+    permission: false,
+    permissionRequest: true
+  });
+  runtime.fireStartup();
+  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  runtime.clickContextMenu("yoink-sync-products");
+  await waitFor(() => runtime.permissionRequests.length === 1, "TrackaLacker access was not requested.");
+  assert.equal(
+    Array.from(runtime.permissionRequests[0]?.origins || []).join(","),
+    "https://trackalacker.com/*,https://www.trackalacker.com/*"
   );
 });
 
@@ -3342,6 +4236,61 @@ test("the inspect hotkey uses the same current-page classifier and revalidation 
   assert.equal((runtime.storage.yoinkPopupResultV1 as Record<string, unknown>).contextKey, "product:target:1011483414");
 });
 
+test("the Yoink hotkey rotates through unseen high-priority handoffs before inspecting a page", async () => {
+  const runtime = harness({
+    activeUrl: PRODUCT_URL,
+    healthVersion: "0.3.0",
+    trackalackerPush: true,
+    permission: true,
+    permissionRequest: true
+  });
+  runtime.storage.yoinkCartReadyV1 = {
+    schemaVersion: 1,
+    items: [{
+      schemaVersion: 1,
+      kind: "needs_you",
+      jobId: "job_target_older",
+      retailerId: "target",
+      retailerSku: "1011483414",
+      tabId: 17,
+      recordedAt: new Date(Date.now() - 1_000).toISOString(),
+      reasonCode: "cart_unverified",
+      latency: {}
+    }, {
+      schemaVersion: 1,
+      kind: "needs_you",
+      jobId: "job_target_newer",
+      retailerId: "target",
+      retailerSku: "1011483414",
+      tabId: 17,
+      recordedAt: new Date().toISOString(),
+      reasonCode: "cart_unverified",
+      latency: {}
+    }]
+  };
+
+  runtime.fireCommand("inspect-current-page");
+  await waitFor(
+    () => Boolean((runtime.storage.yoinkCartReadyV1 as {
+      items?: Array<{ jobId: string; openedAt?: string }>;
+    })?.items?.find((item) => item.jobId === "job_target_newer")?.openedAt),
+    "The hotkey did not open the newest unseen handoff first."
+  );
+  assert.equal((runtime.storage.yoinkCartReadyV1 as { items?: unknown[] }).items?.length, 2);
+  assert.equal(runtime.badgeTexts.at(-1), "2");
+
+  runtime.fireCommand("inspect-current-page");
+  await waitFor(
+    () => Boolean((runtime.storage.yoinkCartReadyV1 as {
+      items?: Array<{ jobId: string; openedAt?: string }>;
+    })?.items?.find((item) => item.jobId === "job_target_older")?.openedAt),
+    "The hotkey did not rotate to the remaining unseen handoff."
+  );
+  assert.equal(runtime.permissionRequests.length, 0);
+  assert.equal(runtime.injections.length, 0);
+  assert.equal(runtime.tabUpdates.filter((update) => update.id === 17 && update.active === true).length, 2);
+});
+
 test("a stale context-menu label never authorizes inspection after the active page changes", async () => {
   const runtime = harness({
     activeUrl: PRODUCT_URL,
@@ -3363,10 +4312,12 @@ test("a stale context-menu label never authorizes inspection after the active pa
   assert.equal(runtime.storage.yoinkPopupResultV1, undefined);
 });
 
-test("warm readiness captures one inactive five-minute cart baseline without crossing an action boundary", async () => {
+test("warm readiness captures two inactive five-minute cart baselines without crossing an action boundary", async () => {
   const runtime = harness({ permission: true });
   const result = await runtime.invokeBackground("runWarmReadinessCycle()");
   assert.equal((result as { warmed?: boolean }).warmed, true);
+  assert.equal((result as { warmedCount?: number }).warmedCount, 2);
+  assert.equal((result as { attemptedCount?: number }).attemptedCount, 2);
   const readinessRequest = runtime.fetchCalls.find((entry) =>
     entry.url.endsWith("/devices/self/readiness/target"));
   assert.ok(readinessRequest);
@@ -3388,13 +4339,18 @@ test("warm readiness captures one inactive five-minute cart baseline without cro
 
 test("warm readiness rotates across every guarded retailer with bounded baselines", async () => {
   const runtime = harness({ permission: true });
-  const warmed = [];
-  for (let index = 0; index < 4; index += 1) {
-    warmed.push(await runtime.invokeBackground("runWarmReadinessCycle()"));
+  const cycles = [];
+  for (let index = 0; index < 2; index += 1) {
+    cycles.push(await runtime.invokeBackground("runWarmReadinessCycle()"));
   }
+  assert.equal(cycles.every((cycle) =>
+    (cycle as { attemptedCount: number }).attemptedCount <= 2), true);
+  const warmed = cycles.flatMap((cycle) => (cycle as {
+    results: Array<{ retailerId: string; warmed: boolean }>;
+  }).results);
   assert.deepEqual(JSON.parse(JSON.stringify(warmed.map((item) => ({
-    retailerId: (item as Record<string, unknown>).retailerId,
-    warmed: (item as Record<string, unknown>).warmed
+    retailerId: item.retailerId,
+    warmed: item.warmed
   })))), [
     { retailerId: "target", warmed: true },
     { retailerId: "walmart", warmed: true },
@@ -3419,6 +4375,62 @@ test("warm readiness rotates across every guarded retailer with bounded baseline
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
 });
 
+test("scheduled warm readiness waits behind an active job watch and coalesces overlapping requests", async () => {
+  const runtime = harness({ permission: true });
+  const result = await runtime.invokeBackground(`(async () => {
+    let releaseJobCycle;
+    jobCyclePromise = new Promise((resolve) => { releaseJobCycle = resolve; });
+    const first = requestWarmReadinessCycle();
+    const second = requestWarmReadinessCycle();
+    const coalesced = first === second;
+    await Promise.resolve();
+    jobCyclePromise = null;
+    releaseJobCycle();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    return { coalesced, firstResult, secondResult };
+  })()`);
+  const model = result as {
+    coalesced: boolean;
+    firstResult: { warmed: boolean; warmedCount: number; attemptedCount: number; reason: string };
+    secondResult: { warmed: boolean; warmedCount: number; attemptedCount: number; reason: string };
+  };
+  assert.equal(model.coalesced, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(model.firstResult)), JSON.parse(JSON.stringify(model.secondResult)));
+  assert.equal(model.firstResult.warmed, true);
+  assert.equal(model.firstResult.warmedCount, 2);
+  assert.equal(model.firstResult.attemptedCount, 2);
+  assert.equal(model.firstResult.reason, "baselines_ready");
+  assert.equal(runtime.fetchCalls.filter((entry) =>
+    /\/devices\/self\/readiness\/(target|walmart|amazon|bestbuy)$/.test(entry.url)).length, 2);
+});
+
+test("the health alarm preserves its warm-readiness rotation when a job watch overlaps", async () => {
+  const runtime = harness({ permission: true });
+  await runtime.invokeBackground(`Promise.resolve().then(() => {
+    jobCyclePromise = new Promise((resolve) => { globalThis.__releaseWarmJobCycle = resolve; });
+  })`);
+  runtime.fireHealthAlarm();
+  let scheduled = false;
+  for (let attempt = 0; attempt < 100 && !scheduled; attempt += 1) {
+    scheduled = Boolean(await runtime.invokeBackground("Boolean(warmReadinessRequestPromise)"));
+    if (!scheduled) await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(scheduled, true);
+  assert.equal(runtime.fetchCalls.some((entry) =>
+    /\/devices\/self\/readiness\/(target|walmart|amazon|bestbuy)$/.test(entry.url)), false);
+  await runtime.invokeBackground(`Promise.resolve().then(() => {
+    const release = globalThis.__releaseWarmJobCycle;
+    jobCyclePromise = null;
+    delete globalThis.__releaseWarmJobCycle;
+    release();
+  })`);
+  await waitFor(() => runtime.fetchCalls.filter((entry) =>
+    /\/devices\/self\/readiness\/(target|walmart|amazon|bestbuy)$/.test(entry.url)).length === 2,
+  "The deferred health-alarm readiness rotation did not run.");
+  const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
+});
+
 test("warm readiness does not repeatedly replace a challenged retailer tab redirected away from cart", async () => {
   const checkoutUrl = "https://www.bestbuy.com/checkout/r/fast-track";
   const runtime = harness({ permission: true, activeUrl: checkoutUrl });
@@ -3436,21 +4448,129 @@ test("warm readiness does not repeatedly replace a challenged retailer tab redir
 
   const result = await runtime.invokeBackground("runWarmReadinessCycle()");
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
-    warmed: false,
-    retailerId: "bestbuy",
-    signedInState: "challenged",
-    reason: "manual_action_required"
+    warmed: true,
+    warmedCount: 1,
+    attemptedCount: 2,
+    reason: "partial",
+    results: [{
+      warmed: false,
+      retailerId: "bestbuy",
+      signedInState: "challenged",
+      reason: "manual_action_required"
+    }, {
+      warmed: true,
+      retailerId: "target",
+      signedInState: "unknown",
+      reason: "baseline_ready"
+    }]
   });
-  assert.deepEqual(runtime.tabUrls(), [checkoutUrl]);
+  assert.deepEqual(runtime.tabUrls().sort(), [checkoutUrl, "https://www.target.com/cart"].sort());
   assert.equal(runtime.injections.some((entry) =>
     (entry.args as unknown[] | undefined)?.[0] === "inspectBestBuyCartBaseline"), false);
-  assert.equal(runtime.storage.yoinkWarmReadinessCursorV1, 0);
+  assert.equal(runtime.storage.yoinkWarmReadinessCursorV1, 1);
+});
+
+test("a completed retailer page clears a recovered session blocker and resumes the preserved job watch", async () => {
+  const runtime = harness({
+    permission: true,
+    activeUrl: BESTBUY_PRODUCT_URL,
+    retailerSessionState: "ready"
+  });
+  runtime.storage.yoinkRetailerActionTabsV1 = {
+    schemaVersion: 2,
+    tabs: {
+      bestbuy: {
+        tabId: 17,
+        cartBaseline: null,
+        signedInState: "challenged"
+      }
+    }
+  };
+
+  runtime.fireTabUpdated(17, BESTBUY_PRODUCT_URL);
+  await waitFor(() => runtime.fetchCalls.some((entry) =>
+    entry.url.endsWith("/devices/self/readiness/bestbuy")),
+  "The recovered Best Buy session was not reported.");
+  await waitFor(() => runtime.jobLeaseRequests() === 1,
+    "The recovered session did not immediately resume the preserved job watch.");
+
+  const readiness = runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith("/devices/self/readiness/bestbuy"));
+  const body = JSON.parse(String(readiness?.options.body)) as Record<string, unknown>;
+  assert.equal(body.signedInState, "ready");
+  assert.equal(body.cartBaselineState, "unavailable");
+  assert.equal(body.errorCode, undefined);
+  const stored = runtime.storage.yoinkRetailerActionTabsV1 as {
+    tabs: { bestbuy: { signedInState: string } };
+  };
+  assert.equal(stored.tabs.bestbuy.signedInState, "ready");
+});
+
+test("a retailer page that still shows a security challenge remains blocked without leasing", async () => {
+  const runtime = harness({
+    permission: true,
+    activeUrl: BESTBUY_PRODUCT_URL,
+    retailerSessionState: "challenged"
+  });
+  runtime.storage.yoinkRetailerActionTabsV1 = {
+    schemaVersion: 2,
+    tabs: {
+      bestbuy: {
+        tabId: 17,
+        cartBaseline: null,
+        signedInState: "challenged"
+      }
+    }
+  };
+
+  runtime.fireTabUpdated(17, BESTBUY_PRODUCT_URL);
+  await waitFor(() => runtime.fetchCalls.some((entry) =>
+    entry.url.endsWith("/devices/self/readiness/bestbuy")),
+  "The continuing Best Buy challenge was not reported.");
+  const readiness = runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith("/devices/self/readiness/bestbuy"));
+  const body = JSON.parse(String(readiness?.options.body)) as Record<string, unknown>;
+  assert.equal(body.signedInState, "challenged");
+  assert.equal(body.errorCode, "security_challenge");
+  assert.equal(runtime.jobLeaseRequests(), 0);
+});
+
+test("a rapid challenge redirect coalesces the latest completed page and does not lose recovery", async () => {
+  const challengeUrl = "https://www.bestbuy.com/identity/global/signin";
+  const runtime = harness({
+    permission: true,
+    activeUrl: challengeUrl,
+    retailerSessionStates: ["challenged", "ready"]
+  });
+  runtime.storage.yoinkRetailerActionTabsV1 = {
+    schemaVersion: 2,
+    tabs: {
+      bestbuy: {
+        tabId: 17,
+        cartBaseline: null,
+        signedInState: "challenged"
+      }
+    }
+  };
+
+  runtime.fireTabUpdated(17, challengeUrl);
+  runtime.fireTabUpdated(17, BESTBUY_PRODUCT_URL);
+  await waitFor(() => runtime.fetchCalls.filter((entry) =>
+    entry.url.endsWith("/devices/self/readiness/bestbuy")).length === 2,
+  "The latest page in the Best Buy recovery redirect was not rechecked.");
+  await waitFor(() => runtime.jobLeaseRequests() === 1,
+    "The coalesced recovery page did not resume the preserved job watch.");
+  const states = runtime.fetchCalls.filter((entry) =>
+    entry.url.endsWith("/devices/self/readiness/bestbuy"))
+    .map((entry) => JSON.parse(String(entry.options.body)).signedInState);
+  assert.deepEqual(states, ["challenged", "ready"]);
 });
 
 test("drop-window observation is exact, read-only, bounded, and closes its inactive tab", async () => {
   const watchId = `watch_item_${"a".repeat(32)}`;
   const runtime = harness({
     permission: true,
+    watchObservationSignal: true,
     watchLease: {
       contractVersion: 1,
       id: watchId,
@@ -3482,6 +4602,11 @@ test("drop-window observation is exact, read-only, bounded, and closes its inact
   assert.equal(JSON.stringify(publicWatchState).includes(PRODUCT_URL), false);
   const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
+  assert.equal(runtime.jobLeaseRequests(), 1);
+  const notificationWatch = runtime.fetchCalls.find((entry) =>
+    new URL(entry.url).pathname.endsWith("/devices/self/notifications/next"));
+  assert.ok(notificationWatch);
+  assert.equal(new URL(notificationWatch.url).searchParams.get("wait"), "25000");
 });
 
 test("one explicit request replays prior products across all four lanes without clicking", async () => {
@@ -3561,6 +4686,21 @@ test("confirmation observation is exact-store bound across every guarded retaile
       tabId: 17,
       recordedAt: new Date().toISOString()
     }];
+    runtime.storage.yoinkCartReadyV1 = {
+      schemaVersion: 1,
+      items: [{
+        schemaVersion: 1,
+        kind: "cart_ready",
+        jobId: `job_${retailerId}_fixture`,
+        retailerId,
+        retailerSku: retailerId === "target" ? "1011483414"
+          : retailerId === "walmart" ? "17354421975"
+            : retailerId === "amazon" ? "B0GYTRYV7P" : "6588149",
+        tabId: 17,
+        recordedAt: new Date().toISOString(),
+        latency: {}
+      }]
+    };
     const observed = await runtime.invokeBackground(
       `observeOrderConfirmation(17, ${JSON.stringify(url)})`
     );
@@ -3576,6 +4716,7 @@ test("confirmation observation is exact-store bound across every guarded retaile
     assert.equal(body.pageClass, "confirmation");
     assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
     assert.deepEqual(runtime.storage.yoinkOrderHandoffsV1, []);
+    assert.equal((runtime.storage.yoinkCartReadyV1 as { items: unknown[] }).items.length, 0);
   }
 
   const mismatch = harness();
@@ -3591,6 +4732,142 @@ test("confirmation observation is exact-store bound across every guarded retaile
   assert.equal(ignored, false);
   assert.equal(mismatch.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/order-confirmations")), false);
   assert.equal((mismatch.storage.yoinkOrderHandoffsV1 as unknown[]).length, 1);
+});
+
+test("dashboard close-out reconciliation clears only the exact local handoff", async () => {
+  const runtime = harness({ handoffReconciliationStatus: "closed" });
+  runtime.storage.yoinkCartReadyV1 = {
+    schemaVersion: 1,
+    items: [{
+      schemaVersion: 1,
+      kind: "needs_you",
+      jobId: "job_target_fixture",
+      retailerId: "target",
+      retailerSku: "1011483414",
+      tabId: 17,
+      recordedAt: new Date().toISOString(),
+      reasonCode: "cart_unverified",
+      latency: {}
+    }]
+  };
+  runtime.storage.yoinkOrderHandoffsV1 = [{
+    jobId: "job_target_fixture",
+    retailerId: "target",
+    tabId: 17,
+    recordedAt: new Date().toISOString()
+  }];
+  const result = await runtime.invokeBackground("reconcileActionHandoffs()");
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, closed: 1 });
+  assert.equal((runtime.storage.yoinkCartReadyV1 as { items: unknown[] }).items.length, 0);
+  assert.deepEqual(runtime.storage.yoinkOrderHandoffsV1, []);
+  const request = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/action-handoffs/reconcile"));
+  assert.ok(request);
+  assert.deepEqual(JSON.parse(String(request.options.body)), {
+    contractVersion: 1,
+    jobIds: ["job_target_fixture"],
+    availabilityVersion: -1,
+    waitMs: 0
+  });
+});
+
+test("a stale device handoff version bootstraps once, then watches and applies the exact close-out", async () => {
+  const runtime = harness({
+    handoffReconciliationResponses: [
+      { availabilityVersion: 7, status: "cart_ready" },
+      { availabilityVersion: 8, status: "closed" }
+    ]
+  });
+  runtime.storage.yoinkCartReadyV1 = {
+    schemaVersion: 1,
+    items: [{
+      schemaVersion: 1,
+      kind: "cart_ready",
+      jobId: "job_target_fixture",
+      retailerId: "target",
+      retailerSku: "1011483414",
+      tabId: 17,
+      recordedAt: new Date().toISOString(),
+      latency: {}
+    }]
+  };
+  runtime.storage.yoinkOrderHandoffsV1 = [{
+    jobId: "job_target_fixture",
+    retailerId: "target",
+    tabId: 17,
+    recordedAt: new Date().toISOString()
+  }];
+
+  const result = await runtime.invokeBackground("reconcileActionHandoffs(ACTION_HANDOFF_WAIT_MS)");
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, closed: 1 });
+  const requests = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/action-handoffs/reconcile"));
+  assert.equal(requests.length, 2);
+  const first = JSON.parse(String(requests[0]?.options.body)) as Record<string, unknown>;
+  const second = JSON.parse(String(requests[1]?.options.body)) as Record<string, unknown>;
+  assert.equal(first.availabilityVersion, -1);
+  assert.equal(Number(first.waitMs) > 0 && Number(first.waitMs) <= 25_000, true);
+  assert.equal(second.availabilityVersion, 7);
+  assert.equal(Number(second.waitMs) > 0 && Number(second.waitMs) <= Number(first.waitMs), true);
+  assert.equal(runtime.storage.yoinkActionHandoffAvailabilityVersionV1, 8);
+  assert.equal((runtime.storage.yoinkCartReadyV1 as { items: unknown[] }).items.length, 0);
+  assert.deepEqual(runtime.storage.yoinkOrderHandoffsV1, []);
+  assert.equal(runtime.clearedNotifications.includes("yoink-cart-ready:job_target_fixture"), true);
+});
+
+test("the popup closes only a locally bound cart handoff through the paired-device outcome route", async () => {
+  const runtime = harness();
+  runtime.storage.yoinkCartReadyV1 = {
+    schemaVersion: 1,
+    items: [{
+      schemaVersion: 1,
+      kind: "cart_ready",
+      jobId: "job_target_fixture",
+      retailerId: "target",
+      retailerSku: "1011483414",
+      tabId: 17,
+      recordedAt: new Date().toISOString(),
+      openedAt: new Date().toISOString(),
+      reviewedMaximumCents: 5_999,
+      latency: {}
+    }]
+  };
+  runtime.storage.yoinkOrderHandoffsV1 = [{
+    jobId: "job_target_fixture",
+    retailerId: "target",
+    tabId: 17,
+    recordedAt: new Date().toISOString()
+  }];
+
+  const response = await runtime.send({
+    type: "yoink:report-cart-outcome",
+    jobId: "job_target_fixture",
+    outcome: "got_it",
+    actualTotalCents: 6_127,
+    confirmation: "I_REVIEWED_CHECKOUT_RESULT"
+  });
+  assert.equal(response.ok, true);
+  assert.equal((runtime.storage.yoinkCartReadyV1 as { items: unknown[] }).items.length, 0);
+  assert.deepEqual(runtime.storage.yoinkOrderHandoffsV1, []);
+  assert.equal(runtime.clearedNotifications.includes("yoink-cart-ready:job_target_fixture"), true);
+  const request = runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith("/devices/self/jobs/job_target_fixture/outcome"));
+  assert.ok(request);
+  assert.equal((request.options.headers as Record<string, string>).Authorization, `Bearer ${TOKEN}`);
+  assert.deepEqual(JSON.parse(String(request.options.body)), {
+    outcome: "got_it",
+    actualTotalCents: 6_127,
+    confirmation: "I_REVIEWED_CHECKOUT_RESULT"
+  });
+
+  const rejected = await runtime.send({
+    type: "yoink:report-cart-outcome",
+    jobId: "job_not_locally_ready",
+    outcome: "missed_it",
+    actualTotalCents: null,
+    confirmation: "I_REVIEWED_CHECKOUT_RESULT"
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(String(rejected.message), /no longer available/i);
+  assert.equal(runtime.fetchCalls.filter((entry) => /\/outcome$/.test(entry.url)).length, 1);
 });
 
 test("verified local deletion clears both extension storage areas before posting its receipt", async () => {

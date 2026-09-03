@@ -22,6 +22,7 @@ interface RetailerRow {
 export interface ExactProductLinkProposalInput {
   url: string;
   title: string;
+  msrpCents?: number | null;
   confirmation: typeof PROPOSE_EXACT_PRODUCT_LINK_CONFIRMATION;
 }
 
@@ -44,6 +45,7 @@ export class CatalogLinkError extends Error {
     readonly code:
       | "exact_product_link_invalid"
       | "product_title_required"
+      | "product_msrp_invalid"
       | "product_link_confirmation_required",
     message: string
   ) {
@@ -111,12 +113,20 @@ export class CatalogLinkRepository {
     if (title.length < 2) {
       throw new CatalogLinkError("product_title_required", "Enter the product name shown on the store page.");
     }
+    const msrpCents = input.msrpCents === undefined || input.msrpCents === null
+      ? null
+      : Number(input.msrpCents);
+    if (msrpCents !== null && (!Number.isSafeInteger(msrpCents) || msrpCents <= 0 || msrpCents > 100_000_000)) {
+      throw new CatalogLinkError("product_msrp_invalid", "Enter MSRP as a positive amount no greater than $1,000,000.");
+    }
+    const source = msrpCents === null ? "user_link" : "admin_link";
+    if (source === "admin_link") this.authorization.require("admin.read");
     const preview = this.preview(input.url);
     const scope = currentRequestScope();
     const sourceConnectionId = ownedIdForUser(
-      "source_user_link",
+      source === "admin_link" ? "source_admin_link" : "source_user_link",
       scope.userId,
-      "source_user_link_local"
+      source === "admin_link" ? "source_admin_link_local" : "source_user_link_local"
     );
     const exactIdentityHash = stableHash(
       "yoink_user_product_link_v1",
@@ -129,17 +139,18 @@ export class CatalogLinkRepository {
         `INSERT OR IGNORE INTO source_connections(
            id, tenant_id, user_id, source, name, status, trust_level,
            auto_create_missions, is_private, created_at, updated_at
-         ) VALUES (?, ?, ?, 'user_link', 'Product links', 'manual',
-                   'informational', 0, 1, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, 'manual', 'informational', 0, 1, ?, ?)`,
         sourceConnectionId,
         scope.tenantId,
         scope.userId,
+        source,
+        source === "admin_link" ? "Admin product links" : "Product links",
         timestamp,
         timestamp
       );
       const result = this.governance.proposeListing({
         sourceConnectionId,
-        source: "user_link",
+        source,
         sourceProductId: `link_product_${exactIdentityHash}`,
         sourceListingId: `link_listing_${exactIdentityHash}`,
         sourceProductAliases: {
@@ -153,7 +164,7 @@ export class CatalogLinkRepository {
         canonicalUrl: preview.canonicalUrl,
         listingStatus: "unknown",
         executionSupported: PACKAGED_ADD_RETAILERS.has(preview.retailerId),
-        msrpCents: null,
+        msrpCents,
         observedPriceCents: null,
         currency: "USD",
         observedAt: timestamp

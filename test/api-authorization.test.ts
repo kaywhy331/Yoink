@@ -42,7 +42,7 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
   try {
     const userDashboard = await fetch(`${baseUrl}/`, { headers: { "X-Test-Principal": "user" } });
     assert.equal(userDashboard.status, 200);
-    assert.match(await userDashboard.text(), /My purchase assistant/);
+    assert.match(await userDashboard.text(), /Yoink · Purchase assistant/);
     const deniedAdminUi = await fetch(`${baseUrl}/admin`, { headers: { "X-Test-Principal": "user" } });
     assert.equal(deniedAdminUi.status, 403);
     const deniedIdentityRead = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
@@ -146,6 +146,16 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     });
     assert.equal(allowedAdmin.status, 200);
     assert.equal(allowedAdmin.headers.get("x-yoink-api-surface"), "admin");
+    const deniedMaintainer = await fetch(`${baseUrl}/api/v1/admin/snapshot?view=community`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(deniedMaintainer.status, 403);
+    assert.equal((await deniedMaintainer.json() as { error: string }).error, "permission_denied");
+    const allowedOverview = await fetch(`${baseUrl}/api/v1/admin/snapshot?view=overview`, {
+      headers: { "X-Test-Principal": "user" }
+    }).then((response) => response.json()) as { permissions: string[] };
+    assert.equal(allowedOverview.permissions.includes("admin.read"), true);
+    assert.equal(allowedOverview.permissions.includes("admin.maintainer"), false);
     const allowedAdminUi = await fetch(`${baseUrl}/admin`, { headers: { "X-Test-Principal": "user" } });
     assert.equal(allowedAdminUi.status, 200);
     assert.match(await allowedAdminUi.text(), /Admin control center/);
@@ -243,6 +253,12 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     }).then((response) => response.json()) as { permissions: string[] };
     assert.equal(curatorAuthorization.permissions.includes("catalog.identity.propose"), true);
     assert.equal(curatorAuthorization.permissions.includes("catalog.identity.approve"), true);
+    assert.equal(curatorAuthorization.permissions.includes("admin.maintainer"), true);
+    const allowedMaintainer = await fetch(`${baseUrl}/api/v1/admin/snapshot?view=community`, {
+      headers: { "X-Test-Principal": "user" }
+    });
+    assert.equal(allowedMaintainer.status, 200);
+    assert.equal((await allowedMaintainer.json() as { view: string }).view, "community");
     const curatorProposal = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
       method: "POST",
       headers: {

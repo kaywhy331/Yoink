@@ -1,6 +1,23 @@
 # Yoink roadmap
 
-## Shipped through 1.18.1
+## Shipped through 1.19.0
+
+### Context-first action handoff and interface (1.19.0)
+
+- Replaces scattered popup controls with one deterministic current-page,
+  handoff, and health view while preserving the existing permission and
+  no-click qualification boundaries
+- Keeps Cart ready and Needs you handoffs recoverable across popup reopen and
+  store-tab closure, including a bounded sanitized checkout-amount draft
+- Consolidates admin and shopper navigation, copy, status, dialogs, analytics,
+  and settings around task-specific routes with progressive disclosure
+- Preserves loaded collection pages during background refresh, refreshes the
+  visible shopper workspace, and surfaces retryable stale-data state on both
+  dashboards
+- Prefers a validated Walmart review-order handoff with Howl, raw direct-cart,
+  and PDP fallback routing; checkout and order submission remain manual
+- Adds rendered accessibility, copy-budget, glossary, responsive navigation,
+  polling, exact-route, and native persistence regression coverage
 
 ### Admin exact-signal simulator (1.18.1)
 
@@ -137,7 +154,9 @@
 
 - Turns exact guarded-add confirmation into a local Cart ready notification,
   badge count, and persistent popup state; Open cart revalidates and focuses
-  only the existing exact retailer cart tab, with checkout remaining manual
+  only the existing exact retailer cart tab, marks the handoff seen without
+  clearing its badge, and leaves closure to confirmed checkout, explicit user
+  close-out, reconciliation, or tab closure, with checkout remaining manual
 - Removes informational notification/status calls from the critical dispatch
   path and replaces the guessed single timer with bounded 250/750/1500/2500 ms
   job probes plus the unchanged durable alarm fallback

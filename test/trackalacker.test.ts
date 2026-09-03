@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
 import test from "node:test";
+import { createActionJobAvailabilityPulse } from "../apps/api/src/action-job-availability.js";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import type { TrackalackerCatalogItemInput, TrackalackerPushEnvelope } from "../packages/contracts/src/index.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
@@ -410,7 +411,13 @@ test("paired Chrome can report sanitized push status, import catalog, and delive
   const devices = new DeviceRepository(db);
   const pairing = devices.createPairingCode();
   const paired = devices.pair({ pairingCode: pairing.code, name: "Desktop - Windows - Chrome" });
-  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "trackalacker-test" });
+  const actionJobAvailability = createActionJobAvailabilityPulse();
+  const server = createYoinkServer({
+    db,
+    webRoot: join(process.cwd(), "apps", "web"),
+    version: "trackalacker-test",
+    actionJobAvailability
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address() as AddressInfo;
@@ -476,6 +483,9 @@ test("paired Chrome can report sanitized push status, import catalog, and delive
     assert.equal(signal.processingState, "queued");
     assert.equal(signal.backgroundTaskCreated, true);
     assert.equal(signal.backgroundWakeState, "created");
+    assert.equal(actionJobAvailability.currentVersion(), 1);
+    assert.ok((actionJobAvailability.rapidRecheckUntil?.() ?? 0) > Date.now(),
+      "Fresh durable ingress should arm the short external-worker recheck window.");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM signal_events")?.count, 0);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count, 0);
 

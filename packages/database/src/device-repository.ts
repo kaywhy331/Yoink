@@ -15,6 +15,7 @@ const PAIRING_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const PAIRING_CODE_LENGTH = 12;
 const PAIRING_TTL_MS = 5 * 60_000;
 const DEVICE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
+const USER_ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 const DEVICE_CREDENTIAL_ROTATION_INTERVAL_MS = 30 * 24 * 60 * 60_000;
 const DEVICE_CREDENTIAL_PENDING_TTL_MS = 10 * 60_000;
 const DEVICE_CREDENTIAL_PREVIOUS_GRACE_MS = 2 * 60_000;
@@ -212,6 +213,19 @@ export class DeviceRepository {
   }
 
   createPairingCode(now = Date.now()): PairingCodeResult {
+    return this.createPairingCodeForUser(currentRequestScope().userId, now);
+  }
+
+  createPairingCodeForUser(userId: string, now = Date.now()): PairingCodeResult {
+    const subjectUserId = cleanText(userId, 120);
+    if (!USER_ID_PATTERN.test(subjectUserId)) throw new Error("The pairing-code user is invalid.");
+    const subject = this.db.get<{ status: string }>(
+      "SELECT status FROM users WHERE tenant_id = ? AND id = ?",
+      currentRequestScope().tenantId,
+      subjectUserId
+    );
+    if (!subject) throw new Error("The pairing-code user does not exist in this tenant.");
+    if (subject.status !== "active") throw new Error("Enable this user before issuing a pairing code.");
     return this.db.transaction(() => {
       const timestamp = nowIso(now);
       const code = pairingCode();
@@ -220,12 +234,12 @@ export class DeviceRepository {
       this.db.run(
         "UPDATE device_pairing_codes SET used_at = ? WHERE user_id = ? AND used_at = ''",
         timestamp,
-        currentRequestScope().userId
+        subjectUserId
       );
       this.db.run(
         `DELETE FROM device_pairing_codes
          WHERE user_id = ? AND ((used_at <> '' AND used_at < ?) OR expires_at < ?)`,
-        currentRequestScope().userId,
+        subjectUserId,
         nowIso(now - 24 * 60 * 60_000),
         nowIso(now - 24 * 60 * 60_000)
       );
@@ -236,12 +250,19 @@ export class DeviceRepository {
          ) VALUES (?, ?, ?, ?, ?, '', ?)`,
         id,
         currentRequestScope().tenantId,
-        currentRequestScope().userId,
+        subjectUserId,
         codeHash(normalized),
         expiresAt,
         timestamp
       );
-      this.audit(id, "device_pairing_code_created", "created", "A one-time extension pairing code was created.", {}, now);
+      this.audit(
+        id,
+        "device_pairing_code_created",
+        "created",
+        "A one-time extension pairing code was created for a tenant user.",
+        { subjectUserId },
+        now
+      );
       return { code, expiresAt };
     });
   }
@@ -258,9 +279,11 @@ export class DeviceRepository {
       userId: string;
       pairingCodeId: string;
     }>(
-      `SELECT tenant_id AS tenantId, user_id AS userId, id AS pairingCodeId
-       FROM device_pairing_codes
-       WHERE code_hash = ? AND used_at = '' AND expires_at >= ?`,
+      `SELECT code.tenant_id AS tenantId, code.user_id AS userId, code.id AS pairingCodeId
+       FROM device_pairing_codes code
+       JOIN users user ON user.id = code.user_id AND user.tenant_id = code.tenant_id
+       WHERE code.code_hash = ? AND code.used_at = '' AND code.expires_at >= ?
+         AND user.status = 'active'`,
       codeHash(normalized),
       nowIso(now)
     ) ?? null;

@@ -38,6 +38,7 @@ import {
   type PurchaseIntentCreateInput,
   type PurchaseIntentDeleteInput,
   type PurchaseIntentPreflightInput,
+  type PurchaseProfileApplyInput,
   type PurchaseProfileInput,
   PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS,
   type OperatorAlertAcknowledgeInput,
@@ -70,14 +71,23 @@ import type {
   SignalProviderEnvelope
 } from "../../../packages/contracts/src/signal-provider.js";
 import type {
+  DropWindowCancelReason,
   DropWindowInput,
+  DropWindowUpdateInput,
   OrderConfirmationObservationInput,
   RetailerSessionReadinessInput,
   UserActionConnectorInput,
   WatchQueueMode,
   WatchQueueObservationInput
 } from "../../../packages/contracts/src/action-platform.js";
-import { WATCH_QUEUE_MODE_CONFIRMATION } from "../../../packages/contracts/src/action-platform.js";
+import {
+  PRIVACY_CHANGE_VERSION,
+  WATCH_QUEUE_MODE_CONFIRMATION
+} from "../../../packages/contracts/src/action-platform.js";
+import {
+  deriveWalmartPurchaseHandoff,
+  withWalmartPurchaseHandoff
+} from "./walmart-purchase-handoff.js";
 import { CatalogRepository } from "../../../packages/database/src/catalog-repository.js";
 import {
   CatalogGovernanceRepository,
@@ -97,6 +107,8 @@ import {
   type AdminChangeStatus
 } from "../../../packages/database/src/admin-change-control-repository.js";
 import { AuthorizationRepository } from "../../../packages/database/src/authorization-repository.js";
+import { AdminOverviewRepository } from "../../../packages/database/src/admin-overview-repository.js";
+import { AdminAnalyticsRepository } from "../../../packages/database/src/admin-analytics-repository.js";
 import { AuditRepository } from "../../../packages/database/src/audit-repository.js";
 import { ControlRepository } from "../../../packages/database/src/control-repository.js";
 import { CommunityEvidenceRepository } from "../../../packages/database/src/community-evidence-repository.js";
@@ -109,6 +121,12 @@ import {
 } from "../../../packages/database/src/hosted-delivery-repository.js";
 import { IdentityClaimRepository } from "../../../packages/database/src/identity-claim-repository.js";
 import { NotificationRepository } from "../../../packages/database/src/notification-repository.js";
+import { StoreLinkInteractionRepository } from "../../../packages/database/src/store-link-interaction-repository.js";
+import {
+  WalmartPurchaseHandoffInteractionRepository,
+  type WalmartPurchaseHandoffRouteKind,
+  type WalmartPurchaseHandoffSurface
+} from "../../../packages/database/src/walmart-purchase-handoff-interaction-repository.js";
 import {
   OBSERVER_RECIPE_CANARY_COHORT_PERCENT,
   OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS,
@@ -188,6 +206,7 @@ import { QualificationRepository } from "../../../packages/database/src/qualific
 import {
   LOCAL_REQUEST_SCOPE,
   currentRequestScope,
+  isExactLocalRequestScope,
   runWithRequestScope,
   scopedSourceConnectionId,
   type RequestScope
@@ -233,6 +252,16 @@ import {
 import { resolveExtensionRelease } from "./extension-release.js";
 import { ApiError, apiErrorPayload } from "./api-error.js";
 import { operationalRouteKey, resolveApiRoutePolicy } from "./api-route-policy.js";
+import { presentShopperPurchaseIntent } from "./purchase-intent-presentation.js";
+import {
+  DEVICE_ACTION_HANDOFF_WAIT_MAX_MS,
+  DEVICE_ACTION_JOB_FALLBACK_RECHECK_MS,
+  DEVICE_ACTION_JOB_RAPID_RECHECK_MS,
+  DEVICE_ACTION_JOB_WAIT_MAX_MS,
+  DEVICE_NOTIFICATION_WAIT_MAX_MS,
+  USER_ACTION_HANDOFF_WAIT_MAX_MS,
+  type ActionJobAvailabilityPulse
+} from "./action-job-availability.js";
 import {
   emptyInternalServiceCapabilityProjection,
   type InternalServiceCapabilityProjection
@@ -244,6 +273,12 @@ const STATIC_FILES = new Map([
   ["/index.html", "user.html"],
   ["/user.js", "user.js"],
   ["/user.css", "user.css"],
+  ["/tokens.css", "tokens.css"],
+  ["/components.css", "components.css"],
+  ["/dialogs.js", "dialogs.js"],
+  ["/dialogs.css", "dialogs.css"],
+  ["/status.js", "status.js"],
+  ["/status.css", "status.css"],
   ["/admin", "index.html"],
   ["/admin/", "index.html"],
   ["/app.js", "app.js"],
@@ -255,9 +290,16 @@ const STATIC_FILES = new Map([
   ["/llms.txt", "llms.txt"],
   ["/privacy", "privacy.html"],
   ["/privacy/", "privacy.html"],
-  ["/privacy.js", "privacy.js"]
+  ["/privacy.js", "privacy.js"],
+  ["/fonts/manrope.woff2", "fonts/manrope.woff2"]
 ]);
 const ADMIN_STATIC_PATHS = new Set(["/admin", "/admin/", "/app.js", "/styles.css"]);
+const ADMIN_SNAPSHOT_VIEW_IDS = [
+  "overview", "library", "strategies", "missions", "signals", "actions", "notifications", "attribution", "activity",
+  "analytics", "operations", "approvals", "catalog-reviews", "alerts", "community", "settings", "access", "connections"
+] as const;
+type AdminSnapshotView = typeof ADMIN_SNAPSHOT_VIEW_IDS[number];
+const ADMIN_SNAPSHOT_VIEWS = new Set<string>(ADMIN_SNAPSHOT_VIEW_IDS);
 
 export interface AppDependencies {
   db: YoinkDatabase;
@@ -269,6 +311,7 @@ export interface AppDependencies {
   operatorAlertConnectorBindings?: Readonly<Record<string, string>>;
   userActionConnectorBindings?: Readonly<Record<string, string>>;
   backgroundWorkerWake?: () => void | Promise<void>;
+  actionJobAvailability?: ActionJobAvailabilityPulse;
   backgroundWorkerRestart?: () => Promise<void>;
   internalServiceCapabilityRegistry?: InternalServiceCapabilityProjection;
   requestScopeResolver?: (
@@ -406,6 +449,22 @@ function purchaseAutomationPlanInput(plan: Record<string, unknown>): PurchaseAut
   };
 }
 
+function userPurchaseIntentUpdateInput(body: Record<string, unknown>): MissionUpdateInput {
+  const normalized: Record<string, unknown> = { ...body };
+  if (Array.isArray(body.targets)) {
+    normalized.targets = body.targets.map((target) => {
+      if (!target || typeof target !== "object" || Array.isArray(target)) return target;
+      const record = target as Record<string, unknown>;
+      return { ...record, sellerPolicy: record.sellerPolicy ?? "first_party_only" };
+    });
+  }
+  if (body.policy && typeof body.policy === "object" && !Array.isArray(body.policy)) {
+    const policy = body.policy as Record<string, unknown>;
+    normalized.policy = { ...policy, substitutionPolicy: policy.substitutionPolicy ?? "exact_only" };
+  }
+  return normalized as unknown as MissionUpdateInput;
+}
+
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLocaleLowerCase("en-US");
   if (contentType !== "application/json") throw new Error("Requests with a body must use application/json.");
@@ -427,13 +486,36 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   return value as Record<string, unknown>;
 }
 
-function staticResponse(response: ServerResponse, webRoot: string, pathname: string): boolean {
+const STATIC_VERSION_TOKEN = "{{YOINK_VERSION}}";
+const STATIC_PRIVACY_CHANGE_VERSION_TOKEN = "{{PRIVACY_CHANGE_VERSION}}";
+
+function staticDocumentVersion(version: string, html: boolean): string {
+  const singleLineVersion = String(version || "unknown").replace(/[\r\n]/g, "");
+  if (!html) return singleLineVersion;
+  return singleLineVersion
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function staticResponse(response: ServerResponse, webRoot: string, pathname: string, version: string): boolean {
   const file = STATIC_FILES.get(pathname);
   if (!file) return false;
   const path = join(webRoot, file);
   let body: Buffer;
   try {
     body = readFileSync(path);
+    const extension = extname(file);
+    if (extension === ".html" || extension === ".txt") {
+      body = Buffer.from(body.toString("utf8")
+        .replaceAll(STATIC_VERSION_TOKEN, staticDocumentVersion(version, extension === ".html"))
+        .replaceAll(
+          STATIC_PRIVACY_CHANGE_VERSION_TOKEN,
+          staticDocumentVersion(PRIVACY_CHANGE_VERSION, extension === ".html")
+        ));
+    }
   } catch {
     json(response, 503, { error: "ui_unavailable", message: "The Yoink control-center files are unavailable." });
     return true;
@@ -444,7 +526,9 @@ function staticResponse(response: ServerResponse, webRoot: string, pathname: str
     ? "text/css; charset=utf-8"
     : extname(file) === ".js"
       ? "text/javascript; charset=utf-8"
-      : extname(file) === ".txt" ? "text/plain; charset=utf-8" : "text/html; charset=utf-8");
+      : extname(file) === ".woff2"
+        ? "font/woff2"
+        : extname(file) === ".txt" ? "text/plain; charset=utf-8" : "text/html; charset=utf-8");
   response.end(body);
   return true;
 }
@@ -457,6 +541,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const mutationOriginValidator = dependencies.mutationOriginValidator ?? sameOriginMutation;
   const extensionOriginValidator = dependencies.extensionOriginValidator ?? chromeExtensionOrigin;
   const localExtensionReleaseEnabled = dependencies.localExtensionReleaseEnabled !== false;
+  const notifyActionJobAvailability = (rapid = false): void => {
+    try {
+      dependencies.actionJobAvailability?.notify(rapid ? { rapid: true } : undefined);
+    } catch {
+      // Availability is a latency optimization; the bounded watch remains authoritative on timeout.
+    }
+  };
   const internalServiceCapabilities = dependencies.internalServiceCapabilityRegistry
     ?? emptyInternalServiceCapabilityProjection();
   const postgresCutover = postgresCutoverCapabilityProjection();
@@ -527,6 +618,52 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     postgresSignalNotificationEnsureCapabilityProjection();
   const postgresSignalHandlerComposition =
     postgresSignalHandlerCompositionCapabilityProjection();
+  const postgresDataPlane = Object.freeze({
+    activeStorageEngine: "sqlite",
+    postgresCutover,
+    postgresRuntimeReadRoles,
+    postgresTenantSessions,
+    postgresTenantQueueWrites,
+    postgresWorkerControl,
+    postgresNotificationRecovery,
+    postgresExecutionRecovery,
+    postgresOperationalRetention,
+    postgresObserverCandidateEvaluation,
+    postgresOperatorAlertConnectorDispatch,
+    postgresOperatorAlertReconciliation,
+    postgresObserverWitnessRefresh,
+    postgresHostedDeliveryLeaseRecovery,
+    postgresSignalCatalogApply,
+    postgresSignalResolutionApply,
+    postgresSignalSourceReferenceRefresh,
+    postgresSignalTerminalDecisionApply,
+    postgresSignalOfferIncidentApply,
+    postgresSignalPostIncidentDecisionApply,
+    postgresSignalMissionBindingApply,
+    postgresSignalStrategyEvaluationApply,
+    postgresSignalWriterLockProtocol,
+    postgresSignalConstraintConfigApply,
+    postgresSignalActionSpendApply,
+    postgresSignalTargetQualificationApply,
+    postgresSignalSourceTrustApply,
+    postgresSignalRetailerQualificationApply,
+    postgresSignalMissionPolicyApply,
+    postgresSignalSourceStatusApply,
+    postgresSignalSourceSyncApply,
+    postgresSignalReservationLifecycleApply,
+    postgresSignalCatalogImportApply,
+    postgresSignalSourceProvisioningApply,
+    postgresSignalAttributionPolicyApply,
+    postgresSignalEvaluationComposition,
+    postgresSignalAttributionReceiptApply,
+    postgresSignalJobLifecycleApply,
+    postgresSignalEvaluationRepositoryComposition,
+    postgresSignalIngressEnqueueApply,
+    postgresSignalIngressComposition,
+    postgresSignalDeadLetterResetApply,
+    postgresSignalNotificationEnsureApply,
+    postgresSignalHandlerComposition
+  });
   const catalog = new CatalogRepository(db);
   const catalogGovernance = new CatalogGovernanceRepository(db);
   const catalogLinks = new CatalogLinkRepository(db);
@@ -536,6 +673,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const adapterDiagnostics = new AdapterDiagnosticRepository(db);
   const adminChanges = new AdminChangeControlRepository(db);
   const authorization = new AuthorizationRepository(db);
+  const adminOverview = new AdminOverviewRepository(db);
+  /** Attach requester and reviewer display names to governance rows that only store actor ids. */
+  const withActorDisplayNames = <T extends { requestedByActorId: string; reviewedByActorId: string }>(rows: T[]) => {
+    const names = catalogGovernance.actorDisplayNames(rows.flatMap((row) => [row.requestedByActorId, row.reviewedByActorId]));
+    return rows.map((row) => ({
+      ...row,
+      requestedByDisplayName: names[row.requestedByActorId] ?? "",
+      reviewedByDisplayName: names[row.reviewedByActorId] ?? ""
+    }));
+  };
+  const adminAnalytics = new AdminAnalyticsRepository(db);
   const audit = new AuditRepository(db);
   const control = new ControlRepository(db);
   const community = new CommunityEvidenceRepository(db);
@@ -555,12 +703,26 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const spendLedger = new SpendLedgerRepository(db);
   const engine = new SignalEngine(db);
   const adminSignalSimulator = new AdminSignalSimulator(db, engine);
-  const signalIngress = new DurableSignalIngressService(db, dependencies.backgroundWorkerWake);
+  const signalIngress = new DurableSignalIngressService(
+    db,
+    dependencies.backgroundWorkerWake,
+    () => notifyActionJobAvailability(true)
+  );
   const devices = new DeviceRepository(db);
   const execution = new ExecutionRepository(db);
   const hostedDelivery = new HostedDeliveryRepository(db);
   const identityClaims = new IdentityClaimRepository(db);
   const notifications = new NotificationRepository(db);
+  const storeLinkInteractions = new StoreLinkInteractionRepository(db);
+  const walmartPurchaseHandoffInteractions = new WalmartPurchaseHandoffInteractionRepository(db);
+  const userActionHandoffSummary = (now = Date.now()) => {
+    const summary = signals.actionHandoffSummary(now);
+    if (summary.primary) return summary;
+    return withWalmartPurchaseHandoff(
+      summary,
+      walmartPurchaseHandoffInteractions.latest(now)
+    );
+  };
   const mutationLanes = new MutationLaneRepository(db);
   const observerContributorEligibility = new ObserverRecipeContributorEligibilityRepository(db);
   const observerRecipes = new ObserverRecipeRepository(
@@ -582,11 +744,53 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const sourceRuntime = new SourceRepository(db);
   const walmartDraws = new WalmartDrawRepository(db);
   const userPrivacy = new UserPrivacyRepository(db);
+  const actorProjection = () => {
+    const scope = currentRequestScope();
+    const principal = db.get<{ displayName: string; tenantName: string }>(
+      `SELECT user.display_name AS displayName, tenant.name AS tenantName
+       FROM users user
+       JOIN tenants tenant ON tenant.id = user.tenant_id
+       WHERE user.tenant_id = ? AND user.id = ?`,
+      scope.tenantId,
+      scope.userId
+    );
+    const localSession = isExactLocalRequestScope(scope);
+    const roleLabels = localSession
+      ? ["Local administrator"]
+      : db.all<{ displayName: string }>(
+        `SELECT role.display_name AS displayName
+         FROM authorization_memberships membership
+         JOIN authorization_roles role ON role.id = membership.role_id
+         WHERE membership.tenant_id = ? AND membership.user_id = ? AND membership.status = 'active'
+         ORDER BY role.display_name`,
+        scope.tenantId,
+        scope.userId
+      ).map((role) => role.displayName);
+    const assurance = adminChanges.assuranceStatus();
+    return {
+      displayName: principal?.displayName || "Signed-in user",
+      userId: scope.userId,
+      tenantName: principal?.tenantName || scope.tenantId,
+      roleLabels,
+      assuranceLevel: assurance.level,
+      assuranceFresh: assurance.fresh,
+      assuranceExpiresAt: assurance.expiresAt,
+      sessionKind: localSession ? "local" : "hosted",
+      signOutUrl: ""
+    };
+  };
   const guardedAddLanes = () => ({
     target: qualifications.targetAddQualified(),
     walmart: qualifications.walmartAddQualified(),
     amazon: qualifications.amazonAddQualified(),
     bestbuy: qualifications.bestBuyAddQualified()
+  });
+  const activateAndReconcileProfiles = <T extends object>(
+    retailerId: "target" | "walmart" | "amazon" | "bestbuy",
+    activate: () => T
+  ) => ({
+    ...activate(),
+    profileReconciliation: control.reconcilePurchaseProfilesForRetailer(retailerId)
   });
   const decoratePurchaseIntents = (
     plans: Array<Record<string, unknown>>,
@@ -595,6 +799,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       sources?: Array<Record<string, unknown>>;
       deviceList?: Array<Record<string, unknown>>;
       laneQualifications?: ReturnType<typeof guardedAddLanes>;
+      sessionBlockers?: ReturnType<RetailerReadinessRepository["freshSessionBlockers"]>;
       now?: number;
     } = {}
   ): Array<Record<string, unknown>> => {
@@ -609,10 +814,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       sources,
       devices: deviceList,
       qualifications: input.laneQualifications ?? guardedAddLanes(),
+      sessionBlockers: input.sessionBlockers ?? retailerReadiness.freshSessionBlockers(now),
       now
     };
     return plans.map((plan) => {
-      const { automationTargets: _automationTargets, ...publicPlan } = plan;
+      const { automationTargets: _automationTargets, ...publicPlan } = presentShopperPurchaseIntent(plan);
       return {
         ...publicPlan,
         automationReadiness: buildPurchaseAutomationReadiness(purchaseAutomationPlanInput(plan), context)
@@ -633,6 +839,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       sources: control.listSources(),
       devices: devices.listDevices(now),
       qualifications: guardedAddLanes(),
+      sessionBlockers: retailerReadiness.freshSessionBlockers(now),
       now
     });
     const { readinessPlan: _readinessPlan, ...publicPreview } = preview;
@@ -671,6 +878,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
   return createServer(async (request, response) => {
     const requestStartedAt = Date.now();
+    let telemetryExcludedWaitMs = 0;
     const suppliedCorrelationId = String(request.headers["x-request-id"] ?? "").trim();
     const correlationId = /^[A-Za-z0-9_-]{8,120}$/.test(suppliedCorrelationId)
       ? suppliedCorrelationId
@@ -697,7 +905,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           actorKind: telemetryActorKind,
           statusCode: response.statusCode,
           errorCode: telemetryErrorCode || (response.statusCode >= 400 ? `http_${response.statusCode}` : ""),
-          durationMs: Date.now() - requestStartedAt
+          durationMs: Math.max(0, Date.now() - requestStartedAt - telemetryExcludedWaitMs)
         }));
       } catch {
         // Operational telemetry is deliberately fail-open for request delivery.
@@ -734,7 +942,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const requestUrl = initialRequestUrl;
       if (request.method === "GET" && STATIC_FILES.has(requestUrl.pathname)) {
         authorization.require(ADMIN_STATIC_PATHS.has(requestUrl.pathname) ? "admin.read" : "user.read");
-        if (staticResponse(response, webRoot, requestUrl.pathname)) return;
+        if (staticResponse(response, webRoot, requestUrl.pathname, version)) return;
       }
 
       const routePolicy = resolveApiRoutePolicy(request.method ?? "GET", requestUrl.pathname);
@@ -775,11 +983,18 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const userConnectorTestMatch = /^\/api\/v1\/user\/connectors\/(user_connector_[a-f0-9]{32})\/test$/.exec(requestUrl.pathname);
       const watchEnrollMatch = /^\/api\/v1\/user\/watch-queue\/(drop_window_item_[a-f0-9]{32})\/enroll$/.exec(requestUrl.pathname);
       const watchCancelMatch = /^\/api\/v1\/user\/watch-queue\/(watch_item_[a-f0-9]{32})\/cancel$/.exec(requestUrl.pathname);
+      const adminUserMatch = /^\/api\/v1\/users\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
+      const adminUserPairingMatch = /^\/api\/v1\/users\/([A-Za-z0-9_-]{3,120})\/pairing-code$/.exec(requestUrl.pathname);
+      const adminUserPauseMatch = /^\/api\/v1\/users\/([A-Za-z0-9_-]{3,120})\/pause-actions$/.exec(requestUrl.pathname);
+      const adminDropWindowMatch = /^\/api\/v1\/admin\/drop-windows\/(drop_window_[a-f0-9]{32})$/.exec(requestUrl.pathname);
+      const adminDropWindowCancelMatch = /^\/api\/v1\/admin\/drop-windows\/(drop_window_[a-f0-9]{32})\/cancel$/.exec(requestUrl.pathname);
+      const walmartPurchaseHandoffClickMatch = /^\/api\/v1\/user\/purchase-handoffs\/([A-Za-z0-9_-]{3,120})\/click$/.exec(requestUrl.pathname);
       const sourceChannelReplayMatch = /^\/api\/v1\/sources\/channels\/(signal_channel_[a-f0-9]{32})\/replay$/.exec(requestUrl.pathname);
       const watchObservationMatch = /^\/api\/v1\/devices\/self\/watch-queue\/(watch_item_[a-f0-9]{32})\/observations$/.exec(requestUrl.pathname);
       const readinessDeviceMatch = /^\/api\/v1\/devices\/self\/readiness\/(target|walmart|amazon|bestbuy)$/.exec(requestUrl.pathname);
       const jobEventsBatchMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/events\/batch$/.exec(requestUrl.pathname);
       const jobHeartbeatMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/heartbeat$/.exec(requestUrl.pathname);
+      const deviceCartOutcomeMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/outcome$/.exec(requestUrl.pathname);
       const observerRecoveryReviewMatch = /^\/api\/v1\/community\/recovery-evidence\/([A-Za-z0-9_-]{3,120})\/review$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
@@ -1019,6 +1234,26 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "POST" && walmartPurchaseHandoffClickMatch) {
+        const body = await readJson(request);
+        if (body.confirmation !== "OPEN_WALMART_PURCHASE_HANDOFF"
+          || !["howl", "direct"].includes(String(body.routeKind))
+          || !["calls", "home"].includes(String(body.surface ?? "calls"))) {
+          throw new Error("A confirmed Walmart purchase handoff route is required.");
+        }
+        const click = walmartPurchaseHandoffInteractions.recordClick(
+          walmartPurchaseHandoffClickMatch[1] ?? "",
+          body.routeKind as WalmartPurchaseHandoffRouteKind,
+          Date.now(),
+          String(body.surface ?? "calls") as WalmartPurchaseHandoffSurface
+        );
+        notifyActionJobAvailability();
+        json(response, 202, {
+          click
+        });
+        return;
+      }
+
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/calls") {
         const now = Date.now();
         const signalCalls = signals.listSignals(100, 0, "").map((signal) => ({
@@ -1036,7 +1271,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           actionJobId: String(signal.actionJobId ?? ""),
           source: String(signal.source ?? ""),
           sourceChannelId: String(signal.sourceChannelId ?? ""),
-          falsePositiveReported: Number(signal.falsePositiveReported ?? 0) === 1
+          falsePositiveReported: Number(signal.falsePositiveReported ?? 0) === 1,
+          purchaseHandoff: deriveWalmartPurchaseHandoff(signal, now)
         }));
         const windowCalls = dropWindows.list(now, false).flatMap((window) => window.items.map((item) => ({
           id: `drop:${item.id}`,
@@ -1057,6 +1293,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           watch: item.watch,
           earlyAccess: item.earlyAccess,
           confidenceBps: window.confidenceBps,
+          timezone: window.timezone,
           startsAt: window.startsAt,
           closesAt: window.closesAt
         })));
@@ -1102,6 +1339,30 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         response.setHeader("Content-Disposition", "attachment; filename=Yoink-action-analytics.csv");
         response.setHeader("Content-Length", String(body.length));
         response.end(body);
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/analytics") {
+        json(response, 200, {
+          analytics: adminAnalytics.snapshot(requestUrl.searchParams.get("window") ?? "7d")
+        });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/analytics.csv") {
+        const body = Buffer.from(adminAnalytics.csv(requestUrl.searchParams.get("window") ?? "7d"), "utf8");
+        securityHeaders(response);
+        response.statusCode = 200;
+        response.setHeader("Content-Type", "text/csv; charset=utf-8");
+        response.setHeader("Content-Disposition", "attachment; filename=Yoink-admin-funnel.csv");
+        response.setHeader("Content-Length", String(body.length));
+        response.end(body);
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/store-link-clicks") {
+        const body = await readJson(request);
+        json(response, 202, { click: storeLinkInteractions.record(body) });
         return;
       }
 
@@ -1169,15 +1430,18 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const proposalCounts = catalogGovernance.mineCounts();
         const deviceList = devices.listDevices(now);
         const laneQualifications = guardedAddLanes();
+        const sessionBlockers = retailerReadiness.freshSessionBlockers(now);
         const purchaseIntents = decoratePurchaseIntents(missions, {
           settings,
           sources: sourceList,
           deviceList,
           laneQualifications,
+          sessionBlockers,
           now
         });
         json(response, 200, {
           version,
+          actor: actorProjection(),
           settings,
           counts: {
             products: catalog.libraryCount(),
@@ -1188,6 +1452,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ...proposalCounts
           },
           purchaseIntents,
+          actionHandoff: userActionHandoffSummary(now),
+          actionHandoffAvailabilityEpoch: dependencies.actionJobAvailability?.currentEpoch() ?? "",
+          actionHandoffAvailabilityVersion: dependencies.actionJobAvailability?.currentVersion() ?? 0,
           spend: spendLedger.summary(now, false),
           sources: sourceList,
           guardedAddLanes: laneQualifications,
@@ -1214,6 +1481,44 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           qualificationCandidates: shadowObservations.qualificationCandidates(now),
           announcement: currentUserReleaseAnnouncement(),
           permissions: authorization.permissions()
+        });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/action-handoff") {
+        const waitMs = Math.max(0, Math.min(USER_ACTION_HANDOFF_WAIT_MAX_MS,
+          Math.floor(Number(requestUrl.searchParams.get("wait") ?? 0) || 0)));
+        const requestedVersionValue = Number(requestUrl.searchParams.get("version"));
+        const requestedVersion = Number.isSafeInteger(requestedVersionValue) && requestedVersionValue >= 0
+          ? requestedVersionValue : -1;
+        const requestedEpochValue = String(requestUrl.searchParams.get("epoch") ?? "");
+        const requestedEpoch = /^[a-f0-9]{32}$/.test(requestedEpochValue) ? requestedEpochValue : "";
+        let availabilityEpoch = dependencies.actionJobAvailability?.currentEpoch() ?? "";
+        let availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? 0;
+        if (waitMs > 0
+          && requestedEpoch === availabilityEpoch
+          && requestedVersion === availabilityVersion
+          && !request.destroyed) {
+          const intentionalWaitStartedAt = Date.now();
+          try {
+            if (dependencies.actionJobAvailability) {
+              availabilityVersion = await dependencies.actionJobAvailability.waitAfter(availabilityVersion, waitMs);
+            } else {
+              await boundedWait(waitMs);
+            }
+          } catch {
+            await boundedWait(Math.min(250, waitMs));
+            availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
+          } finally {
+            telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
+          }
+        }
+        if (request.destroyed) return;
+        availabilityEpoch = dependencies.actionJobAvailability?.currentEpoch() ?? availabilityEpoch;
+        json(response, 200, {
+          actionHandoff: userActionHandoffSummary(),
+          availabilityEpoch,
+          availabilityVersion
         });
         return;
       }
@@ -1301,6 +1606,18 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/authorization/users") {
         json(response, 200, { users: authorization.tenantUsers() });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/users") {
+        json(response, 200, {
+          users: authorization.tenantUsers(requestUrl.searchParams.get("q") ?? "")
+        });
+        return;
+      }
+
+      if (request.method === "GET" && adminUserMatch) {
+        json(response, 200, authorization.tenantUserDetail(adminUserMatch[1] ?? ""));
         return;
       }
 
@@ -1593,7 +1910,41 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/notifications/next") {
-          json(response, 200, notifications.leaseNext(device.id));
+          const waitMs = Math.max(0, Math.min(
+            DEVICE_NOTIFICATION_WAIT_MAX_MS,
+            Math.floor(Number(requestUrl.searchParams.get("wait") ?? 0) || 0)
+          ));
+          const deadline = Date.now() + waitMs;
+          let availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? 0;
+          let lease = notifications.leaseNext(device.id, Date.now());
+          while (!lease.notification && lease.reason === "no_notifications"
+            && lease.closedDeliveryIds.length === 0
+            && Date.now() < deadline && !request.destroyed) {
+            const rapidRecheck = (dependencies.actionJobAvailability?.rapidRecheckUntil?.() ?? 0) > Date.now();
+            const boundedDelay = Math.min(
+              rapidRecheck ? DEVICE_ACTION_JOB_RAPID_RECHECK_MS : DEVICE_ACTION_JOB_FALLBACK_RECHECK_MS,
+              Math.max(1, deadline - Date.now())
+            );
+            const intentionalWaitStartedAt = Date.now();
+            try {
+              if (dependencies.actionJobAvailability) {
+                availabilityVersion = await dependencies.actionJobAvailability.waitAfter(
+                  availabilityVersion,
+                  boundedDelay
+                );
+              } else {
+                await boundedWait(boundedDelay);
+              }
+            } catch {
+              await boundedWait(boundedDelay);
+              availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
+            } finally {
+              telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
+            }
+            lease = notifications.leaseNext(device.id, Date.now());
+          }
+          if (request.destroyed) return;
+          json(response, 200, { ...lease, availabilityVersion });
           return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/watch-queue/next") {
@@ -1623,21 +1974,78 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           if (body.retailerId !== readinessDeviceMatch[1]) {
             throw new Error("The retailer-readiness route and payload must match.");
           }
-          json(response, 200, {
-            readiness: retailerReadiness.record(
-              device.id,
-              body as unknown as RetailerSessionReadinessInput
-            )
-          });
+          const readiness = retailerReadiness.record(
+            device.id,
+            body as unknown as RetailerSessionReadinessInput
+          );
+          notifyActionJobAvailability();
+          json(response, 200, { readiness });
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/order-confirmations") {
           const body = await readJson(request);
+          const observation = orderConfirmations.record(
+            device.id,
+            body as unknown as OrderConfirmationObservationInput
+          );
+          notifyActionJobAvailability();
           json(response, 202, {
-            observation: orderConfirmations.record(
-              device.id,
-              body as unknown as OrderConfirmationObservationInput
-            )
+            observation
+          });
+          return;
+        }
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/action-handoffs/reconcile") {
+          const body = await readJson(request);
+          if (body.contractVersion !== 1 || !Array.isArray(body.jobIds)) {
+            throw new Error("The action-handoff reconciliation contract is invalid.");
+          }
+          const jobIds = body.jobIds.map((value) => String(value ?? ""));
+          const waitMs = Math.max(0, Math.min(
+            DEVICE_ACTION_HANDOFF_WAIT_MAX_MS,
+            Math.floor(Number(body.waitMs ?? 0) || 0)
+          ));
+          const requestedVersionValue = Number(body.availabilityVersion);
+          const requestedVersion = Number.isSafeInteger(requestedVersionValue) && requestedVersionValue >= 0
+            ? requestedVersionValue : -1;
+          let availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? 0;
+          let items = execution.actionHandoffStatuses(device.id, jobIds);
+          const initialStatuses = JSON.stringify(items);
+          const deadline = Date.now() + waitMs;
+          const watchCurrentVersion = requestedVersion === availabilityVersion;
+          while (waitMs > 0
+            && watchCurrentVersion
+            && items.some((item) => item.status !== "closed")
+            && Date.now() < deadline
+            && !request.aborted
+            && !response.destroyed) {
+            const boundedDelay = Math.min(
+              DEVICE_ACTION_JOB_FALLBACK_RECHECK_MS,
+              Math.max(1, deadline - Date.now())
+            );
+            const intentionalWaitStartedAt = Date.now();
+            try {
+              if (dependencies.actionJobAvailability) {
+                availabilityVersion = await dependencies.actionJobAvailability.waitAfter(
+                  availabilityVersion,
+                  boundedDelay
+                );
+              } else {
+                await boundedWait(boundedDelay);
+              }
+            } catch {
+              await boundedWait(Math.min(250, boundedDelay));
+              availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
+            } finally {
+              telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
+            }
+            items = execution.actionHandoffStatuses(device.id, jobIds);
+            if (JSON.stringify(items) !== initialStatuses) break;
+          }
+          if (request.aborted || response.destroyed) return;
+          json(response, 200, {
+            contractVersion: 1,
+            availabilityVersion,
+            items
           });
           return;
         }
@@ -1652,6 +2060,20 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           }
           json(response, 200, {
             compliance: privacyCompliance.record("local_deletion", "deletion_completed", device.id)
+          });
+          return;
+        }
+        if (request.method === "POST"
+          && requestUrl.pathname === "/api/v1/devices/self/notifications/closures/ack") {
+          const body = await readJson(request);
+          if (body.contractVersion !== 1
+            || !Array.isArray(body.deliveryIds)
+            || body.deliveryIds.length > 100
+            || body.deliveryIds.some((value) => !/^[A-Za-z0-9_-]{3,160}$/.test(String(value)))) {
+            throw new Error("Valid closed notification delivery IDs are required.");
+          }
+          json(response, 200, {
+            closures: notifications.acknowledgeClosedDeliveries(device.id, body.deliveryIds)
           });
           return;
         }
@@ -1688,13 +2110,45 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/jobs/next") {
-          const waitMs = Math.max(0, Math.min(5_000, Math.floor(Number(requestUrl.searchParams.get("wait") ?? 0) || 0)));
+          const waitMs = Math.max(0, Math.min(
+            DEVICE_ACTION_JOB_WAIT_MAX_MS,
+            Math.floor(Number(requestUrl.searchParams.get("wait") ?? 0) || 0)
+          ));
           const deadline = Date.now() + waitMs;
-          let lease = execution.leaseNextJob(device.id);
+          const retailerHintValue = requestUrl.searchParams.get("retailers");
+          const accessibleRetailersHint = retailerHintValue === null
+            ? undefined
+            : retailerHintValue.length <= 80
+              ? retailerHintValue.split(",").slice(0, 8)
+              : [];
+          let availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? 0;
+          let lease = execution.leaseNextJob(device.id, Date.now(), accessibleRetailersHint);
           while (!lease.job && lease.reason === "no_jobs" && Date.now() < deadline && !request.destroyed) {
-            await boundedWait(Math.min(250, Math.max(1, deadline - Date.now())));
-            lease = execution.leaseNextJob(device.id);
+            const rapidRecheck = (dependencies.actionJobAvailability?.rapidRecheckUntil?.() ?? 0) > Date.now();
+            const boundedDelay = Math.min(
+              rapidRecheck ? DEVICE_ACTION_JOB_RAPID_RECHECK_MS : DEVICE_ACTION_JOB_FALLBACK_RECHECK_MS,
+              Math.max(1, deadline - Date.now())
+            );
+            const intentionalWaitStartedAt = Date.now();
+            try {
+              if (dependencies.actionJobAvailability) {
+                availabilityVersion = await dependencies.actionJobAvailability.waitAfter(
+                  availabilityVersion,
+                  boundedDelay
+                );
+              } else {
+                await boundedWait(boundedDelay);
+              }
+            } catch {
+              await boundedWait(boundedDelay);
+              availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
+            } finally {
+              telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
+            }
+            lease = execution.leaseNextJob(device.id, Date.now(), accessibleRetailersHint);
           }
+          if (request.destroyed) return;
+          if (lease.job) notifyActionJobAvailability();
           json(response, 200, lease);
           return;
         }
@@ -1719,12 +2173,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
                 ? event.evidence as Record<string, unknown> : {}
             };
           });
-          json(response, 200, execution.reconcileJobBatch(
+          const reconciliation = execution.reconcileJobBatch(
             device.id,
             jobEventsBatchMatch[1] ?? "",
             body.capabilityToken,
             events
-          ));
+          );
+          notifyActionJobAvailability();
+          json(response, 200, reconciliation);
           return;
         }
         if (request.method === "POST" && jobHeartbeatMatch) {
@@ -1738,6 +2194,24 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           });
           return;
         }
+        if (request.method === "POST" && deviceCartOutcomeMatch) {
+          const body = await readJson(request);
+          if (!["got_it", "missed_it"].includes(String(body.outcome))) {
+            throw new Error("Choose Got it or Missed it for this cart action.");
+          }
+          const outcome = signals.reportCartOutcome(
+            deviceCartOutcomeMatch[1] ?? "",
+            body.outcome as "got_it" | "missed_it",
+            String(body.confirmation ?? ""),
+            body.outcome === "got_it" ? Number(body.actualTotalCents) : null,
+            String(body.note ?? ""),
+            Date.now(),
+            device.id
+          );
+          notifyActionJobAvailability();
+          json(response, 200, { outcome });
+          return;
+        }
         const eventMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/events$/.exec(requestUrl.pathname);
         if (request.method === "POST" && eventMatch) {
           const body = await readJson(request);
@@ -1747,17 +2221,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const evidence = body.evidence && typeof body.evidence === "object" && !Array.isArray(body.evidence)
             ? body.evidence as Record<string, unknown>
             : {};
-          json(response, 200, {
-            job: execution.reconcileJob(
-              device.id,
-              eventMatch[1] ?? "",
-              body.capabilityToken,
-              body.state as JobState,
-              String(body.reasonCode ?? "device_report"),
-              String(body.message ?? "Chrome reported action progress."),
-              evidence
-            )
-          });
+          const job = execution.reconcileJob(
+            device.id,
+            eventMatch[1] ?? "",
+            body.capabilityToken,
+            body.state as JobState,
+            String(body.reasonCode ?? "device_report"),
+            String(body.message ?? "Chrome reported action progress."),
+            evidence
+          );
+          notifyActionJobAvailability();
+          json(response, 200, { job });
           return;
         }
         json(response, 404, { error: "device_route_not_found", message: "The requested Chrome companion route does not exist." });
@@ -1861,6 +2335,194 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/snapshot") {
+        const requestedView = requestUrl.searchParams.get("view");
+        if (requestedView && !ADMIN_SNAPSHOT_VIEWS.has(requestedView)) {
+          throw new ApiError(
+            "invalid_admin_snapshot_view",
+            400,
+            "Choose a supported admin workspace before requesting its live snapshot."
+          );
+        }
+        const scopedView = requestedView as AdminSnapshotView | null;
+        if (scopedView === "community") authorization.require("admin.maintainer");
+        if (scopedView) {
+          const pairedDevices = devices.listDevices();
+          const catalogProposalCounts = catalogGovernance.counts();
+          const protectedChangeCounts = adminChanges.counts();
+          const incidentCounts = operatorAlerts.counts();
+          const targetQualification = shadowObservations.targetQualificationReadiness();
+          const walmartQualification = shadowObservations.walmartQualificationReadiness();
+          const amazonQualification = shadowObservations.amazonQualificationReadiness();
+          const bestBuyQualification = shadowObservations.bestBuyQualificationReadiness();
+          const scopedCounts: Record<string, unknown> = {
+            onlineDevices: pairedDevices.filter((device) => device.online === true).length,
+            activeActionJobs: adminOverview.activeActionJobs(),
+            pendingCatalogProposals: catalogProposalCounts.pendingCatalogProposals,
+            pendingAdminChanges: protectedChangeCounts.pending,
+            openIncidents: incidentCounts.openOperatorAlerts + incidentCounts.acknowledgedOperatorAlerts
+          };
+          const scopedSnapshot: Record<string, unknown> = {
+            view: scopedView,
+            version,
+            actor: actorProjection(),
+            permissions: authorization.permissions(),
+            settings: control.settings(),
+            counts: scopedCounts,
+            trackalacker: sourceRuntime.trackalackerStatus(),
+            capabilities: {
+              targetReadOnlyShadow: true,
+              targetAddQualified: targetQualification.addToCartQualified,
+              targetAddMutationAuthorized: targetQualification.mutationAuthorized,
+              walmartAddQualified: walmartQualification.addToCartQualified,
+              walmartAddMutationAuthorized: walmartQualification.mutationAuthorized,
+              amazonAddQualified: amazonQualification.addToCartQualified,
+              amazonAddMutationAuthorized: amazonQualification.mutationAuthorized,
+              bestBuyAddQualified: bestBuyQualification.addToCartQualified,
+              bestBuyAddMutationAuthorized: bestBuyQualification.mutationAuthorized
+            }
+          };
+
+          if (scopedView === "overview") {
+            Object.assign(scopedCounts,
+              catalog.counts(),
+              signals.counts(),
+              notifications.counts(),
+              audit.outboxCounts(),
+              spendLedger.counts(),
+              { auditEvents: audit.count(), missions: control.missionCount() }
+            );
+            scopedCounts.openIncidents = incidentCounts.openOperatorAlerts
+              + incidentCounts.acknowledgedOperatorAlerts;
+            scopedSnapshot.sources = control.listSources();
+            scopedSnapshot.strategies = control.listStrategies();
+            scopedSnapshot.overview = adminOverview.snapshot();
+          }
+
+          if (["library", "strategies", "signals", "operations", "connections"].includes(scopedView)) {
+            scopedSnapshot.sources = control.listSources();
+          }
+          if (scopedView === "strategies") scopedSnapshot.strategies = control.listStrategies();
+          if (scopedView === "operations") scopedSnapshot.plans = { activeByStore: adminOverview.activePlansByStore() };
+
+          if (scopedView === "library") {
+            scopedSnapshot.catalogGovernance = {
+              directUserWritesEnabled: false,
+              reviewCapable: authorization.has("catalog.review"),
+              identityProposalCapable: authorization.has("catalog.identity.propose"),
+              identityApprovalCapable: authorization.has("catalog.identity.approve"),
+              pending: authorization.has("catalog.review") ? catalogGovernance.listForReview("pending", 100, 0) : [],
+              identityOperations: withActorDisplayNames(catalogIdentityGovernance.list("all", 100, 0))
+            };
+          }
+
+          if (scopedView === "catalog-reviews") {
+            scopedSnapshot.catalogGovernance = {
+              reviewCapable: authorization.has("catalog.review"),
+              pending: authorization.has("catalog.review")
+                ? catalogGovernance.listForReview("pending", 100, 0)
+                : []
+            };
+          }
+
+          if (scopedView === "activity") Object.assign(scopedCounts, audit.outboxCounts());
+          if (["approvals", "catalog-reviews", "access"].includes(scopedView)) {
+            scopedSnapshot.authorization = {
+              permissions: authorization.permissions(),
+              memberships: authorization.memberships(),
+              roleAdministrationEnabled: authorization.has("security.manage"),
+              userReadEnabled: authorization.has("admin.users.read"),
+              userSupportEnabled: authorization.has("admin.users.support"),
+              userManagementEnabled: authorization.has("admin.users.manage"),
+              changeApprovalEnabled: authorization.has("change.approve"),
+              assurance: adminChanges.assuranceStatus(),
+              internalServices: internalServiceCapabilities
+            };
+          }
+
+          if (scopedView === "alerts") scopedSnapshot.operatorAlerts = operatorAlerts.snapshot();
+
+          if (scopedView === "community") {
+            const observerTrust = observerRecipes.trustStatus();
+            Object.assign(scopedCounts, community.counts(), identityClaims.counts(), observerRecipes.counts());
+            scopedSnapshot.dataPlane = postgresDataPlane;
+            scopedSnapshot.community = {
+              privacyVersion: "community-readonly-v1",
+              advisoryOnly: true,
+              mutationAuthority: false,
+              selectedOfferScopeVersion: 1,
+              contributorVotePolicy: "latest_eligible_per_user",
+              priceProjectionMethod: "median",
+              productionSharedPlane: false,
+              unresolvedPublicationEnabled: false,
+              consents: community.consents(),
+              assertions: community.listRecent(100),
+              aggregates: community.aggregates()
+            };
+            scopedSnapshot.identityGovernance = {
+              catalogRemappingEnabled: false,
+              reversibleLocalCatalogOperations: true,
+              hostedGlobalCatalogAuthority: false,
+              siblingAvailabilityRequiresIndependentValidation: true,
+              claims: identityClaims.list(100),
+              projections: identityClaims.projections()
+            };
+            scopedSnapshot.observerRegistry = {
+              key: observerRecipes.keyInfo(),
+              trust: observerTrust,
+              mutationCapable: false,
+              trialQuorumPolicy: "latest_per_contributor_sku_layout_stage",
+              canaryCohortPercent: OBSERVER_RECIPE_CANARY_COHORT_PERCENT,
+              canaryMinimumDurationHours: OBSERVER_RECIPE_CANARY_MINIMUM_DURATION_MS / 3_600_000,
+              canaryRegressionAutoKill: true,
+              tenantContributorQuorum: true,
+              publicIndependentAccountQuorum: false,
+              recoveryEvidencePolicy: "oracle_agreed_missing_field_quarantine",
+              recoveryEvidenceUserReview: "append_only_owner_confirm_reject_revoke",
+              recoveryEvidenceRetention: {
+                policyVersion: OBSERVER_RECIPE_RECOVERY_RETENTION_POLICY_VERSION,
+                retentionDays: OBSERVER_RECIPE_RECOVERY_RETENTION_DAYS,
+                maximumEvidencePerRun: OBSERVER_RECIPE_RECOVERY_RETENTION_MAXIMUM_BATCH,
+                activityResetsExpiry: true,
+                ...observerRecipes.recoveryRetentionStatus(20, false)
+              },
+              contributorEligibility: observerContributorEligibility.status(100, false),
+              regionalConflictSlo: observerRecipes.regionalConflictSloStatus(100),
+              recoveryEvidenceReviewAffectsApplication: false,
+              recoveryEvidenceApplication: false,
+              recipeFieldFill: false,
+              recipes: observerRecipes.list(),
+              recoveryEvidence: observerRecipes.recoveryEvidence()
+            };
+          }
+
+          if (scopedView === "settings") {
+            scopedSnapshot.attributionPolicies = attribution.listPolicies();
+          }
+
+          if (scopedView === "connections") {
+            Object.assign(scopedCounts, walmartDraws.counts(), adapterDiagnostics.counts());
+            scopedSnapshot.devices = pairedDevices;
+            scopedSnapshot.shadowObservations = shadowObservations.listRecent(50);
+            scopedSnapshot.walmartDraws = {
+              readOnly: true,
+              entryMutationAuthorized: false,
+              contingentOrderRisk: true,
+              latestScan: walmartDraws.latestScan(),
+              items: walmartDraws.currentItems()
+            };
+            scopedSnapshot.adapterRepairQueue = adapterDiagnostics.listRepairQueue(50);
+            scopedSnapshot.retailerEvidence = shadowObservations.retailerEvidenceReadiness();
+            scopedSnapshot.targetQualification = targetQualification;
+            scopedSnapshot.walmartQualification = walmartQualification;
+            scopedSnapshot.amazonQualification = amazonQualification;
+            scopedSnapshot.bestBuyQualification = bestBuyQualification;
+            scopedSnapshot.futureMutationLanes = mutationLanes.readiness();
+          }
+
+          json(response, 200, scopedSnapshot);
+          return;
+        }
+
         const pairedDevices = devices.listDevices();
         const operatorAlertCounts = operatorAlerts.counts();
         const operatorAlertConnectorCounts = operatorAlerts.connectorCounts();
@@ -1886,6 +2548,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         ].filter(Boolean);
         json(response, 200, {
           version,
+          actor: actorProjection(),
           settings: control.settings(),
           counts: {
             ...catalog.counts(),
@@ -1999,12 +2662,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             identityProposalCapable: authorization.has("catalog.identity.propose"),
             identityApprovalCapable: authorization.has("catalog.identity.approve"),
             pending: authorization.has("catalog.review") ? catalogGovernance.listForReview("pending", 100, 0) : [],
-            identityOperations: catalogIdentityGovernance.list("all", 100, 0)
+            identityOperations: withActorDisplayNames(catalogIdentityGovernance.list("all", 100, 0))
           },
           authorization: {
             permissions: authorization.permissions(),
             memberships: authorization.memberships(),
             roleAdministrationEnabled: authorization.has("security.manage"),
+            userReadEnabled: authorization.has("admin.users.read"),
+            userSupportEnabled: authorization.has("admin.users.support"),
+            userManagementEnabled: authorization.has("admin.users.manage"),
             changeApprovalEnabled: authorization.has("change.approve"),
             assurance: adminChanges.assuranceStatus(),
             internalServices: internalServiceCapabilities
@@ -2024,52 +2690,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           bestBuyQualification,
           futureMutationLanes: mutationLanes.readiness(),
           trackalacker: sourceRuntime.trackalackerStatus(),
-          dataPlane: {
-            activeStorageEngine: "sqlite",
-            postgresCutover,
-            postgresRuntimeReadRoles,
-            postgresTenantSessions,
-            postgresTenantQueueWrites,
-            postgresWorkerControl,
-            postgresNotificationRecovery,
-            postgresExecutionRecovery,
-            postgresOperationalRetention,
-            postgresObserverCandidateEvaluation,
-            postgresOperatorAlertConnectorDispatch,
-            postgresOperatorAlertReconciliation,
-            postgresObserverWitnessRefresh,
-            postgresHostedDeliveryLeaseRecovery,
-            postgresSignalCatalogApply,
-            postgresSignalResolutionApply,
-            postgresSignalSourceReferenceRefresh,
-            postgresSignalTerminalDecisionApply,
-            postgresSignalOfferIncidentApply,
-            postgresSignalPostIncidentDecisionApply,
-            postgresSignalMissionBindingApply,
-            postgresSignalStrategyEvaluationApply,
-            postgresSignalWriterLockProtocol,
-            postgresSignalConstraintConfigApply,
-            postgresSignalActionSpendApply,
-            postgresSignalTargetQualificationApply,
-            postgresSignalSourceTrustApply,
-            postgresSignalRetailerQualificationApply,
-            postgresSignalMissionPolicyApply,
-            postgresSignalSourceStatusApply,
-            postgresSignalSourceSyncApply,
-            postgresSignalReservationLifecycleApply,
-            postgresSignalCatalogImportApply,
-            postgresSignalSourceProvisioningApply,
-            postgresSignalAttributionPolicyApply,
-            postgresSignalEvaluationComposition,
-            postgresSignalAttributionReceiptApply,
-            postgresSignalJobLifecycleApply,
-            postgresSignalEvaluationRepositoryComposition,
-            postgresSignalIngressEnqueueApply,
-            postgresSignalIngressComposition,
-            postgresSignalDeadLetterResetApply,
-            postgresSignalNotificationEnsureApply,
-            postgresSignalHandlerComposition
-          },
+          dataPlane: postgresDataPlane,
           capabilities: {
             catalog: true,
             selfServiceExactProductLinks: true,
@@ -2280,9 +2901,27 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/library/products") {
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
-        const query = String(requestUrl.searchParams.get("q") ?? "");
-        const items = catalog.listLibraryProducts(limit, offset, query);
-        json(response, 200, { items, total: catalog.libraryProductCount(query), offset, limit: items.length });
+        const planFilter = requestUrl.searchParams.get("plan") ?? "";
+        const plannedFilter = requestUrl.searchParams.get("planned") ?? "";
+        const filters = {
+          search: requestUrl.searchParams.get("q") ?? "",
+          retailerId: requestUrl.searchParams.get("store") ?? "",
+          availability: requestUrl.searchParams.get("availability") ?? "",
+          plan: planFilter || (plannedFilter === "true" || plannedFilter === "planned"
+            ? "planned"
+            : plannedFilter === "false" || plannedFilter === "unplanned" ? "unplanned" : ""),
+          priceMinCents: requestUrl.searchParams.get("priceMin") ?? "",
+          priceMaxCents: requestUrl.searchParams.get("priceMax") ?? "",
+          sort: requestUrl.searchParams.get("sort") ?? "newest"
+        };
+        const items = catalog.listLibraryProducts(limit, offset, filters);
+        json(response, 200, {
+          items,
+          total: catalog.libraryProductCount(filters),
+          offset,
+          limit: items.length,
+          facets: { stores: catalog.libraryProductStoreFacets() }
+        });
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/missions") {
@@ -2324,12 +2963,43 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         });
         return;
       }
-      if (request.method === "GET" && requestUrl.pathname === "/api/v1/audit") {
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/notifications") {
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
         const query = String(requestUrl.searchParams.get("q") ?? "");
-        const items = audit.list(limit, offset, query);
-        json(response, 200, { items, total: audit.count(query), offset, limit: items.length, outbox: audit.outboxCounts() });
+        const items = notifications.listRecent(limit, offset, query);
+        json(response, 200, {
+          items,
+          total: notifications.recentCount(query),
+          offset,
+          limit: items.length
+        });
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/attribution-receipts") {
+        const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
+        const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
+        const query = String(requestUrl.searchParams.get("q") ?? "");
+        const items = attribution.listReceipts(limit, offset, query);
+        json(response, 200, {
+          items,
+          total: attribution.receiptCount(query),
+          offset,
+          limit: items.length
+        });
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/audit") {
+        const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
+        const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
+        const filters = {
+          search: String(requestUrl.searchParams.get("q") ?? ""),
+          type: String(requestUrl.searchParams.get("type") ?? ""),
+          actor: String(requestUrl.searchParams.get("actor") ?? ""),
+          since: String(requestUrl.searchParams.get("since") ?? "")
+        };
+        const items = audit.list(limit, offset, filters);
+        json(response, 200, { items, total: audit.count(filters), offset, limit: items.length, outbox: audit.outboxCounts() });
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/strategies") {
@@ -2374,6 +3044,66 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           return;
         }
         json(response, 200, { memberships: governed.result });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/users") {
+        const body = await readJson(request);
+        const displayName = String(body.displayName ?? "").trim();
+        const initialRoleId = String(body.initialRoleId ?? "yoink_user").trim() || "yoink_user";
+        if (initialRoleId === "yoink_user") {
+          json(response, 201, authorization.createTenantUser({ displayName }));
+          return;
+        }
+        if (!authorization.roles().some((role) => role.id === initialRoleId)) {
+          throw new ApiError("authorization_subject_not_found", 404, "The initial authorization role does not exist.");
+        }
+        const governed = adminChanges.execute({
+          operationType: "authorization_role_grant",
+          targetKey: `new_user:${stableHash("yoink_new_tenant_user_v1", displayName.toLocaleLowerCase("en-US"), initialRoleId)}`,
+          payload: { displayName, initialRoleId, action: "create_user_with_role" },
+          summary: { subjectUserId: "new user", roleId: initialRoleId, action: "Create user with role" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => {
+          const created = authorization.createTenantUser({ displayName });
+          authorization.grantRole(created.user.id, initialRoleId);
+          return authorization.tenantUserDetail(created.user.id);
+        });
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 201, governed.result);
+        return;
+      }
+
+      if (request.method === "POST" && adminUserPairingMatch) {
+        const subjectUserId = adminUserPairingMatch[1] ?? "";
+        json(response, 201, {
+          pairing: devices.createPairingCodeForUser(subjectUserId),
+          user: authorization.tenantUserDetail(subjectUserId)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && adminUserPauseMatch) {
+        const subjectUserId = adminUserPauseMatch[1] ?? "";
+        const body = await readJson(request);
+        const paused = body.paused === undefined ? true : body.paused;
+        if (typeof paused !== "boolean") {
+          throw new ApiError("authorization_input_invalid", 400, "Choose whether store actions should be paused.");
+        }
+        json(response, 200, authorization.setTenantUserActionsPaused(subjectUserId, paused));
+        return;
+      }
+
+      if (request.method === "PATCH" && adminUserMatch) {
+        const body = await readJson(request);
+        json(response, 200, authorization.setTenantUserStatus(
+          adminUserMatch[1] ?? "",
+          String(body.status ?? "") as "active" | "disabled"
+        ));
         return;
       }
 
@@ -2560,8 +3290,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const body = await readJson(request);
         const purchaseIntent = control.updateMission(
           purchaseIntentDetailMatch[1] ?? "",
-          body as unknown as MissionUpdateInput
+          userPurchaseIntentUpdateInput(body)
         );
+        notifyActionJobAvailability();
         json(response, 200, {
           purchaseIntent: decoratePurchaseIntents([purchaseIntent])[0]
         });
@@ -2570,11 +3301,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "DELETE" && purchaseIntentDetailMatch) {
         const body = await readJson(request);
+        const deletion = control.deleteMission(
+          purchaseIntentDetailMatch[1] ?? "",
+          body as unknown as PurchaseIntentDeleteInput
+        );
+        notifyActionJobAvailability();
         json(response, 200, {
-          deletion: control.deleteMission(
-            purchaseIntentDetailMatch[1] ?? "",
-            body as unknown as PurchaseIntentDeleteInput
-          )
+          deletion
         });
         return;
       }
@@ -2766,7 +3499,40 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/drop-windows") {
-        json(response, 200, { items: dropWindows.list(Date.now(), true) });
+        json(response, 200, {
+          items: dropWindows.list(Date.now(), true, "tenant"),
+          timezone: spendLedger.policy().timezone
+        });
+        return;
+      }
+      if (request.method === "GET" && adminDropWindowMatch) {
+        const window = dropWindows.detail(adminDropWindowMatch[1] ?? "", Date.now(), "tenant");
+        if (!window) throw new ApiError("drop_window_not_found", 404, "The drop window does not exist.");
+        json(response, 200, { window });
+        return;
+      }
+      if (request.method === "PATCH" && adminDropWindowMatch) {
+        const body = await readJson(request);
+        json(response, 200, {
+          window: dropWindows.update(
+            adminDropWindowMatch[1] ?? "",
+            body as unknown as DropWindowUpdateInput,
+            Date.now(),
+            "tenant"
+          )
+        });
+        return;
+      }
+      if (request.method === "POST" && adminDropWindowCancelMatch) {
+        const body = await readJson(request);
+        json(response, 200, {
+          window: dropWindows.cancelWindow(
+            adminDropWindowCancelMatch[1] ?? "",
+            String(body.reasonCode ?? "") as DropWindowCancelReason,
+            Date.now(),
+            "tenant"
+          )
+        });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/admin/drop-windows") {
@@ -2999,12 +3765,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (body.confirmation !== "RETIRE_ONE_RETAILER_LANE") {
           throw new Error("Explicit single-lane retirement confirmation is required.");
         }
-        json(response, 200, {
-          lane: retailerReadiness.retireLane(
-            retireQualificationMatch[1] ?? "",
-            body.reasonCode ?? "operator_retired"
-          )
-        });
+        const lane = retailerReadiness.retireLane(
+          retireQualificationMatch[1] ?? "",
+          body.reasonCode ?? "operator_retired"
+        );
+        notifyActionJobAvailability();
+        json(response, 200, { lane });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/target-add/activate") {
@@ -3021,11 +3787,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           summary: { retailerId: "target", action: "Activate guarded add-only execution" },
           correlationId,
           ...adminChangeRequestId(request)
-        }, () => qualifications.activateTargetAdd(body as unknown as TargetAddActivationInput));
+        }, () => activateAndReconcileProfiles(
+          "target",
+          () => qualifications.activateTargetAdd(body as unknown as TargetAddActivationInput)
+        ));
         if (governed.disposition === "pending_approval") {
           json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
           return;
         }
+        notifyActionJobAvailability();
         json(response, 200, governed.result);
         return;
       }
@@ -3043,11 +3813,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           summary: { retailerId: "walmart", action: "Activate guarded add-only execution" },
           correlationId,
           ...adminChangeRequestId(request)
-        }, () => qualifications.activateWalmartAdd(body as unknown as WalmartAddActivationInput));
+        }, () => activateAndReconcileProfiles(
+          "walmart",
+          () => qualifications.activateWalmartAdd(body as unknown as WalmartAddActivationInput)
+        ));
         if (governed.disposition === "pending_approval") {
           json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
           return;
         }
+        notifyActionJobAvailability();
         json(response, 200, governed.result);
         return;
       }
@@ -3065,11 +3839,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           summary: { retailerId: "amazon", action: "Activate guarded add-only execution" },
           correlationId,
           ...adminChangeRequestId(request)
-        }, () => qualifications.activateAmazonAdd(body as unknown as AmazonAddActivationInput));
+        }, () => activateAndReconcileProfiles(
+          "amazon",
+          () => qualifications.activateAmazonAdd(body as unknown as AmazonAddActivationInput)
+        ));
         if (governed.disposition === "pending_approval") {
           json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
           return;
         }
+        notifyActionJobAvailability();
         json(response, 200, governed.result);
         return;
       }
@@ -3087,11 +3865,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           summary: { retailerId: "bestbuy", action: "Activate guarded add-only execution" },
           correlationId,
           ...adminChangeRequestId(request)
-        }, () => qualifications.activateBestBuyAdd(body as unknown as BestBuyAddActivationInput));
+        }, () => activateAndReconcileProfiles(
+          "bestbuy",
+          () => qualifications.activateBestBuyAdd(body as unknown as BestBuyAddActivationInput)
+        ));
         if (governed.disposition === "pending_approval") {
           json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
           return;
         }
+        notifyActionJobAvailability();
         json(response, 200, governed.result);
         return;
       }
@@ -3117,6 +3899,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/signals") {
         const body = await readJson(request);
         const result = engine.process(body as unknown as SignalEventInput);
+        if (result.actionJobId) notifyActionJobAvailability();
         json(response, 202, result);
         return;
       }
@@ -3126,14 +3909,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (!["confirmed", "cancelled"].includes(String(body.outcome))) {
           throw new Error("A supported manual-review outcome is required.");
         }
-        json(response, 200, {
-          job: signals.resolveReviewJob(
-            reviewResolutionMatch[1] ?? "",
-            body.outcome as "confirmed" | "cancelled",
-            String(body.confirmation ?? ""),
-            String(body.note ?? "")
-          )
-        });
+        const job = signals.resolveReviewJob(
+          reviewResolutionMatch[1] ?? "",
+          body.outcome as "confirmed" | "cancelled",
+          String(body.confirmation ?? ""),
+          String(body.note ?? "")
+        );
+        notifyActionJobAvailability();
+        json(response, 200, { job });
         return;
       }
       const cartOutcomeMatch = /^\/api\/v1\/jobs\/([A-Za-z0-9_-]{3,120})\/outcome$/.exec(requestUrl.pathname);
@@ -3142,15 +3925,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (!["got_it", "missed_it"].includes(String(body.outcome))) {
           throw new Error("Choose Got it or Missed it for this cart action.");
         }
-        json(response, 200, {
-          outcome: signals.reportCartOutcome(
-            cartOutcomeMatch[1] ?? "",
-            body.outcome as "got_it" | "missed_it",
-            String(body.confirmation ?? ""),
-            body.outcome === "got_it" ? Number(body.actualTotalCents) : null,
-            String(body.note ?? "")
-          )
-        });
+        const outcome = signals.reportCartOutcome(
+          cartOutcomeMatch[1] ?? "",
+          body.outcome as "got_it" | "missed_it",
+          String(body.confirmation ?? ""),
+          body.outcome === "got_it" ? Number(body.actualTotalCents) : null,
+          String(body.note ?? "")
+        );
+        notifyActionJobAvailability();
+        json(response, 200, { outcome });
         return;
       }
       if (request.method === "PUT" && requestUrl.pathname === "/api/v1/strategies") {
@@ -3161,7 +3944,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       if (request.method === "PATCH" && missionDetailMatch) {
         const body = await readJson(request);
-        json(response, 200, { mission: control.updateMission(missionDetailMatch[1] ?? "", body as unknown as MissionUpdateInput) });
+        const mission = control.updateMission(missionDetailMatch[1] ?? "", body as unknown as MissionUpdateInput);
+        notifyActionJobAvailability();
+        json(response, 200, { mission });
         return;
       }
       if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/settings") {
@@ -3177,6 +3962,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const body = await readJson(request);
         const saved = control.savePurchaseProfile(body as unknown as PurchaseProfileInput);
         json(response, 200, { items: saved.profiles, propagation: saved.propagation });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/purchase-profiles/apply") {
+        const body = await readJson(request);
+        const applied = control.applyPurchaseProfileToMissions(body as unknown as PurchaseProfileApplyInput);
+        notifyActionJobAvailability();
+        json(response, 200, { applied });
         return;
       }
       const purchaseProfileMatch = /^\/api\/v1\/purchase-profiles\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
@@ -3219,7 +4011,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           && !qualifications.walmartAddQualified()
           && !qualifications.amazonAddQualified()
           && !qualifications.bestBuyAddQualified()) {
-          throw new Error("At least one add-only retailer lane must be explicitly qualified before actions can be enabled.");
+          throw new Error("Turn on cart adds for at least one store in Stores before resuming actions.");
         }
         if (body.paused === true) {
           json(response, 200, { settings: control.setActionsPaused(true, String(body.reason ?? "User paused global purchase actions.")) });

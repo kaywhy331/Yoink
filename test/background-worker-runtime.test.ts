@@ -335,3 +335,57 @@ test("runtime start and stop publish an observable heartbeat lifecycle", async (
     db.close();
   }
 });
+
+test("a signal wake received during an active cycle is coalesced into one immediate follow-up cycle", async () => {
+  const db = new YoinkDatabase();
+  let releaseFirst: (() => void) | undefined;
+  let markFirstStarted: (() => void) | undefined;
+  let markSecondCompleted: (() => void) | undefined;
+  const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+  const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const secondCompleted = new Promise<void>((resolve) => { markSecondCompleted = resolve; });
+  let handlerCalls = 0;
+  const completedCycles: number[] = [];
+  const runtime = new BackgroundWorkerRuntime({
+    store: new SqliteBackgroundWorkerStore(db),
+    handler: {
+      async execute(): Promise<{ handled: boolean }> {
+        handlerCalls += 1;
+        if (handlerCalls === 1) {
+          markFirstStarted?.();
+          await firstRelease;
+        }
+        if (handlerCalls === 2) markSecondCompleted?.();
+        return { handled: true };
+      }
+    },
+    version: "wake-coalescing-test",
+    deploymentFingerprint: DEPLOYMENT_FINGERPRINT,
+    workerId: "background_worker_wake_coalescing_test",
+    pollIntervalMs: 60_000,
+    maximumTasksPerCycle: 1,
+    onCycleComplete: (result) => { completedCycles.push(result.succeeded); }
+  });
+  try {
+    const starting = runtime.start(NOW);
+    await firstStarted;
+    runtime.wake();
+    runtime.wake();
+    runtime.wake();
+    releaseFirst?.();
+    await starting;
+    await Promise.race([
+      secondCompleted,
+      new Promise<never>((_, reject) => setTimeout(
+        () => reject(new Error("The coalesced worker wake did not run an immediate follow-up cycle.")),
+        1_000
+      ))
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(handlerCalls, 2);
+    assert.deepEqual(completedCycles, [1, 1]);
+  } finally {
+    await runtime.stop(NOW + 1_000);
+    db.close();
+  }
+});

@@ -230,6 +230,7 @@ export function buildHowlAffiliateRoute(input: {
   publisherSlug: unknown;
   articleName: unknown;
   articleUrl: unknown;
+  trackingId?: unknown;
 }): string {
   const destination = safeHttpsDestination(input.destinationUrl);
   if (!destination || !howlAffiliateStoreForDestination(destination.href)) return "";
@@ -242,5 +243,7 @@ export function buildHowlAffiliateRoute(input: {
   route.searchParams.set("publisher_slug", publisherSlug);
   route.searchParams.set("article_name", articleName);
   route.searchParams.set("article_url", articleUrl.href);
+  const trackingId = cleanText(input.trackingId, 120);
+  if (trackingId) route.searchParams.set("u1", trackingId);
   return route.href;
 }

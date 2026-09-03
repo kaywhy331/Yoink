@@ -99,6 +99,34 @@ test("a user product link creates only a normalized review proposal", () => {
   }
 });
 
+test("an admin product link can include reviewed MSRP without asserting offer evidence", () => {
+  const db = new YoinkDatabase();
+  try {
+    const result = new CatalogLinkRepository(db).propose({
+      url: "https://www.target.com/p/example/-/A-95280894?tracking=discard",
+      title: "Exact Target product",
+      msrpCents: 4499,
+      confirmation: PROPOSE_EXACT_PRODUCT_LINK_CONFIRMATION
+    }, NOW);
+    assert.equal(result.proposal.payload.source, "admin_link");
+    assert.equal(result.proposal.payload.msrpCents, 4499);
+    assert.equal(result.proposal.payload.observedPriceCents, null);
+    assert.equal(result.proposal.payload.listingStatus, "unknown");
+    assert.deepEqual({ ...db.get<Record<string, unknown>>(
+      "SELECT source, name, status, trust_level AS trustLevel FROM source_connections WHERE id = 'source_admin_link_local'"
+    ) }, {
+      source: "admin_link",
+      name: "Admin product links",
+      status: "manual",
+      trustLevel: "informational"
+    });
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM listings")?.count, 0);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM offer_observations")?.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
 test("link intake fails closed before creating provenance and preserves tenant ownership", () => {
   const db = new YoinkDatabase();
   try {
@@ -113,6 +141,12 @@ test("link intake fails closed before creating provenance and preserves tenant o
       title: "Card Game",
       confirmation: "WRONG"
     } as never, NOW), /Confirm that this is the exact product page/);
+    assert.throws(() => links.propose({
+      url: "https://www.amazon.com/dp/B0DCGQ6CJD",
+      title: "Card Game",
+      msrpCents: -1,
+      confirmation: PROPOSE_EXACT_PRODUCT_LINK_CONFIRMATION
+    }, NOW), /positive amount/);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM source_connections WHERE source = 'user_link'"
     )?.count, 0);
@@ -150,6 +184,12 @@ test("link intake fails closed before creating provenance and preserves tenant o
       second.proposal.payload.sourceConnectionId
     )?.userId, secondScope.userId);
     assert.equal(runWithRequestScope(LOCAL_REQUEST_SCOPE, () => new CatalogGovernanceRepository(db).listMine()).length, 0);
+    assert.throws(() => runWithRequestScope(secondScope, () => links.propose({
+      url: "https://www.amazon.com/dp/B0DCGQ6CJD",
+      title: "Admin-only MSRP attempt",
+      msrpCents: 2499,
+      confirmation: PROPOSE_EXACT_PRODUCT_LINK_CONFIRMATION
+    }, NOW + 2)), /Permission admin\.read is required/);
   } finally {
     db.close();
   }
