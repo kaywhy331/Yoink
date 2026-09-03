@@ -1,6 +1,17 @@
 # Yoink roadmap
 
-## Shipped through 1.19.3
+## Shipped through 1.19.4
+
+### Automatic incident repair and store renewal (1.19.4)
+
+- Orders active incidents by latest activity so a current Target failure is
+  visible without paging through older higher-severity records
+- Builds bounded automatic store-check batches from every unresolved observer
+  and no-click rehearsal product, prioritizing distinct recorded layouts
+- Safely auto-resolves exact-product failures after a later passing result on
+  the same or a newer packaged adapter, without hiding unresolved sibling SKUs
+- Renews only previously authorized store lanes after current evidence passes,
+  preserving the global pause and deliberate manual retirement
 
 ### Target qualification incident parity (1.19.3)
 

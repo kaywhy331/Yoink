@@ -1752,11 +1752,11 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       profileReconciliation: { retailerId: string };
     };
     assert.equal(activationBody.readiness.addToCartQualified, true);
-    assert.equal(activationBody.readiness.mutationAuthorized, true);
+    assert.equal(activationBody.readiness.mutationAuthorized, false);
     assert.equal(activationBody.profileReconciliation.retailerId, "target");
     const liveHealth = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(liveHealth.executionMode, "live");
-    assert.equal(liveHealth.actionsPaused, false);
+    assert.equal(liveHealth.actionsPaused, true);
     assert.equal(liveHealth.chromeMutationEnabled, true);
 
     const pause = await fetch(`${baseUrl}/api/v1/settings/actions`, {

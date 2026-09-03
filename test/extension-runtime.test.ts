@@ -4798,35 +4798,37 @@ test("one explicit request replays prior products across all four lanes without 
 });
 
 test("opt-in automatic requalification checks only needed saved products and respects its daily cooldown", async () => {
+  const reverificationPlan = {
+    createdAt: new Date().toISOString(),
+    lanes: [{
+      retailerId: "target",
+      expectedAdapterVersion: "target-add-v7",
+      qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
+      evidence: {
+        liveEvidenceReady: false,
+        rehearsalReady: false,
+        qualificationEvidenceReady: false,
+        distinctSkuCount: 1,
+        checks: []
+      },
+      automaticCheckNeeded: true,
+      candidates: [{
+        retailerSku: "1011483414",
+        canonicalUrl: PRODUCT_URL,
+        title: "Target qualification fixture",
+        trialObservedAt: new Date().toISOString(),
+        qualificationTypes: ["first_party_actionable", "shipping_actionable"],
+        currentObserverEvidence: false,
+        currentRehearsalPassed: false,
+        priorRehearsalPassed: true,
+        repairableObserverFailure: false
+      }]
+    }]
+  };
   const runtime = harness({
     permission: true,
     reverificationPlanCompletesAfterTrial: true,
-    reverificationPlan: {
-      createdAt: new Date().toISOString(),
-      lanes: [{
-        retailerId: "target",
-        expectedAdapterVersion: "target-add-v7",
-        qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
-        evidence: {
-          liveEvidenceReady: false,
-          rehearsalReady: false,
-          qualificationEvidenceReady: false,
-          distinctSkuCount: 1,
-          checks: []
-        },
-        automaticCheckNeeded: true,
-        candidates: [{
-          retailerSku: "1011483414",
-          canonicalUrl: PRODUCT_URL,
-          title: "Target qualification fixture",
-          trialObservedAt: new Date().toISOString(),
-          qualificationTypes: ["first_party_actionable", "shipping_actionable"],
-          currentObserverEvidence: false,
-          currentRehearsalPassed: false,
-          priorRehearsalPassed: true
-        }]
-      }]
-    }
+    reverificationPlan
   });
   const setting = await runtime.send({ type: "yoink:set-auto-reverification", enabled: true });
   assert.equal((setting.settings as Record<string, unknown>).enabled, true);
@@ -4844,6 +4846,11 @@ test("opt-in automatic requalification checks only needed saved products and res
   runtime.fireAutoReverificationAlarm();
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal(runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length, trialCount);
+
+  reverificationPlan.lanes[0]!.candidates[0]!.repairableObserverFailure = true;
+  runtime.fireAutoReverificationAlarm();
+  await waitFor(() => runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length > trialCount,
+    "A newly queued repair should bypass the daily cooldown.");
 });
 
 test("automatic requalification never prompts for new retailer access or opens an inaccessible store", async () => {

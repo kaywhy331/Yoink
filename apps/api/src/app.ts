@@ -792,6 +792,21 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     ...activate(),
     profileReconciliation: control.reconcilePurchaseProfilesForRetailer(retailerId)
   });
+  const recordAndRenewQualification = <T extends { outcome: "passed" | "rejected" }>(
+    retailerId: "target" | "walmart" | "amazon" | "bestbuy",
+    deviceId: string,
+    record: () => T
+  ) => {
+    const trial = record();
+    const renewal = trial.outcome === "passed"
+      ? qualifications.renewPreviouslyQualified(retailerId, deviceId)
+      : { retailerId, renewed: false, reasonCode: "rehearsal_rejected", promotedJobs: 0 };
+    const profileReconciliation = renewal.renewed
+      ? control.reconcilePurchaseProfilesForRetailer(retailerId)
+      : null;
+    if (renewal.promotedJobs > 0) notifyActionJobAvailability();
+    return { trial, renewal, profileReconciliation };
+  };
   const decoratePurchaseIntents = (
     plans: Array<Record<string, unknown>>,
     input: {
@@ -1796,30 +1811,26 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/target-add") {
           const body = await readJson(request);
-          json(response, 201, {
-            trial: qualifications.recordTargetAddRehearsal(device.id, body as unknown as TargetAddRehearsalInput)
-          });
+          json(response, 201, recordAndRenewQualification("target", device.id,
+            () => qualifications.recordTargetAddRehearsal(device.id, body as unknown as TargetAddRehearsalInput)));
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/walmart-add") {
           const body = await readJson(request);
-          json(response, 201, {
-            trial: qualifications.recordWalmartAddRehearsal(device.id, body as unknown as WalmartAddRehearsalInput)
-          });
+          json(response, 201, recordAndRenewQualification("walmart", device.id,
+            () => qualifications.recordWalmartAddRehearsal(device.id, body as unknown as WalmartAddRehearsalInput)));
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/amazon-add") {
           const body = await readJson(request);
-          json(response, 201, {
-            trial: qualifications.recordAmazonAddRehearsal(device.id, body as unknown as AmazonAddRehearsalInput)
-          });
+          json(response, 201, recordAndRenewQualification("amazon", device.id,
+            () => qualifications.recordAmazonAddRehearsal(device.id, body as unknown as AmazonAddRehearsalInput)));
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/bestbuy-add") {
           const body = await readJson(request);
-          json(response, 201, {
-            trial: qualifications.recordBestBuyAddRehearsal(device.id, body as unknown as BestBuyAddRehearsalInput)
-          });
+          json(response, 201, recordAndRenewQualification("bestbuy", device.id,
+            () => qualifications.recordBestBuyAddRehearsal(device.id, body as unknown as BestBuyAddRehearsalInput)));
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/status") {

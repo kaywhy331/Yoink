@@ -4,6 +4,7 @@ import {
   BESTBUY_OBSERVER_VERSION,
   TARGET_ADD_ADAPTER_VERSION,
   TARGET_OBSERVER_VERSION,
+  WALMART_ADD_ADAPTER_VERSION,
   WALMART_OBSERVER_VERSION
 } from "../packages/contracts/src/index.js";
 import { AdapterDiagnosticRepository } from "../packages/database/src/adapter-diagnostic-repository.js";
@@ -507,6 +508,83 @@ test("store requalification replays unresolved observer failures and reuses acti
       "a prior-version failed layout remains available for bounded self-healing replay");
     assert.equal(walmart.automaticCheckNeeded, true);
     db.assertIntegrity();
+  } finally {
+    db.close();
+  }
+});
+
+test("store requalification prioritizes unresolved products across distinct observed layouts", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pair(db);
+    const shadows = new ShadowObservationRepository(db);
+    const diagnostics = new AdapterDiagnosticRepository(db);
+    const layout = (scopeKind: "none" | "buybox", addControlCount: number) => ({
+      schemaVersion: 1 as const,
+      pageKind: "product" as const,
+      scopeKind,
+      sellerShape: "legacy" as const,
+      fulfillmentShape: "mixed" as const,
+      addControlCount,
+      genericAddIntentCount: addControlCount,
+      scopedControlCount: scopeKind === "none" ? 0 : addControlCount,
+      explicitSkuInputCount: 0,
+      exactSkuInputCount: 0,
+      variationSkuCount: 0,
+      canonicalOfferInputCount: 0,
+      canonicalOfferDistinctCount: 0,
+      alternateOfferInputCount: 0,
+      alternateOfferDistinctCount: 0,
+      priceCandidateCount: 2,
+      quantityControlCount: 0,
+      securityChallenge: false,
+      interactiveBlock: "" as const
+    });
+    const samples = [
+      { retailerSku: "20895014480", scopeKind: "none" as const, addControlCount: 2, operation: "observe" as const },
+      { retailerSku: "20252562938", scopeKind: "none" as const, addControlCount: 2, operation: "observe" as const },
+      { retailerSku: "20145563530", scopeKind: "buybox" as const, addControlCount: 1, operation: "rehearse_add" as const }
+    ];
+    samples.forEach((sample, index) => {
+      shadows.record(device.id, {
+        adapterVersion: WALMART_OBSERVER_VERSION,
+        contractVersion: 1,
+        observedAt: new Date(NOW + 1_000 + index * 2_000).toISOString(),
+        pageKind: "product",
+        retailerId: "walmart",
+        retailerSku: sample.retailerSku,
+        canonicalUrl: `https://www.walmart.com/ip/${sample.retailerSku}`,
+        availability: "unknown",
+        unitPriceCents: null,
+        currency: "USD",
+        sellerName: "",
+        sellerType: "unknown",
+        fulfillment: "unknown",
+        addControlActionable: false,
+        securityChallenge: false,
+        interactiveBlock: ""
+      }, NOW + 2_000 + index * 2_000);
+      diagnostics.record(device.id, {
+        contractVersion: 1,
+        observedAt: new Date(NOW + 2_500 + index * 2_000).toISOString(),
+        retailerId: "walmart",
+        retailerSku: sample.retailerSku,
+        adapterVersion: sample.operation === "observe" ? WALMART_OBSERVER_VERSION : WALMART_ADD_ADAPTER_VERSION,
+        operation: sample.operation,
+        outcome: "failed",
+        failureStage: "offer_binding",
+        reasonCode: "selected_offer_binding_unresolved",
+        attemptCount: 1,
+        domChanged: false,
+        layout: layout(sample.scopeKind, sample.addControlCount)
+      }, NOW + 3_000 + index * 2_000);
+    });
+
+    const candidates = new RetailerReadinessRepository(db).lane("walmart", NOW + 8_000).candidates;
+    assert.equal(candidates.slice(0, 3).every((candidate) => candidate.repairableObserverFailure), true);
+    assert.equal(candidates[0]?.layoutFingerprint === candidates[1]?.layoutFingerprint, false,
+      "the first repair samples cover distinct observed page layouts");
+    assert.equal(new Set(candidates.slice(0, 3).map((candidate) => candidate.retailerSku)).size, 3);
   } finally {
     db.close();
   }

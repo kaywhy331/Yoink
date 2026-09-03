@@ -13,6 +13,7 @@ import {
 } from "../../contracts/src/index.js";
 import { nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import { AdapterDiagnosticRepository, type AdapterRepairQueueItem } from "./adapter-diagnostic-repository.js";
 import { AuditRepository } from "./audit-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -85,6 +86,7 @@ export interface RequalificationCandidate {
   currentRehearsalPassed: boolean;
   priorRehearsalPassed: boolean;
   repairableObserverFailure: boolean;
+  layoutFingerprint: string;
 }
 
 export interface RequalificationEvidence {
@@ -273,10 +275,27 @@ export class RetailerReadinessRepository {
         : Number.isFinite(expirationTime) && expirationTime <= now ? "expired"
           : Number.isFinite(expirationTime) && expirationTime <= now + QUALIFICATION_WARNING_MS ? "expiring"
             : "none";
+    const repairCandidateAvailable = candidates.some((item) => item.repairableObserverFailure);
+    const latestLaneDecision = qualification?.status === "retired"
+      ? this.db.get<{ eventType: string }>(
+        `SELECT event_type AS eventType FROM audit_events
+         WHERE tenant_id = ? AND user_id = ? AND correlation_id = ?
+           AND event_type IN ('retailer_adapter_qualified', 'retailer_lane_retired')
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        scope.tenantId,
+        scope.userId,
+        retailerId
+      ) : null;
+    const manuallyRetired = qualification?.status === "retired"
+      && latestLaneDecision?.eventType === "retailer_lane_retired";
+    const previouslyAuthorizedRefreshNeeded = Boolean(qualification)
+      && qualification?.status !== "suspended"
+      && !manuallyRetired
+      && (!qualified || warning !== "none");
     const automaticCheckNeeded = candidates.length > 0 && (
-      warning === "expiring"
-      || ((!qualified || warning === "expired" || warning === "version_changed")
-        && !evidence.qualificationEvidenceReady)
+      repairCandidateAvailable
+      || previouslyAuthorizedRefreshNeeded
+      || (!qualified && !evidence.qualificationEvidenceReady)
     );
     const activeDevice = Boolean(this.db.get<{ id: string }>(
       `SELECT id FROM extension_devices
@@ -375,6 +394,13 @@ export class RetailerReadinessRepository {
   ): RequalificationCandidate[] {
     const scope = currentRequestScope();
     const cutoff = nowIso(now - QUALIFICATION_LIFETIME_MS);
+    const repairBySku = new Map<string, AdapterRepairQueueItem>();
+    for (const repair of new AdapterDiagnosticRepository(this.db).listRepairQueue(2_000)) {
+      if (repair.status !== "open" || repair.retailerId !== retailerId) continue;
+      for (const retailerSku of repair.repairRetailerSkus) {
+        if (!repairBySku.has(retailerSku)) repairBySku.set(retailerSku, repair);
+      }
+    }
     const rows = this.db.all<{
       retailerSku: string;
       canonicalUrl: string;
@@ -388,6 +414,7 @@ export class RetailerReadinessRepository {
       currentRehearsalPassed: number;
       priorRehearsalPassed: number;
       repairableObserverFailure: number;
+      layoutFingerprint: string;
     }>(
       `WITH candidate_history AS (
        SELECT observation.retailer_sku AS retailerSku,
@@ -416,6 +443,18 @@ export class RetailerReadinessRepository {
               MAX(CASE WHEN trial.outcome = 'passed' AND trial.adapter_version = ?
                          AND trial.observed_at >= ? THEN 1 ELSE 0 END) AS currentRehearsalPassed,
               MAX(CASE WHEN trial.outcome = 'passed' THEN 1 ELSE 0 END) AS priorRehearsalPassed,
+              COALESCE((
+                SELECT diagnostic.layout_fingerprint
+                FROM retailer_adapter_diagnostics diagnostic
+                WHERE diagnostic.tenant_id = observation.tenant_id
+                  AND diagnostic.user_id = observation.user_id
+                  AND diagnostic.retailer_id = observation.retailer_id
+                  AND diagnostic.retailer_sku = observation.retailer_sku
+                  AND diagnostic.operation = 'observe'
+                  AND diagnostic.received_at >= ?
+                ORDER BY diagnostic.received_at DESC, diagnostic.id DESC
+                LIMIT 1
+              ), '') AS layoutFingerprint,
               CASE WHEN (
                 SELECT diagnostic.outcome
                 FROM retailer_adapter_diagnostics diagnostic
@@ -447,47 +486,120 @@ export class RetailerReadinessRepository {
           OR shippingActionable = 1
           OR pickupActionable = 1
           OR repairableObserverFailure = 1
-       ORDER BY currentRehearsalPassed DESC,
+       ORDER BY repairableObserverFailure DESC,
+                currentRehearsalPassed DESC,
                 currentObserverEvidence DESC,
                 priorRehearsalPassed DESC,
                 shippingActionable DESC,
                 firstPartyActionable DESC,
-                repairableObserverFailure DESC,
                 trialObservedAt DESC,
                 retailerSku
-       LIMIT 8`,
+       LIMIT 24`,
       versions.observer,
       cutoff,
       versions.add,
+      cutoff,
       cutoff,
       cutoff,
       scope.tenantId,
       scope.userId,
       retailerId
     );
-    const candidates: RequalificationCandidate[] = rows.map((row) => ({
-      retailerSku: row.retailerSku,
-      canonicalUrl: row.canonicalUrl,
-      title: row.title,
-      trialObservedAt: row.trialObservedAt,
-      source: row.repairableObserverFailure === 1
-        && row.firstPartyActionable !== 1
-        && row.shippingActionable !== 1
-        && row.pickupActionable !== 1
-        && row.priorRehearsalPassed !== 1
-        ? "repair_queue" : "evidence_history",
-      qualificationTypes: [
-        ...(row.firstPartyActionable === 1 ? ["first_party_actionable" as const] : []),
-        ...(row.shippingActionable === 1 ? ["shipping_actionable" as const] : []),
-        ...(row.pickupActionable === 1 ? ["pickup_actionable" as const] : []),
-        ...(row.offerRouteReady === 1 ? ["offer_route_ready" as const] : []),
-        ...(row.priorRehearsalPassed === 1 ? ["pre_click_rehearsal" as const] : [])
-      ],
-      currentObserverEvidence: row.currentObserverEvidence === 1,
-      currentRehearsalPassed: row.currentRehearsalPassed === 1,
-      priorRehearsalPassed: row.priorRehearsalPassed === 1,
-      repairableObserverFailure: row.repairableObserverFailure === 1
-    }));
+    const candidates: RequalificationCandidate[] = rows.map((row) => {
+      const repair = repairBySku.get(row.retailerSku);
+      const repairNeeded = Boolean(repair) || row.repairableObserverFailure === 1;
+      return {
+        retailerSku: row.retailerSku,
+        canonicalUrl: row.canonicalUrl,
+        title: row.title,
+        trialObservedAt: row.trialObservedAt,
+        source: repairNeeded
+          && row.firstPartyActionable !== 1
+          && row.shippingActionable !== 1
+          && row.pickupActionable !== 1
+          && row.priorRehearsalPassed !== 1
+          ? "repair_queue" : "evidence_history",
+        qualificationTypes: [
+          ...(row.firstPartyActionable === 1 ? ["first_party_actionable" as const] : []),
+          ...(row.shippingActionable === 1 ? ["shipping_actionable" as const] : []),
+          ...(row.pickupActionable === 1 ? ["pickup_actionable" as const] : []),
+          ...(row.offerRouteReady === 1 ? ["offer_route_ready" as const] : []),
+          ...(row.priorRehearsalPassed === 1 ? ["pre_click_rehearsal" as const] : [])
+        ],
+        currentObserverEvidence: row.currentObserverEvidence === 1,
+        currentRehearsalPassed: row.currentRehearsalPassed === 1,
+        priorRehearsalPassed: row.priorRehearsalPassed === 1,
+        repairableObserverFailure: repairNeeded,
+        layoutFingerprint: repair?.layoutFingerprint || row.layoutFingerprint
+      };
+    });
+    for (const [retailerSku, repair] of repairBySku) {
+      if (candidates.some((candidate) => candidate.retailerSku === retailerSku)) continue;
+      const observation = this.db.get<{ canonicalUrl: string; title: string; observedAt: string }>(
+        `SELECT observation.canonical_url AS canonicalUrl,
+                COALESCE(variant.title, '') AS title,
+                observation.observed_at AS observedAt
+         FROM retailer_shadow_observations observation
+         LEFT JOIN listings listing ON listing.retailer_id = observation.retailer_id
+           AND listing.retailer_sku = observation.retailer_sku
+         LEFT JOIN variants variant ON variant.id = listing.variant_id
+         WHERE observation.tenant_id = ? AND observation.user_id = ?
+           AND observation.retailer_id = ? AND observation.retailer_sku = ?
+           AND observation.canonical_url <> ''
+         ORDER BY observation.observed_at DESC, observation.id DESC LIMIT 1`,
+        scope.tenantId,
+        scope.userId,
+        retailerId,
+        retailerSku
+      );
+      if (!observation) continue;
+      candidates.push({
+        retailerSku,
+        canonicalUrl: observation.canonicalUrl,
+        title: observation.title,
+        trialObservedAt: observation.observedAt,
+        source: "repair_queue",
+        qualificationTypes: [],
+        currentObserverEvidence: false,
+        currentRehearsalPassed: false,
+        priorRehearsalPassed: false,
+        repairableObserverFailure: true,
+        layoutFingerprint: repair.layoutFingerprint
+      });
+    }
+    const diversified: RequalificationCandidate[] = [];
+    const append = (candidate: RequalificationCandidate): void => {
+      if (diversified.length >= 8
+        || diversified.some((item) => item.retailerSku === candidate.retailerSku)) return;
+      diversified.push(candidate);
+    };
+    const repairLayouts = new Set<string>();
+    for (const candidate of candidates.filter((item) => item.repairableObserverFailure)) {
+      if (candidate.layoutFingerprint && repairLayouts.has(candidate.layoutFingerprint)) continue;
+      append(candidate);
+      if (candidate.layoutFingerprint) repairLayouts.add(candidate.layoutFingerprint);
+    }
+    for (const candidate of candidates.filter((item) => item.repairableObserverFailure)) append(candidate);
+    const observedLayouts = new Set(diversified.map((item) => item.layoutFingerprint).filter(Boolean));
+    for (const candidate of candidates) {
+      if (!candidate.layoutFingerprint || observedLayouts.has(candidate.layoutFingerprint)) continue;
+      append(candidate);
+      observedLayouts.add(candidate.layoutFingerprint);
+    }
+    const covered = new Set(diversified.flatMap((item) => item.qualificationTypes));
+    while (diversified.length < 8) {
+      const next = candidates
+        .filter((candidate) => !diversified.some((item) => item.retailerSku === candidate.retailerSku))
+        .sort((left, right) => {
+          const leftNew = left.qualificationTypes.filter((item) => !covered.has(item)).length;
+          const rightNew = right.qualificationTypes.filter((item) => !covered.has(item)).length;
+          return rightNew - leftNew;
+        })[0];
+      if (!next) break;
+      append(next);
+      next.qualificationTypes.forEach((item) => covered.add(item));
+    }
+    candidates.splice(0, candidates.length, ...diversified);
     if (candidates.length >= 8) return candidates;
     const catalogRows = this.db.all<{
       retailerSku: string;
@@ -532,7 +644,8 @@ export class RetailerReadinessRepository {
         currentObserverEvidence: false,
         currentRehearsalPassed: false,
         priorRehearsalPassed: false,
-        repairableObserverFailure: false
+        repairableObserverFailure: false,
+        layoutFingerprint: ""
       });
     }
     return candidates;

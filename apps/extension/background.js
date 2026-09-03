@@ -65,7 +65,7 @@ const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
 const WARM_READINESS_LANES_PER_CYCLE = 2;
 const AUTO_REVERIFICATION_PERIOD_MINUTES = 6 * 60;
 const AUTO_REVERIFICATION_COOLDOWN_MS = 24 * 60 * 60_000;
-const MAX_REVERIFICATION_CANDIDATES_PER_LANE = 4;
+const MAX_REVERIFICATION_CANDIDATES_PER_LANE = 8;
 const POST_CLICK_SETTLE_STATE_KEY = "__yoinkPostClickSettleV1";
 const READINESS_KEY = "readiness";
 const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
@@ -3702,7 +3702,9 @@ function normalizedReverificationCandidate(value, retailerId) {
     currentObserverEvidence: value?.currentObserverEvidence === true,
     currentRehearsalPassed: value?.currentRehearsalPassed === true,
     priorRehearsalPassed: value?.priorRehearsalPassed === true,
-    repairableObserverFailure: value?.repairableObserverFailure === true
+    repairableObserverFailure: value?.repairableObserverFailure === true,
+    layoutFingerprint: /^[a-f0-9]{64}$/i.test(String(value?.layoutFingerprint || ""))
+      ? String(value.layoutFingerprint).toLowerCase() : ""
   };
 }
 
@@ -3762,7 +3764,33 @@ async function getReverificationPlan() {
 }
 
 function normalizedAutoReverificationSettings(value) {
-  return { schemaVersion: 1, enabled: value?.schemaVersion === 1 && value?.enabled === true };
+  return {
+    schemaVersion: 1,
+    enabled: value?.schemaVersion === 1 ? value?.enabled === true : true
+  };
+}
+
+function reverificationPlanSignature(plan) {
+  const material = (plan?.lanes || []).map((lane) => [
+    lane.retailerId,
+    lane.expectedAdapterVersion,
+    lane.qualification.status,
+    lane.qualification.warning,
+    lane.automaticCheckNeeded ? "needed" : "steady",
+    lane.candidates.map((candidate) => [
+      candidate.retailerSku,
+      candidate.repairableObserverFailure ? "repair" : "sample",
+      candidate.currentObserverEvidence ? "observer-current" : "observer-stale",
+      candidate.currentRehearsalPassed ? "rehearsal-current" : "rehearsal-stale",
+      candidate.layoutFingerprint || "layout-unknown"
+    ].join(":"))
+  ].flat().join("|")).join(";");
+  let hash = 2166136261;
+  for (let index = 0; index < material.length; index += 1) {
+    hash ^= material.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return `reverification-plan-v1:${material.length}:${hash.toString(16).padStart(8, "0")}`;
 }
 
 async function readAutoReverificationSettings() {
@@ -3793,6 +3821,7 @@ async function saveReverificationState(state, results = [], metadata = {}) {
         Math.floor(Number(result.passedProductCount) || 0)))
     })),
     automatic: metadata.automatic === true,
+    planSignature: String(metadata.planSignature || "").slice(0, 2_000),
     updatedAt: new Date().toISOString()
   };
   await chrome.storage.local.set({ [REVERIFICATION_STATE_KEY]: value });
@@ -3807,8 +3836,12 @@ async function performRetailerReverification(retailerIds = [], metadata = {}) {
     .map((value) => String(value || "")).filter((value) => ADD_LANES[value]))].slice(0, 4);
   if (!requested.length) throw new Error("Choose at least one supported store to check again.");
   let plan = await getReverificationPlan();
+  const stateMetadata = {
+    ...metadata,
+    planSignature: metadata.planSignature || reverificationPlanSignature(plan)
+  };
   const results = [];
-  await saveReverificationState("running", results, metadata);
+  await saveReverificationState("running", results, stateMetadata);
   for (const retailerId of requested) {
     let lane = plan.lanes.find((item) => item.retailerId === retailerId);
     const candidates = (lane?.candidates || []).slice(0, MAX_REVERIFICATION_CANDIDATES_PER_LANE);
@@ -3821,21 +3854,7 @@ async function performRetailerReverification(retailerIds = [], metadata = {}) {
         attemptedProductCount: 0,
         passedProductCount: 0
       });
-      await saveReverificationState("running", results, metadata);
-      continue;
-    }
-    if (metadata.automatic === true
-      && lane.evidence.qualificationEvidenceReady
-      && lane.qualification.warning !== "expiring") {
-      results.push({
-        retailerId,
-        retailerSku: lane.candidate?.retailerSku || "",
-        outcome: "passed",
-        reasonCode: "qualification_evidence_ready",
-        attemptedProductCount: 0,
-        passedProductCount: 0
-      });
-      await saveReverificationState("running", results, metadata);
+      await saveReverificationState("running", results, stateMetadata);
       continue;
     }
     const origins = retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[retailerId];
@@ -3848,7 +3867,7 @@ async function performRetailerReverification(retailerIds = [], metadata = {}) {
         attemptedProductCount: 0,
         passedProductCount: 0
       });
-      await saveReverificationState("running", results, metadata);
+      await saveReverificationState("running", results, stateMetadata);
       continue;
     }
     let attemptedProductCount = 0;
@@ -3881,10 +3900,13 @@ async function performRetailerReverification(retailerIds = [], metadata = {}) {
       }
       plan = await getReverificationPlan();
       lane = plan.lanes.find((item) => item.retailerId === retailerId) || lane;
-      if (lane.evidence.qualificationEvidenceReady
-        && (lane.qualification.warning !== "expiring" || passedProductCount > 0)) break;
+      const unresolvedRepair = lane.candidates.some((item) => item.repairableObserverFailure);
+      if (!unresolvedRepair
+        && lane.evidence.qualificationEvidenceReady
+        && (lane.qualification.warning === "none" || passedProductCount > 0)) break;
     }
-    const evidenceReady = lane.evidence.qualificationEvidenceReady
+    const unresolvedRepair = lane.candidates.some((item) => item.repairableObserverFailure);
+    const evidenceReady = !unresolvedRepair && lane.evidence.qualificationEvidenceReady
       && (lane.qualification.warning !== "expiring" || passedProductCount > 0);
     results.push({
       retailerId,
@@ -3894,10 +3916,10 @@ async function performRetailerReverification(retailerIds = [], metadata = {}) {
       attemptedProductCount,
       passedProductCount
     });
-    await saveReverificationState("running", results, metadata);
+    await saveReverificationState("running", results, stateMetadata);
   }
   const state = results.every((result) => result.outcome === "passed") ? "complete" : "partial";
-  const persisted = await saveReverificationState(state, results, metadata);
+  const persisted = await saveReverificationState(state, results, stateMetadata);
   return { plan, ...persisted };
 }
 
@@ -3914,16 +3936,19 @@ function runAutomaticReverification(force = false) {
     const settings = await readAutoReverificationSettings();
     if (!settings.enabled && !force) return { settings, started: false, reason: "automatic_checks_disabled" };
     const stored = (await chrome.storage.local.get(REVERIFICATION_STATE_KEY))[REVERIFICATION_STATE_KEY];
+    const plan = await getReverificationPlan();
+    const planSignature = reverificationPlanSignature(plan);
     const lastRunAt = stored?.automatic === true ? new Date(String(stored.updatedAt || "")).getTime() : Number.NaN;
-    if (!force && Number.isFinite(lastRunAt) && lastRunAt > Date.now() - AUTO_REVERIFICATION_COOLDOWN_MS) {
+    if (!force && Number.isFinite(lastRunAt)
+      && lastRunAt > Date.now() - AUTO_REVERIFICATION_COOLDOWN_MS
+      && stored?.planSignature === planSignature) {
       return { settings, started: false, reason: "automatic_check_cooldown", state: stored };
     }
-    const plan = await getReverificationPlan();
     const retailerIds = plan.lanes
       .filter((lane) => lane.automaticCheckNeeded && lane.candidates.length > 0)
       .map((lane) => lane.retailerId);
     if (!retailerIds.length) return { settings, started: false, reason: "no_store_checks_needed", plan };
-    const result = await runRetailerReverification(retailerIds, { automatic: true });
+    const result = await runRetailerReverification(retailerIds, { automatic: true, planSignature });
     return { settings, started: true, reason: result.state, ...result };
   })().finally(() => { automaticReverificationPromise = null; });
   return automaticReverificationPromise;
@@ -6636,6 +6661,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     void drainAdapterDiagnosticQueue();
     void checkHealth().then((health) =>
       runSignalDeliveryCycle().finally(() => requestWarmReadinessCycle(health)));
+    // Re-read the lightweight plan on the health cadence so a newly logged
+    // layout failure or packaged adapter change starts its bounded repair
+    // batch promptly. The stable plan signature prevents duplicate tab work.
+    void runAutomaticReverification(false);
     void runNotificationCycle();
   }
   if (alarm.name === JOB_ALARM) {

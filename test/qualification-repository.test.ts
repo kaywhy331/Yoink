@@ -23,6 +23,7 @@ import { YoinkDatabase } from "../packages/database/src/database.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { QualificationRepository } from "../packages/database/src/qualification-repository.js";
+import { RetailerReadinessRepository } from "../packages/database/src/retailer-readiness-repository.js";
 import { ShadowObservationRepository } from "../packages/database/src/shadow-observation-repository.js";
 
 const NOW = new Date("2026-08-23T04:00:00.000Z").getTime();
@@ -272,7 +273,7 @@ test("explicit activation requires two Target-sold shipping samples, one rehears
     }, NOW + 9_000);
     assert.equal(activated.promotedJobs, 0);
     assert.equal(activated.readiness.addToCartQualified, true);
-    assert.equal(activated.readiness.mutationAuthorized, true);
+    assert.equal(activated.readiness.mutationAuthorized, false);
     assert.equal(db.get<{ execution_supported: number }>(
       "SELECT execution_supported FROM retailers WHERE id = 'target'"
     )?.execution_supported, 1);
@@ -280,8 +281,8 @@ test("explicit activation requires two Target-sold shipping samples, one rehears
       "SELECT execution_supported FROM listings WHERE id = 'listing_target_activation_test'"
     )?.execution_supported, 1);
     assert.deepEqual(new ControlRepository(db).settings(), {
-      actionsPaused: false,
-      pauseReason: "",
+      actionsPaused: true,
+      pauseReason: "First-run safety pause",
       executionMode: "live",
       dedupeWindowSeconds: 300,
       affiliateMode: "prefer_fallback",
@@ -302,6 +303,73 @@ test("explicit activation requires two Target-sold shipping samples, one rehears
     assert.equal(repository.targetAddQualified(qualificationExpiresAt), false);
     const durable = JSON.stringify(db.all("SELECT * FROM audit_events"));
     assert.equal(durable.includes(device.token), false);
+  } finally {
+    db.close();
+  }
+});
+
+test("fresh checks renew a previously authorized lane without unpausing actions and honor manual retirement", () => {
+  const db = new YoinkDatabase();
+  try {
+    const devices = new DeviceRepository(db);
+    const code = devices.createPairingCode(NOW);
+    const device = devices.pair({
+      pairingCode: code.code,
+      extensionVersion: "1.19.3",
+      capabilities: {
+        readiness: true,
+        jobReconciliation: true,
+        targetAddOnly: true,
+        targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
+      }
+    }, NOW + 1_000);
+    const shadows = new ShadowObservationRepository(db);
+    const first = shadows.record(device.id, observation(new Date(NOW + 2_000).toISOString()), NOW + 3_000);
+    shadows.record(device.id, {
+      ...observation(new Date(NOW + 4_000).toISOString()),
+      retailerSku: "202258620"
+    }, NOW + 5_000);
+    const repository = new QualificationRepository(db);
+    repository.recordTargetAddRehearsal(device.id, {
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+      observerVersion: TARGET_OBSERVER_VERSION,
+      contractVersion: 1,
+      shadowObservationId: first.id,
+      observedAt: new Date(NOW + 6_000).toISOString(),
+      outcome: "passed",
+      reasonCode: "verified"
+    }, NOW + 7_000);
+    const ready = shadows.targetQualificationReadiness(NOW + 8_000);
+    repository.activateTargetAdd({
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+      evidenceHash: ready.qualificationEvidenceHash,
+      confirmation: TARGET_ADD_ACTIVATION_CONFIRMATION
+    }, NOW + 9_000);
+
+    db.run(
+      `UPDATE retailer_adapter_qualifications
+       SET status = 'retired', adapter_version = 'target-add-v6'
+       WHERE retailer_id = 'target'`
+    );
+    db.run("UPDATE retailers SET execution_supported = 0 WHERE id = 'target'");
+    db.run("UPDATE listings SET execution_supported = 0 WHERE retailer_id = 'target'");
+    const renewal = repository.renewPreviouslyQualified("target", device.id, NOW + 10_000);
+    assert.equal(renewal.renewed, true);
+    assert.equal(repository.targetAddQualified(NOW + 10_001), true);
+    assert.equal(db.get<{ executionSupported: number }>(
+      "SELECT execution_supported AS executionSupported FROM retailers WHERE id = 'target'"
+    )?.executionSupported, 1);
+    assert.equal(new ControlRepository(db).settings().actionsPaused, true);
+
+    new RetailerReadinessRepository(db).retireLane("target", "operator_retired", NOW + 11_000);
+    const blocked = repository.renewPreviouslyQualified("target", device.id, NOW + 12_000);
+    assert.deepEqual(blocked, {
+      retailerId: "target",
+      renewed: false,
+      reasonCode: "lane_manually_retired",
+      promotedJobs: 0
+    });
+    assert.equal(repository.targetAddQualified(NOW + 12_001), false);
   } finally {
     db.close();
   }

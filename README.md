@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.19.3 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.19.4 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
@@ -16,6 +16,17 @@ one, and the exact saved fulfillment choice: Shipping by default or explicit
 Pickup. Amazon additionally requires a unique ASIN-bound offer token that
 remains only in page memory. Buy Now, checkout, and order submission are not
 authorized.
+
+Version 1.19.4 keeps the newest store-check incident visible first and turns
+open observation and no-click rehearsal failures into bounded automatic repair
+batches. Rechecks prioritize exact products from distinct observed layouts,
+advance through up to eight candidates per store, and re-read changed plans on
+the companion health cadence. A later successful result for the same exact
+product and operation safely closes the historical incident, including on the
+same packaged adapter version. Fresh passing evidence can renew a previously
+authorized store lane without resuming paused actions; first activation,
+manual retirement, store permissions, and all Add-to-Cart controls remain
+explicitly governed.
 
 Version 1.19.3 sends Target inspection and qualification failures through the
 same privacy-bounded adapter-diagnostic and Admin Incident pipeline as Walmart,

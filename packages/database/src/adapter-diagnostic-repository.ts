@@ -95,14 +95,6 @@ const REPAIR_MINIMUM_SKUS = 2;
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const MAX_DIAGNOSTIC_AGE_MS = 10 * 60_000;
 const RETENTION_LIMIT = 2_000;
-const OBSERVER_RUNTIME_FAILURE_REASONS = new Set([
-  "observer_bundle_injection_failed",
-  "observer_execution_failed",
-  "observer_top_frame_missing",
-  "observer_runtime_unavailable",
-  "observer_collection_failed",
-  "observer_contract_invalid"
-]);
 
 const SKU_PATTERNS: Record<SupportedRetailerId, RegExp> = {
   target: /^\d{6,20}$/,
@@ -176,6 +168,7 @@ export interface AdapterRepairQueueItem {
   reasonCode: string;
   occurrenceCount: number;
   affectedSkuCount: number;
+  repairRetailerSkus: string[];
   maxAttemptCount: number;
   domChangedSeen: boolean;
   firstSeenAt: string;
@@ -571,48 +564,25 @@ export class AdapterDiagnosticRepository {
       const recoveries = group.rows.filter((row) => row.outcome === "passed" || row.outcome === "recovered");
       const lastFailureAt = failures[0]?.receivedAt ?? "";
       let lastRecoveryAt = recoveries[0]?.receivedAt ?? "";
-      let open = Boolean(lastFailureAt && (!lastRecoveryAt || lastFailureAt > lastRecoveryAt));
-      const runtimeFailureGroup = latest.operation === "observe"
-        && group.repairs.every((row) => row.failureStage === "runner" && OBSERVER_RUNTIME_FAILURE_REASONS.has(row.reasonCode));
-      if (runtimeFailureGroup) {
-        const externalRecoveries: StoredRetailerAdapterDiagnostic[] = [];
-        open = [...group.skus].some((retailerSku) => {
-          const skuFailure = failures.find((row) => row.retailerSku === retailerSku);
-          if (!skuFailure) return false;
-          const recovery = recent.find((row) => row.retailerId === latest.retailerId
-            && row.operation === "observe"
-            && row.retailerSku === retailerSku
-            && (row.outcome === "passed" || row.outcome === "recovered")
-            && row.receivedAt > skuFailure.receivedAt);
-          if (recovery) externalRecoveries.push(recovery);
-          return !recovery;
-        });
-        lastRecoveryAt = externalRecoveries
-          .map((row) => row.receivedAt)
-          .reduce((value, candidate) => candidate > value ? candidate : value, lastRecoveryAt);
-      }
-      if (open && failures.length) {
-        const supersedingRows: StoredRetailerAdapterDiagnostic[] = [];
-        const failedSkus = [...new Set(failures.map((row) => row.retailerSku))];
-        const superseded = failedSkus.every((retailerSku) => {
-          const latestFailure = failures.find((row) => row.retailerSku === retailerSku);
-          if (!latestFailure) return false;
-          const replacement = recent.find((row) => row.retailerId === latestFailure.retailerId
-            && row.operation === latestFailure.operation
-            && row.retailerSku === retailerSku
-            && row.receivedAt > latestFailure.receivedAt
-            && row.outcome !== "failed"
-            && strictlyNewerAdapterVersion(row.adapterVersion, latestFailure.adapterVersion));
-          if (replacement) supersedingRows.push(replacement);
-          return Boolean(replacement);
-        });
-        if (superseded) {
-          open = false;
-          lastRecoveryAt = supersedingRows
-            .map((row) => row.receivedAt)
-            .reduce((value, candidate) => candidate > value ? candidate : value, lastRecoveryAt);
-        }
-      }
+      const supersedingRows: StoredRetailerAdapterDiagnostic[] = [];
+      const failedSkus = [...new Set(failures.map((row) => row.retailerSku))];
+      const repairRetailerSkus = failedSkus.filter((retailerSku) => {
+        const latestFailure = failures.find((row) => row.retailerSku === retailerSku);
+        if (!latestFailure) return false;
+        const replacement = recent.find((row) => row.retailerId === latestFailure.retailerId
+          && row.operation === latestFailure.operation
+          && row.retailerSku === retailerSku
+          && row.receivedAt > latestFailure.receivedAt
+          && row.outcome !== "failed"
+          && (row.adapterVersion === latestFailure.adapterVersion
+            || strictlyNewerAdapterVersion(row.adapterVersion, latestFailure.adapterVersion)));
+        if (replacement) supersedingRows.push(replacement);
+        return !replacement;
+      });
+      const open = repairRetailerSkus.length > 0;
+      lastRecoveryAt = supersedingRows
+        .map((row) => row.receivedAt)
+        .reduce((value, candidate) => candidate > value ? candidate : value, lastRecoveryAt);
       const firstSeenAt = group.repairs.reduce((value, row) => value < row.receivedAt ? value : row.receivedAt, latestRepair.receivedAt);
       queue.push({
         retailerId: latest.retailerId,
@@ -625,6 +595,7 @@ export class AdapterDiagnosticRepository {
         reasonCode: latestRepair.reasonCode,
         occurrenceCount: group.repairs.length,
         affectedSkuCount: group.skus.size,
+        repairRetailerSkus,
         maxAttemptCount: Math.max(...group.repairs.map((row) => row.attemptCount)),
         domChangedSeen: group.repairs.some((row) => row.domChanged),
         firstSeenAt,

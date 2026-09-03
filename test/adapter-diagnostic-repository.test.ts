@@ -432,6 +432,7 @@ test("a later successful inspection closes zero-content runtime incidents for ev
     assert.equal(runtimeRepair?.status, "open");
     assert.equal(runtimeRepair?.occurrenceCount, 2);
     assert.equal(runtimeRepair?.affectedSkuCount, 2);
+    assert.deepEqual(new Set(runtimeRepair?.repairRetailerSkus), new Set(["B0FB21526X", "B0GYTRYV7P"]));
 
     repository.record(device.id, diagnostic({
       observedAt: new Date(NOW + 5_000).toISOString(),
@@ -442,6 +443,8 @@ test("a later successful inspection closes zero-content runtime incidents for ev
     }), NOW + 6_000);
     runtimeRepair = repository.listRepairQueue().find((item) => item.failureStage === "runner");
     assert.equal(runtimeRepair?.status, "open");
+    assert.deepEqual(runtimeRepair?.repairRetailerSkus, ["B0GYTRYV7P"],
+      "one recovered product must not hide another unresolved product in the same layout group");
 
     repository.record(device.id, diagnostic({
       observedAt: new Date(NOW + 7_000).toISOString(),
@@ -453,6 +456,7 @@ test("a later successful inspection closes zero-content runtime incidents for ev
     }), NOW + 8_000);
     runtimeRepair = repository.listRepairQueue().find((item) => item.failureStage === "runner");
     assert.equal(runtimeRepair?.status, "recovered");
+    assert.deepEqual(runtimeRepair?.repairRetailerSkus, []);
     assert.equal(runtimeRepair?.lastRecoveryAt, new Date(NOW + 8_000).toISOString());
     assert.equal(repository.counts().openAdapterRepairGroups, 0);
   } finally {
@@ -502,6 +506,55 @@ test("a strictly newer packaged observer can supersede an older exact-SKU repair
       failureStage: "interactive_block",
       reasonCode: "interactive_location",
       layout: { ...bestBuyLayout, interactiveBlock: "location" }
+    }), NOW + 4_000);
+    const repaired = repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing");
+    assert.equal(repaired?.status, "recovered");
+    assert.equal(repaired?.lastRecoveryAt, new Date(NOW + 4_000).toISOString());
+  } finally {
+    db.close();
+  }
+});
+
+test("a later same-version exact-SKU result supersedes an earlier layout failure", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const repository = new AdapterDiagnosticRepository(db);
+    const failedLayout = layout({
+      scopeKind: "none",
+      fulfillmentShape: "none",
+      addControlCount: 0,
+      genericAddIntentCount: 0,
+      explicitSkuInputCount: 0,
+      exactSkuInputCount: 0,
+      variationSkuCount: 0,
+      canonicalOfferInputCount: 0,
+      canonicalOfferDistinctCount: 0,
+      alternateOfferInputCount: 0,
+      alternateOfferDistinctCount: 0
+    });
+    repository.record(device.id, diagnostic({
+      observedAt: new Date(NOW + 1_000).toISOString(),
+      retailerId: "bestbuy",
+      retailerSku: "6688068",
+      adapterVersion: BESTBUY_OBSERVER_VERSION,
+      failureStage: "add_control",
+      reasonCode: "add_control_missing",
+      layout: failedLayout
+    }), NOW + 2_000);
+    assert.equal(repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing")?.status, "open");
+
+    repository.record(device.id, diagnostic({
+      observedAt: new Date(NOW + 3_000).toISOString(),
+      retailerId: "bestbuy",
+      retailerSku: "6688068",
+      adapterVersion: BESTBUY_OBSERVER_VERSION,
+      outcome: "passed",
+      failureStage: "complete",
+      reasonCode: "verified",
+      layout: layout({ explicitSkuInputCount: 0, exactSkuInputCount: 0,
+        canonicalOfferInputCount: 0, canonicalOfferDistinctCount: 0,
+        alternateOfferInputCount: 0, alternateOfferDistinctCount: 0 })
     }), NOW + 4_000);
     const repaired = repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing");
     assert.equal(repaired?.status, "recovered");

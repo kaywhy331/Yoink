@@ -828,8 +828,9 @@ export class OperatorAlertRepository {
     return this.db.all<IncidentRow>(
       `${INCIDENT_SELECT} WHERE i.tenant_id = ? AND (? = 'all' OR i.status = ?)
        ORDER BY CASE i.status WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END,
+                i.last_seen_at DESC,
                 CASE i.severity WHEN 'critical' THEN 0 WHEN 'error' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END,
-                i.last_seen_at DESC, i.id DESC LIMIT ?`,
+                i.id DESC LIMIT ?`,
       scope.tenantId,
       normalizedStatus,
       normalizedStatus,

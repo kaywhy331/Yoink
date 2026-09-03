@@ -139,6 +139,41 @@ test("sanitized adapter repair groups open, dedupe, acknowledge, and auto-resolv
   }
 });
 
+test("active operator incidents prioritize the newest failure over older severity", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const diagnostics = new AdapterDiagnosticRepository(db);
+    const alerts = new OperatorAlertRepository(db);
+    diagnostics.record(device.id, failedDiagnostic("B0OLDLAY01", NOW + 1_000), NOW + 2_000);
+    alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_alert_old_001", NOW + 2_100);
+    const olderIncident = alerts.incidents("open", 10, NOW + 2_100)[0];
+    assert.ok(olderIncident);
+    db.run(
+      "UPDATE operator_alert_incidents SET severity = 'critical' WHERE id = ?",
+      olderIncident.id
+    );
+
+    diagnostics.record(device.id, {
+      ...failedDiagnostic("B0NEWLAY02", NOW + 3_000),
+      layout: {
+        ...layout(),
+        scopeKind: "buybox",
+        sellerShape: "offer_display_combined"
+      }
+    }, NOW + 4_000);
+    alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_alert_new_001", NOW + 4_100);
+
+    const active = alerts.incidents("open", 10, NOW + 4_100);
+    assert.equal(active.length, 2);
+    assert.equal(active[0]?.severity, "warning");
+    assert.equal(active[0]?.lastSeenAt, new Date(NOW + 4_000).toISOString());
+    assert.equal(active[1]?.severity, "critical");
+  } finally {
+    db.close();
+  }
+});
+
 test("rule thresholds, escalation, manual resolution, and historical suppression are deterministic", () => {
   const db = new YoinkDatabase();
   try {

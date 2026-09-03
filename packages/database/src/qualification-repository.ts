@@ -143,6 +143,29 @@ interface TrialRow {
   receivedAt: string;
 }
 
+type GuardedRetailerId = "target" | "walmart" | "amazon" | "bestbuy";
+
+export interface AutomaticQualificationRenewal {
+  retailerId: GuardedRetailerId;
+  renewed: boolean;
+  reasonCode: string;
+  promotedJobs: number;
+}
+
+const GUARDED_RETAILER_VERSION: Record<GuardedRetailerId, string> = {
+  target: TARGET_ADD_ADAPTER_VERSION,
+  walmart: WALMART_ADD_ADAPTER_VERSION,
+  amazon: AMAZON_ADD_ADAPTER_VERSION,
+  bestbuy: BESTBUY_ADD_ADAPTER_VERSION
+};
+
+const GUARDED_RETAILER_CAPABILITY: Record<GuardedRetailerId, { enabled: string; version: string }> = {
+  target: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
+  walmart: { enabled: "walmartAddOnly", version: "walmartAddAdapterVersion" },
+  amazon: { enabled: "amazonAddOnly", version: "amazonAddAdapterVersion" },
+  bestbuy: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" }
+};
+
 export class QualificationRepository {
   private readonly auditEvents: AuditRepository;
 
@@ -172,6 +195,158 @@ export class QualificationRepository {
       && row.highest_action === "add_to_cart"
       && Number.isFinite(expiresAt)
       && expiresAt > now;
+  }
+
+  renewPreviouslyQualified(
+    retailerId: GuardedRetailerId,
+    deviceId: string,
+    now = Date.now()
+  ): AutomaticQualificationRenewal {
+    const scope = currentRequestScope();
+    const prior = this.db.get<{
+      adapterVersion: string;
+      highestAction: string;
+      status: "qualified" | "suspended" | "retired";
+    }>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction, status
+       FROM retailer_adapter_qualifications
+       WHERE tenant_id = ? AND user_id = ? AND retailer_id = ?`,
+      scope.tenantId,
+      scope.userId,
+      retailerId
+    );
+    const skipped = (reasonCode: string): AutomaticQualificationRenewal => ({
+      retailerId, renewed: false, reasonCode, promotedJobs: 0
+    });
+    if (!prior || prior.highestAction !== "add_to_cart") return skipped("prior_authorization_missing");
+    if (prior.status === "suspended") return skipped("lane_suspended");
+    if (prior.status === "retired") {
+      const latestDecision = this.db.get<{ eventType: string }>(
+        `SELECT event_type AS eventType FROM audit_events
+         WHERE tenant_id = ? AND user_id = ? AND correlation_id = ?
+           AND event_type IN ('retailer_adapter_qualified', 'retailer_lane_retired')
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        scope.tenantId,
+        scope.userId,
+        retailerId
+      );
+      if (latestDecision?.eventType === "retailer_lane_retired") {
+        return skipped("lane_manually_retired");
+      }
+    }
+    const cleanDeviceId = cleanText(deviceId, 120);
+    const adapterVersion = GUARDED_RETAILER_VERSION[retailerId];
+    const capability = GUARDED_RETAILER_CAPABILITY[retailerId];
+    const device = this.db.get<{ capabilitiesJson: string; lastSeenAt: string }>(
+      `SELECT capabilities_json AS capabilitiesJson, last_seen_at AS lastSeenAt
+       FROM extension_devices
+       WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'active'`,
+      cleanDeviceId,
+      scope.tenantId,
+      scope.userId
+    );
+    let capabilities: Record<string, unknown> = {};
+    try { capabilities = JSON.parse(device?.capabilitiesJson ?? "{}") as Record<string, unknown>; } catch { capabilities = {}; }
+    if (!device
+      || new Date(device.lastSeenAt).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
+      || capabilities[capability.enabled] !== true
+      || capabilities[capability.version] !== adapterVersion) {
+      return skipped("current_capable_device_missing");
+    }
+    const freshTrial = this.db.get<{ id: string }>(
+      `SELECT id FROM retailer_adapter_trials
+       WHERE tenant_id = ? AND user_id = ? AND device_id = ? AND retailer_id = ?
+         AND adapter_version = ? AND outcome = 'passed' AND reason_code = 'verified'
+         AND received_at >= ?
+       ORDER BY received_at DESC, id DESC LIMIT 1`,
+      scope.tenantId,
+      scope.userId,
+      cleanDeviceId,
+      retailerId,
+      adapterVersion,
+      nowIso(now - MAX_REHEARSAL_AGE_MS)
+    );
+    if (!freshTrial) return skipped("fresh_rehearsal_missing");
+    const shadowRepository = new ShadowObservationRepository(this.db);
+    const readiness = retailerId === "target" ? shadowRepository.targetQualificationReadiness(now)
+      : retailerId === "walmart" ? shadowRepository.walmartQualificationReadiness(now)
+        : retailerId === "amazon" ? shadowRepository.amazonQualificationReadiness(now)
+          : shadowRepository.bestBuyQualificationReadiness(now);
+    if (!readiness.qualificationEvidenceReady
+      || !EVIDENCE_HASH_PATTERN.test(readiness.qualificationEvidenceHash)) {
+      return skipped("qualification_evidence_incomplete");
+    }
+
+    const promotedJobs = this.db.transaction(() => {
+      const timestamp = nowIso(now);
+      const expiresAt = nowIso(now + QUALIFICATION_TTL_MS);
+      this.db.run(
+        `UPDATE retailer_adapter_qualifications
+         SET adapter_version = ?, highest_action = 'add_to_cart', status = 'qualified',
+             evidence_hash = ?, qualified_at = ?, updated_at = ?, expires_at = ?
+         WHERE tenant_id = ? AND user_id = ? AND retailer_id = ?`,
+        adapterVersion,
+        readiness.qualificationEvidenceHash,
+        timestamp,
+        timestamp,
+        expiresAt,
+        scope.tenantId,
+        scope.userId,
+        retailerId
+      );
+      this.db.run("UPDATE retailers SET execution_supported = 1, updated_at = ? WHERE id = ?", timestamp, retailerId);
+      this.db.run("UPDATE listings SET execution_supported = 1, updated_at = ? WHERE retailer_id = ?", timestamp, retailerId);
+      const control = this.db.get<{ executionMode: string; actionsPaused: number }>(
+        `SELECT execution_mode AS executionMode, actions_paused AS actionsPaused
+         FROM app_settings WHERE user_id = ?`,
+        scope.userId
+      );
+      const promotable = control?.executionMode === "live" && control.actionsPaused === 0
+        ? this.db.all<{ id: string }>(
+          `SELECT aj.id FROM action_jobs aj JOIN listings l ON l.id = aj.listing_id
+           WHERE aj.user_id = ? AND aj.state = 'shadow_ready' AND aj.expires_at > ?
+             AND l.retailer_id = ? AND aj.action = 'add_to_cart' AND aj.quantity = 1
+             AND aj.seller_policy = 'first_party_only' AND aj.fulfillment IN ('shipping', 'pickup')
+           ORDER BY aj.created_at, aj.id`,
+          scope.userId,
+          timestamp,
+          retailerId
+        ) : [];
+      const signals = new SignalRepository(this.db);
+      for (const job of promotable) {
+        signals.transitionJob(
+          job.id,
+          "awaiting_executor",
+          "retailer_lane_automatically_requalified",
+          "A fresh shadow job entered its previously authorized store lane after current checks passed.",
+          { retailerId, adapterVersion },
+          now
+        );
+      }
+      this.auditEvents.record({
+        correlationId: retailerId,
+        aggregateType: "retailer_qualification",
+        eventType: "retailer_adapter_qualified",
+        reasonCode: "automatic_requalification_after_verified_rehearsal",
+        message: `${adapterVersion} renewed a previously authorized add-to-cart lane after fresh current checks passed.`,
+        data: {
+          retailerId,
+          adapterVersion,
+          previousAdapterVersion: prior.adapterVersion,
+          previousStatus: prior.status,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          promotedJobs: promotable.length,
+          globalPausePreserved: control?.actionsPaused !== 0
+        }
+      }, now);
+      return promotable.length;
+    });
+    return {
+      retailerId,
+      renewed: true,
+      reasonCode: "automatic_requalification_after_verified_rehearsal",
+      promotedJobs
+    };
   }
 
   recordTargetAddRehearsal(
@@ -882,20 +1057,24 @@ export class QualificationRepository {
       this.db.run("UPDATE retailers SET execution_supported = 1, updated_at = ? WHERE id = 'target'", timestamp);
       this.db.run("UPDATE listings SET execution_supported = 1, updated_at = ? WHERE retailer_id = 'target'", timestamp);
       this.db.run(
-        `UPDATE app_settings SET execution_mode = 'live', actions_paused = 0,
-           pause_reason = '', updated_at = ? WHERE user_id = ?`,
+        "UPDATE app_settings SET execution_mode = 'live', updated_at = ? WHERE user_id = ?",
         timestamp,
         currentRequestScope().userId
       );
-      const promotable = this.db.all<{ id: string }>(
-        `SELECT aj.id FROM action_jobs aj JOIN listings l ON l.id = aj.listing_id
-         WHERE aj.user_id = ? AND aj.state = 'shadow_ready' AND aj.expires_at > ?
-           AND l.retailer_id = 'target' AND aj.action = 'add_to_cart' AND aj.quantity = 1
-           AND aj.seller_policy = 'first_party_only' AND aj.fulfillment IN ('shipping', 'pickup')
-         ORDER BY aj.created_at, aj.id`,
-        currentRequestScope().userId,
-        timestamp
+      const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
+        "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
+        currentRequestScope().userId
       );
+      const promotable = control?.execution_mode === "live" && control.actions_paused === 0
+        ? this.db.all<{ id: string }>(
+          `SELECT aj.id FROM action_jobs aj JOIN listings l ON l.id = aj.listing_id
+           WHERE aj.user_id = ? AND aj.state = 'shadow_ready' AND aj.expires_at > ?
+             AND l.retailer_id = 'target' AND aj.action = 'add_to_cart' AND aj.quantity = 1
+             AND aj.seller_policy = 'first_party_only' AND aj.fulfillment IN ('shipping', 'pickup')
+           ORDER BY aj.created_at, aj.id`,
+          currentRequestScope().userId,
+          timestamp
+        ) : [];
       const signals = new SignalRepository(this.db);
       for (const job of promotable) {
         signals.transitionJob(
