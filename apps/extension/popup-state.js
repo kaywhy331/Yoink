@@ -547,6 +547,13 @@ var YoinkPopupStateModule = (() => {
     "[class*='carousel' i]",
     "[class*='related-products' i]"
   ].join(", ");
+  var WALMART_SECONDARY_ACTION_SCOPE = [
+    "[data-testid*='sticky' i]",
+    "[data-automation-id*='sticky' i]",
+    "[class*='sticky' i]",
+    "[class*='floating' i]",
+    "[class*='mobile-drawer' i]"
+  ].join(", ");
   var AMAZON_MERCHANDISING_SCOPE = [
     "[data-cel-widget*='recommend' i]",
     "[data-feature-name*='recommend' i]",

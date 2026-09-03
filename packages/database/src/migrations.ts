@@ -3920,5 +3920,16 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         ('security_admin', 'admin.maintainer', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         ('tenant_admin', 'admin.maintainer', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
     `
+  },
+  {
+    version: 61,
+    name: "walmart_v7_v8_duplicate_action_requalification_boundary",
+    sql: `
+      UPDATE retailers SET execution_supported = 0 WHERE id = 'walmart';
+      UPDATE listings SET execution_supported = 0 WHERE retailer_id = 'walmart';
+      UPDATE retailer_adapter_qualifications
+        SET status = 'retired', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE retailer_id = 'walmart';
+    `
   }
 ]);

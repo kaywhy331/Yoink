@@ -44,6 +44,7 @@ const EVIDENCE_REQUEST_TIMEOUT_MS = 10_000;
 const HEALTH_ALARM = "yoink-health";
 const JOB_ALARM = "yoink-jobs";
 const WATCH_QUEUE_ALARM = "yoink-watch-queue";
+const AUTO_REVERIFICATION_ALARM = "yoink-auto-reverification";
 const MAX_ACTION_JOBS_PER_CYCLE = 4;
 const ACTION_JOB_WAIT_MS = 25_000;
 const ACTION_JOB_REQUEST_TIMEOUT_MS = 28_000;
@@ -62,6 +63,9 @@ const CART_PROOF_WAIT_MAX_MS = 2_250;
 const WARM_CART_BASELINE_WAIT_MAX_MS = 350;
 const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
 const WARM_READINESS_LANES_PER_CYCLE = 2;
+const AUTO_REVERIFICATION_PERIOD_MINUTES = 6 * 60;
+const AUTO_REVERIFICATION_COOLDOWN_MS = 24 * 60 * 60_000;
+const MAX_REVERIFICATION_CANDIDATES_PER_LANE = 4;
 const POST_CLICK_SETTLE_STATE_KEY = "__yoinkPostClickSettleV1";
 const READINESS_KEY = "readiness";
 const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
@@ -76,6 +80,7 @@ const WARM_READINESS_CURSOR_KEY = "yoinkWarmReadinessCursorV1";
 const WATCH_QUEUE_STATE_KEY = "yoinkWatchQueueStateV1";
 const WATCH_QUEUE_LEASE_KEY = "yoinkWatchQueueLeaseV1";
 const REVERIFICATION_STATE_KEY = "yoinkRetailerReverificationStateV1";
+const AUTO_REVERIFICATION_SETTINGS_KEY = "yoinkAutoReverificationSettingsV1";
 const ORDER_HANDOFF_KEY = "yoinkOrderHandoffsV1";
 const CART_READY_SOUND_KEY = "yoinkCartReadySoundEnabledV1";
 const TRACKALACKER_PUSH_STATE_KEY = "yoinkTrackalackerPushStateV1";
@@ -123,7 +128,7 @@ const RETAILER_ORIGINS = {
 };
 const TARGET_OBSERVER_VERSION = "target-observer-v5";
 const RETAILER_OBSERVER_VERSIONS = {
-  walmart: "walmart-observer-v6",
+  walmart: "walmart-observer-v7",
   amazon: "amazon-observer-v8",
   bestbuy: "bestbuy-observer-v10",
   disney: "disney-observer-v1",
@@ -156,7 +161,7 @@ const SUPPORTED_RETAILER_DOMAINS = Object.freeze([
   "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
 ]);
 const TARGET_ADD_ADAPTER_VERSION = "target-add-v7";
-const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v7";
+const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v8";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
 const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v10";
@@ -217,6 +222,8 @@ let jobCyclePromise = null;
 let watchQueueCyclePromise = null;
 let warmReadinessCyclePromise = null;
 let warmReadinessRequestPromise = null;
+let automaticReverificationPromise = null;
+let retailerReverificationPromise = null;
 let signalJobHandoffPromise = null;
 let notificationCyclePromise = null;
 let notificationCyclePendingWaitMs = -1;
@@ -249,6 +256,10 @@ function readiness(connected, details = {}, device = null) {
     executionMode: details.executionMode === "live" ? "live" : "shadow",
     actionsPaused: details.actionsPaused !== false,
     chromeMutationEnabled: details.chromeMutationEnabled === true,
+    targetAddExecutionEnabled: details.targetAddExecutionEnabled === true,
+    walmartAddExecutionEnabled: details.walmartAddExecutionEnabled === true,
+    amazonAddExecutionEnabled: details.amazonAddExecutionEnabled === true,
+    bestBuyAddExecutionEnabled: details.bestBuyAddExecutionEnabled === true,
     targetAddCapable: true,
     walmartAddCapable: true,
     amazonAddCapable: true,
@@ -2594,6 +2605,10 @@ async function checkHealth() {
       executionMode: controlPlane?.executionMode ?? health.executionMode,
       actionsPaused: controlPlane?.actionsPaused ?? health.actionsPaused,
       chromeMutationEnabled: controlPlane?.retailerMutationEnabled ?? health.chromeMutationEnabled,
+      targetAddExecutionEnabled: controlPlane?.targetAddExecutionEnabled ?? health.targetAddExecutionEnabled,
+      walmartAddExecutionEnabled: controlPlane?.walmartAddExecutionEnabled ?? health.walmartAddExecutionEnabled,
+      amazonAddExecutionEnabled: controlPlane?.amazonAddExecutionEnabled ?? health.amazonAddExecutionEnabled,
+      bestBuyAddExecutionEnabled: controlPlane?.bestBuyAddExecutionEnabled ?? health.bestBuyAddExecutionEnabled,
       communitySharingRetailers: controlPlane?.communitySharingRetailers,
       targetShadowAccess: await targetShadowAccess(),
       trackalackerPush: await readTrackalackerState(),
@@ -3548,20 +3563,53 @@ async function inspectAndQualifyActiveTab(tabId = null) {
   }
 }
 
+const REVERIFICATION_COVERAGE = new Set([
+  "first_party_actionable", "shipping_actionable", "pickup_actionable",
+  "offer_route_ready", "pre_click_rehearsal"
+]);
+
+function normalizedReverificationCandidate(value, retailerId) {
+  const identity = canonicalRetailerIdentity(value?.canonicalUrl);
+  if (identity?.retailerId !== retailerId
+    || identity.retailerSku !== String(value?.retailerSku || "").toUpperCase()) return null;
+  return {
+    retailerSku: identity.retailerSku,
+    canonicalUrl: identity.canonicalUrl,
+    title: String(value?.title || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 160),
+    trialObservedAt: String(value?.trialObservedAt || "").slice(0, 40),
+    source: ["evidence_history", "repair_queue", "catalog"].includes(String(value?.source || ""))
+      ? String(value.source) : "evidence_history",
+    qualificationTypes: [...new Set((Array.isArray(value?.qualificationTypes) ? value.qualificationTypes : [])
+      .map((item) => String(item || ""))
+      .filter((item) => REVERIFICATION_COVERAGE.has(item)))].slice(0, REVERIFICATION_COVERAGE.size),
+    currentObserverEvidence: value?.currentObserverEvidence === true,
+    currentRehearsalPassed: value?.currentRehearsalPassed === true,
+    priorRehearsalPassed: value?.priorRehearsalPassed === true,
+    repairableObserverFailure: value?.repairableObserverFailure === true
+  };
+}
+
 function normalizedReverificationPlan(value) {
   const lanes = [];
   for (const item of Array.isArray(value?.lanes) ? value.lanes.slice(0, 4) : []) {
     const retailerId = String(item?.retailerId || "");
-    const candidateIdentity = canonicalRetailerIdentity(item?.candidate?.canonicalUrl);
-    const candidate = candidateIdentity?.retailerId === retailerId
-      && candidateIdentity.retailerSku === String(item?.candidate?.retailerSku || "").toUpperCase()
-      ? {
-        retailerSku: candidateIdentity.retailerSku,
-        canonicalUrl: candidateIdentity.canonicalUrl,
-        title: String(item.candidate.title || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 160),
-        trialObservedAt: String(item.candidate.trialObservedAt || "").slice(0, 40)
-      } : null;
     if (!ADD_LANES[retailerId] || lanes.some((lane) => lane.retailerId === retailerId)) continue;
+    const sourceCandidates = Array.isArray(item?.candidates) && item.candidates.length
+      ? item.candidates : item?.candidate ? [item.candidate] : [];
+    const candidates = [];
+    for (const source of sourceCandidates.slice(0, 8)) {
+      const candidate = normalizedReverificationCandidate(source, retailerId);
+      if (!candidate || candidates.some((entry) => entry.retailerSku === candidate.retailerSku)) continue;
+      candidates.push(candidate);
+    }
+    const evidenceChecks = Array.isArray(item?.evidence?.checks)
+      ? item.evidence.checks.slice(0, 12).map((check) => ({
+        id: safeReasonCode(check?.id || "unknown"),
+        observed: Math.max(0, Math.min(1_000, Math.floor(Number(check?.observed) || 0))),
+        required: Math.max(0, Math.min(100, Math.floor(Number(check?.required) || 0))),
+        requiredForQualification: check?.requiredForQualification === true,
+        met: check?.met === true
+      })) : [];
     lanes.push({
       retailerId,
       expectedAdapterVersion: String(item.expectedAdapterVersion || "").slice(0, 80),
@@ -3572,7 +3620,16 @@ function normalizedReverificationPlan(value) {
           ? String(item.qualification.warning) : "none",
         expiresAt: String(item.qualification?.expiresAt || "").slice(0, 40)
       },
-      candidate
+      candidate: candidates[0] ?? null,
+      candidates,
+      evidence: {
+        liveEvidenceReady: item?.evidence?.liveEvidenceReady === true,
+        rehearsalReady: item?.evidence?.rehearsalReady === true,
+        qualificationEvidenceReady: item?.evidence?.qualificationEvidenceReady === true,
+        distinctSkuCount: Math.max(0, Math.min(1_000, Math.floor(Number(item?.evidence?.distinctSkuCount) || 0))),
+        checks: evidenceChecks
+      },
+      automaticCheckNeeded: item?.automaticCheckNeeded === true
     });
   }
   return { createdAt: String(value?.createdAt || "").slice(0, 40), lanes };
@@ -3587,80 +3644,185 @@ async function getReverificationPlan() {
   return normalizedReverificationPlan(payload?.plan);
 }
 
-async function saveReverificationState(state, results = []) {
+function normalizedAutoReverificationSettings(value) {
+  return { schemaVersion: 1, enabled: value?.schemaVersion === 1 && value?.enabled === true };
+}
+
+async function readAutoReverificationSettings() {
+  const stored = await chrome.storage.local.get(AUTO_REVERIFICATION_SETTINGS_KEY);
+  return normalizedAutoReverificationSettings(stored[AUTO_REVERIFICATION_SETTINGS_KEY]);
+}
+
+async function setAutoReverificationEnabled(enabled) {
+  const settings = { schemaVersion: 1, enabled: enabled === true };
+  await chrome.storage.local.set({ [AUTO_REVERIFICATION_SETTINGS_KEY]: settings });
+  if (settings.enabled) void runAutomaticReverification(false);
+  return { settings };
+}
+
+async function saveReverificationState(state, results = [], metadata = {}) {
   const value = {
     schemaVersion: 1,
     state: ["running", "complete", "partial", "error"].includes(state) ? state : "error",
     results: results.slice(0, 4).map((result) => ({
       retailerId: String(result.retailerId || "").slice(0, 40),
       retailerSku: String(result.retailerSku || "").slice(0, 80),
-      outcome: ["passed", "blocked", "missing_candidate", "access_missing", "error"].includes(result.outcome)
+      outcome: ["passed", "partial", "blocked", "missing_candidate", "access_missing", "error"].includes(result.outcome)
         ? result.outcome : "error",
-      reasonCode: safeReasonCode(result.reasonCode || result.outcome)
+      reasonCode: safeReasonCode(result.reasonCode || result.outcome),
+      attemptedProductCount: Math.max(0, Math.min(MAX_REVERIFICATION_CANDIDATES_PER_LANE,
+        Math.floor(Number(result.attemptedProductCount) || 0))),
+      passedProductCount: Math.max(0, Math.min(MAX_REVERIFICATION_CANDIDATES_PER_LANE,
+        Math.floor(Number(result.passedProductCount) || 0)))
     })),
+    automatic: metadata.automatic === true,
     updatedAt: new Date().toISOString()
   };
   await chrome.storage.local.set({ [REVERIFICATION_STATE_KEY]: value });
   return value;
 }
 
-async function runRetailerReverification(retailerIds = []) {
+async function performRetailerReverification(retailerIds = [], metadata = {}) {
   if (await activeJob().catch(() => null)) {
     throw new Error("Wait for the current cart action to finish before checking stores again.");
   }
   const requested = [...new Set((Array.isArray(retailerIds) ? retailerIds : [])
     .map((value) => String(value || "")).filter((value) => ADD_LANES[value]))].slice(0, 4);
   if (!requested.length) throw new Error("Choose at least one supported store to check again.");
-  const plan = await getReverificationPlan();
+  let plan = await getReverificationPlan();
   const results = [];
-  await saveReverificationState("running", results);
+  await saveReverificationState("running", results, metadata);
   for (const retailerId of requested) {
-    const lane = plan.lanes.find((item) => item.retailerId === retailerId);
-    if (!lane?.candidate) {
-      results.push({ retailerId, retailerSku: "", outcome: "missing_candidate", reasonCode: "qualification_candidate_missing" });
-      await saveReverificationState("running", results);
+    let lane = plan.lanes.find((item) => item.retailerId === retailerId);
+    const candidates = (lane?.candidates || []).slice(0, MAX_REVERIFICATION_CANDIDATES_PER_LANE);
+    if (!lane || !candidates.length) {
+      results.push({
+        retailerId,
+        retailerSku: "",
+        outcome: "missing_candidate",
+        reasonCode: "qualification_candidate_missing",
+        attemptedProductCount: 0,
+        passedProductCount: 0
+      });
+      await saveReverificationState("running", results, metadata);
+      continue;
+    }
+    if (metadata.automatic === true
+      && lane.evidence.qualificationEvidenceReady
+      && lane.qualification.warning !== "expiring") {
+      results.push({
+        retailerId,
+        retailerSku: lane.candidate?.retailerSku || "",
+        outcome: "passed",
+        reasonCode: "qualification_evidence_ready",
+        attemptedProductCount: 0,
+        passedProductCount: 0
+      });
+      await saveReverificationState("running", results, metadata);
       continue;
     }
     const origins = retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[retailerId];
     if (!origins || !await chrome.permissions.contains({ origins })) {
       results.push({
         retailerId,
-        retailerSku: lane.candidate.retailerSku,
+        retailerSku: lane.candidate?.retailerSku || "",
         outcome: "access_missing",
-        reasonCode: "retailer_access_missing"
+        reasonCode: "retailer_access_missing",
+        attemptedProductCount: 0,
+        passedProductCount: 0
       });
-      await saveReverificationState("running", results);
+      await saveReverificationState("running", results, metadata);
       continue;
     }
-    let tabId = null;
-    try {
-      const tab = await chrome.tabs.create({ url: lane.candidate.canonicalUrl, active: false });
-      if (!Number.isInteger(tab?.id)) throw new Error("qualification_tab_unavailable");
-      tabId = tab.id;
-      await waitForExactProductTab(tabId, retailerId, lane.candidate.retailerSku);
-      const verified = await inspectAndQualifyActiveTab(tabId);
-      const passed = verified?.rehearsal?.ok === true;
-      results.push({
-        retailerId,
-        retailerSku: lane.candidate.retailerSku,
-        outcome: passed ? "passed" : "blocked",
-        reasonCode: passed ? "verified" : safeReasonCode(verified?.rehearsal?.reason || "qualification_blocked")
-      });
-    } catch (error) {
-      results.push({
-        retailerId,
-        retailerSku: lane.candidate.retailerSku,
-        outcome: "error",
-        reasonCode: safeReasonCode(error instanceof Error ? error.message : "qualification_failed")
-      });
-    } finally {
-      if (Number.isInteger(tabId)) await chrome.tabs.remove(tabId).catch(() => undefined);
+    let attemptedProductCount = 0;
+    let passedProductCount = 0;
+    let lastRetailerSku = lane.candidate?.retailerSku || "";
+    let lastReasonCode = "qualification_candidate_exhausted";
+    for (const candidate of candidates) {
+      if (await activeJob().catch(() => null)) {
+        lastReasonCode = "action_job_active";
+        break;
+      }
+      let tabId = null;
+      lastRetailerSku = candidate.retailerSku;
+      attemptedProductCount += 1;
+      try {
+        const tab = await chrome.tabs.create({ url: candidate.canonicalUrl, active: false });
+        if (!Number.isInteger(tab?.id)) throw new Error("qualification_tab_unavailable");
+        tabId = tab.id;
+        await waitForExactProductTab(tabId, retailerId, candidate.retailerSku);
+        const verified = await inspectAndQualifyActiveTab(tabId);
+        const passed = verified?.rehearsal?.ok === true;
+        if (passed) passedProductCount += 1;
+        lastReasonCode = passed
+          ? "verified"
+          : safeReasonCode(verified?.rehearsal?.reason || "qualification_blocked");
+      } catch (error) {
+        lastReasonCode = safeReasonCode(error instanceof Error ? error.message : "qualification_failed");
+      } finally {
+        if (Number.isInteger(tabId)) await chrome.tabs.remove(tabId).catch(() => undefined);
+      }
+      plan = await getReverificationPlan();
+      lane = plan.lanes.find((item) => item.retailerId === retailerId) || lane;
+      if (lane.evidence.qualificationEvidenceReady
+        && (lane.qualification.warning !== "expiring" || passedProductCount > 0)) break;
     }
-    await saveReverificationState("running", results);
+    const evidenceReady = lane.evidence.qualificationEvidenceReady
+      && (lane.qualification.warning !== "expiring" || passedProductCount > 0);
+    results.push({
+      retailerId,
+      retailerSku: lastRetailerSku,
+      outcome: evidenceReady ? "passed" : passedProductCount > 0 ? "partial" : "blocked",
+      reasonCode: evidenceReady ? "qualification_evidence_ready" : lastReasonCode,
+      attemptedProductCount,
+      passedProductCount
+    });
+    await saveReverificationState("running", results, metadata);
   }
   const state = results.every((result) => result.outcome === "passed") ? "complete" : "partial";
-  const persisted = await saveReverificationState(state, results);
+  const persisted = await saveReverificationState(state, results, metadata);
   return { plan, ...persisted };
+}
+
+function runRetailerReverification(retailerIds = [], metadata = {}) {
+  if (retailerReverificationPromise) return retailerReverificationPromise;
+  retailerReverificationPromise = performRetailerReverification(retailerIds, metadata)
+    .finally(() => { retailerReverificationPromise = null; });
+  return retailerReverificationPromise;
+}
+
+function runAutomaticReverification(force = false) {
+  if (automaticReverificationPromise) return automaticReverificationPromise;
+  automaticReverificationPromise = (async () => {
+    const settings = await readAutoReverificationSettings();
+    if (!settings.enabled && !force) return { settings, started: false, reason: "automatic_checks_disabled" };
+    const stored = (await chrome.storage.local.get(REVERIFICATION_STATE_KEY))[REVERIFICATION_STATE_KEY];
+    const lastRunAt = stored?.automatic === true ? new Date(String(stored.updatedAt || "")).getTime() : Number.NaN;
+    if (!force && Number.isFinite(lastRunAt) && lastRunAt > Date.now() - AUTO_REVERIFICATION_COOLDOWN_MS) {
+      return { settings, started: false, reason: "automatic_check_cooldown", state: stored };
+    }
+    const plan = await getReverificationPlan();
+    const retailerIds = plan.lanes
+      .filter((lane) => lane.automaticCheckNeeded && lane.candidates.length > 0)
+      .map((lane) => lane.retailerId);
+    if (!retailerIds.length) return { settings, started: false, reason: "no_store_checks_needed", plan };
+    const result = await runRetailerReverification(retailerIds, { automatic: true });
+    return { settings, started: true, reason: result.state, ...result };
+  })().finally(() => { automaticReverificationPromise = null; });
+  return automaticReverificationPromise;
+}
+
+async function automaticReverificationStatus() {
+  const [settings, stored, plan] = await Promise.all([
+    readAutoReverificationSettings(),
+    chrome.storage.local.get(REVERIFICATION_STATE_KEY),
+    getReverificationPlan().catch(() => null)
+  ]);
+  return {
+    settings,
+    state: stored[REVERIFICATION_STATE_KEY] || null,
+    plan
+  };
 }
 
 async function persistPopupResult(result) {
@@ -5732,9 +5894,32 @@ async function runWatchQueueCycle() {
   return watchQueueCyclePromise;
 }
 
-async function runWarmReadinessCycle() {
+function warmReadinessBlocked(control) {
+  if (!control?.connected || !control?.paired) return "device_unavailable";
+  if (control.actionsPaused === true) return "actions_paused";
+  if (control.executionMode !== "live") return "shadow_mode";
+  if (control.chromeMutationEnabled !== true) return "retailer_actions_unavailable";
+  return "";
+}
+
+function warmLaneEnabled(control, retailerId) {
+  return control?.[`${retailerId}AddExecutionEnabled`] === true;
+}
+
+async function runWarmReadinessCycle(control = null) {
   if (warmReadinessCyclePromise) return warmReadinessCyclePromise;
   warmReadinessCyclePromise = (async () => {
+    const storedControl = control || (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY];
+    const blocked = warmReadinessBlocked(storedControl);
+    if (blocked) {
+      return {
+        warmed: false,
+        warmedCount: 0,
+        attemptedCount: 0,
+        reason: blocked,
+        results: []
+      };
+    }
     if (jobCyclePromise || await activeJob().catch(() => null)) {
       return {
         warmed: false,
@@ -5769,6 +5954,7 @@ async function runWarmReadinessCycle() {
       if (results.length && (jobCyclePromise || await activeJob().catch(() => null))) break;
       const index = (cursor + offset) % retailerIds.length;
       const retailerId = retailerIds[index];
+      if (!warmLaneEnabled(storedControl, retailerId)) continue;
       if (!await addLaneAccess(retailerId)) continue;
       const lane = ADD_LANES[retailerId];
       const stored = storedTabs.get(retailerId);
@@ -5873,7 +6059,7 @@ async function runWarmReadinessCycle() {
   return warmReadinessCyclePromise;
 }
 
-function requestWarmReadinessCycle() {
+function requestWarmReadinessCycle(control = null) {
   if (warmReadinessRequestPromise) return warmReadinessRequestPromise;
   warmReadinessRequestPromise = (async () => {
     let result = null;
@@ -5885,7 +6071,7 @@ function requestWarmReadinessCycle() {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const activeCycle = jobCyclePromise;
       if (activeCycle) await activeCycle.catch(() => undefined);
-      result = await runWarmReadinessCycle();
+      result = await runWarmReadinessCycle(control);
       if (result?.reason !== "action_job_active") return result;
     }
     return result;
@@ -6256,8 +6442,11 @@ async function initialize() {
   await chrome.alarms.create(HEALTH_ALARM, { periodInMinutes: 1 });
   await chrome.alarms.create(JOB_ALARM, { periodInMinutes: 0.5 });
   await chrome.alarms.create(WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 });
+  await chrome.alarms.create(AUTO_REVERIFICATION_ALARM, {
+    periodInMinutes: AUTO_REVERIFICATION_PERIOD_MINUTES
+  });
   await ensureContextMenus();
-  await checkHealth();
+  const health = await checkHealth();
   await reconcileActionHandoffs();
   void reconcileActionHandoffs(ACTION_HANDOFF_WAIT_MS);
   await drainAdapterDiagnosticQueue();
@@ -6268,7 +6457,8 @@ async function initialize() {
   // as a locally accepted signal.
   if (!signalDelivery?.delivered) await runSignalActionHandoff();
   void runWatchQueueCycle();
-  void requestWarmReadinessCycle();
+  void requestWarmReadinessCycle(health);
+  void runAutomaticReverification(false);
 }
 
 chrome.runtime.onInstalled.addListener(() => { void initialize(); });
@@ -6326,9 +6516,9 @@ chrome.commands?.onCommand?.addListener((command) => {
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEALTH_ALARM) {
-    void checkHealth();
     void drainAdapterDiagnosticQueue();
-    void runSignalDeliveryCycle().finally(() => requestWarmReadinessCycle());
+    void checkHealth().then((health) =>
+      runSignalDeliveryCycle().finally(() => requestWarmReadinessCycle(health)));
     void runNotificationCycle();
   }
   if (alarm.name === JOB_ALARM) {
@@ -6336,6 +6526,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
   if (alarm.name === WATCH_QUEUE_ALARM) {
     void runWatchQueueCycle();
+  }
+  if (alarm.name === AUTO_REVERIFICATION_ALARM) {
+    void runAutomaticReverification(false);
   }
 });
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -6358,13 +6551,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const localDataDeletion = message?.type === "yoink:delete-local-data";
   const reverificationPlan = message?.type === "yoink:get-reverification-plan";
   const retailerReverification = message?.type === "yoink:reverify-retailer-lanes";
+  const automaticReverificationGet = message?.type === "yoink:get-auto-reverification";
+  const automaticReverificationSet = message?.type === "yoink:set-auto-reverification";
+  const automaticReverificationRun = message?.type === "yoink:run-auto-reverification";
   const contentOperation = [
     "yoink:resolve-trackalacker-listing",
     "yoink:trackalacker-sync-progress",
     "yoink:trackalacker-sync-item",
     "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
-  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || contentOperation;
+  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || automaticReverificationGet || automaticReverificationSet || automaticReverificationRun || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : message?.type === "yoink:pair-device"
@@ -6409,6 +6605,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   ? getReverificationPlan().then((plan) => ({ plan }))
                 : retailerReverification
                   ? runRetailerReverification(message.retailerIds)
+                : automaticReverificationGet
+                  ? automaticReverificationStatus()
+                : automaticReverificationSet
+                  ? setAutoReverificationEnabled(message.enabled)
+                : automaticReverificationRun
+                  ? runAutomaticReverification(true)
                 : message?.type === "yoink:resolve-trackalacker-listing"
                   ? resolveTrackalackerListing(message, sender)
                   : message?.type === "yoink:trackalacker-sync-progress"

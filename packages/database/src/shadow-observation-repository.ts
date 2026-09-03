@@ -1070,7 +1070,7 @@ export class ShadowObservationRepository {
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional coverage for a future marketplace-capable adapter; walmart-add-v7 rejects it.",
+        detail: "Optional coverage for a future marketplace-capable adapter; walmart-add-v8 rejects it.",
         required: 1,
         requiredForQualification: false
       },

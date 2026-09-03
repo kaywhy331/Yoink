@@ -583,6 +583,27 @@ test("Walmart recovers the exact selected first-party shipping offer from curren
   assert.equal(attempt.diagnostic.failureStage, "complete");
   assert.equal(attempt.diagnostic.layout.scopedControlCount, 1);
 
+  const duplicateShell = page();
+  duplicateShell.querySelector("main")?.insertAdjacentHTML("beforeend", `
+    <aside data-testid="sticky-product-action">
+      <button data-automation-id="atc">Add to cart</button>
+    </aside>
+  `);
+  const primaryControl = duplicateShell.querySelector("[data-testid='add-to-cart-section'] button");
+  const stickyControl = duplicateShell.querySelector("[data-testid='sticky-product-action'] button");
+  assert.equal(retailerAddControl(duplicateShell, url, "walmart", "20895014480", "shipping"), primaryControl);
+  assert.notEqual(primaryControl, stickyControl);
+  const duplicateAttempt = collectRetailerShadowAttempt(duplicateShell, url, "walmart", "shipping");
+  assert.equal(duplicateAttempt.diagnostic.outcome, "passed");
+  assert.equal(duplicateAttempt.diagnostic.layout.addControlCount, 2);
+  assert.equal(duplicateAttempt.diagnostic.layout.scopedControlCount, 1);
+  assert.equal(duplicateAttempt.observation.selectedOffer?.selectionState, "exact");
+
+  const ambiguousPrimary = page();
+  const duplicatePrimary = ambiguousPrimary.querySelector("[data-testid='add-to-cart-section'] button")?.cloneNode(true);
+  if (duplicatePrimary) ambiguousPrimary.querySelector("[data-testid='add-to-cart-section']")?.append(duplicatePrimary);
+  assert.equal(retailerAddControl(ambiguousPrimary, url, "walmart", "20895014480", "shipping"), null);
+
   const thirdParty = observeRetailerOffer(
     page({ sellerName: "Fixture Marketplace", sellerType: "EXTERNAL" }),
     url,
@@ -597,6 +618,32 @@ test("Walmart recovers the exact selected first-party shipping offer from curren
   const pickup = observeRetailerOffer(page(), url, "walmart", "20895014480", "pickup", NOW);
   assert.equal(pickup.addControlActionable, false);
   assert.equal(pickup.fulfillment, "unknown");
+});
+
+test("Walmart records explicit product-level out-of-stock fulfillment as an expected stop", () => {
+  const url = "https://www.walmart.com/ip/example/20895014480";
+  const document = new JSDOM(`
+    <main>
+      <h1>Exact unavailable product</h1>
+      <section data-testid="fulfillment-shipping" aria-label="Shipping out of stock">
+        <span>Out of stock</span>
+      </section>
+    </main>
+    <aside data-testid="recommended-products">
+      <span itemprop="price">$39.97</span>
+      <button data-automation-id="atc">Add to cart</button>
+    </aside>
+  `, { url }).window.document;
+
+  const attempt = collectRetailerShadowAttempt(document, url, "walmart", "shipping");
+  assert.equal(attempt.observation.availability, "out_of_stock");
+  assert.equal(attempt.observation.unitPriceCents, null);
+  assert.equal(attempt.observation.addControlActionable, false);
+  assert.equal(attempt.diagnostic.outcome, "rejected");
+  assert.equal(attempt.diagnostic.failureStage, "availability_binding");
+  assert.equal(attempt.diagnostic.reasonCode, "out_of_stock");
+  assert.equal(attempt.diagnostic.layout.addControlCount, 0);
+  assert.equal(attempt.diagnostic.layout.scopedControlCount, 0);
 });
 
 test("Walmart split dollar and cent markup cannot inflate the bound price", () => {

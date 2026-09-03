@@ -1318,7 +1318,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           targetAddOnly: true,
           targetAddAdapterVersion: "target-add-v7",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v7",
+          walmartAddAdapterVersion: "walmart-add-v8",
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v9",
           bestBuyAddOnly: true,
@@ -1357,7 +1357,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           targetAddOnly: true,
           targetAddAdapterVersion: "target-add-v7",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v7",
+          walmartAddAdapterVersion: "walmart-add-v8",
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v9",
           bestBuyAddOnly: true,
@@ -1563,7 +1563,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           targetAddOnly: true,
           targetAddAdapterVersion: "target-add-v7",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v7",
+          walmartAddAdapterVersion: "walmart-add-v8",
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v9",
           bestBuyAddOnly: true,
@@ -1782,7 +1782,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           Authorization: `Bearer ${paired.token}`
         },
         body: JSON.stringify({
-          adapterVersion: "walmart-observer-v6",
+          adapterVersion: "walmart-observer-v7",
           contractVersion: 1,
           observedAt: new Date().toISOString(),
           pageKind: "product",
@@ -1810,8 +1810,8 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "walmart-add-v7",
-        observerVersion: "walmart-observer-v6",
+        adapterVersion: "walmart-add-v8",
+        observerVersion: "walmart-observer-v7",
         contractVersion: 1,
         shadowObservationId: walmartShadowIds[0],
         observedAt: new Date().toISOString(),
@@ -1828,9 +1828,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "walmart-add-v7",
+        adapterVersion: "walmart-add-v8",
         evidenceHash: walmartReadySnapshot.walmartQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_WALMART_ADD_V7"
+        confirmation: "ENABLE_WALMART_ADD_V8"
       })
     });
     assert.equal(walmartActivation.status, 200);

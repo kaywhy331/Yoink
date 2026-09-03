@@ -3525,7 +3525,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_WALMART_ADD_V7"
+          confirmation: "ENABLE_WALMART_ADD_V8"
         })
       });
       await refresh();

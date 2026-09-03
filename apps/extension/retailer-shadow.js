@@ -48,7 +48,7 @@ var YoinkRetailerShadowModule = (() => {
 
   // packages/contracts/src/index.ts
   var TARGET_OBSERVER_VERSION = "target-observer-v5";
-  var WALMART_OBSERVER_VERSION = "walmart-observer-v6";
+  var WALMART_OBSERVER_VERSION = "walmart-observer-v7";
   var WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
   var AMAZON_OBSERVER_VERSION = "amazon-observer-v8";
   var BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v10";
@@ -1090,6 +1090,13 @@ var YoinkRetailerShadowModule = (() => {
     "[class*='carousel' i]",
     "[class*='related-products' i]"
   ].join(", ");
+  var WALMART_SECONDARY_ACTION_SCOPE = [
+    "[data-testid*='sticky' i]",
+    "[data-automation-id*='sticky' i]",
+    "[class*='sticky' i]",
+    "[class*='floating' i]",
+    "[class*='mobile-drawer' i]"
+  ].join(", ");
   var AMAZON_MERCHANDISING_SCOPE = [
     "[data-cel-widget*='recommend' i]",
     "[data-feature-name*='recommend' i]",
@@ -1444,6 +1451,14 @@ var YoinkRetailerShadowModule = (() => {
     if (!controls.length) return true;
     return controls.every((control) => String(control.value || "").trim() === "1");
   }
+  function walmartPrimaryActionControls(document, retailer) {
+    const rendered = candidateControls(document, retailer).filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE)).filter(renderedVisible);
+    const nonSecondary = rendered.filter((control) => !control.closest(WALMART_SECONDARY_ACTION_SCOPE));
+    const primary = nonSecondary.filter((control) => Boolean(control.closest(WALMART_PRIMARY_SCOPE)));
+    if (primary.length > 0) return primary;
+    if (nonSecondary.length > 0) return nonSecondary;
+    return rendered.length === 1 ? rendered : [];
+  }
   function walmartStructuredOffer(document, retailer, expectedSku, requiredFulfillment) {
     const scripts = [...document.querySelectorAll("script#__NEXT_DATA__")];
     if (scripts.length !== 1 || scripts[0]?.getAttribute("type") !== "application/json") return null;
@@ -1493,9 +1508,7 @@ var YoinkRetailerShadowModule = (() => {
     for (const limit of [fulfillmentOption.maxOrderQuantity, fulfillmentOption.orderLimit, product.orderLimit]) {
       if (limit !== null && limit !== void 0 && (!Number.isFinite(Number(limit)) || Number(limit) < 1)) return null;
     }
-    const controls = candidateControls(document, retailer).filter((control2) => !control2.closest(WALMART_MERCHANDISING_SCOPE));
-    const primary = controls.filter((control2) => Boolean(control2.closest(WALMART_PRIMARY_SCOPE)));
-    const pool = primary.length > 0 ? primary : controls;
+    const pool = walmartPrimaryActionControls(document, retailer);
     if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document)) return null;
     const control = pool[0];
     const offerRoot = control.closest(WALMART_PRIMARY_SCOPE) || control.closest("main") || control.parentElement;
@@ -1507,7 +1520,8 @@ var YoinkRetailerShadowModule = (() => {
       structuredOffer: {
         unitPriceCents,
         sellerName: "Walmart",
-        sellerType: "first_party"
+        sellerType: "first_party",
+        exactSelectionBound: true
       }
     };
   }
@@ -1537,7 +1551,7 @@ var YoinkRetailerShadowModule = (() => {
   }
   function selectedWalmartControl(document, retailer, expectedSku, requiredFulfillment) {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-    const scoped = candidateControls(document, retailer).map((control) => walmartOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
+    const scoped = walmartPrimaryActionControls(document, retailer).map((control) => walmartOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
     const exact = scoped.filter((candidate) => candidate.identityBound);
     const primary = scoped.filter((candidate) => candidate.primaryScope);
     const pool = exact.length > 0 ? exact : primary.length > 0 ? primary : scoped;
@@ -1729,8 +1743,13 @@ var YoinkRetailerShadowModule = (() => {
     const selectors = [
       "[data-testid*='availability' i]",
       "[data-automation-id*='availability' i]",
+      "[data-testid*='fulfillment' i]",
+      "[data-automation-id*='fulfillment' i]",
+      "[data-testid*='shipping' i]",
+      "[data-automation-id*='shipping' i]",
       "[data-testid*='out-of-stock' i]",
       "[data-automation-id*='out-of-stock' i]",
+      "[aria-label*='out of stock' i]",
       "[itemprop='availability']",
       "button[disabled]"
     ];
@@ -1773,6 +1792,14 @@ var YoinkRetailerShadowModule = (() => {
     const pageSku = extractRetailerSku(retailerId, urlValue);
     if (!pageSku || pageSku !== expectedSku) throw new Error("The exact retailer listing identity is unavailable.");
     const selected = selectedControl(document, CONFIGS[retailerId], requiredFulfillment, expectedSku);
+    if (retailerId === "walmart" && selected.structuredOffer?.exactSelectionBound === true) {
+      return {
+        schemaVersion: 1,
+        selectionState: "exact",
+        childOfferKey: pageSku,
+        attributes: {}
+      };
+    }
     return selectedOfferScope(
       document,
       retailerId,
@@ -2182,6 +2209,9 @@ var YoinkRetailerShadowModule = (() => {
         failureStage: "interactive_block",
         reasonCode: layout.securityChallenge ? "security_challenge" : `interactive_${layout.interactiveBlock}`
       };
+    }
+    if (observation.retailerId === "walmart" && observation.availability === "out_of_stock" && !observation.addControlActionable) {
+      return { outcome: "rejected", failureStage: "availability_binding", reasonCode: "out_of_stock" };
     }
     if (observation.selectedOffer?.selectionState === "unresolved") {
       return {

@@ -10,7 +10,7 @@ and submit qualification.
 The current Yoink companion has only loopback access as a required host
 permission. Retailer access is optional. Generic `retailerMutation` remains
 forced false, while the independently versioned `target-add-v7`,
-`walmart-add-v7`, `amazon-add-v9`, and `bestbuy-add-v10` capabilities can be declared and qualified
+`walmart-add-v8`, `amazon-add-v9`, and `bestbuy-add-v10` capabilities can be declared and qualified
 only for their narrow add-only scopes.
 
 ## Source-to-target map
@@ -97,13 +97,14 @@ order submission remain closed.
 
 ## Current Walmart boundary
 
-`walmart-observer-v6` is a local page reader whose shipping evidence must be
+`walmart-observer-v7` is a local page reader whose shipping evidence must be
 explicit. It prefers a fully bound visible buy box and can recover Walmart's
 current split layout only when the exact `__NEXT_DATA__` product, selected offer
 ID, first-party seller, USD price, new-condition offer, selected in-stock
-Shipping option, quantity-one state, and one primary Add control all agree; the
-serialized offer ID is never emitted. The v1 observer cannot qualify mutation. The separate
-`walmart-add-v7` bundle accepts only an immutable
+Shipping option, quantity-one state, and one unambiguous primary Add control
+agree. A rendered sticky duplicate is excluded, while duplicate primary actions
+remain blocked; the serialized offer ID is never emitted. The v1 observer
+cannot qualify mutation. The separate `walmart-add-v8` bundle accepts only an immutable
 Walmart/add-to-cart/quantity-one/first-party job matching exact Shipping or
 explicitly configured Pickup. It captures a bounded cart baseline, stops on
 virtual queues or interactive blockers,
@@ -112,7 +113,7 @@ proves only the authorized SKU increased by one afterward. Its service-worker re
 semantics match Target without sharing a generic mutation capability.
 
 The implementation and automated recovery coverage are complete. Live Walmart
-authorization requires two fresh v6 item IDs, a first-party shipping candidate,
+authorization requires two fresh v7 item IDs, a first-party shipping candidate,
 one no-click rehearsal, a recently connected capable companion, the exact
 dossier hash, and explicit local activation.
 

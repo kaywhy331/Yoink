@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  TARGET_ADD_ADAPTER_VERSION
+  BESTBUY_OBSERVER_VERSION,
+  TARGET_ADD_ADAPTER_VERSION,
+  TARGET_OBSERVER_VERSION,
+  WALMART_OBSERVER_VERSION
 } from "../packages/contracts/src/index.js";
+import { AdapterDiagnosticRepository } from "../packages/database/src/adapter-diagnostic-repository.js";
 import { LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { DropWindowRepository } from "../packages/database/src/drop-window-repository.js";
@@ -10,6 +14,8 @@ import { OrderConfirmationRepository } from "../packages/database/src/order-conf
 import { PrivacyComplianceRepository } from "../packages/database/src/privacy-compliance-repository.js";
 import { RestockPatternRepository } from "../packages/database/src/restock-pattern-repository.js";
 import { RetailerReadinessRepository } from "../packages/database/src/retailer-readiness-repository.js";
+import { QualificationRepository } from "../packages/database/src/qualification-repository.js";
+import { ShadowObservationRepository } from "../packages/database/src/shadow-observation-repository.js";
 import { UserActionConnectorRepository } from "../packages/database/src/user-action-connector-repository.js";
 import { UserPrivacyRepository } from "../packages/database/src/user-privacy-repository.js";
 
@@ -310,6 +316,196 @@ test("scheduled drop windows expose details, recalculate on edit, and cancel wat
       "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'drop_window_cancelled' AND reason_code = 'incorrect_schedule'"
     )?.count, 1);
     assert.throws(() => repository.update(created.id, { title: "Too late" }, NOW + 4_000), /scheduled/i);
+    db.assertIntegrity();
+  } finally {
+    db.close();
+  }
+});
+
+test("store requalification plans reuse and rank a multi-product evidence history", () => {
+  const db = new YoinkDatabase();
+  try {
+    seedListing(db);
+    const device = pair(db);
+    const shadows = new ShadowObservationRepository(db);
+    const first = shadows.record(device.id, {
+      adapterVersion: TARGET_OBSERVER_VERSION,
+      contractVersion: 1,
+      observedAt: new Date(NOW + 1_000).toISOString(),
+      pageKind: "product",
+      retailerId: "target",
+      retailerSku: "13331333",
+      availability: "in_stock",
+      unitPriceCents: 539,
+      currency: "USD",
+      sellerName: "Target",
+      sellerType: "first_party",
+      fulfillment: "shipping",
+      addControlActionable: true,
+      securityChallenge: false,
+      interactiveBlock: ""
+    }, NOW + 2_000);
+    const incomplete = new RetailerReadinessRepository(db).lane("target", NOW + 3_000);
+    assert.equal(incomplete.candidates.length, 1);
+    assert.equal(incomplete.candidate?.retailerSku, "13331333");
+    assert.deepEqual(incomplete.candidate?.qualificationTypes, [
+      "first_party_actionable",
+      "shipping_actionable"
+    ]);
+    assert.equal(incomplete.evidence.qualificationEvidenceReady, false);
+    assert.equal(incomplete.automaticCheckNeeded, true);
+
+    new QualificationRepository(db).recordTargetAddRehearsal(device.id, {
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+      observerVersion: TARGET_OBSERVER_VERSION,
+      contractVersion: 1,
+      shadowObservationId: first.id,
+      observedAt: new Date(NOW + 3_500).toISOString(),
+      outcome: "passed",
+      reasonCode: "verified"
+    }, NOW + 4_000);
+    shadows.record(device.id, {
+      adapterVersion: TARGET_OBSERVER_VERSION,
+      contractVersion: 1,
+      observedAt: new Date(NOW + 5_000).toISOString(),
+      pageKind: "product",
+      retailerId: "target",
+      retailerSku: "94972381",
+      availability: "in_stock",
+      unitPriceCents: 3999,
+      currency: "USD",
+      sellerName: "Target",
+      sellerType: "first_party",
+      fulfillment: "shipping",
+      addControlActionable: true,
+      securityChallenge: false,
+      interactiveBlock: ""
+    }, NOW + 6_000);
+
+    const complete = new RetailerReadinessRepository(db).lane("target", NOW + 7_000);
+    assert.deepEqual(complete.candidates.map((candidate) => candidate.retailerSku), [
+      "13331333",
+      "94972381"
+    ]);
+    assert.equal(complete.candidates[1]?.canonicalUrl, "https://www.target.com/p/-/A-94972381",
+      "a directly inspected product remains reusable before it is added to the catalog");
+    assert.equal(complete.candidates[0]?.currentRehearsalPassed, true);
+    assert.equal(complete.candidates[0]?.priorRehearsalPassed, true);
+    assert.equal(complete.evidence.distinctSkuCount, 2);
+    assert.equal(complete.evidence.qualificationEvidenceReady, true);
+    assert.equal(complete.automaticCheckNeeded, false,
+      "a complete current dossier should await explicit store activation without reopening products");
+    db.assertIntegrity();
+  } finally {
+    db.close();
+  }
+});
+
+test("store requalification replays unresolved observer failures but never treats preorders as in-stock candidates", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pair(db);
+    db.exec(`
+      INSERT INTO product_families(id, title, brand, created_at, updated_at)
+        VALUES ('family_bestbuy_candidate', 'Best Buy candidate', '', '2026-08-30T17:00:00.000Z', '2026-08-30T17:00:00.000Z');
+      INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at)
+        VALUES ('variant_bestbuy_candidate', 'family_bestbuy_candidate', 'In-stock Best Buy candidate', '{}', '2026-08-30T17:00:00.000Z', '2026-08-30T17:00:00.000Z');
+      INSERT INTO listings(
+        id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+        execution_supported, currency, created_at, updated_at
+      ) VALUES (
+        'listing_bestbuy_candidate', 'variant_bestbuy_candidate', 'bestbuy', '6587244',
+        'https://www.bestbuy.com/site/-/6587244.p', 'in_stock', 0, 'USD',
+        '2026-08-30T17:00:00.000Z', '2026-08-30T17:00:00.000Z'
+      );
+    `);
+    const shadows = new ShadowObservationRepository(db);
+    shadows.record(device.id, {
+      adapterVersion: BESTBUY_OBSERVER_VERSION,
+      contractVersion: 1,
+      observedAt: new Date(NOW + 1_000).toISOString(),
+      pageKind: "product",
+      retailerId: "bestbuy",
+      retailerSku: "6688068",
+      canonicalUrl: "https://www.bestbuy.com/product/example/sku/6688068",
+      availability: "preorder",
+      unitPriceCents: 2499,
+      currency: "USD",
+      sellerName: "Best Buy",
+      sellerType: "first_party",
+      fulfillment: "shipping",
+      addControlActionable: true,
+      securityChallenge: false,
+      interactiveBlock: ""
+    }, NOW + 2_000);
+    shadows.record(device.id, {
+      adapterVersion: WALMART_OBSERVER_VERSION,
+      contractVersion: 1,
+      observedAt: new Date(NOW + 3_000).toISOString(),
+      pageKind: "product",
+      retailerId: "walmart",
+      retailerSku: "15561620611",
+      canonicalUrl: "https://www.walmart.com/ip/15561620611",
+      availability: "unknown",
+      unitPriceCents: null,
+      currency: "USD",
+      sellerName: "Walmart",
+      sellerType: "first_party",
+      fulfillment: "unknown",
+      addControlActionable: false,
+      securityChallenge: false,
+      interactiveBlock: ""
+    }, NOW + 4_000);
+    new AdapterDiagnosticRepository(db).record(device.id, {
+      contractVersion: 1,
+      observedAt: new Date(NOW + 4_500).toISOString(),
+      retailerId: "walmart",
+      retailerSku: "15561620611",
+      adapterVersion: WALMART_OBSERVER_VERSION,
+      operation: "observe",
+      outcome: "failed",
+      failureStage: "offer_binding",
+      reasonCode: "selected_offer_binding_unresolved",
+      attemptCount: 1,
+      domChanged: false,
+      layout: {
+        schemaVersion: 1,
+        pageKind: "product",
+        scopeKind: "none",
+        sellerShape: "legacy",
+        fulfillmentShape: "mixed",
+        addControlCount: 2,
+        genericAddIntentCount: 2,
+        scopedControlCount: 0,
+        explicitSkuInputCount: 0,
+        exactSkuInputCount: 0,
+        variationSkuCount: 0,
+        canonicalOfferInputCount: 0,
+        canonicalOfferDistinctCount: 0,
+        alternateOfferInputCount: 0,
+        alternateOfferDistinctCount: 0,
+        priceCandidateCount: 50,
+        quantityControlCount: 0,
+        securityChallenge: false,
+        interactiveBlock: ""
+      }
+    }, NOW + 5_000);
+    db.run(
+      "UPDATE retailer_adapter_diagnostics SET adapter_version = 'walmart-observer-v6' WHERE retailer_id = 'walmart' AND retailer_sku = '15561620611'"
+    );
+
+    const readiness = new RetailerReadinessRepository(db);
+    const bestBuy = readiness.lane("bestbuy", NOW + 6_000);
+    assert.deepEqual(bestBuy.candidates.map((candidate) => candidate.retailerSku), ["6587244"],
+      "the in-stock catalog candidate replaces the unsuitable preorder");
+    assert.equal(bestBuy.candidate?.source, "catalog");
+    assert.equal(bestBuy.candidates.some((candidate) => candidate.retailerSku === "6688068"), false,
+      "a preorder policy stop is not reusable in-stock qualification evidence");
+    const walmart = readiness.lane("walmart", NOW + 6_000);
+    assert.equal(walmart.candidate?.retailerSku, "15561620611");
+    assert.equal(walmart.candidate?.repairableObserverFailure, true,
+      "a prior-version failed layout remains available for bounded self-healing replay");
+    assert.equal(walmart.automaticCheckNeeded, true);
     db.assertIntegrity();
   } finally {
     db.close();

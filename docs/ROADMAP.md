@@ -1,6 +1,19 @@
 # Yoink roadmap
 
-## Shipped through 1.19.0
+## Shipped through 1.19.1
+
+### Self-healing store checks and Walmart duplicate-action binding (1.19.1)
+
+- Reuses a ranked, bounded history of exact products plus in-stock catalog
+  candidates for optional automatic no-click checks and advances past products
+  that are no longer usable
+- Keeps current repairable observer failures eligible for a later packaged fix
+  while excluding preorder evidence from the in-stock candidate pool
+- Binds Walmart's exact structured first-party Shipping offer to one primary
+  action when the page also renders a sticky duplicate; two primary actions
+  remain ambiguous and fail closed
+- Advances Walmart observer/action contracts to versions 7/8 and retires the
+  prior Walmart lane for fresh evidence and explicit activation
 
 ### Context-first action handoff and interface (1.19.0)
 

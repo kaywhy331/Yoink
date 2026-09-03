@@ -65,16 +65,38 @@ async function optionsHarness(options: OptionsHarnessOptions = {}) {
               ok: true,
               plan: {
                 lanes: [
-                  { retailerId: "target", qualification: { status: "retired", warning: "version_changed" }, candidate: { retailerSku: "94972381" } },
-                  { retailerId: "walmart", qualification: { status: "qualified", warning: "expiring" }, candidate: { retailerSku: "20252562938" } }
+                  { retailerId: "target", qualification: { status: "retired", warning: "version_changed" }, candidate: { retailerSku: "94972381" }, candidates: [{ retailerSku: "94972381", qualificationTypes: ["first_party_actionable", "shipping_actionable", "pre_click_rehearsal"] }], evidence: { qualificationEvidenceReady: false }, automaticCheckNeeded: true },
+                  { retailerId: "walmart", qualification: { status: "qualified", warning: "expiring" }, candidate: { retailerSku: "20252562938" }, candidates: [{ retailerSku: "20252562938", qualificationTypes: ["first_party_actionable", "shipping_actionable"] }], evidence: { qualificationEvidenceReady: true }, automaticCheckNeeded: true }
                 ]
               }
+            };
+          }
+          if (message.type === "yoink:get-auto-reverification") {
+            return { ok: true, settings: { schemaVersion: 1, enabled: false }, state: null };
+          }
+          if (message.type === "yoink:set-auto-reverification") {
+            return { ok: true, settings: { schemaVersion: 1, enabled: message.enabled === true } };
+          }
+          if (message.type === "yoink:run-auto-reverification") {
+            return {
+              ok: true,
+              started: true,
+              state: "complete",
+              results: [
+                { retailerId: "target", outcome: "passed", attemptedProductCount: 2, passedProductCount: 2 },
+                { retailerId: "walmart", outcome: "passed", attemptedProductCount: 1, passedProductCount: 1 }
+              ]
             };
           }
           if (message.type === "yoink:reverify-retailer-lanes") {
             return {
               ok: true,
-              results: (message.retailerIds as string[]).map((retailerId) => ({ retailerId, outcome: "passed" }))
+              results: (message.retailerIds as string[]).map((retailerId) => ({
+                retailerId,
+                outcome: "passed",
+                attemptedProductCount: 1,
+                passedProductCount: 1
+              }))
             };
           }
           return { ok: false };
@@ -144,12 +166,12 @@ test("extension settings manage exact store permissions and verified local delet
   assert.deepEqual(JSON.parse(JSON.stringify(requested)), [["https://*.walmart.com/*"]]);
   assert.equal(walmart.querySelector("button")?.textContent, "Remove");
 
-  assert.equal(document.querySelector("#laneReadinessState")?.textContent, "2 of 2 ready");
+  assert.equal(document.querySelector("#laneReadinessState")?.textContent, "2 need checking");
   assert.equal((document.querySelector("#laneReadinessRetry") as HTMLButtonElement).hidden, true);
   assert.equal(document.querySelector("#reverifyLanes"), null);
   assert.equal(document.querySelectorAll("#laneReadinessList .lane-readiness-row").length, 2);
   const targetCheck = document.querySelector('[data-reverify-retailer="target"]') as HTMLElement;
-  assert.match(targetCheck.textContent ?? "", /Check Target again without adding to cart/);
+  assert.match(targetCheck.textContent ?? "", /1 candidate product · first-party · shipping · no-click passed/);
   click(window, targetCheck.querySelector("button") as HTMLButtonElement);
   await turn();
   await turn();
@@ -162,7 +184,7 @@ test("extension settings manage exact store permissions and verified local delet
   });
   assert.equal(
     targetCheck.querySelector("[data-lane-status]")?.textContent,
-    "Passed · no click"
+    "1 of 1 passed · no click"
   );
 
   click(window, walmart.querySelector("button") as HTMLButtonElement);
@@ -175,7 +197,25 @@ test("extension settings manage exact store permissions and verified local delet
   assert.deepEqual(JSON.parse(JSON.stringify(
     messages.filter((message) => message.type === "yoink:reverify-retailer-lanes").at(-1)
   )), { type: "yoink:reverify-retailer-lanes", retailerIds: ["walmart"] });
-  assert.equal(walmartCheck.querySelector("[data-lane-status]")?.textContent, "Passed · no click");
+  assert.equal(walmartCheck.querySelector("[data-lane-status]")?.textContent, "1 of 1 passed · no click");
+
+  const automaticToggle = document.querySelector("#autoReverification") as HTMLInputElement;
+  const automaticButton = document.querySelector("#checkNeededStores") as HTMLButtonElement;
+  assert.equal(automaticToggle.checked, false);
+  automaticToggle.checked = true;
+  automaticToggle.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await turn();
+  assert.deepEqual(JSON.parse(JSON.stringify(
+    messages.filter((message) => message.type === "yoink:set-auto-reverification").at(-1)
+  )), { type: "yoink:set-auto-reverification", enabled: true });
+  assert.equal(document.querySelector("#automaticCheckResult")?.textContent, "Automatic daily checks enabled.");
+
+  click(window, automaticButton);
+  await turn();
+  await turn();
+  assert.equal(messages.filter((message) => message.type === "yoink:run-auto-reverification").length, 1);
+  assert.equal(document.querySelector("#automaticCheckResult")?.textContent,
+    "2 of 2 stores ready. No Add controls were clicked.");
 
   const deleteButton = document.querySelector("#deleteLocalData") as HTMLButtonElement;
   const cancelButton = document.querySelector("#cancelDeleteLocalData") as HTMLButtonElement;
@@ -245,7 +285,7 @@ test("a store-check plan that cannot load offers a retry", async () => {
 
   click(window, retry);
   await turn();
-  assert.equal(document.querySelector("#laneReadinessState")?.textContent, "2 of 2 ready");
+  assert.equal(document.querySelector("#laneReadinessState")?.textContent, "2 need checking");
   assert.equal(retry.hidden, true);
   assert.equal(document.querySelectorAll("#laneReadinessList .lane-readiness-row").length, 2);
   assert.equal(fixture.messages.filter((message) => message.type === "yoink:get-reverification-plan").length, 2);

@@ -132,6 +132,14 @@ function observationDiagnosticState(
       reasonCode: layout.securityChallenge ? "security_challenge" : `interactive_${layout.interactiveBlock}`
     };
   }
+  // Walmart may retain unrelated recommendation controls on an unavailable
+  // product page. Exact fulfillment unavailability is an expected stock stop,
+  // not evidence that the adapter itself is broken.
+  if (observation.retailerId === "walmart"
+    && observation.availability === "out_of_stock"
+    && !observation.addControlActionable) {
+    return { outcome: "rejected", failureStage: "availability_binding", reasonCode: "out_of_stock" };
+  }
   if (observation.selectedOffer?.selectionState === "unresolved") {
     return {
       outcome: "failed",

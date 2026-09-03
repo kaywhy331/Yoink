@@ -16,6 +16,17 @@ const DISNEY_PRODUCT_URL = "https://www.disneystore.com/dumbo-jeweled-figurine-4
 const PBANDAI_PRODUCT_URL = "https://p-bandai.com/us/item/N2884150001";
 const POKEMONCENTER_PRODUCT_URL = "https://www.pokemoncenter.com/product/10-10320-101/pokemon-tcg-mewtwo-and-mew-dna-premium-zip-binder";
 const WALMART_DRAW_URL = "https://www.walmart.com/shop/collectibles/draw";
+const WARM_READINESS_CONTROL = Object.freeze({
+  connected: true,
+  paired: true,
+  executionMode: "live",
+  actionsPaused: false,
+  chromeMutationEnabled: true,
+  targetAddExecutionEnabled: true,
+  walmartAddExecutionEnabled: true,
+  amazonAddExecutionEnabled: true,
+  bestbuyAddExecutionEnabled: true
+});
 
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -297,7 +308,7 @@ const AMAZON_OBSERVATION = {
   selectedOffer: selectedOffer("B0GYTRYV7P")
 };
 const WALMART_OBSERVATION = {
-  adapterVersion: "walmart-observer-v6",
+  adapterVersion: "walmart-observer-v7",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -549,6 +560,7 @@ interface HarnessOptions {
   watchLease?: Record<string, unknown>;
   watchObservationSignal?: boolean;
   reverificationPlan?: Record<string, unknown>;
+  reverificationPlanCompletesAfterTrial?: boolean;
   localDeletionResidual?: boolean;
   handoffReconciliationStatus?: "cart_ready" | "needs_you" | "closed";
   handoffReconciliationResponses?: Array<{
@@ -1316,7 +1328,11 @@ function harness(options: HarnessOptions = {}) {
         version: options.healthVersion ?? "0.5.0",
         executionMode: liveJob ? "live" : "shadow",
         actionsPaused: !liveJob,
-        chromeMutationEnabled: liveJob
+        chromeMutationEnabled: liveJob,
+        targetAddExecutionEnabled: liveJob,
+        walmartAddExecutionEnabled: liveJob,
+        amazonAddExecutionEnabled: liveJob,
+        bestBuyAddExecutionEnabled: liveJob
       }), { status: 200 });
     }
     if (url.endsWith("/extension/release")) {
@@ -1378,7 +1394,11 @@ function harness(options: HarnessOptions = {}) {
         controlPlane: {
           executionMode: liveJob ? "live" : "shadow",
           actionsPaused: !liveJob,
-          retailerMutationEnabled: liveJob
+          retailerMutationEnabled: liveJob,
+          targetAddExecutionEnabled: liveJob,
+          walmartAddExecutionEnabled: liveJob,
+          amazonAddExecutionEnabled: liveJob,
+          bestBuyAddExecutionEnabled: liveJob
         }
       }), { status: 200 });
     }
@@ -1394,7 +1414,28 @@ function harness(options: HarnessOptions = {}) {
         : { reason: "no_watch_items", item: null }), { status: 200 });
     }
     if (url.endsWith("/devices/self/readiness/reverification-plan")) {
-      return new Response(JSON.stringify({ plan: options.reverificationPlan ?? { createdAt: new Date().toISOString(), lanes: [] } }), { status: 200 });
+      const plan = structuredClone(options.reverificationPlan ?? { createdAt: new Date().toISOString(), lanes: [] }) as {
+        lanes?: Array<{ retailerId?: string; evidence?: Record<string, unknown> }>;
+      };
+      if (options.reverificationPlanCompletesAfterTrial) {
+        for (const lane of plan.lanes || []) {
+          const trialLane = lane.retailerId === "target" ? "target-add"
+            : lane.retailerId === "walmart" ? "walmart-add"
+              : lane.retailerId === "amazon" ? "amazon-add"
+                : lane.retailerId === "bestbuy" ? "bestbuy-add" : "";
+          if (trialLane && fetchCalls.some((entry) => entry.url.endsWith(`/devices/self/qualification-trials/${trialLane}`))) {
+            lane.evidence = {
+              ...(lane.evidence || {}),
+              liveEvidenceReady: true,
+              rehearsalReady: true,
+              qualificationEvidenceReady: true,
+              distinctSkuCount: 2,
+              checks: []
+            };
+          }
+        }
+      }
+      return new Response(JSON.stringify({ plan }), { status: 200 });
     }
     if (/\/devices\/self\/watch-queue\/watch_item_[a-f0-9]{32}\/observations$/.test(url)) {
       return new Response(JSON.stringify({
@@ -1677,7 +1718,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.walmartJob ? {
         contractVersion: 1,
-        adapterVersion: "walmart-add-v7",
+        adapterVersion: "walmart-add-v8",
         id: `job_walmart_fixture${jobSuffix}`,
         capabilityToken: "W".repeat(43),
         action: "add_to_cart",
@@ -1852,6 +1893,7 @@ function harness(options: HarnessOptions = {}) {
     serviceWorkerListeners,
     fireJobAlarm: () => alarmListener?.({ name: "yoink-jobs" }),
     fireHealthAlarm: () => alarmListener?.({ name: "yoink-health" }),
+    fireAutoReverificationAlarm: () => alarmListener?.({ name: "yoink-auto-reverification" }),
     clickNotification: (id: string) => notificationClickedListener?.(id),
     closeNotification: (id: string, byUser = true) => notificationClosedListener?.(id, byUser),
     fireStartup: () => startupListener?.(),
@@ -2699,7 +2741,7 @@ test("one domain-aware workflow inspects exactly once and routes all four guarde
   assert.equal(readOnly.injections.some((entry) => (entry.files as string[] | undefined)?.some((file) => file.includes("action.js"))), false);
 });
 
-test("the service worker captures observer-v6 evidence and rehearses Walmart add-v7 without clicking", async () => {
+test("the service worker captures observer-v7 evidence and rehearses Walmart add-v8 without clicking", async () => {
   const runtime = harness({ activeUrl: WALMART_PRODUCT_URL });
   const inspection = await runtime.send({ type: "yoink:inspect-retailer" });
   assert.equal(inspection.ok, true);
@@ -2712,13 +2754,13 @@ test("the service worker captures observer-v6 evidence and rehearses Walmart add
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/walmart"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "walmart-observer-v6");
+  assert.equal(observationBody.adapterVersion, "walmart-observer-v7");
   assert.equal(observationBody.retailerSku, "17354421975");
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/walmart-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "walmart-add-v7");
-  assert.equal(trialBody.observerVersion, "walmart-observer-v6");
+  assert.equal(trialBody.adapterVersion, "walmart-add-v8");
+  assert.equal(trialBody.observerVersion, "walmart-observer-v7");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("4499"), false);
   assert.equal(JSON.stringify(trialBody).includes(WALMART_PRODUCT_URL), false);
@@ -4314,7 +4356,7 @@ test("a stale context-menu label never authorizes inspection after the active pa
 
 test("warm readiness captures two inactive five-minute cart baselines without crossing an action boundary", async () => {
   const runtime = harness({ permission: true });
-  const result = await runtime.invokeBackground("runWarmReadinessCycle()");
+  const result = await runtime.invokeBackground(`runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)})`);
   assert.equal((result as { warmed?: boolean }).warmed, true);
   assert.equal((result as { warmedCount?: number }).warmedCount, 2);
   assert.equal((result as { attemptedCount?: number }).attemptedCount, 2);
@@ -4337,11 +4379,29 @@ test("warm readiness captures two inactive five-minute cart baselines without cr
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
 });
 
+test("paused readiness never opens or recreates retailer cart tabs", async () => {
+  const runtime = harness({ permission: true });
+  const health = await runtime.send({ type: "yoink:check-health" });
+  assert.equal((health.state as Record<string, unknown>).actionsPaused, true);
+  const before = runtime.tabCreates.length;
+  const result = await runtime.invokeBackground("runWarmReadinessCycle()");
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    warmed: false,
+    warmedCount: 0,
+    attemptedCount: 0,
+    reason: "actions_paused",
+    results: []
+  });
+  assert.equal(runtime.tabCreates.length, before);
+  assert.equal(runtime.fetchCalls.some((entry) =>
+    /\/devices\/self\/readiness\/(target|walmart|amazon|bestbuy)$/.test(entry.url)), false);
+});
+
 test("warm readiness rotates across every guarded retailer with bounded baselines", async () => {
   const runtime = harness({ permission: true });
   const cycles = [];
   for (let index = 0; index < 2; index += 1) {
-    cycles.push(await runtime.invokeBackground("runWarmReadinessCycle()"));
+    cycles.push(await runtime.invokeBackground(`runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)})`));
   }
   assert.equal(cycles.every((cycle) =>
     (cycle as { attemptedCount: number }).attemptedCount <= 2), true);
@@ -4380,8 +4440,8 @@ test("scheduled warm readiness waits behind an active job watch and coalesces ov
   const result = await runtime.invokeBackground(`(async () => {
     let releaseJobCycle;
     jobCyclePromise = new Promise((resolve) => { releaseJobCycle = resolve; });
-    const first = requestWarmReadinessCycle();
-    const second = requestWarmReadinessCycle();
+    const first = requestWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)});
+    const second = requestWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)});
     const coalesced = first === second;
     await Promise.resolve();
     jobCyclePromise = null;
@@ -4405,7 +4465,7 @@ test("scheduled warm readiness waits behind an active job watch and coalesces ov
 });
 
 test("the health alarm preserves its warm-readiness rotation when a job watch overlaps", async () => {
-  const runtime = harness({ permission: true });
+  const runtime = harness({ permission: true, liveJob: true });
   await runtime.invokeBackground(`Promise.resolve().then(() => {
     jobCyclePromise = new Promise((resolve) => { globalThis.__releaseWarmJobCycle = resolve; });
   })`);
@@ -4446,7 +4506,7 @@ test("warm readiness does not repeatedly replace a challenged retailer tab redir
   };
   runtime.storage.yoinkWarmReadinessCursorV1 = 3;
 
-  const result = await runtime.invokeBackground("runWarmReadinessCycle()");
+  const result = await runtime.invokeBackground(`runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)})`);
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
     warmed: true,
     warmedCount: 1,
@@ -4612,6 +4672,7 @@ test("drop-window observation is exact, read-only, bounded, and closes its inact
 test("one explicit request replays prior products across all four lanes without clicking", async () => {
   const runtime = harness({
     permission: true,
+    reverificationPlanCompletesAfterTrial: true,
     reverificationPlan: {
       createdAt: new Date().toISOString(),
       lanes: [
@@ -4646,6 +4707,101 @@ test("one explicit request replays prior products across all four lanes without 
   assert.equal(state.state, "complete");
   assert.equal(JSON.stringify(state).includes(TOKEN), false);
   assert.equal(JSON.stringify(state).includes("https://"), false);
+});
+
+test("opt-in automatic requalification checks only needed saved products and respects its daily cooldown", async () => {
+  const runtime = harness({
+    permission: true,
+    reverificationPlanCompletesAfterTrial: true,
+    reverificationPlan: {
+      createdAt: new Date().toISOString(),
+      lanes: [{
+        retailerId: "target",
+        expectedAdapterVersion: "target-add-v7",
+        qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
+        evidence: {
+          liveEvidenceReady: false,
+          rehearsalReady: false,
+          qualificationEvidenceReady: false,
+          distinctSkuCount: 1,
+          checks: []
+        },
+        automaticCheckNeeded: true,
+        candidates: [{
+          retailerSku: "1011483414",
+          canonicalUrl: PRODUCT_URL,
+          title: "Target qualification fixture",
+          trialObservedAt: new Date().toISOString(),
+          qualificationTypes: ["first_party_actionable", "shipping_actionable"],
+          currentObserverEvidence: false,
+          currentRehearsalPassed: false,
+          priorRehearsalPassed: true
+        }]
+      }]
+    }
+  });
+  const setting = await runtime.send({ type: "yoink:set-auto-reverification", enabled: true });
+  assert.equal((setting.settings as Record<string, unknown>).enabled, true);
+  await waitFor(() => runtime.fetchCalls.some((entry) =>
+    entry.url.endsWith("/devices/self/qualification-trials/target-add")),
+  "The enabled automatic check did not replay the saved Target product.");
+  await waitFor(() => (runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown>)?.state === "complete",
+    "The automatic check did not persist its completed result.");
+  const state = runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown>;
+  assert.equal(state.automatic, true);
+  assert.equal(runtime.tabRemovals.length, 1);
+  assert.equal(runtime.injections.some((entry) =>
+    String((entry.args as unknown[] | undefined)?.[0]).startsWith("commit")), false);
+  const trialCount = runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length;
+  runtime.fireAutoReverificationAlarm();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length, trialCount);
+});
+
+test("automatic requalification never prompts for new retailer access or opens an inaccessible store", async () => {
+  const runtime = harness({
+    permission: false,
+    reverificationPlan: {
+      createdAt: new Date().toISOString(),
+      lanes: [{
+        retailerId: "bestbuy",
+        expectedAdapterVersion: "bestbuy-add-v10",
+        qualification: { status: "missing", warning: "none", expiresAt: "" },
+        evidence: {
+          liveEvidenceReady: false,
+          rehearsalReady: false,
+          qualificationEvidenceReady: false,
+          distinctSkuCount: 1,
+          checks: []
+        },
+        automaticCheckNeeded: true,
+        candidates: [{
+          retailerSku: "6588149",
+          canonicalUrl: BESTBUY_PRODUCT_URL,
+          title: "Best Buy qualification fixture",
+          trialObservedAt: new Date().toISOString(),
+          qualificationTypes: ["first_party_actionable", "shipping_actionable"],
+          currentObserverEvidence: false,
+          currentRehearsalPassed: false,
+          priorRehearsalPassed: true
+        }]
+      }]
+    }
+  });
+  const response = await runtime.send({ type: "yoink:run-auto-reverification" });
+  assert.equal(response.ok, true);
+  assert.equal(response.started, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(response.results)), [{
+    retailerId: "bestbuy",
+    retailerSku: "6588149",
+    outcome: "access_missing",
+    reasonCode: "retailer_access_missing",
+    attemptedProductCount: 0,
+    passedProductCount: 0
+  }]);
+  assert.equal(runtime.permissionRequests.length, 0,
+    "background checks cannot turn a scheduled task into a permission prompt");
+  assert.equal(runtime.tabCreates.length, 0);
 });
 
 test("a service-worker restart resumes its persisted read-only watch lease", async () => {

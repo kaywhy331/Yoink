@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.19.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.19.1 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
@@ -16,6 +16,14 @@ one, and the exact saved fulfillment choice: Shipping by default or explicit
 Pickup. Amazon additionally requires a unique ASIN-bound offer token that
 remains only in page memory. Buy Now, checkout, and order submission are not
 authorized.
+
+Version 1.19.1 adds opt-in, bounded automatic store rechecks that reuse prior
+exact product evidence and in-stock catalog candidates without clicking Add to
+cart. It ranks current in-stock evidence ahead of repair candidates, excludes
+preorders from reusable in-stock coverage, and advances when one product is
+unavailable. Walmart
+observer/action versions 7/8 bind one primary action while ignoring a rendered
+sticky duplicate; duplicate primary actions remain ambiguous and fail closed.
 
 Version 1.19.0 ships the context-first action and interface pass. The Chrome
 popup derives one relevant action from current page, handoff, and health state;
@@ -2803,7 +2811,7 @@ page memory and are discarded; only readiness and a reason code are persisted.
 These observations never authorize mutation by themselves.
 
 Walmart Collectibles Draw uses a separate `walmart-draw-observer-v1` contract,
-not the normal Walmart product observer or `walmart-add-v7` qualification
+not the normal Walmart product observer or `walmart-add-v8` qualification
 dossier. From the exact `/shop/collectibles/draw` hub it records at most 24
 normalized cards and reconstructs canonical item URLs server-side. Draw cards
 are matched to private missions only by exact Walmart item ID. They are never
@@ -2868,7 +2876,7 @@ Target's qualified `target-add-v7` runner requires:
 - a durable `adding` receipt before one click;
 - an exact +1 delta afterward, with every baseline quantity unchanged.
 
-Walmart's separately gated `walmart-add-v7` runner applies the same immutable
+Walmart's separately gated `walmart-add-v8` runner applies the same immutable
 job, bounded-baseline, at-most-once, cart-delta, and recovery boundaries. In addition,
 the live buy box must exactly match Shipping or explicitly configured Pickup,
 Walmart must be the seller, and
@@ -2876,7 +2884,7 @@ virtual queues, memberships, location prompts, authentication, MFA, or security
 challenges stop the job before mutation. Walmart's current split layout can
 bind its locally serialized selected offer only when exact item ID, offer ID,
 new condition, USD price, internal Walmart seller, selected in-stock
-fulfillment, quantity one, and one primary Add control all agree.
+fulfillment, quantity one, and one unambiguous primary Add control all agree.
 
 Amazon's separately gated `amazon-add-v9` runner requires an exact ASIN,
 Amazon.com as first-party seller and an exact Shipping or explicitly configured

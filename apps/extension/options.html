@@ -21,7 +21,15 @@
     </section>
     <section aria-labelledby="laneReadinessTitle">
       <div class="heading"><div><p class="eyebrow">No-click checks</p><h2 id="laneReadinessTitle">Store checks</h2></div><span class="state-actions"><span id="laneReadinessState" class="state">Checking…</span><button class="button quiet" id="laneReadinessRetry" type="button" hidden>Retry</button></span></div>
-      <p>Check one store at a time using its prior passing product.</p>
+      <p>Reuse products that previously demonstrated the required store layout. These checks stop before Add to cart.</p>
+      <div class="automatic-checks">
+        <label for="autoReverification">
+          <input id="autoReverification" type="checkbox">
+          <span><strong>Automatically check stores that need it</strong><small>Runs at most once per day using already approved store access.</small></span>
+        </label>
+        <button class="button quiet" id="checkNeededStores" type="button">Check needed stores</button>
+      </div>
+      <p class="result" id="automaticCheckResult" role="status" aria-live="polite"></p>
       <div class="lane-readiness-head" aria-hidden="true"><span>Store</span><span>Status</span><span>Action</span></div>
       <div id="laneReadinessList" class="lane-readiness-list"></div>
     </section>

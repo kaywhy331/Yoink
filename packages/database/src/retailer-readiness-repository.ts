@@ -16,6 +16,7 @@ import { cleanText } from "../../domain/src/normalize.js";
 import { AuditRepository } from "./audit-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
+import { ShadowObservationRepository } from "./shadow-observation-repository.js";
 
 const ACTION_RETAILERS = ["target", "walmart", "amazon", "bestbuy"] as const;
 type ActionRetailer = typeof ACTION_RETAILERS[number];
@@ -66,11 +67,38 @@ interface QualificationRow {
   expiresAt: string;
 }
 
-interface CandidateRow {
+export type RequalificationCoverage =
+  | "first_party_actionable"
+  | "shipping_actionable"
+  | "pickup_actionable"
+  | "offer_route_ready"
+  | "pre_click_rehearsal";
+
+export interface RequalificationCandidate {
   retailerSku: string;
   canonicalUrl: string;
   title: string;
   trialObservedAt: string;
+  source: "evidence_history" | "repair_queue" | "catalog";
+  qualificationTypes: RequalificationCoverage[];
+  currentObserverEvidence: boolean;
+  currentRehearsalPassed: boolean;
+  priorRehearsalPassed: boolean;
+  repairableObserverFailure: boolean;
+}
+
+export interface RequalificationEvidence {
+  liveEvidenceReady: boolean;
+  rehearsalReady: boolean;
+  qualificationEvidenceReady: boolean;
+  distinctSkuCount: number;
+  checks: Array<{
+    id: string;
+    observed: number;
+    required: number;
+    requiredForQualification: boolean;
+    met: boolean;
+  }>;
 }
 
 export interface RetailerLaneReadiness {
@@ -86,7 +114,10 @@ export interface RetailerLaneReadiness {
     warning: "none" | "expiring" | "expired" | "version_changed";
   };
   session: ReadinessRow | null;
-  candidate: CandidateRow | null;
+  candidate: RequalificationCandidate | null;
+  candidates: RequalificationCandidate[];
+  evidence: RequalificationEvidence;
+  automaticCheckNeeded: boolean;
   checklist: Array<{ id: string; ready: boolean; label: string }>;
   readyForGuardedAdd: boolean;
   readyForWarmObservation: boolean;
@@ -225,18 +256,9 @@ export class RetailerReadinessRepository {
       scope.tenantId, scope.userId, retailerId
     );
     const session = this.session(retailerId);
-    const candidate = this.db.get<CandidateRow>(
-      `SELECT trial.retailer_sku AS retailerSku, listing.canonical_url AS canonicalUrl,
-              variant.title, trial.observed_at AS trialObservedAt
-       FROM retailer_adapter_trials trial
-       JOIN listings listing ON listing.retailer_id = trial.retailer_id
-         AND listing.retailer_sku = trial.retailer_sku
-       JOIN variants variant ON variant.id = listing.variant_id
-       WHERE trial.tenant_id = ? AND trial.user_id = ? AND trial.retailer_id = ?
-         AND trial.outcome = 'passed'
-       ORDER BY trial.received_at DESC, trial.id DESC LIMIT 1`,
-      scope.tenantId, scope.userId, retailerId
-    ) ?? null;
+    const candidates = this.requalificationCandidates(retailerId, versions, now);
+    const candidate = candidates[0] ?? null;
+    const evidence = this.qualificationEvidence(retailerId, now);
     const expirationTime = qualification?.expiresAt
       ? new Date(qualification.expiresAt).getTime()
       : qualification?.qualifiedAt
@@ -251,6 +273,11 @@ export class RetailerReadinessRepository {
         : Number.isFinite(expirationTime) && expirationTime <= now ? "expired"
           : Number.isFinite(expirationTime) && expirationTime <= now + QUALIFICATION_WARNING_MS ? "expiring"
             : "none";
+    const automaticCheckNeeded = candidates.length > 0 && (
+      warning === "expiring"
+      || ((!qualified || warning === "expired" || warning === "version_changed")
+        && !evidence.qualificationEvidenceReady)
+    );
     const activeDevice = Boolean(this.db.get<{ id: string }>(
       `SELECT id FROM extension_devices
        WHERE tenant_id = ? AND user_id = ? AND status = 'active' AND last_seen_at >= ?
@@ -307,6 +334,9 @@ export class RetailerReadinessRepository {
       },
       session,
       candidate,
+      candidates,
+      evidence,
+      automaticCheckNeeded,
       checklist,
       readyForGuardedAdd: qualified && activeDevice && !sessionBlocksAdd,
       readyForWarmObservation: activeDevice && signedIn
@@ -315,6 +345,197 @@ export class RetailerReadinessRepository {
 
   reverifyPlan(now = Date.now()): { createdAt: string; lanes: RetailerLaneReadiness[] } {
     return { createdAt: nowIso(now), lanes: this.lanes(now) };
+  }
+
+  private qualificationEvidence(retailerId: ActionRetailer, now: number): RequalificationEvidence {
+    const observations = new ShadowObservationRepository(this.db);
+    const readiness = retailerId === "target" ? observations.targetQualificationReadiness(now)
+      : retailerId === "walmart" ? observations.walmartQualificationReadiness(now)
+        : retailerId === "amazon" ? observations.amazonQualificationReadiness(now)
+          : observations.bestBuyQualificationReadiness(now);
+    return {
+      liveEvidenceReady: readiness.liveEvidenceReady,
+      rehearsalReady: readiness.rehearsalReady,
+      qualificationEvidenceReady: readiness.qualificationEvidenceReady,
+      distinctSkuCount: readiness.distinctSkuCount,
+      checks: readiness.checks.map((check) => ({
+        id: check.id,
+        observed: check.observed,
+        required: check.required,
+        requiredForQualification: check.requiredForQualification,
+        met: check.met
+      }))
+    };
+  }
+
+  private requalificationCandidates(
+    retailerId: ActionRetailer,
+    versions: { add: string; observer: string },
+    now: number
+  ): RequalificationCandidate[] {
+    const scope = currentRequestScope();
+    const cutoff = nowIso(now - QUALIFICATION_LIFETIME_MS);
+    const rows = this.db.all<{
+      retailerSku: string;
+      canonicalUrl: string;
+      title: string;
+      trialObservedAt: string;
+      firstPartyActionable: number;
+      shippingActionable: number;
+      pickupActionable: number;
+      offerRouteReady: number;
+      currentObserverEvidence: number;
+      currentRehearsalPassed: number;
+      priorRehearsalPassed: number;
+      repairableObserverFailure: number;
+    }>(
+      `WITH candidate_history AS (
+       SELECT observation.retailer_sku AS retailerSku,
+              MAX(observation.canonical_url) AS canonicalUrl,
+              COALESCE(MAX(variant.title), '') AS title,
+              MAX(observation.observed_at) AS trialObservedAt,
+              MAX(CASE WHEN observation.observation_state = 'actionable_candidate'
+                         AND observation.availability = 'in_stock'
+                         AND observation.seller_type = 'first_party'
+                         AND observation.add_control_actionable = 1 THEN 1 ELSE 0 END) AS firstPartyActionable,
+              MAX(CASE WHEN observation.observation_state = 'actionable_candidate'
+                         AND observation.availability = 'in_stock'
+                         AND observation.fulfillment = 'shipping'
+                         AND observation.add_control_actionable = 1 THEN 1 ELSE 0 END) AS shippingActionable,
+              MAX(CASE WHEN observation.observation_state = 'actionable_candidate'
+                         AND observation.availability = 'in_stock'
+                         AND observation.fulfillment = 'pickup'
+                         AND observation.add_control_actionable = 1 THEN 1 ELSE 0 END) AS pickupActionable,
+              MAX(CASE WHEN observation.observation_state = 'actionable_candidate'
+                         AND observation.availability = 'in_stock'
+                         AND observation.purchase_route_ready = 1 THEN 1 ELSE 0 END) AS offerRouteReady,
+              MAX(CASE WHEN observation.adapter_version = ?
+                         AND observation.observation_state = 'actionable_candidate'
+                         AND observation.availability = 'in_stock'
+                         AND observation.observed_at >= ? THEN 1 ELSE 0 END) AS currentObserverEvidence,
+              MAX(CASE WHEN trial.outcome = 'passed' AND trial.adapter_version = ?
+                         AND trial.observed_at >= ? THEN 1 ELSE 0 END) AS currentRehearsalPassed,
+              MAX(CASE WHEN trial.outcome = 'passed' THEN 1 ELSE 0 END) AS priorRehearsalPassed,
+              CASE WHEN (
+                SELECT diagnostic.outcome
+                FROM retailer_adapter_diagnostics diagnostic
+                WHERE diagnostic.tenant_id = observation.tenant_id
+                  AND diagnostic.user_id = observation.user_id
+                  AND diagnostic.retailer_id = observation.retailer_id
+                  AND diagnostic.retailer_sku = observation.retailer_sku
+                  AND diagnostic.operation = 'observe'
+                  AND diagnostic.received_at >= ?
+                ORDER BY diagnostic.received_at DESC, diagnostic.id DESC
+                LIMIT 1
+              ) = 'failed' THEN 1 ELSE 0 END AS repairableObserverFailure
+       FROM retailer_shadow_observations observation
+       LEFT JOIN listings listing ON listing.retailer_id = observation.retailer_id
+         AND listing.retailer_sku = observation.retailer_sku
+       LEFT JOIN variants variant ON variant.id = listing.variant_id
+       LEFT JOIN retailer_adapter_trials trial
+         ON trial.shadow_observation_id = observation.id
+        AND trial.tenant_id = observation.tenant_id
+        AND trial.user_id = observation.user_id
+       WHERE observation.tenant_id = ? AND observation.user_id = ?
+         AND observation.retailer_id = ?
+         AND observation.canonical_url <> ''
+       GROUP BY observation.retailer_sku
+       )
+       SELECT * FROM candidate_history
+       WHERE priorRehearsalPassed = 1
+          OR firstPartyActionable = 1
+          OR shippingActionable = 1
+          OR pickupActionable = 1
+          OR repairableObserverFailure = 1
+       ORDER BY currentRehearsalPassed DESC,
+                currentObserverEvidence DESC,
+                priorRehearsalPassed DESC,
+                shippingActionable DESC,
+                firstPartyActionable DESC,
+                repairableObserverFailure DESC,
+                trialObservedAt DESC,
+                retailerSku
+       LIMIT 8`,
+      versions.observer,
+      cutoff,
+      versions.add,
+      cutoff,
+      cutoff,
+      scope.tenantId,
+      scope.userId,
+      retailerId
+    );
+    const candidates: RequalificationCandidate[] = rows.map((row) => ({
+      retailerSku: row.retailerSku,
+      canonicalUrl: row.canonicalUrl,
+      title: row.title,
+      trialObservedAt: row.trialObservedAt,
+      source: row.repairableObserverFailure === 1
+        && row.firstPartyActionable !== 1
+        && row.shippingActionable !== 1
+        && row.pickupActionable !== 1
+        && row.priorRehearsalPassed !== 1
+        ? "repair_queue" : "evidence_history",
+      qualificationTypes: [
+        ...(row.firstPartyActionable === 1 ? ["first_party_actionable" as const] : []),
+        ...(row.shippingActionable === 1 ? ["shipping_actionable" as const] : []),
+        ...(row.pickupActionable === 1 ? ["pickup_actionable" as const] : []),
+        ...(row.offerRouteReady === 1 ? ["offer_route_ready" as const] : []),
+        ...(row.priorRehearsalPassed === 1 ? ["pre_click_rehearsal" as const] : [])
+      ],
+      currentObserverEvidence: row.currentObserverEvidence === 1,
+      currentRehearsalPassed: row.currentRehearsalPassed === 1,
+      priorRehearsalPassed: row.priorRehearsalPassed === 1,
+      repairableObserverFailure: row.repairableObserverFailure === 1
+    }));
+    if (candidates.length >= 8) return candidates;
+    const catalogRows = this.db.all<{
+      retailerSku: string;
+      canonicalUrl: string;
+      title: string;
+      updatedAt: string;
+      userRelevant: number;
+    }>(
+      `SELECT listing.retailer_sku AS retailerSku,
+              listing.canonical_url AS canonicalUrl,
+              variant.title,
+              listing.updated_at AS updatedAt,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM mission_targets target
+                JOIN missions mission ON mission.id = target.mission_id
+                WHERE target.listing_id = listing.id
+                  AND target.enabled = 1
+                  AND mission.tenant_id = ? AND mission.user_id = ?
+                  AND mission.status = 'active'
+              ) THEN 1 ELSE 0 END AS userRelevant
+       FROM listings listing
+       JOIN variants variant ON variant.id = listing.variant_id
+       WHERE listing.retailer_id = ?
+         AND listing.status = 'in_stock'
+         AND listing.canonical_url <> ''
+       ORDER BY userRelevant DESC, listing.updated_at DESC, listing.retailer_sku
+       LIMIT 16`,
+      scope.tenantId,
+      scope.userId,
+      retailerId
+    );
+    for (const row of catalogRows) {
+      if (candidates.length >= 8) break;
+      if (candidates.some((candidate) => candidate.retailerSku === row.retailerSku)) continue;
+      candidates.push({
+        retailerSku: row.retailerSku,
+        canonicalUrl: row.canonicalUrl,
+        title: row.title,
+        trialObservedAt: row.updatedAt,
+        source: "catalog",
+        qualificationTypes: [],
+        currentObserverEvidence: false,
+        currentRehearsalPassed: false,
+        priorRehearsalPassed: false,
+        repairableObserverFailure: false
+      });
+    }
+    return candidates;
   }
 
   retireLane(retailerValue: string, reason: unknown, now = Date.now()): RetailerLaneReadiness {

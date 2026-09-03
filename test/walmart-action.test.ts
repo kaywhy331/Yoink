@@ -120,7 +120,7 @@ test("Walmart rehearsal reaches the exact no-click boundary and virtual queues f
   });
 });
 
-test("Walmart v7 rehearses a split current page from its exact selected offer state", () => {
+test("Walmart v8 rehearses a split current page from its exact selected offer state", () => {
   const url = "https://www.walmart.com/ip/fixture/20895014480";
   const document = structuredProduct();
   let clicks = 0;
@@ -190,7 +190,7 @@ test("Walmart safely self-heals unique control and price selector drift", () => 
   assert.equal(prepareWalmartAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Walmart v7 accepts exact shipping or explicit pickup quantity-one jobs", () => {
+test("Walmart v8 accepts exact shipping or explicit pickup quantity-one jobs", () => {
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");

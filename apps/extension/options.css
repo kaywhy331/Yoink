@@ -143,6 +143,12 @@ section > p { margin: 12px 0 16px; color: var(--color-muted); line-height: 1.55;
 .state { display: inline-flex; align-items: center; min-height: 30px; border: 1px solid var(--color-rule); border-radius: 999px; padding: 4px 11px; color: var(--color-muted); background: var(--color-surface-raised); font-size: 12px; font-weight: 750; white-space: nowrap; }
 .state-actions { display: inline-flex; align-items: center; gap: 10px; }
 .state-actions .button.quiet { margin-top: 0; min-height: 34px; padding: 0 12px; }
+.automatic-checks { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 0; border-top: 1px solid var(--color-rule); }
+.automatic-checks label { display: flex; min-width: 0; align-items: center; gap: 12px; cursor: pointer; }
+.automatic-checks input { width: 18px; height: 18px; margin: 0; accent-color: var(--color-accent); }
+.automatic-checks label > span { display: grid; gap: 3px; }
+.automatic-checks small { color: var(--color-subtle); font-size: 12px; }
+.automatic-checks + .result { min-height: 0; margin: 0 0 12px; }
 .permission-list { display: grid; margin-top: 4px; }
 .permission-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 56px; border-top: 1px solid var(--color-rule); }
 .permission-row:first-child { border-top: 0; }
@@ -178,6 +184,8 @@ section > p { margin: 12px 0 16px; color: var(--color-muted); line-height: 1.55;
 a:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
 @media (max-width: 620px) {
   main { margin-top: 32px; }
+  .automatic-checks { align-items: stretch; flex-direction: column; }
+  .automatic-checks .button { width: 100%; }
   .lane-readiness-head { display: none; }
   .lane-readiness-row { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 0; }
   .lane-status { grid-column: 1; }

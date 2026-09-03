@@ -1048,6 +1048,7 @@ interface SelectedRetailerControl {
     unitPriceCents: number;
     sellerName: string;
     sellerType: SellerType;
+    exactSelectionBound?: boolean;
   };
 }
 
@@ -1085,6 +1086,14 @@ const WALMART_MERCHANDISING_SCOPE = [
   "[data-testid*='sponsored' i]",
   "[class*='carousel' i]",
   "[class*='related-products' i]"
+].join(", ");
+
+const WALMART_SECONDARY_ACTION_SCOPE = [
+  "[data-testid*='sticky' i]",
+  "[data-automation-id*='sticky' i]",
+  "[class*='sticky' i]",
+  "[class*='floating' i]",
+  "[class*='mobile-drawer' i]"
 ].join(", ");
 
 const AMAZON_MERCHANDISING_SCOPE = [
@@ -1531,6 +1540,20 @@ function walmartQuantityOne(root: ParentNode): boolean {
   return controls.every((control) => String((control as HTMLInputElement | HTMLSelectElement).value || "").trim() === "1");
 }
 
+function walmartPrimaryActionControls(
+  document: Document,
+  retailer: RetailerObserverConfig
+): Element[] {
+  const rendered = candidateControls(document, retailer)
+    .filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE))
+    .filter(renderedVisible);
+  const nonSecondary = rendered.filter((control) => !control.closest(WALMART_SECONDARY_ACTION_SCOPE));
+  const primary = nonSecondary.filter((control) => Boolean(control.closest(WALMART_PRIMARY_SCOPE)));
+  if (primary.length > 0) return primary;
+  if (nonSecondary.length > 0) return nonSecondary;
+  return rendered.length === 1 ? rendered : [];
+}
+
 function walmartStructuredOffer(
   document: Document,
   retailer: RetailerObserverConfig,
@@ -1596,9 +1619,7 @@ function walmartStructuredOffer(
     if (limit !== null && limit !== undefined && (!Number.isFinite(Number(limit)) || Number(limit) < 1)) return null;
   }
 
-  const controls = candidateControls(document, retailer).filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE));
-  const primary = controls.filter((control) => Boolean(control.closest(WALMART_PRIMARY_SCOPE)));
-  const pool = primary.length > 0 ? primary : controls;
+  const pool = walmartPrimaryActionControls(document, retailer);
   if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document)) return null;
   const control = pool[0];
   const offerRoot = control.closest(WALMART_PRIMARY_SCOPE) || control.closest("main") || control.parentElement;
@@ -1610,7 +1631,8 @@ function walmartStructuredOffer(
     structuredOffer: {
       unitPriceCents,
       sellerName: "Walmart",
-      sellerType: "first_party"
+      sellerType: "first_party",
+      exactSelectionBound: true
     }
   };
 }
@@ -1652,7 +1674,7 @@ function selectedWalmartControl(
   requiredFulfillment: Fulfillment
 ): SelectedRetailerControl {
   const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-  const scoped = candidateControls(document, retailer)
+  const scoped = walmartPrimaryActionControls(document, retailer)
     .map((control) => walmartOfferScope(control, retailer, expectedSku))
     .filter((candidate): candidate is WalmartScopedControl => Boolean(candidate));
   const exact = scoped.filter((candidate) => candidate.identityBound);
@@ -1926,8 +1948,13 @@ function explicitlyUnavailableOffer(document: Document): boolean {
   const selectors = [
     "[data-testid*='availability' i]",
     "[data-automation-id*='availability' i]",
+    "[data-testid*='fulfillment' i]",
+    "[data-automation-id*='fulfillment' i]",
+    "[data-testid*='shipping' i]",
+    "[data-automation-id*='shipping' i]",
     "[data-testid*='out-of-stock' i]",
     "[data-automation-id*='out-of-stock' i]",
+    "[aria-label*='out of stock' i]",
     "[itemprop='availability']",
     "button[disabled]"
   ];
@@ -2005,6 +2032,14 @@ export function observeRetailerSelectedOfferScope(
   const pageSku = extractRetailerSku(retailerId, urlValue);
   if (!pageSku || pageSku !== expectedSku) throw new Error("The exact retailer listing identity is unavailable.");
   const selected = selectedControl(document, CONFIGS[retailerId], requiredFulfillment, expectedSku);
+  if (retailerId === "walmart" && selected.structuredOffer?.exactSelectionBound === true) {
+    return {
+      schemaVersion: 1 as const,
+      selectionState: "exact" as const,
+      childOfferKey: pageSku,
+      attributes: {}
+    };
+  }
   return selectedOfferScope(
     document,
     retailerId,

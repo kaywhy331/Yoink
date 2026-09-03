@@ -10,6 +10,13 @@ const RETAILER_NAMES = {
   booksamillion: "Books-A-Million", fanatics: "Fanatics", kohls: "Kohl's",
   macys: "Macy's", pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center"
 };
+const COVERAGE_NAMES = {
+  first_party_actionable: "first-party",
+  shipping_actionable: "shipping",
+  pickup_actionable: "pickup",
+  offer_route_ready: "exact offer",
+  pre_click_rehearsal: "no-click passed"
+};
 const $ = (selector) => document.querySelector(selector);
 
 async function renderHealth() {
@@ -67,11 +74,13 @@ async function renderPermissions() {
 }
 
 function laneStatus(lane) {
-  if (!lane.candidate) return "Needs a prior passing product";
+  if (!lane.candidate) return "Needs a candidate product";
   const warning = String(lane.qualification?.warning || "none");
   if (warning === "version_changed") return "Version changed";
   if (warning === "expired") return "Expired";
   if (warning === "expiring") return "Expiring soon";
+  if (lane.evidence?.qualificationEvidenceReady === true
+    && lane.qualification?.status !== "qualified") return "Ready to enable";
   return lane.qualification?.status === "qualified" ? "Ready" : "Ready to check";
 }
 
@@ -101,7 +110,9 @@ async function reverifyStore(lane, button, status) {
     const result = response.results.find((item) => item.retailerId === retailerId);
     if (!result) throw new Error(`${storeName} did not return a check result.`);
     status.textContent = result.outcome === "passed"
-      ? "Passed · no click"
+      ? result.attemptedProductCount > 0
+        ? `${result.passedProductCount} of ${result.attemptedProductCount} passed · no click`
+        : "Evidence already ready"
       : `Stopped · ${resultReason(result.reasonCode || result.outcome)}`;
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : `${storeName} could not be checked.`;
@@ -119,7 +130,7 @@ async function renderReverificationPlan() {
     $("#laneReadinessState").textContent = "Unavailable";
     $("#laneReadinessList").replaceChildren();
     retry.hidden = false;
-    return;
+    return null;
   }
   const rows = response.plan.lanes.map((lane) => {
     const row = document.createElement("div");
@@ -130,9 +141,14 @@ async function renderReverificationPlan() {
     const storeName = RETAILER_NAMES[lane.retailerId] || lane.retailerId;
     name.textContent = storeName;
     const detail = document.createElement("small");
-    detail.textContent = lane.candidate
-      ? `Check ${storeName} again without adding to cart. Prior product ${lane.candidate.retailerSku}.`
-      : `Add a passing ${storeName} product before checking again.`;
+    const candidates = Array.isArray(lane.candidates) && lane.candidates.length
+      ? lane.candidates : lane.candidate ? [lane.candidate] : [];
+    const coverage = [...new Set(candidates.flatMap((candidate) =>
+      Array.isArray(candidate.qualificationTypes) ? candidate.qualificationTypes : []))]
+      .map((item) => COVERAGE_NAMES[item]).filter(Boolean).slice(0, 3);
+    detail.textContent = candidates.length
+      ? `${candidates.length} candidate product${candidates.length === 1 ? "" : "s"}${coverage.length ? ` · ${coverage.join(" · ")}` : ""}.`
+      : `No safe ${storeName} candidate is available yet.`;
     identity.append(name, detail);
     const status = document.createElement("span");
     status.className = "lane-status";
@@ -145,15 +161,77 @@ async function renderReverificationPlan() {
     button.type = "button";
     button.textContent = "Check again";
     button.disabled = !lane.candidate;
-    if (!lane.candidate) button.title = "A prior passing product is needed.";
+    if (!lane.candidate) button.title = "An eligible candidate product is needed.";
     button.addEventListener("click", () => reverifyStore(lane, button, status));
     row.append(identity, status, button);
     return row;
   });
   $("#laneReadinessList").replaceChildren(...rows);
   const available = response.plan.lanes.filter((lane) => lane.candidate);
-  $("#laneReadinessState").textContent = `${available.length} of ${response.plan.lanes.length} ready`;
+  const needed = response.plan.lanes.filter((lane) => lane.automaticCheckNeeded === true);
+  $("#laneReadinessState").textContent = needed.length
+    ? `${needed.length} need checking`
+    : `${available.length} stores remembered`;
+  return response.plan;
 }
+
+function automaticResultText(response) {
+  if (!response) return "Automatic checks are unavailable.";
+  if (response.started === false && response.reason === "no_store_checks_needed") return "No stores currently need a check.";
+  if (response.started === false && response.reason === "automatic_check_cooldown") return "The daily automatic check already ran.";
+  const results = Array.isArray(response.results) ? response.results : [];
+  if (!results.length) return response.state?.updatedAt ? `Last checked ${new Date(response.state.updatedAt).toLocaleString()}.` : "";
+  const passed = results.filter((item) => item.outcome === "passed").length;
+  const access = results.filter((item) => item.outcome === "access_missing").length;
+  return `${passed} of ${results.length} stores ready${access ? ` · allow access for ${access}` : ""}. No Add controls were clicked.`;
+}
+
+async function renderAutomaticReverification() {
+  const toggle = $("#autoReverification");
+  const button = $("#checkNeededStores");
+  const result = $("#automaticCheckResult");
+  const response = await chrome.runtime.sendMessage({ type: "yoink:get-auto-reverification" }).catch(() => null);
+  if (!response?.ok) {
+    toggle.disabled = true;
+    button.disabled = true;
+    result.textContent = "Automatic checks are unavailable.";
+    return;
+  }
+  toggle.disabled = false;
+  toggle.checked = response.settings?.enabled === true;
+  result.textContent = automaticResultText(response);
+}
+
+$("#autoReverification").addEventListener("change", async (event) => {
+  const toggle = event.currentTarget;
+  toggle.disabled = true;
+  $("#automaticCheckResult").textContent = toggle.checked ? "Enabling automatic checks…" : "Turning automatic checks off…";
+  const response = await chrome.runtime.sendMessage({
+    type: "yoink:set-auto-reverification",
+    enabled: toggle.checked
+  }).catch(() => null);
+  if (!response?.ok) toggle.checked = !toggle.checked;
+  $("#automaticCheckResult").textContent = response?.ok
+    ? toggle.checked ? "Automatic daily checks enabled." : "Automatic checks off."
+    : response?.message || "The setting could not be changed.";
+  toggle.disabled = false;
+});
+
+$("#checkNeededStores").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  $("#automaticCheckResult").textContent = "Checking candidate products without adding…";
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "yoink:run-auto-reverification" });
+    if (!response?.ok) throw new Error(response?.message || "Store checks could not run.");
+    $("#automaticCheckResult").textContent = automaticResultText(response);
+    await renderReverificationPlan();
+  } catch (error) {
+    $("#automaticCheckResult").textContent = error instanceof Error ? error.message : "Store checks could not run.";
+  } finally {
+    button.disabled = false;
+  }
+});
 
 $("#openYoink").href = PopupState.appDestinationUrl(runtime.appOrigin, "dashboard");
 $("#laneReadinessRetry").addEventListener("click", () => { void renderReverificationPlan(); });
@@ -218,4 +296,4 @@ document.addEventListener("keydown", (event) => {
   $("#deletionResult").textContent = "";
 });
 
-await Promise.all([renderHealth(), renderPermissions(), renderReverificationPlan()]);
+await Promise.all([renderHealth(), renderPermissions(), renderReverificationPlan(), renderAutomaticReverification()]);
