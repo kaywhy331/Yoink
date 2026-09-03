@@ -58,6 +58,47 @@ test("the browser bundle executes the shared Target observer and returns only th
   assert.doesNotMatch(source, /\.click\s*\(|dispatchEvent\s*\(|\bfetch\s*\(/);
 });
 
+test("the Target bundle emits sanitized adapter diagnostics and identifies a missing price binding", () => {
+  const html = readFileSync(join(ROOT, "test", "fixtures", "target", "product-first-party.html"), "utf8");
+  const dom = new JSDOM(html, { url: PRODUCT_URL });
+  const source = readFileSync(join(ROOT, "apps", "extension", "target-shadow.js"), "utf8");
+  const context = createContext({
+    document: dom.window.document,
+    location: dom.window.location,
+    URL: dom.window.URL,
+    Date,
+    Set,
+    Object,
+    String,
+    Number,
+    RegExp,
+    Array,
+    Boolean,
+    Math
+  });
+  runInContext(source, context);
+  const healthy = runInContext(
+    "YoinkTargetShadow.collectTargetShadowAttempt(document, location.href)",
+    context
+  ) as { diagnostic: Record<string, unknown> };
+  assert.equal(healthy.diagnostic.outcome, "passed");
+  assert.equal(healthy.diagnostic.failureStage, "complete");
+  assert.equal(healthy.diagnostic.reasonCode, "verified");
+  assert.equal(JSON.stringify(healthy).includes(PRODUCT_URL), false);
+  assert.equal(JSON.stringify(healthy).includes("Fixture Collectible Product"), false);
+
+  dom.window.document.querySelector("[data-test='product-price']")?.remove();
+  const blocked = runInContext(
+    "YoinkTargetShadow.collectTargetShadowAttempt(document, location.href)",
+    context
+  ) as { diagnostic: Record<string, unknown> };
+  assert.equal(blocked.diagnostic.outcome, "failed");
+  assert.equal(blocked.diagnostic.failureStage, "price_binding");
+  assert.equal(blocked.diagnostic.reasonCode, "price_binding_missing");
+  assert.equal(JSON.stringify(blocked).includes(PRODUCT_URL), false);
+  assert.equal(JSON.stringify(blocked).includes("Fixture Collectible Product"), false);
+});
+
 test("the Target shadow reports an actionable remote path when modern Target defaults to pickup", () => {
   const html = readFileSync(join(ROOT, "test", "fixtures", "target", "product-modern-pickup-selected.html"), "utf8");
   const dom = new JSDOM(html, { url: PRODUCT_URL });

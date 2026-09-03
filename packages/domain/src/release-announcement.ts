@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-19-2-preorder-adds",
-  version: "1.19.2",
-  publishedAt: "2026-09-03T17:41:37.000Z",
-  title: "Preorders use the cart path",
-  summary: "An actionable first-party preorder now qualifies and runs through the same add-to-cart checks as an in-stock offer.",
+  id: "yoink-1-19-3-target-qualification-incidents",
+  version: "1.19.3",
+  publishedAt: "2026-09-03T19:34:30.000Z",
+  title: "Target store-check issues reach Incidents",
+  summary: "Target page and store-check failures now use the same privacy-bounded incident pipeline as the other supported stores.",
   highlights: [
-    "Best Buy add v11 removes the preorder-only rejection while retaining exact SKU, seller, price, fulfillment, and control checks.",
-    "Optional automatic store checks can reuse actionable preorder evidence and preorder catalog candidates without clicking the store control.",
-    "Unavailable products, marketplace sellers, ambiguous controls, checkout, and order submission remain blocked."
+    "Target inspection reports missing price, seller, fulfillment, offer, and Add-to-Cart bindings for operator repair.",
+    "Brief page hydration is retried before a Target layout issue is recorded, reducing transient false alarms.",
+    "Diagnostics retain only bounded structural evidence; product URLs, page text, account state, and observed offer values remain excluded."
   ],
   docsUrl: "/docs"
 });

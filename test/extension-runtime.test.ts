@@ -422,7 +422,7 @@ const WALMART_DRAW_SCAN = {
   }))
 };
 
-function diagnosticFor(observation: typeof AMAZON_OBSERVATION | typeof WALMART_OBSERVATION | typeof BESTBUY_OBSERVATION | typeof DISNEY_OBSERVATION | typeof PBANDAI_OBSERVATION | typeof POKEMONCENTER_OBSERVATION) {
+function diagnosticFor(observation: typeof OBSERVATION | typeof AMAZON_OBSERVATION | typeof WALMART_OBSERVATION | typeof BESTBUY_OBSERVATION | typeof DISNEY_OBSERVATION | typeof PBANDAI_OBSERVATION | typeof POKEMONCENTER_OBSERVATION) {
   const amazon = observation.retailerId === "amazon";
   return {
     contractVersion: 1,
@@ -570,6 +570,7 @@ interface HarnessOptions {
   retailerSessionState?: "ready" | "signed_out" | "challenged" | "unknown";
   retailerSessionStates?: Array<"ready" | "signed_out" | "challenged" | "unknown">;
   bestBuyPreorder?: boolean;
+  targetPriceMissing?: boolean;
 }
 
 async function waitFor(
@@ -928,6 +929,28 @@ function harness(options: HarnessOptions = {}) {
         }
         if (args?.[0] === "yoink_post_click_settle_clear") {
           return [{ frameId: 0, result: true }];
+        }
+        if (args?.[0] === "collectTargetShadowAttempt") {
+          const observation = options.targetPriceMissing
+            ? { ...OBSERVATION, unitPriceCents: null }
+            : OBSERVATION;
+          const diagnostic = options.targetPriceMissing
+            ? {
+              ...diagnosticFor(OBSERVATION),
+              outcome: "failed",
+              failureStage: "price_binding",
+              reasonCode: "price_binding_missing",
+              layout: { ...diagnosticFor(OBSERVATION).layout, priceCandidateCount: 0 }
+            }
+            : diagnosticFor(OBSERVATION);
+          return [{ frameId: 0, result: { ok: true, observation, diagnostic } }];
+        }
+        if (args?.[0] === "collectOperationDiagnostic") {
+          const observation = args[1] === "target" ? OBSERVATION
+            : args[1] === "walmart" ? WALMART_OBSERVATION
+              : args[1] === "bestbuy" ? BESTBUY_OBSERVATION
+                : AMAZON_OBSERVATION;
+          return [{ frameId: 0, result: { ok: true, diagnostic: diagnosticFor(observation) } }];
         }
         if (args?.[0] === "rehearseTargetAdd") {
           return [{ frameId: 0, result: { ok: true, reason: "verified", wouldClick: true, proof: { retailerSku: "1011483414" } } }];
@@ -1983,7 +2006,33 @@ test("the service worker performs one authenticated, sanitized, isolated Target 
   assert.equal("cookie" in body, false);
   assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
   assert.equal((post.options.headers as Record<string, string>).Authorization, `Bearer ${TOKEN}`);
+  const diagnosticPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/target"));
+  assert.ok(diagnosticPost);
+  const diagnosticBody = JSON.parse(String(diagnosticPost.options.body)) as Record<string, unknown>;
+  assert.equal(diagnosticBody.operation, "observe");
+  assert.equal(diagnosticBody.outcome, "passed");
+  assert.equal(diagnosticBody.failureStage, "complete");
+  assert.equal(JSON.stringify(diagnosticBody).includes(PRODUCT_URL), false);
+  assert.equal(JSON.stringify(diagnosticBody).includes("DO_NOT_SEND"), false);
   assert.equal((response.state as Record<string, unknown>).chromeMutationEnabled, false);
+});
+
+test("a Target price-binding block is posted through the repair incident diagnostic path", async () => {
+  const runtime = harness({ targetPriceMissing: true });
+  const response = await runtime.send({ type: "yoink:inspect-target" });
+  assert.equal(response.ok, true);
+  assert.equal((response.diagnostic as Record<string, unknown>).outcome, "failed");
+  const diagnosticPosts = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/target"));
+  assert.equal(diagnosticPosts.length, 1);
+  const body = JSON.parse(String(diagnosticPosts[0]?.options.body)) as Record<string, unknown>;
+  assert.equal(body.retailerId, "target");
+  assert.equal(body.operation, "observe");
+  assert.equal(body.outcome, "failed");
+  assert.equal(body.failureStage, "price_binding");
+  assert.equal(body.reasonCode, "price_binding_missing");
+  assert.equal(body.attemptCount, 3);
+  assert.equal(JSON.stringify(body).includes(PRODUCT_URL), false);
+  assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
 });
 
 test("the service worker fails before tab access or injection when Target permission is absent", async () => {
@@ -2882,6 +2931,12 @@ test("the service worker records one sanitized Target add rehearsal without clic
   assert.equal(JSON.stringify(body).includes("5999"), false);
   assert.equal(JSON.stringify(body).includes(PRODUCT_URL), false);
   assert.equal(JSON.stringify(body).includes(TOKEN), false);
+  const diagnostics = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/target"));
+  assert.equal(diagnostics.length, 2);
+  const rehearsalDiagnostic = JSON.parse(String(diagnostics.at(-1)?.options.body)) as Record<string, unknown>;
+  assert.equal(rehearsalDiagnostic.operation, "rehearse_add");
+  assert.equal(rehearsalDiagnostic.outcome, "passed");
+  assert.equal(rehearsalDiagnostic.failureStage, "complete");
 });
 
 test("the read-only cart verifier wakes on DOM mutation in one injection and refuses mutation operations", async () => {
@@ -3049,6 +3104,16 @@ test("the service worker runs one leased Target add through baseline, click rece
   assert.equal(operations.filter((operation) => operation === "yoink_post_click_settle_arm").length, 1);
   assert.equal(operations.filter((operation) => operation === "yoink_post_click_settle_wait").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyTargetAddedCart").length, 1);
+  await waitFor(
+    () => runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/target")
+      && JSON.parse(String(entry.options.body)).operation === "live_add"),
+    "The Target live-add diagnostic did not reach the shared activity pipeline."
+  );
+  const liveDiagnosticPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/target")
+    && JSON.parse(String(entry.options.body)).operation === "live_add");
+  const liveDiagnostic = JSON.parse(String(liveDiagnosticPost?.options.body)) as Record<string, unknown>;
+  assert.equal(liveDiagnostic.outcome, "passed");
+  assert.equal(liveDiagnostic.failureStage, "complete");
   const targetVerifyArgs = runtime.injections.find(
     (entry) => (entry.args as unknown[] | undefined)?.[0] === "verifyTargetAddedCart"
   )?.args as unknown[];

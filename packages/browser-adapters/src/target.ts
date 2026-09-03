@@ -4,7 +4,12 @@ import {
   type CheckoutEvidence,
   type LiveOfferObservation
 } from "../../browser-safety/src/index.js";
-import { TARGET_OBSERVER_VERSION, type Fulfillment, type SellerType } from "../../contracts/src/index.js";
+import {
+  TARGET_OBSERVER_VERSION,
+  type Fulfillment,
+  type RetailerAdapterLayoutEvidence,
+  type SellerType
+} from "../../contracts/src/index.js";
 import { selectedOfferScope } from "./selected-offer.js";
 
 export { TARGET_OBSERVER_VERSION };
@@ -530,6 +535,100 @@ export function observeTargetSelectedOfferScope(
     pageSku,
     selected.control?.closest("[data-test='product-detail'], main") || document
   );
+}
+
+function boundedDiagnosticCount(value: number): number {
+  return Math.max(0, Math.min(50, Math.trunc(value)));
+}
+
+function targetGenericAddIntentControls(document: Document): Element[] {
+  return [...document.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")]
+    .filter((candidate) => visible(candidate) && !recommendationControl(candidate))
+    .filter((candidate) => /\b(?:add(?:\s+(?:item\s+)?to)?\s+cart|pre[ -]?order)\b/i.test([
+      candidate.getAttribute("aria-label"),
+      candidate.getAttribute("name"),
+      candidate.getAttribute("value"),
+      candidate.getAttribute("data-test"),
+      candidate.getAttribute("data-testid"),
+      text(candidate, 300)
+    ].filter(Boolean).join(" ")));
+}
+
+function targetDiagnosticScopeKind(control: Element | null): RetailerAdapterLayoutEvidence["scopeKind"] {
+  if (!control) return "none";
+  if (control.closest("form")) return "form";
+  if (control.closest("[data-test*='buy-box' i], [data-testid*='buy-box' i]")) return "buybox";
+  if (control.closest(`${TARGET_FULFILLMENT_ROOT_SELECTOR}, [data-test='product-detail'], main`)) return "other";
+  return "other";
+}
+
+function targetDiagnosticFulfillmentShape(root: Element | Document): RetailerAdapterLayoutEvidence["fulfillmentShape"] {
+  const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter(visible);
+  const shipping = tiles.some((tile) => fulfillmentKind(tile) === "shipping");
+  const pickup = tiles.some((tile) => fulfillmentKind(tile) === "pickup");
+  if (shipping && pickup) return "mixed";
+  if (shipping) return "shipping";
+  if (pickup) return "pickup";
+  const evidence = observableText(root, 30_000);
+  const textShipping = /\b(?:ship(?:ping| it)?|deliver(?:y|ies|ed|ing)?)\b/i.test(evidence);
+  const textPickup = /\bpick[ -]?up\b/i.test(evidence);
+  return textShipping && textPickup ? "mixed" : textShipping ? "shipping" : textPickup ? "pickup" : "none";
+}
+
+/**
+ * Privacy-bounded structural evidence for Target diagnostics. This deliberately
+ * emits only counts and enum-valued page shapes; it never returns page text,
+ * selectors, URLs, prices, seller names, cookies, or account state.
+ */
+export function targetAdapterLayoutEvidence(
+  document: Document,
+  urlValue: string,
+  expectedSku: string,
+  requiredFulfillment: Fulfillment = "shipping"
+): RetailerAdapterLayoutEvidence {
+  const pageSku = extractTargetSku(urlValue);
+  const binding = pageSku === expectedSku
+    ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment)
+    : emptyTargetAddBinding();
+  const packagedControls = pageSku === expectedSku
+    ? [...new Set([...addControls(document, expectedSku), ...(binding.control ? [binding.control] : [])])]
+    : [];
+  const evidenceRoot = binding.offerRoot
+    || binding.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main")
+    || document;
+  const priceCandidates = [...evidenceRoot.querySelectorAll([
+    "[data-test='product-price']",
+    "[data-test*='current-price' i]",
+    "meta[itemprop='price']",
+    "[itemprop='price']"
+  ].join(", "))].filter((element) => element.tagName === "META" || visible(element));
+  const seller = pageSku === expectedSku
+    ? sellerEvidence(document, binding.control)
+    : { sellerType: "unknown" as const };
+  const identities = pageSku === expectedSku ? targetSkuEvidence(document) : new Set<string>();
+  return {
+    schemaVersion: 1,
+    pageKind: pageSku ? "product" : "other",
+    scopeKind: targetDiagnosticScopeKind(binding.control),
+    sellerShape: seller.sellerType === "unknown" ? "none" : "legacy",
+    fulfillmentShape: targetDiagnosticFulfillmentShape(evidenceRoot),
+    addControlCount: boundedDiagnosticCount(packagedControls.length),
+    genericAddIntentCount: boundedDiagnosticCount(targetGenericAddIntentControls(document).length),
+    scopedControlCount: binding.control ? 1 : 0,
+    explicitSkuInputCount: 0,
+    exactSkuInputCount: 0,
+    variationSkuCount: boundedDiagnosticCount(identities.size),
+    canonicalOfferInputCount: 0,
+    canonicalOfferDistinctCount: 0,
+    alternateOfferInputCount: 0,
+    alternateOfferDistinctCount: 0,
+    priceCandidateCount: boundedDiagnosticCount(priceCandidates.length),
+    quantityControlCount: boundedDiagnosticCount([
+      ...evidenceRoot.querySelectorAll("select[name*='quantity' i], input[name*='quantity' i], [data-test*='quantity' i]")
+    ].filter(visible).length),
+    securityChallenge: targetSecurityChallenge(document),
+    interactiveBlock: targetInteractiveBlock(document)
+  };
 }
 
 function lineSku(line: Element): string {

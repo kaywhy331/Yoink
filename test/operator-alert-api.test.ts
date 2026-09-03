@@ -6,11 +6,11 @@ import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import {
   ACKNOWLEDGE_OPERATOR_ALERT_CONFIRMATION,
-  AMAZON_OBSERVER_VERSION,
   RESOLVE_OPERATOR_ALERT_CONFIRMATION,
   RETRY_OPERATOR_ALERT_CONNECTOR_DELIVERY_CONFIRMATION,
   SAVE_OPERATOR_ALERT_CONNECTOR_CONFIRMATION,
   SAVE_OPERATOR_ALERT_RULE_CONFIRMATION,
+  TARGET_OBSERVER_VERSION,
   type RetailerAdapterDiagnosticInput
 } from "../packages/contracts/src/index.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
@@ -21,32 +21,32 @@ function diagnostic(): RetailerAdapterDiagnosticInput {
   return {
     contractVersion: 1,
     observedAt: new Date().toISOString(),
-    retailerId: "amazon",
-    retailerSku: "B0FB21526X",
-    adapterVersion: AMAZON_OBSERVER_VERSION,
+    retailerId: "target",
+    retailerSku: "1010423703",
+    adapterVersion: TARGET_OBSERVER_VERSION,
     operation: "observe",
     outcome: "failed",
-    failureStage: "offer_binding",
-    reasonCode: "offer_binding_ambiguous",
+    failureStage: "price_binding",
+    reasonCode: "price_binding_missing",
     attemptCount: 1,
     domChanged: false,
     layout: {
       schemaVersion: 1,
       pageKind: "product",
-      scopeKind: "accordion",
+      scopeKind: "other",
       sellerShape: "legacy",
       fulfillmentShape: "shipping",
       addControlCount: 1,
       genericAddIntentCount: 1,
-      scopedControlCount: 0,
-      explicitSkuInputCount: 2,
-      exactSkuInputCount: 2,
+      scopedControlCount: 1,
+      explicitSkuInputCount: 0,
+      exactSkuInputCount: 0,
       variationSkuCount: 0,
-      canonicalOfferInputCount: 2,
-      canonicalOfferDistinctCount: 1,
-      alternateOfferInputCount: 1,
-      alternateOfferDistinctCount: 1,
-      priceCandidateCount: 1,
+      canonicalOfferInputCount: 0,
+      canonicalOfferDistinctCount: 0,
+      alternateOfferInputCount: 0,
+      alternateOfferDistinctCount: 0,
+      priceCandidateCount: 0,
       quantityControlCount: 0,
       securityChallenge: false,
       interactiveBlock: ""
@@ -95,7 +95,7 @@ test("device diagnostics immediately feed permission-gated operator alert APIs",
       headers: { "Content-Type": "application/json", Origin: extensionOrigin },
       body: JSON.stringify({ pairingCode: pairing.pairing.code })
     }).then((response) => response.json()) as { device: { token: string } };
-    const diagnosticResponse = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/amazon`, {
+    const diagnosticResponse = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/target`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -134,14 +134,15 @@ test("device diagnostics immediately feed permission-gated operator alert APIs",
     assert.equal(alerts.canManage, true);
     assert.equal(alerts.mutationAuthority, false);
     assert.equal(alerts.counts.openOperatorAlerts, 1);
+    assert.equal(alerts.incidents[0]?.retailerId, "target");
     assert.equal(alerts.incidents[0]?.privacyClassification, "operational_aggregate");
     assert.equal(alerts.deliveries.length, 2);
     assert.equal(alerts.connectors.connectors.length, 1);
     assert.equal(alerts.connectors.deliveries.length, 1);
     assert.equal(alerts.connectors.deliveries[0]?.deliveryState, "pending");
-    assert.equal(JSON.stringify(alerts).includes("B0FB21526X"), false);
+    assert.equal(JSON.stringify(alerts).includes("1010423703"), false);
     assert.equal(JSON.stringify(alerts).includes("DO_NOT_STORE"), false);
-    assert.equal(JSON.stringify(db.all("SELECT * FROM operator_alert_incidents")).includes("B0FB21526X"), false);
+    assert.equal(JSON.stringify(db.all("SELECT * FROM operator_alert_incidents")).includes("1010423703"), false);
 
     const rejectedTransport: OperatorAlertWebhookTransport = {
       async deliver() {

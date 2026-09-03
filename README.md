@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.19.2 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.19.3 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
@@ -17,7 +17,15 @@ Pickup. Amazon additionally requires a unique ASIN-bound offer token that
 remains only in page memory. Buy Now, checkout, and order submission are not
 authorized.
 
-Version 1.19.2 treats an actionable first-party preorder as a normal guarded
+Version 1.19.3 sends Target inspection and qualification failures through the
+same privacy-bounded adapter-diagnostic and Admin Incident pipeline as Walmart,
+Amazon, and Best Buy. Target inspection retries brief DOM hydration before
+reporting missing price, seller, fulfillment, offer, or Add-to-Cart bindings,
+and both no-click rehearsal and live guarded-add outcomes now produce operation
+diagnostics. Diagnostic evidence remains structural and excludes product URLs,
+page text, account state, and observed offer values.
+
+Version 1.19.2 treated an actionable first-party preorder as a normal guarded
 add-to-cart offer. Best Buy add v11 removes its preorder-only rejection, and
 qualification plus automatic store checks now reuse exact preorder evidence
 and catalog candidates. Exact product, seller, price, fulfillment, quantity,

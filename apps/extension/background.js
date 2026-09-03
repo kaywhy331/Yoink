@@ -897,7 +897,7 @@ function retailerDiagnosticPayload(value, retailerId, overrides = {}) {
   const failureStage = String(overrides.failureStage || value.failureStage || "");
   const reasonCode = safeReasonCode(overrides.reasonCode || value.reasonCode);
   const expectedAdapterVersion = operation === "observe"
-    ? RETAILER_OBSERVER_VERSIONS[retailerId]
+    ? observerVersionForRetailer(retailerId)
     : ADD_LANES[retailerId]?.adapterVersion;
   if (!DIAGNOSTIC_OPERATIONS.has(operation)
     || !DIAGNOSTIC_OUTCOMES.has(outcome)
@@ -1107,7 +1107,7 @@ function observerRuntimeFailureDiagnostic(identity, reasonCode, attemptCount = 1
     observedAt: new Date().toISOString(),
     retailerId: identity.retailerId,
     retailerSku: identity.retailerSku,
-    adapterVersion: RETAILER_OBSERVER_VERSIONS[identity.retailerId],
+    adapterVersion: observerVersionForRetailer(identity.retailerId),
     operation: "observe",
     outcome: "failed",
     failureStage: "runner",
@@ -1152,6 +1152,10 @@ function operationDiagnostic(base, retailerId, operation, outcome, failureStage,
   });
 }
 
+function observerVersionForRetailer(retailerId) {
+  return retailerId === "target" ? TARGET_OBSERVER_VERSION : RETAILER_OBSERVER_VERSIONS[retailerId];
+}
+
 const EXPECTED_LIVE_REJECTIONS = new Set([
   "manual_action_required", "out_of_stock", "third_party_seller", "signal_seller_mismatch",
   "over_unit_cap", "fulfillment_not_supported", "seller_policy_not_supported",
@@ -1171,20 +1175,27 @@ function runnerFailureStage(reasonCode) {
 }
 
 async function recordTabOperationDiagnostic(tabId, retailerId, operation, outcome, failureStage, reasonCode, requiredFulfillment = "shipping") {
-  if (retailerId === "target" || !["walmart", "amazon", "bestbuy"].includes(retailerId)) return null;
+  if (!["target", "walmart", "amazon", "bestbuy"].includes(retailerId)) return null;
   const device = await storedDevice();
   if (!device?.token) throw new Error("The paired Chrome device is unavailable for adapter diagnostics.");
   await chrome.scripting.executeScript({
     target: { tabId },
     world: "ISOLATED",
-    files: ["retailer-shadow.js"]
+    files: [retailerId === "target" ? "target-shadow.js" : "retailer-shadow.js"]
   });
   const injections = await chrome.scripting.executeScript({
     target: { tabId },
     world: "ISOLATED",
-    args: [retailerId, requiredFulfillment === "pickup" ? "pickup" : "shipping"],
-    func: (exactRetailerId, exactFulfillment) => {
+    args: ["collectOperationDiagnostic", retailerId, requiredFulfillment === "pickup" ? "pickup" : "shipping"],
+    func: (_operationName, exactRetailerId, exactFulfillment) => {
       try {
+        if (exactRetailerId === "target") {
+          const observer = globalThis.YoinkTargetShadow;
+          if (!observer || typeof observer.collectTargetShadowAttempt !== "function") {
+            return { ok: false, message: "The Target shadow observer is unavailable." };
+          }
+          return { ok: true, diagnostic: observer.collectTargetShadowAttempt(document, location.href, exactFulfillment).diagnostic };
+        }
         const observer = globalThis.YoinkRetailerShadow;
         if (!observer || typeof observer.collectRetailerShadowAttempt !== "function") {
           return { ok: false, message: "The retailer shadow observer is unavailable." };
@@ -2719,39 +2730,106 @@ async function inspectTargetTab(tabId = null) {
   if (!Number.isInteger(tab?.id) || !exactTargetProductUrl(tab.url)) {
     throw new Error("Open an exact Target product page in the active tab, then try again.");
   }
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    world: "ISOLATED",
-    files: ["target-shadow.js"]
-  });
-  const injections = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    world: "ISOLATED",
-    func: () => {
-      try {
-        const observer = globalThis.YoinkTargetShadow;
-        if (!observer || typeof observer.collectTargetShadowObservation !== "function") {
-          return { ok: false, message: "The Target shadow observer is unavailable." };
+  const identity = { retailerId: "target", retailerSku: targetSkuFromUrl(tab.url) };
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "ISOLATED",
+      files: ["target-shadow.js"]
+    });
+  } catch {
+    await reportObserverRuntimeFailure(device, identity, "observer_bundle_injection_failed");
+    throw new Error("Yoink could not load the Target observer. Reload the extension and try again.");
+  }
+  const attempts = [];
+  let priorLayout = "";
+  let domChanged = false;
+  for (let attemptCount = 1; attemptCount <= 3; attemptCount += 1) {
+    let injections;
+    try {
+      injections = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: "ISOLATED",
+        args: ["collectTargetShadowAttempt", attemptCount, domChanged],
+        func: (_operationName, currentAttempt, changed) => {
+          try {
+            const observer = globalThis.YoinkTargetShadow;
+            if (!observer || typeof observer.collectTargetShadowAttempt !== "function") {
+              return { ok: false, reasonCode: "observer_runtime_unavailable" };
+            }
+            return { ok: true, ...observer.collectTargetShadowAttempt(document, location.href, "shipping", currentAttempt, changed) };
+          } catch {
+            return { ok: false, reasonCode: "observer_collection_failed" };
+          }
         }
-        return { ok: true, observation: observer.collectTargetShadowObservation(document, location.href) };
-      } catch (error) {
-        return { ok: false, message: error instanceof Error ? error.message : "The Target page could not be inspected." };
-      }
+      });
+    } catch {
+      await reportObserverRuntimeFailure(device, identity, "observer_execution_failed", attemptCount, domChanged);
+      throw new Error("Yoink could not inspect this Target page. Reload the page and try again.");
     }
-  });
-  const result = injections.find((entry) => entry.frameId === 0)?.result;
-  if (!result?.ok) throw new Error(result?.message || "The Target page returned no shadow evidence.");
-  const observation = targetObservationPayload(result.observation);
-  const payload = await request("/devices/self/shadow-observations/target", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${device.token}` },
-    body: JSON.stringify(observation)
-  }, EVIDENCE_REQUEST_TIMEOUT_MS);
-  const recipeTrial = await runObserverRecipeShadow(tab.id, "target", payload.observation, null, device);
+    const result = injections.find((entry) => entry.frameId === 0)?.result;
+    if (!result) {
+      await reportObserverRuntimeFailure(device, identity, "observer_top_frame_missing", attemptCount, domChanged);
+      throw new Error("Yoink could not inspect this Target page. Reload the page and try again.");
+    }
+    if (!result.ok) {
+      const reasonCode = OBSERVER_RUNTIME_FAILURE_REASONS.has(result.reasonCode)
+        ? result.reasonCode : "observer_collection_failed";
+      await reportObserverRuntimeFailure(device, identity, reasonCode, attemptCount, domChanged);
+      throw new Error("Yoink could not inspect this Target page. The failure was reported for repair.");
+    }
+    let observation;
+    let diagnostic;
+    try {
+      observation = targetObservationPayload(result.observation);
+      diagnostic = retailerDiagnosticPayload(result.diagnostic, "target", { attemptCount, domChanged });
+    } catch {
+      await reportObserverRuntimeFailure(device, identity, "observer_contract_invalid", attemptCount, domChanged);
+      throw new Error("Yoink received invalid Target evidence. The failure was reported for repair.");
+    }
+    const layoutSignature = JSON.stringify(diagnostic.layout);
+    if (priorLayout && priorLayout !== layoutSignature) domChanged = true;
+    priorLayout = layoutSignature;
+    attempts.push({ observation, diagnostic });
+    const retryable = diagnostic.outcome !== "passed"
+      && !diagnostic.layout.securityChallenge
+      && !diagnostic.layout.interactiveBlock
+      && observation.sellerType !== "third_party"
+      && ["availability_binding", "add_control", "offer_binding", "price_binding", "seller_binding", "fulfillment_binding"]
+        .includes(diagnostic.failureStage);
+    if (!retryable || attemptCount === 3) break;
+    await new Promise((resolve) => setTimeout(resolve, attemptCount === 1 ? 300 : 700));
+  }
+  const initial = attempts[0];
+  const final = attempts.at(-1);
+  if (!initial || !final) throw new Error("The Target page returned no shadow evidence.");
+  const recovered = initial.diagnostic.outcome !== "passed" && final.diagnostic.outcome === "passed";
+  const diagnostic = recovered
+    ? retailerDiagnosticPayload(initial.diagnostic, "target", {
+      outcome: "recovered",
+      failureStage: initial.diagnostic.failureStage,
+      reasonCode: "dom_hydration_recovered",
+      attemptCount: attempts.length,
+      domChanged
+    })
+    : retailerDiagnosticPayload(final.diagnostic, "target", {
+      attemptCount: attempts.length,
+      domChanged
+    });
+  const [payload, diagnosticPayload] = await Promise.all([
+    request("/devices/self/shadow-observations/target", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${device.token}` },
+      body: JSON.stringify(final.observation)
+    }, EVIDENCE_REQUEST_TIMEOUT_MS),
+    postRetailerDiagnostic(device, diagnostic)
+  ]);
+  const recipeTrial = await runObserverRecipeShadow(tab.id, "target", payload.observation, diagnosticPayload.diagnostic, device);
   return {
     state: await checkHealth(),
     observation: payload.observation,
     productIdentity: payload.productIdentity || null,
+    diagnostic: diagnosticPayload.diagnostic,
     recipeTrial
   };
 }
@@ -3140,6 +3218,9 @@ function targetRehearsalJob(observation) {
   const price = Number(observation?.unitPriceCents);
   if (!observation?.id
     || !/^\d{6,}$/.test(String(observation.retailerSku || ""))
+    || !["in_stock", "preorder"].includes(observation.availability)
+    || observation.addControlActionable !== true
+    || Boolean(observation.securityChallenge || observation.interactiveBlock)
     || !Number.isSafeInteger(price)
     || price <= 0
     || observation.fulfillment !== "shipping"
@@ -3169,7 +3250,36 @@ function targetRehearsalJob(observation) {
 async function rehearseTargetTab(existingInspection = null, tabId = null) {
   const inspection = existingInspection || await inspectTargetTab(tabId);
   const observation = inspection.observation;
-  const job = targetRehearsalJob(observation);
+  const device = await storedDevice();
+  if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Target.");
+  let job;
+  try {
+    job = targetRehearsalJob(observation);
+  } catch (error) {
+    const expectedPolicyRejection = observation.sellerType === "third_party"
+      || !["in_stock", "preorder"].includes(observation.availability)
+      || observation.fulfillment === "pickup"
+      || Boolean(observation.securityChallenge || observation.interactiveBlock);
+    const reasonCode = observation.securityChallenge || observation.interactiveBlock
+      ? "manual_action_required"
+      : !["in_stock", "preorder"].includes(observation.availability)
+        ? "out_of_stock"
+        : observation.sellerType === "third_party"
+          ? "third_party_seller"
+          : observation.fulfillment === "pickup"
+            ? "fulfillment_not_supported"
+            : safeReasonCode(inspection.diagnostic?.reasonCode || "offer_not_actionable");
+    await postRetailerDiagnostic(device, operationDiagnostic(
+      inspection.diagnostic,
+      "target",
+      "rehearse_add",
+      expectedPolicyRejection ? "rejected" : "failed",
+      expectedPolicyRejection ? (observation.securityChallenge || observation.interactiveBlock ? "interactive_block" : "policy")
+        : inspection.diagnostic?.failureStage || "runner",
+      reasonCode
+    ));
+    throw error;
+  }
   const tab = await operationTab(tabId);
   if (!Number.isInteger(tab?.id)
     || targetSkuFromUrl(tab.url) !== observation.retailerSku) {
@@ -3179,21 +3289,31 @@ async function rehearseTargetTab(existingInspection = null, tabId = null) {
   const result = await executeTargetAction(tab.id, "rehearseTargetAdd", [job]);
   const passed = result?.ok === true && result?.wouldClick === true;
   const reasonCode = passed ? "verified" : safeReasonCode(result?.reason);
-  const device = await storedDevice();
-  if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Target.");
-  const payload = await request("/devices/self/qualification-trials/target-add", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${device.token}` },
-    body: JSON.stringify({
-      adapterVersion: TARGET_ADD_ADAPTER_VERSION,
-      observerVersion: TARGET_OBSERVER_VERSION,
-      contractVersion: 1,
-      shadowObservationId: observation.id,
-      observedAt: new Date().toISOString(),
-      outcome: passed ? "passed" : "rejected",
-      reasonCode
-    })
-  }, EVIDENCE_REQUEST_TIMEOUT_MS);
+  const manualRejection = reasonCode === "manual_action_required";
+  const operationEvidence = operationDiagnostic(
+    inspection.diagnostic,
+    "target",
+    "rehearse_add",
+    passed ? "passed" : manualRejection ? "rejected" : "failed",
+    passed ? "complete" : manualRejection ? "interactive_block" : runnerFailureStage(reasonCode),
+    reasonCode
+  );
+  const [payload] = await Promise.all([
+    request("/devices/self/qualification-trials/target-add", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${device.token}` },
+      body: JSON.stringify({
+        adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+        observerVersion: TARGET_OBSERVER_VERSION,
+        contractVersion: 1,
+        shadowObservationId: observation.id,
+        observedAt: new Date().toISOString(),
+        outcome: passed ? "passed" : "rejected",
+        reasonCode
+      })
+    }, EVIDENCE_REQUEST_TIMEOUT_MS),
+    postRetailerDiagnostic(device, operationEvidence)
+  ]);
   return {
     state: await checkHealth(),
     observation,

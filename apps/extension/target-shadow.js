@@ -21,6 +21,7 @@ var YoinkTargetShadowModule = (() => {
   // apps/extension/src/target-shadow.ts
   var target_shadow_exports = {};
   __export(target_shadow_exports, {
+    collectTargetShadowAttempt: () => collectTargetShadowAttempt,
     collectTargetShadowObservation: () => collectTargetShadowObservation
   });
 
@@ -537,13 +538,83 @@ var YoinkTargetShadowModule = (() => {
       selected.control?.closest("[data-test='product-detail'], main") || document
     );
   }
+  function boundedDiagnosticCount(value) {
+    return Math.max(0, Math.min(50, Math.trunc(value)));
+  }
+  function targetGenericAddIntentControls(document) {
+    return [...document.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((candidate) => visible2(candidate) && !recommendationControl(candidate)).filter((candidate) => /\b(?:add(?:\s+(?:item\s+)?to)?\s+cart|pre[ -]?order)\b/i.test([
+      candidate.getAttribute("aria-label"),
+      candidate.getAttribute("name"),
+      candidate.getAttribute("value"),
+      candidate.getAttribute("data-test"),
+      candidate.getAttribute("data-testid"),
+      text(candidate, 300)
+    ].filter(Boolean).join(" ")));
+  }
+  function targetDiagnosticScopeKind(control) {
+    if (!control) return "none";
+    if (control.closest("form")) return "form";
+    if (control.closest("[data-test*='buy-box' i], [data-testid*='buy-box' i]")) return "buybox";
+    if (control.closest(`${TARGET_FULFILLMENT_ROOT_SELECTOR}, [data-test='product-detail'], main`)) return "other";
+    return "other";
+  }
+  function targetDiagnosticFulfillmentShape(root) {
+    const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter(visible2);
+    const shipping = tiles.some((tile) => fulfillmentKind(tile) === "shipping");
+    const pickup = tiles.some((tile) => fulfillmentKind(tile) === "pickup");
+    if (shipping && pickup) return "mixed";
+    if (shipping) return "shipping";
+    if (pickup) return "pickup";
+    const evidence = observableText(root, 3e4);
+    const textShipping = /\b(?:ship(?:ping| it)?|deliver(?:y|ies|ed|ing)?)\b/i.test(evidence);
+    const textPickup = /\bpick[ -]?up\b/i.test(evidence);
+    return textShipping && textPickup ? "mixed" : textShipping ? "shipping" : textPickup ? "pickup" : "none";
+  }
+  function targetAdapterLayoutEvidence(document, urlValue, expectedSku, requiredFulfillment = "shipping") {
+    const pageSku = extractTargetSku(urlValue);
+    const binding = pageSku === expectedSku ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment) : emptyTargetAddBinding();
+    const packagedControls = pageSku === expectedSku ? [.../* @__PURE__ */ new Set([...addControls(document, expectedSku), ...binding.control ? [binding.control] : []])] : [];
+    const evidenceRoot = binding.offerRoot || binding.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || document;
+    const priceCandidates = [...evidenceRoot.querySelectorAll([
+      "[data-test='product-price']",
+      "[data-test*='current-price' i]",
+      "meta[itemprop='price']",
+      "[itemprop='price']"
+    ].join(", "))].filter((element) => element.tagName === "META" || visible2(element));
+    const seller = pageSku === expectedSku ? sellerEvidence(document, binding.control) : { sellerType: "unknown" };
+    const identities = pageSku === expectedSku ? targetSkuEvidence(document) : /* @__PURE__ */ new Set();
+    return {
+      schemaVersion: 1,
+      pageKind: pageSku ? "product" : "other",
+      scopeKind: targetDiagnosticScopeKind(binding.control),
+      sellerShape: seller.sellerType === "unknown" ? "none" : "legacy",
+      fulfillmentShape: targetDiagnosticFulfillmentShape(evidenceRoot),
+      addControlCount: boundedDiagnosticCount(packagedControls.length),
+      genericAddIntentCount: boundedDiagnosticCount(targetGenericAddIntentControls(document).length),
+      scopedControlCount: binding.control ? 1 : 0,
+      explicitSkuInputCount: 0,
+      exactSkuInputCount: 0,
+      variationSkuCount: boundedDiagnosticCount(identities.size),
+      canonicalOfferInputCount: 0,
+      canonicalOfferDistinctCount: 0,
+      alternateOfferInputCount: 0,
+      alternateOfferDistinctCount: 0,
+      priceCandidateCount: boundedDiagnosticCount(priceCandidates.length),
+      quantityControlCount: boundedDiagnosticCount([
+        ...evidenceRoot.querySelectorAll("select[name*='quantity' i], input[name*='quantity' i], [data-test*='quantity' i]")
+      ].filter(visible2).length),
+      securityChallenge: targetSecurityChallenge(document),
+      interactiveBlock: targetInteractiveBlock(document)
+    };
+  }
 
   // apps/extension/src/target-shadow.ts
-  function collectTargetShadowObservation(documentValue = globalThis.document, urlValue = globalThis.location?.href ?? "") {
+  function collectTargetShadowObservation(documentValue = globalThis.document, urlValue = globalThis.location?.href ?? "", requiredFulfillment = "shipping") {
     if (!documentValue) throw new Error("The current Target page is unavailable.");
     const retailerSku = extractTargetSku(urlValue);
     if (!retailerSku) throw new Error("Open an exact Target product page before inspecting it.");
-    const observation = observeTargetOffer(documentValue, urlValue, retailerSku, "shipping");
+    const fulfillmentPreference = requiredFulfillment === "pickup" ? "pickup" : "shipping";
+    const observation = observeTargetOffer(documentValue, urlValue, retailerSku, fulfillmentPreference);
     if (observation.pageKind !== "product" || observation.retailerId !== "target" || observation.retailerSku !== retailerSku) {
       throw new Error("The exact Target product page could not be verified.");
     }
@@ -564,11 +635,82 @@ var YoinkTargetShadowModule = (() => {
       addControlActionable: observation.addControlActionable,
       securityChallenge: observation.securityChallenge,
       interactiveBlock: observation.interactiveBlock,
-      selectedOffer: observeTargetSelectedOfferScope(documentValue, urlValue, retailerSku, "shipping")
+      selectedOffer: observeTargetSelectedOfferScope(documentValue, urlValue, retailerSku, fulfillmentPreference)
     });
   }
+  function targetObservationDiagnosticState(observation, layout) {
+    if (layout.pageKind !== "product") {
+      return { outcome: "failed", failureStage: "page_identity", reasonCode: "product_identity_missing" };
+    }
+    if (layout.securityChallenge || layout.interactiveBlock) {
+      return {
+        outcome: "rejected",
+        failureStage: "interactive_block",
+        reasonCode: layout.securityChallenge ? "security_challenge" : `interactive_${layout.interactiveBlock}`
+      };
+    }
+    if (observation.availability === "out_of_stock") {
+      return { outcome: "rejected", failureStage: "availability_binding", reasonCode: "out_of_stock" };
+    }
+    if (observation.selectedOffer?.selectionState === "unresolved") {
+      return { outcome: "failed", failureStage: "offer_binding", reasonCode: "selected_offer_binding_unresolved" };
+    }
+    if (layout.addControlCount === 0) {
+      return {
+        outcome: "failed",
+        failureStage: "add_control",
+        reasonCode: (layout.genericAddIntentCount ?? 0) > 0 ? "add_control_selector_miss" : "add_control_missing"
+      };
+    }
+    if (layout.addControlCount > 1 && layout.scopedControlCount !== 1) {
+      return { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_ambiguous" };
+    }
+    if (!observation.addControlActionable && layout.scopedControlCount > 0) {
+      return { outcome: "rejected", failureStage: "add_control", reasonCode: "add_control_disabled" };
+    }
+    if (layout.priceCandidateCount === 0 || observation.unitPriceCents === null) {
+      return { outcome: "failed", failureStage: "price_binding", reasonCode: "price_binding_missing" };
+    }
+    if (observation.sellerType === "unknown") {
+      return { outcome: "failed", failureStage: "seller_binding", reasonCode: "seller_binding_missing" };
+    }
+    if (observation.fulfillment === "unknown") {
+      return { outcome: "failed", failureStage: "fulfillment_binding", reasonCode: "fulfillment_binding_missing" };
+    }
+    if (!observation.addControlActionable) {
+      return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_scope_not_actionable" };
+    }
+    return { outcome: "passed", failureStage: "complete", reasonCode: "verified" };
+  }
+  function collectTargetShadowAttempt(documentValue = globalThis.document, urlValue = globalThis.location?.href ?? "", requiredFulfillment = "shipping", attemptCount = 1, domChanged = false) {
+    const observation = collectTargetShadowObservation(documentValue, urlValue, requiredFulfillment);
+    const layout = targetAdapterLayoutEvidence(
+      documentValue,
+      urlValue,
+      observation.retailerSku,
+      requiredFulfillment
+    );
+    const state = targetObservationDiagnosticState(observation, layout);
+    return {
+      observation,
+      diagnostic: {
+        contractVersion: 1,
+        observedAt: observation.observedAt,
+        retailerId: "target",
+        retailerSku: observation.retailerSku,
+        adapterVersion: TARGET_OBSERVER_VERSION,
+        operation: "observe",
+        outcome: state.outcome,
+        failureStage: state.failureStage,
+        reasonCode: state.reasonCode,
+        attemptCount: Math.max(1, Math.min(3, Math.trunc(attemptCount) || 1)),
+        domChanged: domChanged === true,
+        layout
+      }
+    };
+  }
   Object.defineProperty(globalThis, "YoinkTargetShadow", {
-    value: Object.freeze({ collectTargetShadowObservation }),
+    value: Object.freeze({ collectTargetShadowAttempt, collectTargetShadowObservation }),
     configurable: true
   });
   return __toCommonJS(target_shadow_exports);

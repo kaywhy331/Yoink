@@ -1,6 +1,16 @@
 # Yoink roadmap
 
-## Shipped through 1.19.2
+## Shipped through 1.19.3
+
+### Target qualification incident parity (1.19.3)
+
+- Routes Target observation, no-click rehearsal, and guarded add outcomes
+  through the shared privacy-bounded adapter-diagnostic pipeline
+- Retries brief Target DOM hydration before recording repairable selector or
+  offer-binding failures
+- Surfaces actionable Target adapter failures in Admin Incidents while keeping
+  expected unavailable, third-party, and interactive outcomes classified as
+  policy rejections rather than repair incidents
 
 ### Guarded preorder adds (1.19.2)
 
