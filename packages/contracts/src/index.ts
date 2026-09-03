@@ -67,8 +67,8 @@ export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v8";
 export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V8";
 export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
 export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V9";
-export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v10";
-export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V10";
+export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v11";
+export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V11";
 
 export const RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS = ["observe", "rehearse_add", "live_add"] as const;
 export type RetailerAdapterDiagnosticOperation = (typeof RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS)[number];

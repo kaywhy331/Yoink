@@ -137,7 +137,7 @@ test("Best Buy safely self-heals unique control and price selector drift", () =>
   assert.equal(prepareBestBuyAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Best Buy v10 requires an exact selected Shipping or explicit Pickup offer", () => {
+test("Best Buy v11 requires an exact selected Shipping or explicit Pickup offer and accepts preorders", () => {
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
@@ -165,13 +165,28 @@ test("Best Buy v10 requires an exact selected Shipping or explicit Pickup offer"
     maxUnitPriceCents: 15499,
     maxOrderTotalCents: 15499
   });
-  assert.equal(
-    prepareBestBuyAdd(fixture("bestbuy-reality-fracture-preorder.html", preorderUrl), preorderUrl, preorderJob, NOW).reason,
-    "preorder_not_supported"
-  );
+  const preorder = fixture("bestbuy-reality-fracture-preorder.html", preorderUrl);
+  let preorderClicks = 0;
+  preorder.querySelector("button")?.addEventListener("click", () => { preorderClicks += 1; });
+  const preorderRehearsal = rehearseBestBuyAdd(preorder, preorderUrl, preorderJob, NOW);
+  assert.equal(preorderRehearsal.ok, true);
+  assert.equal(preorderRehearsal.ok && preorderRehearsal.wouldClick, true);
+  assert.equal(preorderClicks, 0);
+  const preorderPreparation = prepareBestBuyAdd(preorder, preorderUrl, preorderJob, NOW);
+  assert.equal(preorderPreparation.ok, true);
+  if (preorderPreparation.ok) {
+    assert.equal(commitBestBuyAdd(
+      preorder,
+      preorderUrl,
+      preorderJob,
+      preorderPreparation.authorizationId,
+      NOW + 100
+    ).ok, true);
+  }
+  assert.equal(preorderClicks, 1);
 });
 
-test("Best Buy v10 reaches the no-click boundary on the modern fulfillment layout", () => {
+test("Best Buy v11 reaches the no-click boundary on the modern fulfillment layout", () => {
   const url = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const document = fixture("bestbuy-modern-first-party.html", url);
   let clicks = 0;
@@ -187,7 +202,7 @@ test("Best Buy v10 reaches the no-click boundary on the modern fulfillment layou
   assert.equal(clicks, 0);
 });
 
-test("Best Buy v10 uses the primary action when one exact offer also renders a sticky duplicate", () => {
+test("Best Buy v11 uses the primary action when one exact offer also renders a sticky duplicate", () => {
   const url = "https://www.bestbuy.com/product/riftbound-origins-ahri-playmat/J3GWY596JF/sku/6677244";
   const document = fixture("bestbuy-primary-and-sticky-add.html", url);
   const primary = document.querySelector("[data-testid='purchase-controls'] button");
@@ -214,7 +229,7 @@ test("Best Buy v10 uses the primary action when one exact offer also renders a s
   assert.equal(stickyClicks, 0);
 });
 
-test("Best Buy v10 rehearses and commits one exact split-shell action", () => {
+test("Best Buy v11 rehearses and commits one exact split-shell action", () => {
   const url = "https://www.bestbuy.com/product/2026-topps-flagship-football-mega-box/J3ZPGXX9RP/sku/6685081";
   const document = fixture("bestbuy-single-split-shell.html", url);
   const control = document.querySelector(".add-to-cart-button");

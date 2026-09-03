@@ -10,7 +10,7 @@ and submit qualification.
 The current Yoink companion has only loopback access as a required host
 permission. Retailer access is optional. Generic `retailerMutation` remains
 forced false, while the independently versioned `target-add-v7`,
-`walmart-add-v8`, `amazon-add-v9`, and `bestbuy-add-v10` capabilities can be declared and qualified
+`walmart-add-v8`, `amazon-add-v9`, and `bestbuy-add-v11` capabilities can be declared and qualified
 only for their narrow add-only scopes.
 
 ## Source-to-target map
@@ -181,7 +181,7 @@ CAPTCHA scaffolding is excluded using computed visibility, while a rendered
 challenge remains manual. A visible `Account Required` state is classified as
 authentication so the user receives a sign-in instruction rather than a false
 security alert. The separate
-`bestbuy-add-v10` runner preserves the bounded-baseline, durable pre-click receipt,
+`bestbuy-add-v11` runner preserves the bounded-baseline, durable pre-click receipt,
 at-most-once click, exact cart-delta proof, queue/interactive restraint, and
 marketplace/fulfillment-mismatch rejection boundaries. Accessibility-backed seller names are
 read only inside the already-bound seller element, and in-store-only products
@@ -191,10 +191,10 @@ Add control, one distinct price, one seller class, quantity one, selected
 fulfillment, and no competing SKU. Migration 53
 retires prior qualifications for all four add stores, and migration 57 retires
 the prior Best Buy lane after its rendered-challenge boundary changes;
-observer-version binding also excludes pre-v10 evidence from current qualification. Preorders and actual high-demand
-gates are retained as read-only evidence but cannot satisfy or execute the
-in-stock lane; a passive demand badge does not close an otherwise exact offer.
-Activation requires a fresh v10 dossier,
+observer-version binding also excludes pre-v10 evidence from current qualification. An actionable first-party
+preorder satisfies and executes the same guarded add lane as an in-stock offer;
+actual high-demand gates remain read-only, while a passive demand badge does not
+close an otherwise exact offer. Activation requires a fresh observer-v10/add-v11 dossier,
 no-click rehearsal, capable companion, exact evidence hash, and local
 confirmation.
 

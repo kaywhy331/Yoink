@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.19.1 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.19.2 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
@@ -17,11 +17,16 @@ Pickup. Amazon additionally requires a unique ASIN-bound offer token that
 remains only in page memory. Buy Now, checkout, and order submission are not
 authorized.
 
-Version 1.19.1 adds opt-in, bounded automatic store rechecks that reuse prior
-exact product evidence and in-stock catalog candidates without clicking Add to
-cart. It ranks current in-stock evidence ahead of repair candidates, excludes
-preorders from reusable in-stock coverage, and advances when one product is
-unavailable. Walmart
+Version 1.19.2 treats an actionable first-party preorder as a normal guarded
+add-to-cart offer. Best Buy add v11 removes its preorder-only rejection, and
+qualification plus automatic store checks now reuse exact preorder evidence
+and catalog candidates. Exact product, seller, price, fulfillment, quantity,
+control, no-click rehearsal, and activation requirements remain unchanged.
+
+Version 1.19.1 added opt-in, bounded automatic store rechecks that reuse prior
+exact product evidence and catalog candidates without clicking Add to cart. It
+ranks current actionable evidence ahead of repair candidates and advances when
+one product is unavailable. Walmart
 observer/action versions 7/8 bind one primary action while ignoring a rendered
 sticky duplicate; duplicate primary actions remain ambiguous and fail closed.
 
@@ -2906,7 +2911,7 @@ pre-click check. Only the Add-to-Cart control can be clicked; Buy Now navigation
 is never used. The resulting cart must show exactly one authorized quantity
 added while every baseline quantity remains unchanged.
 
-Best Buy's separately gated `bestbuy-add-v10` runner requires an exact numeric
+Best Buy's separately gated `bestbuy-add-v11` runner requires an exact numeric
 SKU from a current or legacy product URL, explicit visible `Sold by Best Buy`
 evidence in the same bounded offer scope as one Add-to-Cart control and price,
 an exact Shipping or explicitly configured Pickup selection, and quantity one.
@@ -2925,7 +2930,9 @@ rendered-security change, requiring fresh evidence and current-runner rehearsal 
 explicit activation. Its bounded baseline, at-most-once receipt, immediate offer
 revalidation, and exact cart-delta proof match the other guarded lanes. A historical
 repair group is superseded only by a strictly newer packaged adapter's later
-non-failure result for that same exact SKU.
+non-failure result for that same exact SKU. An exact first-party preorder with
+an actionable Pre-order control uses this same guarded add path; preorder status
+alone is never a rejection reason.
 
 A generic retailer-mutation capability cannot authorize Target, Walmart,
 Amazon, Best Buy, or any future lane.

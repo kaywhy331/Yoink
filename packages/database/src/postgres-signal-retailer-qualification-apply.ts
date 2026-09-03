@@ -776,15 +776,11 @@ BEGIN
   SELECT COUNT(*), COUNT(DISTINCT observation.retailer_sku),
          COUNT(*) FILTER (
            WHERE observation.observation_state = 'actionable_candidate'
-             AND (retailer_id_value <> 'bestbuy'
-               OR observation.availability = 'in_stock')
              AND observation.seller_type = 'first_party'
              AND observation.seller_name = first_party_seller_value
          ),
          COUNT(*) FILTER (
            WHERE observation.observation_state = 'actionable_candidate'
-             AND (retailer_id_value <> 'bestbuy'
-               OR observation.availability = 'in_stock')
              AND observation.fulfillment = 'shipping'
          ),
          COUNT(*) FILTER (

@@ -401,7 +401,7 @@ test("store requalification plans reuse and rank a multi-product evidence histor
   }
 });
 
-test("store requalification replays unresolved observer failures but never treats preorders as in-stock candidates", () => {
+test("store requalification replays unresolved observer failures and reuses actionable preorders", () => {
   const db = new YoinkDatabase();
   try {
     const device = pair(db);
@@ -496,11 +496,11 @@ test("store requalification replays unresolved observer failures but never treat
 
     const readiness = new RetailerReadinessRepository(db);
     const bestBuy = readiness.lane("bestbuy", NOW + 6_000);
-    assert.deepEqual(bestBuy.candidates.map((candidate) => candidate.retailerSku), ["6587244"],
-      "the in-stock catalog candidate replaces the unsuitable preorder");
-    assert.equal(bestBuy.candidate?.source, "catalog");
-    assert.equal(bestBuy.candidates.some((candidate) => candidate.retailerSku === "6688068"), false,
-      "a preorder policy stop is not reusable in-stock qualification evidence");
+    assert.deepEqual(bestBuy.candidates.map((candidate) => candidate.retailerSku), ["6688068", "6587244"],
+      "the actionable preorder is preferred over an unobserved catalog candidate");
+    assert.equal(bestBuy.candidate?.source, "evidence_history");
+    assert.deepEqual(bestBuy.candidate?.qualificationTypes, ["first_party_actionable", "shipping_actionable"],
+      "a first-party preorder with an exact shipping control supplies normal add qualification evidence");
     const walmart = readiness.lane("walmart", NOW + 6_000);
     assert.equal(walmart.candidate?.retailerSku, "15561620611");
     assert.equal(walmart.candidate?.repairableObserverFailure, true,

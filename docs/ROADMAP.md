@@ -1,6 +1,14 @@
 # Yoink roadmap
 
-## Shipped through 1.19.1
+## Shipped through 1.19.2
+
+### Guarded preorder adds (1.19.2)
+
+- Treats actionable first-party preorders as normal add-to-cart offers while
+  preserving exact identity, price, seller, fulfillment, and quantity checks
+- Advances Best Buy's add runner to v11 and removes its preorder-only rejection
+- Reuses prior preorder evidence and preorder catalog candidates during bounded,
+  opt-in automatic store checks
 
 ### Self-healing store checks and Walmart duplicate-action binding (1.19.1)
 
@@ -8,7 +16,7 @@
   candidates for optional automatic no-click checks and advances past products
   that are no longer usable
 - Keeps current repairable observer failures eligible for a later packaged fix
-  while excluding preorder evidence from the in-stock candidate pool
+  and ranks reusable exact-product evidence ahead of unobserved catalog entries
 - Binds Walmart's exact structured first-party Shipping offer to one primary
   action when the page also renders a sticky duplicate; two primary actions
   remain ambiguous and fail closed

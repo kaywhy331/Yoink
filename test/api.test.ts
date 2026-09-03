@@ -1322,7 +1322,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v9",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v10"
+          bestBuyAddAdapterVersion: "bestbuy-add-v11"
         }
       })
     });
@@ -1361,7 +1361,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v9",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v10"
+          bestBuyAddAdapterVersion: "bestbuy-add-v11"
         }
       })
     });
@@ -1567,7 +1567,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v9",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v10"
+          bestBuyAddAdapterVersion: "bestbuy-add-v11"
         }
       })
     });
@@ -1958,7 +1958,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v10",
+        adapterVersion: "bestbuy-add-v11",
         observerVersion: "bestbuy-observer-v10",
         contractVersion: 1,
         shadowObservationId: bestBuyShadowIds[0],
@@ -1976,9 +1976,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v10",
+        adapterVersion: "bestbuy-add-v11",
         evidenceHash: bestBuyReadySnapshot.bestBuyQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_BESTBUY_ADD_V10"
+        confirmation: "ENABLE_BESTBUY_ADD_V11"
       })
     });
     assert.equal(bestBuyActivation.status, 200);

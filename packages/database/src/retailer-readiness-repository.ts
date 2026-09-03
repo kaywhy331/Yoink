@@ -395,23 +395,23 @@ export class RetailerReadinessRepository {
               COALESCE(MAX(variant.title), '') AS title,
               MAX(observation.observed_at) AS trialObservedAt,
               MAX(CASE WHEN observation.observation_state = 'actionable_candidate'
-                         AND observation.availability = 'in_stock'
+                         AND observation.availability IN ('in_stock', 'preorder')
                          AND observation.seller_type = 'first_party'
                          AND observation.add_control_actionable = 1 THEN 1 ELSE 0 END) AS firstPartyActionable,
               MAX(CASE WHEN observation.observation_state = 'actionable_candidate'
-                         AND observation.availability = 'in_stock'
+                         AND observation.availability IN ('in_stock', 'preorder')
                          AND observation.fulfillment = 'shipping'
                          AND observation.add_control_actionable = 1 THEN 1 ELSE 0 END) AS shippingActionable,
               MAX(CASE WHEN observation.observation_state = 'actionable_candidate'
-                         AND observation.availability = 'in_stock'
+                         AND observation.availability IN ('in_stock', 'preorder')
                          AND observation.fulfillment = 'pickup'
                          AND observation.add_control_actionable = 1 THEN 1 ELSE 0 END) AS pickupActionable,
               MAX(CASE WHEN observation.observation_state = 'actionable_candidate'
-                         AND observation.availability = 'in_stock'
+                         AND observation.availability IN ('in_stock', 'preorder')
                          AND observation.purchase_route_ready = 1 THEN 1 ELSE 0 END) AS offerRouteReady,
               MAX(CASE WHEN observation.adapter_version = ?
                          AND observation.observation_state = 'actionable_candidate'
-                         AND observation.availability = 'in_stock'
+                         AND observation.availability IN ('in_stock', 'preorder')
                          AND observation.observed_at >= ? THEN 1 ELSE 0 END) AS currentObserverEvidence,
               MAX(CASE WHEN trial.outcome = 'passed' AND trial.adapter_version = ?
                          AND trial.observed_at >= ? THEN 1 ELSE 0 END) AS currentRehearsalPassed,
@@ -511,7 +511,7 @@ export class RetailerReadinessRepository {
        FROM listings listing
        JOIN variants variant ON variant.id = listing.variant_id
        WHERE listing.retailer_id = ?
-         AND listing.status = 'in_stock'
+         AND listing.status IN ('in_stock', 'preorder')
          AND listing.canonical_url <> ''
        ORDER BY userRelevant DESC, listing.updated_at DESC, listing.retailer_sku
        LIMIT 16`,

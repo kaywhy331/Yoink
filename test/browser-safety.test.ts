@@ -58,8 +58,9 @@ function offer(overrides: Partial<LiveOfferObservation> = {}): LiveOfferObservat
   };
 }
 
-test("live verification binds exact listing, seller, price, fulfillment, and actionable control", () => {
+test("live verification accepts actionable preorders and binds exact listing, seller, price, fulfillment, and control", () => {
   assert.equal(verifyLiveOffer(job(), offer(), NOW).ok, true);
+  assert.equal(verifyLiveOffer(job(), offer({ availability: "preorder" }), NOW).ok, true);
   const failures: Array<[Partial<LiveOfferObservation>, string]> = [
     [{ retailerSku: "B0WRONG0001" }, "listing_mismatch"],
     [{ unitPriceCents: 6001 }, "over_unit_cap"],

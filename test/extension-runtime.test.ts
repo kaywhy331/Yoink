@@ -569,6 +569,7 @@ interface HarnessOptions {
   }>;
   retailerSessionState?: "ready" | "signed_out" | "challenged" | "unknown";
   retailerSessionStates?: Array<"ready" | "signed_out" | "challenged" | "unknown">;
+  bestBuyPreorder?: boolean;
 }
 
 async function waitFor(
@@ -1243,7 +1244,12 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: { ok: true, observation: AMAZON_OBSERVATION, diagnostic: diagnosticFor(AMAZON_OBSERVATION) } }];
         }
         if (args?.[0] === "walmart") return [{ frameId: 0, result: { ok: true, observation: WALMART_OBSERVATION, diagnostic: diagnosticFor(WALMART_OBSERVATION) } }];
-        if (args?.[0] === "bestbuy") return [{ frameId: 0, result: { ok: true, observation: BESTBUY_OBSERVATION, diagnostic: diagnosticFor(BESTBUY_OBSERVATION) } }];
+        if (args?.[0] === "bestbuy") {
+          const observation = options.bestBuyPreorder
+            ? { ...BESTBUY_OBSERVATION, availability: "preorder" }
+            : BESTBUY_OBSERVATION;
+          return [{ frameId: 0, result: { ok: true, observation, diagnostic: diagnosticFor(observation) } }];
+        }
         if (args?.[0] === "disney") return [{ frameId: 0, result: { ok: true, observation: DISNEY_OBSERVATION, diagnostic: diagnosticFor(DISNEY_OBSERVATION) } }];
         if (args?.[0] === "pbandai") return [{ frameId: 0, result: { ok: true, observation: PBANDAI_OBSERVATION, diagnostic: diagnosticFor(PBANDAI_OBSERVATION) } }];
         if (args?.[0] === "pokemoncenter") return [{ frameId: 0, result: { ok: true, observation: POKEMONCENTER_OBSERVATION, diagnostic: diagnosticFor(POKEMONCENTER_OBSERVATION) } }];
@@ -1735,7 +1741,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.bestBuyJob ? {
         contractVersion: 1,
-        adapterVersion: "bestbuy-add-v10",
+        adapterVersion: "bestbuy-add-v11",
         id: `job_bestbuy_fixture${jobSuffix}`,
         capabilityToken: "B".repeat(43),
         action: "add_to_cart",
@@ -2791,7 +2797,7 @@ test("the service worker rehearses Amazon add-v9 without persisting its offer to
   assert.equal(JSON.stringify(rehearsalDiagnostic).includes("offerListing"), false);
 });
 
-test("the service worker captures observer-v10 evidence and rehearses Best Buy add-v10 without clicking", async () => {
+test("the service worker captures observer-v10 evidence and rehearses Best Buy add-v11 without clicking", async () => {
   const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL });
   const rehearsal = await runtime.send({ type: "yoink:rehearse-bestbuy" });
   assert.equal(rehearsal.ok, true);
@@ -2806,7 +2812,7 @@ test("the service worker captures observer-v10 evidence and rehearses Best Buy a
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v10");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v11");
   assert.equal(trialBody.observerVersion, "bestbuy-observer-v10");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("699"), false);
@@ -2818,6 +2824,23 @@ test("the service worker captures observer-v10 evidence and rehearses Best Buy a
   assert.equal(diagnostic.operation, "rehearse_add");
   assert.equal(diagnostic.outcome, "passed");
   assert.equal(diagnostic.failureStage, "complete");
+});
+
+test("the service worker qualifies an actionable Best Buy preorder through the normal no-click boundary", async () => {
+  const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL, bestBuyPreorder: true });
+  const rehearsal = await runtime.send({ type: "yoink:rehearse-bestbuy" });
+  assert.equal(rehearsal.ok, true);
+  assert.equal((rehearsal.rehearsal as Record<string, unknown>).ok, true);
+  const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
+  assert.ok(trialPost);
+  const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v11");
+  assert.equal(trialBody.outcome, "passed");
+  const diagnostics = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/bestbuy"));
+  assert.equal(diagnostics.length, 2);
+  const rehearsalDiagnostic = JSON.parse(String(diagnostics.at(-1)?.options.body)) as Record<string, unknown>;
+  assert.equal(rehearsalDiagnostic.outcome, "passed");
+  assert.equal(rehearsalDiagnostic.reasonCode, "verified");
 });
 
 test("the service worker rejects a non-Target active tab before injection", async () => {
@@ -4765,7 +4788,7 @@ test("automatic requalification never prompts for new retailer access or opens a
       createdAt: new Date().toISOString(),
       lanes: [{
         retailerId: "bestbuy",
-        expectedAdapterVersion: "bestbuy-add-v10",
+        expectedAdapterVersion: "bestbuy-add-v11",
         qualification: { status: "missing", warning: "none", expiresAt: "" },
         evidence: {
           liveEvidenceReady: false,

@@ -109,7 +109,6 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(background, /idempotencyKey: envelope\.signalId/);
   assert.match(background, /trackalacker-sync\.js/);
   assert.match(background, /retailerMutation: false/);
-  assert.match(background, /preorder_not_supported/);
   assert.match(background, /high_demand/);
   assert.match(background, /Sign in to Best Buy in this tab, confirm your location/);
   assert.match(background, /Complete the visible Best Buy security check/);
@@ -147,7 +146,7 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.doesNotMatch(amazonActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
   assert.doesNotMatch(amazonActionBundle, /checkout\/entry\/buynow/);
   assert.match(bestBuyActionBundle, /\.click\s*\(/);
-  assert.match(bestBuyActionBundle, /preorder_not_supported/);
+  assert.doesNotMatch(bestBuyActionBundle, /preorder_not_supported/);
   assert.match(bestBuyActionBundle, /high_demand/);
   assert.doesNotMatch(bestBuyActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
   assert.doesNotMatch(trackalackerPush, /console\./);

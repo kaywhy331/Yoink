@@ -164,7 +164,7 @@ const TARGET_ADD_ADAPTER_VERSION = "target-add-v7";
 const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v8";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
-const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v10";
+const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v11";
 const TARGET_CART_URL = "https://www.target.com/cart";
 const WALMART_CART_URL = "https://www.walmart.com/cart";
 const AMAZON_CART_URL = "https://www.amazon.com/gp/cart/view.html";
@@ -1153,7 +1153,7 @@ function operationDiagnostic(base, retailerId, operation, outcome, failureStage,
 }
 
 const EXPECTED_LIVE_REJECTIONS = new Set([
-  "manual_action_required", "preorder_not_supported", "out_of_stock", "third_party_seller", "signal_seller_mismatch",
+  "manual_action_required", "out_of_stock", "third_party_seller", "signal_seller_mismatch",
   "over_unit_cap", "fulfillment_not_supported", "seller_policy_not_supported",
   "quantity_not_supported", "unsupported_action", "job_expired"
 ]);
@@ -3145,7 +3145,7 @@ function targetRehearsalJob(observation) {
     || observation.fulfillment !== "shipping"
     || observation.sellerType !== "first_party"
     || observation.sellerName !== "Target") {
-    throw new Error("Open an in-stock, Target-sold product with Shipping available or same-day Delivery already available before running the no-click rehearsal.");
+    throw new Error("Open an available Target-sold product with Shipping or same-day Delivery available before running the no-click rehearsal.");
   }
   return {
     adapterVersion: TARGET_ADD_ADAPTER_VERSION,
@@ -3211,7 +3211,7 @@ function walmartRehearsalJob(observation) {
     || observation.fulfillment !== "shipping"
     || observation.sellerType !== "first_party"
     || observation.sellerName !== "Walmart") {
-    throw new Error("Open an in-stock, Walmart-sold product with shipping explicitly available before running the no-click rehearsal.");
+    throw new Error("Open an available Walmart-sold product with shipping explicitly available before running the no-click rehearsal.");
   }
   return {
     adapterVersion: WALMART_ADD_ADAPTER_VERSION,
@@ -3280,7 +3280,7 @@ function amazonRehearsalJob(observation) {
     || observation.sellerType !== "first_party"
     || observation.sellerName !== "Amazon.com"
     || observation.purchaseRouteReady !== true) {
-    throw new Error("Open an in-stock, Amazon.com-sold product with a unique shipping offer before running the no-click rehearsal.");
+    throw new Error("Open an available Amazon.com-sold product with a unique shipping offer before running the no-click rehearsal.");
   }
   return {
     adapterVersion: AMAZON_ADD_ADAPTER_VERSION,
@@ -3379,7 +3379,7 @@ function bestBuyRehearsalJob(observation) {
   if (!observation?.id
     || observation.retailerId !== "bestbuy"
     || !/^\d{5,20}$/.test(String(observation.retailerSku || ""))
-    || observation.availability !== "in_stock"
+    || !["in_stock", "preorder"].includes(observation.availability)
     || observation.addControlActionable !== true
     || Boolean(observation.securityChallenge || observation.interactiveBlock)
     || !Number.isSafeInteger(price)
@@ -3402,13 +3402,10 @@ function bestBuyRehearsalJob(observation) {
     if (observation?.interactiveBlock === "location") {
       throw new Error("Confirm your Best Buy location and select Shipping, then retry qualification.");
     }
-    if (observation?.availability === "preorder") {
-      throw new Error("Best Buy preorder evidence was recorded, but preorder adds remain closed. Use an in-stock Best Buy-sold offer with Shipping selected.");
-    }
     if (observation?.fulfillment === "pickup") {
-      throw new Error("Best Buy pickup evidence was recorded. Select Shipping on an in-stock Best Buy-sold offer before rehearsing.");
+      throw new Error("Best Buy pickup evidence was recorded. Select Shipping on an available Best Buy-sold offer before rehearsing.");
     }
-    throw new Error("Open an in-stock offer explicitly sold by Best Buy, select Shipping, and verify a usable Add to cart control before rehearsing.");
+    throw new Error("Open an available offer explicitly sold by Best Buy, select Shipping, and verify a usable Add to cart or Pre-order control before rehearsing.");
   }
   return {
     adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
@@ -3439,13 +3436,13 @@ async function rehearseBestBuyTab(existingInspection = null, tabId = null) {
     job = bestBuyRehearsalJob(observation);
   } catch (error) {
     const expectedPolicyRejection = observation.sellerType === "third_party"
-      || observation.availability === "preorder"
+      || !["in_stock", "preorder"].includes(observation.availability)
       || observation.fulfillment === "pickup"
       || Boolean(observation.securityChallenge || observation.interactiveBlock);
     const reasonCode = observation.securityChallenge || observation.interactiveBlock
       ? "manual_action_required"
-      : observation.availability === "preorder"
-        ? "preorder_not_supported"
+      : !["in_stock", "preorder"].includes(observation.availability)
+        ? "out_of_stock"
         : observation.sellerType === "third_party"
           ? "third_party_seller"
           : observation.fulfillment === "pickup"

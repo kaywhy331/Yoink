@@ -234,7 +234,7 @@ var YoinkBestBuyActionModule = (() => {
   }
 
   // packages/contracts/src/index.ts
-  var BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v10";
+  var BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v11";
 
   // packages/browser-adapters/src/retailers.ts
   function fanaticsProductId(url) {
@@ -1816,9 +1816,6 @@ var YoinkBestBuyActionModule = (() => {
       job.fulfillment,
       new Date(now).toISOString()
     );
-    if (observation.availability === "preorder" && !observation.securityChallenge && !observation.interactiveBlock) {
-      return { ok: false, reason: "preorder_not_supported" };
-    }
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return verified;
     const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment);
@@ -1851,9 +1848,6 @@ var YoinkBestBuyActionModule = (() => {
       job.fulfillment,
       new Date(now).toISOString()
     );
-    if (observation.availability === "preorder" && !observation.securityChallenge && !observation.interactiveBlock) {
-      return { ok: false, reason: "preorder_not_supported", clicked: false };
-    }
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return { ...verified, clicked: false };
     const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment);

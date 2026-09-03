@@ -437,7 +437,7 @@ test("Amazon activation requires exact ephemeral-route evidence and preserves th
   }
 });
 
-test("Best Buy activation requires two explicitly first-party selected-shipping observations and a no-click rehearsal", () => {
+test("Best Buy activation accepts an actionable preorder as first-party shipping evidence", () => {
   const db = new YoinkDatabase();
   try {
     const devices = new DeviceRepository(db);
@@ -453,28 +453,27 @@ test("Best Buy activation requires two explicitly first-party selected-shipping 
       }
     }, NOW + 1_000);
     const shadows = new ShadowObservationRepository(db);
-    shadows.record(device.id, {
+    const preorder = shadows.record(device.id, {
       ...bestBuyObservation(new Date(NOW + 1_500).toISOString(), "6678193"),
       availability: "preorder"
     }, NOW + 1_750);
     const preorderOnly = shadows.bestBuyQualificationReadiness(NOW + 1_800);
-    assert.equal(preorderOnly.checks.find((check) => check.id === "first_party_actionable")?.observed, 0);
-    assert.equal(preorderOnly.checks.find((check) => check.id === "shipping_actionable")?.observed, 0);
+    assert.equal(preorderOnly.checks.find((check) => check.id === "first_party_actionable")?.observed, 1);
+    assert.equal(preorderOnly.checks.find((check) => check.id === "shipping_actionable")?.observed, 1);
     assert.equal(preorderOnly.liveEvidenceReady, false);
-    const first = shadows.record(device.id, bestBuyObservation(new Date(NOW + 2_000).toISOString()), NOW + 3_000);
-    shadows.record(device.id, bestBuyObservation(new Date(NOW + 4_000).toISOString(), "6588152"), NOW + 5_000);
+    shadows.record(device.id, bestBuyObservation(new Date(NOW + 2_000).toISOString(), "6588152"), NOW + 3_000);
     const repository = new QualificationRepository(db);
     const trial = repository.recordBestBuyAddRehearsal(device.id, {
       adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
       observerVersion: BESTBUY_OBSERVER_VERSION,
       contractVersion: 1,
-      shadowObservationId: first.id,
-      observedAt: new Date(NOW + 6_000).toISOString(),
+      shadowObservationId: preorder.id,
+      observedAt: new Date(NOW + 4_000).toISOString(),
       outcome: "passed",
       reasonCode: "verified"
-    }, NOW + 7_000);
+    }, NOW + 5_000);
     assert.equal(trial.retailerId, "bestbuy");
-    const ready = shadows.bestBuyQualificationReadiness(NOW + 8_000);
+    const ready = shadows.bestBuyQualificationReadiness(NOW + 6_000);
     assert.equal(ready.liveEvidenceReady, true);
     assert.equal(ready.rehearsalReady, true);
     assert.equal(ready.qualificationEvidenceReady, true);
@@ -483,10 +482,10 @@ test("Best Buy activation requires two explicitly first-party selected-shipping 
       adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
       evidenceHash: ready.qualificationEvidenceHash,
       confirmation: BESTBUY_ADD_ACTIVATION_CONFIRMATION
-    }, NOW + 9_000);
+    }, NOW + 7_000);
     assert.equal(activated.readiness.addToCartQualified, true);
     assert.equal(activated.readiness.mutationAuthorized, false);
-    assert.equal(repository.bestBuyAddQualified(NOW + 10_000), true);
+    assert.equal(repository.bestBuyAddQualified(NOW + 8_000), true);
     assert.equal(db.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 1);
     assert.equal(new ControlRepository(db).settings().actionsPaused, true);
   } finally {

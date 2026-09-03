@@ -1155,7 +1155,7 @@ gated, so SQLite retains runtime authority. See
 ## Constrained action-store layout recovery
 
 The current action contracts are `target-add-v7`, `walmart-add-v8`,
-`amazon-add-v9`, and `bestbuy-add-v10`, paired with observer versions 5, 7, 8,
+`amazon-add-v9`, and `bestbuy-add-v11`, paired with observer versions 5, 7, 8,
 and 10 respectively. Packaged selectors remain authoritative when present.
 When they drift, local packaged code may recover only one unique semantic Add
 control and one unique price landmark, after the existing exact identity,

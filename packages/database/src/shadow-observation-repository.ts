@@ -782,7 +782,7 @@ export class ShadowObservationRepository {
         || observation.adapterVersion !== currentObserverVersions[retailerId]
         || new Date(observation.observedAt).getTime() < cutoff
         || observation.observationState !== "actionable_candidate"
-        || observation.availability !== "in_stock"
+        || !["in_stock", "preorder"].includes(observation.availability)
         || observation.sellerType !== "first_party"
         || observation.fulfillment !== "shipping"
         || !observation.addControlActionable
@@ -903,7 +903,7 @@ export class ShadowObservationRepository {
       {
         id: "first_party_actionable",
         label: "First-party offer",
-        detail: "Capture an in-stock Target-sold offer with a usable add control.",
+        detail: "Capture an available Target-sold offer with a usable Add or Pre-order control.",
         required: 1,
         requiredForQualification: true
       },
@@ -1063,7 +1063,7 @@ export class ShadowObservationRepository {
       {
         id: "first_party_actionable",
         label: "First-party offer",
-        detail: "Capture an in-stock Walmart-sold offer with a usable add control.",
+        detail: "Capture an available Walmart-sold offer with a usable Add or Pre-order control.",
         required: 1,
         requiredForQualification: true
       },
@@ -1224,7 +1224,7 @@ export class ShadowObservationRepository {
       {
         id: "first_party_actionable",
         label: "First-party offer",
-        detail: "Capture an in-stock Amazon.com-sold offer with a usable add control.",
+        detail: "Capture an available Amazon.com-sold offer with a usable Add or Pre-order control.",
         required: 1,
         requiredForQualification: true
       },
@@ -1359,7 +1359,7 @@ export class ShadowObservationRepository {
       BESTBUY_OBSERVER_VERSION,
       cutoff
     );
-    const actionable = rows.filter((row) => row.observationState === "actionable_candidate" && row.availability === "in_stock");
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
     const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
     const rehearsals = this.db.all<QualificationTrialRow>(
       `SELECT evidence_hash AS evidenceHash FROM retailer_adapter_trials
@@ -1384,14 +1384,14 @@ export class ShadowObservationRepository {
       {
         id: "first_party_actionable",
         label: "First-party offer",
-        detail: "Capture an in-stock offer explicitly labeled Sold by Best Buy with a usable add control.",
+        detail: "Capture an available offer explicitly labeled Sold by Best Buy with a usable Add or Pre-order control.",
         required: 1,
         requiredForQualification: true
       },
       {
         id: "named_marketplace_actionable",
         label: "Named marketplace offer",
-        detail: "Optional fail-closed coverage; bestbuy-add-v10 rejects every marketplace seller.",
+        detail: "Optional fail-closed coverage; bestbuy-add-v11 rejects every marketplace seller.",
         required: 1,
         requiredForQualification: false
       },
