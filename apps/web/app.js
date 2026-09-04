@@ -957,9 +957,17 @@ function renderActionPlatformAdmin() {
     }
     const warning = lane.qualification?.warning || "none";
     const qualificationNeedsAttention = warning !== "none";
-    const readinessLabel = qualificationNeedsAttention ? warning.replaceAll("_", " ")
-      : lane.readyForGuardedAdd ? "Ready" : "Needs setup";
-    container.innerHTML = `<div class="adapter-repair-summary"><span>Guarded add readiness</span><strong>${escapeHtml(readinessLabel)}</strong></div><div class="card-meta">${(lane.checklist || []).map((check) => `<span class="tag ${check.ready ? "good" : ""}"><span aria-hidden="true">${check.ready ? "✓" : "○"}</span> ${escapeHtml(check.label)}</span>`).join("")}</div><div class="card-actions">${lane.candidate?.canonicalUrl ? `<a class="button secondary" href="${escapeHtml(lane.candidate.canonicalUrl)}" target="_blank" rel="noopener">Open prior passing SKU</a>` : ""}${lane.qualification?.status === "qualified" ? `<button class="button danger" data-retire-lane="${escapeHtml(lane.retailerId)}" type="button">Retire this lane</button>` : ""}</div>`;
+    const readinessLabel = lane.degraded ? "Degraded"
+      : qualificationNeedsAttention ? warning.replaceAll("_", " ")
+        : lane.readyForGuardedAdd ? "Ready" : "Needs setup";
+    const degradedReasons = (lane.degradedReasons || []).map((reason) => LANE_DEGRADATION_LABELS[reason] || String(reason).replaceAll("_", " "));
+    const blockedLabel = LANE_BLOCKED_LABELS[lane.blockedReason || ""] || "";
+    const lastRun = lane.lastAutomaticRun || null;
+    const stalledCount = Number(lane.consecutiveNonPassingRuns || 0);
+    const automaticSummary = lastRun
+      ? `Last automatic check: ${escapeHtml(String(lastRun.outcome).replaceAll("_", " "))} · ${escapeHtml(String(lastRun.reasonCode || "").replaceAll("_", " "))} · ${escapeHtml(relativeTime(lastRun.finishedAt))}${stalledCount > 0 ? ` · ${stalledCount.toLocaleString()} non-passing run${stalledCount === 1 ? "" : "s"} in a row` : ""}`
+      : "No automatic check has reported yet.";
+    container.innerHTML = `<div class="adapter-repair-summary"><span>Guarded add readiness</span><strong>${escapeHtml(readinessLabel)}</strong></div><div class="card-meta">${lane.degraded ? `<span class="tag bad">Degraded · ${escapeHtml(degradedReasons.join(", ") || "current checks failing")}</span>` : ""}${blockedLabel ? `<span class="tag warning">${escapeHtml(blockedLabel)}</span>` : ""}${(lane.checklist || []).map((check) => `<span class="tag ${check.ready ? "good" : ""}"><span aria-hidden="true">${check.ready ? "✓" : "○"}</span> ${escapeHtml(check.label)}</span>`).join("")}</div><p class="fine-print" data-lane-automatic-run="${escapeHtml(lane.retailerId)}">${automaticSummary}</p><div class="card-actions">${lane.candidate?.canonicalUrl ? `<a class="button secondary" href="${escapeHtml(lane.candidate.canonicalUrl)}" target="_blank" rel="noopener">Open prior passing SKU</a>` : ""}${lane.qualification?.status === "qualified" ? `<button class="button danger" data-retire-lane="${escapeHtml(lane.retailerId)}" type="button">Retire this lane</button>` : ""}</div>`;
   }
   populateTimezoneSelect($("#dropWindowTimezone"), $("#dropWindowTimezone").value || state.dropWindowTimezone);
   populateTimezoneSelect($("#restockPatternTimezone"), $("#restockPatternTimezone").value || state.dropWindowTimezone);
@@ -1241,17 +1249,30 @@ function renderShadowObservations() {
   }).join("") : empty("No store page has been inspected yet. Open an exact product page and use the Chrome companion’s read-only inspection button.");
 }
 
+const LANE_DEGRADATION_LABELS = Object.freeze({
+  open_repair_current_version: "open repairs on the current adapter",
+  recent_rehearsals_rejected: "last three no-click checks rejected",
+  live_add_failed_after_pass: "a live add failed after the last pass"
+});
+const LANE_BLOCKED_LABELS = Object.freeze({
+  no_candidate: "No candidate product to check",
+  no_purchasable_candidate: "No purchasable product to check right now"
+});
+
 function renderAdapterRepairQueue() {
   const queue = state.snapshot.adapterRepairQueue || [];
   const open = Number(state.snapshot.counts.openAdapterRepairGroups || 0);
   const recovered = Number(state.snapshot.counts.recoveredAdapterRepairGroups || 0);
+  const agedOut = Number(state.snapshot.counts.agedOutAdapterRepairGroups || 0);
   const events = Number(state.snapshot.counts.adapterDiagnosticEvents || 0);
   const gate = $("#adapterRepairGate");
   gate.textContent = open ? "Attention" : "OK";
   gate.classList.toggle("danger", open > 0);
-  $("#adapterRepairSummary").innerHTML = `<strong>${open.toLocaleString()} open repair group${open === 1 ? "" : "s"}</strong><span>${events.toLocaleString()} sanitized events · ${recovered.toLocaleString()} recovered groups</span>`;
+  $("#adapterRepairSummary").innerHTML = `<strong>${open.toLocaleString()} open repair group${open === 1 ? "" : "s"}</strong><span>${events.toLocaleString()} sanitized events · ${recovered.toLocaleString()} recovered groups${agedOut ? ` · ${agedOut.toLocaleString()} aged out` : ""}</span>`;
   $("#adapterRepairList").innerHTML = queue.length ? queue.map((item) => {
     const isOpen = item.status === "open";
+    const isAgedOut = item.status === "aged_out";
+    const statusLabel = isOpen ? "Repair needed" : isAgedOut ? "Aged out" : "Recovered";
     const retailer = retailerName(item.retailerId);
     const operation = String(item.operation || "observe").replaceAll("_", " ");
     const stage = String(item.failureStage || "unknown").replaceAll("_", " ");
@@ -1262,9 +1283,9 @@ function renderAdapterRepairQueue() {
       const ready = suggestion.reviewState === "maintainer_ready";
       return `<div class="card-meta"><span class="tag">${escapeHtml(observerFieldName(suggestion.field))}</span><span class="tag ${ready ? "warning" : ""}">${ready ? "Ready for candidate evaluation" : "Collecting evidence"}</span><span class="tag">never auto-promoted</span><span class="tag">non-executable</span><code>${escapeHtml(suggestion.selector || "")}</code><span>${Number(suggestion.distinctDeviceCount || 0).toLocaleString()}/${Number(suggestion.minimumDeviceCount || 3).toLocaleString()} Chrome companions · ${Number(suggestion.distinctSkuCount || 0).toLocaleString()}/${Number(suggestion.minimumSkuCount || 2).toLocaleString()} exact SKUs</span></div>`;
     }).join("");
-    return `<article class="adapter-repair-row ${isOpen ? "open" : "recovered"}">
-      <div>${statusDot(isOpen ? "bad" : "good", isOpen ? "Repair needed" : "Recovered")}<div><h3>${escapeHtml(retailer)} · ${escapeHtml(operation)} · ${escapeHtml(item.latestRetailerSku || "unknown SKU")}</h3><p>${escapeHtml(stage)} · ${escapeHtml(reason)} · layout ${escapeHtml(fingerprint || "unknown")}</p></div></div>
-      <div class="adapter-repair-meta"><span class="tag ${isOpen ? "bad" : "good"}">${isOpen ? "Repair needed" : "Recovered"}</span><span>${Number(item.occurrenceCount || 0).toLocaleString()} occurrences · ${Number(item.affectedSkuCount || 0).toLocaleString()} SKUs${item.domChangedSeen ? " · DOM changed during retry" : ""}</span><time>${escapeHtml(relativeTime(item.lastSeenAt))}</time></div>
+    return `<article class="adapter-repair-row ${isOpen ? "open" : isAgedOut ? "aged-out" : "recovered"}">
+      <div>${statusDot(isOpen ? "bad" : isAgedOut ? "warning" : "good", statusLabel)}<div><h3>${escapeHtml(retailer)} · ${escapeHtml(operation)} · ${escapeHtml(item.latestRetailerSku || "unknown SKU")}</h3><p>${escapeHtml(stage)} · ${escapeHtml(reason)} · layout ${escapeHtml(fingerprint || "unknown")}</p></div></div>
+      <div class="adapter-repair-meta"><span class="tag ${isOpen ? "bad" : isAgedOut ? "" : "good"}">${statusLabel}</span><span>${Number(item.occurrenceCount || 0).toLocaleString()} occurrences · ${Number(item.affectedSkuCount || 0).toLocaleString()} SKUs${item.domChangedSeen ? " · DOM changed during retry" : ""}</span><time>${escapeHtml(relativeTime(item.lastSeenAt))}</time></div>
       ${suggestionRows}
     </article>`;
   }).join("") : empty("No adapter repair incidents have been captured. The server is listening for sanitized extension diagnostics.");
@@ -3498,7 +3519,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_TARGET_ADD_V7"
+          confirmation: "ENABLE_TARGET_ADD_V8"
         })
       });
       await refresh();

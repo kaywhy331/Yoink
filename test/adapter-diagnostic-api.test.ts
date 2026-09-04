@@ -183,3 +183,117 @@ test("the authenticated diagnostic endpoint immediately feeds the sanitized repa
     db.close();
   }
 });
+
+async function pairedHeaders(baseUrl: string): Promise<Record<string, string>> {
+  const extensionOrigin = `chrome-extension://${"e".repeat(32)}`;
+  const pairing = await fetch(`${baseUrl}/api/v1/devices/pairing-code`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseUrl },
+    body: "{}"
+  }).then((response) => response.json()) as { pairing: { code: string } };
+  const paired = await fetch(`${baseUrl}/api/v1/devices/pair`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: extensionOrigin },
+    body: JSON.stringify({ pairingCode: pairing.pairing.code })
+  }).then((response) => response.json()) as { device: { token: string } };
+  return {
+    "Content-Type": "application/json",
+    Origin: extensionOrigin,
+    Authorization: `Bearer ${paired.device.token}`
+  };
+}
+
+test("a packaged adapter version mismatch is a typed 409 conflict on every evidence route", async () => {
+  const db = new YoinkDatabase();
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const headers = await pairedHeaders(baseUrl);
+    const diagnosticResponse = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/amazon`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...diagnostic(), adapterVersion: "amazon-observer-v7" })
+    });
+    assert.equal(diagnosticResponse.status, 409);
+    const diagnosticError = await diagnosticResponse.json() as { error: string; message: string };
+    assert.equal(diagnosticError.error, "adapter_version_mismatch");
+    assert.match(diagnosticError.message, /amazon-observer-v7/);
+    const observationResponse = await fetch(`${baseUrl}/api/v1/devices/self/shadow-observations/target`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ retailerId: "target", adapterVersion: "target-observer-v5", contractVersion: 1 })
+    });
+    assert.equal(observationResponse.status, 409);
+    assert.equal((await observationResponse.json() as { error: string }).error, "adapter_version_mismatch");
+    const trialResponse = await fetch(`${baseUrl}/api/v1/devices/self/qualification-trials/target-add`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ adapterVersion: "target-add-v7", observerVersion: "target-observer-v6", contractVersion: 1 })
+    });
+    assert.equal(trialResponse.status, 409);
+    assert.equal((await trialResponse.json() as { error: string }).error, "adapter_version_mismatch");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics")?.count, 0);
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});
+
+test("store re-verification run receipts land on the readiness plan through the device route", async () => {
+  const db = new YoinkDatabase();
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const headers = await pairedHeaders(baseUrl);
+    const finishedAt = new Date().toISOString();
+    const receipt = {
+      contractVersion: 1,
+      runId: "run_target_api_0001",
+      retailerId: "target",
+      automatic: true,
+      trigger: "scheduled",
+      outcome: "blocked",
+      reasonCode: "out_of_stock",
+      attemptedProductCount: 2,
+      passedProductCount: 0,
+      startedAt: finishedAt,
+      finishedAt,
+      extensionVersion: "1.19.5",
+      planSignature: "reverification-plan-v3:trigger:0000"
+    };
+    const created = await fetch(`${baseUrl}/api/v1/devices/self/readiness/reverification-runs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...receipt, canonicalUrl: "https://www.target.com/p/-/A-1?secret=DO_NOT_STORE" })
+    });
+    assert.equal(created.status, 201);
+    const body = await created.json() as { run: Record<string, unknown>; lane: Record<string, unknown>; stallReconciliation: Record<string, number> };
+    assert.equal(body.run.runId, "run_target_api_0001");
+    assert.equal((body.lane.lastAutomaticRun as Record<string, unknown>).outcome, "blocked");
+    assert.equal(body.lane.consecutiveNonPassingRuns, 1);
+    assert.equal(body.lane.blockedReason, "no_candidate");
+    assert.equal(body.lane.degraded, false);
+    assert.deepEqual(body.stallReconciliation, { opened: 0, updated: 0, resolved: 0, routed: 0 });
+    assert.equal(JSON.stringify(body).includes("DO_NOT_STORE"), false);
+    const plan = await fetch(`${baseUrl}/api/v1/devices/self/readiness/reverification-plan`, { headers })
+      .then((response) => response.json()) as { plan: { lanes: Array<Record<string, unknown>> } };
+    const target = plan.plan.lanes.find((lane) => lane.retailerId === "target");
+    assert.equal((target?.lastAutomaticRun as Record<string, unknown>)?.runId, "run_target_api_0001");
+    assert.equal(target?.consecutiveNonPassingRuns, 1);
+    const invalid = await fetch(`${baseUrl}/api/v1/devices/self/readiness/reverification-runs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...receipt, runId: "run_target_api_0002", passedProductCount: 3 })
+    });
+    assert.equal(invalid.status, 400);
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});

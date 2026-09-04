@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-19-4-automatic-incident-repair",
-  version: "1.19.4",
-  publishedAt: "2026-09-03T23:10:20.000Z",
-  title: "Store checks repair incidents automatically",
-  summary: "Current store-check issues now drive bounded, varied-product rechecks and close automatically only after passing evidence arrives.",
+  id: "yoink-1-19-5-self-correcting-store-checks",
+  version: "1.19.5",
+  publishedAt: "2026-09-04T01:57:17.000Z",
+  title: "Store checks correct themselves",
+  summary: "Automatic checks now prefer purchasable products, pause cart adds when checks keep failing, and report every run so a stalled store is visible.",
   highlights: [
-    "The newest Target, Walmart, Amazon, or Best Buy incident appears first instead of being buried by older severity.",
-    "Automatic checks prioritize unresolved products across distinct recorded layouts, including no-click rehearsal failures.",
-    "Passing evidence renews a previously authorized store without resuming paused actions or overriding manual retirement."
+    "Checks pick products you can buy right now, so a store with sold-out saved products can still pass its store checks after an update.",
+    "Repeated failures pause cart adds for that store until a fresh passing check renews it; stalled stores open an incident.",
+    "Every automatic check leaves a receipt, backs off instead of retrying blindly, and waits for you when a sign-in or store access is needed."
   ],
   docsUrl: "/docs"
 });

@@ -12,6 +12,12 @@ const PRODUCT_URL = "https://www.target.com/p/fixture/-/A-1011483414";
 const WALMART_PRODUCT_URL = "https://www.walmart.com/ip/fixture/17354421975";
 const AMAZON_PRODUCT_URL = "https://www.amazon.com/dp/B0GYTRYV7P";
 const BESTBUY_PRODUCT_URL = "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149";
+const PACKAGED_ADD_VERSIONS = {
+  target: "target-add-v8", walmart: "walmart-add-v8", amazon: "amazon-add-v9", bestbuy: "bestbuy-add-v11"
+} as const;
+const PACKAGED_OBSERVER_VERSIONS = {
+  target: "target-observer-v6", walmart: "walmart-observer-v7", amazon: "amazon-observer-v8", bestbuy: "bestbuy-observer-v10"
+} as const;
 const DISNEY_PRODUCT_URL = "https://www.disneystore.com/dumbo-jeweled-figurine-409914998395.html";
 const PBANDAI_PRODUCT_URL = "https://p-bandai.com/us/item/N2884150001";
 const POKEMONCENTER_PRODUCT_URL = "https://www.pokemoncenter.com/product/10-10320-101/pokemon-tcg-mewtwo-and-mew-dna-premium-zip-binder";
@@ -267,7 +273,7 @@ const selectedOffer = (childOfferKey: string, selectionState = "exact") => ({
 });
 
 const OBSERVATION = {
-  adapterVersion: "target-observer-v5",
+  adapterVersion: "target-observer-v6",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -530,6 +536,11 @@ interface HarnessOptions {
   trackalackerNotificationDelayMs?: number;
   trackalackerBatchReceipts?: Array<Array<{ accepted: boolean; retryable?: boolean; errorCode?: string }>>;
   amazonHydrationRetry?: boolean;
+  walmartHydrationRetry?: boolean;
+  reverificationPlanFailAfterFetches?: number;
+  tabNeverLoads?: boolean;
+  hydrationExecuteThrows?: boolean;
+  evidenceVersionMismatch?: boolean;
   amazonSemanticRecovery?: boolean;
   observerRepairLandmark?: boolean;
   observerFiveFieldRepairLandmarks?: boolean;
@@ -571,6 +582,8 @@ interface HarnessOptions {
   retailerSessionStates?: Array<"ready" | "signed_out" | "challenged" | "unknown">;
   bestBuyPreorder?: boolean;
   targetPriceMissing?: boolean;
+  targetPriceHydrationRetry?: boolean;
+  targetUnavailable?: boolean;
 }
 
 async function waitFor(
@@ -633,7 +646,7 @@ function harness(options: HarnessOptions = {}) {
         lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
       } : null,
       runnerJob: {
-        adapterVersion: "target-add-v7",
+        adapterVersion: "target-add-v8",
         contractVersion: 1,
         jobId: "job_target_fixture",
         retailerId: "target",
@@ -770,6 +783,9 @@ function harness(options: HarnessOptions = {}) {
     expiresAt: new Date(Date.now() + 60_000).toISOString()
   }];
   let amazonObservationAttempts = 0;
+  let walmartObservationAttempts = 0;
+  let targetObservationAttempts = 0;
+  let reverificationPlanFetches = 0;
   let cartBaselineAttempts = 0;
   let adapterDiagnosticFailuresRemaining = Math.max(0, options.adapterDiagnosticFailures ?? 0);
   let adapterDiagnosticQueueWasNonEmpty = Array.isArray(storage.yoinkAdapterDiagnosticQueueV1)
@@ -860,7 +876,9 @@ function harness(options: HarnessOptions = {}) {
       get: async (id: number) => tabs.get(id),
       create: async ({ url, active = true }: { url: string; active?: boolean }) => {
         hotPathTimeline.push(`tab:${new URL(url).pathname}`);
-        const tab = { id: ++nextTabId, url, status: "complete" };
+        const tab = options.tabNeverLoads
+          ? { id: ++nextTabId, url: "about:blank", status: "loading" }
+          : { id: ++nextTabId, url, status: "complete" };
         tabCreates.push({ id: tab.id, url, active });
         if (tabLoadDelayMs) await new Promise((resolve) => setTimeout(resolve, tabLoadDelayMs));
         hotPathTimeline.push(`tab-complete:${new URL(url).pathname}`);
@@ -931,10 +949,29 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: true }];
         }
         if (args?.[0] === "collectTargetShadowAttempt") {
-          const observation = options.targetPriceMissing
+          if (options.targetUnavailable === true) {
+            targetObservationAttempts += 1;
+            const observation = {
+              ...OBSERVATION,
+              availability: "out_of_stock",
+              addControlActionable: false,
+              observationState: "not_actionable"
+            };
+            const diagnostic = {
+              ...diagnosticFor(observation),
+              outcome: "rejected",
+              failureStage: "availability_binding",
+              reasonCode: "out_of_stock"
+            };
+            return [{ frameId: 0, result: { ok: true, observation, diagnostic } }];
+          }
+          const priceMissing = options.targetPriceMissing === true
+            || (options.targetPriceHydrationRetry === true && targetObservationAttempts === 0);
+          targetObservationAttempts += 1;
+          const observation = priceMissing
             ? { ...OBSERVATION, unitPriceCents: null }
             : OBSERVATION;
-          const diagnostic = options.targetPriceMissing
+          const diagnostic = priceMissing
             ? {
               ...diagnosticFor(OBSERVATION),
               outcome: "failed",
@@ -944,6 +981,24 @@ function harness(options: HarnessOptions = {}) {
             }
             : diagnosticFor(OBSERVATION);
           return [{ frameId: 0, result: { ok: true, observation, diagnostic } }];
+        }
+        if (args?.[0] === "waitForTargetShadowHydration") {
+          if (options.hydrationExecuteThrows) {
+            throw new Error(`RAW_BROWSER_ERROR token=${TOKEN} url=${PRODUCT_URL}?secret=DO_NOT_SEND`);
+          }
+          targetObservationAttempts += 1;
+          const priceMissing = options.targetPriceMissing === true;
+          const observation = priceMissing ? { ...OBSERVATION, unitPriceCents: null } : OBSERVATION;
+          const diagnostic = priceMissing
+            ? {
+              ...diagnosticFor(OBSERVATION),
+              outcome: "failed",
+              failureStage: "price_binding",
+              reasonCode: "price_binding_missing",
+              layout: { ...diagnosticFor(OBSERVATION).layout, priceCandidateCount: 0 }
+            }
+            : diagnosticFor(OBSERVATION);
+          return [{ frameId: 0, result: { ok: true, observation, diagnostic, domChanged: true } }];
         }
         if (args?.[0] === "collectOperationDiagnostic") {
           const observation = args[1] === "target" ? OBSERVATION
@@ -1147,6 +1202,57 @@ function harness(options: HarnessOptions = {}) {
             }
           } }];
         }
+        if (args?.[0] === "waitForRetailerShadowHydration") {
+          const retailerId = String(args[1] || "");
+          if (retailerId === "amazon" && (options.observerRepairLandmark || options.observerFiveFieldRepairLandmarks)) {
+            const fiveField = options.observerFiveFieldRepairLandmarks === true;
+            const observation = {
+              ...AMAZON_OBSERVATION,
+              availability: "out_of_stock",
+              fulfillment: "unknown",
+              addControlActionable: false,
+              purchaseRouteReady: false,
+              routeReasonCode: "offer_not_actionable"
+            };
+            const diagnostic = {
+              ...diagnosticFor(AMAZON_OBSERVATION),
+              outcome: "failed",
+              failureStage: fiveField ? "availability_binding" : "add_control",
+              reasonCode: fiveField ? "availability_selector_miss" : "add_control_selector_miss",
+              layout: {
+                ...diagnosticFor(AMAZON_OBSERVATION).layout,
+                addControlCount: 0,
+                genericAddIntentCount: 1,
+                ...(fiveField ? {
+                  genericAvailabilityCandidateCount: 1,
+                  genericPriceCandidateCount: 1,
+                  genericSellerCandidateCount: 1,
+                  genericFulfillmentCandidateCount: 1
+                } : {}),
+                scopedControlCount: 0,
+                repairLandmarks: [
+                  ...(fiveField ? [
+                    { field: "availability", elementKind: "div", attribute: "data-testid", value: "product-availability-status" },
+                    { field: "unitPrice", elementKind: "span", attribute: "data-testid", value: "product-current-price" },
+                    { field: "seller", elementKind: "p", attribute: "data-testid", value: "seller-display-name" },
+                    { field: "fulfillment", elementKind: "div", attribute: "data-testid", value: "shipping-fulfillment-option" }
+                  ] : []),
+                  { field: "addControl", elementKind: "role_button", attribute: "data-testid", value: "pdp-add-to-cart-control" }
+                ]
+              }
+            };
+            return [{ frameId: 0, result: { ok: true, observation, diagnostic, domChanged: false } }];
+          }
+          const observation = retailerId === "walmart" ? WALMART_OBSERVATION
+            : retailerId === "bestbuy" ? BESTBUY_OBSERVATION
+              : AMAZON_OBSERVATION;
+          return [{ frameId: 0, result: {
+            ok: true,
+            observation,
+            diagnostic: diagnosticFor(observation),
+            domChanged: true
+          } }];
+        }
         if (args?.[0] === "amazon") {
           if (options.retailerObserverFailure === "execution") {
             throw new Error(`RAW_BROWSER_ERROR token=${TOKEN} url=${AMAZON_PRODUCT_URL}?secret=DO_NOT_SEND`);
@@ -1266,7 +1372,21 @@ function harness(options: HarnessOptions = {}) {
           }
           return [{ frameId: 0, result: { ok: true, observation: AMAZON_OBSERVATION, diagnostic: diagnosticFor(AMAZON_OBSERVATION) } }];
         }
-        if (args?.[0] === "walmart") return [{ frameId: 0, result: { ok: true, observation: WALMART_OBSERVATION, diagnostic: diagnosticFor(WALMART_OBSERVATION) } }];
+        if (args?.[0] === "walmart") {
+          walmartObservationAttempts += 1;
+          if (options.walmartHydrationRetry && walmartObservationAttempts === 1) {
+            const observation = { ...WALMART_OBSERVATION, unitPriceCents: null };
+            const diagnostic = {
+              ...diagnosticFor(WALMART_OBSERVATION),
+              outcome: "failed",
+              failureStage: "price_binding",
+              reasonCode: "price_binding_missing",
+              layout: { ...diagnosticFor(WALMART_OBSERVATION).layout, priceCandidateCount: 0 }
+            };
+            return [{ frameId: 0, result: { ok: true, observation, diagnostic } }];
+          }
+          return [{ frameId: 0, result: { ok: true, observation: WALMART_OBSERVATION, diagnostic: diagnosticFor(WALMART_OBSERVATION) } }];
+        }
         if (args?.[0] === "bestbuy") {
           const observation = options.bestBuyPreorder
             ? { ...BESTBUY_OBSERVATION, availability: "preorder" }
@@ -1442,7 +1562,19 @@ function harness(options: HarnessOptions = {}) {
         ? { reason: "leased", item: options.watchLease }
         : { reason: "no_watch_items", item: null }), { status: 200 });
     }
+    if (url.endsWith("/devices/self/readiness/reverification-runs")) {
+      const receipt = JSON.parse(String(requestOptions.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        run: { id: `reverification_run_${fetchCalls.length}`, ...receipt },
+        lane: { retailerId: receipt.retailerId }
+      }), { status: 201 });
+    }
     if (url.endsWith("/devices/self/readiness/reverification-plan")) {
+      reverificationPlanFetches += 1;
+      if (Number.isInteger(options.reverificationPlanFailAfterFetches)
+        && reverificationPlanFetches > Number(options.reverificationPlanFailAfterFetches)) {
+        return new Response(JSON.stringify({ message: `RAW_PLAN_ERROR token=${TOKEN} secret=DO_NOT_SEND` }), { status: 503 });
+      }
       const plan = structuredClone(options.reverificationPlan ?? { createdAt: new Date().toISOString(), lanes: [] }) as {
         lanes?: Array<{ retailerId?: string; evidence?: Record<string, unknown> }>;
       };
@@ -1533,6 +1665,12 @@ function harness(options: HarnessOptions = {}) {
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     }
     if (url.endsWith("/devices/self/shadow-observations/target")) {
+      if (options.evidenceVersionMismatch) {
+        return new Response(JSON.stringify({
+          error: "adapter_version_mismatch",
+          message: `RAW_VERSION_ERROR token=${TOKEN} secret=DO_NOT_SEND`
+        }), { status: 409 });
+      }
       return new Response(JSON.stringify({
         observation: {
           ...OBSERVATION,
@@ -1781,7 +1919,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : {
         contractVersion: 1,
-        adapterVersion: "target-add-v7",
+        adapterVersion: "target-add-v8",
         id: `job_target_fixture${jobSuffix}`,
         capabilityToken: "C".repeat(43),
         action: "add_to_cart",
@@ -2030,9 +2168,43 @@ test("a Target price-binding block is posted through the repair incident diagnos
   assert.equal(body.outcome, "failed");
   assert.equal(body.failureStage, "price_binding");
   assert.equal(body.reasonCode, "price_binding_missing");
-  assert.equal(body.attemptCount, 3);
+  assert.equal(body.attemptCount, 2);
   assert.equal(JSON.stringify(body).includes(PRODUCT_URL), false);
   assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
+});
+
+test("a Target price placeholder waits for hydration and reports one recovered diagnostic", async () => {
+  const runtime = harness({ targetPriceHydrationRetry: true });
+  const response = await runtime.send({ type: "yoink:inspect-target" });
+  assert.equal(response.ok, true);
+  assert.equal((response.observation as Record<string, unknown>).unitPriceCents, 5999);
+  const hydrationWaits = runtime.injections.filter((entry) =>
+    (entry.args as unknown[] | undefined)?.[0] === "waitForTargetShadowHydration");
+  assert.equal(hydrationWaits.length, 1);
+  const diagnosticPosts = runtime.fetchCalls.filter((entry) =>
+    entry.url.endsWith("/devices/self/adapter-diagnostics/target"));
+  assert.equal(diagnosticPosts.length, 1);
+  const diagnostic = JSON.parse(String(diagnosticPosts[0]?.options.body)) as Record<string, unknown>;
+  assert.equal(diagnostic.outcome, "recovered");
+  assert.equal(diagnostic.failureStage, "price_binding");
+  assert.equal(diagnostic.reasonCode, "dom_hydration_recovered");
+  assert.equal(diagnostic.attemptCount, 2);
+  assert.equal(diagnostic.domChanged, true);
+});
+
+test("a terminal Target availability rejection does not wait for hydration", async () => {
+  const runtime = harness({ targetUnavailable: true });
+  const response = await runtime.send({ type: "yoink:inspect-target" });
+  assert.equal(response.ok, true);
+  assert.equal((response.diagnostic as Record<string, unknown>).outcome, "rejected");
+  assert.equal(runtime.injections.some((entry) =>
+    (entry.args as unknown[] | undefined)?.[0] === "waitForTargetShadowHydration"), false);
+  const diagnosticPost = runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith("/devices/self/adapter-diagnostics/target"));
+  assert.ok(diagnosticPost);
+  const diagnostic = JSON.parse(String(diagnosticPost.options.body)) as Record<string, unknown>;
+  assert.equal(diagnostic.reasonCode, "out_of_stock");
+  assert.equal(diagnostic.attemptCount, 1);
 });
 
 test("the service worker fails before tab access or injection when Target permission is absent", async () => {
@@ -2736,6 +2908,24 @@ test("the service worker retries one hydrating Amazon layout and reports a recov
   assert.equal(diagnostic.reasonCode, "dom_hydration_recovered");
   assert.equal(diagnostic.attemptCount, 2);
   assert.equal(JSON.stringify(diagnostic).includes("offerListingID"), false);
+});
+
+test("the service worker waits for a hydrating Walmart price before logging a repair", async () => {
+  const runtime = harness({ activeUrl: WALMART_PRODUCT_URL, walmartHydrationRetry: true });
+  const response = await runtime.send({ type: "yoink:inspect-retailer" });
+  assert.equal(response.ok, true);
+  assert.equal((response.observation as Record<string, unknown>).unitPriceCents, 4499);
+  assert.equal(runtime.injections.filter((entry) =>
+    (entry.args as unknown[] | undefined)?.[0] === "waitForRetailerShadowHydration").length, 1);
+  const diagnosticPost = runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith("/devices/self/adapter-diagnostics/walmart"));
+  assert.ok(diagnosticPost);
+  const diagnostic = JSON.parse(String(diagnosticPost.options.body)) as Record<string, unknown>;
+  assert.equal(diagnostic.outcome, "recovered");
+  assert.equal(diagnostic.failureStage, "price_binding");
+  assert.equal(diagnostic.reasonCode, "dom_hydration_recovered");
+  assert.equal(diagnostic.attemptCount, 2);
+  assert.equal(diagnostic.domChanged, true);
 });
 
 test("the service worker accepts and reports constrained semantic layout recovery without retrying", async () => {
@@ -4770,7 +4960,8 @@ test("one explicit request replays prior products across all four lanes without 
         ["bestbuy", "6588149", BESTBUY_PRODUCT_URL]
       ].map(([retailerId, retailerSku, canonicalUrl]) => ({
         retailerId,
-        expectedAdapterVersion: "fixture-current",
+        expectedAdapterVersion: PACKAGED_ADD_VERSIONS[retailerId as keyof typeof PACKAGED_ADD_VERSIONS],
+        expectedObserverVersion: PACKAGED_OBSERVER_VERSIONS[retailerId as keyof typeof PACKAGED_OBSERVER_VERSIONS],
         qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
         candidate: { retailerSku, canonicalUrl, title: `${retailerId} fixture`, trialObservedAt: new Date().toISOString() }
       }))
@@ -4802,7 +4993,8 @@ test("opt-in automatic requalification checks only needed saved products and res
     createdAt: new Date().toISOString(),
     lanes: [{
       retailerId: "target",
-      expectedAdapterVersion: "target-add-v7",
+      expectedAdapterVersion: "target-add-v8",
+      expectedObserverVersion: "target-observer-v6",
       qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
       evidence: {
         liveEvidenceReady: false,
@@ -4847,10 +5039,360 @@ test("opt-in automatic requalification checks only needed saved products and res
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal(runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length, trialCount);
 
+  const receiptCount = () => runtime.fetchCalls.filter((entry) =>
+    entry.url.endsWith("/devices/self/readiness/reverification-runs")).length;
+  const firstReceipts = receiptCount();
+  assert.equal(firstReceipts, 1);
+  const firstReceipt = JSON.parse(String(runtime.fetchCalls.find((entry) =>
+    entry.url.endsWith("/devices/self/readiness/reverification-runs"))?.options.body)) as Record<string, unknown>;
+  assert.equal(firstReceipt.outcome, "passed");
+  assert.equal(firstReceipt.trigger, "settings_enabled");
+  assert.equal(firstReceipt.automatic, true);
+  assert.equal(JSON.stringify(firstReceipt).includes(PRODUCT_URL), false);
+  assert.equal(JSON.stringify(firstReceipt).includes(TOKEN), false);
+
+  // A packaged observer version the companion does not ship bypasses the
+  // cooldown, but instead of opening tabs the lane is skipped with an update
+  // reason so the app and companion can be brought back in step.
+  reverificationPlan.lanes[0]!.expectedObserverVersion = "target-observer-v7";
+  runtime.fireAutoReverificationAlarm();
+  await waitFor(() => receiptCount() > firstReceipts,
+    "A packaged observer version change should bypass the daily cooldown.");
+  await runtime.invokeBackground("automaticReverificationPromise");
+  assert.equal(runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length, trialCount);
+  const skewReceipt = JSON.parse(String(runtime.fetchCalls.filter((entry) =>
+    entry.url.endsWith("/devices/self/readiness/reverification-runs")).at(-1)?.options.body)) as Record<string, unknown>;
+  assert.equal(skewReceipt.outcome, "skipped");
+  assert.equal(skewReceipt.reasonCode, "companion_update_required");
+  assert.equal(skewReceipt.trigger, "plan_changed");
+  assert.equal(runtime.tabRemovals.length, 1);
+  const skewReceipts = receiptCount();
+
+  reverificationPlan.lanes[0]!.expectedObserverVersion = "target-observer-v6";
   reverificationPlan.lanes[0]!.candidates[0]!.repairableObserverFailure = true;
   runtime.fireAutoReverificationAlarm();
   await waitFor(() => runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length > trialCount,
     "A newly queued repair should bypass the daily cooldown.");
+  await runtime.invokeBackground("automaticReverificationPromise");
+  assert.ok(receiptCount() > skewReceipts);
+  const finalState = runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown>;
+  assert.equal(finalState.schemaVersion, 2);
+  assert.equal(typeof finalState.runId, "string");
+  assert.equal((finalState.automaticRunsToday as { count: number }).count, 3);
+  assert.equal(JSON.stringify(finalState).includes(PRODUCT_URL), false);
+});
+
+function targetReverificationPlan(overrides: Record<string, unknown> = {}, candidates: Array<Record<string, unknown>> = [{
+  retailerSku: "1011483414",
+  canonicalUrl: PRODUCT_URL,
+  title: "Target qualification fixture",
+  trialObservedAt: new Date().toISOString(),
+  qualificationTypes: ["first_party_actionable", "shipping_actionable"],
+  currentObserverEvidence: false,
+  currentRehearsalPassed: false,
+  priorRehearsalPassed: true,
+  repairableObserverFailure: false
+}]) {
+  return {
+    createdAt: new Date().toISOString(),
+    lanes: [{
+      retailerId: "target",
+      expectedAdapterVersion: PACKAGED_ADD_VERSIONS.target,
+      expectedObserverVersion: PACKAGED_OBSERVER_VERSIONS.target,
+      qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
+      evidence: {
+        liveEvidenceReady: false,
+        rehearsalReady: false,
+        qualificationEvidenceReady: false,
+        distinctSkuCount: 1,
+        checks: []
+      },
+      automaticCheckNeeded: true,
+      candidates,
+      ...overrides
+    }]
+  };
+}
+
+function receiptBodies(runtime: ReturnType<typeof harness>) {
+  return runtime.fetchCalls
+    .filter((entry) => entry.url.endsWith("/devices/self/readiness/reverification-runs"))
+    .map((entry) => JSON.parse(String(entry.options.body)) as Record<string, unknown>);
+}
+
+test("a blocked automatic check backs off on the next tick and only a trigger change restarts it", async () => {
+  const reverificationPlan = targetReverificationPlan();
+  const runtime = harness({ permission: true, tabNeverLoads: true, reverificationPlan });
+  await runtime.invokeBackground("REVERIFICATION_TAB_WAIT_MS = 40");
+  await runtime.send({ type: "yoink:set-auto-reverification", enabled: true });
+  await waitFor(() => ["partial", "complete"].includes(String(
+    (runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown> | undefined)?.state)),
+  "The automatic check did not finish.");
+  const state = JSON.parse(JSON.stringify(runtime.storage.yoinkRetailerReverificationStateV1)) as Record<string, unknown>;
+  assert.equal(state.state, "partial");
+  const results = state.results as Array<Record<string, unknown>>;
+  assert.equal(results[0]?.outcome, "blocked");
+  assert.equal(results[0]?.reasonCode, "product_page_unavailable");
+  assert.deepEqual(state.consecutiveNonPassingRuns, { target: 1 });
+  assert.equal(typeof state.lastAutomaticRunAt, "string");
+  const receipts = receiptBodies(runtime);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]?.outcome, "blocked");
+  assert.equal(receipts[0]?.reasonCode, "product_page_unavailable");
+  assert.equal(receipts[0]?.attemptedProductCount, 1);
+
+  // Fresh evidence bits must not re-arm the loop: the same lane holds for an
+  // hour after one failure even though the plan's evidence flags moved.
+  reverificationPlan.lanes[0]!.candidates[0]!.currentObserverEvidence = true;
+  reverificationPlan.lanes[0]!.candidates[0]!.layoutFingerprint = "b".repeat(64);
+  const held = await runtime.invokeBackground("runAutomaticReverification(false)") as Record<string, unknown>;
+  assert.equal(held.started, false);
+  assert.equal(held.reason, "automatic_check_cooldown");
+  assert.equal(receiptBodies(runtime).length, 1);
+
+  // A lane status change is trigger material and restarts the check at once.
+  (reverificationPlan.lanes[0]!.qualification as Record<string, unknown>).warning = "expired";
+  const restarted = await runtime.invokeBackground("runAutomaticReverification(false)") as Record<string, unknown>;
+  assert.equal(restarted.started, true);
+  assert.equal(receiptBodies(runtime).length, 2);
+  assert.equal(receiptBodies(runtime)[1]?.trigger, "plan_changed");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify((runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown>).consecutiveNonPassingRuns)),
+    { target: 2 }
+  );
+});
+
+test("a plan fetch failure between candidates ends the run in an error state with a receipt", async () => {
+  const runtime = harness({
+    permission: true,
+    reverificationPlanFailAfterFetches: 1,
+    reverificationPlan: targetReverificationPlan({}, [
+      { retailerSku: "1011483414", canonicalUrl: PRODUCT_URL, title: "first", trialObservedAt: new Date().toISOString(), priorRehearsalPassed: true },
+      { retailerSku: "1011483415", canonicalUrl: "https://www.target.com/p/fixture/-/A-1011483415", title: "second", trialObservedAt: new Date().toISOString(), priorRehearsalPassed: true }
+    ])
+  });
+  const response = await runtime.send({ type: "yoink:run-auto-reverification" });
+  assert.equal(response.ok, false);
+  const state = runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown>;
+  assert.equal(state.state, "error");
+  assert.match(String(state.reasonCode), /^[a-z][a-z0-9_]{1,79}$/);
+  assert.equal(state.laneIndex, 0);
+  assert.equal(state.candidateIndex, 0);
+  assert.equal(JSON.stringify(state).includes("DO_NOT_SEND"), false);
+  assert.equal(JSON.stringify(state).includes(TOKEN), false);
+  const receipts = receiptBodies(runtime);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]?.outcome, "error");
+  assert.equal(receipts[0]?.retailerId, "target");
+  assert.equal(receipts[0]?.attemptedProductCount, 1);
+  assert.equal(JSON.stringify(receipts[0]).includes("DO_NOT_SEND"), false);
+  assert.equal(runtime.tabRemovals.length, 1, "the candidate tab is closed even when the run fails");
+});
+
+test("a saved product whose page never resolves records a terminal unavailable diagnostic and moves on", async () => {
+  const runtime = harness({
+    permission: true,
+    tabNeverLoads: true,
+    reverificationPlan: targetReverificationPlan({}, [
+      { retailerSku: "1011483414", canonicalUrl: PRODUCT_URL, title: "first", trialObservedAt: new Date().toISOString(), priorRehearsalPassed: true },
+      { retailerSku: "1011483415", canonicalUrl: "https://www.target.com/p/fixture/-/A-1011483415", title: "second", trialObservedAt: new Date().toISOString(), priorRehearsalPassed: true }
+    ])
+  });
+  await runtime.invokeBackground("REVERIFICATION_TAB_WAIT_MS = 40");
+  const response = await runtime.send({ type: "yoink:reverify-retailer-lanes", retailerIds: ["target"] });
+  assert.equal(response.ok, true);
+  const result = (response.results as Array<Record<string, unknown>>)[0]!;
+  assert.equal(result.outcome, "blocked");
+  assert.equal(result.reasonCode, "product_page_unavailable");
+  assert.equal(result.attemptedProductCount, 2);
+  const diagnostics = runtime.fetchCalls
+    .filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/target"))
+    .map((entry) => JSON.parse(String(entry.options.body)) as Record<string, unknown>);
+  assert.equal(diagnostics.length, 2);
+  for (const diagnostic of diagnostics) {
+    assert.equal(diagnostic.operation, "observe");
+    assert.equal(diagnostic.outcome, "rejected");
+    assert.equal(diagnostic.failureStage, "page_identity");
+    assert.equal(diagnostic.reasonCode, "product_page_unavailable");
+    assert.equal(diagnostic.attemptCount, 1);
+    assert.equal((diagnostic.layout as Record<string, unknown>).pageKind, "other");
+    assert.equal(JSON.stringify(diagnostic).includes("target.com"), false);
+  }
+  assert.deepEqual(diagnostics.map((diagnostic) => diagnostic.retailerSku), ["1011483414", "1011483415"]);
+  assert.equal(runtime.tabRemovals.length, 2);
+  assert.equal(runtime.storage.yoinkReverificationTabV1, undefined);
+});
+
+test("a multi-candidate lane stops as soon as its evidence is ready", async () => {
+  const runtime = harness({
+    permission: true,
+    reverificationPlanCompletesAfterTrial: true,
+    reverificationPlan: targetReverificationPlan({}, [
+      { retailerSku: "1011483414", canonicalUrl: PRODUCT_URL, title: "first", trialObservedAt: new Date().toISOString(), priorRehearsalPassed: true },
+      { retailerSku: "1011483415", canonicalUrl: "https://www.target.com/p/fixture/-/A-1011483415", title: "second", trialObservedAt: new Date().toISOString(), priorRehearsalPassed: true },
+      { retailerSku: "1011483416", canonicalUrl: "https://www.target.com/p/fixture/-/A-1011483416", title: "third", trialObservedAt: new Date().toISOString(), priorRehearsalPassed: true }
+    ])
+  });
+  const response = await runtime.send({ type: "yoink:reverify-retailer-lanes", retailerIds: ["target"] });
+  assert.equal(response.ok, true);
+  const result = (response.results as Array<Record<string, unknown>>)[0]!;
+  assert.equal(result.outcome, "passed");
+  assert.equal(result.attemptedProductCount, 1);
+  assert.equal(result.passedProductCount, 1);
+  assert.equal(runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length, 1);
+  assert.equal(runtime.tabRemovals.length, 1);
+  assert.equal(receiptBodies(runtime)[0]?.trigger, "manual");
+  assert.equal(receiptBodies(runtime)[0]?.automatic, false);
+});
+
+test("an open repair product from a failed live add is replayed and reported even when repair stays unresolved", async () => {
+  const runtime = harness({
+    permission: true,
+    reverificationPlan: targetReverificationPlan({}, [{
+      retailerSku: "1011483414",
+      canonicalUrl: PRODUCT_URL,
+      title: "live add repair fixture",
+      trialObservedAt: new Date().toISOString(),
+      source: "repair_queue",
+      qualificationTypes: [],
+      repairableObserverFailure: true,
+      layoutFingerprint: "c".repeat(64)
+    }])
+  });
+  const response = await runtime.send({ type: "yoink:run-auto-reverification" });
+  assert.equal(response.ok, true);
+  assert.equal(response.started, true);
+  assert.equal(runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/qualification-trials/target-add")).length, 1);
+  const result = (response.results as Array<Record<string, unknown>>)[0]!;
+  assert.equal(result.outcome, "partial", "a passing rehearsal with an unresolved repair entry is partial, not complete");
+  assert.equal(result.passedProductCount, 1);
+  const receipts = receiptBodies(runtime);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]?.outcome, "partial");
+  assert.equal(receipts[0]?.retailerId, "target");
+});
+
+test("a lane whose expected contracts differ from the packaged ones is skipped with an update reason", async () => {
+  const newer = harness({
+    permission: true,
+    reverificationPlan: targetReverificationPlan({ expectedObserverVersion: "target-observer-v7" })
+  });
+  const skipped = await newer.send({ type: "yoink:run-auto-reverification" });
+  assert.equal(skipped.ok, true);
+  assert.equal(skipped.started, true);
+  const result = (skipped.results as Array<Record<string, unknown>>)[0]!;
+  assert.equal(result.outcome, "skipped");
+  assert.equal(result.reasonCode, "companion_update_required");
+  assert.equal(newer.tabCreates.length, 0);
+  assert.equal(receiptBodies(newer)[0]?.reasonCode, "companion_update_required");
+
+  const older = harness({
+    permission: true,
+    reverificationPlan: targetReverificationPlan({ expectedAdapterVersion: "target-add-v7" })
+  });
+  const stale = await older.send({ type: "yoink:run-auto-reverification" });
+  assert.equal((stale.results as Array<Record<string, unknown>>)[0]?.reasonCode, "app_update_required");
+  assert.equal(older.tabCreates.length, 0);
+
+  const mismatch = harness({ permission: true, evidenceVersionMismatch: true, reverificationPlan: targetReverificationPlan() });
+  const rejected = await mismatch.send({ type: "yoink:run-auto-reverification" });
+  const rejectedResult = (rejected.results as Array<Record<string, unknown>>)[0]!;
+  assert.equal(rejectedResult.outcome, "skipped");
+  assert.equal(rejectedResult.reasonCode, "adapter_version_mismatch");
+  assert.equal(mismatch.tabRemovals.length, 1);
+  assert.equal(JSON.stringify(rejected).includes("DO_NOT_SEND"), false);
+});
+
+test("an interrupted hydration wait keeps the first attempt instead of reporting a runtime failure", async () => {
+  const runtime = harness({ targetPriceHydrationRetry: true, hydrationExecuteThrows: true });
+  const response = await runtime.send({ type: "yoink:inspect-target" });
+  assert.equal(response.ok, true);
+  const diagnosticPosts = runtime.fetchCalls
+    .filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/target"))
+    .map((entry) => JSON.parse(String(entry.options.body)) as Record<string, unknown>);
+  assert.equal(diagnosticPosts.length, 1);
+  assert.equal(diagnosticPosts[0]?.outcome, "failed");
+  assert.equal(diagnosticPosts[0]?.failureStage, "price_binding");
+  assert.equal(diagnosticPosts[0]?.reasonCode, "price_binding_missing");
+  assert.equal(diagnosticPosts[0]?.attemptCount, 1);
+  assert.equal(diagnosticPosts.some((post) => post.reasonCode === "observer_execution_failed"), false);
+  assert.equal(JSON.stringify(response).includes("DO_NOT_SEND"), false);
+});
+
+test("a restarted service worker closes its leftover check tab and retires a stale running record", async () => {
+  const runtime = harness({ permission: true });
+  runtime.storage.yoinkReverificationTabV1 = {
+    schemaVersion: 1, tabId: 41, retailerId: "target", retailerSku: "1011483414", openedAt: new Date().toISOString()
+  };
+  runtime.storage.yoinkRetailerReverificationStateV1 = {
+    schemaVersion: 2, state: "running", results: [], automatic: true, trigger: "scheduled",
+    runId: "run_fixture_1", planSignature: "reverification-plan-v3:1:00000000", reasonCode: "",
+    laneIndex: 0, candidateIndex: 2, consecutiveNonPassingRuns: {}, laneOutcomes: {},
+    lastRunAt: new Date().toISOString(), lastAutomaticRunAt: new Date().toISOString(),
+    automaticRunsToday: { day: new Date().toISOString().slice(0, 10), count: 1 },
+    startedAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  };
+  await runtime.invokeBackground("reconcileReverificationRestart()");
+  assert.ok(runtime.tabRemovals.includes(41));
+  assert.equal(runtime.storage.yoinkReverificationTabV1, undefined);
+  const state = runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown>;
+  assert.equal(state.state, "error");
+  assert.equal(state.reasonCode, "worker_restarted");
+  assert.equal(state.candidateIndex, 2);
+});
+
+test("each lane result posts its own receipt, including parked and access-missing lanes", async () => {
+  const runtime = harness({
+    permission: true,
+    permittedRetailers: ["target"],
+    reverificationPlan: {
+      createdAt: new Date().toISOString(),
+      lanes: [
+        { ...targetReverificationPlan({ session: { signedInState: "signed_out" } }).lanes[0] },
+        {
+          retailerId: "bestbuy",
+          expectedAdapterVersion: PACKAGED_ADD_VERSIONS.bestbuy,
+          expectedObserverVersion: PACKAGED_OBSERVER_VERSIONS.bestbuy,
+          qualification: { status: "missing", warning: "none", expiresAt: "" },
+          evidence: { liveEvidenceReady: false, rehearsalReady: false, qualificationEvidenceReady: false, distinctSkuCount: 1, checks: [] },
+          automaticCheckNeeded: true,
+          candidates: [{ retailerSku: "6588149", canonicalUrl: BESTBUY_PRODUCT_URL, title: "Best Buy fixture", trialObservedAt: new Date().toISOString(), priorRehearsalPassed: true }]
+        }
+      ]
+    }
+  });
+  const response = await runtime.send({ type: "yoink:run-auto-reverification" });
+  assert.equal(response.ok, true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify((response.results as Array<Record<string, unknown>>)
+      .map((result) => [result.retailerId, result.outcome, result.reasonCode]))),
+    [["target", "parked", "retailer_session_signed_out"], ["bestbuy", "access_missing", "retailer_access_missing"]]
+  );
+  assert.equal(runtime.tabCreates.length, 0);
+  assert.equal(runtime.permissionRequests.length, 0);
+  const receipts = receiptBodies(runtime);
+  assert.deepEqual(receipts.map((receipt) => [receipt.retailerId, receipt.outcome]), [["target", "parked"], ["bestbuy", "access_missing"]]);
+  assert.equal(receipts[0]?.runId, receipts[1]?.runId);
+  const state = JSON.parse(JSON.stringify(runtime.storage.yoinkRetailerReverificationStateV1)) as Record<string, unknown>;
+  assert.deepEqual(state.consecutiveNonPassingRuns, {}, "parked and access-missing lanes do not count as failures");
+});
+
+test("automatic checks stop at the daily cap until the next day", async () => {
+  const runtime = harness({ permission: true, reverificationPlan: targetReverificationPlan() });
+  runtime.storage.yoinkRetailerReverificationStateV1 = {
+    schemaVersion: 2, state: "partial", results: [], automatic: true, trigger: "scheduled",
+    runId: "run_fixture_2", planSignature: "reverification-plan-v3:1:00000000", reasonCode: "",
+    laneIndex: 0, candidateIndex: 0, consecutiveNonPassingRuns: {}, laneOutcomes: {},
+    lastRunAt: new Date().toISOString(), lastAutomaticRunAt: new Date().toISOString(),
+    automaticRunsToday: { day: new Date().toISOString().slice(0, 10), count: 6 },
+    startedAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  };
+  const capped = await runtime.invokeBackground("runAutomaticReverification(false)") as Record<string, unknown>;
+  assert.equal(capped.started, false);
+  assert.equal(capped.reason, "automatic_check_daily_cap");
+  assert.equal(runtime.tabCreates.length, 0);
+  const forced = await runtime.send({ type: "yoink:run-auto-reverification" });
+  assert.equal(forced.started, true, "a manual request is never capped");
 });
 
 test("automatic requalification never prompts for new retailer access or opens an inaccessible store", async () => {

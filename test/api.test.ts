@@ -1316,7 +1316,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v7",
+          targetAddAdapterVersion: "target-add-v8",
           walmartAddOnly: true,
           walmartAddAdapterVersion: "walmart-add-v8",
           amazonAddOnly: true,
@@ -1355,7 +1355,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v7",
+          targetAddAdapterVersion: "target-add-v8",
           walmartAddOnly: true,
           walmartAddAdapterVersion: "walmart-add-v8",
           amazonAddOnly: true,
@@ -1493,7 +1493,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "target-observer-v5",
+        adapterVersion: "target-observer-v6",
         contractVersion: 1,
         observedAt: new Date().toISOString(),
         pageKind: "product",
@@ -1561,7 +1561,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v7",
+          targetAddAdapterVersion: "target-add-v8",
           walmartAddOnly: true,
           walmartAddAdapterVersion: "walmart-add-v8",
           amazonAddOnly: true,
@@ -1615,8 +1615,8 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "target-add-v7",
-        observerVersion: "target-observer-v5",
+        adapterVersion: "target-add-v8",
+        observerVersion: "target-observer-v6",
         contractVersion: 1,
         shadowObservationId: shadow.id,
         observedAt: new Date().toISOString(),
@@ -1709,7 +1709,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "target-observer-v5",
+        adapterVersion: "target-observer-v6",
         contractVersion: 1,
         observedAt: new Date().toISOString(),
         pageKind: "product",
@@ -1740,9 +1740,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "target-add-v7",
+        adapterVersion: "target-add-v8",
         evidenceHash: readySnapshot.targetQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_TARGET_ADD_V7"
+        confirmation: "ENABLE_TARGET_ADD_V8"
       })
     });
     assert.equal(activation.status, 200);

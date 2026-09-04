@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.19.4 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.19.5 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
@@ -16,6 +16,31 @@ one, and the exact saved fulfillment choice: Shipping by default or explicit
 Pickup. Amazon additionally requires a unique ASIN-bound offer token that
 remains only in page memory. Buy Now, checkout, and order submission are not
 authorized.
+
+Version 1.19.5 makes automatic store checks self-correcting in both
+directions. Candidate selection prefers products that are currently
+purchasable and reserves slots for in-stock catalog listings, so a store whose
+saved products are sold out can still rebuild evidence after a packaged adapter
+change; a store with no purchasable candidate is reported as blocked instead of
+being rechecked daily. Failing evidence now degrades a store lane: open repair
+groups on the current adapter, three rejected rehearsals in a row, or a live
+add failure newer than the last passing result pause guarded adds until fresh
+passing evidence renews the lane. The companion posts a bounded receipt for
+every automatic run, keys its cooldown on a trigger signature (packaged
+versions, lane status, and open repair SKUs) with backoff instead of raw
+evidence freshness, parks lanes that need a sign-in or store access, caps
+automatic runs per day, records a terminal error state instead of a stuck
+running state, closes orphaned check tabs after a service-worker restart, and
+skips lanes whose expected adapter or observer version differs from the
+packaged companion. Server-side, a no-click rehearsal pass supersedes an
+earlier live-add binding failure on the same product, unreachable product
+pages record a `product_page_unavailable` rejection that closes their incident,
+repair groups age out after fourteen days without a fresh failure, and a
+`qualification_stalled` alert family opens an incident when a previously
+authorized store's automatic checks keep failing. The read-only observer's
+hydration wait is mutation-driven, bounded to eight seconds, and falls back to
+its first attempt if the page navigates during the wait; Target binds the
+`ProductDetailPrice` module without reading recommendation prices.
 
 Version 1.19.4 keeps the newest store-check incident visible first and turns
 open observation and no-click rehearsal failures into bounded automatic repair
@@ -2885,7 +2910,7 @@ seller, fulfillment, quantity, price-cap, offer-scope, and offer-token checks
 all pass. Duplicate candidates fail closed. Remote observer recipes remain
 read-only shadow evidence and cannot supply click targets.
 
-Target's qualified `target-add-v7` runner requires:
+Target's qualified `target-add-v8` runner requires:
 
 - live execution mode, Actions unpaused, an online paired device, and a current
   adapter qualification;

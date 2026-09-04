@@ -30,7 +30,7 @@ export type Fulfillment = "shipping" | "pickup" | "either" | "manual" | "unknown
 export const ACTION_FULFILLMENTS = ["shipping", "pickup"] as const;
 export type ActionFulfillment = (typeof ACTION_FULFILLMENTS)[number];
 export type Availability = "in_stock" | "preorder" | "out_of_stock" | "unknown";
-export const TARGET_OBSERVER_VERSION = "target-observer-v5";
+export const TARGET_OBSERVER_VERSION = "target-observer-v6";
 export const WALMART_OBSERVER_VERSION = "walmart-observer-v7";
 export const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 export const AMAZON_OBSERVER_VERSION = "amazon-observer-v8";
@@ -61,8 +61,8 @@ export const RETAILER_OBSERVER_VERSIONS = {
 } as const;
 export type SupportedRetailerId = keyof typeof RETAILER_OBSERVER_VERSIONS;
 export type RetailerObserverVersion = (typeof RETAILER_OBSERVER_VERSIONS)[SupportedRetailerId];
-export const TARGET_ADD_ADAPTER_VERSION = "target-add-v7";
-export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V7";
+export const TARGET_ADD_ADAPTER_VERSION = "target-add-v8";
+export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V8";
 export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v8";
 export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V8";
 export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
@@ -152,6 +152,7 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "offer_stale",
   "listing_mismatch",
   "product_page_unverified",
+  "product_page_unavailable",
   "manual_action_required",
   "preorder_not_supported",
   "out_of_stock",
@@ -181,6 +182,38 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "clicked"
 ] as const;
 export type RetailerAdapterDiagnosticReasonCode = (typeof RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES)[number];
+
+/**
+ * One bounded receipt for an automatic (or manual) store re-verification run
+ * performed by the Chrome companion. It carries counts, enums, and reason
+ * codes only: no product URLs, page text, or observed offer values. The
+ * server uses it to expose the last automatic result on the readiness plan
+ * and to open a "store checks stalled" operator alert after repeated
+ * non-passing runs. It cannot qualify, lease, or execute anything.
+ */
+export const RETAILER_REVERIFICATION_RUN_CONTRACT_VERSION = 1;
+export const RETAILER_REVERIFICATION_RUN_TRIGGERS = ["scheduled", "plan_changed", "manual", "settings_enabled"] as const;
+export type RetailerReverificationRunTrigger = (typeof RETAILER_REVERIFICATION_RUN_TRIGGERS)[number];
+export const RETAILER_REVERIFICATION_RUN_OUTCOMES = [
+  "passed", "partial", "blocked", "missing_candidate", "access_missing", "parked", "error", "skipped"
+] as const;
+export type RetailerReverificationRunOutcome = (typeof RETAILER_REVERIFICATION_RUN_OUTCOMES)[number];
+export const RETAILER_REVERIFICATION_RUN_MAX_PRODUCTS = 8;
+export interface RetailerReverificationRunInput {
+  contractVersion: typeof RETAILER_REVERIFICATION_RUN_CONTRACT_VERSION;
+  runId: string;
+  retailerId: "target" | "walmart" | "amazon" | "bestbuy";
+  automatic: boolean;
+  trigger: RetailerReverificationRunTrigger;
+  outcome: RetailerReverificationRunOutcome;
+  reasonCode: string;
+  attemptedProductCount: number;
+  passedProductCount: number;
+  startedAt: string;
+  finishedAt: string;
+  extensionVersion: string;
+  planSignature: string;
+}
 
 export const RETAILER_ADAPTER_REPAIR_LANDMARK_ATTRIBUTES = [
   "data-testid", "data-test-id", "data-automation-id", "data-button-state", "name", "itemprop"
@@ -247,7 +280,7 @@ export interface RetailerAdapterDiagnosticInput {
   layout: RetailerAdapterLayoutEvidence;
 }
 
-export const OPERATOR_ALERT_EVENT_FAMILIES = ["adapter_repair"] as const;
+export const OPERATOR_ALERT_EVENT_FAMILIES = ["adapter_repair", "qualification_stalled"] as const;
 export type OperatorAlertEventFamily = (typeof OPERATOR_ALERT_EVENT_FAMILIES)[number];
 export const OPERATOR_ALERT_SEVERITIES = ["info", "warning", "error", "critical"] as const;
 export type OperatorAlertSeverity = (typeof OPERATOR_ALERT_SEVERITIES)[number];

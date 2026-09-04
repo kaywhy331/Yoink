@@ -5,15 +5,27 @@ import {
   AMAZON_OBSERVER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
   BESTBUY_OBSERVER_VERSION,
+  RETAILER_REVERIFICATION_RUN_CONTRACT_VERSION,
+  RETAILER_REVERIFICATION_RUN_MAX_PRODUCTS,
+  RETAILER_REVERIFICATION_RUN_OUTCOMES,
+  RETAILER_REVERIFICATION_RUN_TRIGGERS,
   TARGET_ADD_ADAPTER_VERSION,
   TARGET_OBSERVER_VERSION,
   WALMART_ADD_ADAPTER_VERSION,
   WALMART_OBSERVER_VERSION,
+  type RetailerReverificationRunInput,
+  type RetailerReverificationRunOutcome,
+  type RetailerReverificationRunTrigger,
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
 import { nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
-import { AdapterDiagnosticRepository, type AdapterRepairQueueItem } from "./adapter-diagnostic-repository.js";
+import {
+  AdapterDiagnosticRepository,
+  laneDegradation,
+  type AdapterRepairQueueItem,
+  type LaneDegradationReason
+} from "./adapter-diagnostic-repository.js";
 import { AuditRepository } from "./audit-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -24,6 +36,27 @@ type ActionRetailer = typeof ACTION_RETAILERS[number];
 const QUALIFICATION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 const QUALIFICATION_WARNING_MS = 7 * 24 * 60 * 60_000;
 const BASELINE_MAX_AGE_MS = 5 * 60_000;
+const MAX_CANDIDATES = 8;
+// When a lane still needs a passing no-click rehearsal, keep room for
+// products that can actually be rehearsed today: a sold-out history can never
+// rebuild the evidence ladder on its own.
+const PURCHASABLE_CANDIDATE_RESERVE = 2;
+const RUN_RECEIPT_MAX_AGE_MS = 10 * 60_000;
+const RUN_RECEIPT_CLOCK_SKEW_MS = 5 * 60_000;
+const RUN_RECEIPT_READ_LIMIT = 500;
+const RUN_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
+const REASON_PATTERN = /^[a-z][a-z0-9_]{1,79}$/;
+const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const RUN_TRIGGERS = new Set<string>(RETAILER_REVERIFICATION_RUN_TRIGGERS);
+const RUN_OUTCOMES = new Set<string>(RETAILER_REVERIFICATION_RUN_OUTCOMES);
+// Outcomes that neither prove nor disprove the lane: they do not count toward
+// a stall, but they do not clear one either.
+const NEUTRAL_RUN_OUTCOMES = new Set<RetailerReverificationRunOutcome>(["skipped", "parked", "missing_candidate"]);
+// Run receipts are bounded domain events on the existing append-only audit
+// ledger rather than a new tenant-scoped table: the PostgreSQL tenant RLS
+// surface is sealed at an exact table count, and a receipt is exactly the
+// kind of counted, enum-only operational fact the ledger already carries.
+const RUN_EVENT_TYPE = "retailer_reverification_run";
 export const RETAILER_SESSION_MAX_AGE_MS = 5 * 60_000;
 export const RETAILER_SESSION_FUTURE_TOLERANCE_MS = 5 * 60_000;
 
@@ -33,6 +66,8 @@ const LANE_VERSIONS: Record<ActionRetailer, { add: string; observer: string }> =
   amazon: { add: AMAZON_ADD_ADAPTER_VERSION, observer: AMAZON_OBSERVER_VERSION },
   bestbuy: { add: BESTBUY_ADD_ADAPTER_VERSION, observer: BESTBUY_OBSERVER_VERSION }
 };
+
+const runCorrelationId = (retailerId: ActionRetailer): string => `retailer_reverification:${retailerId}`;
 
 export interface ReadinessRow {
   deviceId: string;
@@ -86,7 +121,38 @@ export interface RequalificationCandidate {
   currentRehearsalPassed: boolean;
   priorRehearsalPassed: boolean;
   repairableObserverFailure: boolean;
+  currentlyPurchasable: boolean;
   layoutFingerprint: string;
+}
+
+export type LaneBlockedReason = "" | "no_purchasable_candidate" | "no_candidate";
+
+export interface StoredRetailerReverificationRun {
+  id: string;
+  deviceId: string;
+  retailerId: ActionRetailer;
+  runId: string;
+  automatic: boolean;
+  trigger: RetailerReverificationRunTrigger;
+  outcome: RetailerReverificationRunOutcome;
+  reasonCode: string;
+  attemptedProductCount: number;
+  passedProductCount: number;
+  startedAt: string;
+  finishedAt: string;
+  extensionVersion: string;
+  planSignature: string;
+  receivedAt: string;
+}
+
+export interface LaneAutomaticRunSummary {
+  runId: string;
+  outcome: RetailerReverificationRunOutcome;
+  reasonCode: string;
+  attemptedProductCount: number;
+  passedProductCount: number;
+  finishedAt: string;
+  extensionVersion: string;
 }
 
 export interface RequalificationEvidence {
@@ -120,6 +186,11 @@ export interface RetailerLaneReadiness {
   candidates: RequalificationCandidate[];
   evidence: RequalificationEvidence;
   automaticCheckNeeded: boolean;
+  blockedReason: LaneBlockedReason;
+  degraded: boolean;
+  degradedReasons: LaneDegradationReason[];
+  lastAutomaticRun: LaneAutomaticRunSummary | null;
+  consecutiveNonPassingRuns: number;
   checklist: Array<{ id: string; ready: boolean; label: string }>;
   readyForGuardedAdd: boolean;
   readyForWarmObservation: boolean;
@@ -276,6 +347,10 @@ export class RetailerReadinessRepository {
           : Number.isFinite(expirationTime) && expirationTime <= now + QUALIFICATION_WARNING_MS ? "expiring"
             : "none";
     const repairCandidateAvailable = candidates.some((item) => item.repairableObserverFailure);
+    const purchasableCandidateAvailable = candidates.some((item) => item.currentlyPurchasable);
+    const degradation = laneDegradation(this.db, retailerId, versions, now);
+    const lastAutomaticRun = this.lastAutomaticRun(retailerId);
+    const consecutiveNonPassingRuns = this.consecutiveNonPassingRuns(retailerId);
     const latestLaneDecision = qualification?.status === "retired"
       ? this.db.get<{ eventType: string }>(
         `SELECT event_type AS eventType FROM audit_events
@@ -288,14 +363,22 @@ export class RetailerReadinessRepository {
       ) : null;
     const manuallyRetired = qualification?.status === "retired"
       && latestLaneDecision?.eventType === "retailer_lane_retired";
+    // `suspended` is a legacy status no current code writes; it is treated as
+    // a previously authorized lane that fresh passing evidence may renew.
     const previouslyAuthorizedRefreshNeeded = Boolean(qualification)
-      && qualification?.status !== "suspended"
       && !manuallyRetired
       && (!qualified || warning !== "none");
-    const automaticCheckNeeded = candidates.length > 0 && (
+    const evidenceStillNeeded = !qualified || warning !== "none" || degradation.degraded;
+    const blockedReason: LaneBlockedReason = !candidates.length
+      ? "no_candidate"
+      : !repairCandidateAvailable && !purchasableCandidateAvailable && evidenceStillNeeded
+        ? "no_purchasable_candidate"
+        : "";
+    const automaticCheckNeeded = blockedReason === "" && candidates.length > 0 && (
       repairCandidateAvailable
       || previouslyAuthorizedRefreshNeeded
       || (!qualified && !evidence.qualificationEvidenceReady)
+      || degradation.degraded
     );
     const activeDevice = Boolean(this.db.get<{ id: string }>(
       `SELECT id FROM extension_devices
@@ -335,6 +418,7 @@ export class RetailerReadinessRepository {
     );
     const checklist = [
       { id: "qualification", ready: qualified, label: qualified ? "Store checks passed" : "Store checks need a refresh" },
+      { id: "store_checks", ready: !degradation.degraded, label: degradation.degraded ? "Store checks failing" : "Store checks healthy" },
       { id: "device", ready: activeDevice, label: activeDevice ? "Chrome companion online" : "Chrome companion offline" },
       { id: "signed_in", ready: signedIn, label: signedIn ? "Signed in to the store in Chrome" : "Sign in to the store in Chrome" },
       { id: "cart_baseline", ready: warmBaseline, label: warmBaseline ? "Cart warmed up" : "Cart not warmed up yet" }
@@ -356,14 +440,151 @@ export class RetailerReadinessRepository {
       candidates,
       evidence,
       automaticCheckNeeded,
+      blockedReason,
+      degraded: degradation.degraded,
+      degradedReasons: degradation.reasons,
+      lastAutomaticRun,
+      consecutiveNonPassingRuns,
       checklist,
-      readyForGuardedAdd: qualified && activeDevice && !sessionBlocksAdd,
+      readyForGuardedAdd: qualified && activeDevice && !sessionBlocksAdd && !degradation.degraded,
       readyForWarmObservation: activeDevice && signedIn
     };
   }
 
   reverifyPlan(now = Date.now()): { createdAt: string; lanes: RetailerLaneReadiness[] } {
     return { createdAt: nowIso(now), lanes: this.lanes(now) };
+  }
+
+  recordReverificationRun(
+    deviceId: string,
+    input: RetailerReverificationRunInput,
+    now = Date.now()
+  ): StoredRetailerReverificationRun {
+    if (!input || typeof input !== "object") throw new Error("A store re-verification run receipt is required.");
+    if (input.contractVersion !== RETAILER_REVERIFICATION_RUN_CONTRACT_VERSION) {
+      throw new Error("The store re-verification run contract version is unsupported.");
+    }
+    const retailerId = actionRetailer(input.retailerId);
+    const safeDeviceId = cleanText(deviceId, 120);
+    const scope = currentRequestScope();
+    const device = this.db.get<{ id: string }>(
+      `SELECT id FROM extension_devices
+       WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'active'`,
+      safeDeviceId, scope.tenantId, scope.userId
+    );
+    if (!device) throw new Error("The paired device is unavailable.");
+    const runId = cleanText(input.runId, 80);
+    if (!RUN_ID_PATTERN.test(runId)) throw new Error("A valid store re-verification run ID is required.");
+    if (typeof input.automatic !== "boolean") throw new Error("The store re-verification automatic flag must be boolean.");
+    if (!RUN_TRIGGERS.has(String(input.trigger))) throw new Error("The store re-verification trigger is invalid.");
+    if (!RUN_OUTCOMES.has(String(input.outcome))) throw new Error("The store re-verification outcome is invalid.");
+    const reasonCode = cleanText(input.reasonCode, 80).toLocaleLowerCase("en-US");
+    if (!REASON_PATTERN.test(reasonCode)) throw new Error("The store re-verification reason code is invalid.");
+    const attempted = Number(input.attemptedProductCount);
+    const passed = Number(input.passedProductCount);
+    if (!Number.isInteger(attempted) || attempted < 0 || attempted > RETAILER_REVERIFICATION_RUN_MAX_PRODUCTS
+      || !Number.isInteger(passed) || passed < 0 || passed > RETAILER_REVERIFICATION_RUN_MAX_PRODUCTS
+      || passed > attempted) {
+      throw new Error("Store re-verification product counts are out of bounds.");
+    }
+    const started = exactTimestamp(input.startedAt);
+    const finished = exactTimestamp(input.finishedAt);
+    if (!started || !finished || started.time > finished.time
+      || finished.time > now + RUN_RECEIPT_CLOCK_SKEW_MS
+      || now - finished.time > RUN_RECEIPT_MAX_AGE_MS) {
+      throw new Error("The store re-verification run receipt is stale or has invalid timestamps.");
+    }
+    const extensionVersion = cleanText(input.extensionVersion, 40);
+    if (!SEMVER_PATTERN.test(extensionVersion)) throw new Error("A valid companion version is required on the run receipt.");
+    const planSignature = cleanText(input.planSignature, 200);
+    const existing = this.runRows(retailerId, RUN_RECEIPT_READ_LIMIT)
+      .find((row) => row.runId === runId && row.deviceId === safeDeviceId);
+    if (existing) return existing;
+    const receipt: Omit<StoredRetailerReverificationRun, "id" | "receivedAt"> = {
+      deviceId: safeDeviceId,
+      retailerId,
+      runId,
+      automatic: input.automatic,
+      trigger: input.trigger,
+      outcome: input.outcome,
+      reasonCode,
+      attemptedProductCount: attempted,
+      passedProductCount: passed,
+      startedAt: started.iso,
+      finishedAt: finished.iso,
+      extensionVersion,
+      planSignature
+    };
+    const recorded = this.audit.record({
+      correlationId: runCorrelationId(retailerId),
+      aggregateType: "retailer_reverification",
+      eventType: RUN_EVENT_TYPE,
+      reasonCode,
+      message: `A ${input.automatic ? "automatic" : "manual"} ${retailerId} store check finished ${input.outcome.replaceAll("_", " ")}.`,
+      data: receipt
+    }, now) as { id: string; createdAt: string };
+    return { id: recorded.id, receivedAt: recorded.createdAt, ...receipt };
+  }
+
+  private runRows(retailerId: ActionRetailer, limit: number): StoredRetailerReverificationRun[] {
+    const scope = currentRequestScope();
+    const rows: StoredRetailerReverificationRun[] = [];
+    for (const row of this.db.all<{ id: string; dataJson: string; createdAt: string }>(
+      `SELECT id, data_json AS dataJson, created_at AS createdAt FROM audit_events
+       WHERE tenant_id = ? AND user_id = ? AND correlation_id = ? AND event_type = ?
+       ORDER BY created_at DESC, id DESC LIMIT ?`,
+      scope.tenantId,
+      scope.userId,
+      runCorrelationId(retailerId),
+      RUN_EVENT_TYPE,
+      limit
+    )) {
+      let data: Record<string, unknown>;
+      try { data = JSON.parse(row.dataJson) as Record<string, unknown>; } catch { continue; }
+      if (!RUN_OUTCOMES.has(String(data.outcome)) || !RUN_TRIGGERS.has(String(data.trigger))) continue;
+      rows.push({
+        id: row.id,
+        deviceId: String(data.deviceId ?? ""),
+        retailerId,
+        runId: String(data.runId ?? ""),
+        automatic: data.automatic === true,
+        trigger: data.trigger as RetailerReverificationRunTrigger,
+        outcome: data.outcome as RetailerReverificationRunOutcome,
+        reasonCode: String(data.reasonCode ?? ""),
+        attemptedProductCount: Number(data.attemptedProductCount) || 0,
+        passedProductCount: Number(data.passedProductCount) || 0,
+        startedAt: String(data.startedAt ?? ""),
+        finishedAt: String(data.finishedAt ?? ""),
+        extensionVersion: String(data.extensionVersion ?? ""),
+        planSignature: String(data.planSignature ?? ""),
+        receivedAt: row.createdAt
+      });
+    }
+    return rows.sort((left, right) => right.finishedAt.localeCompare(left.finishedAt) || right.receivedAt.localeCompare(left.receivedAt));
+  }
+
+  private lastAutomaticRun(retailerId: ActionRetailer): LaneAutomaticRunSummary | null {
+    const row = this.runRows(retailerId, RUN_RECEIPT_READ_LIMIT).find((run) => run.automatic);
+    return row ? {
+      runId: row.runId,
+      outcome: row.outcome,
+      reasonCode: row.reasonCode,
+      attemptedProductCount: row.attemptedProductCount,
+      passedProductCount: row.passedProductCount,
+      finishedAt: row.finishedAt,
+      extensionVersion: row.extensionVersion
+    } : null;
+  }
+
+  private consecutiveNonPassingRuns(retailerId: ActionRetailer): number {
+    let count = 0;
+    for (const row of this.runRows(retailerId, RUN_RECEIPT_READ_LIMIT)) {
+      if (!row.automatic) continue;
+      if (row.outcome === "passed") break;
+      if (NEUTRAL_RUN_OUTCOMES.has(row.outcome)) continue;
+      count += 1;
+    }
+    return count;
   }
 
   private qualificationEvidence(retailerId: ActionRetailer, now: number): RequalificationEvidence {
@@ -414,6 +635,7 @@ export class RetailerReadinessRepository {
       currentRehearsalPassed: number;
       priorRehearsalPassed: number;
       repairableObserverFailure: number;
+      currentlyPurchasable: number;
       layoutFingerprint: string;
     }>(
       `WITH candidate_history AS (
@@ -443,6 +665,7 @@ export class RetailerReadinessRepository {
               MAX(CASE WHEN trial.outcome = 'passed' AND trial.adapter_version = ?
                          AND trial.observed_at >= ? THEN 1 ELSE 0 END) AS currentRehearsalPassed,
               MAX(CASE WHEN trial.outcome = 'passed' THEN 1 ELSE 0 END) AS priorRehearsalPassed,
+              MAX(CASE WHEN listing.status IN ('in_stock', 'preorder') THEN 1 ELSE 0 END) AS currentlyPurchasable,
               COALESCE((
                 SELECT diagnostic.layout_fingerprint
                 FROM retailer_adapter_diagnostics diagnostic
@@ -487,6 +710,7 @@ export class RetailerReadinessRepository {
           OR pickupActionable = 1
           OR repairableObserverFailure = 1
        ORDER BY repairableObserverFailure DESC,
+                currentlyPurchasable DESC,
                 currentRehearsalPassed DESC,
                 currentObserverEvidence DESC,
                 priorRehearsalPassed DESC,
@@ -530,6 +754,7 @@ export class RetailerReadinessRepository {
         currentRehearsalPassed: row.currentRehearsalPassed === 1,
         priorRehearsalPassed: row.priorRehearsalPassed === 1,
         repairableObserverFailure: repairNeeded,
+        currentlyPurchasable: row.currentlyPurchasable === 1,
         layoutFingerprint: repair?.layoutFingerprint || row.layoutFingerprint
       };
     });
@@ -564,12 +789,17 @@ export class RetailerReadinessRepository {
         currentRehearsalPassed: false,
         priorRehearsalPassed: false,
         repairableObserverFailure: true,
+        currentlyPurchasable: Boolean(this.db.get<{ id: string }>(
+          `SELECT id FROM listings WHERE retailer_id = ? AND retailer_sku = ? AND status IN ('in_stock', 'preorder') LIMIT 1`,
+          retailerId,
+          retailerSku
+        )),
         layoutFingerprint: repair.layoutFingerprint
       });
     }
     const diversified: RequalificationCandidate[] = [];
     const append = (candidate: RequalificationCandidate): void => {
-      if (diversified.length >= 8
+      if (diversified.length >= MAX_CANDIDATES
         || diversified.some((item) => item.retailerSku === candidate.retailerSku)) return;
       diversified.push(candidate);
     };
@@ -587,7 +817,7 @@ export class RetailerReadinessRepository {
       observedLayouts.add(candidate.layoutFingerprint);
     }
     const covered = new Set(diversified.flatMap((item) => item.qualificationTypes));
-    while (diversified.length < 8) {
+    while (diversified.length < MAX_CANDIDATES) {
       const next = candidates
         .filter((candidate) => !diversified.some((item) => item.retailerSku === candidate.retailerSku))
         .sort((left, right) => {
@@ -600,7 +830,12 @@ export class RetailerReadinessRepository {
       next.qualificationTypes.forEach((item) => covered.add(item));
     }
     candidates.splice(0, candidates.length, ...diversified);
-    if (candidates.length >= 8) return candidates;
+    const rehearsalCovered = candidates.some((candidate) => candidate.currentRehearsalPassed);
+    const purchasableReserve = rehearsalCovered ? 0 : PURCHASABLE_CANDIDATE_RESERVE;
+    if (candidates.length >= MAX_CANDIDATES
+      && candidates.filter((candidate) => candidate.currentlyPurchasable).length >= purchasableReserve) {
+      return candidates;
+    }
     const catalogRows = this.db.all<{
       retailerSku: string;
       canonicalUrl: string;
@@ -632,9 +867,9 @@ export class RetailerReadinessRepository {
       retailerId
     );
     for (const row of catalogRows) {
-      if (candidates.length >= 8) break;
       if (candidates.some((candidate) => candidate.retailerSku === row.retailerSku)) continue;
-      candidates.push({
+      const purchasableCount = candidates.filter((candidate) => candidate.currentlyPurchasable).length;
+      const catalogCandidate: RequalificationCandidate = {
         retailerSku: row.retailerSku,
         canonicalUrl: row.canonicalUrl,
         title: row.title,
@@ -645,8 +880,21 @@ export class RetailerReadinessRepository {
         currentRehearsalPassed: false,
         priorRehearsalPassed: false,
         repairableObserverFailure: false,
+        currentlyPurchasable: true,
         layoutFingerprint: ""
-      });
+      };
+      if (candidates.length < MAX_CANDIDATES) {
+        candidates.push(catalogCandidate);
+        continue;
+      }
+      if (purchasableCount >= purchasableReserve) break;
+      // Reserve a slot: replace the last sold-out history product that carries
+      // no open repair, so the loop can still rehearse something purchasable.
+      const replaceable = candidates.map((candidate, index) => ({ candidate, index }))
+        .filter(({ candidate }) => !candidate.repairableObserverFailure && !candidate.currentlyPurchasable)
+        .at(-1);
+      if (!replaceable) break;
+      candidates.splice(replaceable.index, 1, catalogCandidate);
     }
     return candidates;
   }

@@ -5,6 +5,7 @@ import { extname, join } from "node:path";
 import {
   AMAZON_ADD_ACTIVATION_CONFIRMATION,
   AMAZON_ADD_ADAPTER_VERSION,
+  RETAILER_OBSERVER_VERSIONS,
   BESTBUY_ADD_ACTIVATION_CONFIRMATION,
   BESTBUY_ADD_ADAPTER_VERSION,
   JOB_STATES,
@@ -48,6 +49,7 @@ import {
   type OperatorAlertRuleInput,
   type SpendPolicyUpdateInput,
   type RetailerAdapterDiagnosticInput,
+  type RetailerReverificationRunInput,
   type RetailerShadowObservationInput,
   type SignalEventInput,
   type SourceSyncProgressInput,
@@ -792,6 +794,23 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     ...activate(),
     profileReconciliation: control.reconcilePurchaseProfilesForRetailer(retailerId)
   });
+  const ADD_ADAPTER_VERSIONS: Record<"target" | "walmart" | "amazon" | "bestbuy", string> = {
+    target: TARGET_ADD_ADAPTER_VERSION,
+    walmart: WALMART_ADD_ADAPTER_VERSION,
+    amazon: AMAZON_ADD_ADAPTER_VERSION,
+    bestbuy: BESTBUY_ADD_ADAPTER_VERSION
+  };
+  // Companion and app releases can land minutes apart. A packaged-version
+  // mismatch is a distinct, typed conflict so the companion can park its
+  // automatic checks and ask for an update instead of logging a repair.
+  const requireAdapterVersion = (supplied: unknown, expected: string, label: string): void => {
+    if (typeof supplied === "string" && supplied === expected) return;
+    throw new ApiError(
+      "adapter_version_mismatch",
+      409,
+      `The ${label} version ${String(supplied || "").slice(0, 80) || "(missing)"} does not match this app's ${expected}. Update the Chrome companion or the Yoink app so both run the same release.`
+    );
+  };
   const recordAndRenewQualification = <T extends { outcome: "passed" | "rejected" }>(
     retailerId: "target" | "walmart" | "amazon" | "bestbuy",
     deviceId: string,
@@ -1701,6 +1720,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           json(response, 200, { plan: retailerReadiness.reverifyPlan() });
           return;
         }
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/readiness/reverification-runs") {
+          const body = await readJson(request);
+          const recorded = db.transaction(() => {
+            const run = retailerReadiness.recordReverificationRun(device.id, body as unknown as RetailerReverificationRunInput);
+            const lane = retailerReadiness.lane(run.retailerId);
+            const stallReconciliation = operatorAlerts.reconcileQualificationStalls([lane], correlationId);
+            return { run, lane, stallReconciliation };
+          });
+          json(response, 201, recorded);
+          return;
+        }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/credential-rotation/begin") {
           if (device.credentialSlot !== "current") {
             json(response, 409, { error: "credential_rotation_stale", message: "The current Chrome credential is required to begin rotation." });
@@ -1713,6 +1743,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && shadowObservationMatch) {
           const body = await readJson(request);
           if (body.retailerId !== shadowObservationMatch[1]) throw new Error("The retailer observation route and payload must match.");
+          requireAdapterVersion(body.adapterVersion, RETAILER_OBSERVER_VERSIONS[shadowObservationMatch[1] as SupportedRetailerId], "retailer observer");
           const observation = shadowObservations.record(device.id, body as unknown as RetailerShadowObservationInput);
           const listing = catalog.exactRetailerListing(observation.retailerId, observation.retailerSku);
           json(response, 201, {
@@ -1737,6 +1768,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && adapterDiagnosticMatch) {
           const body = await readJson(request);
           if (body.retailerId !== adapterDiagnosticMatch[1]) throw new Error("The adapter diagnostic route and payload must match.");
+          {
+            const diagnosticRetailer = adapterDiagnosticMatch[1] as SupportedRetailerId;
+            const expectedDiagnosticVersion = body.operation === "observe"
+              ? RETAILER_OBSERVER_VERSIONS[diagnosticRetailer]
+              : ADD_ADAPTER_VERSIONS[diagnosticRetailer as keyof typeof ADD_ADAPTER_VERSIONS];
+            if (expectedDiagnosticVersion) requireAdapterVersion(body.adapterVersion, expectedDiagnosticVersion, "adapter diagnostic");
+          }
           const recorded = db.transaction(() => {
             const diagnostic = adapterDiagnostics.record(device.id, body as unknown as RetailerAdapterDiagnosticInput);
             const alertReconciliation = operatorAlerts.reconcileAdapterRepairs(
@@ -1811,24 +1849,32 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/target-add") {
           const body = await readJson(request);
+          requireAdapterVersion(body.adapterVersion, TARGET_ADD_ADAPTER_VERSION, "add runner");
+          requireAdapterVersion(body.observerVersion, RETAILER_OBSERVER_VERSIONS.target, "retailer observer");
           json(response, 201, recordAndRenewQualification("target", device.id,
             () => qualifications.recordTargetAddRehearsal(device.id, body as unknown as TargetAddRehearsalInput)));
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/walmart-add") {
           const body = await readJson(request);
+          requireAdapterVersion(body.adapterVersion, WALMART_ADD_ADAPTER_VERSION, "add runner");
+          requireAdapterVersion(body.observerVersion, RETAILER_OBSERVER_VERSIONS.walmart, "retailer observer");
           json(response, 201, recordAndRenewQualification("walmart", device.id,
             () => qualifications.recordWalmartAddRehearsal(device.id, body as unknown as WalmartAddRehearsalInput)));
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/amazon-add") {
           const body = await readJson(request);
+          requireAdapterVersion(body.adapterVersion, AMAZON_ADD_ADAPTER_VERSION, "add runner");
+          requireAdapterVersion(body.observerVersion, RETAILER_OBSERVER_VERSIONS.amazon, "retailer observer");
           json(response, 201, recordAndRenewQualification("amazon", device.id,
             () => qualifications.recordAmazonAddRehearsal(device.id, body as unknown as AmazonAddRehearsalInput)));
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/bestbuy-add") {
           const body = await readJson(request);
+          requireAdapterVersion(body.adapterVersion, BESTBUY_ADD_ADAPTER_VERSION, "add runner");
+          requireAdapterVersion(body.observerVersion, RETAILER_OBSERVER_VERSIONS.bestbuy, "retailer observer");
           json(response, 201, recordAndRenewQualification("bestbuy", device.id,
             () => qualifications.recordBestBuyAddRehearsal(device.id, body as unknown as BestBuyAddRehearsalInput)));
           return;

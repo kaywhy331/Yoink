@@ -41,6 +41,9 @@ const API_ROOT = `${RUNTIME_CONFIG.apiOrigin}/api/v1`;
 const APP_ROOT = RUNTIME_CONFIG.appOrigin;
 const LOCAL_PACKAGE_UPDATES = RUNTIME_CONFIG.localPackageUpdates;
 const EVIDENCE_REQUEST_TIMEOUT_MS = 10_000;
+const OBSERVER_HYDRATION_MAX_MS = 8_000;
+const OBSERVER_HYDRATION_QUIET_MS = 100;
+const OBSERVER_HYDRATION_FALLBACK_MS = 400;
 const HEALTH_ALARM = "yoink-health";
 const JOB_ALARM = "yoink-jobs";
 const WATCH_QUEUE_ALARM = "yoink-watch-queue";
@@ -65,7 +68,32 @@ const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
 const WARM_READINESS_LANES_PER_CYCLE = 2;
 const AUTO_REVERIFICATION_PERIOD_MINUTES = 6 * 60;
 const AUTO_REVERIFICATION_COOLDOWN_MS = 24 * 60 * 60_000;
+// Automatic store checks back off per lane: a passing lane may be rechecked
+// after 30 minutes, a lane that keeps failing waits 1 h, 4 h, 12 h, then 24 h,
+// and a lane parked on a user action (sign in, permission, challenge) waits a
+// full day unless the plan's trigger material changes first.
+const AUTO_REVERIFICATION_PASS_BACKOFF_MS = 30 * 60_000;
+const AUTO_REVERIFICATION_FAILURE_BACKOFF_MS = Object.freeze([
+  60 * 60_000, 4 * 60 * 60_000, 12 * 60 * 60_000, 24 * 60 * 60_000
+]);
+const AUTO_REVERIFICATION_DAILY_CAP = 6;
 const MAX_REVERIFICATION_CANDIDATES_PER_LANE = 8;
+// Overridable so a test can prove the unreachable-product path quickly.
+let REVERIFICATION_TAB_WAIT_MS = 25_000;
+// One list decides which observer failure stages are worth a hydration
+// retry. It is shared by the Target loop, the retailer loop, and the injected
+// waiter so the three can never drift apart.
+const HYDRATION_RETRYABLE_STAGES = Object.freeze([
+  "availability_binding", "add_control", "sku_binding", "offer_binding",
+  "price_binding", "seller_binding", "fulfillment_binding", "route_binding"
+]);
+const REVERIFICATION_PARKED_REASONS = new Set([
+  "manual_action_required", "retailer_access_missing", "action_job_active",
+  "retailer_session_signed_out", "retailer_session_challenged"
+]);
+const REVERIFICATION_SKIPPED_REASONS = new Set([
+  "companion_update_required", "app_update_required", "adapter_version_mismatch"
+]);
 const POST_CLICK_SETTLE_STATE_KEY = "__yoinkPostClickSettleV1";
 const READINESS_KEY = "readiness";
 const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
@@ -80,6 +108,7 @@ const WARM_READINESS_CURSOR_KEY = "yoinkWarmReadinessCursorV1";
 const WATCH_QUEUE_STATE_KEY = "yoinkWatchQueueStateV1";
 const WATCH_QUEUE_LEASE_KEY = "yoinkWatchQueueLeaseV1";
 const REVERIFICATION_STATE_KEY = "yoinkRetailerReverificationStateV1";
+const REVERIFICATION_TAB_KEY = "yoinkReverificationTabV1";
 const AUTO_REVERIFICATION_SETTINGS_KEY = "yoinkAutoReverificationSettingsV1";
 const ORDER_HANDOFF_KEY = "yoinkOrderHandoffsV1";
 const CART_READY_SOUND_KEY = "yoinkCartReadySoundEnabledV1";
@@ -126,7 +155,7 @@ const RETAILER_ORIGINS = {
   pbandai: ["https://*.p-bandai.com/*"],
   pokemoncenter: ["https://*.pokemoncenter.com/*"]
 };
-const TARGET_OBSERVER_VERSION = "target-observer-v5";
+const TARGET_OBSERVER_VERSION = "target-observer-v6";
 const RETAILER_OBSERVER_VERSIONS = {
   walmart: "walmart-observer-v7",
   amazon: "amazon-observer-v8",
@@ -160,7 +189,7 @@ const SUPPORTED_RETAILER_DOMAINS = Object.freeze([
   "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
   "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
 ]);
-const TARGET_ADD_ADAPTER_VERSION = "target-add-v7";
+const TARGET_ADD_ADAPTER_VERSION = "target-add-v8";
 const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v8";
 const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
 const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
@@ -820,7 +849,7 @@ const OBSERVER_RUNTIME_FAILURE_REASONS = new Set([
 const DIAGNOSTIC_REASON_CODES = new Set([
   "verified", "dom_hydration_recovered", "semantic_layout_recovered",
   ...OBSERVER_RUNTIME_FAILURE_REASONS,
-  "product_identity_missing", "security_challenge",
+  "product_identity_missing", "product_page_unavailable", "security_challenge",
   "interactive_auth", "interactive_mfa", "interactive_location", "interactive_membership",
   "interactive_queue", "interactive_high_demand", "interactive_unknown",
   "availability_selector_miss",
@@ -1140,6 +1169,47 @@ async function reportObserverRuntimeFailure(device, identity, reasonCode, attemp
   }
 }
 
+// A saved product whose page no longer resolves to the exact product (removed
+// listing, redirect, sign-in wall) is recorded as a terminal rejection so the
+// server can close its open repair entry instead of replaying it forever.
+function productPageUnavailableDiagnostic(identity) {
+  if (!identity?.retailerId || !identity.retailerSku) {
+    throw new Error("The unreachable product diagnostic needs an exact retailer identity.");
+  }
+  const zeroCounts = Object.fromEntries(DIAGNOSTIC_COUNT_FIELDS.map((field) => [field, 0]));
+  return retailerDiagnosticPayload({
+    contractVersion: 1,
+    observedAt: new Date().toISOString(),
+    retailerId: identity.retailerId,
+    retailerSku: identity.retailerSku,
+    adapterVersion: observerVersionForRetailer(identity.retailerId),
+    operation: "observe",
+    outcome: "rejected",
+    failureStage: "page_identity",
+    reasonCode: "product_page_unavailable",
+    attemptCount: 1,
+    domChanged: false,
+    layout: {
+      schemaVersion: 1,
+      pageKind: "other",
+      scopeKind: "none",
+      sellerShape: "none",
+      fulfillmentShape: "none",
+      ...zeroCounts,
+      securityChallenge: false,
+      interactiveBlock: ""
+    }
+  }, identity.retailerId);
+}
+
+async function reportProductPageUnavailable(device, identity) {
+  try {
+    return await postRetailerDiagnostic(device, productPageUnavailableDiagnostic(identity));
+  } catch {
+    return null;
+  }
+}
+
 function operationDiagnostic(base, retailerId, operation, outcome, failureStage, reasonCode) {
   return retailerDiagnosticPayload(base, retailerId, {
     operation,
@@ -1229,6 +1299,9 @@ async function request(path, options = {}, timeoutMs = 3000) {
     if (!response.ok) {
       const error = new Error(payload.message || `Yoink returned HTTP ${response.status}.`);
       error.status = response.status;
+      // The typed error code lets callers distinguish version skew from a bad
+      // payload without parsing the human message.
+      error.code = /^[a-z][a-z0-9_]{1,79}$/.test(String(payload.error || "")) ? String(payload.error) : "";
       throw error;
     }
     return payload;
@@ -2722,6 +2795,103 @@ async function operationTab(tabId = null) {
   return tabs[0] || null;
 }
 
+// Retailer SPAs can report tab completion while their exact offer is still a
+// placeholder. Re-run the read-only observer on DOM change (with a bounded
+// fallback) before turning a transient shell into an operator incident.
+async function waitForShadowHydration(tabId, retailerId, targetObserver, attemptCount, priorLayoutSignature) {
+  const injections = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    args: [
+      targetObserver ? "waitForTargetShadowHydration" : "waitForRetailerShadowHydration",
+      retailerId,
+      targetObserver,
+      attemptCount,
+      priorLayoutSignature,
+      OBSERVER_HYDRATION_MAX_MS,
+      OBSERVER_HYDRATION_QUIET_MS,
+      OBSERVER_HYDRATION_FALLBACK_MS,
+      [...HYDRATION_RETRYABLE_STAGES]
+    ],
+    func: (_operationName, exactRetailerId, useTargetObserver, currentAttempt, initialLayoutSignature, waitMs, quietMs, fallbackMs, retryableStageList) => new Promise((resolve) => {
+      const observerApi = useTargetObserver ? globalThis.YoinkTargetShadow : globalThis.YoinkRetailerShadow;
+      const collectAttempt = useTargetObserver
+        ? observerApi?.collectTargetShadowAttempt
+        : observerApi?.collectRetailerShadowAttempt;
+      if (typeof collectAttempt !== "function") {
+        resolve({ ok: false, reasonCode: "observer_runtime_unavailable" });
+        return;
+      }
+      const retryableStages = new Set(Array.isArray(retryableStageList) ? retryableStageList : []);
+      let settled = false;
+      let mutationSeen = false;
+      let mutationTimer;
+      let fallbackTimer;
+      let deadlineTimer;
+      let mutationObserver;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(mutationTimer);
+        clearInterval(fallbackTimer);
+        clearTimeout(deadlineTimer);
+        mutationObserver?.disconnect?.();
+        resolve(result);
+      };
+      const inspect = (final = false) => {
+        if (settled) return;
+        let attempt;
+        try {
+          attempt = useTargetObserver
+            ? collectAttempt(document, location.href, "shipping", currentAttempt, mutationSeen)
+            : collectAttempt(document, location.href, exactRetailerId, "shipping", currentAttempt, mutationSeen);
+        } catch {
+          finish({ ok: false, reasonCode: "observer_collection_failed" });
+          return;
+        }
+        const diagnostic = attempt?.diagnostic;
+        const observation = attempt?.observation;
+        const layoutSignature = JSON.stringify(diagnostic?.layout || {});
+        // Only a structural change counts. Unrelated mutations (carousels,
+        // countdowns) must not mark the repair evidence as DOM-changed.
+        const domChanged = layoutSignature !== initialLayoutSignature;
+        const retryable = diagnostic?.outcome === "failed"
+          && !diagnostic?.layout?.securityChallenge
+          && !diagnostic?.layout?.interactiveBlock
+          && observation?.sellerType !== "third_party"
+          && retryableStages.has(String(diagnostic?.failureStage || ""));
+        if (!retryable || final) finish({ ok: true, ...attempt, domChanged });
+      };
+      const inspectAfterMutation = () => {
+        mutationSeen = true;
+        if (settled || mutationTimer) return;
+        mutationTimer = setTimeout(() => {
+          mutationTimer = undefined;
+          inspect(false);
+        }, quietMs);
+      };
+      try {
+        mutationObserver = new MutationObserver(inspectAfterMutation);
+        mutationObserver.observe(document.documentElement || document, {
+          childList: true,
+          subtree: true,
+          attributes: true
+        });
+      } catch {
+        mutationObserver = null;
+      }
+      fallbackTimer = setInterval(() => inspect(false), fallbackMs);
+      deadlineTimer = setTimeout(() => {
+        clearTimeout(mutationTimer);
+        mutationTimer = undefined;
+        inspect(true);
+      }, waitMs);
+      inspect(false);
+    })
+  });
+  return injections.find((entry) => entry.frameId === 0)?.result || null;
+}
+
 async function inspectTargetTab(tabId = null) {
   if (!await targetShadowAccess()) throw new Error("Allow Target page access, then try again.");
   const device = await storedDevice();
@@ -2744,35 +2914,44 @@ async function inspectTargetTab(tabId = null) {
   const attempts = [];
   let priorLayout = "";
   let domChanged = false;
-  for (let attemptCount = 1; attemptCount <= 3; attemptCount += 1) {
-    let injections;
+  for (let attemptCount = 1; attemptCount <= 2; attemptCount += 1) {
+    let result;
     try {
-      injections = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        world: "ISOLATED",
-        args: ["collectTargetShadowAttempt", attemptCount, domChanged],
-        func: (_operationName, currentAttempt, changed) => {
-          try {
-            const observer = globalThis.YoinkTargetShadow;
-            if (!observer || typeof observer.collectTargetShadowAttempt !== "function") {
-              return { ok: false, reasonCode: "observer_runtime_unavailable" };
+      if (attemptCount === 1) {
+        const injections = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: "ISOLATED",
+          args: ["collectTargetShadowAttempt", attemptCount, domChanged],
+          func: (_operationName, currentAttempt, changed) => {
+            try {
+              const observer = globalThis.YoinkTargetShadow;
+              if (!observer || typeof observer.collectTargetShadowAttempt !== "function") {
+                return { ok: false, reasonCode: "observer_runtime_unavailable" };
+              }
+              return { ok: true, ...observer.collectTargetShadowAttempt(document, location.href, "shipping", currentAttempt, changed) };
+            } catch {
+              return { ok: false, reasonCode: "observer_collection_failed" };
             }
-            return { ok: true, ...observer.collectTargetShadowAttempt(document, location.href, "shipping", currentAttempt, changed) };
-          } catch {
-            return { ok: false, reasonCode: "observer_collection_failed" };
           }
-        }
-      });
+        });
+        result = injections.find((entry) => entry.frameId === 0)?.result;
+      } else {
+        result = await waitForShadowHydration(tab.id, "target", true, attemptCount, priorLayout);
+      }
     } catch {
+      // An interrupted hydration wait (navigation, document replacement) is
+      // not an observer runtime failure: keep the first attempt's evidence.
+      if (attemptCount > 1 && attempts.length) break;
       await reportObserverRuntimeFailure(device, identity, "observer_execution_failed", attemptCount, domChanged);
       throw new Error("Yoink could not inspect this Target page. Reload the page and try again.");
     }
-    const result = injections.find((entry) => entry.frameId === 0)?.result;
     if (!result) {
+      if (attemptCount > 1 && attempts.length) break;
       await reportObserverRuntimeFailure(device, identity, "observer_top_frame_missing", attemptCount, domChanged);
       throw new Error("Yoink could not inspect this Target page. Reload the page and try again.");
     }
     if (!result.ok) {
+      if (attemptCount > 1 && attempts.length) break;
       const reasonCode = OBSERVER_RUNTIME_FAILURE_REASONS.has(result.reasonCode)
         ? result.reasonCode : "observer_collection_failed";
       await reportObserverRuntimeFailure(device, identity, reasonCode, attemptCount, domChanged);
@@ -2788,17 +2967,16 @@ async function inspectTargetTab(tabId = null) {
       throw new Error("Yoink received invalid Target evidence. The failure was reported for repair.");
     }
     const layoutSignature = JSON.stringify(diagnostic.layout);
+    if (result.domChanged === true) domChanged = true;
     if (priorLayout && priorLayout !== layoutSignature) domChanged = true;
     priorLayout = layoutSignature;
     attempts.push({ observation, diagnostic });
-    const retryable = diagnostic.outcome !== "passed"
+    const retryable = diagnostic.outcome === "failed"
       && !diagnostic.layout.securityChallenge
       && !diagnostic.layout.interactiveBlock
       && observation.sellerType !== "third_party"
-      && ["availability_binding", "add_control", "offer_binding", "price_binding", "seller_binding", "fulfillment_binding"]
-        .includes(diagnostic.failureStage);
-    if (!retryable || attemptCount === 3) break;
-    await new Promise((resolve) => setTimeout(resolve, attemptCount === 1 ? 300 : 700));
+      && HYDRATION_RETRYABLE_STAGES.includes(diagnostic.failureStage);
+    if (!retryable || attemptCount === 2) break;
   }
   const initial = attempts[0];
   const final = attempts.at(-1);
@@ -2925,35 +3103,44 @@ async function inspectRetailerTab(tabId = null) {
   const attempts = [];
   let priorLayout = "";
   let domChanged = false;
-  for (let attemptCount = 1; attemptCount <= 3; attemptCount += 1) {
-    let injections;
+  for (let attemptCount = 1; attemptCount <= 2; attemptCount += 1) {
+    let result;
     try {
-      injections = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        world: "ISOLATED",
-        args: [identity.retailerId, attemptCount, domChanged],
-        func: (retailerId, currentAttempt, changed) => {
-          try {
-            const observer = globalThis.YoinkRetailerShadow;
-            if (!observer || typeof observer.collectRetailerShadowAttempt !== "function") {
-              return { ok: false, reasonCode: "observer_runtime_unavailable" };
+      if (attemptCount === 1) {
+        const injections = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: "ISOLATED",
+          args: [identity.retailerId, attemptCount, domChanged],
+          func: (retailerId, currentAttempt, changed) => {
+            try {
+              const observer = globalThis.YoinkRetailerShadow;
+              if (!observer || typeof observer.collectRetailerShadowAttempt !== "function") {
+                return { ok: false, reasonCode: "observer_runtime_unavailable" };
+              }
+              return { ok: true, ...observer.collectRetailerShadowAttempt(document, location.href, retailerId, "shipping", currentAttempt, changed) };
+            } catch {
+              return { ok: false, reasonCode: "observer_collection_failed" };
             }
-            return { ok: true, ...observer.collectRetailerShadowAttempt(document, location.href, retailerId, "shipping", currentAttempt, changed) };
-          } catch {
-            return { ok: false, reasonCode: "observer_collection_failed" };
           }
-        }
-      });
+        });
+        result = injections.find((entry) => entry.frameId === 0)?.result;
+      } else {
+        result = await waitForShadowHydration(tab.id, identity.retailerId, false, attemptCount, priorLayout);
+      }
     } catch {
+      // An interrupted hydration wait keeps the first attempt's evidence
+      // instead of opening a zero-layout runtime incident.
+      if (attemptCount > 1 && attempts.length) break;
       await reportObserverRuntimeFailure(device, identity, "observer_execution_failed", attemptCount, domChanged);
       throw new Error("Yoink could not inspect this retailer page. Reload the page and try again.");
     }
-    const result = injections.find((entry) => entry.frameId === 0)?.result;
     if (!result) {
+      if (attemptCount > 1 && attempts.length) break;
       await reportObserverRuntimeFailure(device, identity, "observer_top_frame_missing", attemptCount, domChanged);
       throw new Error("Yoink could not inspect this retailer page. Reload the page and try again.");
     }
     if (!result.ok) {
+      if (attemptCount > 1 && attempts.length) break;
       const reasonCode = OBSERVER_RUNTIME_FAILURE_REASONS.has(result.reasonCode)
         ? result.reasonCode
         : "observer_collection_failed";
@@ -2970,20 +3157,20 @@ async function inspectRetailerTab(tabId = null) {
       throw new Error("Yoink received invalid retailer evidence. The failure was reported for repair.");
     }
     const layoutSignature = JSON.stringify(diagnostic.layout);
+    if (result.domChanged === true) domChanged = true;
     if (priorLayout && priorLayout !== layoutSignature) domChanged = true;
     priorLayout = layoutSignature;
     attempts.push({ observation, diagnostic });
     const retryable = [
-      "amazon", "bestbuy", "disney", "ravensburger", "riot", "booksamillion",
+      "walmart", "amazon", "bestbuy", "disney", "ravensburger", "riot", "booksamillion",
       "fanatics", "kohls", "macys", "pbandai", "pokemoncenter"
     ].includes(identity.retailerId)
-      && diagnostic.outcome !== "passed"
+      && diagnostic.outcome === "failed"
       && !diagnostic.layout.securityChallenge
       && !diagnostic.layout.interactiveBlock
       && observation.sellerType !== "third_party"
-      && ["availability_binding", "add_control", "sku_binding", "offer_binding", "price_binding", "seller_binding", "fulfillment_binding", "route_binding"].includes(diagnostic.failureStage);
-    if (!retryable || attemptCount === 3) break;
-    await new Promise((resolve) => setTimeout(resolve, attemptCount === 1 ? 300 : 700));
+      && HYDRATION_RETRYABLE_STAGES.includes(diagnostic.failureStage);
+    if (!retryable || attemptCount === 2) break;
   }
   const initial = attempts[0];
   const final = attempts.at(-1);
@@ -3708,6 +3895,29 @@ function normalizedReverificationCandidate(value, retailerId) {
   };
 }
 
+const REVERIFICATION_OUTCOMES = new Set([
+  "passed", "partial", "blocked", "missing_candidate", "access_missing", "parked", "error", "skipped"
+]);
+const REVERIFICATION_TRIGGERS = new Set(["scheduled", "plan_changed", "manual", "settings_enabled"]);
+const REVERIFICATION_STATES = new Set(["running", "complete", "partial", "error"]);
+
+function normalizedLastAutomaticRun(value) {
+  if (!value || typeof value !== "object") return null;
+  const outcome = String(value.outcome || "");
+  if (!REVERIFICATION_OUTCOMES.has(outcome)) return null;
+  return {
+    runId: String(value.runId || "").slice(0, 80),
+    outcome,
+    reasonCode: safeReasonCode(value.reasonCode || outcome),
+    attemptedProductCount: Math.max(0, Math.min(MAX_REVERIFICATION_CANDIDATES_PER_LANE,
+      Math.floor(Number(value.attemptedProductCount) || 0))),
+    passedProductCount: Math.max(0, Math.min(MAX_REVERIFICATION_CANDIDATES_PER_LANE,
+      Math.floor(Number(value.passedProductCount) || 0))),
+    finishedAt: String(value.finishedAt || "").slice(0, 40),
+    extensionVersion: String(value.extensionVersion || "").slice(0, 40)
+  };
+}
+
 function normalizedReverificationPlan(value) {
   const lanes = [];
   for (const item of Array.isArray(value?.lanes) ? value.lanes.slice(0, 4) : []) {
@@ -3729,15 +3939,20 @@ function normalizedReverificationPlan(value) {
         requiredForQualification: check?.requiredForQualification === true,
         met: check?.met === true
       })) : [];
+    const signedInState = String(item?.session?.signedInState || "");
     lanes.push({
       retailerId,
       expectedAdapterVersion: String(item.expectedAdapterVersion || "").slice(0, 80),
+      expectedObserverVersion: String(item.expectedObserverVersion || "").slice(0, 80),
       qualification: {
         status: ["qualified", "suspended", "retired", "missing"].includes(String(item.qualification?.status || ""))
           ? String(item.qualification.status) : "missing",
         warning: ["none", "expiring", "expired", "version_changed"].includes(String(item.qualification?.warning || ""))
           ? String(item.qualification.warning) : "none",
         expiresAt: String(item.qualification?.expiresAt || "").slice(0, 40)
+      },
+      session: {
+        signedInState: ["unknown", "ready", "signed_out", "challenged"].includes(signedInState) ? signedInState : "unknown"
       },
       candidate: candidates[0] ?? null,
       candidates,
@@ -3748,7 +3963,14 @@ function normalizedReverificationPlan(value) {
         distinctSkuCount: Math.max(0, Math.min(1_000, Math.floor(Number(item?.evidence?.distinctSkuCount) || 0))),
         checks: evidenceChecks
       },
-      automaticCheckNeeded: item?.automaticCheckNeeded === true
+      automaticCheckNeeded: item?.automaticCheckNeeded === true,
+      degraded: item?.degraded === true,
+      degradedReasons: (Array.isArray(item?.degradedReasons) ? item.degradedReasons : [])
+        .slice(0, 4).map((reason) => safeReasonCode(reason)),
+      blockedReason: ["no_purchasable_candidate", "no_candidate"].includes(String(item?.blockedReason || ""))
+        ? String(item.blockedReason) : "",
+      lastAutomaticRun: normalizedLastAutomaticRun(item?.lastAutomaticRun),
+      consecutiveNonPassingRuns: Math.max(0, Math.min(1_000, Math.floor(Number(item?.consecutiveNonPassingRuns) || 0)))
     });
   }
   return { createdAt: String(value?.createdAt || "").slice(0, 40), lanes };
@@ -3770,27 +3992,33 @@ function normalizedAutoReverificationSettings(value) {
   };
 }
 
+// The trigger signature carries only the material that should start a new
+// bounded replay: packaged versions, lane status, and which exact products
+// are queued for repair. Evidence freshness bits are deliberately excluded so
+// a run cannot re-arm itself by posting the evidence it just collected.
 function reverificationPlanSignature(plan) {
-  const material = (plan?.lanes || []).map((lane) => [
+  const laneMaterial = (plan?.lanes || []).map((lane) => [
     lane.retailerId,
     lane.expectedAdapterVersion,
+    lane.expectedObserverVersion,
     lane.qualification.status,
     lane.qualification.warning,
     lane.automaticCheckNeeded ? "needed" : "steady",
-    lane.candidates.map((candidate) => [
-      candidate.retailerSku,
-      candidate.repairableObserverFailure ? "repair" : "sample",
-      candidate.currentObserverEvidence ? "observer-current" : "observer-stale",
-      candidate.currentRehearsalPassed ? "rehearsal-current" : "rehearsal-stale",
-      candidate.layoutFingerprint || "layout-unknown"
-    ].join(":"))
-  ].flat().join("|")).join(";");
+    lane.degraded ? "degraded" : "healthy",
+    lane.blockedReason || "unblocked",
+    lane.candidates
+      .filter((candidate) => candidate.repairableObserverFailure)
+      .map((candidate) => candidate.retailerSku)
+      .sort()
+      .join(",")
+  ].join("|")).join(";");
+  const material = `${EXTENSION_VERSION}|${laneMaterial}`;
   let hash = 2166136261;
   for (let index = 0; index < material.length; index += 1) {
     hash ^= material.charCodeAt(index);
     hash = Math.imul(hash, 16777619) >>> 0;
   }
-  return `reverification-plan-v1:${material.length}:${hash.toString(16).padStart(8, "0")}`;
+  return `reverification-plan-v3:${material.length}:${hash.toString(16).padStart(8, "0")}`;
 }
 
 async function readAutoReverificationSettings() {
@@ -3801,31 +4029,184 @@ async function readAutoReverificationSettings() {
 async function setAutoReverificationEnabled(enabled) {
   const settings = { schemaVersion: 1, enabled: enabled === true };
   await chrome.storage.local.set({ [AUTO_REVERIFICATION_SETTINGS_KEY]: settings });
-  if (settings.enabled) void runAutomaticReverification(false);
+  if (settings.enabled) void runAutomaticReverification(false, "settings_enabled").catch(() => undefined);
   return { settings };
 }
 
-async function saveReverificationState(state, results = [], metadata = {}) {
-  const value = {
-    schemaVersion: 1,
-    state: ["running", "complete", "partial", "error"].includes(state) ? state : "error",
-    results: results.slice(0, 4).map((result) => ({
-      retailerId: String(result.retailerId || "").slice(0, 40),
-      retailerSku: String(result.retailerSku || "").slice(0, 80),
-      outcome: ["passed", "partial", "blocked", "missing_candidate", "access_missing", "error"].includes(result.outcome)
-        ? result.outcome : "error",
-      reasonCode: safeReasonCode(result.reasonCode || result.outcome),
-      attemptedProductCount: Math.max(0, Math.min(MAX_REVERIFICATION_CANDIDATES_PER_LANE,
-        Math.floor(Number(result.attemptedProductCount) || 0))),
-      passedProductCount: Math.max(0, Math.min(MAX_REVERIFICATION_CANDIDATES_PER_LANE,
-        Math.floor(Number(result.passedProductCount) || 0)))
-    })),
-    automatic: metadata.automatic === true,
-    planSignature: String(metadata.planSignature || "").slice(0, 2_000),
-    updatedAt: new Date().toISOString()
+function normalizedReverificationResult(value) {
+  const retailerId = String(value?.retailerId || "").slice(0, 40);
+  if (!retailerId) return null;
+  return {
+    retailerId,
+    retailerSku: String(value?.retailerSku || "").slice(0, 80),
+    outcome: REVERIFICATION_OUTCOMES.has(value?.outcome) ? value.outcome : "error",
+    reasonCode: safeReasonCode(value?.reasonCode || value?.outcome),
+    attemptedProductCount: Math.max(0, Math.min(MAX_REVERIFICATION_CANDIDATES_PER_LANE,
+      Math.floor(Number(value?.attemptedProductCount) || 0))),
+    passedProductCount: Math.max(0, Math.min(MAX_REVERIFICATION_CANDIDATES_PER_LANE,
+      Math.floor(Number(value?.passedProductCount) || 0)))
   };
+}
+
+function boundedLaneCounter(value) {
+  const counters = {};
+  for (const [retailerId, count] of Object.entries(value && typeof value === "object" ? value : {})) {
+    if (!ADD_LANES[retailerId]) continue;
+    counters[retailerId] = Math.max(0, Math.min(1_000, Math.floor(Number(count) || 0)));
+  }
+  return counters;
+}
+
+function boundedLaneOutcomes(value) {
+  const outcomes = {};
+  for (const [retailerId, entry] of Object.entries(value && typeof value === "object" ? value : {})) {
+    if (!ADD_LANES[retailerId] || !REVERIFICATION_OUTCOMES.has(entry?.outcome)) continue;
+    outcomes[retailerId] = {
+      outcome: entry.outcome,
+      reasonCode: safeReasonCode(entry.reasonCode || entry.outcome),
+      at: String(entry.at || "").slice(0, 40)
+    };
+  }
+  return outcomes;
+}
+
+function normalizedReverificationState(value) {
+  if (!value || typeof value !== "object") return null;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(value.automaticRunsToday?.day || ""))
+    ? String(value.automaticRunsToday.day) : "";
+  return {
+    schemaVersion: 2,
+    state: REVERIFICATION_STATES.has(value.state) ? value.state : "error",
+    results: (Array.isArray(value.results) ? value.results : []).slice(0, 4)
+      .map(normalizedReverificationResult).filter(Boolean),
+    automatic: value.automatic === true,
+    trigger: REVERIFICATION_TRIGGERS.has(value.trigger) ? value.trigger : (value.automatic === true ? "scheduled" : "manual"),
+    runId: /^[A-Za-z0-9_-]{8,80}$/.test(String(value.runId || "")) ? String(value.runId) : "",
+    planSignature: String(value.planSignature || "").slice(0, 200),
+    reasonCode: value.reasonCode ? safeReasonCode(value.reasonCode) : "",
+    laneIndex: Math.max(0, Math.min(3, Math.floor(Number(value.laneIndex) || 0))),
+    candidateIndex: Math.max(0, Math.min(MAX_REVERIFICATION_CANDIDATES_PER_LANE, Math.floor(Number(value.candidateIndex) || 0))),
+    consecutiveNonPassingRuns: boundedLaneCounter(value.consecutiveNonPassingRuns),
+    laneOutcomes: boundedLaneOutcomes(value.laneOutcomes),
+    lastRunAt: String(value.lastRunAt || value.updatedAt || "").slice(0, 40),
+    lastAutomaticRunAt: String(value.lastAutomaticRunAt || (value.automatic === true ? value.updatedAt : "") || "").slice(0, 40),
+    automaticRunsToday: { day, count: day ? Math.max(0, Math.min(1_000, Math.floor(Number(value.automaticRunsToday?.count) || 0))) : 0 },
+    startedAt: String(value.startedAt || "").slice(0, 40),
+    updatedAt: String(value.updatedAt || "").slice(0, 40)
+  };
+}
+
+async function readReverificationState() {
+  const stored = await chrome.storage.local.get(REVERIFICATION_STATE_KEY);
+  return normalizedReverificationState(stored[REVERIFICATION_STATE_KEY]);
+}
+
+async function persistReverificationRun(run) {
+  run.updatedAt = new Date().toISOString();
+  const value = normalizedReverificationState(run);
   await chrome.storage.local.set({ [REVERIFICATION_STATE_KEY]: value });
   return value;
+}
+
+function newReverificationRunId() {
+  return `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function laneBackoffMs(state, retailerId) {
+  const last = state?.laneOutcomes?.[retailerId];
+  if (!last) return 0;
+  if (last.outcome === "passed") return AUTO_REVERIFICATION_PASS_BACKOFF_MS;
+  if (["parked", "access_missing", "skipped", "missing_candidate"].includes(last.outcome)) {
+    return AUTO_REVERIFICATION_COOLDOWN_MS;
+  }
+  const failures = Math.max(1, Number(state?.consecutiveNonPassingRuns?.[retailerId]) || 1);
+  return AUTO_REVERIFICATION_FAILURE_BACKOFF_MS[Math.min(failures, AUTO_REVERIFICATION_FAILURE_BACKOFF_MS.length) - 1];
+}
+
+function adapterVersionNumber(value) {
+  const match = /-v(\d+)$/.exec(String(value || ""));
+  return match ? Number(match[1]) : Number.NaN;
+}
+
+// The plan tells the companion which packaged contracts the app expects. A
+// mismatch means every evidence post would be rejected, so the lane is
+// skipped with a reason the settings page can turn into an update prompt.
+function laneVersionSkew(lane) {
+  const packaged = [
+    [lane.expectedAdapterVersion, ADD_LANES[lane.retailerId]?.adapterVersion || ""],
+    [lane.expectedObserverVersion, observerVersionForRetailer(lane.retailerId) || ""]
+  ];
+  for (const [expected, installed] of packaged) {
+    if (!expected || expected === installed) continue;
+    const expectedNumber = adapterVersionNumber(expected);
+    const installedNumber = adapterVersionNumber(installed);
+    return Number.isFinite(expectedNumber) && Number.isFinite(installedNumber) && installedNumber < expectedNumber
+      ? "companion_update_required"
+      : "app_update_required";
+  }
+  return "";
+}
+
+async function rememberReverificationTab(tabId, retailerId, retailerSku) {
+  await chrome.storage.session.set({
+    [REVERIFICATION_TAB_KEY]: {
+      schemaVersion: 1,
+      tabId,
+      retailerId,
+      retailerSku,
+      openedAt: new Date().toISOString()
+    }
+  }).catch(() => undefined);
+}
+
+async function forgetReverificationTab() {
+  await chrome.storage.session.remove(REVERIFICATION_TAB_KEY).catch(() => undefined);
+}
+
+// A recycled service worker loses its in-memory run. Close the tab it left
+// behind and turn the stale "running" record into a terminal error so the
+// backoff logic, not the stale record, decides when the next replay starts.
+async function reconcileReverificationRestart() {
+  const stored = (await chrome.storage.session.get(REVERIFICATION_TAB_KEY).catch(() => ({})))[REVERIFICATION_TAB_KEY];
+  if (Number.isInteger(stored?.tabId)) await chrome.tabs.remove(stored.tabId).catch(() => undefined);
+  await forgetReverificationTab();
+  const state = await readReverificationState();
+  if (state?.state === "running") {
+    await persistReverificationRun({ ...state, state: "error", reasonCode: "worker_restarted" });
+  }
+}
+
+async function postReverificationRunReceipt(device, run, result, startedAt) {
+  if (!device?.token) return null;
+  try {
+    return await request("/devices/self/readiness/reverification-runs", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${device.token}` },
+      body: JSON.stringify({
+        contractVersion: 1,
+        runId: run.runId,
+        retailerId: result.retailerId,
+        automatic: run.automatic === true,
+        trigger: run.trigger,
+        outcome: result.outcome,
+        reasonCode: result.reasonCode,
+        attemptedProductCount: result.attemptedProductCount,
+        passedProductCount: result.passedProductCount,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        extensionVersion: EXTENSION_VERSION,
+        planSignature: String(run.planSignature || "").slice(0, 200)
+      })
+    }, EVIDENCE_REQUEST_TIMEOUT_MS);
+  } catch {
+    // Receipts are operator telemetry; they never change the local outcome.
+    return null;
+  }
+}
+
+function bumpAutomaticRunsToday(previous, startedAt) {
+  const day = startedAt.slice(0, 10);
+  return { day, count: (previous?.day === day ? previous.count : 0) + 1 };
 }
 
 async function performRetailerReverification(retailerIds = [], metadata = {}) {
@@ -3835,92 +4216,202 @@ async function performRetailerReverification(retailerIds = [], metadata = {}) {
   const requested = [...new Set((Array.isArray(retailerIds) ? retailerIds : [])
     .map((value) => String(value || "")).filter((value) => ADD_LANES[value]))].slice(0, 4);
   if (!requested.length) throw new Error("Choose at least one supported store to check again.");
-  let plan = await getReverificationPlan();
-  const stateMetadata = {
-    ...metadata,
-    planSignature: metadata.planSignature || reverificationPlanSignature(plan)
+  const device = await storedDevice();
+  let plan = metadata.plan?.lanes ? metadata.plan : await getReverificationPlan();
+  const previous = await readReverificationState();
+  const automatic = metadata.automatic === true;
+  const startedAt = new Date().toISOString();
+  const run = {
+    schemaVersion: 2,
+    state: "running",
+    results: [],
+    automatic,
+    trigger: REVERIFICATION_TRIGGERS.has(metadata.trigger) ? metadata.trigger : automatic ? "scheduled" : "manual",
+    runId: newReverificationRunId(),
+    planSignature: metadata.planSignature || reverificationPlanSignature(plan),
+    reasonCode: "",
+    laneIndex: 0,
+    candidateIndex: 0,
+    consecutiveNonPassingRuns: { ...(previous?.consecutiveNonPassingRuns || {}) },
+    laneOutcomes: { ...(previous?.laneOutcomes || {}) },
+    lastRunAt: startedAt,
+    lastAutomaticRunAt: automatic ? startedAt : (previous?.lastAutomaticRunAt || ""),
+    automaticRunsToday: automatic
+      ? bumpAutomaticRunsToday(previous?.automaticRunsToday, startedAt)
+      : (previous?.automaticRunsToday || { day: "", count: 0 }),
+    startedAt,
+    updatedAt: startedAt
   };
-  const results = [];
-  await saveReverificationState("running", results, stateMetadata);
-  for (const retailerId of requested) {
-    let lane = plan.lanes.find((item) => item.retailerId === retailerId);
-    const candidates = (lane?.candidates || []).slice(0, MAX_REVERIFICATION_CANDIDATES_PER_LANE);
-    if (!lane || !candidates.length) {
-      results.push({
-        retailerId,
-        retailerSku: "",
-        outcome: "missing_candidate",
-        reasonCode: "qualification_candidate_missing",
-        attemptedProductCount: 0,
-        passedProductCount: 0
-      });
-      await saveReverificationState("running", results, stateMetadata);
-      continue;
+  await persistReverificationRun(run);
+  const recordLaneResult = async (result, laneStartedAt) => {
+    const normalized = normalizedReverificationResult(result);
+    run.results.push(normalized);
+    if (normalized.outcome === "passed") {
+      run.consecutiveNonPassingRuns[normalized.retailerId] = 0;
+    } else if (["partial", "blocked", "error"].includes(normalized.outcome)) {
+      run.consecutiveNonPassingRuns[normalized.retailerId] = (run.consecutiveNonPassingRuns[normalized.retailerId] || 0) + 1;
     }
-    const origins = retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[retailerId];
-    if (!origins || !await chrome.permissions.contains({ origins })) {
-      results.push({
-        retailerId,
-        retailerSku: lane.candidate?.retailerSku || "",
-        outcome: "access_missing",
-        reasonCode: "retailer_access_missing",
-        attemptedProductCount: 0,
-        passedProductCount: 0
-      });
-      await saveReverificationState("running", results, stateMetadata);
-      continue;
-    }
-    let attemptedProductCount = 0;
-    let passedProductCount = 0;
-    let lastRetailerSku = lane.candidate?.retailerSku || "";
-    let lastReasonCode = "qualification_candidate_exhausted";
-    for (const candidate of candidates) {
-      if (await activeJob().catch(() => null)) {
-        lastReasonCode = "action_job_active";
-        break;
+    run.laneOutcomes[normalized.retailerId] = {
+      outcome: normalized.outcome,
+      reasonCode: normalized.reasonCode,
+      at: new Date().toISOString()
+    };
+    await persistReverificationRun(run);
+    await postReverificationRunReceipt(device, run, normalized, laneStartedAt);
+  };
+  let currentRetailerId = requested[0];
+  let laneStartedAt = startedAt;
+  let attemptedProductCount = 0;
+  let passedProductCount = 0;
+  try {
+    for (let laneIndex = 0; laneIndex < requested.length; laneIndex += 1) {
+      const retailerId = requested[laneIndex];
+      currentRetailerId = retailerId;
+      laneStartedAt = new Date().toISOString();
+      run.laneIndex = laneIndex;
+      run.candidateIndex = 0;
+      attemptedProductCount = 0;
+      passedProductCount = 0;
+      let lane = plan.lanes.find((item) => item.retailerId === retailerId);
+      const candidates = (lane?.candidates || []).slice(0, MAX_REVERIFICATION_CANDIDATES_PER_LANE);
+      const skew = lane ? laneVersionSkew(lane) : "";
+      if (skew) {
+        await recordLaneResult({
+          retailerId,
+          retailerSku: "",
+          outcome: "skipped",
+          reasonCode: skew,
+          attemptedProductCount: 0,
+          passedProductCount: 0
+        }, laneStartedAt);
+        continue;
       }
-      let tabId = null;
-      lastRetailerSku = candidate.retailerSku;
-      attemptedProductCount += 1;
-      try {
-        const tab = await chrome.tabs.create({ url: candidate.canonicalUrl, active: false });
-        if (!Number.isInteger(tab?.id)) throw new Error("qualification_tab_unavailable");
-        tabId = tab.id;
-        await waitForExactProductTab(tabId, retailerId, candidate.retailerSku);
-        const verified = await inspectAndQualifyActiveTab(tabId);
-        const passed = verified?.rehearsal?.ok === true;
-        if (passed) passedProductCount += 1;
-        lastReasonCode = passed
-          ? "verified"
-          : safeReasonCode(verified?.rehearsal?.reason || "qualification_blocked");
-      } catch (error) {
-        lastReasonCode = safeReasonCode(error instanceof Error ? error.message : "qualification_failed");
-      } finally {
-        if (Number.isInteger(tabId)) await chrome.tabs.remove(tabId).catch(() => undefined);
+      if (!lane || !candidates.length) {
+        await recordLaneResult({
+          retailerId,
+          retailerSku: "",
+          outcome: "missing_candidate",
+          reasonCode: "qualification_candidate_missing",
+          attemptedProductCount: 0,
+          passedProductCount: 0
+        }, laneStartedAt);
+        continue;
       }
-      plan = await getReverificationPlan();
-      lane = plan.lanes.find((item) => item.retailerId === retailerId) || lane;
+      const origins = retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[retailerId];
+      if (!origins || !await chrome.permissions.contains({ origins })) {
+        await recordLaneResult({
+          retailerId,
+          retailerSku: lane.candidate?.retailerSku || "",
+          outcome: "access_missing",
+          reasonCode: "retailer_access_missing",
+          attemptedProductCount: 0,
+          passedProductCount: 0
+        }, laneStartedAt);
+        continue;
+      }
+      if (lane.session.signedInState === "signed_out" || lane.session.signedInState === "challenged") {
+        await recordLaneResult({
+          retailerId,
+          retailerSku: lane.candidate?.retailerSku || "",
+          outcome: "parked",
+          reasonCode: lane.session.signedInState === "signed_out"
+            ? "retailer_session_signed_out" : "retailer_session_challenged",
+          attemptedProductCount: 0,
+          passedProductCount: 0
+        }, laneStartedAt);
+        continue;
+      }
+      let lastRetailerSku = lane.candidate?.retailerSku || "";
+      let lastReasonCode = "qualification_candidate_exhausted";
+      let parkedReason = "";
+      let skewReason = "";
+      for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+        const candidate = candidates[candidateIndex];
+        run.candidateIndex = candidateIndex;
+        if (await activeJob().catch(() => null)) {
+          parkedReason = "action_job_active";
+          lastReasonCode = parkedReason;
+          break;
+        }
+        let tabId = null;
+        lastRetailerSku = candidate.retailerSku;
+        attemptedProductCount += 1;
+        try {
+          const tab = await chrome.tabs.create({ url: candidate.canonicalUrl, active: false });
+          if (!Number.isInteger(tab?.id)) throw new Error("qualification_tab_unavailable");
+          tabId = tab.id;
+          await rememberReverificationTab(tabId, retailerId, candidate.retailerSku);
+          let reachable = true;
+          try {
+            await waitForExactProductTab(tabId, retailerId, candidate.retailerSku, REVERIFICATION_TAB_WAIT_MS);
+          } catch {
+            reachable = false;
+          }
+          if (!reachable) {
+            await reportProductPageUnavailable(device, { retailerId, retailerSku: candidate.retailerSku });
+            lastReasonCode = "product_page_unavailable";
+            continue;
+          }
+          const verified = await inspectAndQualifyActiveTab(tabId);
+          const passed = verified?.rehearsal?.ok === true;
+          if (passed) passedProductCount += 1;
+          lastReasonCode = passed
+            ? "verified"
+            : safeReasonCode(verified?.rehearsal?.reason || "qualification_blocked");
+          if (lastReasonCode === "manual_action_required") parkedReason = lastReasonCode;
+        } catch (error) {
+          if (Number(error?.status) === 409 && error?.code === "adapter_version_mismatch") {
+            skewReason = "adapter_version_mismatch";
+            lastReasonCode = skewReason;
+            break;
+          }
+          lastReasonCode = safeReasonCode(error instanceof Error ? error.message : "qualification_failed");
+        } finally {
+          if (Number.isInteger(tabId)) await chrome.tabs.remove(tabId).catch(() => undefined);
+          await forgetReverificationTab();
+        }
+        if (parkedReason) break;
+        plan = await getReverificationPlan();
+        lane = plan.lanes.find((item) => item.retailerId === retailerId) || lane;
+        const unresolvedRepair = lane.candidates.some((item) => item.repairableObserverFailure);
+        if (!unresolvedRepair
+          && lane.evidence.qualificationEvidenceReady
+          && (lane.qualification.warning === "none" || passedProductCount > 0)) break;
+      }
       const unresolvedRepair = lane.candidates.some((item) => item.repairableObserverFailure);
-      if (!unresolvedRepair
-        && lane.evidence.qualificationEvidenceReady
-        && (lane.qualification.warning === "none" || passedProductCount > 0)) break;
+      const evidenceReady = !skewReason && !unresolvedRepair && lane.evidence.qualificationEvidenceReady
+        && (lane.qualification.warning !== "expiring" || passedProductCount > 0);
+      const outcome = skewReason ? "skipped"
+        : evidenceReady ? "passed"
+          : passedProductCount > 0 ? "partial"
+            : parkedReason ? "parked"
+              : "blocked";
+      await recordLaneResult({
+        retailerId,
+        retailerSku: lastRetailerSku,
+        outcome,
+        reasonCode: evidenceReady ? "qualification_evidence_ready" : (skewReason || parkedReason || lastReasonCode),
+        attemptedProductCount,
+        passedProductCount
+      }, laneStartedAt);
     }
-    const unresolvedRepair = lane.candidates.some((item) => item.repairableObserverFailure);
-    const evidenceReady = !unresolvedRepair && lane.evidence.qualificationEvidenceReady
-      && (lane.qualification.warning !== "expiring" || passedProductCount > 0);
-    results.push({
-      retailerId,
-      retailerSku: lastRetailerSku,
-      outcome: evidenceReady ? "passed" : passedProductCount > 0 ? "partial" : "blocked",
-      reasonCode: evidenceReady ? "qualification_evidence_ready" : lastReasonCode,
+    run.state = run.results.every((result) => result.outcome === "passed") ? "complete" : "partial";
+    const persisted = await persistReverificationRun(run);
+    return { plan, ...persisted };
+  } catch (error) {
+    run.state = "error";
+    run.reasonCode = safeReasonCode(error instanceof Error ? error.message : "qualification_failed");
+    await persistReverificationRun(run);
+    await postReverificationRunReceipt(device, run, {
+      retailerId: currentRetailerId,
+      retailerSku: "",
+      outcome: "error",
+      reasonCode: run.reasonCode,
       attemptedProductCount,
       passedProductCount
-    });
-    await saveReverificationState("running", results, stateMetadata);
+    }, laneStartedAt);
+    throw error;
   }
-  const state = results.every((result) => result.outcome === "passed") ? "complete" : "partial";
-  const persisted = await saveReverificationState(state, results, stateMetadata);
-  return { plan, ...persisted };
 }
 
 function runRetailerReverification(retailerIds = [], metadata = {}) {
@@ -3930,41 +4421,48 @@ function runRetailerReverification(retailerIds = [], metadata = {}) {
   return retailerReverificationPromise;
 }
 
-function runAutomaticReverification(force = false) {
+function runAutomaticReverification(force = false, trigger = "") {
   if (automaticReverificationPromise) return automaticReverificationPromise;
   automaticReverificationPromise = (async () => {
     const settings = await readAutoReverificationSettings();
     if (!settings.enabled && !force) return { settings, started: false, reason: "automatic_checks_disabled" };
-    const stored = (await chrome.storage.local.get(REVERIFICATION_STATE_KEY))[REVERIFICATION_STATE_KEY];
+    const stored = await readReverificationState();
     const plan = await getReverificationPlan();
     const planSignature = reverificationPlanSignature(plan);
-    const lastRunAt = stored?.automatic === true ? new Date(String(stored.updatedAt || "")).getTime() : Number.NaN;
-    if (!force && Number.isFinite(lastRunAt)
-      && lastRunAt > Date.now() - AUTO_REVERIFICATION_COOLDOWN_MS
-      && stored?.planSignature === planSignature) {
-      return { settings, started: false, reason: "automatic_check_cooldown", state: stored };
+    const now = Date.now();
+    const planChanged = stored?.planSignature !== planSignature;
+    const needed = plan.lanes.filter((lane) => lane.automaticCheckNeeded && !lane.blockedReason && lane.candidates.length > 0);
+    if (!needed.length) return { settings, started: false, reason: "no_store_checks_needed", plan };
+    const lastRunAt = new Date(String(stored?.lastRunAt || "")).getTime();
+    const eligible = force || planChanged || !Number.isFinite(lastRunAt)
+      ? needed
+      : needed.filter((lane) => now - lastRunAt >= laneBackoffMs(stored, lane.retailerId));
+    if (!eligible.length) return { settings, started: false, reason: "automatic_check_cooldown", state: stored, plan };
+    const today = new Date(now).toISOString().slice(0, 10);
+    const runsToday = stored?.automaticRunsToday?.day === today ? stored.automaticRunsToday.count : 0;
+    if (!force && runsToday >= AUTO_REVERIFICATION_DAILY_CAP) {
+      return { settings, started: false, reason: "automatic_check_daily_cap", state: stored, plan };
     }
-    const retailerIds = plan.lanes
-      .filter((lane) => lane.automaticCheckNeeded && lane.candidates.length > 0)
-      .map((lane) => lane.retailerId);
-    if (!retailerIds.length) return { settings, started: false, reason: "no_store_checks_needed", plan };
-    const result = await runRetailerReverification(retailerIds, { automatic: true, planSignature });
+    const runTrigger = REVERIFICATION_TRIGGERS.has(trigger) ? trigger
+      : force ? "manual" : planChanged ? "plan_changed" : "scheduled";
+    const result = await runRetailerReverification(eligible.map((lane) => lane.retailerId), {
+      automatic: !force,
+      trigger: runTrigger,
+      planSignature,
+      plan
+    });
     return { settings, started: true, reason: result.state, ...result };
   })().finally(() => { automaticReverificationPromise = null; });
   return automaticReverificationPromise;
 }
 
 async function automaticReverificationStatus() {
-  const [settings, stored, plan] = await Promise.all([
+  const [settings, state, plan] = await Promise.all([
     readAutoReverificationSettings(),
-    chrome.storage.local.get(REVERIFICATION_STATE_KEY),
+    readReverificationState(),
     getReverificationPlan().catch(() => null)
   ]);
-  return {
-    settings,
-    state: stored[REVERIFICATION_STATE_KEY] || null,
-    plan
-  };
+  return { settings, state, plan };
 }
 
 async function persistPopupResult(result) {
@@ -6591,6 +7089,7 @@ async function initialize() {
   const health = await checkHealth();
   await reconcileActionHandoffs();
   void reconcileActionHandoffs(ACTION_HANDOFF_WAIT_MS);
+  await reconcileReverificationRestart();
   await drainAdapterDiagnosticQueue();
   const signalDelivery = await runSignalDeliveryCycle();
   // A cold worker may have server-originated Discord/API/admin work waiting
@@ -6750,13 +7249,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 : reverificationPlan
                   ? getReverificationPlan().then((plan) => ({ plan }))
                 : retailerReverification
-                  ? runRetailerReverification(message.retailerIds)
+                  ? runRetailerReverification(message.retailerIds, { automatic: false, trigger: "manual" })
                 : automaticReverificationGet
                   ? automaticReverificationStatus()
                 : automaticReverificationSet
                   ? setAutoReverificationEnabled(message.enabled)
                 : automaticReverificationRun
-                  ? runAutomaticReverification(true)
+                  ? runAutomaticReverification(true, "manual")
                 : message?.type === "yoink:resolve-trackalacker-listing"
                   ? resolveTrackalackerListing(message, sender)
                   : message?.type === "yoink:trackalacker-sync-progress"

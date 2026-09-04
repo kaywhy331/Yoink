@@ -45,7 +45,7 @@ readiness projection: it cannot write an adapter qualification, change global
 execution settings, advertise browser mutation capability, or lease a job.
 
 Yoink 0.5 introduced `target-add-v1`, an independently versioned add-only runner.
-The current `target-add-v7` contract binds Target's fulfillment-tile UI and can
+The current `target-add-v8` contract binds Target's fulfillment-tile UI and can
 guardedly select the exact saved fulfillment: Shipping by default (including an
 available same-day Delivery fallback) or Pickup only after explicit user opt-in.
 It rebinds and revalidates the single Add control, and unavailable or mismatched
@@ -1154,8 +1154,8 @@ gated, so SQLite retains runtime authority. See
 
 ## Constrained action-store layout recovery
 
-The current action contracts are `target-add-v7`, `walmart-add-v8`,
-`amazon-add-v9`, and `bestbuy-add-v11`, paired with observer versions 5, 7, 8,
+The current action contracts are `target-add-v8`, `walmart-add-v8`,
+`amazon-add-v9`, and `bestbuy-add-v11`, paired with observer versions 6, 7, 8,
 and 10 respectively. Packaged selectors remain authoritative when present.
 When they drift, local packaged code may recover only one unique semantic Add
 control and one unique price landmark, after the existing exact identity,

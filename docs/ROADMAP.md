@@ -1,6 +1,26 @@
 # Yoink roadmap
 
-## Shipped through 1.19.4
+## Shipped through 1.19.5
+
+### Self-correcting store checks (1.19.5)
+
+- Prefers currently purchasable candidate products and reserves check slots
+  for in-stock catalog listings, and reports a store with nothing purchasable
+  as blocked instead of rechecking it daily
+- Degrades a store lane on open current-adapter repair groups, repeated
+  rejected rehearsals, or a live add failure newer than the last pass, pausing
+  guarded adds until fresh passing evidence renews the lane
+- Records a receipt for every automatic check run, keys the cooldown on a
+  trigger signature with backoff, parks lanes that need a sign-in or access,
+  caps daily runs, and never leaves a run stuck in the running state
+- Closes incidents that the loop could not close before: rehearsal passes
+  supersede live-add binding failures, unreachable pages record a
+  `product_page_unavailable` rejection, and repair groups age out
+- Opens a `qualification_stalled` incident when a previously authorized store's
+  automatic checks keep failing, and skips lanes on companion/app version skew
+- Waits for DOM hydration on mutation instead of fixed sleeps, falls back to
+  the first attempt if the page navigates mid-wait, and binds Target's
+  `ProductDetailPrice` module without reading recommendation prices
 
 ### Automatic incident repair and store renewal (1.19.4)
 

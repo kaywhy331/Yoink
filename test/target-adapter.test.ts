@@ -19,6 +19,7 @@ import {
   parseUsPrice,
   targetAddBinding,
   targetAddControl,
+  targetAdapterLayoutEvidence,
   targetInteractiveBlock,
   targetPageKind,
   targetSecurityChallenge
@@ -79,6 +80,28 @@ test("Target product observation binds the exact TCIN, offer, seller, and fulfil
   const wrongSku = observeTargetOffer(fixture("product-first-party.html"), PRODUCT_URL, "9999999999", "shipping", NOW);
   assert.equal(wrongSku.addControlActionable, false);
   assert.equal(wrongSku.availability, "unknown");
+});
+
+test("Target binds a hydrated ProductDetailPrice module without reading recommendation prices", () => {
+  const document = new JSDOM(`<body><main>
+    <aside data-test="recommendations">
+      <div data-module-type="ProductDetailPrice">$4.99</div>
+    </aside>
+    <div data-module-type="ProductDetailPrice">
+      <span>$29.99</span>
+      <span data-test="product-regular-price">reg $39.99</span>
+    </div>
+    <section aria-label="Fulfillment" data-test="@web/AddToCart/FulfillmentSection" role="region">
+      <button type="button" data-test="fulfillment-cell-shipping" aria-label="shipping - selected - Arrives tomorrow" aria-selected="true">Shipping</button>
+      <button type="button">Add to cart</button>
+    </section>
+  </main></body>`, { url: PRODUCT_URL }).window.document;
+  const observation = observeTargetOffer(document, PRODUCT_URL, "1011483414", "shipping", NOW);
+  const layout = targetAdapterLayoutEvidence(document, PRODUCT_URL, "1011483414", "shipping");
+  assert.equal(observation.unitPriceCents, 2999);
+  assert.equal(observation.availability, "in_stock");
+  assert.equal(observation.addControlActionable, true);
+  assert.equal(layout.priceCandidateCount, 1);
 });
 
 test("Target product observation ignores hidden, recommended, and wrong-SKU controls", () => {

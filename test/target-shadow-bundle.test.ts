@@ -31,7 +31,7 @@ test("the browser bundle executes the shared Target observer and returns only th
   runInContext(source, context);
   const result = runInContext("YoinkTargetShadow.collectTargetShadowObservation(document, location.href)", context) as Record<string, unknown>;
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
-    adapterVersion: "target-observer-v5",
+    adapterVersion: "target-observer-v6",
     contractVersion: 1,
     observedAt: result.observedAt,
     pageKind: "product",

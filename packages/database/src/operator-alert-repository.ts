@@ -3,6 +3,7 @@ import {
   OPERATOR_ALERT_ACKNOWLEDGEMENT_REASON_CODES,
   OPERATOR_ALERT_ROUTES,
   OPERATOR_ALERT_RESOLUTION_REASON_CODES,
+  OPERATOR_ALERT_EVENT_FAMILIES,
   OPERATOR_ALERT_SEVERITIES,
   RESOLVE_OPERATOR_ALERT_CONFIRMATION,
   RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS,
@@ -33,6 +34,7 @@ import {
 import { currentRequestScope } from "./request-scope.js";
 
 const SEVERITIES = new Set<string>(OPERATOR_ALERT_SEVERITIES);
+const EVENT_FAMILIES = new Set<string>(OPERATOR_ALERT_EVENT_FAMILIES);
 const ROUTES = new Set<string>(OPERATOR_ALERT_ROUTES);
 const OPERATIONS = new Set<string>(RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS);
 const RETAILERS = new Set<string>(Object.keys(RETAILER_OBSERVER_VERSIONS));
@@ -302,8 +304,11 @@ export class OperatorAlertRepository {
     }
     const name = cleanText(input.name, 120);
     if (name.length < 3) throw new OperatorAlertError("operator_alert_input_invalid", 400, "An operator alert rule name is required.");
-    if (input.eventFamily !== "adapter_repair" || typeof input.enabled !== "boolean" || !SEVERITIES.has(input.severity)) {
+    if (!EVENT_FAMILIES.has(input.eventFamily) || typeof input.enabled !== "boolean" || !SEVERITIES.has(input.severity)) {
       throw new OperatorAlertError("operator_alert_input_invalid", 400, "The operator alert family, enabled state, or severity is invalid.");
+    }
+    if (input.eventFamily === "qualification_stalled" && input.operationScope !== "*") {
+      throw new OperatorAlertError("operator_alert_input_invalid", 400, "Store-check stall alerts apply to every operation; use the all-operations scope.");
     }
     const minimumOccurrences = boundedInteger(input.minimumOccurrences, 1, 100, "Minimum occurrences");
     const dedupeWindowSeconds = boundedInteger(input.dedupeWindowSeconds, 60, 86_400, "Dedupe window");
@@ -326,7 +331,7 @@ export class OperatorAlertRepository {
       throw new OperatorAlertError("operator_alert_input_invalid", 400, "Operator alert routes are invalid.");
     }
     return {
-      eventFamily: "adapter_repair",
+      eventFamily: input.eventFamily,
       name,
       enabled: input.enabled,
       severity: input.severity,
@@ -536,6 +541,136 @@ export class OperatorAlertRepository {
     }, now);
   }
 
+  /**
+   * Opens one "store checks stalled" incident per retailer once a previously
+   * authorized lane has failed its automatic re-verification runs
+   * `minimumOccurrences` times in a row, and auto-resolves it after the newest
+   * automatic run passes. Input is the bounded readiness plan: no URLs, page
+   * text, or offer values are involved.
+   */
+  reconcileQualificationStalls(
+    lanes: Array<{
+      retailerId: SupportedRetailerId;
+      qualification: { status: string };
+      lastAutomaticRun: { outcome: string; reasonCode: string; finishedAt: string; attemptedProductCount: number } | null;
+      consecutiveNonPassingRuns: number;
+    }>,
+    correlationId: string,
+    now = Date.now()
+  ): { opened: number; updated: number; resolved: number; routed: number } {
+    const scope = currentRequestScope();
+    const safeCorrelationId = cleanText(correlationId, 160) || newId("alert_reconcile");
+    const result = { opened: 0, updated: 0, resolved: 0, routed: 0 };
+    const rules = this.loadRules(true).filter((rule) => rule.eventFamily === "qualification_stalled");
+    if (!rules.length || !Array.isArray(lanes)) return result;
+    this.db.transaction(() => {
+      for (const lane of lanes) {
+        if (!lane?.retailerId || !RETAILERS.has(lane.retailerId)) continue;
+        const manuallyRetired = lane.qualification.status === "retired" && Boolean(this.db.get<{ eventType: string }>(
+          `SELECT event_type AS eventType FROM audit_events
+           WHERE tenant_id = ? AND user_id = ? AND correlation_id = ?
+             AND event_type IN ('retailer_adapter_qualified', 'retailer_lane_retired')
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+          scope.tenantId,
+          scope.userId,
+          lane.retailerId
+        )?.eventType === "retailer_lane_retired");
+        const previouslyAuthorized = lane.qualification.status !== "missing" && !manuallyRetired;
+        for (const rule of rules) {
+          if (rule.retailerScope !== "*" && rule.retailerScope !== lane.retailerId) continue;
+          const incidentKeyHash = stableHash("yoink_operator_alert_qualification_stalled_v1", lane.retailerId);
+          let incident = this.activeIncident(rule.id, incidentKeyHash);
+          const lastRun = lane.lastAutomaticRun;
+          const recovered = lastRun?.outcome === "passed";
+          if (recovered || !previouslyAuthorized || lane.consecutiveNonPassingRuns < rule.minimumOccurrences) {
+            if (!incident || !recovered) continue;
+            const timestamp = nowIso(now);
+            this.db.run(
+              `UPDATE operator_alert_incidents SET status = 'resolved', last_seen_at = ?,
+                 resolved_by_actor_id = ?, resolved_at = ?, resolution_code = 'qualification_recovered', updated_at = ?
+               WHERE id = ? AND tenant_id = ? AND status IN ('open', 'acknowledged')`,
+              lastRun?.finishedAt ?? timestamp,
+              scope.actorId,
+              timestamp,
+              timestamp,
+              incident.id,
+              scope.tenantId
+            );
+            incident = this.db.get<IncidentRow>(`${INCIDENT_SELECT} WHERE i.id = ? AND i.tenant_id = ?`, incident.id, scope.tenantId) as IncidentRow;
+            this.lifecycle(incident, rule, "auto_resolved", "qualification_recovered", safeCorrelationId, {
+              retailerId: lane.retailerId,
+              consecutiveNonPassingRuns: lane.consecutiveNonPassingRuns
+            }, now);
+            result.resolved += 1;
+            result.routed += rule.routes.length;
+            continue;
+          }
+          const reasonCode = cleanText(lastRun?.reasonCode, 80) || "store_checks_stalled";
+          const lastSeenAt = lastRun?.finishedAt || nowIso(now);
+          const summary = `${displayRetailer(lane.retailerId)} automatic store checks have not passed ${lane.consecutiveNonPassingRuns} time${lane.consecutiveNonPassingRuns === 1 ? "" : "s"} in a row; the latest run stopped on ${reasonCode.replaceAll("_", " ")}.`;
+          if (!incident) {
+            const timestamp = nowIso(now);
+            const id = newId("alert_incident");
+            this.db.run(
+              `INSERT INTO operator_alert_incidents(
+                 id, tenant_id, subject_user_id, rule_id, event_family, incident_key_hash,
+                 severity, status, privacy_classification, title, summary, retailer_id,
+                 operation, failure_stage, reason_code, layout_fingerprint,
+                 occurrence_count, affected_entity_count, first_seen_at, last_seen_at,
+                 last_failure_at, last_routed_at, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, 'qualification_stalled', ?, ?, 'open', 'operational_aggregate',
+                         ?, ?, ?, 'rehearse_add', 'runner', ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+              id,
+              scope.tenantId,
+              scope.userId,
+              rule.id,
+              incidentKeyHash,
+              rule.severity,
+              `${displayRetailer(lane.retailerId)} store checks stalled`,
+              summary,
+              lane.retailerId,
+              reasonCode,
+              lane.consecutiveNonPassingRuns,
+              Math.max(1, lastRun?.attemptedProductCount ?? 1),
+              lastSeenAt,
+              lastSeenAt,
+              lastSeenAt,
+              timestamp,
+              timestamp,
+              timestamp
+            );
+            incident = this.db.get<IncidentRow>(`${INCIDENT_SELECT} WHERE i.id = ? AND i.tenant_id = ?`, id, scope.tenantId) as IncidentRow;
+            this.lifecycle(incident, rule, "opened", reasonCode, safeCorrelationId, {
+              retailerId: lane.retailerId,
+              consecutiveNonPassingRuns: lane.consecutiveNonPassingRuns
+            }, now);
+            result.opened += 1;
+            result.routed += rule.routes.length;
+            continue;
+          }
+          if (lane.consecutiveNonPassingRuns > incident.occurrenceCount || lastSeenAt > incident.lastSeenAt) {
+            this.db.run(
+              `UPDATE operator_alert_incidents SET summary = ?, reason_code = ?,
+                 occurrence_count = MAX(occurrence_count, ?), last_seen_at = MAX(last_seen_at, ?),
+                 last_failure_at = MAX(last_failure_at, ?), updated_at = ?
+               WHERE id = ? AND tenant_id = ?`,
+              summary,
+              reasonCode,
+              lane.consecutiveNonPassingRuns,
+              lastSeenAt,
+              lastSeenAt,
+              nowIso(now),
+              incident.id,
+              scope.tenantId
+            );
+            result.updated += 1;
+          }
+        }
+      }
+    });
+    return result;
+  }
+
   saveConnector(input: OperatorAlertConnectorInput, id = "", now = Date.now()): OperatorAlertConnector {
     return this.connectors.save(input, id, now);
   }
@@ -575,22 +710,24 @@ export class OperatorAlertRepository {
             item.layoutFingerprint
           );
           let incident = this.activeIncident(rule.id, incidentKeyHash);
-          if (item.status === "recovered") {
+          if (item.status === "recovered" || item.status === "aged_out") {
             if (!incident) continue;
+            const resolutionCode = item.status === "aged_out" ? "adapter_aged_out" : "adapter_recovered";
             const timestamp = nowIso(now);
             this.db.run(
               `UPDATE operator_alert_incidents SET status = 'resolved', last_seen_at = ?,
-                 resolved_by_actor_id = ?, resolved_at = ?, resolution_code = 'adapter_recovered', updated_at = ?
+                 resolved_by_actor_id = ?, resolved_at = ?, resolution_code = ?, updated_at = ?
                WHERE id = ? AND tenant_id = ? AND status IN ('open', 'acknowledged')`,
               item.lastSeenAt,
               scope.actorId,
               timestamp,
+              resolutionCode,
               timestamp,
               incident.id,
               scope.tenantId
             );
             incident = this.db.get<IncidentRow>(`${INCIDENT_SELECT} WHERE i.id = ? AND i.tenant_id = ?`, incident.id, scope.tenantId) as IncidentRow;
-            this.lifecycle(incident, rule, "auto_resolved", "adapter_recovered", safeCorrelationId, {
+            this.lifecycle(incident, rule, "auto_resolved", resolutionCode, safeCorrelationId, {
               retailerId: item.retailerId,
               operation: item.operation,
               layoutFingerprint: item.layoutFingerprint,

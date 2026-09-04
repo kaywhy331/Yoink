@@ -92,6 +92,18 @@ const REPAIR_REASON_STAGES: Record<string, RetailerAdapterDiagnosticStage> = {
 };
 const REPAIR_MINIMUM_DEVICES = 3;
 const REPAIR_MINIMUM_SKUS = 2;
+// An open repair SKU whose newest failure is older than this, with no newer
+// failure, ages out: the loop cannot close it, so it stops driving replays.
+const REPAIR_AGE_OUT_MS = 14 * 24 * 60 * 60_000;
+// A passing no-click rehearsal proves the packaged runner binds the exact
+// product again. It supersedes an earlier live-add *binding* failure; policy,
+// interactive-block, identity, and runner-infrastructure stages are not
+// binding evidence and keep the strict same-operation rule.
+const NON_BINDING_STAGES = new Set<RetailerAdapterDiagnosticStage>([
+  "policy", "interactive_block", "page_identity", "runner", "complete"
+]);
+const DEGRADATION_MINIMUM_REPAIR_SKUS = 2;
+const DEGRADATION_REHEARSAL_WINDOW = 3;
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const MAX_DIAGNOSTIC_AGE_MS = 10 * 60_000;
 const RETENTION_LIMIT = 2_000;
@@ -157,10 +169,22 @@ export interface StoredRetailerAdapterDiagnostic extends Omit<DiagnosticRow, "do
   layout: RetailerAdapterLayoutEvidence;
 }
 
+export type AdapterRepairQueueStatus = "open" | "recovered" | "aged_out";
+
+export type LaneDegradationReason =
+  | "open_repair_current_version"
+  | "recent_rehearsals_rejected"
+  | "live_add_failed_after_pass";
+
+export interface LaneDegradation {
+  degraded: boolean;
+  reasons: LaneDegradationReason[];
+}
+
 export interface AdapterRepairQueueItem {
   retailerId: SupportedRetailerId;
   operation: RetailerAdapterDiagnosticOperation;
-  status: "open" | "recovered";
+  status: AdapterRepairQueueStatus;
   layoutFingerprint: string;
   latestAdapterVersion: string;
   latestRetailerSku: string;
@@ -402,6 +426,10 @@ export class AdapterDiagnosticRepository {
       && input.failureStage !== REPAIR_REASON_STAGES[reasonCode]) {
       throw new Error("The adapter diagnostic selector-miss stage is inconsistent.");
     }
+    if (reasonCode === "product_page_unavailable"
+      && (input.operation !== "observe" || input.outcome !== "rejected" || input.failureStage !== "page_identity")) {
+      throw new Error("An unavailable product page is a rejected read-only page-identity result.");
+    }
     const attemptCount = Number(input.attemptCount);
     if (!Number.isInteger(attemptCount) || attemptCount < 1 || attemptCount > 3) throw new Error("Adapter diagnostic attempt count must be 1 through 3.");
     if (input.outcome === "recovered" && attemptCount < 2) throw new Error("A recovered diagnostic requires a retry attempt.");
@@ -538,8 +566,9 @@ export class AdapterDiagnosticRepository {
     ).map(rowToStored);
   }
 
-  listRepairQueue(limit = 50): AdapterRepairQueueItem[] {
+  listRepairQueue(limit = 50, now = Date.now()): AdapterRepairQueueItem[] {
     const recent = this.listRecent(RETENTION_LIMIT);
+    const ageOutCutoff = nowIso(now - REPAIR_AGE_OUT_MS);
     const groups = new Map<string, {
       rows: StoredRetailerAdapterDiagnostic[];
       repairs: StoredRetailerAdapterDiagnostic[];
@@ -570,16 +599,22 @@ export class AdapterDiagnosticRepository {
         const latestFailure = failures.find((row) => row.retailerSku === retailerSku);
         if (!latestFailure) return false;
         const replacement = recent.find((row) => row.retailerId === latestFailure.retailerId
-          && row.operation === latestFailure.operation
           && row.retailerSku === retailerSku
           && row.receivedAt > latestFailure.receivedAt
           && row.outcome !== "failed"
           && (row.adapterVersion === latestFailure.adapterVersion
-            || strictlyNewerAdapterVersion(row.adapterVersion, latestFailure.adapterVersion)));
+            || strictlyNewerAdapterVersion(row.adapterVersion, latestFailure.adapterVersion))
+          && (row.operation === latestFailure.operation
+            || (latestFailure.operation === "live_add"
+              && row.operation === "rehearse_add"
+              && row.outcome === "passed"
+              && !NON_BINDING_STAGES.has(latestFailure.failureStage))));
         if (replacement) supersedingRows.push(replacement);
         return !replacement;
       });
-      const open = repairRetailerSkus.length > 0;
+      const unresolved = repairRetailerSkus.length > 0;
+      const agedOut = unresolved && lastFailureAt !== "" && lastFailureAt < ageOutCutoff;
+      const open = unresolved && !agedOut;
       lastRecoveryAt = supersedingRows
         .map((row) => row.receivedAt)
         .reduce((value, candidate) => candidate > value ? candidate : value, lastRecoveryAt);
@@ -587,7 +622,7 @@ export class AdapterDiagnosticRepository {
       queue.push({
         retailerId: latest.retailerId,
         operation: latest.operation,
-        status: open ? "open" : "recovered",
+        status: open ? "open" : agedOut ? "aged_out" : "recovered",
         layoutFingerprint: latest.layoutFingerprint,
         latestAdapterVersion: latest.adapterVersion,
         latestRetailerSku: latestRepair.retailerSku,
@@ -611,16 +646,92 @@ export class AdapterDiagnosticRepository {
       .slice(0, Math.max(1, Math.min(RETENTION_LIMIT, Math.trunc(Number(limit) || 50))));
   }
 
-  counts(): { adapterDiagnosticEvents: number; openAdapterRepairGroups: number; recoveredAdapterRepairGroups: number } {
+  counts(now = Date.now()): {
+    adapterDiagnosticEvents: number;
+    openAdapterRepairGroups: number;
+    recoveredAdapterRepairGroups: number;
+    agedOutAdapterRepairGroups: number;
+  } {
     const adapterDiagnosticEvents = Number(this.db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics WHERE user_id = ?",
       currentRequestScope().userId
     )?.count ?? 0);
-    const queue = this.listRepairQueue(RETENTION_LIMIT);
+    const queue = this.listRepairQueue(RETENTION_LIMIT, now);
     return {
       adapterDiagnosticEvents,
       openAdapterRepairGroups: queue.filter((item) => item.status === "open").length,
-      recoveredAdapterRepairGroups: queue.filter((item) => item.status === "recovered").length
+      recoveredAdapterRepairGroups: queue.filter((item) => item.status === "recovered").length,
+      agedOutAdapterRepairGroups: queue.filter((item) => item.status === "aged_out").length
     };
   }
+}
+
+/**
+ * Derives whether a guarded-add lane should stop leasing live adds because
+ * current-version evidence is failing. Pure read: it never writes the
+ * qualification row, so a later passing rehearsal lifts it automatically.
+ */
+export function laneDegradation(
+  db: YoinkDatabase,
+  retailerId: "target" | "walmart" | "amazon" | "bestbuy",
+  versions: { add: string; observer: string },
+  now = Date.now()
+): LaneDegradation {
+  const scope = currentRequestScope();
+  const reasons: LaneDegradationReason[] = [];
+  const repairSkus = new Set<string>();
+  for (const group of new AdapterDiagnosticRepository(db).listRepairQueue(RETENTION_LIMIT, now)) {
+    if (group.retailerId !== retailerId || group.status !== "open") continue;
+    if (group.latestAdapterVersion !== versions.add && group.latestAdapterVersion !== versions.observer) continue;
+    for (const retailerSku of group.repairRetailerSkus) repairSkus.add(retailerSku);
+  }
+  if (repairSkus.size >= DEGRADATION_MINIMUM_REPAIR_SKUS) reasons.push("open_repair_current_version");
+  const rehearsals = db.all<{ outcome: string }>(
+    `SELECT outcome FROM retailer_adapter_trials
+     WHERE tenant_id = ? AND user_id = ? AND retailer_id = ? AND adapter_version = ?
+       AND trial_kind = 'pre_click_rehearsal'
+     ORDER BY received_at DESC, id DESC LIMIT ?`,
+    scope.tenantId,
+    scope.userId,
+    retailerId,
+    versions.add,
+    DEGRADATION_REHEARSAL_WINDOW
+  );
+  if (rehearsals.length === DEGRADATION_REHEARSAL_WINDOW && rehearsals.every((row) => row.outcome === "rejected")) {
+    reasons.push("recent_rehearsals_rejected");
+  }
+  const latestLiveFailure = db.get<{ receivedAt: string }>(
+    `SELECT received_at AS receivedAt FROM retailer_adapter_diagnostics
+     WHERE user_id = ? AND retailer_id = ? AND adapter_version = ?
+       AND operation = 'live_add' AND outcome = 'failed' AND failure_stage <> 'interactive_block'
+     ORDER BY received_at DESC, id DESC LIMIT 1`,
+    scope.userId,
+    retailerId,
+    versions.add
+  );
+  if (latestLiveFailure) {
+    const latestLivePass = db.get<{ receivedAt: string }>(
+      `SELECT received_at AS receivedAt FROM retailer_adapter_diagnostics
+       WHERE user_id = ? AND retailer_id = ? AND adapter_version = ?
+         AND operation IN ('live_add', 'rehearse_add') AND outcome = 'passed'
+       ORDER BY received_at DESC, id DESC LIMIT 1`,
+      scope.userId,
+      retailerId,
+      versions.add
+    );
+    const latestRehearsalPass = db.get<{ receivedAt: string }>(
+      `SELECT received_at AS receivedAt FROM retailer_adapter_trials
+       WHERE tenant_id = ? AND user_id = ? AND retailer_id = ? AND adapter_version = ?
+         AND trial_kind = 'pre_click_rehearsal' AND outcome = 'passed'
+       ORDER BY received_at DESC, id DESC LIMIT 1`,
+      scope.tenantId,
+      scope.userId,
+      retailerId,
+      versions.add
+    );
+    const latestPassAt = [latestLivePass?.receivedAt ?? "", latestRehearsalPass?.receivedAt ?? ""]
+      .reduce((value, candidate) => candidate > value ? candidate : value, "");
+    if (!latestPassAt || latestLiveFailure.receivedAt > latestPassAt) reasons.push("live_add_failed_after_pass");
+  }
+  return { degraded: reasons.length > 0, reasons };
 }

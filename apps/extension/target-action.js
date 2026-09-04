@@ -234,11 +234,18 @@ var YoinkTargetActionModule = (() => {
   }
 
   // packages/contracts/src/index.ts
-  var TARGET_ADD_ADAPTER_VERSION = "target-add-v7";
+  var TARGET_ADD_ADAPTER_VERSION = "target-add-v8";
 
   // packages/browser-adapters/src/target.ts
   var MARKETPLACE_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+(?!target\b)|sold\s+by\s+(?!target\b)|target\s*plus|marketplace\s+seller/i;
   var FIRST_PARTY_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+target\b|sold\s+by\s+target\b/i;
+  var TARGET_CURRENT_PRICE_SELECTORS = [
+    "[data-test='product-price']",
+    "[data-test*='current-price' i]",
+    "meta[itemprop='price']",
+    "[itemprop='price']"
+  ];
+  var TARGET_PRICE_MODULE_SELECTOR = "[data-module-type='ProductDetailPrice']";
   function text(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
@@ -323,7 +330,7 @@ var YoinkTargetActionModule = (() => {
   function readPrice(root, selectors) {
     for (const selector of selectors) {
       for (const element of root.querySelectorAll(selector)) {
-        if (!visible(element)) continue;
+        if (!visible(element) || recommendationControl(element)) continue;
         for (const candidate of [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)]) {
           const price = parseUsPrice(candidate);
           if (price !== null) return price;
@@ -335,6 +342,9 @@ var YoinkTargetActionModule = (() => {
   function adaptiveTargetPrice(root, selectors) {
     const packaged = readPrice(root, selectors);
     if (packaged !== null) return packaged;
+    const modulePrices = [...root.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)].filter((element) => visible(element) && !recommendationControl(element)).map((element) => readPrice(element, selectors) ?? parseUsPrice(observableText(element, 1200))).filter((price) => price !== null);
+    const uniqueModulePrices = [...new Set(modulePrices)];
+    if (uniqueModulePrices.length === 1) return uniqueModulePrices[0] ?? null;
     const candidates = [...root.querySelectorAll("[data-test], [data-testid], [itemprop], [aria-label]")].slice(0, 500).filter((element) => visible(element) && !recommendationControl(element)).filter((element) => /(?:price|amount)/i.test([
       element.getAttribute("data-test"),
       element.getAttribute("data-testid"),
@@ -564,12 +574,7 @@ var YoinkTargetActionModule = (() => {
     let current = anchor?.parentElement ?? null;
     for (let depth = 0; depth < 12 && current; depth += 1) {
       const scopedText = text(current, 6e4);
-      const price = adaptiveTargetPrice(current, [
-        "[data-test='product-price']",
-        "[data-test*='current-price' i]",
-        "meta[itemprop='price']",
-        "[itemprop='price']"
-      ]);
+      const price = adaptiveTargetPrice(current, TARGET_CURRENT_PRICE_SELECTORS);
       if (price !== null && scopedText.length < 4e4) return current;
       current = current.parentElement;
     }
@@ -597,12 +602,7 @@ var YoinkTargetActionModule = (() => {
     const selected = pageSku === expectedSku ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment) : emptyTargetAddBinding();
     const seller = sellerEvidence(document, selected.control);
     const priceRoot = selected.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || selected.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || document;
-    const unitPriceCents = adaptiveTargetPrice(priceRoot, [
-      "[data-test='product-price']",
-      "[data-test*='current-price' i]",
-      "meta[itemprop='price']",
-      "[itemprop='price']"
-    ]);
+    const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS);
     const blocked = targetInteractiveBlock(document);
     const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
     const availability = blocked ? "unknown" : selectedControlActionable ? "in_stock" : pageSku === expectedSku && targetExplicitlyUnavailable(document) ? "out_of_stock" : "unknown";

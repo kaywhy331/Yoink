@@ -151,7 +151,8 @@ test("adapter diagnostics persist only normalized structural evidence and group 
     assert.deepEqual(repository.counts(), {
       adapterDiagnosticEvents: 2,
       openAdapterRepairGroups: 0,
-      recoveredAdapterRepairGroups: 1
+      recoveredAdapterRepairGroups: 1,
+      agedOutAdapterRepairGroups: 0
     });
 
     const durable = JSON.stringify(db.all("SELECT * FROM retailer_adapter_diagnostics"));
@@ -599,6 +600,105 @@ test("read-only retailer diagnostics are version-bound and can open repair work 
       adapterVersion: AMAZON_OBSERVER_VERSION,
       layout: disneyLayout
     }), NOW + 2_000), /version/);
+  } finally {
+    db.close();
+  }
+});
+
+test("a passing no-click rehearsal supersedes an earlier live-add binding failure but not a runner failure", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const repository = new AdapterDiagnosticRepository(db);
+    repository.record(device.id, diagnostic({
+      adapterVersion: "amazon-add-v9",
+      operation: "live_add",
+      outcome: "failed",
+      failureStage: "add_control",
+      reasonCode: "add_control_changed"
+    }), NOW + 2_000);
+    assert.equal(repository.listRepairQueue(50, NOW + 2_000)[0]?.status, "open");
+    repository.record(device.id, diagnostic({
+      adapterVersion: "amazon-add-v9",
+      operation: "rehearse_add",
+      outcome: "passed",
+      failureStage: "complete",
+      reasonCode: "verified",
+      observedAt: new Date(NOW + 3_000).toISOString()
+    }), NOW + 4_000);
+    const bindingGroup = repository.listRepairQueue(50, NOW + 4_000).find((item) => item.operation === "live_add");
+    assert.equal(bindingGroup?.status, "recovered", "a rehearsal that binds the exact product closes a live-add binding failure");
+    assert.deepEqual(bindingGroup?.repairRetailerSkus, []);
+
+    repository.record(device.id, diagnostic({
+      retailerSku: "B0RUNNER01",
+      adapterVersion: "amazon-add-v9",
+      operation: "live_add",
+      outcome: "failed",
+      failureStage: "runner",
+      reasonCode: "runner_failed",
+      observedAt: new Date(NOW + 5_000).toISOString(),
+      layout: layout({ addControlCount: 0, genericAddIntentCount: 0, scopedControlCount: 0 })
+    }), NOW + 6_000);
+    repository.record(device.id, diagnostic({
+      retailerSku: "B0RUNNER01",
+      adapterVersion: "amazon-add-v9",
+      operation: "rehearse_add",
+      outcome: "passed",
+      failureStage: "complete",
+      reasonCode: "verified",
+      observedAt: new Date(NOW + 7_000).toISOString()
+    }), NOW + 8_000);
+    const runnerGroup = repository.listRepairQueue(50, NOW + 8_000)
+      .find((item) => item.operation === "live_add" && item.repairRetailerSkus.includes("B0RUNNER01"));
+    assert.equal(runnerGroup?.status, "open", "runner-infrastructure failures keep the strict same-operation rule");
+  } finally {
+    db.close();
+  }
+});
+
+test("an unresolved repair ages out after fourteen days and stops driving replays", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const repository = new AdapterDiagnosticRepository(db);
+    repository.record(device.id, diagnostic(), NOW + 2_000);
+    const day = 24 * 60 * 60_000;
+    assert.equal(repository.listRepairQueue(50, NOW + 13 * day)[0]?.status, "open");
+    const aged = repository.listRepairQueue(50, NOW + 15 * day)[0];
+    assert.equal(aged?.status, "aged_out");
+    assert.deepEqual(aged?.repairRetailerSkus, ["B0FB21526X"], "the unresolved SKU stays visible for maintainers");
+    assert.deepEqual(repository.counts(NOW + 15 * day), {
+      adapterDiagnosticEvents: 1,
+      openAdapterRepairGroups: 0,
+      recoveredAdapterRepairGroups: 0,
+      agedOutAdapterRepairGroups: 1
+    });
+  } finally {
+    db.close();
+  }
+});
+
+test("an unavailable product page is a rejected page-identity result that closes the exact SKU", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const repository = new AdapterDiagnosticRepository(db);
+    repository.record(device.id, diagnostic(), NOW + 2_000);
+    assert.equal(repository.listRepairQueue(50, NOW + 2_000)[0]?.status, "open");
+    const unavailable = (): RetailerAdapterDiagnosticInput => diagnostic({
+      outcome: "rejected",
+      failureStage: "page_identity",
+      reasonCode: "product_page_unavailable",
+      observedAt: new Date(NOW + 3_000).toISOString(),
+      layout: runtimeLayout()
+    });
+    assert.throws(() => repository.record(device.id, { ...unavailable(), outcome: "failed" }, NOW + 4_000), /rejected read-only page-identity/);
+    assert.throws(() => repository.record(device.id, { ...unavailable(), operation: "rehearse_add", adapterVersion: "amazon-add-v9" }, NOW + 4_000), /rejected read-only page-identity/);
+    const recorded = repository.record(device.id, { ...unavailable(), layout: { ...runtimeLayout(), pageKind: "other" } }, NOW + 4_000);
+    assert.equal(recorded.reasonCode, "product_page_unavailable");
+    const group = repository.listRepairQueue(50, NOW + 4_000).find((item) => item.repairSuggestions !== undefined && item.operation === "observe" && item.reasonCode === "offer_binding_ambiguous");
+    assert.equal(group?.status, "recovered", "the unreachable product no longer keeps the layout group open");
   } finally {
     db.close();
   }

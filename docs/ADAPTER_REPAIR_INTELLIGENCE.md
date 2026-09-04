@@ -88,6 +88,18 @@ pseudonymous contributor reputation, Sybil resistance, cross-account
 governance, retention/deletion operations, and independent page validation
 before treating crowd evidence as global.
 
+Since 1.19.5 three closure rules keep a repair group from driving automatic
+rechecks forever. A `rehearse_add` diagnostic that passes for the same exact
+product on the same or a newer packaged add adapter supersedes an earlier
+`live_add` failure at a binding stage, because the automatic loop can only
+rehearse, never place a live add. A product page that no longer resolves to
+the exact product records an observe diagnostic with outcome `rejected`,
+stage `page_identity`, and reason `product_page_unavailable`, which closes that
+product's open failure. A group whose newest failure is older than fourteen
+days without a fresher failure reports `aged_out`; its operator incident
+resolves with `adapter_aged_out` rather than `adapter_recovered`. Policy and
+interactive-block rejections keep the strict same-operation rule.
+
 ## Maintainer workflow
 
 The suggestion appears in **Admin → Retailers → Adapter repair queue**. A

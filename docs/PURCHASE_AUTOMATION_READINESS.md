@@ -46,6 +46,22 @@ lane does not prevent exact monitoring. `effectiveAutomation` is `none`,
 `notification`, or `guarded_add`; it describes current configuration readiness,
 not a current stock claim.
 
+Since 1.19.5 a qualified lane can also be `degraded`. The readiness lane
+reports `degraded` with `degradedReasons` drawn from
+`open_repair_current_version` (open repair groups on the current packaged
+adapter covering at least two exact products), `recent_rehearsals_rejected`
+(the last three no-click rehearsals were rejected), and
+`live_add_failed_after_pass` (a live add failed on the current adapter after
+the last passing evidence). A degraded lane keeps its qualification row but
+`readyForGuardedAdd` is false, the lane cannot lease guarded add jobs, the
+checklist shows "Store checks failing", and automatic checks treat it as
+needed. Fresh passing evidence renews the lane through the normal renewal
+path. The lane also reports `blockedReason` (`no_candidate` or
+`no_purchasable_candidate`) when automatic checks have nothing safe to open,
+`lastAutomaticRun` with the companion's most recent receipt, and
+`consecutiveNonPassingRuns`, which feeds the `qualification_stalled` operator
+alert family.
+
 ## Meaning of armed
 
 “Guarded add is armed” means the static prerequisites are present. It does not

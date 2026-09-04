@@ -69,7 +69,7 @@ test("Target rehearsal reaches the final click boundary without clicking", () =>
   assert.equal(clicks, 0);
 });
 
-test("Target v7 rehearses the current no-TCIN hydrated fulfillment action", () => {
+test("Target v8 rehearses the current no-TCIN hydrated fulfillment action", () => {
   const document = new JSDOM(`<body><main>
     <div data-test="product-price">$34.99</div>
     <section aria-label="Fulfillment" data-test="@web/AddToCart/FulfillmentSection" role="region">
@@ -86,7 +86,7 @@ test("Target v7 rehearses the current no-TCIN hydrated fulfillment action", () =
   assert.equal(clicks, 0);
 });
 
-test("Target v7 binds the current direct shipping shell without treating sticky or recommendation controls as the offer", async () => {
+test("Target v8 binds the current direct shipping shell without treating sticky or recommendation controls as the offer", async () => {
   const document = new JSDOM(`<body>
     <main>
       <div data-test="product-price">$44.99</div>
@@ -133,7 +133,7 @@ test("Target v7 binds the current direct shipping shell without treating sticky 
   assert.equal(clicks, 1);
 });
 
-test("Target v7 never treats a direct pickup shell as shipping and requires an explicit pickup job", () => {
+test("Target v8 never treats a direct pickup shell as shipping and requires an explicit pickup job", () => {
   const document = new JSDOM(`<body><main>
     <div data-test="product-price">$24.99</div>
     <section aria-label="Fulfillment" data-test="@web/AddToCart/FulfillmentSection" role="region">

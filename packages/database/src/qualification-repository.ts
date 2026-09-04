@@ -33,6 +33,7 @@ import {
 } from "./shadow-observation-repository.js";
 import { SignalRepository } from "./signal-repository.js";
 import { AuditRepository } from "./audit-repository.js";
+import { laneDegradation } from "./adapter-diagnostic-repository.js";
 
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const MAX_REHEARSAL_AGE_MS = 10 * 60_000;
@@ -158,6 +159,12 @@ const GUARDED_RETAILER_VERSION: Record<GuardedRetailerId, string> = {
   amazon: AMAZON_ADD_ADAPTER_VERSION,
   bestbuy: BESTBUY_ADD_ADAPTER_VERSION
 };
+const GUARDED_RETAILER_OBSERVER_VERSION: Record<GuardedRetailerId, string> = {
+  target: TARGET_OBSERVER_VERSION,
+  walmart: WALMART_OBSERVER_VERSION,
+  amazon: AMAZON_OBSERVER_VERSION,
+  bestbuy: BESTBUY_OBSERVER_VERSION
+};
 
 const GUARDED_RETAILER_CAPABILITY: Record<GuardedRetailerId, { enabled: string; version: string }> = {
   target: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
@@ -190,11 +197,21 @@ export class QualificationRepository {
       retailerId
     );
     const expiresAt = new Date(row?.expires_at ?? "").getTime();
-    return row?.status === "qualified"
+    const qualified = row?.status === "qualified"
       && row.adapter_version === adapterVersion
       && row.highest_action === "add_to_cart"
       && Number.isFinite(expiresAt)
       && expiresAt > now;
+    if (!qualified) return false;
+    // A qualified row is necessary but not sufficient: current-version
+    // evidence that keeps failing (open repair groups on ≥2 products, three
+    // rejected rehearsals in a row, or a live add that failed after the last
+    // pass) degrades the lane so guarded adds stop leasing until fresh
+    // passing evidence arrives. Nothing is written; renewal lifts it.
+    return !laneDegradation(this.db, retailerId, {
+      add: adapterVersion,
+      observer: GUARDED_RETAILER_OBSERVER_VERSION[retailerId]
+    }, now).degraded;
   }
 
   renewPreviouslyQualified(
@@ -219,7 +236,10 @@ export class QualificationRepository {
       retailerId, renewed: false, reasonCode, promotedJobs: 0
     });
     if (!prior || prior.highestAction !== "add_to_cart") return skipped("prior_authorization_missing");
-    if (prior.status === "suspended") return skipped("lane_suspended");
+    // `suspended` is a legacy status value that no current code path writes.
+    // It is treated exactly like an expired or version-changed qualification:
+    // a previously authorized lane that fresh passing evidence may renew.
+    // Only explicit manual retirement refuses automatic renewal.
     if (prior.status === "retired") {
       const latestDecision = this.db.get<{ eventType: string }>(
         `SELECT event_type AS eventType FROM audit_events

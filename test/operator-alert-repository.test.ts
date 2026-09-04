@@ -301,3 +301,93 @@ test("operator alert rules and redacted incidents remain tenant isolated", () =>
     db.close();
   }
 });
+
+test("an aged-out repair group auto-resolves its incident with a distinct resolution code", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const diagnostics = new AdapterDiagnosticRepository(db);
+    const alerts = new OperatorAlertRepository(db);
+    diagnostics.record(device.id, failedDiagnostic("B0FB21526X", NOW + 1_000), NOW + 2_000);
+    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 2_100), "request_alert_age_open", NOW + 2_100).opened, 1);
+    const day = 24 * 60 * 60_000;
+    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 10 * day), "request_alert_age_hold", NOW + 10 * day).resolved, 0);
+    const aged = alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 15 * day), "request_alert_age_out", NOW + 15 * day);
+    assert.equal(aged.resolved, 1);
+    const incident = db.get<{ status: string; resolutionCode: string }>(
+      "SELECT status, resolution_code AS resolutionCode FROM operator_alert_incidents"
+    );
+    assert.deepEqual({ ...incident }, { status: "resolved", resolutionCode: "adapter_aged_out" });
+    assert.equal(db.get<{ reasonCode: string }>(
+      "SELECT reason_code AS reasonCode FROM operator_alert_events WHERE event_type = 'auto_resolved'"
+    )?.reasonCode, "adapter_aged_out");
+  } finally {
+    db.close();
+  }
+});
+
+test("stalled automatic store checks open one qualification incident per store and resolve after a passing run", () => {
+  const db = new YoinkDatabase();
+  try {
+    const alerts = new OperatorAlertRepository(db);
+    assert.throws(() => alerts.saveRule({
+      eventFamily: "qualification_stalled",
+      name: "Stalled store checks",
+      enabled: true,
+      severity: "warning",
+      minimumOccurrences: 2,
+      dedupeWindowSeconds: 900,
+      escalationAfterSeconds: 0,
+      retailerScope: "*",
+      operationScope: "observe",
+      routes: ["dashboard"],
+      confirmation: SAVE_OPERATOR_ALERT_RULE_CONFIRMATION
+    }, "", NOW), /all-operations scope/);
+    const rule = alerts.saveRule({
+      eventFamily: "qualification_stalled",
+      name: "Stalled store checks",
+      enabled: true,
+      severity: "warning",
+      minimumOccurrences: 2,
+      dedupeWindowSeconds: 900,
+      escalationAfterSeconds: 0,
+      retailerScope: "*",
+      operationScope: "*",
+      routes: ["dashboard"],
+      confirmation: SAVE_OPERATOR_ALERT_RULE_CONFIRMATION
+    }, "", NOW);
+    assert.equal(rule.eventFamily, "qualification_stalled");
+    const lane = (consecutiveNonPassingRuns: number, outcome = "blocked", status = "qualified") => ({
+      retailerId: "target" as const,
+      qualification: { status },
+      lastAutomaticRun: {
+        outcome,
+        reasonCode: outcome === "passed" ? "qualification_evidence_ready" : "out_of_stock",
+        finishedAt: new Date(NOW + 1_000 * consecutiveNonPassingRuns).toISOString(),
+        attemptedProductCount: 3
+      },
+      consecutiveNonPassingRuns
+    });
+    assert.deepEqual(alerts.reconcileQualificationStalls([lane(1)], "request_stall_1", NOW + 2_000), { opened: 0, updated: 0, resolved: 0, routed: 0 });
+    assert.deepEqual(alerts.reconcileQualificationStalls([lane(2, "blocked", "missing")], "request_stall_missing", NOW + 2_100), { opened: 0, updated: 0, resolved: 0, routed: 0 });
+    assert.deepEqual(alerts.reconcileQualificationStalls([lane(2)], "request_stall_2", NOW + 3_000), { opened: 1, updated: 0, resolved: 0, routed: 1 });
+    assert.deepEqual(alerts.reconcileQualificationStalls([lane(2)], "request_stall_2b", NOW + 3_100), { opened: 0, updated: 0, resolved: 0, routed: 0 });
+    assert.deepEqual(alerts.reconcileQualificationStalls([lane(3)], "request_stall_3", NOW + 4_000), { opened: 0, updated: 1, resolved: 0, routed: 0 });
+    const open = db.get<{ eventFamily: string; title: string; summary: string; occurrenceCount: number; operation: string }>(
+      "SELECT event_family AS eventFamily, title, summary, occurrence_count AS occurrenceCount, operation FROM operator_alert_incidents"
+    );
+    assert.equal(open?.eventFamily, "qualification_stalled");
+    assert.equal(open?.title, "Target store checks stalled");
+    assert.match(open?.summary ?? "", /3 times in a row; the latest run stopped on out of stock/);
+    assert.equal(open?.occurrenceCount, 3);
+    assert.equal(open?.operation, "rehearse_add");
+    assert.deepEqual(alerts.reconcileQualificationStalls([lane(0, "passed")], "request_stall_pass", NOW + 5_000), { opened: 0, updated: 0, resolved: 1, routed: 1 });
+    assert.deepEqual({ ...db.get<{ status: string; resolutionCode: string }>(
+      "SELECT status, resolution_code AS resolutionCode FROM operator_alert_incidents"
+    ) }, { status: "resolved", resolutionCode: "qualification_recovered" });
+    const durable = JSON.stringify(db.all("SELECT * FROM operator_alert_incidents"));
+    assert.equal(durable.includes("target.com"), false);
+  } finally {
+    db.close();
+  }
+});

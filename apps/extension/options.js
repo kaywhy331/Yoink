@@ -73,7 +73,43 @@ async function renderPermissions() {
   $("#permissionList").replaceChildren(...rows);
 }
 
+function storeName(retailerId) {
+  return RETAILER_NAMES[retailerId] || retailerId || "this store";
+}
+
+// Reason codes are machine identifiers. Everything a person reads here is
+// translated into a sentence that says what to do next.
+function humanizeReason(reasonCode, retailerId = "") {
+  const store = storeName(retailerId);
+  const known = {
+    verified: "Passed without clicking",
+    qualification_evidence_ready: "Evidence ready",
+    qualification_candidate_missing: "No candidate product yet",
+    qualification_candidate_exhausted: "No candidate passed",
+    qualification_blocked: "Check stopped",
+    retailer_access_missing: `Allow ${store} access`,
+    retailer_session_signed_out: `Sign in to ${store} in Chrome`,
+    retailer_session_challenged: `Finish the ${store} security check in Chrome`,
+    manual_action_required: `${store} needs you in Chrome`,
+    action_job_active: "Waiting for the current cart action",
+    companion_update_required: "Update the Chrome companion",
+    app_update_required: "Update the Yoink app",
+    adapter_version_mismatch: "Chrome companion and Yoink app versions differ",
+    product_page_unavailable: "Product page no longer loads",
+    out_of_stock: "Product is sold out",
+    third_party_seller: "Sold by a marketplace seller",
+    fulfillment_not_supported: "Shipping is not offered",
+    worker_restarted: "Chrome restarted the companion mid-check",
+    no_purchasable_candidate: "No purchasable product to check yet",
+    no_candidate: "No candidate product yet"
+  };
+  if (known[reasonCode]) return known[reasonCode];
+  return String(reasonCode || "check_stopped").replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
+}
+
 function laneStatus(lane) {
+  if (lane.degraded === true) return "Store checks failing · cart adds paused";
+  if (lane.blockedReason) return humanizeReason(lane.blockedReason, lane.retailerId);
   if (!lane.candidate) return "Needs a candidate product";
   const warning = String(lane.qualification?.warning || "none");
   if (warning === "version_changed") return "Version changed";
@@ -84,8 +120,38 @@ function laneStatus(lane) {
   return lane.qualification?.status === "qualified" ? "Ready" : "Ready to check";
 }
 
-function resultReason(value) {
-  return String(value || "check_stopped").replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
+function lastRunText(lane) {
+  const run = lane.lastAutomaticRun;
+  if (!run?.finishedAt) return "";
+  const when = new Date(run.finishedAt);
+  const stamp = Number.isFinite(when.getTime()) ? when.toLocaleString() : "";
+  const outcome = run.outcome === "passed" ? "passed"
+    : run.outcome === "partial" ? "partly passed"
+      : humanizeReason(run.reasonCode || run.outcome, lane.retailerId).toLowerCase();
+  return stamp ? `Last automatic check ${stamp} · ${outcome}` : "";
+}
+
+function resultReason(value, retailerId = "") {
+  return humanizeReason(value || "check_stopped", retailerId);
+}
+
+function laneResultText(result) {
+  if (!result) return "";
+  const retailerId = result.retailerId || "";
+  if (result.outcome === "passed") {
+    return result.attemptedProductCount > 0
+      ? `${result.passedProductCount} of ${result.attemptedProductCount} passed · no click`
+      : "Evidence already ready";
+  }
+  if (result.outcome === "partial") {
+    return `${result.passedProductCount} of ${result.attemptedProductCount} passed · more evidence needed`;
+  }
+  if (result.outcome === "parked" || result.outcome === "access_missing") {
+    return `Waiting · ${resultReason(result.reasonCode, retailerId)}`;
+  }
+  if (result.outcome === "skipped") return `Skipped · ${resultReason(result.reasonCode, retailerId)}`;
+  if (result.outcome === "error") return `Stopped · ${resultReason(result.reasonCode, retailerId)}`;
+  return `Stopped · ${resultReason(result.reasonCode || result.outcome, retailerId)}`;
 }
 
 async function reverifyStore(lane, button, status) {
@@ -109,11 +175,7 @@ async function reverifyStore(lane, button, status) {
     }
     const result = response.results.find((item) => item.retailerId === retailerId);
     if (!result) throw new Error(`${storeName} did not return a check result.`);
-    status.textContent = result.outcome === "passed"
-      ? result.attemptedProductCount > 0
-        ? `${result.passedProductCount} of ${result.attemptedProductCount} passed · no click`
-        : "Evidence already ready"
-      : `Stopped · ${resultReason(result.reasonCode || result.outcome)}`;
+    status.textContent = laneResultText(result);
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : `${storeName} could not be checked.`;
   } finally {
@@ -146,9 +208,16 @@ async function renderReverificationPlan() {
     const coverage = [...new Set(candidates.flatMap((candidate) =>
       Array.isArray(candidate.qualificationTypes) ? candidate.qualificationTypes : []))]
       .map((item) => COVERAGE_NAMES[item]).filter(Boolean).slice(0, 3);
-    detail.textContent = candidates.length
-      ? `${candidates.length} candidate product${candidates.length === 1 ? "" : "s"}${coverage.length ? ` · ${coverage.join(" · ")}` : ""}.`
-      : `No safe ${storeName} candidate is available yet.`;
+    const lastRun = lastRunText(lane);
+    detail.textContent = [
+      candidates.length
+        ? `${candidates.length} candidate product${candidates.length === 1 ? "" : "s"}${coverage.length ? ` · ${coverage.join(" · ")}` : ""}.`
+        : `No safe ${storeName} candidate is available yet.`,
+      lane.degraded === true && Array.isArray(lane.degradedReasons) && lane.degradedReasons.length
+        ? `Recent failures: ${lane.degradedReasons.map((reason) => humanizeReason(reason, lane.retailerId)).join(", ")}.`
+        : "",
+      lastRun ? `${lastRun}.` : ""
+    ].filter(Boolean).join(" ");
     identity.append(name, detail);
     const status = document.createElement("span");
     status.className = "lane-status";
@@ -175,15 +244,41 @@ async function renderReverificationPlan() {
   return response.plan;
 }
 
+function resultsSummary(results, stateRecord) {
+  const passed = results.filter((item) => item.outcome === "passed").length;
+  const waiting = results.filter((item) => ["parked", "access_missing", "skipped"].includes(item.outcome));
+  const waitingText = waiting.length
+    ? ` · ${waiting.map((item) => `${storeName(item.retailerId)}: ${resultReason(item.reasonCode, item.retailerId)}`).join(" · ")}`
+    : "";
+  const stamp = stateRecord?.updatedAt && Number.isFinite(new Date(stateRecord.updatedAt).getTime())
+    ? ` Last checked ${new Date(stateRecord.updatedAt).toLocaleString()}.`
+    : "";
+  return `${passed} of ${results.length} stores ready${waitingText}. No Add controls were clicked.${stamp}`;
+}
+
 function automaticResultText(response) {
   if (!response) return "Automatic checks are unavailable.";
   if (response.started === false && response.reason === "no_store_checks_needed") return "No stores currently need a check.";
-  if (response.started === false && response.reason === "automatic_check_cooldown") return "The daily automatic check already ran.";
-  const results = Array.isArray(response.results) ? response.results : [];
-  if (!results.length) return response.state?.updatedAt ? `Last checked ${new Date(response.state.updatedAt).toLocaleString()}.` : "";
-  const passed = results.filter((item) => item.outcome === "passed").length;
-  const access = results.filter((item) => item.outcome === "access_missing").length;
-  return `${passed} of ${results.length} stores ready${access ? ` · allow access for ${access}` : ""}. No Add controls were clicked.`;
+  if (response.started === false && response.reason === "automatic_check_cooldown") {
+    return "Automatic checks are waiting out their backoff after the last run.";
+  }
+  if (response.started === false && response.reason === "automatic_check_daily_cap") {
+    return "Automatic checks reached today's limit. They resume tomorrow.";
+  }
+  if (response.started === false && response.reason === "automatic_checks_disabled") return "Automatic checks off.";
+  const stateRecord = typeof response.state === "object" && response.state ? response.state : null;
+  const results = Array.isArray(response.results) ? response.results
+    : Array.isArray(stateRecord?.results) ? stateRecord.results : [];
+  const runState = typeof response.state === "string" ? response.state : stateRecord?.state || "";
+  if (runState === "error") {
+    const reason = resultReason(response.reasonCode || stateRecord?.reasonCode || "check_stopped");
+    return `The last check stopped early · ${reason}.${results.length ? ` ${resultsSummary(results, stateRecord)}` : ""}`;
+  }
+  if (runState === "running") return "A store check is running now. No Add controls are clicked.";
+  if (!results.length) {
+    return stateRecord?.updatedAt ? `Last checked ${new Date(stateRecord.updatedAt).toLocaleString()}.` : "";
+  }
+  return resultsSummary(results, stateRecord);
 }
 
 async function renderAutomaticReverification() {

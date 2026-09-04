@@ -560,3 +560,74 @@ test("Best Buy activation accepts an actionable preorder as first-party shipping
     db.close();
   }
 });
+
+test("a legacy suspended lane renews after fresh passing evidence like any other previously authorized lane", () => {
+  const db = new YoinkDatabase();
+  try {
+    const devices = new DeviceRepository(db);
+    const code = devices.createPairingCode(NOW);
+    const device = devices.pair({
+      pairingCode: code.code,
+      extensionVersion: "1.19.5",
+      capabilities: {
+        readiness: true,
+        jobReconciliation: true,
+        targetAddOnly: true,
+        targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
+      }
+    }, NOW + 1_000);
+    const shadows = new ShadowObservationRepository(db);
+    const first = shadows.record(device.id, observation(new Date(NOW + 2_000).toISOString()), NOW + 3_000);
+    shadows.record(device.id, {
+      ...observation(new Date(NOW + 4_000).toISOString()),
+      retailerSku: "202258620"
+    }, NOW + 5_000);
+    const repository = new QualificationRepository(db);
+    repository.recordTargetAddRehearsal(device.id, {
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+      observerVersion: TARGET_OBSERVER_VERSION,
+      contractVersion: 1,
+      shadowObservationId: first.id,
+      observedAt: new Date(NOW + 6_000).toISOString(),
+      outcome: "passed",
+      reasonCode: "verified"
+    }, NOW + 7_000);
+    repository.activateTargetAdd({
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+      evidenceHash: shadows.targetQualificationReadiness(NOW + 8_000).qualificationEvidenceHash,
+      confirmation: TARGET_ADD_ACTIVATION_CONFIRMATION
+    }, NOW + 9_000);
+    db.run("UPDATE retailer_adapter_qualifications SET status = 'suspended' WHERE retailer_id = 'target'");
+    assert.equal(repository.targetAddQualified(NOW + 9_500), false);
+    const blockedLane = new RetailerReadinessRepository(db).lane("target", NOW + 9_500);
+    assert.equal(blockedLane.qualification.status, "suspended");
+    assert.equal(blockedLane.blockedReason, "no_purchasable_candidate", "without a purchasable product the refresh cannot run");
+    const catalogTimestamp = new Date(NOW).toISOString();
+    db.run(
+      "INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES ('family_suspended', 'Suspended fixture', '', ?, ?)",
+      catalogTimestamp,
+      catalogTimestamp
+    );
+    db.run(
+      "INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at) VALUES ('variant_suspended', 'family_suspended', 'Suspended fixture', '{}', ?, ?)",
+      catalogTimestamp,
+      catalogTimestamp
+    );
+    db.run(
+      `INSERT INTO listings(
+         id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+         execution_supported, currency, created_at, updated_at
+       ) VALUES ('listing_suspended', 'variant_suspended', 'target', '1011483414', 'https://www.target.com/p/-/A-1011483414', 'in_stock', 0, 'USD', ?, ?)`,
+      catalogTimestamp,
+      catalogTimestamp
+    );
+    const lane = new RetailerReadinessRepository(db).lane("target", NOW + 9_500);
+    assert.equal(lane.blockedReason, "");
+    assert.equal(lane.automaticCheckNeeded, true, "a suspended lane is a previously authorized lane that needs a refresh");
+    const renewal = repository.renewPreviouslyQualified("target", device.id, NOW + 10_000);
+    assert.equal(renewal.renewed, true);
+    assert.equal(repository.targetAddQualified(NOW + 10_001), true);
+  } finally {
+    db.close();
+  }
+});

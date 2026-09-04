@@ -26,7 +26,7 @@ var YoinkTargetShadowModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var TARGET_OBSERVER_VERSION = "target-observer-v5";
+  var TARGET_OBSERVER_VERSION = "target-observer-v6";
   var SELECTED_OFFER_SCOPE_VERSION = 1;
 
   // packages/browser-safety/src/index.ts
@@ -146,6 +146,13 @@ var YoinkTargetShadowModule = (() => {
   // packages/browser-adapters/src/target.ts
   var MARKETPLACE_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+(?!target\b)|sold\s+by\s+(?!target\b)|target\s*plus|marketplace\s+seller/i;
   var FIRST_PARTY_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+target\b|sold\s+by\s+target\b/i;
+  var TARGET_CURRENT_PRICE_SELECTORS = [
+    "[data-test='product-price']",
+    "[data-test*='current-price' i]",
+    "meta[itemprop='price']",
+    "[itemprop='price']"
+  ];
+  var TARGET_PRICE_MODULE_SELECTOR = "[data-module-type='ProductDetailPrice']";
   function text(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
@@ -226,7 +233,7 @@ var YoinkTargetShadowModule = (() => {
   function readPrice(root, selectors) {
     for (const selector of selectors) {
       for (const element of root.querySelectorAll(selector)) {
-        if (!visible2(element)) continue;
+        if (!visible2(element) || recommendationControl(element)) continue;
         for (const candidate of [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)]) {
           const price = parseUsPrice(candidate);
           if (price !== null) return price;
@@ -238,6 +245,9 @@ var YoinkTargetShadowModule = (() => {
   function adaptiveTargetPrice(root, selectors) {
     const packaged = readPrice(root, selectors);
     if (packaged !== null) return packaged;
+    const modulePrices = [...root.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)].filter((element) => visible2(element) && !recommendationControl(element)).map((element) => readPrice(element, selectors) ?? parseUsPrice(observableText(element, 1200))).filter((price) => price !== null);
+    const uniqueModulePrices = [...new Set(modulePrices)];
+    if (uniqueModulePrices.length === 1) return uniqueModulePrices[0] ?? null;
     const candidates = [...root.querySelectorAll("[data-test], [data-testid], [itemprop], [aria-label]")].slice(0, 500).filter((element) => visible2(element) && !recommendationControl(element)).filter((element) => /(?:price|amount)/i.test([
       element.getAttribute("data-test"),
       element.getAttribute("data-testid"),
@@ -467,12 +477,7 @@ var YoinkTargetShadowModule = (() => {
     let current = anchor?.parentElement ?? null;
     for (let depth = 0; depth < 12 && current; depth += 1) {
       const scopedText = text(current, 6e4);
-      const price = adaptiveTargetPrice(current, [
-        "[data-test='product-price']",
-        "[data-test*='current-price' i]",
-        "meta[itemprop='price']",
-        "[itemprop='price']"
-      ]);
+      const price = adaptiveTargetPrice(current, TARGET_CURRENT_PRICE_SELECTORS);
       if (price !== null && scopedText.length < 4e4) return current;
       current = current.parentElement;
     }
@@ -500,12 +505,7 @@ var YoinkTargetShadowModule = (() => {
     const selected = pageSku === expectedSku ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment) : emptyTargetAddBinding();
     const seller = sellerEvidence(document, selected.control);
     const priceRoot = selected.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || selected.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || document;
-    const unitPriceCents = adaptiveTargetPrice(priceRoot, [
-      "[data-test='product-price']",
-      "[data-test*='current-price' i]",
-      "meta[itemprop='price']",
-      "[itemprop='price']"
-    ]);
+    const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS);
     const blocked = targetInteractiveBlock(document);
     const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
     const availability = blocked ? "unknown" : selectedControlActionable ? "in_stock" : pageSku === expectedSku && targetExplicitlyUnavailable(document) ? "out_of_stock" : "unknown";
@@ -574,13 +574,10 @@ var YoinkTargetShadowModule = (() => {
     const pageSku = extractTargetSku(urlValue);
     const binding = pageSku === expectedSku ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment) : emptyTargetAddBinding();
     const packagedControls = pageSku === expectedSku ? [.../* @__PURE__ */ new Set([...addControls(document, expectedSku), ...binding.control ? [binding.control] : []])] : [];
-    const evidenceRoot = binding.offerRoot || binding.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || document;
-    const priceCandidates = [...evidenceRoot.querySelectorAll([
-      "[data-test='product-price']",
-      "[data-test*='current-price' i]",
-      "meta[itemprop='price']",
-      "[itemprop='price']"
-    ].join(", "))].filter((element) => element.tagName === "META" || visible2(element));
+    const evidenceRoot = binding.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || binding.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || binding.offerRoot || document;
+    const packagedPriceCandidates = [...evidenceRoot.querySelectorAll(TARGET_CURRENT_PRICE_SELECTORS.join(", "))].filter((element) => (element.tagName === "META" || visible2(element)) && !recommendationControl(element)).filter((element) => [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)].some((candidate) => parseUsPrice(candidate) !== null));
+    const modulePriceCandidates = packagedPriceCandidates.length ? [] : [...evidenceRoot.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)].filter((element) => visible2(element) && !recommendationControl(element)).filter((element) => (readPrice(element, TARGET_CURRENT_PRICE_SELECTORS) ?? parseUsPrice(observableText(element, 1200))) !== null);
+    const priceCandidates = packagedPriceCandidates.length ? packagedPriceCandidates : modulePriceCandidates;
     const seller = pageSku === expectedSku ? sellerEvidence(document, binding.control) : { sellerType: "unknown" };
     const identities = pageSku === expectedSku ? targetSkuEvidence(document) : /* @__PURE__ */ new Set();
     return {

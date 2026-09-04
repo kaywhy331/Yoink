@@ -32,6 +32,13 @@ export type FingerprintSigner = (values: string[]) => Promise<string>;
 
 const MARKETPLACE_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+(?!target\b)|sold\s+by\s+(?!target\b)|target\s*plus|marketplace\s+seller/i;
 const FIRST_PARTY_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+target\b|sold\s+by\s+target\b/i;
+const TARGET_CURRENT_PRICE_SELECTORS = [
+  "[data-test='product-price']",
+  "[data-test*='current-price' i]",
+  "meta[itemprop='price']",
+  "[itemprop='price']"
+];
+const TARGET_PRICE_MODULE_SELECTOR = "[data-module-type='ProductDetailPrice']";
 
 function text(value: Element | Document | null | undefined, maximum = 2_000): string {
   return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
@@ -136,7 +143,7 @@ export function parseUsPrice(value: unknown): number | null {
 function readPrice(root: ParentNode, selectors: string[]): number | null {
   for (const selector of selectors) {
     for (const element of root.querySelectorAll(selector)) {
-      if (!visible(element)) continue;
+      if (!visible(element) || recommendationControl(element)) continue;
       for (const candidate of [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)]) {
         const price = parseUsPrice(candidate);
         if (price !== null) return price;
@@ -149,6 +156,12 @@ function readPrice(root: ParentNode, selectors: string[]): number | null {
 function adaptiveTargetPrice(root: ParentNode, selectors: string[]): number | null {
   const packaged = readPrice(root, selectors);
   if (packaged !== null) return packaged;
+  const modulePrices = [...root.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)]
+    .filter((element) => visible(element) && !recommendationControl(element))
+    .map((element) => readPrice(element, selectors) ?? parseUsPrice(observableText(element, 1_200)))
+    .filter((price): price is number => price !== null);
+  const uniqueModulePrices = [...new Set(modulePrices)];
+  if (uniqueModulePrices.length === 1) return uniqueModulePrices[0] ?? null;
   const candidates = [...root.querySelectorAll("[data-test], [data-testid], [itemprop], [aria-label]")]
     .slice(0, 500)
     .filter((element) => visible(element) && !recommendationControl(element))
@@ -446,12 +459,7 @@ function closestOfferContainer(anchor: Element | null): Element | null {
   let current = anchor?.parentElement ?? null;
   for (let depth = 0; depth < 12 && current; depth += 1) {
     const scopedText = text(current, 60_000);
-    const price = adaptiveTargetPrice(current, [
-      "[data-test='product-price']",
-      "[data-test*='current-price' i]",
-      "meta[itemprop='price']",
-      "[itemprop='price']"
-    ]);
+    const price = adaptiveTargetPrice(current, TARGET_CURRENT_PRICE_SELECTORS);
     if (price !== null && scopedText.length < 40_000) return current;
     current = current.parentElement;
   }
@@ -490,12 +498,7 @@ export function observeTargetOffer(
   const seller = sellerEvidence(document, selected.control);
   const priceRoot = selected.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main")
     || selected.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || document;
-  const unitPriceCents = adaptiveTargetPrice(priceRoot, [
-    "[data-test='product-price']",
-    "[data-test*='current-price' i]",
-    "meta[itemprop='price']",
-    "[itemprop='price']"
-  ]);
+  const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS);
   const blocked = targetInteractiveBlock(document);
   const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
   const availability = blocked ? "unknown"
@@ -593,15 +596,20 @@ export function targetAdapterLayoutEvidence(
   const packagedControls = pageSku === expectedSku
     ? [...new Set([...addControls(document, expectedSku), ...(binding.control ? [binding.control] : [])])]
     : [];
-  const evidenceRoot = binding.offerRoot
+  const evidenceRoot = binding.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main")
     || binding.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main")
+    || binding.offerRoot
     || document;
-  const priceCandidates = [...evidenceRoot.querySelectorAll([
-    "[data-test='product-price']",
-    "[data-test*='current-price' i]",
-    "meta[itemprop='price']",
-    "[itemprop='price']"
-  ].join(", "))].filter((element) => element.tagName === "META" || visible(element));
+  const packagedPriceCandidates = [...evidenceRoot.querySelectorAll(TARGET_CURRENT_PRICE_SELECTORS.join(", "))]
+    .filter((element) => (element.tagName === "META" || visible(element)) && !recommendationControl(element))
+    .filter((element) => [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)]
+      .some((candidate) => parseUsPrice(candidate) !== null));
+  const modulePriceCandidates = packagedPriceCandidates.length ? []
+    : [...evidenceRoot.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)]
+      .filter((element) => visible(element) && !recommendationControl(element))
+      .filter((element) => (readPrice(element, TARGET_CURRENT_PRICE_SELECTORS)
+        ?? parseUsPrice(observableText(element, 1_200))) !== null);
+  const priceCandidates = packagedPriceCandidates.length ? packagedPriceCandidates : modulePriceCandidates;
   const seller = pageSku === expectedSku
     ? sellerEvidence(document, binding.control)
     : { sellerType: "unknown" as const };
