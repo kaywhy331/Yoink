@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementResultingChanges } from "node:sqlite";
 import { nowIso } from "../../domain/src/ids.js";
@@ -214,8 +214,8 @@ export class YoinkDatabase {
     const prefix = `${basename(this.path)}.before-v`;
     const backups = readdirSync(directory)
       .filter((name) => name.startsWith(prefix) && name.endsWith(".sqlite"))
-      .map((name) => ({ name, timestamp: /\.before-v\d+\.(.+)\.sqlite$/.exec(name)?.[1] ?? "" }))
-      .sort((left, right) => right.timestamp.localeCompare(left.timestamp) || right.name.localeCompare(left.name));
+      .map((name) => ({ name, modifiedAt: statSync(join(directory, name)).mtimeMs }))
+      .sort((left, right) => right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name));
     for (const backup of backups.slice(MIGRATION_BACKUP_RETENTION_COUNT)) {
       unlinkSync(join(directory, backup.name));
     }

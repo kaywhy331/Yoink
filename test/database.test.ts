@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -105,13 +105,23 @@ test("database startup retains only the newest bounded migration backups", () =>
   const filePath = join(directory, "yoink.sqlite");
   try {
     new YoinkDatabase(filePath).close();
-    for (let index = 0; index < 6; index += 1) {
-      writeFileSync(`${filePath}.before-v${index + 1}.2026-09-0${index + 1}T00-00-00-000Z.sqlite`, "fixture");
+    const fixtures = [
+      ["before-v0.91.0.20991231T000000Z.sqlite", "2026-08-27T10:24:38.000Z"],
+      ["before-v0.92.0.20991231T000000Z.sqlite", "2026-08-27T12:11:45.000Z"],
+      ["before-v0.93.0.20991231T000000Z.sqlite", "2026-08-27T13:52:49.000Z"],
+      ["before-v64.2026-09-02T00-00-00-000Z.sqlite", "2026-09-02T00:00:00.000Z"],
+      ["before-v65.2026-09-03T00-00-00-000Z.sqlite", "2026-09-03T00:00:00.000Z"],
+      ["before-v66.2026-09-04T00-00-00-000Z.sqlite", "2026-09-04T00:00:00.000Z"]
+    ] as const;
+    for (const [suffix, modifiedAt] of fixtures) {
+      const backupPath = `${filePath}.${suffix}`;
+      writeFileSync(backupPath, "fixture");
+      utimesSync(backupPath, new Date(modifiedAt), new Date(modifiedAt));
     }
     new YoinkDatabase(filePath).close();
     const backups = readdirSync(directory).filter((name) => name.startsWith("yoink.sqlite.before-v")).sort();
     assert.equal(backups.length, MIGRATION_BACKUP_RETENTION_COUNT);
-    assert.deepEqual(backups.map((name) => name.match(/before-v(\d+)/)?.[1]), ["4", "5", "6"]);
+    assert.deepEqual(backups.map((name) => name.match(/before-v(\d+)/)?.[1]), ["64", "65", "66"]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
