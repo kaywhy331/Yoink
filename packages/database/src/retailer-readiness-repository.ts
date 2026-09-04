@@ -9,6 +9,7 @@ import {
   RETAILER_REVERIFICATION_RUN_MAX_PRODUCTS,
   RETAILER_REVERIFICATION_RUN_OUTCOMES,
   RETAILER_REVERIFICATION_RUN_TRIGGERS,
+  RETAILER_SELECTOR_PACK_VERSIONS,
   TARGET_ADD_ADAPTER_VERSION,
   TARGET_OBSERVER_VERSION,
   WALMART_ADD_ADAPTER_VERSION,
@@ -19,6 +20,7 @@ import {
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
 import { nowIso } from "../../domain/src/ids.js";
+import { classifyAdapterDiagnostic } from "../../domain/src/adapter-diagnostic-class.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import {
@@ -61,11 +63,11 @@ const RUN_EVENT_TYPE = "retailer_reverification_run";
 export const RETAILER_SESSION_MAX_AGE_MS = 5 * 60_000;
 export const RETAILER_SESSION_FUTURE_TOLERANCE_MS = 5 * 60_000;
 
-const LANE_VERSIONS: Record<ActionRetailer, { add: string; observer: string }> = {
-  target: { add: TARGET_ADD_ADAPTER_VERSION, observer: TARGET_OBSERVER_VERSION },
-  walmart: { add: WALMART_ADD_ADAPTER_VERSION, observer: WALMART_OBSERVER_VERSION },
-  amazon: { add: AMAZON_ADD_ADAPTER_VERSION, observer: AMAZON_OBSERVER_VERSION },
-  bestbuy: { add: BESTBUY_ADD_ADAPTER_VERSION, observer: BESTBUY_OBSERVER_VERSION }
+const LANE_VERSIONS: Record<ActionRetailer, { add: string; observer: string; pack: string }> = {
+  target: { add: TARGET_ADD_ADAPTER_VERSION, observer: TARGET_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.target },
+  walmart: { add: WALMART_ADD_ADAPTER_VERSION, observer: WALMART_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.walmart },
+  amazon: { add: AMAZON_ADD_ADAPTER_VERSION, observer: AMAZON_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.amazon },
+  bestbuy: { add: BESTBUY_ADD_ADAPTER_VERSION, observer: BESTBUY_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.bestbuy }
 };
 
 const runCorrelationId = (retailerId: ActionRetailer): string => `retailer_reverification:${retailerId}`;
@@ -174,13 +176,14 @@ export interface RetailerLaneReadiness {
   retailerId: ActionRetailer;
   expectedAdapterVersion: string;
   expectedObserverVersion: string;
+  expectedPackVersion: string;
   qualification: {
     status: "qualified" | "suspended" | "retired" | "missing";
     currentVersion: boolean;
     qualifiedAt: string;
     expiresAt: string;
     expiresInMs: number | null;
-    warning: "none" | "expiring" | "expired" | "version_changed";
+    warning: "none" | "expiring" | "expired" | "version_changed" | "pack_unverified";
   };
   session: ReadinessRow | null;
   candidate: RequalificationCandidate | null;
@@ -341,14 +344,33 @@ export class RetailerReadinessRepository {
     const currentVersion = qualification?.adapterVersion === versions.add;
     const qualified = qualification?.status === "qualified" && currentVersion
       && Number.isFinite(expirationTime) && expirationTime > now;
+    const latestPassingTrial = this.db.get<{ packVersion: string }>(
+      `SELECT COALESCE(pack_version, '') AS packVersion
+       FROM retailer_adapter_trials
+       WHERE tenant_id = ? AND user_id = ? AND retailer_id = ?
+         AND adapter_version = ? AND outcome = 'passed'
+       ORDER BY received_at DESC, id DESC LIMIT 1`,
+      scope.tenantId,
+      scope.userId,
+      retailerId,
+      versions.add
+    );
+    const packUnverified = Boolean(latestPassingTrial && latestPassingTrial.packVersion !== versions.pack);
     const expiresInMs = Number.isFinite(expirationTime) ? Math.round(expirationTime - now) : null;
     const warning = !qualification ? "none"
       : !currentVersion ? "version_changed"
         : Number.isFinite(expirationTime) && expirationTime <= now ? "expired"
-          : Number.isFinite(expirationTime) && expirationTime <= now + QUALIFICATION_WARNING_MS ? "expiring"
+          : packUnverified ? "pack_unverified"
+            : Number.isFinite(expirationTime) && expirationTime <= now + QUALIFICATION_WARNING_MS ? "expiring"
             : "none";
     const repairCandidateAvailable = candidates.some((item) => item.repairableObserverFailure);
-    const purchasableCandidateAvailable = candidates.some((item) => item.currentlyPurchasable);
+    // A prior passing store check is itself a safe candidate for selector-pack
+    // renewal even when that product has not been imported into the local
+    // catalog. Requiring a listing row here made pack-only renewal stall on
+    // exactly the saved-product history it is intended to replay.
+    const purchasableCandidateAvailable = candidates.some((item) =>
+      item.currentlyPurchasable || (packUnverified && item.priorRehearsalPassed)
+    );
     const degradation = laneDegradation(this.db, retailerId, versions, now);
     const lastAutomaticRun = this.lastAutomaticRun(retailerId);
     const consecutiveNonPassingRuns = this.consecutiveNonPassingRuns(retailerId);
@@ -418,7 +440,9 @@ export class RetailerReadinessRepository {
       now
     );
     const checklist = [
-      { id: "qualification", ready: qualified, label: qualified ? "Store checks passed" : "Store checks need a refresh" },
+      { id: "qualification", ready: qualified && !packUnverified, label: packUnverified
+        ? "Store check pending after update"
+        : qualified ? "Store checks passed" : "Store checks need a refresh" },
       { id: "store_checks", ready: !degradation.degraded, label: degradation.degraded ? "Store checks failing" : "Store checks healthy" },
       { id: "device", ready: activeDevice, label: activeDevice ? "Chrome companion online" : "Chrome companion offline" },
       { id: "signed_in", ready: signedIn, label: signedIn ? "Signed in to the store in Chrome" : "Sign in to the store in Chrome" },
@@ -428,6 +452,7 @@ export class RetailerReadinessRepository {
       retailerId,
       expectedAdapterVersion: versions.add,
       expectedObserverVersion: versions.observer,
+      expectedPackVersion: versions.pack,
       qualification: {
         status: qualification?.status ?? "missing",
         currentVersion,
@@ -447,7 +472,7 @@ export class RetailerReadinessRepository {
       lastAutomaticRun,
       consecutiveNonPassingRuns,
       checklist,
-      readyForGuardedAdd: qualified && activeDevice && !sessionBlocksAdd && !degradation.degraded,
+      readyForGuardedAdd: qualified && !packUnverified && activeDevice && !sessionBlocksAdd && !degradation.degraded,
       readyForWarmObservation: activeDevice && signedIn
     };
   }
@@ -611,7 +636,7 @@ export class RetailerReadinessRepository {
 
   private requalificationCandidates(
     retailerId: ActionRetailer,
-    versions: { add: string; observer: string },
+    versions: { add: string; observer: string; pack: string },
     now: number
   ): RequalificationCandidate[] {
     const scope = currentRequestScope();
@@ -635,7 +660,8 @@ export class RetailerReadinessRepository {
       currentObserverEvidence: number;
       currentRehearsalPassed: number;
       priorRehearsalPassed: number;
-      repairableObserverFailure: number;
+      latestDiagnosticOutcome: string;
+      latestDiagnosticReasonCode: string;
       currentlyPurchasable: number;
       layoutFingerprint: string;
     }>(
@@ -664,6 +690,7 @@ export class RetailerReadinessRepository {
                          AND observation.availability IN ('in_stock', 'preorder')
                          AND observation.observed_at >= ? THEN 1 ELSE 0 END) AS currentObserverEvidence,
               MAX(CASE WHEN trial.outcome = 'passed' AND trial.adapter_version = ?
+                         AND trial.pack_version = ?
                          AND trial.observed_at >= ? THEN 1 ELSE 0 END) AS currentRehearsalPassed,
               MAX(CASE WHEN trial.outcome = 'passed' THEN 1 ELSE 0 END) AS priorRehearsalPassed,
               MAX(CASE WHEN listing.status IN ('in_stock', 'preorder') THEN 1 ELSE 0 END) AS currentlyPurchasable,
@@ -679,7 +706,7 @@ export class RetailerReadinessRepository {
                 ORDER BY diagnostic.received_at DESC, diagnostic.id DESC
                 LIMIT 1
               ), '') AS layoutFingerprint,
-              CASE WHEN (
+              COALESCE((
                 SELECT diagnostic.outcome
                 FROM retailer_adapter_diagnostics diagnostic
                 WHERE diagnostic.tenant_id = observation.tenant_id
@@ -690,7 +717,19 @@ export class RetailerReadinessRepository {
                   AND diagnostic.received_at >= ?
                 ORDER BY diagnostic.received_at DESC, diagnostic.id DESC
                 LIMIT 1
-              ) = 'failed' THEN 1 ELSE 0 END AS repairableObserverFailure
+              ), '') AS latestDiagnosticOutcome,
+              COALESCE((
+                SELECT diagnostic.reason_code
+                FROM retailer_adapter_diagnostics diagnostic
+                WHERE diagnostic.tenant_id = observation.tenant_id
+                  AND diagnostic.user_id = observation.user_id
+                  AND diagnostic.retailer_id = observation.retailer_id
+                  AND diagnostic.retailer_sku = observation.retailer_sku
+                  AND diagnostic.operation = 'observe'
+                  AND diagnostic.received_at >= ?
+                ORDER BY diagnostic.received_at DESC, diagnostic.id DESC
+                LIMIT 1
+              ), '') AS latestDiagnosticReasonCode
        FROM retailer_shadow_observations observation
        LEFT JOIN listings listing ON listing.retailer_id = observation.retailer_id
          AND listing.retailer_sku = observation.retailer_sku
@@ -709,8 +748,8 @@ export class RetailerReadinessRepository {
           OR firstPartyActionable = 1
           OR shippingActionable = 1
           OR pickupActionable = 1
-          OR repairableObserverFailure = 1
-       ORDER BY repairableObserverFailure DESC,
+          OR latestDiagnosticOutcome IN ('failed', 'rejected')
+       ORDER BY (latestDiagnosticOutcome IN ('failed', 'rejected')) DESC,
                 currentlyPurchasable DESC,
                 currentRehearsalPassed DESC,
                 currentObserverEvidence DESC,
@@ -723,6 +762,8 @@ export class RetailerReadinessRepository {
       versions.observer,
       cutoff,
       versions.add,
+      versions.pack,
+      cutoff,
       cutoff,
       cutoff,
       cutoff,
@@ -732,7 +773,13 @@ export class RetailerReadinessRepository {
     );
     const candidates: RequalificationCandidate[] = rows.map((row) => {
       const repair = repairBySku.get(row.retailerSku);
-      const repairNeeded = Boolean(repair) || row.repairableObserverFailure === 1;
+      const latestClass = classifyAdapterDiagnostic({
+        operation: "observe",
+        outcome: row.latestDiagnosticOutcome,
+        failureStage: "runner",
+        reasonCode: row.latestDiagnosticReasonCode
+      });
+      const repairNeeded = Boolean(repair) || latestClass === "adapter_defect";
       return {
         retailerSku: row.retailerSku,
         canonicalUrl: row.canonicalUrl,

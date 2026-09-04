@@ -216,7 +216,8 @@ export type PopupOperationStage =
   | "reconnecting"
   | "opening_cart"
   | "updating"
-  | "sharing";
+  | "sharing"
+  | "saving";
 
 export interface PopupHealthState {
   connected?: boolean;
@@ -229,6 +230,8 @@ export interface PopupHealthState {
   executionMode?: string;
   actionsPaused?: boolean;
   chromeMutationEnabled?: boolean;
+  localEvidenceCapsules?: boolean;
+  evidenceCapsuleTransport?: "loopback" | "none";
   trackalackerPush?: {
     ready?: boolean;
     state?: string;
@@ -636,6 +639,7 @@ export interface PopupViewModel {
   menu: {
     syncProducts: boolean;
     shareEvidence: boolean;
+    saveRepairPage: boolean;
     checkUpdates: boolean;
   };
 }
@@ -643,6 +647,7 @@ export interface PopupViewModel {
 export type PopupContextMenuCommand =
   | "open_yoink"
   | "inspect_product"
+  | "save_repair_page"
   | "inspect_drawings"
   | "reconnect_trackalacker"
   | "sync_products"
@@ -674,6 +679,7 @@ function operationLabel(action: PopupActionId, stage: PopupOperationStage): stri
   if (stage === "opening_cart") return action === "open_purchase" ? "Opening Walmart…" : "Opening cart…";
   if (stage === "updating") return "Checking update…";
   if (stage === "sharing") return "Sharing…";
+  if (stage === "saving") return "Saving…";
   return null;
 }
 
@@ -1019,6 +1025,8 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     menu: {
       syncProducts: health.connected === true && health.paired === true,
       shareEvidence: hardBlocker === null && input.page.kind === "product" && sharingRetailers.has(input.page.retailerId),
+      saveRepairPage: !input.production && hardBlocker === null && input.page.kind === "product"
+        && health.localEvidenceCapsules === true && health.evidenceCapsuleTransport === "loopback",
       checkUpdates: !input.production && health.connected === true
     }
   };
@@ -1029,6 +1037,8 @@ export function deriveContextMenuCommands(input: PopupViewInput): PopupContextMe
   const commands: PopupContextMenuCommand[] = ["open_yoink"];
   if (view.hardBlocker === null) {
     if (input.page.kind === "product") commands.push("inspect_product");
+    if (!input.production && input.page.kind === "product" && input.health?.localEvidenceCapsules === true
+      && input.health?.evidenceCapsuleTransport === "loopback") commands.push("save_repair_page");
     if (input.page.kind === "walmart_draw") commands.push("inspect_drawings");
     commands.push(input.health?.trackalackerPush?.ready === true
       ? "sync_products" : "reconnect_trackalacker");

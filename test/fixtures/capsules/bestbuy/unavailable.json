@@ -1,0 +1,23 @@
+{
+  "capsuleId": "cap_promoted_bestbuy_unavailable",
+  "capturedAt": "2026-09-04T22:06:00.000Z",
+  "url": "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149",
+  "retailerId": "bestbuy",
+  "retailerSku": "6588149",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "bestbuy-observer-v10",
+  "addAdapterVersion": "bestbuy-add-v11",
+  "packVersion": "bestbuy-pack-v1",
+  "sha256": "a59f8a7dfdab6c7d8baf54f3ec06afdcf7c6795b3ef97b662944dcc75468b413",
+  "expectations": {
+    "outcome": "rejected",
+    "failureStage": "availability_binding",
+    "reasonCode": "listing_unavailable_layout",
+    "availability": "out_of_stock",
+    "sellerType": "first_party",
+    "fulfillment": "unknown"
+  },
+  "notes": "Promoted from a sanitized Best Buy unavailable page capture.",
+  "allowReason": ""
+}

@@ -3,7 +3,7 @@ import {
   type CartInventoryEvidence,
   type LiveOfferObservation
 } from "../../browser-safety/src/index.js";
-import { AMAZON_OBSERVER_VERSION, type Fulfillment, type SellerType } from "../../contracts/src/index.js";
+import { AMAZON_OBSERVER_VERSION, type AdapterEnvironment, type Fulfillment, type SellerType } from "../../contracts/src/index.js";
 import {
   amazonOfferBinding,
   extractRetailerSku,
@@ -84,11 +84,12 @@ export function amazonAddBinding(
   documentValue: Document,
   urlValue: string,
   expectedAsin: string,
-  requiredFulfillment: Fulfillment
+  requiredFulfillment: Fulfillment,
+  environment?: AdapterEnvironment
 ): { control: Element; offerListingId: string } | null {
   if (requiredFulfillment !== "shipping" && requiredFulfillment !== "pickup") return null;
   if (amazonInteractiveBlock(documentValue, urlValue)) return null;
-  return amazonOfferBinding(documentValue, urlValue, expectedAsin, requiredFulfillment);
+  return amazonOfferBinding(documentValue, urlValue, expectedAsin, requiredFulfillment, environment);
 }
 
 export function observeAmazonOffer(
@@ -96,7 +97,8 @@ export function observeAmazonOffer(
   urlValue: string,
   expectedAsin: string,
   requiredFulfillment: Fulfillment,
-  observedAt = new Date().toISOString()
+  observedAt = new Date().toISOString(),
+  environment?: AdapterEnvironment
 ): LiveOfferObservation {
   const observation = observeRetailerOffer(
     documentValue,
@@ -104,7 +106,8 @@ export function observeAmazonOffer(
     "amazon",
     expectedAsin,
     requiredFulfillment,
-    observedAt
+    observedAt,
+    environment
   );
   return { ...observation, pageKind: amazonPageKind(urlValue) };
 }

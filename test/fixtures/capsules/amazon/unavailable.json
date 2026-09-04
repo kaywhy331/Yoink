@@ -1,0 +1,24 @@
+{
+  "capsuleId": "cap_promoted_amazon_unavailable",
+  "capturedAt": "2026-09-04T22:05:00.000Z",
+  "url": "https://www.amazon.com/dp/B0GYTRYV7P",
+  "retailerId": "amazon",
+  "retailerSku": "B0GYTRYV7P",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "amazon-observer-v8",
+  "addAdapterVersion": "amazon-add-v9",
+  "packVersion": "amazon-pack-v1",
+  "sha256": "63696810a5cfeb6cdd555c09dbd397542d54aae52c97d0cb4c6c24befd9eaf9c",
+  "expectations": {
+    "outcome": "rejected",
+    "failureStage": "availability_binding",
+    "reasonCode": "listing_unavailable_layout",
+    "availability": "out_of_stock",
+    "unitPriceCents": 2186,
+    "sellerType": "first_party",
+    "fulfillment": "shipping"
+  },
+  "notes": "Promoted from a sanitized Amazon unavailable page capture.",
+  "allowReason": ""
+}

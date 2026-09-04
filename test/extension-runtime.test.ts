@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
+import { gunzipSync, gzipSync } from "node:zlib";
 import test from "node:test";
 import { RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES } from "../packages/contracts/src/index.js";
 
@@ -51,6 +52,63 @@ function stableHash(...parts: Array<string | number>): string {
     hash.update("|", "utf8");
   }
   return hash.digest("hex");
+}
+
+function isRuntimeCapsuleInput(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const input = value as Record<string, unknown>;
+  return typeof input.trigger === "string"
+    && Boolean(input.diagnostic)
+    && typeof input.diagnostic === "object"
+    && !Array.isArray(input.diagnostic);
+}
+
+function runtimeCapsuleFixture(
+  input: Record<string, unknown>,
+  url: string,
+  sequence: number
+): Record<string, unknown> {
+  const snapshotHtml = "<!DOCTYPE html><html data-yoink-vis=\"1\"><head><meta itemprop=\"price\" content=\"59.99\" data-yoink-vis=\"1\" data-yoink-rect=\"0,0,0,0\"></head><body data-yoink-vis=\"1\"><button data-testid=\"add-to-cart\" data-yoink-vis=\"1\" data-yoink-rect=\"12,24,120,40\">Add to cart</button><input name=\"email\" value=\"\" data-yoink-vis=\"0\" data-yoink-rect=\"0,0,0,0\"></body></html>";
+  const compressed = gzipSync(snapshotHtml);
+  const diagnostic = input.diagnostic as Record<string, unknown>;
+  return {
+    contractVersion: 1,
+    id: `cap_runtimefixture${sequence}`,
+    capturedAt: new Date().toISOString(),
+    retailerId: input.retailerId,
+    retailerSku: input.retailerSku,
+    operation: diagnostic.operation,
+    trigger: input.trigger,
+    outcome: diagnostic.outcome,
+    failureStage: diagnostic.failureStage,
+    reasonCode: diagnostic.reasonCode,
+    observerVersion: input.observerVersion,
+    addAdapterVersion: input.addAdapterVersion,
+    packVersion: input.packVersion,
+    extensionVersion: input.extensionVersion,
+    url: url.split(/[?#]/, 1)[0],
+    viewport: { width: 1440, height: 900, devicePixelRatio: 2 },
+    requiredFulfillment: input.requiredFulfillment,
+    diagnostic,
+    trace: input.trace,
+    snapshot: {
+      encoding: "gzip+base64",
+      bytes: compressed.length,
+      sha256: createHash("sha256").update(compressed).digest("hex"),
+      html: compressed.toString("base64")
+    },
+    redactions: {
+      scriptsRemoved: 1,
+      jsonBlocksKept: 0,
+      keysRedacted: 1,
+      inputsCleared: 1,
+      iframesReduced: 0,
+      mediaStripped: 0,
+      textRedactions: 1
+    },
+    reductionApplied: [],
+    truncated: false
+  };
 }
 
 interface ObserverRecipeFixture {
@@ -584,6 +642,7 @@ interface HarnessOptions {
   targetPriceMissing?: boolean;
   targetPriceHydrationRetry?: boolean;
   targetUnavailable?: boolean;
+  targetInterstitial?: boolean;
 }
 
 async function waitFor(
@@ -927,6 +986,29 @@ function harness(options: HarnessOptions = {}) {
           return [];
         }
         const args = injection.args as unknown[] | undefined;
+        const capsuleInput = args?.[0];
+        if (isRuntimeCapsuleInput(capsuleInput)) {
+          return [{ frameId: 0, result: {
+            ok: true,
+            capsule: runtimeCapsuleFixture(
+              capsuleInput,
+              String(tabs.get(17)?.url || PRODUCT_URL),
+              injections.length
+            )
+          } }];
+        }
+        if (args?.length === 2 && typeof args[0] === "string" && typeof args[1] === "boolean"
+          && ["target", "walmart", "amazon", "bestbuy"].includes(args[0])) {
+          const observation = args[0] === "target" ? OBSERVATION
+            : args[0] === "walmart" ? WALMART_OBSERVATION
+              : args[0] === "amazon" ? AMAZON_OBSERVATION : BESTBUY_OBSERVATION;
+          return [{ frameId: 0, result: {
+            ok: true,
+            observation,
+            diagnostic: diagnosticFor(observation),
+            trace: [{ atMs: 0, phase: "identity", field: "retailerSku", source: "url", result: "matched" }]
+          } }];
+        }
         if (typeof args?.[0] === "string") hotPathTimeline.push(`operation:${args[0]}`);
         if (args?.[0] === "inspectRetailerSessionState") {
           const states = options.retailerSessionStates || [];
@@ -949,6 +1031,28 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: true }];
         }
         if (args?.[0] === "collectTargetShadowAttempt") {
+          if (options.targetInterstitial === true) {
+            targetObservationAttempts += 1;
+            const observation = {
+              ...OBSERVATION,
+              availability: "unknown",
+              addControlActionable: false,
+              securityChallenge: true,
+              interactiveBlock: ""
+            };
+            const diagnostic = {
+              ...diagnosticFor(observation),
+              outcome: "rejected",
+              failureStage: "interactive_block",
+              reasonCode: "security_challenge",
+              layout: {
+                ...diagnosticFor(observation).layout,
+                securityChallenge: true,
+                interactiveBlock: ""
+              }
+            };
+            return [{ frameId: 0, result: { ok: true, observation, diagnostic } }];
+          }
           if (options.targetUnavailable === true) {
             targetObservationAttempts += 1;
             const observation = {
@@ -980,7 +1084,12 @@ function harness(options: HarnessOptions = {}) {
               layout: { ...diagnosticFor(OBSERVATION).layout, priceCandidateCount: 0 }
             }
             : diagnosticFor(OBSERVATION);
-          return [{ frameId: 0, result: { ok: true, observation, diagnostic } }];
+          return [{ frameId: 0, result: {
+            ok: true,
+            observation,
+            diagnostic,
+            trace: [{ atMs: 1, phase: "binding", field: "unitPrice", source: "selector_pack", result: priceMissing ? "missing" : "matched" }]
+          } }];
         }
         if (args?.[0] === "waitForTargetShadowHydration") {
           if (options.hydrationExecuteThrows) {
@@ -998,7 +1107,13 @@ function harness(options: HarnessOptions = {}) {
               layout: { ...diagnosticFor(OBSERVATION).layout, priceCandidateCount: 0 }
             }
             : diagnosticFor(OBSERVATION);
-          return [{ frameId: 0, result: { ok: true, observation, diagnostic, domChanged: true } }];
+          return [{ frameId: 0, result: {
+            ok: true,
+            observation,
+            diagnostic,
+            domChanged: true,
+            trace: [{ atMs: 2, phase: "binding", field: "unitPrice", source: "selector_pack", result: priceMissing ? "missing" : "matched" }]
+          } }];
         }
         if (args?.[0] === "collectOperationDiagnostic") {
           const observation = args[1] === "target" ? OBSERVATION
@@ -1780,6 +1895,10 @@ function harness(options: HarnessOptions = {}) {
         diagnostic: { ...diagnostic, id: "adapter_diagnostic_fixture", layoutFingerprint: "f".repeat(64) }
       }), { status: 201 });
     }
+    if (url.includes("/devices/self/evidence-capsules/")) {
+      const capsule = JSON.parse(String(requestOptions.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ accepted: true, capsuleId: capsule.id }), { status: 202 });
+    }
     if (url.includes("/devices/self/community/nonces/")) {
       return new Response(JSON.stringify({ nonce: "N".repeat(43), expiresAt: new Date(Date.now() + 60_000).toISOString() }), { status: 201 });
     }
@@ -2171,6 +2290,80 @@ test("a Target price-binding block is posted through the repair incident diagnos
   assert.equal(body.attemptCount, 2);
   assert.equal(JSON.stringify(body).includes(PRODUCT_URL), false);
   assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
+});
+
+test("one local evidence capsule is captured after a failed observe", async () => {
+  const runtime = harness({ targetPriceMissing: true });
+  const response = await runtime.send({ type: "yoink:inspect-target" });
+  assert.equal(response.ok, true);
+
+  const capsulePosts = runtime.fetchCalls.filter((entry) =>
+    entry.url.endsWith("/devices/self/evidence-capsules/target"));
+  assert.equal(capsulePosts.length, 1);
+  const capsule = JSON.parse(String(capsulePosts[0]?.options.body)) as Record<string, unknown>;
+  assert.equal(capsule.trigger, "diagnostic_failed");
+  assert.equal(capsule.outcome, "failed");
+  assert.equal(capsule.failureStage, "price_binding");
+  assert.ok(Array.isArray(capsule.trace) && capsule.trace.length > 0);
+
+  const snapshot = capsule.snapshot as Record<string, unknown>;
+  const html = gunzipSync(Buffer.from(String(snapshot.html), "base64")).toString("utf8");
+  assert.match(html, /data-yoink-vis="[01]"/);
+  assert.match(html, /data-yoink-rect="12,24,120,40"/);
+  assert.doesNotMatch(html, /<script|\son[a-z]+=|javascript:|data:|@[A-Za-z0-9.-]+\.|\b\d{3}[-.) ]\d{3}[-. ]\d{4}\b/i);
+  assert.match(html, /<input[^>]+value=""/);
+
+  const capture = runtime.injections.find((entry) => {
+    const input = (entry.args as unknown[] | undefined)?.[0] as Record<string, unknown> | undefined;
+    return input?.trigger === "diagnostic_failed";
+  });
+  assert.equal(((capture?.args as unknown[])[0] as Record<string, unknown>).budgetMs, 1_500);
+  assert.equal((capture?.target as Record<string, unknown>).tabId, 17);
+  assert.equal(capture?.world, "ISOLATED");
+});
+
+test("interactive store challenges never trigger an automatic evidence capsule", async () => {
+  const runtime = harness({ targetInterstitial: true });
+  const response = await runtime.send({ type: "yoink:inspect-target" });
+  assert.equal(response.ok, true);
+  assert.equal((response.diagnostic as Record<string, unknown>).failureStage, "interactive_block");
+  assert.equal((response.diagnostic as Record<string, unknown>).reasonCode, "security_challenge");
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.includes("/evidence-capsules/")), false);
+  assert.equal(runtime.injections.some((entry) =>
+    Array.isArray(entry.files) && entry.files.includes("evidence-capsule.js")), false);
+});
+
+test("manual repair-page capture works for every guarded store", async () => {
+  for (const [retailerId, activeUrl] of Object.entries({
+    target: PRODUCT_URL,
+    walmart: WALMART_PRODUCT_URL,
+    amazon: AMAZON_PRODUCT_URL,
+    bestbuy: BESTBUY_PRODUCT_URL
+  })) {
+    const runtime = harness({ activeUrl });
+    const response = await runtime.send({ type: "yoink:save-repair-page" });
+    assert.equal(response.ok, true, retailerId);
+    assert.equal(response.saved, true, retailerId);
+    assert.match(String(response.capsuleId), /^cap_/);
+    const posts = runtime.fetchCalls.filter((entry) =>
+      entry.url.endsWith(`/devices/self/evidence-capsules/${retailerId}`));
+    assert.equal(posts.length, 1, retailerId);
+    const capsule = JSON.parse(String(posts[0]?.options.body)) as Record<string, unknown>;
+    assert.equal(capsule.trigger, "manual", retailerId);
+    assert.ok(Array.isArray(capsule.trace) && capsule.trace.length === 1, retailerId);
+  }
+});
+
+test("the production companion cannot inject or transport repair-page capsules", async () => {
+  const runtime = harness({ runtimeProfile: "production", targetPriceMissing: true });
+  const observed = await runtime.send({ type: "yoink:inspect-target" });
+  assert.equal(observed.ok, true);
+  const manual = await runtime.send({ type: "yoink:save-repair-page" });
+  assert.equal(manual.ok, false);
+  assert.match(String(manual.message), /local companion/);
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.includes("/evidence-capsules/")), false);
+  assert.equal(runtime.injections.some((entry) =>
+    Array.isArray(entry.files) && entry.files.includes("evidence-capsule.js")), false);
 });
 
 test("a Target observer startup error is immediately posted to the incident diagnostic path", async () => {
@@ -3148,6 +3341,7 @@ test("the service worker records one sanitized Target add rehearsal without clic
     "observedAt",
     "observerVersion",
     "outcome",
+    "packVersion",
     "reasonCode",
     "shadowObservationId"
   ]);
@@ -4496,7 +4690,7 @@ test("the extension action menu stays small and derives visibility from the shar
   const runtime = harness({ healthVersion: "0.3.0", trackalackerPush: true });
   assert.equal(runtime.permissionRequests.length, 0);
   runtime.fireStartup();
-  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  await waitFor(() => runtime.contextMenuDefinitions.size === 7, "Context menu commands were not registered.");
   await waitFor(
     () => runtime.contextMenuDefinitions.get("yoink-inspect-product")?.visible === true,
     "Context menu health was not applied."
@@ -4504,6 +4698,7 @@ test("the extension action menu stays small and derives visibility from the shar
   assert.deepEqual([...runtime.contextMenuDefinitions.keys()], [
     "yoink-open",
     "yoink-inspect-product",
+    "yoink-save-repair-page",
     "yoink-inspect-drawings",
     "yoink-reconnect-trackalacker",
     "yoink-sync-products",
@@ -4531,7 +4726,7 @@ test("the extension action menu stays small and derives visibility from the shar
 test("the extension action menu opens the dashboard and Settings workspace distinctly", async () => {
   const runtime = harness({ healthVersion: "0.3.0", trackalackerPush: true });
   runtime.fireStartup();
-  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  await waitFor(() => runtime.contextMenuDefinitions.size === 7, "Context menu commands were not registered.");
   runtime.clickContextMenu("yoink-open");
   await waitFor(
     () => runtime.tabUrls().includes("http://127.0.0.1:32991/#home"),
@@ -4552,7 +4747,7 @@ test("the context-menu product sync requests only TrackaLacker access", async ()
     permissionRequest: true
   });
   runtime.fireStartup();
-  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  await waitFor(() => runtime.contextMenuDefinitions.size === 7, "Context menu commands were not registered.");
   runtime.clickContextMenu("yoink-sync-products");
   await waitFor(() => runtime.permissionRequests.length === 1, "TrackaLacker access was not requested.");
   assert.equal(
@@ -4570,7 +4765,7 @@ test("a context-menu inspection revalidates state and page, requests exact acces
     permissionRequest: true
   });
   runtime.fireStartup();
-  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  await waitFor(() => runtime.contextMenuDefinitions.size === 7, "Context menu commands were not registered.");
   runtime.clickContextMenu("yoink-inspect-product", PRODUCT_URL);
   await waitFor(() => Boolean(runtime.storage.yoinkPopupResultV1), "The context-menu result was not persisted.");
   assert.equal(runtime.permissionRequests.length, 1);
@@ -4663,7 +4858,7 @@ test("a stale context-menu label never authorizes inspection after the active pa
     permissionRequest: true
   });
   runtime.fireStartup();
-  await waitFor(() => runtime.contextMenuDefinitions.size === 6, "Context menu commands were not registered.");
+  await waitFor(() => runtime.contextMenuDefinitions.size === 7, "Context menu commands were not registered.");
   const injectionCount = runtime.injections.length;
   runtime.setActiveUrl("https://example.com/not-a-product");
   runtime.clickContextMenu("yoink-inspect-product", PRODUCT_URL);

@@ -1,14 +1,41 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import { resolveExtensionRelease } from "../apps/api/src/extension-release.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import {
+  AMAZON_ADD_ADAPTER_VERSION,
+  BESTBUY_ADD_ADAPTER_VERSION,
+  RETAILER_OBSERVER_VERSIONS,
+  TARGET_ADD_ADAPTER_VERSION,
+  WALMART_ADD_ADAPTER_VERSION,
+  WALMART_DRAW_OBSERVER_VERSION
+} from "../packages/contracts/src/index.js";
+
+test("the companion loads one generated adapter-version source with no worker literals", () => {
+  const extensionRoot = join(process.cwd(), "apps", "extension");
+  const background = readFileSync(join(extensionRoot, "background.js"), "utf8");
+  assert.doesNotMatch(background, /-(?:add|observer)-v\d+/);
+  assert.match(background, /importScripts\([^)]*adapter-versions\.js/);
+  const scope: { YoinkAdapterVersions?: Record<string, any>; globalThis?: unknown } = {};
+  scope.globalThis = scope;
+  runInNewContext(readFileSync(join(extensionRoot, "adapter-versions.js"), "utf8"), scope);
+  assert.deepEqual({ ...scope.YoinkAdapterVersions?.observer }, { ...RETAILER_OBSERVER_VERSIONS });
+  assert.deepEqual({ ...scope.YoinkAdapterVersions?.add }, {
+    target: TARGET_ADD_ADAPTER_VERSION,
+    walmart: WALMART_ADD_ADAPTER_VERSION,
+    amazon: AMAZON_ADD_ADAPTER_VERSION,
+    bestbuy: BESTBUY_ADD_ADAPTER_VERSION
+  });
+  assert.equal(scope.YoinkAdapterVersions?.walmartDrawObserver, WALMART_DRAW_OBSERVER_VERSION);
+});
 
 test("the local extension release descriptor binds one exact versioned archive and hash", () => {
   const releaseRoot = mkdtempSync(join(tmpdir(), "yoink-release-"));

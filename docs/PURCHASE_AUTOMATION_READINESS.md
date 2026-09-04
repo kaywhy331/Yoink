@@ -62,6 +62,14 @@ path. The lane also reports `blockedReason` (`no_candidate` or
 `consecutiveNonPassingRuns`, which feeds the `qualification_stalled` operator
 alert family.
 
+From 1.22.0, contract and selector-pack versions are independent. A packaged
+selector change leaves the existing authorization row intact but reports
+`pack_unverified`, disables cart adds, and requests an automatic no-click
+store check. One passing check on the current packaged pack records
+`retailer_adapter_pack_verified` and renews the store without an admin action.
+A contract-version change still retires the store as before, and initial
+activation and manual retirement remain manual.
+
 ## Meaning of armed
 
 “Guarded add is armed” means the static prerequisites are present. It does not

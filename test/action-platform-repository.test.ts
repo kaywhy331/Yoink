@@ -466,7 +466,7 @@ test("store requalification replays unresolved observer failures and reuses acti
       operation: "observe",
       outcome: "failed",
       failureStage: "offer_binding",
-      reasonCode: "selected_offer_binding_unresolved",
+      reasonCode: "offer_binding_missing",
       attemptCount: 1,
       domChanged: false,
       layout: {
@@ -573,7 +573,7 @@ test("store requalification prioritizes unresolved products across distinct obse
         operation: sample.operation,
         outcome: "failed",
         failureStage: "offer_binding",
-        reasonCode: "selected_offer_binding_unresolved",
+        reasonCode: "offer_binding_missing",
         attemptCount: 1,
         domChanged: false,
         layout: layout(sample.scopeKind, sample.addControlCount)

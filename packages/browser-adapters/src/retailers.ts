@@ -4,6 +4,8 @@ import {
   BESTBUY_OBSERVER_VERSION,
   RETAILER_OBSERVER_VERSIONS,
   WALMART_OBSERVER_VERSION,
+  type AdapterEnvironment,
+  type AdapterTraceEntry,
   type Fulfillment,
   type RetailerAdapterLayoutEvidence,
   type RetailerAdapterRepairLandmark,
@@ -12,18 +14,65 @@ import {
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
 import { selectedOfferScope } from "./selected-offer.js";
+import { selectorsFor } from "./selector-packs.js";
 
 export { AMAZON_OBSERVER_VERSION, BESTBUY_OBSERVER_VERSION, WALMART_OBSERVER_VERSION };
+
+let activeAdapterEnvironment: AdapterEnvironment | undefined;
+
+function withAdapterEnvironment<T>(environment: AdapterEnvironment, work: () => T): T {
+  const previous = activeAdapterEnvironment;
+  activeAdapterEnvironment = environment;
+  try {
+    return work();
+  } finally {
+    activeAdapterEnvironment = previous;
+  }
+}
+
+function recordTrace(entry: AdapterTraceEntry): void {
+  activeAdapterEnvironment?.trace?.record(entry);
+}
+
+function selectorTrace(
+  step: AdapterTraceEntry["step"],
+  root: ParentNode,
+  selector: string,
+  options: Partial<AdapterTraceEntry> = {}
+): void {
+  if (!activeAdapterEnvironment?.trace) return;
+  let matches: Element[] = [];
+  try {
+    matches = [...root.querySelectorAll(selector)];
+  } catch {
+    recordTrace({ step, selector, matched: 0, visible: 0, scoped: 0, reject: "pattern_mismatch", ...options });
+    return;
+  }
+  const visibleMatches = matches.filter(visible);
+  recordTrace({
+    step,
+    selector,
+    matched: matches.length,
+    visible: visibleMatches.length,
+    scoped: root.nodeType === 9 ? 0 : visibleMatches.length,
+    ...(matches.length > 0 && visibleMatches.length === 0 ? { reject: "not_visible" as const } : {}),
+    ...options
+  });
+}
+
+function selectorListTrace(step: AdapterTraceEntry["step"], root: ParentNode, selectors: readonly string[]): void {
+  for (const selector of selectors) selectorTrace(step, root, selector);
+}
 
 interface RetailerObserverConfig {
   retailerId: Exclude<SupportedRetailerId, "target">;
   domains: string[];
   skuPattern: RegExp;
   skuFromUrl: (url: URL) => string;
-  addSelectors: string[];
+  addSelectors: readonly string[];
   addIntentPattern?: RegExp;
-  priceSelectors: string[];
-  sellerSelectors: string[];
+  priceSelectors: readonly string[];
+  sellerSelectors: readonly string[];
   firstPartyPattern: RegExp;
   marketplacePattern: RegExp;
   shippingPattern: RegExp;
@@ -44,22 +93,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     skuPattern: /^\d{5,20}$/,
     skuFromUrl: (url) => url.pathname.match(/\/ip\/(?:[^/?#]+\/)?(\d{5,20})(?:\/|$)/i)?.[1]
       || url.searchParams.get("items")?.match(/^\d{5,20}$/)?.[0] || "",
-    addSelectors: [
-      "button[data-automation-id='atc']",
-      "button[data-testid='add-to-cart-button']",
-      "button[aria-label*='add to cart' i]"
-    ],
-    priceSelectors: [
-      "[data-automation-id='product-price']",
-      "[data-testid='price-wrap']",
-      "meta[itemprop='price']",
-      "[itemprop='price']"
-    ],
-    sellerSelectors: [
-      "[data-testid='seller-display-name']",
-      "[data-automation-id='seller-name']",
-      "[data-testid*='seller' i]"
-    ],
+    addSelectors: selectorsFor("walmart", "addControl"),
+    priceSelectors: selectorsFor("walmart", "price"),
+    sellerSelectors: selectorsFor("walmart", "seller"),
     firstPartyPattern: /sold\s+(?:and|&)\s+shipped\s+by\s+walmart(?:\.com)?|sold\s+by\s+walmart(?:\.com)?(?:\s+(?:and|&)\s+(?:shipped|fulfilled)\s+by\s+walmart(?:\.com)?)?/i,
     marketplacePattern: /sold\s+(?:and|&)\s+shipped\s+by\s+(?!walmart\b)|sold\s+by\s+(?!walmart\b)|marketplace\s+seller/i,
     shippingPattern: /shipping|ship to|delivery/i,
@@ -74,24 +110,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     skuPattern: /^[A-Z0-9]{10}$/,
     skuFromUrl: (url) => (url.pathname.match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})(?:\/|$)/i)?.[1]
       || url.searchParams.get("asin")?.match(/^[A-Z0-9]{10}$/i)?.[0] || "").toUpperCase(),
-    addSelectors: [
-      "#add-to-cart-button",
-      "input[name='submit.add-to-cart']",
-      "button[name='submit.add-to-cart']"
-    ],
-    priceSelectors: [
-      "#corePrice_feature_div .a-offscreen",
-      "#priceblock_ourprice",
-      "#priceblock_dealprice",
-      ".a-price .a-offscreen",
-      "meta[itemprop='price']"
-    ],
-    sellerSelectors: [
-      "#merchant-info",
-      "#sellerProfileTriggerId",
-      "[data-feature-name='shipsFromSoldBy']",
-      "#tabular-buybox"
-    ],
+    addSelectors: selectorsFor("amazon", "addControl"),
+    priceSelectors: selectorsFor("amazon", "price"),
+    sellerSelectors: selectorsFor("amazon", "seller"),
     firstPartyPattern: /ships\s+from\s+amazon(?:\.com)?[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?|sold\s+by\s+amazon(?:\.com)?[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?/i,
     marketplacePattern: /sold\s+by\s+(?!amazon(?:\.com)?\b)|seller:\s*(?!amazon(?:\.com)?\b)/i,
     shippingPattern: /shipping|delivery|ships from/i,
@@ -107,33 +128,10 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     skuFromUrl: (url) => url.pathname.match(/^\/product\/[^/]+\/(?:[^/]+\/sku\/)?(\d{5,20})(?:\/|$)/i)?.[1]
       || url.pathname.match(/^\/site\/[^/]+\/(\d{5,20})\.p(?:\/|$)/i)?.[1]
       || url.searchParams.get("skuId")?.match(/^\d{5,20}$/)?.[0] || "",
-    addSelectors: [
-      "button.add-to-cart-button",
-      "button[data-button-state='ADD_TO_CART']",
-      "button[data-testid*='add-to-cart' i]",
-      "button[data-test-id*='add-to-cart' i]",
-      "button[data-automation-id*='add-to-cart' i]",
-      "button[name*='add-to-cart' i]",
-      "button[aria-label*='add to cart' i]",
-      "input[type='submit'][value*='add to cart' i]",
-      "button"
-    ],
+    addSelectors: selectorsFor("bestbuy", "addControl"),
     addIntentPattern: /\b(?:add(?:\s+(?:item\s+)?to)?\s+(?:cart|bag)|pre[ -]?order(?:\s+now|\s+(?:item\s+)?to\s+(?:cart|bag))?|atc)\b/i,
-    priceSelectors: [
-      "[data-testid='customer-price']",
-      "[data-testid*='customer-price' i]",
-      ".priceView-customer-price",
-      ".priceView-hero-price",
-      "meta[itemprop='price']",
-      "[itemprop='price']"
-    ],
-    sellerSelectors: [
-      "[data-testid='sold-by']",
-      "[data-testid*='sold-by' i]",
-      "[data-testid*='seller' i]",
-      "[class*='seller' i]",
-      "[data-track*='marketplace' i]"
-    ],
+    priceSelectors: selectorsFor("bestbuy", "price"),
+    sellerSelectors: selectorsFor("bestbuy", "seller"),
     firstPartyPattern: /sold\s+(?:and|&)\s+shipped\s+by\s+best\s*buy|sold\s+by\s+best\s*buy/i,
     marketplacePattern: /sold\s+(?:and|&)\s+shipped\s+by\s+(?!best\s*buy\b)|sold\s+by\s+(?!best\s*buy\b)|marketplace\s+seller/i,
     shippingPattern: /shipping|ship to|delivery/i,
@@ -147,22 +145,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     domains: ["disneystore.com"],
     skuPattern: /^\d{10,20}$/,
     skuFromUrl: (url) => url.pathname.match(/-(\d{10,20})\.html(?:\/|$)/i)?.[1] || "",
-    addSelectors: [
-      "button[data-testid*='add-to-cart' i]",
-      "button[data-testid*='add-to-bag' i]",
-      "button[name*='add-to-cart' i]",
-      "button[aria-label*='add to bag' i]",
-      "button[aria-label*='add to cart' i]",
-      "button"
-    ],
-    priceSelectors: [
-      "meta[itemprop='price']",
-      "meta[property='product:price:amount']",
-      "[itemprop='price']",
-      "[data-testid*='product-price' i]",
-      "[class*='product-price' i]"
-    ],
-    sellerSelectors: [],
+    addSelectors: selectorsFor("disney", "addControl"),
+    priceSelectors: selectorsFor("disney", "price"),
+    sellerSelectors: selectorsFor("disney", "seller"),
     firstPartyPattern: /sold\s+by\s+disney\s*store/i,
     marketplacePattern: /sold\s+by\s+(?!disney\s*store\b)/i,
     shippingPattern: /shipping|ship to|delivery/i,
@@ -178,21 +163,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     skuFromUrl: (url) => /^\/en-US\/products\//i.test(url.pathname)
       ? url.pathname.match(/-(\d{5,20})(?:\/|$)/i)?.[1] || ""
       : "",
-    addSelectors: [
-      "button[data-testid*='add-to-cart' i]",
-      "button[name*='add-to-cart' i]",
-      "button[aria-label*='add to cart' i]",
-      "button[class*='add-to-cart' i]",
-      "button"
-    ],
-    priceSelectors: [
-      "meta[itemprop='price']",
-      "meta[property='product:price:amount']",
-      "[itemprop='price']",
-      "[data-testid*='price' i]",
-      "[class*='product-price' i]"
-    ],
-    sellerSelectors: [],
+    addSelectors: selectorsFor("ravensburger", "addControl"),
+    priceSelectors: selectorsFor("ravensburger", "price"),
+    sellerSelectors: selectorsFor("ravensburger", "seller"),
     firstPartyPattern: /sold\s+by\s+ravensburger/i,
     marketplacePattern: /sold\s+by\s+(?!ravensburger\b)/i,
     shippingPattern: /shipping|ship to|delivery/i,
@@ -206,21 +179,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     domains: ["merch.riotgames.com"],
     skuPattern: /^[A-Z0-9](?:[A-Z0-9-]{1,118}[A-Z0-9])?$/,
     skuFromUrl: (url) => url.pathname.match(/^\/en-us\/product\/([a-z0-9](?:[a-z0-9-]{1,118}[a-z0-9])?)\/?$/i)?.[1] || "",
-    addSelectors: [
-      "button[data-testid*='add-to-cart' i]",
-      "button[name*='add-to-cart' i]",
-      "button[aria-label*='add to cart' i]",
-      "button[class*='add-to-cart' i]",
-      "button"
-    ],
-    priceSelectors: [
-      "meta[itemprop='price']",
-      "meta[property='product:price:amount']",
-      "[itemprop='price']",
-      "[data-testid*='price' i]",
-      "[class*='product-price' i]"
-    ],
-    sellerSelectors: [],
+    addSelectors: selectorsFor("riot", "addControl"),
+    priceSelectors: selectorsFor("riot", "price"),
+    sellerSelectors: selectorsFor("riot", "seller"),
     firstPartyPattern: /sold\s+by\s+riot\s+games/i,
     marketplacePattern: /sold\s+by\s+(?!riot\s+games\b)/i,
     shippingPattern: /shipping|ships|delivery|fulfillment/i,
@@ -235,22 +196,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     skuPattern: /^[A-Z0-9]{10,20}$/,
     skuFromUrl: (url) => url.pathname.match(/^\/p\/-\/([a-z0-9]{10,20})(?:\/|$)/i)?.[1]
       || url.pathname.match(/^\/p\/([a-z0-9]{10,20})(?:\/|$)/i)?.[1] || "",
-    addSelectors: [
-      "button[data-testid*='add-to-cart' i]",
-      "button[name*='add-to-cart' i]",
-      "button[aria-label*='add to cart' i]",
-      "input[type='submit'][value*='add to cart' i]",
-      "button"
-    ],
-    priceSelectors: [
-      "meta[itemprop='price']",
-      "meta[property='product:price:amount']",
-      "[itemprop='price']",
-      "[data-testid*='price' i]",
-      "[class*='our-price' i]",
-      "[class*='sale-price' i]"
-    ],
-    sellerSelectors: [],
+    addSelectors: selectorsFor("booksamillion", "addControl"),
+    priceSelectors: selectorsFor("booksamillion", "price"),
+    sellerSelectors: selectorsFor("booksamillion", "seller"),
     firstPartyPattern: /sold\s+by\s+(?:bam!?|books-a-million|books\s+a\s+million)/i,
     marketplacePattern: /sold\s+by\s+(?!(?:bam!?|books-a-million|books\s+a\s+million)\b)/i,
     shippingPattern: /shipping|ship to|delivery/i,
@@ -264,24 +212,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     domains: ["fanatics.com"],
     skuPattern: /^\d{6,20}$/,
     skuFromUrl: fanaticsProductId,
-    addSelectors: [
-      "button[data-testid*='add-to-cart' i]",
-      "button[name*='add-to-cart' i]",
-      "button[aria-label*='add to cart' i]",
-      "button[class*='add-to-cart' i]",
-      "button"
-    ],
-    priceSelectors: [
-      "[data-talos='pdpProductPrice'] .money-value",
-      "[data-trk-id='pdp-price'] .money-value",
-      "meta[itemprop='price']",
-      "meta[property='product:price:amount']",
-      "[itemprop='price']",
-      "[data-testid*='price' i]",
-      "[class*='current-price' i]",
-      "[class*='sale-price' i]"
-    ],
-    sellerSelectors: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='shipping' i]"],
+    addSelectors: selectorsFor("fanatics", "addControl"),
+    priceSelectors: selectorsFor("fanatics", "price"),
+    sellerSelectors: selectorsFor("fanatics", "seller"),
     firstPartyPattern: /sold\s+by\s+fanatics|ships?\s+(?:from|by)\s+fanatics/i,
     marketplacePattern: /ships?\s+directly\s+from\s+a\s+trusted\s+partner|sold\s+by\s+(?!fanatics\b)/i,
     shippingPattern: /shipping|ships|delivery/i,
@@ -295,22 +228,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     domains: ["kohls.com"],
     skuPattern: /^\d{5,12}$/,
     skuFromUrl: (url) => url.pathname.match(/^\/product\/prd-(\d{5,12})\//i)?.[1] || "",
-    addSelectors: [
-      "button[data-testid*='add-to-cart' i]",
-      "button[name*='add-to-cart' i]",
-      "button[aria-label*='add to cart' i]",
-      "button[class*='add-to-cart' i]",
-      "button"
-    ],
-    priceSelectors: [
-      "meta[itemprop='price']",
-      "meta[property='product:price:amount']",
-      "[itemprop='price']",
-      "[data-testid*='sale-price' i]",
-      "[data-testid*='price' i]",
-      "[class*='sale-price' i]"
-    ],
-    sellerSelectors: ["[data-testid*='seller' i]", "[class*='seller' i]"],
+    addSelectors: selectorsFor("kohls", "addControl"),
+    priceSelectors: selectorsFor("kohls", "price"),
+    sellerSelectors: selectorsFor("kohls", "seller"),
     firstPartyPattern: /sold\s+by\s+kohl'?s|ships?\s+(?:from|by)\s+kohl'?s/i,
     marketplacePattern: /sold\s+by\s+(?!kohl'?s\b)|marketplace\s+seller/i,
     shippingPattern: /ship to me|shipping|delivery/i,
@@ -326,22 +246,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     skuFromUrl: (url) => /^\/shop\/product\//i.test(url.pathname)
       ? url.searchParams.get("ID")?.match(/^\d{5,20}$/)?.[0] || url.searchParams.get("id")?.match(/^\d{5,20}$/)?.[0] || ""
       : "",
-    addSelectors: [
-      "button[data-testid*='add-to-bag' i]",
-      "button[name*='add-to-bag' i]",
-      "button[aria-label*='add to bag' i]",
-      "button[class*='add-to-bag' i]",
-      "button"
-    ],
-    priceSelectors: [
-      "meta[itemprop='price']",
-      "meta[property='product:price:amount']",
-      "[itemprop='price']",
-      "[data-testid*='sale-price' i]",
-      "[data-testid*='price' i]",
-      "[class*='sale-price' i]"
-    ],
-    sellerSelectors: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='marketplace' i]"],
+    addSelectors: selectorsFor("macys", "addControl"),
+    priceSelectors: selectorsFor("macys", "price"),
+    sellerSelectors: selectorsFor("macys", "seller"),
     firstPartyPattern: /(?:shipped\s+and\s+)?sold\s+by\s+macy'?s/i,
     marketplacePattern: /(?:shipped\s+and\s+)?sold\s+by\s+(?!macy'?s\b)/i,
     shippingPattern: /shipping|ship to|delivery/i,
@@ -355,27 +262,10 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     domains: ["p-bandai.com"],
     skuPattern: /^[A-Z]\d{10}$/,
     skuFromUrl: (url) => url.pathname.match(/^\/us\/item\/([a-z]\d{10})(?:\/|$)/i)?.[1] || "",
-    addSelectors: [
-      "button[data-testid*='add-to-cart' i]",
-      "button[data-automation-id*='add-to-cart' i]",
-      "button[aria-label*='add to cart' i]",
-      "button[class*='add-cart' i]",
-      "button[class*='pre-order' i]",
-      "a[class*='add-cart' i]",
-      "a[class*='pre-order' i]",
-      "button",
-      "a[role='button']"
-    ],
+    addSelectors: selectorsFor("pbandai", "addControl"),
     addIntentPattern: /\b(?:add(?:\s+(?:item\s+)?to)?\s+(?:cart|bag)|pre[ -]?order(?:\s+now|\s+(?:item\s+)?to\s+(?:cart|bag))?|atc)\b/i,
-    priceSelectors: [
-      "meta[itemprop='price']",
-      "meta[property='product:price:amount']",
-      "[itemprop='price']",
-      "[data-testid*='price' i]",
-      "[class*='item-price' i]",
-      "[class*='product-price' i]"
-    ],
-    sellerSelectors: [],
+    priceSelectors: selectorsFor("pbandai", "price"),
+    sellerSelectors: selectorsFor("pbandai", "seller"),
     firstPartyPattern: /sold\s+by\s+premium\s+bandai/i,
     marketplacePattern: /sold\s+by\s+(?!premium\s+bandai\b)/i,
     shippingPattern: /shipping|ships|delivery/i,
@@ -389,23 +279,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     domains: ["pokemoncenter.com"],
     skuPattern: /^\d{2,3}-\d{5}(?:-\d{3})?$/,
     skuFromUrl: (url) => url.pathname.match(/^\/product\/(\d{2,3}-\d{5}(?:-\d{3})?)(?:\/|$)/i)?.[1] || "",
-    addSelectors: [
-      "button[data-testid*='add-to-cart' i]",
-      "button[data-automation-id*='add-to-cart' i]",
-      "button[name*='add-to-cart' i]",
-      "button[aria-label*='add to cart' i]",
-      "button[class*='add-to-cart' i]",
-      "button"
-    ],
-    priceSelectors: [
-      "meta[itemprop='price']",
-      "meta[property='product:price:amount']",
-      "[itemprop='price']",
-      "[data-testid*='price' i]",
-      "[class*='product-price' i]",
-      "[class*='sales-price' i]"
-    ],
-    sellerSelectors: [],
+    addSelectors: selectorsFor("pokemoncenter", "addControl"),
+    priceSelectors: selectorsFor("pokemoncenter", "price"),
+    sellerSelectors: selectorsFor("pokemoncenter", "seller"),
     firstPartyPattern: /sold\s+by\s+pok[eé]mon\s+center/i,
     marketplacePattern: /sold\s+by\s+(?!pok[eé]mon\s+center\b)/i,
     shippingPattern: /shipping|ships|delivery/i,
@@ -473,6 +349,13 @@ function sellerElementText(value: Element | null, maximum = 2_000): string {
 
 function visible(element: Element | null): element is Element {
   if (!element) return false;
+  if (activeAdapterEnvironment?.isVisible) {
+    try {
+      return activeAdapterEnvironment.isVisible(element);
+    } catch {
+      return false;
+    }
+  }
   let current: Element | null = element;
   while (current) {
     if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") return false;
@@ -485,6 +368,7 @@ function visible(element: Element | null): element is Element {
 
 function renderedVisible(element: Element | null): element is Element {
   if (!visible(element)) return false;
+  if (activeAdapterEnvironment?.isVisible) return true;
   const view = element.ownerDocument.defaultView;
   if (!view?.getComputedStyle) return true;
   let current: Element | null = element;
@@ -506,7 +390,7 @@ function actionable(element: Element | null): element is Element {
     && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text(element, 300));
 }
 
-function queryVisible(root: ParentNode, selectors: string[]): Element | null {
+function queryVisible(root: ParentNode, selectors: readonly string[]): Element | null {
   for (const selector of selectors) {
     const found = [...root.querySelectorAll(selector)].find(visible);
     if (found) return found;
@@ -514,7 +398,7 @@ function queryVisible(root: ParentNode, selectors: string[]): Element | null {
   return null;
 }
 
-function queryRendered(root: ParentNode, selectors: string[]): Element | null {
+function queryRendered(root: ParentNode, selectors: readonly string[]): Element | null {
   for (const selector of selectors) {
     const found = [...root.querySelectorAll(selector)].find(renderedVisible);
     if (found) return found;
@@ -595,7 +479,7 @@ export function parseRetailerPriceElement(element: Element): number | null {
   return null;
 }
 
-function readPrice(root: ParentNode, selectors: string[]): number | null {
+function readPrice(root: ParentNode, selectors: readonly string[]): number | null {
   for (const selector of selectors) {
     for (const element of root.querySelectorAll(selector)) {
       if (element.tagName !== "META" && !visible(element)) continue;
@@ -695,7 +579,19 @@ function retailerUnavailableShell(document: Document): boolean {
     .test(text(document.body, 20_000));
 }
 
-export function retailerInteractiveBlock(document: Document, urlValue: string): LiveOfferObservation["interactiveBlock"] {
+export function retailerInteractiveBlock(
+  document: Document,
+  urlValue: string,
+  environment?: AdapterEnvironment
+): LiveOfferObservation["interactiveBlock"] {
+  if (environment) return withAdapterEnvironment(environment, () => retailerInteractiveBlock(document, urlValue));
+  selectorListTrace("interactive_block", document, [
+    "input[autocomplete='one-time-code']", "input[name*='otp' i]",
+    "form[action*='login' i] input[type='password']", "input[autocomplete='current-password']",
+    "[role='dialog']", "dialog[open]",
+    "[data-testid*='high-demand-gate' i]", "[data-testid*='demand-gate' i]",
+    "[data-automation-id*='high-demand-gate' i]", "[class*='high-demand-gate' i]"
+  ]);
   const bestBuyPage = (() => {
     try {
       const url = new URL(urlValue);
@@ -748,6 +644,7 @@ function sellerEvidence(
   boundRoot: Element | null = null
 ): { sellerName: string; sellerType: SellerType } {
   const root = boundRoot || control?.closest("form, [data-testid*='buy-box' i], [data-automation-id*='buy-box' i], #buybox, main") || document;
+  selectorListTrace("seller", root, retailer.sellerSelectors);
   if (retailer.retailerId === "amazon") {
     const offerDisplaySeller = amazonOfferDisplaySeller(root);
     if (offerDisplaySeller) return offerDisplaySeller;
@@ -782,7 +679,9 @@ function sellerEvidence(
 }
 
 function fulfillmentEvidence(root: Element | Document, control: Element | null, retailer: RetailerObserverConfig): "shipping" | "pickup" | "unknown" {
-  const selected = [...root.querySelectorAll("[aria-selected='true'], [data-selected='true'], input:checked")]
+  const tileSelectors = selectorsFor(retailer.retailerId, "fulfillmentTile");
+  selectorListTrace("fulfillment", root, tileSelectors);
+  const selected = [...root.querySelectorAll(tileSelectors.join(", "))]
     .filter(visible)
     .map((element) => text(element.closest("label, [role='tab'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i]") || element, 800));
   const evidence = [text(control, 500), ...selected].join(" ");
@@ -803,7 +702,7 @@ const MERCHANDISING_CONTROL_SCOPE = [
 ].join(", ");
 
 function controlIntent(element: Element): string {
-  return [
+  const raw = [
     element.getAttribute("aria-label"),
     element.getAttribute("name"),
     element.getAttribute("id"),
@@ -814,6 +713,11 @@ function controlIntent(element: Element): string {
     element.getAttribute("value"),
     text(element, 300)
   ].filter(Boolean).join(" ");
+  // Snapshot sanitization intentionally clears non-hidden input values. Keep
+  // packaged controls replayable by treating safe identifier punctuation as
+  // word separators (for example `submit.add-to-cart`) while retaining the
+  // original string for retailer-specific patterns.
+  return `${raw} ${raw.replace(/[-_.:]+/g, " ")}`;
 }
 
 function merchandisingControl(element: Element): boolean {
@@ -821,6 +725,7 @@ function merchandisingControl(element: Element): boolean {
 }
 
 function packagedCandidateControls(root: ParentNode, retailer: RetailerObserverConfig): Element[] {
+  selectorListTrace("add_control", root, retailer.addSelectors);
   const packaged = retailer.addSelectors.flatMap((selector) => [...root.querySelectorAll(selector)]);
   const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
   return [...new Set(packaged)].filter((element) => visible(element)
@@ -960,6 +865,7 @@ function stableRepairLandmark(
 }
 
 function adaptiveReadPrice(root: Element | Document, retailer: RetailerObserverConfig): number | null {
+  selectorListTrace("price", root, retailer.priceSelectors);
   const packaged = readPrice(root, retailer.priceSelectors);
   if (packaged !== null) return packaged;
   if (!SEMANTIC_ACTION_RECOVERY_RETAILERS.has(retailer.retailerId)) return null;
@@ -1070,73 +976,17 @@ interface BestBuyScopedControl extends SelectedRetailerControl {
   offerRoot: Element;
 }
 
-const WALMART_PRIMARY_SCOPE = [
-  "[data-testid*='buy-box' i]",
-  "[data-automation-id*='buy-box' i]",
-  "[data-testid*='purchase' i]",
-  "[data-automation-id*='purchase' i]",
-  "[data-testid*='add-to-cart-section' i]"
-].join(", ");
+const WALMART_PRIMARY_SCOPE = selectorsFor("walmart", "primaryScope").join(", ");
+const WALMART_MERCHANDISING_SCOPE = selectorsFor("walmart", "merchandisingScope").join(", ");
+const WALMART_SECONDARY_ACTION_SCOPE = selectorsFor("walmart", "secondaryActionScope").join(", ");
+const AMAZON_MERCHANDISING_SCOPE = selectorsFor("amazon", "merchandisingScope").join(", ");
+const BESTBUY_PRIMARY_SCOPE = selectorsFor("bestbuy", "primaryScope").join(", ");
+const BESTBUY_MERCHANDISING_SCOPE = selectorsFor("bestbuy", "merchandisingScope").join(", ");
 
-const WALMART_MERCHANDISING_SCOPE = [
-  "[data-testid*='recommend' i]",
-  "[data-automation-id*='recommend' i]",
-  "[aria-label*='similar' i]",
-  "[aria-label*='sponsored' i]",
-  "[data-testid*='sponsored' i]",
-  "[class*='carousel' i]",
-  "[class*='related-products' i]"
-].join(", ");
-
-const WALMART_SECONDARY_ACTION_SCOPE = [
-  "[data-testid*='sticky' i]",
-  "[data-automation-id*='sticky' i]",
-  "[class*='sticky' i]",
-  "[class*='floating' i]",
-  "[class*='mobile-drawer' i]"
-].join(", ");
-
-const AMAZON_MERCHANDISING_SCOPE = [
-  "[data-cel-widget*='recommend' i]",
-  "[data-feature-name*='recommend' i]",
-  "[aria-label*='sponsored' i]",
-  "[class*='carousel' i]",
-  "#similarities_feature_div",
-  "#sp_detail"
-].join(", ");
-
-const BESTBUY_PRIMARY_SCOPE = [
-  "[data-testid*='buy-box' i]",
-  "[data-testid*='fulfillment' i]",
-  "[data-testid*='purchase' i]",
-  "[class*='fulfillment-add-to-cart' i]",
-  "[class*='buy-box' i]",
-  "[class*='purchase' i]"
-].join(", ");
-
-const BESTBUY_MERCHANDISING_SCOPE = [
-  "[data-testid*='recommend' i]",
-  "[aria-label*='similar' i]",
-  "[aria-label*='sponsored' i]",
-  "[class*='carousel' i]",
-  "[class*='related-products' i]",
-  "[class*='recommend' i]"
-].join(", ");
-
-const AMAZON_CANONICAL_OFFER_INPUT_SELECTOR = [
-  "input[name='offerListingID']",
-  "input[name='offerListingId']",
-  "input[name='items[0.base][offerListingID]']",
-  "input[name='items[0.base][offerListingId]']"
-].join(", ");
-
-const AMAZON_ALTERNATE_OFFER_INPUT_SELECTOR = "input[name='offeringID.1']";
-
-const AMAZON_EXPLICIT_ASIN_SELECTOR = [
-  "input[name='ASIN']",
-  "input[name='asin']",
-  "input[name='items[0.base][asin]']"
-].join(", ");
+const AMAZON_OFFER_INPUT_SELECTORS = selectorsFor("amazon", "offerInput");
+const AMAZON_CANONICAL_OFFER_INPUT_SELECTOR = AMAZON_OFFER_INPUT_SELECTORS.slice(0, 4).join(", ");
+const AMAZON_ALTERNATE_OFFER_INPUT_SELECTOR = AMAZON_OFFER_INPUT_SELECTORS[4] ?? "input:not(*)";
+const AMAZON_EXPLICIT_ASIN_SELECTOR = AMAZON_OFFER_INPUT_SELECTORS.slice(5).join(", ");
 
 function amazonOfferDisplayField(
   root: ParentNode,
@@ -1345,8 +1195,12 @@ export function retailerAdapterLayoutEvidence(
   document: Document,
   urlValue: string,
   retailerId: Exclude<SupportedRetailerId, "target">,
-  expectedSku: string
+  expectedSku: string,
+  environment?: AdapterEnvironment
 ): RetailerAdapterLayoutEvidence {
+  if (environment) {
+    return withAdapterEnvironment(environment, () => retailerAdapterLayoutEvidence(document, urlValue, retailerId, expectedSku));
+  }
   if (retailerId === "amazon") return amazonLayoutEvidence(document, urlValue, expectedSku);
   const retailer = CONFIGS[retailerId];
   const pageSku = extractRetailerSku(retailerId, urlValue);
@@ -1425,9 +1279,8 @@ function amazonSellerBound(root: Element, retailer: RetailerObserverConfig): boo
 }
 
 function amazonFulfillment(root: Element): "shipping" | "pickup" | "unknown" {
-  const selectedEvidence = [...root.querySelectorAll(
-    "[aria-selected='true'], [aria-checked='true'], [data-selected='true'], [data-state='selected'], input:checked"
-  )].filter(visible).map((element) => observableText(
+  const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))]
+    .filter(visible).map((element) => observableText(
     element.closest("label, [role='tab'], [role='radio'], [data-testid*='fulfillment' i], [data-feature-name*='delivery' i]") || element,
     2_000
   )).join(" ");
@@ -1441,9 +1294,10 @@ function amazonFulfillment(root: Element): "shipping" | "pickup" | "unknown" {
 }
 
 function amazonQuantityOne(root: Element): boolean {
-  const controls = [...root.querySelectorAll(
-    "select#quantity, select[name='quantity'], input[name='quantity'], input[name='items[0.base][quantity]']"
-  )].filter((element) => element.tagName === "INPUT" || visible(element));
+  const selectors = selectorsFor("amazon", "quantity");
+  selectorListTrace("quantity", root, selectors);
+  const controls = [...root.querySelectorAll(selectors.join(", "))]
+    .filter((element) => element.tagName === "INPUT" || visible(element));
   if (!controls.length) return true;
   return controls.every((control) => {
     const value = String((control as HTMLInputElement | HTMLSelectElement).value || "").trim();
@@ -1456,6 +1310,14 @@ function amazonOfferScope(
   retailer: RetailerObserverConfig,
   expectedSku: string
 ): AmazonScopedControl | null {
+  const merchandising = Boolean(control.closest(AMAZON_MERCHANDISING_SCOPE));
+  recordTrace({
+    step: "offer_scope",
+    condition: "amazon.merchandisingScope",
+    actual: merchandising ? "inside" : "outside",
+    passed: !merchandising,
+    ...(merchandising ? { reject: "merchandising_scope" as const } : {})
+  });
   if (control.closest(AMAZON_MERCHANDISING_SCOPE)) return null;
   const roots: Element[] = [];
   const exactForm = control.closest("form");
@@ -1472,6 +1334,14 @@ function amazonOfferScope(
     const offers = amazonOfferIds(root);
     const price = adaptiveReadPrice(root, retailer);
     const fulfillment = amazonFulfillment(root);
+    recordTrace({
+      step: "sku_binding",
+      condition: "amazon.asin",
+      expected: expectedSku,
+      actual: [...asins].join(","),
+      passed: asins.size === 1 && asins.has(expectedSku),
+      ...(asins.size === 1 && asins.has(expectedSku) ? {} : { reject: "sku_mismatch" as const })
+    });
     if (controls.length === 1 && controls[0] === control
       && asins.size === 1 && asins.has(expectedSku)
       && offers.size === 1 && price !== null
@@ -1505,7 +1375,7 @@ function selectedAmazonControl(
 
 function walmartSkuEvidence(root: Element): Set<string> {
   const skus = new Set<string>();
-  for (const element of [root, ...root.querySelectorAll("[data-us-item-id], [data-item-id], [data-product-id]")]) {
+  for (const element of [root, ...root.querySelectorAll(selectorsFor("walmart", "offerInput").join(", "))]) {
     for (const name of ["data-us-item-id", "data-item-id", "data-product-id"]) {
       const candidate = String(element.getAttribute(name) || "");
       if (CONFIGS.walmart.skuPattern.test(candidate)) skus.add(candidate);
@@ -1533,9 +1403,10 @@ function objectValue(value: unknown): Record<string, unknown> | null {
 }
 
 function walmartQuantityOne(root: ParentNode): boolean {
-  const controls = [...root.querySelectorAll(
-    "select[name*='quantity' i], select[aria-label*='quantity' i], input[name*='quantity' i], input[aria-label*='quantity' i]"
-  )].filter((element) => element.tagName === "INPUT" || visible(element));
+  const selectors = selectorsFor("walmart", "quantity");
+  selectorListTrace("quantity", root, selectors);
+  const controls = [...root.querySelectorAll(selectors.join(", "))]
+    .filter((element) => element.tagName === "INPUT" || visible(element));
   if (!controls.length) return true;
   return controls.every((control) => String((control as HTMLInputElement | HTMLSelectElement).value || "").trim() === "1");
 }
@@ -1544,6 +1415,9 @@ function walmartPrimaryActionControls(
   document: Document,
   retailer: RetailerObserverConfig
 ): Element[] {
+  selectorTrace("offer_scope", document, WALMART_MERCHANDISING_SCOPE);
+  selectorTrace("offer_scope", document, WALMART_SECONDARY_ACTION_SCOPE);
+  selectorTrace("offer_scope", document, WALMART_PRIMARY_SCOPE);
   const rendered = candidateControls(document, retailer)
     .filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE))
     .filter(renderedVisible);
@@ -1560,8 +1434,21 @@ function walmartStructuredOffer(
   expectedSku: string,
   requiredFulfillment: Fulfillment
 ): SelectedRetailerControl | null {
-  const scripts = [...document.querySelectorAll("script#__NEXT_DATA__")];
-  if (scripts.length !== 1 || scripts[0]?.getAttribute("type") !== "application/json") return null;
+  const condition = (name: string, expected: unknown, actual: unknown, passed: boolean): boolean => {
+    recordTrace({
+      step: "structured_offer",
+      condition: name,
+      expected: String(expected),
+      actual: String(actual),
+      passed,
+      ...(passed ? {} : { reject: "condition_failed" as const })
+    });
+    return passed;
+  };
+  const structuredSelector = selectorsFor("walmart", "structuredData").join(", ");
+  const scripts = [...document.querySelectorAll(structuredSelector)];
+  if (!condition("script#__NEXT_DATA__.count", 1, scripts.length, scripts.length === 1)
+    || !condition("script#__NEXT_DATA__.type", "application/json", scripts[0]?.getAttribute("type") || "", scripts[0]?.getAttribute("type") === "application/json")) return null;
   const script = scripts[0];
   const serialized = String(script?.textContent || "").trim();
   if (!serialized || serialized.length > 2_000_000) return null;
@@ -1576,22 +1463,31 @@ function walmartStructuredOffer(
   const initialData = objectValue(pageProps?.initialData);
   const data = objectValue(initialData?.data);
   const product = objectValue(data?.product);
-  if (!product || String(product.usItemId || "") !== expectedSku) return null;
-  if (product.availabilityStatus !== "IN_STOCK" || product.itemPageAvailabilityStatus !== "IN_STOCK"
-    || product.showAtc !== true || product.isConditionNew !== true) return null;
+  if (!condition("product", "object", product ? "object" : "missing", Boolean(product)) || !product) return null;
+  if (!condition("product.usItemId", expectedSku, product.usItemId || "", String(product.usItemId || "") === expectedSku)) return null;
+  if (!condition("product.availabilityStatus", "IN_STOCK", product.availabilityStatus, product.availabilityStatus === "IN_STOCK")) {
+    selectorListTrace("price", document, retailer.priceSelectors);
+    return null;
+  }
+  if (!condition("product.itemPageAvailabilityStatus", "IN_STOCK", product.itemPageAvailabilityStatus, product.itemPageAvailabilityStatus === "IN_STOCK")) return null;
+  if (!condition("product.showAtc", true, product.showAtc, product.showAtc === true)) return null;
+  if (!condition("product.isConditionNew", true, product.isConditionNew, product.isConditionNew === true)) return null;
 
   const selectedOfferId = String(product.selectedOfferId || "").trim();
   const offerId = String(product.offerId || "").trim();
-  if (!/^[A-Za-z0-9_-]{8,200}$/.test(selectedOfferId) || offerId !== selectedOfferId) return null;
+  if (!condition("product.selectedOfferId", "valid offer id", selectedOfferId, /^[A-Za-z0-9_-]{8,200}$/.test(selectedOfferId))) return null;
+  if (!condition("product.offerId", selectedOfferId, offerId, offerId === selectedOfferId)) return null;
 
   const priceInfo = objectValue(product.priceInfo);
   const currentPrice = objectValue(priceInfo?.currentPrice);
   const dollars = Number(currentPrice?.price);
-  if (!Number.isFinite(dollars) || dollars <= 0 || currentPrice?.currencyUnit !== "USD") return null;
+  if (!condition("product.priceInfo.currentPrice.price", "positive number", currentPrice?.price, Number.isFinite(dollars) && dollars > 0)) return null;
+  if (!condition("product.priceInfo.currentPrice.currencyUnit", "USD", currentPrice?.currencyUnit, currentPrice?.currencyUnit === "USD")) return null;
   const unitPriceCents = Math.round(dollars * 100);
-  if (Math.abs(dollars * 100 - unitPriceCents) > 0.001) return null;
+  if (!condition("product.priceInfo.currentPrice.precision", "whole cents", dollars, Math.abs(dollars * 100 - unitPriceCents) <= 0.001)) return null;
 
-  if (product.sellerType !== "INTERNAL" || !/^walmart(?:\.com)?$/i.test(String(product.sellerName || "").trim())) return null;
+  if (!condition("product.sellerType", "INTERNAL", product.sellerType, product.sellerType === "INTERNAL")) return null;
+  if (!condition("product.sellerName", "Walmart", product.sellerName, /^walmart(?:\.com)?$/i.test(String(product.sellerName || "").trim()))) return null;
   const visibleSeller = queryVisible(document, retailer.sellerSelectors);
   const visibleSellerText = sellerElementText(visibleSeller, 2_000);
   if (visibleSellerText && retailer.marketplacePattern.test(visibleSellerText)
@@ -1599,22 +1495,25 @@ function walmartStructuredOffer(
 
   const conditionOffers = Array.isArray(product.conditionOffers) ? product.conditionOffers.map(objectValue).filter(Boolean) : [];
   const exactConditionOffers = conditionOffers.filter((conditionOffer) => conditionOffer?.offerId === selectedOfferId);
-  if (exactConditionOffers.length !== 1 || !exactConditionOffers[0]) return null;
+  if (!condition("product.conditionOffers.selected.count", 1, exactConditionOffers.length, exactConditionOffers.length === 1) || !exactConditionOffers[0]) return null;
   const conditionOffer = exactConditionOffers[0];
   const conditionAvailability = objectValue(conditionOffer.availabilityStatus);
-  const condition = objectValue(conditionOffer.condition);
+  const offerCondition = objectValue(conditionOffer.condition);
   const conditionPrice = objectValue(conditionOffer.price);
-  if (conditionAvailability?.value !== "IN_STOCK" || Number(condition?.groupCode) !== 1
-    || Math.round(Number(conditionPrice?.price) * 100) !== unitPriceCents) return null;
+  if (!condition("product.conditionOffers[].availabilityStatus.value", "IN_STOCK", conditionAvailability?.value, conditionAvailability?.value === "IN_STOCK")) return null;
+  if (!condition("product.conditionOffers[].condition.groupCode", 1, offerCondition?.groupCode, Number(offerCondition?.groupCode) === 1)) return null;
+  if (!condition("product.conditionOffers[].price.price", unitPriceCents, Math.round(Number(conditionPrice?.price) * 100), Math.round(Number(conditionPrice?.price) * 100) === unitPriceCents)) return null;
 
   const expectedType = requiredFulfillment === "pickup" ? "PICKUP" : "SHIPPING";
   const fulfillmentOptions = Array.isArray(product.fulfillmentOptions)
     ? product.fulfillmentOptions.map(objectValue).filter(Boolean) : [];
   const selectedOptions = fulfillmentOptions.filter((option) => option?.type === expectedType && option?.selected === true);
-  if (selectedOptions.length !== 1 || !selectedOptions[0]) return null;
+  if (!condition("product.fulfillmentOptions.selected.count", 1, selectedOptions.length, selectedOptions.length === 1) || !selectedOptions[0]) return null;
   const fulfillmentOption = selectedOptions[0];
-  if (fulfillmentOption.availabilityStatus !== "IN_STOCK" || fulfillmentOption.viewOnly === true
-    || fulfillmentOption.restricted === true || fulfillmentOption.intent === false) return null;
+  if (!condition("product.fulfillmentOptions[].availabilityStatus", "IN_STOCK", fulfillmentOption.availabilityStatus, fulfillmentOption.availabilityStatus === "IN_STOCK")) return null;
+  if (!condition("product.fulfillmentOptions[].viewOnly", false, fulfillmentOption.viewOnly, fulfillmentOption.viewOnly !== true)) return null;
+  if (!condition("product.fulfillmentOptions[].restricted", false, fulfillmentOption.restricted, fulfillmentOption.restricted !== true)) return null;
+  if (!condition("product.fulfillmentOptions[].intent", "not false", fulfillmentOption.intent, fulfillmentOption.intent !== false)) return null;
   for (const limit of [fulfillmentOption.maxOrderQuantity, fulfillmentOption.orderLimit, product.orderLimit]) {
     if (limit !== null && limit !== undefined && (!Number.isFinite(Number(limit)) || Number(limit) < 1)) return null;
   }
@@ -1642,6 +1541,13 @@ function walmartOfferScope(
   retailer: RetailerObserverConfig,
   expectedSku: string
 ): WalmartScopedControl | null {
+  recordTrace({
+    step: "offer_scope",
+    condition: "walmart.merchandisingScope",
+    actual: control.closest(WALMART_MERCHANDISING_SCOPE) ? "inside" : "outside",
+    passed: !control.closest(WALMART_MERCHANDISING_SCOPE),
+    ...(control.closest(WALMART_MERCHANDISING_SCOPE) ? { reject: "merchandising_scope" as const } : {})
+  });
   if (control.closest(WALMART_MERCHANDISING_SCOPE)) return null;
   const primaryScope = Boolean(control.closest(WALMART_PRIMARY_SCOPE));
   let current = control.parentElement;
@@ -1693,9 +1599,8 @@ function bestBuySkuEvidence(root: Element): Set<string> {
     const candidate = String(value || "").trim();
     if (CONFIGS.bestbuy.skuPattern.test(candidate)) skus.add(candidate);
   };
-  const productElements = [root, ...root.querySelectorAll(
-    "[data-sku-id], [data-sku], [data-product-id], input[name*='sku' i]"
-  )].filter((element) => !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+  const productElements = [root, ...root.querySelectorAll(selectorsFor("bestbuy", "offerInput").join(", "))]
+    .filter((element) => !element.closest(BESTBUY_MERCHANDISING_SCOPE));
   for (const element of productElements) {
     add(element.getAttribute("data-sku-id"));
     add(element.getAttribute("data-sku"));
@@ -1748,22 +1653,15 @@ function bestBuyFulfillment(root: Element, control: Element): "shipping" | "pick
     const pickup = CONFIGS.bestbuy.pickupPattern.test(evidence);
     if (shipping !== pickup) return shipping ? "shipping" : "pickup";
   }
-  const selected = [...root.querySelectorAll(
-    "[aria-selected='true'], [aria-checked='true'], [data-selected='true'], [data-state='selected'], input:checked"
-  )].filter(visible).map(evidenceFor);
+  const selected = [...root.querySelectorAll(selectorsFor("bestbuy", "fulfillmentTile").join(", "))]
+    .filter(visible).map(evidenceFor);
   const selectedShipping = selected.some((value) => CONFIGS.bestbuy.shippingPattern.test(value));
   const selectedPickup = selected.some((value) => CONFIGS.bestbuy.pickupPattern.test(value));
   if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
   return "unknown";
 }
 
-const BESTBUY_SECONDARY_ACTION_SCOPE = [
-  "[data-testid*='sticky' i]",
-  "[data-automation-id*='sticky' i]",
-  "[class*='sticky' i]",
-  "[class*='floating' i]",
-  "[class*='mobile-drawer' i]"
-].join(", ");
+const BESTBUY_SECONDARY_ACTION_SCOPE = selectorsFor("bestbuy", "secondaryActionScope").join(", ");
 
 function bestBuyBoundPrice(root: Element, retailer: RetailerObserverConfig): number | null {
   for (const selector of retailer.priceSelectors) {
@@ -1795,6 +1693,9 @@ function recoveredBestBuyOfferScope(
   retailer: RetailerObserverConfig,
   expectedSku: string
 ): BestBuyScopedControl | null {
+  selectorTrace("offer_scope", document, BESTBUY_MERCHANDISING_SCOPE);
+  selectorTrace("offer_scope", document, BESTBUY_SECONDARY_ACTION_SCOPE);
+  selectorTrace("offer_scope", document, BESTBUY_PRIMARY_SCOPE);
   const controls = candidateControls(document, retailer)
     .filter((control) => !control.closest(BESTBUY_MERCHANDISING_SCOPE));
   if (controls.length < 1 || controls.length > 4) return null;
@@ -1829,9 +1730,10 @@ function recoveredBestBuyOfferScope(
 }
 
 function bestBuyQuantityOne(root: Element): boolean {
-  const controls = [...root.querySelectorAll(
-    "select[name*='quantity' i], select[aria-label*='quantity' i], input[name*='quantity' i], input[aria-label*='quantity' i]"
-  )].filter((element) => element.tagName === "INPUT" || visible(element));
+  const quantitySelectors = selectorsFor("bestbuy", "quantity");
+  selectorListTrace("quantity", root, quantitySelectors);
+  const controls = [...root.querySelectorAll(quantitySelectors.join(", "))]
+    .filter((element) => element.tagName === "INPUT" || visible(element));
   if (!controls.length) return true;
   return controls.every((control) => String((control as HTMLInputElement | HTMLSelectElement).value || "").trim() === "1");
 }
@@ -1841,6 +1743,13 @@ function bestBuyOfferScope(
   retailer: RetailerObserverConfig,
   expectedSku: string
 ): BestBuyScopedControl | null {
+  recordTrace({
+    step: "offer_scope",
+    condition: "bestbuy.merchandisingScope",
+    actual: control.closest(BESTBUY_MERCHANDISING_SCOPE) ? "inside" : "outside",
+    passed: !control.closest(BESTBUY_MERCHANDISING_SCOPE),
+    ...(control.closest(BESTBUY_MERCHANDISING_SCOPE) ? { reject: "merchandising_scope" as const } : {})
+  });
   if (control.closest(BESTBUY_MERCHANDISING_SCOPE)) return null;
   const roots: Element[] = [];
   const primary = control.closest(BESTBUY_PRIMARY_SCOPE);
@@ -1892,6 +1801,13 @@ function selectedControl(
   requiredFulfillment: Fulfillment,
   expectedSku = ""
 ): SelectedRetailerControl {
+  recordTrace({
+    step: "add_control",
+    condition: "selectedControl.retailer",
+    expected: retailer.retailerId,
+    actual: retailer.retailerId,
+    passed: true
+  });
   const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
   if (retailer.retailerId === "walmart" && CONFIGS.walmart.skuPattern.test(expectedSku)) {
     return selectedWalmartControl(document, retailer, expectedSku, requiredFulfillment);
@@ -1916,22 +1832,40 @@ export function retailerAddControl(
   urlValue: string,
   retailerId: Exclude<SupportedRetailerId, "target">,
   expectedSku: string,
-  requiredFulfillment: Fulfillment
+  requiredFulfillment: Fulfillment,
+  environment?: AdapterEnvironment
 ): Element | null {
+  if (environment) {
+    return withAdapterEnvironment(environment, () => retailerAddControl(document, urlValue, retailerId, expectedSku, requiredFulfillment));
+  }
   const retailer = CONFIGS[retailerId];
   if (extractRetailerSku(retailerId, urlValue) !== expectedSku) return null;
   const selected = selectedControl(document, retailer, requiredFulfillment, expectedSku);
   const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
   const fulfillmentAllowed = selected.fulfillment === expectedFulfillment;
-  return fulfillmentAllowed && actionable(selected.control) ? selected.control : null;
+  const chosen = fulfillmentAllowed && actionable(selected.control) ? selected.control : null;
+  recordTrace({
+    step: "add_control",
+    chosen: chosen ? 1 : 0,
+    condition: "actionable",
+    expected: "true",
+    actual: String(Boolean(chosen)),
+    passed: Boolean(chosen),
+    ...(chosen ? {} : { reject: "not_actionable" as const })
+  });
+  return chosen;
 }
 
 export function amazonOfferBinding(
   document: Document,
   urlValue: string,
   expectedAsin: string,
-  requiredFulfillment: Fulfillment = "shipping"
+  requiredFulfillment: Fulfillment = "shipping",
+  environment?: AdapterEnvironment
 ): { control: Element; offerListingId: string } | null {
+  if (environment) {
+    return withAdapterEnvironment(environment, () => amazonOfferBinding(document, urlValue, expectedAsin, requiredFulfillment));
+  }
   if (extractRetailerSku("amazon", urlValue) !== expectedAsin) return null;
   const selected = selectedAmazonControl(document, CONFIGS.amazon, expectedAsin, requiredFulfillment);
   if (!actionable(selected.control) || !selected.offerRoot) return null;
@@ -1945,19 +1879,7 @@ export function amazonOfferBinding(
 }
 
 function explicitlyUnavailableOffer(document: Document): boolean {
-  const selectors = [
-    "[data-testid*='availability' i]",
-    "[data-automation-id*='availability' i]",
-    "[data-testid*='fulfillment' i]",
-    "[data-automation-id*='fulfillment' i]",
-    "[data-testid*='shipping' i]",
-    "[data-automation-id*='shipping' i]",
-    "[data-testid*='out-of-stock' i]",
-    "[data-automation-id*='out-of-stock' i]",
-    "[aria-label*='out of stock' i]",
-    "[itemprop='availability']",
-    "button[disabled]"
-  ];
+  const selectors = selectorsFor("walmart", "availability");
   return [...document.querySelectorAll(selectors.join(", "))]
     .filter((element) => visible(element) && !merchandisingControl(element))
     .some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
@@ -1971,10 +1893,24 @@ export function observeRetailerOffer(
   retailerId: Exclude<SupportedRetailerId, "target">,
   expectedSku: string,
   requiredFulfillment: Fulfillment = "shipping",
-  observedAt = new Date().toISOString()
+  observedAt = new Date().toISOString(),
+  environment?: AdapterEnvironment
 ): LiveOfferObservation {
+  if (environment) {
+    return withAdapterEnvironment(environment, () => observeRetailerOffer(
+      document, urlValue, retailerId, expectedSku, requiredFulfillment, observedAt
+    ));
+  }
   const retailer = CONFIGS[retailerId];
   const pageSku = extractRetailerSku(retailerId, urlValue);
+  recordTrace({
+    step: "page_identity",
+    condition: "retailerSku",
+    expected: expectedSku,
+    actual: pageSku,
+    passed: pageSku === expectedSku,
+    ...(pageSku === expectedSku ? {} : { reject: "sku_mismatch" as const })
+  });
   const blocked = retailerInteractiveBlock(document, urlValue);
   const selected = pageSku === expectedSku
     ? selectedControl(document, retailer, requiredFulfillment, expectedSku)
@@ -2003,6 +1939,14 @@ export function observeRetailerOffer(
     : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock"
       : retailerId === "walmart" ? explicitlyUnavailableOffer(document) ? "out_of_stock" : "unknown"
         : "out_of_stock";
+  recordTrace({
+    step: "availability",
+    condition: "offer.availability",
+    expected: "in_stock or preorder",
+    actual: availability,
+    passed: availability === "in_stock" || availability === "preorder",
+    ...(availability === "in_stock" || availability === "preorder" ? {} : { reject: "not_actionable" as const })
+  });
   return {
     contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
     observedAt,
@@ -2027,8 +1971,14 @@ export function observeRetailerSelectedOfferScope(
   urlValue: string,
   retailerId: Exclude<SupportedRetailerId, "target">,
   expectedSku: string,
-  requiredFulfillment: Fulfillment = "shipping"
-) {
+  requiredFulfillment: Fulfillment = "shipping",
+  environment?: AdapterEnvironment
+): ReturnType<typeof selectedOfferScope> {
+  if (environment) {
+    return withAdapterEnvironment(environment, () => observeRetailerSelectedOfferScope(
+      document, urlValue, retailerId, expectedSku, requiredFulfillment
+    ));
+  }
   const pageSku = extractRetailerSku(retailerId, urlValue);
   if (!pageSku || pageSku !== expectedSku) throw new Error("The exact retailer listing identity is unavailable.");
   const selected = selectedControl(document, CONFIGS[retailerId], requiredFulfillment, expectedSku);

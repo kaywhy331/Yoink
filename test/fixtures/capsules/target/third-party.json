@@ -1,0 +1,24 @@
+{
+  "capsuleId": "cap_promoted_target_third_party",
+  "capturedAt": "2026-09-04T22:00:00.000Z",
+  "url": "https://www.target.com/p/fixture/-/A-1011483414",
+  "retailerId": "target",
+  "retailerSku": "1011483414",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "target-observer-v6",
+  "addAdapterVersion": "target-add-v8",
+  "packVersion": "target-pack-v1",
+  "sha256": "0621cfe700203ecc028223a94e1026606f2ba3418682edd5344d8e20c566477c",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified",
+    "availability": "in_stock",
+    "unitPriceCents": 8999,
+    "sellerType": "third_party",
+    "fulfillment": "shipping"
+  },
+  "notes": "Promoted from a sanitized Target third party page capture.",
+  "allowReason": ""
+}

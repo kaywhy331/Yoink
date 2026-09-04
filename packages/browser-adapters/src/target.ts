@@ -6,13 +6,56 @@ import {
 } from "../../browser-safety/src/index.js";
 import {
   TARGET_OBSERVER_VERSION,
+  type AdapterEnvironment,
+  type AdapterTraceEntry,
   type Fulfillment,
   type RetailerAdapterLayoutEvidence,
   type SellerType
 } from "../../contracts/src/index.js";
 import { selectedOfferScope } from "./selected-offer.js";
+import { selectorsFor } from "./selector-packs.js";
 
 export { TARGET_OBSERVER_VERSION };
+
+let activeAdapterEnvironment: AdapterEnvironment | undefined;
+
+function withAdapterEnvironment<T>(environment: AdapterEnvironment, work: () => T): T {
+  const previous = activeAdapterEnvironment;
+  activeAdapterEnvironment = environment;
+  try {
+    return work();
+  } finally {
+    activeAdapterEnvironment = previous;
+  }
+}
+
+function recordTrace(entry: AdapterTraceEntry): void {
+  activeAdapterEnvironment?.trace?.record(entry);
+}
+
+function selectorTrace(step: AdapterTraceEntry["step"], root: ParentNode, selector: string): void {
+  if (!activeAdapterEnvironment?.trace) return;
+  let matches: Element[] = [];
+  try {
+    matches = [...root.querySelectorAll(selector)];
+  } catch {
+    recordTrace({ step, selector, matched: 0, visible: 0, scoped: 0, reject: "pattern_mismatch" });
+    return;
+  }
+  const visibleMatches = matches.filter(visible);
+  recordTrace({
+    step,
+    selector,
+    matched: matches.length,
+    visible: visibleMatches.length,
+    scoped: root.nodeType === 9 ? 0 : visibleMatches.length,
+    ...(matches.length > 0 && visibleMatches.length === 0 ? { reject: "not_visible" } : {})
+  });
+}
+
+function selectorListTrace(step: AdapterTraceEntry["step"], root: ParentNode, selectors: readonly string[]): void {
+  for (const selector of selectors) selectorTrace(step, root, selector);
+}
 
 export interface TargetMissionIdentity {
   retailerSku: string;
@@ -32,13 +75,16 @@ export type FingerprintSigner = (values: string[]) => Promise<string>;
 
 const MARKETPLACE_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+(?!target\b)|sold\s+by\s+(?!target\b)|target\s*plus|marketplace\s+seller/i;
 const FIRST_PARTY_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+target\b|sold\s+by\s+target\b/i;
-const TARGET_CURRENT_PRICE_SELECTORS = [
-  "[data-test='product-price']",
-  "[data-test*='current-price' i]",
-  "meta[itemprop='price']",
-  "[itemprop='price']"
-];
-const TARGET_PRICE_MODULE_SELECTOR = "[data-module-type='ProductDetailPrice']";
+const TARGET_PRICE_SELECTORS = selectorsFor("target", "price");
+const TARGET_CURRENT_PRICE_SELECTORS = TARGET_PRICE_SELECTORS.slice(0, -1);
+const TARGET_PRICE_MODULE_SELECTOR = TARGET_PRICE_SELECTORS.at(-1) ?? "meta:not(*)";
+const TARGET_ADD_CONTROL_SELECTORS = selectorsFor("target", "addControl");
+const TARGET_SELLER_SELECTORS = selectorsFor("target", "seller");
+const TARGET_AVAILABILITY_SELECTORS = selectorsFor("target", "availability");
+const TARGET_QUANTITY_SELECTORS = selectorsFor("target", "quantity");
+const TARGET_PRIMARY_SCOPE_SELECTOR = selectorsFor("target", "primaryScope").join(", ");
+const TARGET_RECOMMENDATION_SCOPE_SELECTOR = selectorsFor("target", "merchandisingScope").join(", ");
+const TARGET_OFFER_INPUT_SELECTOR = selectorsFor("target", "offerInput").join(", ");
 
 function text(value: Element | Document | null | undefined, maximum = 2_000): string {
   return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
@@ -77,6 +123,13 @@ function observableText(value: Element | Document | null | undefined, maximum = 
 
 function visible(element: Element | null): element is Element {
   if (!element) return false;
+  if (activeAdapterEnvironment?.isVisible) {
+    try {
+      return activeAdapterEnvironment.isVisible(element);
+    } catch {
+      return false;
+    }
+  }
   const view = element.ownerDocument.defaultView;
   let current: Element | null = element;
   while (current) {
@@ -106,7 +159,7 @@ function formControlChecked(element: Element): boolean {
   return element.tagName === "INPUT" && Boolean((element as HTMLInputElement).checked);
 }
 
-function queryVisible(root: ParentNode, selectors: string[]): Element | null {
+function queryVisible(root: ParentNode, selectors: readonly string[]): Element | null {
   for (const selector of selectors) {
     const match = [...root.querySelectorAll(selector)].find(visible);
     if (match) return match;
@@ -140,7 +193,7 @@ export function parseUsPrice(value: unknown): number | null {
   return Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : null;
 }
 
-function readPrice(root: ParentNode, selectors: string[]): number | null {
+function readPrice(root: ParentNode, selectors: readonly string[]): number | null {
   for (const selector of selectors) {
     for (const element of root.querySelectorAll(selector)) {
       if (!visible(element) || recommendationControl(element)) continue;
@@ -153,7 +206,9 @@ function readPrice(root: ParentNode, selectors: string[]): number | null {
   return null;
 }
 
-function adaptiveTargetPrice(root: ParentNode, selectors: string[]): number | null {
+function adaptiveTargetPrice(root: ParentNode, selectors: readonly string[]): number | null {
+  selectorListTrace("price", root, selectors);
+  selectorTrace("price", root, TARGET_PRICE_MODULE_SELECTOR);
   const packaged = readPrice(root, selectors);
   if (packaged !== null) return packaged;
   const modulePrices = [...root.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)]
@@ -189,7 +244,16 @@ export function targetSecurityChallenge(document: Document): boolean {
   ])) || /verify you are human|unusual traffic|security challenge/i.test(observableText(document.body, 50_000));
 }
 
-export function targetInteractiveBlock(document: Document): LiveOfferObservation["interactiveBlock"] {
+export function targetInteractiveBlock(
+  document: Document,
+  environment?: AdapterEnvironment
+): LiveOfferObservation["interactiveBlock"] {
+  if (environment) return withAdapterEnvironment(environment, () => targetInteractiveBlock(document));
+  selectorListTrace("interactive_block", document, [
+    "input[autocomplete='one-time-code']", "input[name*='otp' i]",
+    "[role='dialog']", "dialog[open]",
+    "form[action*='login' i] input[type='password']", "input[autocomplete='current-password']"
+  ]);
   const visibleText = observableText(document.body, 80_000);
   if (queryVisible(document, ["input[autocomplete='one-time-code']", "input[name*='otp' i]"])) return "mfa";
   const dialog = queryVisible(document, ["[role='dialog']", "dialog[open]"]);
@@ -216,21 +280,8 @@ export function targetPageKind(urlValue: string): LiveOfferObservation["pageKind
   }
 }
 
-const TARGET_FULFILLMENT_ROOT_SELECTOR = [
-  "[data-test='@web/AddToCart/FulfillmentSection'][aria-label='Fulfillment']",
-  "[data-test='module-product-detail-fulfillment-v1'][aria-label='Fulfillment']",
-  "[data-module-type='ProductDetailFulfillment'] [aria-label='Fulfillment']",
-  "[aria-label='Fulfillment']"
-].join(", ");
-const TARGET_FULFILLMENT_TILE_SELECTOR = [
-  "button[data-test='fulfillment-cell-pickup']",
-  "button[data-test='fulfillment-cell-delivery']",
-  "button[data-test='fulfillment-cell-shipping']",
-  "button#PICKUP",
-  "button#DELIVERY",
-  "button#SHIPPING",
-  "button[aria-label]"
-].join(", ");
+const TARGET_FULFILLMENT_ROOT_SELECTOR = selectorsFor("target", "fulfillmentRoot").join(", ");
+const TARGET_FULFILLMENT_TILE_SELECTOR = selectorsFor("target", "fulfillmentTile").join(", ");
 const TARGET_FULFILLMENT_UNAVAILABLE_PATTERN = /\b(?:not available|unavailable|out of stock|sold out|loading|check availability|choose (?:a |your )?(?:store|location|address)|select (?:a |your )?(?:store|location|address)|set (?:a |your )?(?:store|location|address))\b/i;
 const TARGET_FULFILLMENT_AVAILABLE_PATTERN = /\b(?:arrives?|ready|available|get it|same[ -]?day|today|tomorrow|within|deliver(?:ed|y) by)\b/i;
 
@@ -266,6 +317,8 @@ function fulfillmentTileAvailable(element: Element): boolean {
 }
 
 function controlFulfillment(control: Element, root: Element | Document): "shipping" | "pickup" | "unknown" {
+  selectorTrace("fulfillment", root, TARGET_FULFILLMENT_TILE_SELECTOR);
+  selectorListTrace("fulfillment", root, ["[aria-selected='true']", "[data-selected='true']", "input:checked"]);
   const own = fulfillmentKind(control);
   const selectedTiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)]
     .filter((element) => visible(element) && fulfillmentKind(element) !== "unknown" && fulfillmentTileSelected(element));
@@ -297,18 +350,12 @@ function directControlFulfillment(control: Element, root: Element): "shipping" |
 }
 
 function recommendationControl(candidate: Element): boolean {
-  return Boolean(candidate.closest([
-    "[data-test*='recommend' i]",
-    "[data-testid*='carousel' i]",
-    "[aria-label*='similar items' i]",
-    "[data-test*='productCard' i]",
-    "[data-strategy-id]",
-    "[data-module-type*='Recommended' i]"
-  ].join(", ")));
+  return Boolean(candidate.closest(TARGET_RECOMMENDATION_SCOPE_SELECTOR));
 }
 
 function exactAddControls(root: ParentNode, sku: string): Element[] {
   if (!/^\d{6,}$/.test(sku)) return [];
+  selectorTrace("add_control", root, `button[id='addToCartButtonOrTextIdFor${sku}']`);
   return [...root.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`)]
     .filter((candidate) => visible(candidate) && !recommendationControl(candidate));
 }
@@ -317,7 +364,7 @@ function targetSkuEvidence(root: ParentNode): Set<string> {
   const skus = new Set<string>();
   const elements = [
     ...(root.nodeType === 1 ? [root as Element] : []),
-    ...root.querySelectorAll("[data-tcin], button[id^='addToCartButtonOrTextIdFor']")
+    ...root.querySelectorAll(TARGET_OFFER_INPUT_SELECTOR)
   ];
   for (const element of elements) {
     const dataTcin = String(element.getAttribute("data-tcin") || "").trim();
@@ -341,13 +388,26 @@ function semanticTargetAddControls(root: ParentNode, sku: string): Element[] {
       candidate.getAttribute("data-testid"),
       text(candidate, 300)
     ].filter(Boolean).join(" ")));
+  recordTrace({
+    step: "add_control",
+    selector: "semantic:add-intent",
+    matched: candidates.length,
+    visible: candidates.length,
+    scoped: root.nodeType === 9 ? 0 : candidates.length,
+    chosen: candidates.length === 1 ? 1 : 0,
+    ...(candidates.length === 1 ? {} : { reject: "ambiguous" })
+  });
   return candidates.length === 1 ? candidates : [];
 }
 
 function addControls(document: Document, sku: string): Element[] {
+  selectorListTrace("add_control", document, [
+    `button[id='addToCartButtonOrTextIdFor${sku}']`,
+    ...TARGET_ADD_CONTROL_SELECTORS
+  ]);
   const candidates = [
     ...exactAddControls(document, sku),
-    ...document.querySelectorAll("button[data-test='shipItButton'], button[data-test='shippingButton'], button[data-test='orderPickupButton'], button[data-test*='addToCart' i]")
+    ...document.querySelectorAll(TARGET_ADD_CONTROL_SELECTORS.join(", "))
   ];
   return [...new Set(candidates)].filter((candidate) => {
     if (!visible(candidate)) return false;
@@ -364,9 +424,20 @@ function emptyTargetAddBinding(): TargetAddBinding {
 }
 
 function modernTargetAddBinding(document: Document, sku: string, required: Fulfillment): TargetAddBinding | null {
+  selectorTrace("offer_scope", document, TARGET_FULFILLMENT_ROOT_SELECTOR);
   const visibleRoots = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))]
     .filter((root) => visible(root) && !recommendationControl(root));
   const roots = visibleRoots.filter((root) => !visibleRoots.some((candidate) => candidate !== root && root.contains(candidate)));
+  recordTrace({
+    step: "offer_scope",
+    condition: "target.fulfillmentRoot",
+    matched: visibleRoots.length,
+    visible: visibleRoots.length,
+    scoped: roots.length,
+    chosen: roots.length === 1 ? 1 : 0,
+    passed: roots.length > 0,
+    ...(roots.length > 0 ? {} : { reject: "outside_offer_root" })
+  });
   if (roots.length === 0) return null;
   const scoped = roots.map((root) => {
     const exact = exactAddControls(root, sku);
@@ -410,15 +481,7 @@ function modernTargetAddBinding(document: Document, sku: string, required: Fulfi
 }
 
 function targetExplicitlyUnavailable(document: Document): boolean {
-  const selectors = [
-    "[data-test*='availability' i]",
-    "[data-testid*='availability' i]",
-    "[data-test*='out-of-stock' i]",
-    "[data-testid*='out-of-stock' i]",
-    "[itemprop='availability']",
-    "button[disabled]"
-  ];
-  return [...document.querySelectorAll(selectors.join(", "))]
+  return [...document.querySelectorAll(TARGET_AVAILABILITY_SELECTORS.join(", "))]
     .filter((element) => visible(element) && !recommendationControl(element))
     .some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
@@ -438,9 +501,22 @@ export function targetAddBinding(
   document: Document,
   urlValue: string,
   expectedSku: string,
-  requiredFulfillment: Fulfillment
+  requiredFulfillment: Fulfillment,
+  environment?: AdapterEnvironment
 ): TargetAddBinding {
-  if (extractTargetSku(urlValue) !== expectedSku) return emptyTargetAddBinding();
+  if (environment) {
+    return withAdapterEnvironment(environment, () => targetAddBinding(document, urlValue, expectedSku, requiredFulfillment));
+  }
+  const pageSku = extractTargetSku(urlValue);
+  recordTrace({
+    step: "page_identity",
+    condition: "retailerSku",
+    expected: expectedSku,
+    actual: pageSku,
+    passed: pageSku === expectedSku,
+    ...(pageSku === expectedSku ? {} : { reject: "sku_mismatch" })
+  });
+  if (pageSku !== expectedSku) return emptyTargetAddBinding();
   return modernTargetAddBinding(document, expectedSku, requiredFulfillment)
     ?? legacyTargetAddBinding(document, expectedSku, requiredFulfillment);
 }
@@ -449,10 +525,24 @@ export function targetAddControl(
   document: Document,
   urlValue: string,
   expectedSku: string,
-  requiredFulfillment: Fulfillment
+  requiredFulfillment: Fulfillment,
+  environment?: AdapterEnvironment
 ): Element | null {
+  if (environment) {
+    return withAdapterEnvironment(environment, () => targetAddControl(document, urlValue, expectedSku, requiredFulfillment));
+  }
   const binding = targetAddBinding(document, urlValue, expectedSku, requiredFulfillment);
-  return !binding.selectionRequired && actionable(binding.control) ? binding.control : null;
+  const control = !binding.selectionRequired && actionable(binding.control) ? binding.control : null;
+  recordTrace({
+    step: "add_control",
+    chosen: control ? 1 : 0,
+    condition: "actionable",
+    expected: "true",
+    actual: String(Boolean(control)),
+    passed: Boolean(control),
+    ...(control ? {} : { reject: "not_actionable" })
+  });
+  return control;
 }
 
 function closestOfferContainer(anchor: Element | null): Element | null {
@@ -469,8 +559,8 @@ function closestOfferContainer(anchor: Element | null): Element | null {
 function sellerEvidence(document: Document, anchor: Element | null): { sellerName: string; sellerType: SellerType } {
   const cartRoot = anchor?.closest("[data-test='cart-item'], [data-test='cartItem'], [data-testid='cart-item']") ?? null;
   const offerRoot = cartRoot ? null : closestOfferContainer(anchor);
-  const root = cartRoot || offerRoot || anchor?.closest("[data-test*='buy-box' i], [data-test='product-detail'], [data-test*='fulfillment' i]") || document;
-  const region = queryVisible(root, ["[data-test*='sold-by' i]", "[data-test*='seller' i]", "[data-testid*='seller' i]"]);
+  const root = cartRoot || offerRoot || anchor?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document;
+  const region = queryVisible(root, TARGET_SELLER_SELECTORS);
   const seller = text(region, 500);
   const scope = text(root, 60_000);
   if (FIRST_PARTY_PATTERN.test(seller)) return { sellerName: "Target", sellerType: "first_party" };
@@ -489,21 +579,35 @@ export function observeTargetOffer(
   urlValue: string,
   expectedSku: string,
   requiredFulfillment: Fulfillment,
-  observedAt = new Date().toISOString()
+  observedAt = new Date().toISOString(),
+  environment?: AdapterEnvironment
 ): LiveOfferObservation {
+  if (environment) {
+    return withAdapterEnvironment(environment, () => observeTargetOffer(
+      document, urlValue, expectedSku, requiredFulfillment, observedAt
+    ));
+  }
   const pageSku = extractTargetSku(urlValue);
   const selected = pageSku === expectedSku
     ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment)
     : emptyTargetAddBinding();
   const seller = sellerEvidence(document, selected.control);
-  const priceRoot = selected.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main")
-    || selected.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || document;
+  const priceRoot = selected.offerRoot?.closest(TARGET_PRIMARY_SCOPE_SELECTOR)
+    || selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document;
   const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS);
   const blocked = targetInteractiveBlock(document);
   const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
   const availability = blocked ? "unknown"
     : selectedControlActionable ? "in_stock"
       : pageSku === expectedSku && targetExplicitlyUnavailable(document) ? "out_of_stock" : "unknown";
+  recordTrace({
+    step: "availability",
+    condition: "offer.availability",
+    expected: "in_stock",
+    actual: availability,
+    passed: availability === "in_stock",
+    ...(availability === "in_stock" ? {} : { reject: "not_actionable" })
+  });
   return {
     contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
     observedAt,
@@ -527,8 +631,14 @@ export function observeTargetSelectedOfferScope(
   document: Document,
   urlValue: string,
   expectedSku: string,
-  requiredFulfillment: Fulfillment = "shipping"
-) {
+  requiredFulfillment: Fulfillment = "shipping",
+  environment?: AdapterEnvironment
+): ReturnType<typeof selectedOfferScope> {
+  if (environment) {
+    return withAdapterEnvironment(environment, () => observeTargetSelectedOfferScope(
+      document, urlValue, expectedSku, requiredFulfillment
+    ));
+  }
   const pageSku = extractTargetSku(urlValue);
   if (!pageSku || pageSku !== expectedSku) throw new Error("The exact Target listing identity is unavailable.");
   const selected = targetAddBinding(document, urlValue, expectedSku, requiredFulfillment);
@@ -536,7 +646,7 @@ export function observeTargetSelectedOfferScope(
     document,
     "target",
     pageSku,
-    selected.control?.closest("[data-test='product-detail'], main") || document
+    selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document
   );
 }
 
@@ -545,7 +655,7 @@ function boundedDiagnosticCount(value: number): number {
 }
 
 function targetGenericAddIntentControls(document: Document): Element[] {
-  return [...document.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")]
+  const controls = [...document.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")]
     .filter((candidate) => visible(candidate) && !recommendationControl(candidate))
     .filter((candidate) => /\b(?:add(?:\s+(?:item\s+)?to)?\s+cart|pre[ -]?order)\b/i.test([
       candidate.getAttribute("aria-label"),
@@ -555,13 +665,23 @@ function targetGenericAddIntentControls(document: Document): Element[] {
       candidate.getAttribute("data-testid"),
       text(candidate, 300)
     ].filter(Boolean).join(" ")));
+  recordTrace({
+    step: "add_control",
+    selector: "semantic:add-intent",
+    matched: controls.length,
+    visible: controls.length,
+    scoped: 0,
+    chosen: controls.length === 1 ? 1 : 0,
+    ...(controls.length === 1 ? {} : { reject: "ambiguous" })
+  });
+  return controls;
 }
 
 function targetDiagnosticScopeKind(control: Element | null): RetailerAdapterLayoutEvidence["scopeKind"] {
   if (!control) return "none";
   if (control.closest("form")) return "form";
-  if (control.closest("[data-test*='buy-box' i], [data-testid*='buy-box' i]")) return "buybox";
-  if (control.closest(`${TARGET_FULFILLMENT_ROOT_SELECTOR}, [data-test='product-detail'], main`)) return "other";
+  if (control.closest(TARGET_PRIMARY_SCOPE_SELECTOR)) return "buybox";
+  if (control.closest(TARGET_FULFILLMENT_ROOT_SELECTOR)) return "other";
   return "other";
 }
 
@@ -587,8 +707,14 @@ export function targetAdapterLayoutEvidence(
   document: Document,
   urlValue: string,
   expectedSku: string,
-  requiredFulfillment: Fulfillment = "shipping"
+  requiredFulfillment: Fulfillment = "shipping",
+  environment?: AdapterEnvironment
 ): RetailerAdapterLayoutEvidence {
+  if (environment) {
+    return withAdapterEnvironment(environment, () => targetAdapterLayoutEvidence(
+      document, urlValue, expectedSku, requiredFulfillment
+    ));
+  }
   const pageSku = extractTargetSku(urlValue);
   const binding = pageSku === expectedSku
     ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment)
@@ -596,8 +722,8 @@ export function targetAdapterLayoutEvidence(
   const packagedControls = pageSku === expectedSku
     ? [...new Set([...addControls(document, expectedSku), ...(binding.control ? [binding.control] : [])])]
     : [];
-  const evidenceRoot = binding.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main")
-    || binding.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main")
+  const evidenceRoot = binding.offerRoot?.closest(TARGET_PRIMARY_SCOPE_SELECTOR)
+    || binding.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR)
     || binding.offerRoot
     || document;
   const packagedPriceCandidates = [...evidenceRoot.querySelectorAll(TARGET_CURRENT_PRICE_SELECTORS.join(", "))]
@@ -632,7 +758,7 @@ export function targetAdapterLayoutEvidence(
     alternateOfferDistinctCount: 0,
     priceCandidateCount: boundedDiagnosticCount(priceCandidates.length),
     quantityControlCount: boundedDiagnosticCount([
-      ...evidenceRoot.querySelectorAll("select[name*='quantity' i], input[name*='quantity' i], [data-test*='quantity' i]")
+      ...evidenceRoot.querySelectorAll(TARGET_QUANTITY_SELECTORS.join(", "))
     ].filter(visible).length),
     securityChallenge: targetSecurityChallenge(document),
     interactiveBlock: targetInteractiveBlock(document)
@@ -650,7 +776,7 @@ function lineSku(line: Element): string {
 }
 
 function lineQuantity(line: Element): number | null {
-  const control = queryVisible(line, ["select[name*='quantity' i]", "input[name*='quantity' i]", "[data-test*='quantity' i]"]);
+  const control = queryVisible(line, TARGET_QUANTITY_SELECTORS);
   const candidate = control?.getAttribute("value") || formControlValue(control) || text(control, 100);
   const match = String(candidate).match(/(?:qty|quantity)?\s*:?\s*(\d{1,2})/i);
   const quantity = Number(match?.[1]);

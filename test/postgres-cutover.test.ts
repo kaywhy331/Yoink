@@ -27,6 +27,7 @@ import {
   type PostgresQuerySession
 } from "../packages/database/src/postgres-cutover.js";
 import {
+  POSTGRES_ADAPTER_PACK_VERSION_TABLES,
   POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION,
   buildPostgresSchemaManifest
 } from "../packages/database/src/postgres-schema-manifest.js";
@@ -1634,6 +1635,17 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
         AND column_default IS NOT NULL
     `);
     assert.equal(defaultCount.rows[0]?.count, imported.manifest.defaultExpressionCount);
+    const packVersionColumns = await postgres.query<{ table_name: string; is_nullable: string }>(`
+      SELECT table_name, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'yoink_cutover_test'
+        AND column_name = 'pack_version'
+      ORDER BY table_name
+    `);
+    assert.deepEqual(
+      packVersionColumns.rows.map((row) => [row.table_name, row.is_nullable]),
+      POSTGRES_ADAPTER_PACK_VERSION_TABLES.map((tableName) => [tableName, "YES"])
+    );
 
     await postgres.query("BEGIN");
     await postgres.query(

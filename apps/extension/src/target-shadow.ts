@@ -1,5 +1,8 @@
 import {
+  createAdapterTraceBuffer,
   TARGET_OBSERVER_VERSION,
+  type AdapterEnvironment,
+  type AdapterTraceEntry,
   type Fulfillment,
   type RetailerAdapterDiagnosticInput,
   type RetailerAdapterDiagnosticOutcome,
@@ -17,13 +20,16 @@ import {
 export function collectTargetShadowObservation(
   documentValue: Document = globalThis.document,
   urlValue: string = globalThis.location?.href ?? "",
-  requiredFulfillment: Fulfillment = "shipping"
+  requiredFulfillment: Fulfillment = "shipping",
+  environment?: AdapterEnvironment
 ): TargetShadowObservationInput {
   if (!documentValue) throw new Error("The current Target page is unavailable.");
   const retailerSku = extractTargetSku(urlValue);
   if (!retailerSku) throw new Error("Open an exact Target product page before inspecting it.");
   const fulfillmentPreference = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-  const observation = observeTargetOffer(documentValue, urlValue, retailerSku, fulfillmentPreference);
+  const observation = observeTargetOffer(
+    documentValue, urlValue, retailerSku, fulfillmentPreference, undefined, environment
+  );
   if (observation.pageKind !== "product" || observation.retailerId !== "target" || observation.retailerSku !== retailerSku) {
     throw new Error("The exact Target product page could not be verified.");
   }
@@ -46,7 +52,9 @@ export function collectTargetShadowObservation(
     addControlActionable: observation.addControlActionable,
     securityChallenge: observation.securityChallenge,
     interactiveBlock: observation.interactiveBlock,
-    selectedOffer: observeTargetSelectedOfferScope(documentValue, urlValue, retailerSku, fulfillmentPreference)
+    selectedOffer: observeTargetSelectedOfferScope(
+      documentValue, urlValue, retailerSku, fulfillmentPreference, environment
+    )
   });
 }
 
@@ -69,10 +77,10 @@ function targetObservationDiagnosticState(
     };
   }
   if (observation.availability === "out_of_stock") {
-    return { outcome: "rejected", failureStage: "availability_binding", reasonCode: "out_of_stock" };
+    return { outcome: "rejected", failureStage: "availability_binding", reasonCode: "listing_unavailable_layout" };
   }
   if (observation.selectedOffer?.selectionState === "unresolved") {
-    return { outcome: "failed", failureStage: "offer_binding", reasonCode: "selected_offer_binding_unresolved" };
+    return { outcome: "rejected", failureStage: "offer_binding", reasonCode: "listing_variant_unselected" };
   }
   if (layout.addControlCount === 0) {
     return {
@@ -107,14 +115,26 @@ export function collectTargetShadowAttempt(
   urlValue: string = globalThis.location?.href ?? "",
   requiredFulfillment: Fulfillment = "shipping",
   attemptCount = 1,
-  domChanged = false
-): { observation: TargetShadowObservationInput; diagnostic: RetailerAdapterDiagnosticInput } {
-  const observation = collectTargetShadowObservation(documentValue, urlValue, requiredFulfillment);
+  domChanged = false,
+  environment?: AdapterEnvironment
+): { observation: TargetShadowObservationInput; diagnostic: RetailerAdapterDiagnosticInput; trace?: AdapterTraceEntry[] } {
+  const traceBuffer = environment ? createAdapterTraceBuffer() : null;
+  const tracedEnvironment = environment && traceBuffer ? {
+    ...environment,
+    trace: {
+      record(entry: AdapterTraceEntry) {
+        traceBuffer.record(entry);
+        environment.trace?.record(entry);
+      }
+    }
+  } satisfies AdapterEnvironment : undefined;
+  const observation = collectTargetShadowObservation(documentValue, urlValue, requiredFulfillment, tracedEnvironment);
   const layout = targetAdapterLayoutEvidence(
     documentValue,
     urlValue,
     observation.retailerSku,
-    requiredFulfillment
+    requiredFulfillment,
+    tracedEnvironment
   );
   const state = targetObservationDiagnosticState(observation, layout);
   return {
@@ -132,7 +152,8 @@ export function collectTargetShadowAttempt(
       attemptCount: Math.max(1, Math.min(3, Math.trunc(attemptCount) || 1)),
       domChanged: domChanged === true,
       layout
-    }
+    },
+    ...(traceBuffer ? { trace: traceBuffer.entries } : {})
   };
 }
 

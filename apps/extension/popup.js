@@ -251,6 +251,7 @@ function render() {
 
   $("#syncProducts").hidden = !view.menu.syncProducts;
   $("#shareEvidence").hidden = !view.menu.shareEvidence;
+  $("#saveRepairPage").hidden = !view.menu.saveRepairPage;
   $("#checkUpdate").hidden = !view.menu.checkUpdates;
   $("#cartReadySound").setAttribute("aria-checked", String(ui.cartReadySoundEnabled));
   $("#cartReadySound").querySelector(".menu-check").textContent = ui.cartReadySoundEnabled ? "On" : "Off";
@@ -586,6 +587,25 @@ async function shareEvidence() {
   }
 }
 
+async function saveRepairPage() {
+  if (ui.page.kind !== "product") return;
+  closePanels(false);
+  try {
+    await requestRetailerAccess();
+    setOperation("saving");
+    const response = await chrome.runtime.sendMessage({ type: "yoink:save-repair-page" });
+    if (!response?.ok) throw new Error(response?.message || "Could not save this page. Open the product page and try again.");
+    if (response.state) ui.health = response.state;
+    ui.notice = "Saved on this computer";
+    showToast(ui.notice);
+    announce(ui.notice);
+  } catch (error) {
+    showToast(errorMessage(error, "Could not save this page. Open the product page and try again."), true);
+  } finally {
+    setOperation("idle");
+  }
+}
+
 async function handlePrimaryAction() {
   const action = ui.view?.primaryAction?.id;
   if (!action || ui.view.primaryAction.disabled) return;
@@ -691,6 +711,7 @@ function bindEvents() {
     render();
     $("#primaryAction").focus();
   });
+  $("#saveRepairPage").addEventListener("click", () => { void saveRepairPage(); });
   $("#activityAction").addEventListener("click", () => {
     const action = ui.view?.activity?.action;
     if (action === "open_purchase") void openPurchaseOpportunity();

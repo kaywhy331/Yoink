@@ -1,0 +1,22 @@
+{
+  "capsuleId": "cap_target95238329selector",
+  "capturedAt": "2026-09-04T21:00:00.000Z",
+  "url": "https://www.target.com/p/fixture/-/A-95238329",
+  "retailerId": "target",
+  "retailerSku": "95238329",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "target-observer-v6",
+  "addAdapterVersion": "target-add-v8",
+  "packVersion": "target-pack-v1",
+  "sha256": "42d106b694222472db486017fb5302013b519778dde314696a5aea68c1f19abd",
+  "expectations": {
+    "outcome": "failed",
+    "failureStage": "add_control",
+    "reasonCode": "add_control_selector_miss",
+    "unitPriceCents": 539,
+    "sellerType": "first_party"
+  },
+  "notes": "Promoted from the sanitized Target 95238329 selector-miss acceptance capture.",
+  "allowReason": ""
+}

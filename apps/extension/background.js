@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("runtime-config.js", "popup-state.js", "trackalacker-push.js", "observer-recipe-root.js");
+importScripts("runtime-config.js", "adapter-versions.js", "add-lanes.js", "popup-state.js", "trackalacker-push.js", "observer-recipe-root.js");
 
 function normalizedRuntimeOrigin(value, profile) {
   const parsed = new URL(String(value || ""));
@@ -87,6 +87,10 @@ const HYDRATION_RETRYABLE_STAGES = Object.freeze([
   "availability_binding", "add_control", "sku_binding", "offer_binding",
   "price_binding", "seller_binding", "fulfillment_binding", "route_binding"
 ]);
+const EVIDENCE_CAPSULE_BINDING_STAGES = Object.freeze([
+  "availability_binding", "add_control", "sku_binding", "offer_binding",
+  "price_binding", "seller_binding", "fulfillment_binding", "quantity_binding", "route_binding"
+]);
 const REVERIFICATION_PARKED_REASONS = new Set([
   "manual_action_required", "retailer_access_missing", "action_job_active",
   "retailer_session_signed_out", "retailer_session_challenged"
@@ -127,11 +131,13 @@ const LEGACY_OBSERVER_RECIPE_KEY_PIN = "yoinkObserverRecipeKeyPinV1";
 const OBSERVER_RECIPE_TRUST_STATE_KEY = "yoinkObserverRecipeTrustStateV1";
 const OBSERVER_RECIPE_STATUS_KEY = "yoinkObserverRecipeStatusV1";
 const ADAPTER_DIAGNOSTIC_QUEUE_KEY = "yoinkAdapterDiagnosticQueueV1";
+const EVIDENCE_CAPSULE_QUEUE_KEY = "yoinkEvidenceCapsuleQueueV1";
 const QUALIFICATION_LAUNCH_HASH = "yoink-inspect-and-qualify";
 const COMMUNITY_CONTRIBUTION_INTERVAL_MS = 60_000;
 const CONTEXT_MENU_IDS = Object.freeze({
   open: "yoink-open",
   inspectProduct: "yoink-inspect-product",
+  saveRepair: "yoink-save-repair-page",
   inspectDrawings: "yoink-inspect-drawings",
   reconnect: "yoink-reconnect-trackalacker",
   sync: "yoink-sync-products",
@@ -140,6 +146,8 @@ const CONTEXT_MENU_IDS = Object.freeze({
 const TRACKALACKER_PUSH_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_MAX_AGE_MS = 9 * 60_000;
+const EVIDENCE_CAPSULE_QUEUE_LIMIT = 2;
+const EVIDENCE_CAPSULE_QUEUE_MAX_ATTEMPTS = 3;
 const qualificationLaunchTabs = new Map();
 let qualificationLaunchQueue = Promise.resolve();
 const DEVICE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
@@ -161,21 +169,15 @@ const RETAILER_ORIGINS = {
   pbandai: ["https://*.p-bandai.com/*"],
   pokemoncenter: ["https://*.pokemoncenter.com/*"]
 };
-const TARGET_OBSERVER_VERSION = "target-observer-v6";
-const RETAILER_OBSERVER_VERSIONS = {
-  walmart: "walmart-observer-v7",
-  amazon: "amazon-observer-v8",
-  bestbuy: "bestbuy-observer-v10",
-  disney: "disney-observer-v1",
-  ravensburger: "ravensburger-observer-v1",
-  riot: "riot-observer-v1",
-  booksamillion: "booksamillion-observer-v1",
-  fanatics: "fanatics-observer-v1",
-  kohls: "kohls-observer-v1",
-  macys: "macys-observer-v1",
-  pbandai: "pbandai-observer-v2",
-  pokemoncenter: "pokemoncenter-observer-v2"
-};
+const ADAPTER_VERSIONS = globalThis.YoinkAdapterVersions;
+if (!ADAPTER_VERSIONS?.observer?.target || !ADAPTER_VERSIONS?.add?.target
+  || !ADAPTER_VERSIONS?.walmartDrawObserver) {
+  throw new Error("Yoink Companion has no generated adapter version map.");
+}
+const TARGET_OBSERVER_VERSION = ADAPTER_VERSIONS.observer.target;
+const RETAILER_OBSERVER_VERSIONS = Object.freeze(Object.fromEntries(
+  Object.entries(ADAPTER_VERSIONS.observer).filter(([retailerId]) => retailerId !== "target")
+));
 const RETAILER_SKU_PATTERNS = Object.freeze({
   walmart: /^\d{5,20}$/,
   amazon: /^[A-Z0-9]{10}$/,
@@ -195,61 +197,43 @@ const SUPPORTED_RETAILER_DOMAINS = Object.freeze([
   "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
   "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
 ]);
-const TARGET_ADD_ADAPTER_VERSION = "target-add-v8";
-const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v8";
-const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
-const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
-const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v11";
-const TARGET_CART_URL = "https://www.target.com/cart";
-const WALMART_CART_URL = "https://www.walmart.com/cart";
-const AMAZON_CART_URL = "https://www.amazon.com/gp/cart/view.html";
-const BESTBUY_CART_URL = "https://www.bestbuy.com/cart";
-const ADD_LANES = Object.freeze({
-  target: Object.freeze({
-    name: "Target",
-    adapterVersion: TARGET_ADD_ADAPTER_VERSION,
-    cartUrl: TARGET_CART_URL,
-    runnerFile: "target-action.js",
-    runnerGlobal: "YoinkTargetAction",
-    baselineOperation: "inspectTargetCartBaseline",
-    prepareOperation: "prepareTargetAdd",
-    commitOperation: "commitTargetAdd",
-    verifyCartOperation: "verifyTargetAddedCart"
-  }),
-  walmart: Object.freeze({
-    name: "Walmart",
-    adapterVersion: WALMART_ADD_ADAPTER_VERSION,
-    cartUrl: WALMART_CART_URL,
-    runnerFile: "walmart-action.js",
-    runnerGlobal: "YoinkWalmartAction",
-    baselineOperation: "inspectWalmartCartBaseline",
-    prepareOperation: "prepareWalmartAdd",
-    commitOperation: "commitWalmartAdd",
-    verifyCartOperation: "verifyWalmartAddedCart"
-  }),
-  amazon: Object.freeze({
-    name: "Amazon",
-    adapterVersion: AMAZON_ADD_ADAPTER_VERSION,
-    cartUrl: AMAZON_CART_URL,
-    runnerFile: "amazon-action.js",
-    runnerGlobal: "YoinkAmazonAction",
-    baselineOperation: "inspectAmazonCartBaseline",
-    prepareOperation: "prepareAmazonAdd",
-    commitOperation: "commitAmazonAdd",
-    verifyCartOperation: "verifyAmazonAddedCart"
-  }),
-  bestbuy: Object.freeze({
-    name: "Best Buy",
-    adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
-    cartUrl: BESTBUY_CART_URL,
-    runnerFile: "bestbuy-action.js",
-    runnerGlobal: "YoinkBestBuyAction",
-    baselineOperation: "inspectBestBuyCartBaseline",
-    prepareOperation: "prepareBestBuyAdd",
-    commitOperation: "commitBestBuyAdd",
-    verifyCartOperation: "verifyBestBuyAddedCart"
-  })
-});
+const WALMART_DRAW_OBSERVER_VERSION = ADAPTER_VERSIONS.walmartDrawObserver;
+const PACKAGED_ADD_LANES = globalThis.YoinkAddLaneRegistryModule?.ADD_LANES;
+if (!PACKAGED_ADD_LANES) throw new Error("Yoink Companion has no packaged add-lane registry.");
+const ADD_LANES = Object.freeze(Object.fromEntries(Object.entries(PACKAGED_ADD_LANES).map(([retailerId, lane]) => {
+  if (lane.id !== retailerId
+    || lane.contractVersion !== ADAPTER_VERSIONS.add[retailerId]
+    || lane.observerVersion !== ADAPTER_VERSIONS.observer[retailerId]
+    || lane.packVersion !== ADAPTER_VERSIONS.pack[retailerId]) {
+    throw new Error(`Yoink Companion has skewed ${retailerId} add-lane metadata.`);
+  }
+  return [retailerId, Object.freeze({
+    ...lane,
+    adapterVersion: lane.contractVersion,
+    baselineOperation: lane.operations.baseline,
+    prepareOperation: lane.operations.prepare,
+    commitOperation: lane.operations.commit,
+    verifyCartOperation: lane.operations.verifyCart
+  })];
+})));
+const LEGACY_ADD_CAPABILITY_VERSION_KEYS = Object.freeze([
+  "targetAddAdapterVersion",
+  "walmartAddAdapterVersion",
+  "amazonAddAdapterVersion",
+  "bestBuyAddAdapterVersion"
+]);
+if (!LEGACY_ADD_CAPABILITY_VERSION_KEYS.every((key) =>
+  Object.values(ADD_LANES).some((lane) => lane.capability.version === key))) {
+  throw new Error("Yoink Companion is missing an existing add-lane capability alias.");
+}
+const REQUIRED_BESTBUY_REHEARSAL_GUIDANCE = Object.freeze([
+  "Sign in to Best Buy in this tab, confirm your location, then retry qualification.",
+  "Complete the visible Best Buy security check in this tab, then retry qualification."
+]);
+if (!REQUIRED_BESTBUY_REHEARSAL_GUIDANCE.every((message) =>
+  Object.values(ADD_LANES.bestbuy.rehearsalGuidance).includes(message))) {
+  throw new Error("Yoink Companion is missing required Best Buy stop guidance.");
+}
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const TrackalackerPush = globalThis.YoinkTrackalackerPush;
 const ObserverRecipeRoot = globalThis.YoinkObserverRecipeRoot;
@@ -274,6 +258,8 @@ const retailerSessionRefreshes = new Map();
 let offscreenDocumentPromise = null;
 let adapterDiagnosticDrainPromise = null;
 let adapterDiagnosticQueueLock = Promise.resolve();
+let evidenceCapsuleDrainPromise = null;
+let evidenceCapsuleQueueLock = Promise.resolve();
 let deviceCredentialRotationPromise = null;
 
 function readiness(connected, details = {}, device = null) {
@@ -298,6 +284,8 @@ function readiness(connected, details = {}, device = null) {
     walmartAddExecutionEnabled: details.walmartAddExecutionEnabled === true,
     amazonAddExecutionEnabled: details.amazonAddExecutionEnabled === true,
     bestBuyAddExecutionEnabled: details.bestBuyAddExecutionEnabled === true,
+    localEvidenceCapsules: details.localEvidenceCapsules === true,
+    evidenceCapsuleTransport: details.evidenceCapsuleTransport === "loopback" ? "loopback" : "none",
     targetAddCapable: true,
     walmartAddCapable: true,
     amazonAddCapable: true,
@@ -311,19 +299,16 @@ function readiness(connected, details = {}, device = null) {
 }
 
 function targetCapabilities() {
+  const addLaneCapabilities = Object.fromEntries(Object.values(ADD_LANES).flatMap((lane) => [
+    [lane.capability.enabled, true],
+    [lane.capability.version, lane.contractVersion]
+  ]));
   return {
     readiness: true,
     jobReconciliation: true,
     notifications: true,
     retailerMutation: false,
-    targetAddOnly: true,
-    targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION,
-    walmartAddOnly: true,
-    walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION,
-    amazonAddOnly: true,
-    amazonAddAdapterVersion: AMAZON_ADD_ADAPTER_VERSION,
-    bestBuyAddOnly: true,
-    bestBuyAddAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
+    ...addLaneCapabilities,
     retailerShadow: true,
     communityReadOnlyEvidence: true,
     exactSelectedOfferEvidence: true,
@@ -333,6 +318,7 @@ function targetCapabilities() {
     sanitizedAdapterDiagnostics: true,
     durableAdapterDiagnostics: true,
     privacyBoundedRepairLandmarks: true,
+    localEvidenceCapsules: RUNTIME_CONFIG.profile === "local",
     rotatableDeviceCredentials: true,
     productionTransportProfile: RUNTIME_CONFIG.profile === "production",
     managedExtensionUpdates: RUNTIME_CONFIG.profile === "production",
@@ -867,6 +853,7 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   "offer_binding_missing", "offer_binding_ambiguous", "price_selector_miss", "price_binding_missing",
   "seller_selector_miss", "seller_binding_missing", "fulfillment_selector_miss", "fulfillment_binding_missing",
   "selected_offer_binding_unresolved",
+  "listing_unavailable_layout", "listing_variant_unselected",
   "offer_scope_not_actionable",
   "not_applicable", "offer_not_actionable", "offer_id_missing_or_ambiguous",
   "offer_route_verified", "route_validation_failed", "route_binding_failed",
@@ -934,6 +921,7 @@ function retailerDiagnosticPayload(value, retailerId, overrides = {}) {
   const outcome = String(overrides.outcome || value.outcome || "");
   const failureStage = String(overrides.failureStage || value.failureStage || "");
   const reasonCode = safeReasonCode(overrides.reasonCode || value.reasonCode);
+  const packVersion = String(overrides.packVersion || value.packVersion || ADAPTER_VERSIONS.pack[retailerId] || "");
   const expectedAdapterVersion = operation === "observe"
     ? observerVersionForRetailer(retailerId)
     : ADD_LANES[retailerId]?.adapterVersion;
@@ -1001,6 +989,7 @@ function retailerDiagnosticPayload(value, retailerId, overrides = {}) {
     retailerId,
     retailerSku: String(value.retailerSku || "").toUpperCase(),
     adapterVersion: expectedAdapterVersion,
+    packVersion,
     operation,
     outcome,
     failureStage,
@@ -1135,6 +1124,188 @@ async function drainAdapterDiagnosticQueue() {
   return adapterDiagnosticDrainPromise;
 }
 
+function evidenceCapsuleRetryable(error) {
+  const status = Number(error?.status || 0);
+  return !status || status >= 500 || [408, 429].includes(status);
+}
+
+function withEvidenceCapsuleQueueLock(work) {
+  const next = evidenceCapsuleQueueLock.then(work, work);
+  evidenceCapsuleQueueLock = next.then(() => undefined, () => undefined);
+  return next;
+}
+
+function queuedEvidenceCapsule(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || !/^[A-Za-z0-9_-]{3,160}$/.test(String(value.deviceId || ""))
+    || !value.capsule || typeof value.capsule !== "object" || Array.isArray(value.capsule)
+    || !/^cap_[A-Za-z0-9_-]{8,120}$/.test(String(value.capsule.id || ""))) return null;
+  const attempts = Number(value.attempts || 0);
+  if (!Number.isInteger(attempts) || attempts < 0 || attempts >= EVIDENCE_CAPSULE_QUEUE_MAX_ATTEMPTS) return null;
+  return { deviceId: String(value.deviceId), capsule: value.capsule, attempts };
+}
+
+async function readEvidenceCapsuleQueueUnlocked() {
+  const stored = (await chrome.storage.local.get(EVIDENCE_CAPSULE_QUEUE_KEY))[EVIDENCE_CAPSULE_QUEUE_KEY];
+  if (!Array.isArray(stored)) return [];
+  const ids = new Set();
+  const result = [];
+  for (let index = stored.length - 1; index >= 0; index -= 1) {
+    const entry = queuedEvidenceCapsule(stored[index]);
+    if (!entry || ids.has(entry.capsule.id)) continue;
+    ids.add(entry.capsule.id);
+    result.unshift(entry);
+  }
+  return result.slice(-EVIDENCE_CAPSULE_QUEUE_LIMIT);
+}
+
+async function enqueueEvidenceCapsule(device, capsule, attempts = 1) {
+  if (RUNTIME_CONFIG.profile !== "local" || attempts >= EVIDENCE_CAPSULE_QUEUE_MAX_ATTEMPTS
+    || !/^[A-Za-z0-9_-]{3,160}$/.test(String(device?.id || ""))) return null;
+  return withEvidenceCapsuleQueueLock(async () => {
+    const current = await readEvidenceCapsuleQueueUnlocked();
+    const next = [
+      ...current.filter((entry) => entry.capsule.id !== capsule.id),
+      { deviceId: String(device.id), capsule, attempts }
+    ].slice(-EVIDENCE_CAPSULE_QUEUE_LIMIT);
+    try {
+      await chrome.storage.local.set({ [EVIDENCE_CAPSULE_QUEUE_KEY]: next });
+      return next.at(-1) || null;
+    } catch {
+      // A large snapshot may exhaust extension storage. Capture remains fail-closed and never escapes locally.
+      return null;
+    }
+  });
+}
+
+async function sendEvidenceCapsule(device, capsule) {
+  if (RUNTIME_CONFIG.profile !== "local") return null;
+  return request(`/devices/self/evidence-capsules/${encodeURIComponent(capsule.retailerId)}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify(capsule)
+  }, EVIDENCE_REQUEST_TIMEOUT_MS);
+}
+
+async function postEvidenceCapsule(device, capsule) {
+  if (RUNTIME_CONFIG.profile !== "local") return null;
+  try {
+    return await sendEvidenceCapsule(device, capsule);
+  } catch (error) {
+    if (Number(error?.status || 0) === 409) return { duplicate: true };
+    if (evidenceCapsuleRetryable(error)) await enqueueEvidenceCapsule(device, capsule, 1);
+    throw error;
+  }
+}
+
+async function drainEvidenceCapsuleQueue() {
+  if (RUNTIME_CONFIG.profile !== "local") return { delivered: 0, pending: 0 };
+  if (evidenceCapsuleDrainPromise) return evidenceCapsuleDrainPromise;
+  evidenceCapsuleDrainPromise = withEvidenceCapsuleQueueLock(async () => {
+    const current = await readEvidenceCapsuleQueueUnlocked();
+    const device = await storedDevice();
+    if (!device?.id || !device?.token) return { delivered: 0, pending: current.length };
+    const remaining = [];
+    let delivered = 0;
+    for (const entry of current) {
+      if (entry.deviceId !== device.id) continue;
+      try {
+        await sendEvidenceCapsule(device, entry.capsule);
+        delivered += 1;
+      } catch (error) {
+        if (Number(error?.status || 0) === 409) {
+          delivered += 1;
+          continue;
+        }
+        const attempts = entry.attempts + 1;
+        if (evidenceCapsuleRetryable(error) && attempts < EVIDENCE_CAPSULE_QUEUE_MAX_ATTEMPTS) {
+          remaining.push({ ...entry, attempts });
+        }
+      }
+    }
+    await chrome.storage.local.set({ [EVIDENCE_CAPSULE_QUEUE_KEY]: remaining.slice(-EVIDENCE_CAPSULE_QUEUE_LIMIT) });
+    return { delivered, pending: remaining.length };
+  }).finally(() => { evidenceCapsuleDrainPromise = null; });
+  return evidenceCapsuleDrainPromise;
+}
+
+function evidenceCapsuleTrigger(diagnostic, manual = false) {
+  if (manual) return "manual";
+  if (diagnostic?.operation === "observe" && diagnostic?.outcome === "failed") return "diagnostic_failed";
+  if (!["rehearse_add", "live_add"].includes(diagnostic?.operation)
+    || !["failed", "rejected"].includes(diagnostic?.outcome)
+    || !EVIDENCE_CAPSULE_BINDING_STAGES.includes(diagnostic?.failureStage)) return "";
+  return diagnostic.operation === "rehearse_add" ? "rehearsal_non_pass" : "live_add_non_pass";
+}
+
+async function captureTabEvidenceCapsule(
+  tabId,
+  diagnostic,
+  { manual = false, requiredFulfillment = "shipping", trace = [] } = {}
+) {
+  if (RUNTIME_CONFIG.profile !== "local") return null;
+  const trigger = evidenceCapsuleTrigger(diagnostic, manual);
+  if (!trigger) return null;
+  const readinessState = (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY];
+  if (readinessState?.localEvidenceCapsules === false) {
+    if (manual) throw new Error("Page snapshots for store repairs are turned off in Yoink settings.");
+    return null;
+  }
+  const device = await storedDevice();
+  if (!device?.id || !device?.token) {
+    if (manual) throw new Error("Pair this Chrome companion before saving a page snapshot.");
+    return null;
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    files: ["evidence-capsule.js"]
+  });
+  const injections = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    args: [{
+      retailerId: diagnostic.retailerId,
+      retailerSku: diagnostic.retailerSku,
+      diagnostic,
+      trigger,
+      observerVersion: observerVersionForRetailer(diagnostic.retailerId),
+      addAdapterVersion: ADD_LANES[diagnostic.retailerId]?.adapterVersion || "",
+      packVersion: ADAPTER_VERSIONS.pack[diagnostic.retailerId] || "",
+      extensionVersion: EXTENSION_VERSION,
+      requiredFulfillment: requiredFulfillment === "pickup" ? "pickup" : "shipping",
+      trace: Array.isArray(trace) ? trace : [],
+      budgetMs: 1_500
+    }],
+    func: async (input) => {
+      try {
+        const api = globalThis.YoinkEvidenceCapsuleModule;
+        if (!api || typeof api.captureEvidenceCapsule !== "function") {
+          return { ok: false, message: "The page snapshot collector is unavailable." };
+        }
+        const capsule = await api.captureEvidenceCapsule({ ...input, document, url: location.href });
+        return { ok: true, capsule };
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : "The page snapshot could not be created." };
+      }
+    }
+  });
+  const result = injections.find((entry) => entry.frameId === 0)?.result;
+  if (!result?.ok || !result.capsule) {
+    if (manual) throw new Error(result?.message || "The page snapshot could not be created.");
+    return null;
+  }
+  await postEvidenceCapsule(device, result.capsule);
+  return result.capsule;
+}
+
+async function postOperationDiagnosticWithCapsule(device, tabId, diagnostic, requiredFulfillment = "shipping", trace = []) {
+  if (Number.isInteger(tabId)) {
+    await captureTabEvidenceCapsule(tabId, diagnostic, { requiredFulfillment, trace }).catch(() => null);
+  }
+  return postRetailerDiagnostic(device, diagnostic);
+}
+
 function observerRuntimeFailureDiagnostic(identity, reasonCode, attemptCount = 1, domChanged = false) {
   if (!identity || !OBSERVER_RUNTIME_FAILURE_REASONS.has(reasonCode)) {
     throw new Error("The observer runtime failure reason is unsupported.");
@@ -1265,21 +1436,31 @@ async function recordTabOperationDiagnostic(tabId, retailerId, operation, outcom
   const injections = await chrome.scripting.executeScript({
     target: { tabId },
     world: "ISOLATED",
-    args: ["collectOperationDiagnostic", retailerId, requiredFulfillment === "pickup" ? "pickup" : "shipping"],
-    func: (_operationName, exactRetailerId, exactFulfillment) => {
+    args: [
+      "collectOperationDiagnostic",
+      retailerId,
+      requiredFulfillment === "pickup" ? "pickup" : "shipping",
+      RUNTIME_CONFIG.profile === "local"
+    ],
+    func: (_operationName, exactRetailerId, exactFulfillment, collectTrace) => {
       try {
+        const environment = collectTrace ? { trace: { record() {} } } : undefined;
         if (exactRetailerId === "target") {
           const observer = globalThis.YoinkTargetShadow;
           if (!observer || typeof observer.collectTargetShadowAttempt !== "function") {
             return { ok: false, message: "The Target shadow observer is unavailable." };
           }
-          return { ok: true, diagnostic: observer.collectTargetShadowAttempt(document, location.href, exactFulfillment).diagnostic };
+          const attempt = observer.collectTargetShadowAttempt(document, location.href, exactFulfillment, 1, false, environment);
+          return { ok: true, diagnostic: attempt.diagnostic, trace: attempt.trace || [] };
         }
         const observer = globalThis.YoinkRetailerShadow;
         if (!observer || typeof observer.collectRetailerShadowAttempt !== "function") {
           return { ok: false, message: "The retailer shadow observer is unavailable." };
         }
-        return { ok: true, diagnostic: observer.collectRetailerShadowAttempt(document, location.href, exactRetailerId, exactFulfillment).diagnostic };
+        const attempt = observer.collectRetailerShadowAttempt(
+          document, location.href, exactRetailerId, exactFulfillment, 1, false, environment
+        );
+        return { ok: true, diagnostic: attempt.diagnostic, trace: attempt.trace || [] };
       } catch (error) {
         return { ok: false, message: error instanceof Error ? error.message : "The retailer diagnostic could not be collected." };
       }
@@ -1288,6 +1469,10 @@ async function recordTabOperationDiagnostic(tabId, retailerId, operation, outcom
   const result = injections.find((entry) => entry.frameId === 0)?.result;
   if (!result?.ok) throw new Error(result?.message || "The retailer diagnostic could not be collected.");
   const diagnostic = operationDiagnostic(result.diagnostic, retailerId, operation, outcome, failureStage, reasonCode);
+  await captureTabEvidenceCapsule(tabId, diagnostic, {
+    requiredFulfillment,
+    trace: result.trace || []
+  }).catch(() => null);
   return postRetailerDiagnostic(device, diagnostic);
 }
 
@@ -2822,9 +3007,10 @@ async function waitForShadowHydration(tabId, retailerId, targetObserver, attempt
       OBSERVER_HYDRATION_MAX_MS,
       OBSERVER_HYDRATION_QUIET_MS,
       OBSERVER_HYDRATION_FALLBACK_MS,
-      [...HYDRATION_RETRYABLE_STAGES]
+      [...HYDRATION_RETRYABLE_STAGES],
+      RUNTIME_CONFIG.profile === "local"
     ],
-    func: (_operationName, exactRetailerId, useTargetObserver, currentAttempt, initialLayoutSignature, waitMs, quietMs, fallbackMs, retryableStageList) => new Promise((resolve) => {
+    func: (_operationName, exactRetailerId, useTargetObserver, currentAttempt, initialLayoutSignature, waitMs, quietMs, fallbackMs, retryableStageList, collectTrace) => new Promise((resolve) => {
       const observerApi = useTargetObserver ? globalThis.YoinkTargetShadow : globalThis.YoinkRetailerShadow;
       const collectAttempt = useTargetObserver
         ? observerApi?.collectTargetShadowAttempt
@@ -2834,6 +3020,7 @@ async function waitForShadowHydration(tabId, retailerId, targetObserver, attempt
         return;
       }
       const retryableStages = new Set(Array.isArray(retryableStageList) ? retryableStageList : []);
+      const environment = collectTrace ? { trace: { record() {} } } : undefined;
       let settled = false;
       let mutationSeen = false;
       let mutationTimer;
@@ -2854,8 +3041,8 @@ async function waitForShadowHydration(tabId, retailerId, targetObserver, attempt
         let attempt;
         try {
           attempt = useTargetObserver
-            ? collectAttempt(document, location.href, "shipping", currentAttempt, mutationSeen)
-            : collectAttempt(document, location.href, exactRetailerId, "shipping", currentAttempt, mutationSeen);
+            ? collectAttempt(document, location.href, "shipping", currentAttempt, mutationSeen, environment)
+            : collectAttempt(document, location.href, exactRetailerId, "shipping", currentAttempt, mutationSeen, environment);
         } catch {
           finish({ ok: false, reasonCode: "observer_collection_failed" });
           return;
@@ -2932,14 +3119,17 @@ async function inspectTargetTab(tabId = null) {
         const injections = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           world: "ISOLATED",
-          args: ["collectTargetShadowAttempt", attemptCount, domChanged],
-          func: (_operationName, currentAttempt, changed) => {
+          args: ["collectTargetShadowAttempt", attemptCount, domChanged, RUNTIME_CONFIG.profile === "local"],
+          func: (_operationName, currentAttempt, changed, collectTrace) => {
             try {
               const observer = globalThis.YoinkTargetShadow;
               if (!observer || typeof observer.collectTargetShadowAttempt !== "function") {
                 return { ok: false, reasonCode: "observer_runtime_unavailable" };
               }
-              return { ok: true, ...observer.collectTargetShadowAttempt(document, location.href, "shipping", currentAttempt, changed) };
+              const environment = collectTrace ? { trace: { record() {} } } : undefined;
+              return { ok: true, ...observer.collectTargetShadowAttempt(
+                document, location.href, "shipping", currentAttempt, changed, environment
+              ) };
             } catch {
               return { ok: false, reasonCode: "observer_collection_failed" };
             }
@@ -2981,7 +3171,11 @@ async function inspectTargetTab(tabId = null) {
     if (result.domChanged === true) domChanged = true;
     if (priorLayout && priorLayout !== layoutSignature) domChanged = true;
     priorLayout = layoutSignature;
-    attempts.push({ observation, diagnostic });
+    attempts.push({
+      observation,
+      diagnostic,
+      trace: Array.isArray(result.trace) ? result.trace : []
+    });
     const retryable = diagnostic.outcome === "failed"
       && !diagnostic.layout.securityChallenge
       && !diagnostic.layout.interactiveBlock
@@ -3005,6 +3199,7 @@ async function inspectTargetTab(tabId = null) {
       attemptCount: attempts.length,
       domChanged
     });
+  await captureTabEvidenceCapsule(tab.id, diagnostic, { trace: final.trace || [] }).catch(() => null);
   const [payload, diagnosticPayload] = await Promise.all([
     request("/devices/self/shadow-observations/target", {
       method: "POST",
@@ -3121,14 +3316,17 @@ async function inspectRetailerTab(tabId = null) {
         const injections = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           world: "ISOLATED",
-          args: [identity.retailerId, attemptCount, domChanged],
-          func: (retailerId, currentAttempt, changed) => {
+          args: [identity.retailerId, attemptCount, domChanged, RUNTIME_CONFIG.profile === "local"],
+          func: (retailerId, currentAttempt, changed, collectTrace) => {
             try {
               const observer = globalThis.YoinkRetailerShadow;
               if (!observer || typeof observer.collectRetailerShadowAttempt !== "function") {
                 return { ok: false, reasonCode: "observer_runtime_unavailable" };
               }
-              return { ok: true, ...observer.collectRetailerShadowAttempt(document, location.href, retailerId, "shipping", currentAttempt, changed) };
+              const environment = collectTrace ? { trace: { record() {} } } : undefined;
+              return { ok: true, ...observer.collectRetailerShadowAttempt(
+                document, location.href, retailerId, "shipping", currentAttempt, changed, environment
+              ) };
             } catch {
               return { ok: false, reasonCode: "observer_collection_failed" };
             }
@@ -3171,7 +3369,11 @@ async function inspectRetailerTab(tabId = null) {
     if (result.domChanged === true) domChanged = true;
     if (priorLayout && priorLayout !== layoutSignature) domChanged = true;
     priorLayout = layoutSignature;
-    attempts.push({ observation, diagnostic });
+    attempts.push({
+      observation,
+      diagnostic,
+      trace: Array.isArray(result.trace) ? result.trace : []
+    });
     const retryable = [
       "walmart", "amazon", "bestbuy", "disney", "ravensburger", "riot", "booksamillion",
       "fanatics", "kohls", "macys", "pbandai", "pokemoncenter"
@@ -3199,6 +3401,7 @@ async function inspectRetailerTab(tabId = null) {
       attemptCount: attempts.length,
       domChanged
     });
+  await captureTabEvidenceCapsule(tab.id, diagnostic, { trace: final.trace || [] }).catch(() => null);
   const [observationPayload, diagnosticPayload] = await Promise.all([
     request(`/devices/self/shadow-observations/${encodeURIComponent(identity.retailerId)}`, {
       method: "POST",
@@ -3221,6 +3424,54 @@ async function inspectRetailerTab(tabId = null) {
     diagnostic: diagnosticPayload.diagnostic,
     recipeTrial
   };
+}
+
+async function saveCurrentPageForRepair(tabId = null) {
+  if (RUNTIME_CONFIG.profile !== "local") {
+    throw new Error("Page snapshots for store repairs are available only with the local companion.");
+  }
+  const device = await storedDevice();
+  if (!device?.id || !device?.token) throw new Error("Pair this Chrome companion before saving a page snapshot.");
+  const tab = await operationTab(tabId);
+  const identity = Number.isInteger(tab?.id) ? canonicalRetailerIdentity(tab.url) : null;
+  if (!identity || !Object.hasOwn(RETAILER_ORIGINS, identity.retailerId) && identity.retailerId !== "target") {
+    throw new Error("Open a supported product page and try again.");
+  }
+  const origins = identity.retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[identity.retailerId];
+  if (!origins || !await chrome.permissions.contains({ origins })) {
+    throw new Error(`Allow ${identity.retailerId} page access, then try again.`);
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "ISOLATED",
+    files: [identity.retailerId === "target" ? "target-shadow.js" : "retailer-shadow.js"]
+  });
+  const injections = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "ISOLATED",
+    args: [identity.retailerId, RUNTIME_CONFIG.profile === "local"],
+    func: (retailerId, collectTrace) => {
+      try {
+        const observer = retailerId === "target" ? globalThis.YoinkTargetShadow : globalThis.YoinkRetailerShadow;
+        const environment = collectTrace ? { trace: { record() {} } } : undefined;
+        const result = retailerId === "target"
+          ? observer?.collectTargetShadowAttempt?.(document, location.href, "shipping", 1, false, environment)
+          : observer?.collectRetailerShadowAttempt?.(document, location.href, retailerId, "shipping", 1, false, environment);
+        return result ? { ok: true, ...result } : { ok: false, message: "The store observer is unavailable." };
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : "The page could not be inspected." };
+      }
+    }
+  });
+  const result = injections.find((entry) => entry.frameId === 0)?.result;
+  if (!result?.ok || !result.diagnostic) throw new Error(result?.message || "The page could not be inspected.");
+  const diagnostic = retailerDiagnosticPayload(result.diagnostic, identity.retailerId);
+  const capsule = await captureTabEvidenceCapsule(tab.id, diagnostic, {
+    manual: true,
+    trace: result.trace || []
+  });
+  if (!capsule) throw new Error("The page snapshot could not be saved.");
+  return { saved: true, capsuleId: capsule.id, state: await checkHealth() };
 }
 
 async function contributeRetailerTab() {
@@ -3412,10 +3663,27 @@ function safeReasonCode(value) {
   return /^[a-z][a-z0-9_]{1,79}$/.test(reason) ? reason : "rehearsal_failed";
 }
 
-function targetRehearsalJob(observation) {
+function addRehearsalGuidance(lane, observation) {
+  const guidance = lane.rehearsalGuidance;
+  if (["high_demand", "queue"].includes(observation?.interactiveBlock) && guidance.highDemand) {
+    return guidance.highDemand;
+  }
+  if (observation?.securityChallenge && guidance.securityChallenge) return guidance.securityChallenge;
+  if (observation?.interactiveBlock === "auth" && guidance.auth) return guidance.auth;
+  if (observation?.interactiveBlock === "mfa" && guidance.mfa) return guidance.mfa;
+  if (observation?.interactiveBlock === "location" && guidance.location) return guidance.location;
+  if (observation?.fulfillment === "pickup" && guidance.pickup) return guidance.pickup;
+  return guidance.default;
+}
+
+function addRehearsalJob(lane, observation) {
   const price = Number(observation?.unitPriceCents);
+  const validSku = new RegExp(lane.skuPattern).test(String(observation?.retailerSku || ""));
+  const exactRouteReady = lane.rehearsalPolicy !== "first_party_exact_route"
+    || observation?.purchaseRouteReady === true;
   if (!observation?.id
-    || !/^\d{6,}$/.test(String(observation.retailerSku || ""))
+    || observation.retailerId !== lane.id
+    || !validSku
     || !["in_stock", "preorder"].includes(observation.availability)
     || observation.addControlActionable !== true
     || Boolean(observation.securityChallenge || observation.interactiveBlock)
@@ -3423,14 +3691,15 @@ function targetRehearsalJob(observation) {
     || price <= 0
     || observation.fulfillment !== "shipping"
     || observation.sellerType !== "first_party"
-    || observation.sellerName !== "Target") {
-    throw new Error("Open an available Target-sold product with Shipping or same-day Delivery available before running the no-click rehearsal.");
+    || observation.sellerName !== lane.firstPartySeller
+    || !exactRouteReady) {
+    throw new Error(addRehearsalGuidance(lane, observation));
   }
   return {
-    adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+    adapterVersion: lane.contractVersion,
     contractVersion: 1,
     jobId: `rehearsal_${String(observation.id).slice(0, 100)}`,
-    retailerId: "target",
+    retailerId: lane.id,
     retailerSku: String(observation.retailerSku),
     canonicalUrl: String(observation.canonicalUrl),
     action: "add_to_cart",
@@ -3439,70 +3708,104 @@ function targetRehearsalJob(observation) {
     maxOrderTotalCents: price,
     currency: "USD",
     sellerPolicy: "first_party_only",
-    expectedSeller: String(observation.sellerName || "").slice(0, 160),
+    expectedSeller: lane.firstPartySeller,
     fulfillment: "shipping",
     expiresAt: new Date(Date.now() + 60_000).toISOString()
   };
 }
 
-async function rehearseTargetTab(existingInspection = null, tabId = null) {
-  const inspection = existingInspection || await inspectTargetTab(tabId);
+const ADD_REHEARSAL_POLICY_HOOKS = Object.freeze({
+  first_party_shipping: Object.freeze({ resultFailureStage: runnerFailureStage }),
+  first_party_exact_route: Object.freeze({ resultFailureStage: () => "runner" })
+});
+
+function addRehearsalBuildFailure(inspection) {
+  const observation = inspection?.observation || {};
+  const interactive = Boolean(observation.securityChallenge || observation.interactiveBlock);
+  const unavailable = !["in_stock", "preorder"].includes(observation.availability);
+  const thirdParty = observation.sellerType === "third_party";
+  const unsupportedFulfillment = observation.fulfillment === "pickup";
+  const expectedStop = interactive || unavailable || thirdParty || unsupportedFulfillment;
+  const reasonCode = interactive
+    ? "manual_action_required"
+    : unavailable
+      ? "out_of_stock"
+      : thirdParty
+        ? "third_party_seller"
+        : unsupportedFulfillment
+          ? "fulfillment_not_supported"
+          : safeReasonCode(inspection?.diagnostic?.reasonCode || observation.routeReasonCode || "offer_not_actionable");
+  return {
+    outcome: expectedStop ? "rejected" : "failed",
+    failureStage: interactive ? "interactive_block"
+      : expectedStop ? "policy" : inspection?.diagnostic?.failureStage || "runner",
+    reasonCode
+  };
+}
+
+async function rehearseAddTab(retailerId, existingInspection = null, tabId = null) {
+  const lane = ADD_LANES[retailerId];
+  const policy = ADD_REHEARSAL_POLICY_HOOKS[lane?.rehearsalPolicy];
+  if (!lane || !policy) throw new Error("The retailer add runner is unavailable.");
+  const inspection = existingInspection || (retailerId === "target"
+    ? await inspectTargetTab(tabId)
+    : await inspectRetailerTab(tabId));
   const observation = inspection.observation;
   const device = await storedDevice();
-  if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Target.");
+  if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing " + lane.name + ".");
+
   let job;
   try {
-    job = targetRehearsalJob(observation);
+    job = addRehearsalJob(lane, observation);
   } catch (error) {
-    const expectedPolicyRejection = observation.sellerType === "third_party"
-      || !["in_stock", "preorder"].includes(observation.availability)
-      || observation.fulfillment === "pickup"
-      || Boolean(observation.securityChallenge || observation.interactiveBlock);
-    const reasonCode = observation.securityChallenge || observation.interactiveBlock
-      ? "manual_action_required"
-      : !["in_stock", "preorder"].includes(observation.availability)
-        ? "out_of_stock"
-        : observation.sellerType === "third_party"
-          ? "third_party_seller"
-          : observation.fulfillment === "pickup"
-            ? "fulfillment_not_supported"
-            : safeReasonCode(inspection.diagnostic?.reasonCode || "offer_not_actionable");
-    await postRetailerDiagnostic(device, operationDiagnostic(
+    const nonPass = addRehearsalBuildFailure(inspection);
+    const operationEvidence = operationDiagnostic(
       inspection.diagnostic,
-      "target",
+      retailerId,
       "rehearse_add",
-      expectedPolicyRejection ? "rejected" : "failed",
-      expectedPolicyRejection ? (observation.securityChallenge || observation.interactiveBlock ? "interactive_block" : "policy")
-        : inspection.diagnostic?.failureStage || "runner",
-      reasonCode
-    ));
+      nonPass.outcome,
+      nonPass.failureStage,
+      nonPass.reasonCode
+    );
+    const failedTab = await operationTab(tabId).catch(() => null);
+    await postOperationDiagnosticWithCapsule(
+      device,
+      failedTab?.id,
+      operationEvidence,
+      "shipping",
+      inspection.trace || []
+    );
     throw error;
   }
+
   const tab = await operationTab(tabId);
+  const identity = canonicalRetailerIdentity(tab?.url);
   if (!Number.isInteger(tab?.id)
-    || targetSkuFromUrl(tab.url) !== observation.retailerSku) {
-    throw new Error("Keep the inspected Target product page active while the no-click rehearsal runs.");
+    || identity?.retailerId !== retailerId
+    || identity.retailerSku !== observation.retailerSku) {
+    throw new Error("Keep the inspected " + lane.name + " product page active while the no-click rehearsal runs.");
   }
-  await injectTargetAction(tab.id);
-  const result = await executeTargetAction(tab.id, "rehearseTargetAdd", [job]);
+  await injectAddAction(tab.id, retailerId);
+  const result = await executeAddAction(tab.id, retailerId, lane.operations.rehearse, [job]);
   const passed = result?.ok === true && result?.wouldClick === true;
   const reasonCode = passed ? "verified" : safeReasonCode(result?.reason);
   const manualRejection = reasonCode === "manual_action_required";
   const operationEvidence = operationDiagnostic(
     inspection.diagnostic,
-    "target",
+    retailerId,
     "rehearse_add",
     passed ? "passed" : manualRejection ? "rejected" : "failed",
-    passed ? "complete" : manualRejection ? "interactive_block" : runnerFailureStage(reasonCode),
+    passed ? "complete" : manualRejection ? "interactive_block" : policy.resultFailureStage(reasonCode),
     reasonCode
   );
   const [payload] = await Promise.all([
-    request("/devices/self/qualification-trials/target-add", {
+    request("/devices/self/qualification-trials/" + lane.trialRouteSlug, {
       method: "POST",
       headers: { Authorization: `Bearer ${device.token}` },
       body: JSON.stringify({
-        adapterVersion: TARGET_ADD_ADAPTER_VERSION,
-        observerVersion: TARGET_OBSERVER_VERSION,
+        adapterVersion: lane.contractVersion,
+        observerVersion: lane.observerVersion,
+        packVersion: lane.packVersion,
         contractVersion: 1,
         shadowObservationId: observation.id,
         observedAt: new Date().toISOString(),
@@ -3510,308 +3813,7 @@ async function rehearseTargetTab(existingInspection = null, tabId = null) {
         reasonCode
       })
     }, EVIDENCE_REQUEST_TIMEOUT_MS),
-    postRetailerDiagnostic(device, operationEvidence)
-  ]);
-  return {
-    state: await checkHealth(),
-    observation,
-    rehearsal: { ok: passed, reason: reasonCode, trialId: payload.trial?.id || "" }
-  };
-}
-
-function walmartRehearsalJob(observation) {
-  const price = Number(observation?.unitPriceCents);
-  if (!observation?.id
-    || observation.retailerId !== "walmart"
-    || !/^\d{5,20}$/.test(String(observation.retailerSku || ""))
-    || !Number.isSafeInteger(price)
-    || price <= 0
-    || observation.fulfillment !== "shipping"
-    || observation.sellerType !== "first_party"
-    || observation.sellerName !== "Walmart") {
-    throw new Error("Open an available Walmart-sold product with shipping explicitly available before running the no-click rehearsal.");
-  }
-  return {
-    adapterVersion: WALMART_ADD_ADAPTER_VERSION,
-    contractVersion: 1,
-    jobId: `rehearsal_${String(observation.id).slice(0, 100)}`,
-    retailerId: "walmart",
-    retailerSku: String(observation.retailerSku),
-    canonicalUrl: String(observation.canonicalUrl),
-    action: "add_to_cart",
-    quantity: 1,
-    maxUnitPriceCents: price,
-    maxOrderTotalCents: price,
-    currency: "USD",
-    sellerPolicy: "first_party_only",
-    expectedSeller: "Walmart",
-    fulfillment: "shipping",
-    expiresAt: new Date(Date.now() + 60_000).toISOString()
-  };
-}
-
-async function rehearseWalmartTab(existingInspection = null, tabId = null) {
-  const inspection = existingInspection || await inspectRetailerTab(tabId);
-  const observation = inspection.observation;
-  const job = walmartRehearsalJob(observation);
-  const tab = await operationTab(tabId);
-  const identity = canonicalRetailerIdentity(tab?.url);
-  if (!Number.isInteger(tab?.id)
-    || identity?.retailerId !== "walmart"
-    || identity.retailerSku !== observation.retailerSku) {
-    throw new Error("Keep the inspected Walmart product page active while the no-click rehearsal runs.");
-  }
-  await injectAddAction(tab.id, "walmart");
-  const result = await executeAddAction(tab.id, "walmart", "rehearseWalmartAdd", [job]);
-  const passed = result?.ok === true && result?.wouldClick === true;
-  const reasonCode = passed ? "verified" : safeReasonCode(result?.reason);
-  const device = await storedDevice();
-  if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Walmart.");
-  const payload = await request("/devices/self/qualification-trials/walmart-add", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${device.token}` },
-    body: JSON.stringify({
-      adapterVersion: WALMART_ADD_ADAPTER_VERSION,
-      observerVersion: RETAILER_OBSERVER_VERSIONS.walmart,
-      contractVersion: 1,
-      shadowObservationId: observation.id,
-      observedAt: new Date().toISOString(),
-      outcome: passed ? "passed" : "rejected",
-      reasonCode
-    })
-  }, EVIDENCE_REQUEST_TIMEOUT_MS);
-  return {
-    state: await checkHealth(),
-    observation,
-    rehearsal: { ok: passed, reason: reasonCode, trialId: payload.trial?.id || "" }
-  };
-}
-
-function amazonRehearsalJob(observation) {
-  const price = Number(observation?.unitPriceCents);
-  if (!observation?.id
-    || observation.retailerId !== "amazon"
-    || !/^[A-Z0-9]{10}$/.test(String(observation.retailerSku || ""))
-    || !Number.isSafeInteger(price)
-    || price <= 0
-    || observation.fulfillment !== "shipping"
-    || observation.sellerType !== "first_party"
-    || observation.sellerName !== "Amazon.com"
-    || observation.purchaseRouteReady !== true) {
-    throw new Error("Open an available Amazon.com-sold product with a unique shipping offer before running the no-click rehearsal.");
-  }
-  return {
-    adapterVersion: AMAZON_ADD_ADAPTER_VERSION,
-    contractVersion: 1,
-    jobId: `rehearsal_${String(observation.id).slice(0, 100)}`,
-    retailerId: "amazon",
-    retailerSku: String(observation.retailerSku),
-    canonicalUrl: String(observation.canonicalUrl),
-    action: "add_to_cart",
-    quantity: 1,
-    maxUnitPriceCents: price,
-    maxOrderTotalCents: price,
-    currency: "USD",
-    sellerPolicy: "first_party_only",
-    expectedSeller: "Amazon.com",
-    fulfillment: "shipping",
-    expiresAt: new Date(Date.now() + 60_000).toISOString()
-  };
-}
-
-async function rehearseAmazonTab(existingInspection = null, tabId = null) {
-  const inspection = existingInspection || await inspectRetailerTab(tabId);
-  const observation = inspection.observation;
-  const device = await storedDevice();
-  if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Amazon.");
-  let job;
-  try {
-    job = amazonRehearsalJob(observation);
-  } catch (error) {
-    const expectedPolicyRejection = observation.sellerType === "third_party"
-      || observation.fulfillment === "pickup"
-      || Boolean(observation.securityChallenge || observation.interactiveBlock);
-    const reasonCode = observation.sellerType === "third_party"
-      ? "third_party_seller"
-      : observation.fulfillment === "pickup"
-        ? "fulfillment_not_supported"
-        : observation.securityChallenge || observation.interactiveBlock
-          ? "manual_action_required"
-          : safeReasonCode(inspection.diagnostic?.reasonCode || observation.routeReasonCode || "offer_not_actionable");
-    await postRetailerDiagnostic(device, operationDiagnostic(
-      inspection.diagnostic,
-      "amazon",
-      "rehearse_add",
-      expectedPolicyRejection ? "rejected" : "failed",
-      expectedPolicyRejection ? (observation.securityChallenge || observation.interactiveBlock ? "interactive_block" : "policy")
-        : inspection.diagnostic?.failureStage || "route_binding",
-      reasonCode
-    ));
-    throw error;
-  }
-  const tab = await operationTab(tabId);
-  const identity = canonicalRetailerIdentity(tab?.url);
-  if (!Number.isInteger(tab?.id)
-    || identity?.retailerId !== "amazon"
-    || identity.retailerSku !== observation.retailerSku) {
-    throw new Error("Keep the inspected Amazon product page active while the no-click rehearsal runs.");
-  }
-  await injectAddAction(tab.id, "amazon");
-  const result = await executeAddAction(tab.id, "amazon", "rehearseAmazonAdd", [job]);
-  const passed = result?.ok === true && result?.wouldClick === true;
-  const reasonCode = passed ? "verified" : safeReasonCode(result?.reason);
-  const manualRejection = reasonCode === "manual_action_required";
-  const operationEvidence = operationDiagnostic(
-    inspection.diagnostic,
-    "amazon",
-    "rehearse_add",
-    passed ? "passed" : manualRejection ? "rejected" : "failed",
-    passed ? "complete" : manualRejection ? "interactive_block" : "runner",
-    reasonCode
-  );
-  const [payload] = await Promise.all([
-    request("/devices/self/qualification-trials/amazon-add", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${device.token}` },
-      body: JSON.stringify({
-        adapterVersion: AMAZON_ADD_ADAPTER_VERSION,
-        observerVersion: RETAILER_OBSERVER_VERSIONS.amazon,
-        contractVersion: 1,
-        shadowObservationId: observation.id,
-        observedAt: new Date().toISOString(),
-        outcome: passed ? "passed" : "rejected",
-        reasonCode
-      })
-    }, EVIDENCE_REQUEST_TIMEOUT_MS),
-    postRetailerDiagnostic(device, operationEvidence)
-  ]);
-  return {
-    state: await checkHealth(),
-    observation,
-    rehearsal: { ok: passed, reason: reasonCode, trialId: payload.trial?.id || "" }
-  };
-}
-
-function bestBuyRehearsalJob(observation) {
-  const price = Number(observation?.unitPriceCents);
-  if (!observation?.id
-    || observation.retailerId !== "bestbuy"
-    || !/^\d{5,20}$/.test(String(observation.retailerSku || ""))
-    || !["in_stock", "preorder"].includes(observation.availability)
-    || observation.addControlActionable !== true
-    || Boolean(observation.securityChallenge || observation.interactiveBlock)
-    || !Number.isSafeInteger(price)
-    || price <= 0
-    || observation.fulfillment !== "shipping"
-    || observation.sellerType !== "first_party"
-    || observation.sellerName !== "Best Buy") {
-    if (observation?.interactiveBlock === "high_demand" || observation?.interactiveBlock === "queue") {
-      throw new Error("Best Buy high-demand or queue evidence was recorded, but automated demand-gate handling remains closed.");
-    }
-    if (observation?.securityChallenge) {
-      throw new Error("Complete the visible Best Buy security check in this tab, then retry qualification.");
-    }
-    if (observation?.interactiveBlock === "auth") {
-      throw new Error("Sign in to Best Buy in this tab, confirm your location, then retry qualification.");
-    }
-    if (observation?.interactiveBlock === "mfa") {
-      throw new Error("Complete Best Buy account verification in this tab, then retry qualification.");
-    }
-    if (observation?.interactiveBlock === "location") {
-      throw new Error("Confirm your Best Buy location and select Shipping, then retry qualification.");
-    }
-    if (observation?.fulfillment === "pickup") {
-      throw new Error("Best Buy pickup evidence was recorded. Select Shipping on an available Best Buy-sold offer before rehearsing.");
-    }
-    throw new Error("Open an available offer explicitly sold by Best Buy, select Shipping, and verify a usable Add to cart or Pre-order control before rehearsing.");
-  }
-  return {
-    adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
-    contractVersion: 1,
-    jobId: `rehearsal_${String(observation.id).slice(0, 100)}`,
-    retailerId: "bestbuy",
-    retailerSku: String(observation.retailerSku),
-    canonicalUrl: String(observation.canonicalUrl),
-    action: "add_to_cart",
-    quantity: 1,
-    maxUnitPriceCents: price,
-    maxOrderTotalCents: price,
-    currency: "USD",
-    sellerPolicy: "first_party_only",
-    expectedSeller: "Best Buy",
-    fulfillment: "shipping",
-    expiresAt: new Date(Date.now() + 60_000).toISOString()
-  };
-}
-
-async function rehearseBestBuyTab(existingInspection = null, tabId = null) {
-  const inspection = existingInspection || await inspectRetailerTab(tabId);
-  const observation = inspection.observation;
-  const device = await storedDevice();
-  if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing Best Buy.");
-  let job;
-  try {
-    job = bestBuyRehearsalJob(observation);
-  } catch (error) {
-    const expectedPolicyRejection = observation.sellerType === "third_party"
-      || !["in_stock", "preorder"].includes(observation.availability)
-      || observation.fulfillment === "pickup"
-      || Boolean(observation.securityChallenge || observation.interactiveBlock);
-    const reasonCode = observation.securityChallenge || observation.interactiveBlock
-      ? "manual_action_required"
-      : !["in_stock", "preorder"].includes(observation.availability)
-        ? "out_of_stock"
-        : observation.sellerType === "third_party"
-          ? "third_party_seller"
-          : observation.fulfillment === "pickup"
-            ? "fulfillment_not_supported"
-            : safeReasonCode(inspection.diagnostic?.reasonCode || "offer_not_actionable");
-    await postRetailerDiagnostic(device, operationDiagnostic(
-      inspection.diagnostic,
-      "bestbuy",
-      "rehearse_add",
-      expectedPolicyRejection ? "rejected" : "failed",
-      expectedPolicyRejection ? (observation.securityChallenge || observation.interactiveBlock ? "interactive_block" : "policy")
-        : inspection.diagnostic?.failureStage || "runner",
-      reasonCode
-    ));
-    throw error;
-  }
-  const tab = await operationTab(tabId);
-  const identity = canonicalRetailerIdentity(tab?.url);
-  if (!Number.isInteger(tab?.id)
-    || identity?.retailerId !== "bestbuy"
-    || identity.retailerSku !== observation.retailerSku) {
-    throw new Error("Keep the inspected Best Buy product page active while the no-click rehearsal runs.");
-  }
-  await injectAddAction(tab.id, "bestbuy");
-  const result = await executeAddAction(tab.id, "bestbuy", "rehearseBestBuyAdd", [job]);
-  const passed = result?.ok === true && result?.wouldClick === true;
-  const reasonCode = passed ? "verified" : safeReasonCode(result?.reason);
-  const manualRejection = reasonCode === "manual_action_required";
-  const operationEvidence = operationDiagnostic(
-    inspection.diagnostic,
-    "bestbuy",
-    "rehearse_add",
-    passed ? "passed" : manualRejection ? "rejected" : "failed",
-    passed ? "complete" : manualRejection ? "interactive_block" : runnerFailureStage(reasonCode),
-    reasonCode
-  );
-  const [payload] = await Promise.all([
-    request("/devices/self/qualification-trials/bestbuy-add", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${device.token}` },
-      body: JSON.stringify({
-        adapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
-        observerVersion: RETAILER_OBSERVER_VERSIONS.bestbuy,
-        contractVersion: 1,
-        shadowObservationId: observation.id,
-        observedAt: new Date().toISOString(),
-        outcome: passed ? "passed" : "rejected",
-        reasonCode
-      })
-    }, EVIDENCE_REQUEST_TIMEOUT_MS),
-    postRetailerDiagnostic(device, operationEvidence)
+    postOperationDiagnosticWithCapsule(device, tab.id, operationEvidence, "shipping", inspection.trace || [])
   ]);
   return {
     state: await checkHealth(),
@@ -3829,17 +3831,10 @@ async function inspectAndQualifyActiveTab(tabId = null) {
     || popupPage.sku !== identity.retailerSku) {
     throw new Error("Open an exact supported retailer product page first.");
   }
-  const guardedRehearsals = {
-    target: rehearseTargetTab,
-    walmart: rehearseWalmartTab,
-    amazon: rehearseAmazonTab,
-    bestbuy: rehearseBestBuyTab
-  };
   const inspection = identity.retailerId === "target"
     ? await inspectTargetTab(tab?.id)
     : await inspectRetailerTab(tab?.id);
-  const rehearsal = guardedRehearsals[identity.retailerId];
-  if (!rehearsal) {
+  if (!ADD_LANES[identity.retailerId]) {
     return {
       ...inspection,
       retailerId: identity.retailerId,
@@ -3856,7 +3851,7 @@ async function inspectAndQualifyActiveTab(tabId = null) {
   }
   try {
     return {
-      ...await rehearsal(inspection, tab?.id),
+      ...await rehearseAddTab(identity.retailerId, inspection, tab?.id),
       productIdentity: inspection.productIdentity || null,
       retailerId: identity.retailerId,
       workflow: "qualification",
@@ -4064,6 +4059,7 @@ function reverificationPlanSignature(plan) {
     lane.retailerId,
     lane.expectedAdapterVersion,
     lane.expectedObserverVersion,
+    ADAPTER_VERSIONS.pack[lane.retailerId] || "",
     lane.qualification.status,
     lane.qualification.warning,
     lane.automaticCheckNeeded ? "needed" : "steady",
@@ -7086,6 +7082,12 @@ async function ensureContextMenus() {
       documentUrlPatterns: PopupState.PRODUCT_DOCUMENT_PATTERNS
     },
     {
+      id: CONTEXT_MENU_IDS.saveRepair,
+      title: "Save this page for a store repair",
+      contexts: ["action"],
+      documentUrlPatterns: PopupState.PRODUCT_DOCUMENT_PATTERNS
+    },
+    {
       id: CONTEXT_MENU_IDS.inspectDrawings,
       title: "Inspect drawings",
       contexts: ["action"],
@@ -7126,6 +7128,7 @@ async function updateContextMenuHealth(state) {
   });
   await Promise.all([
     updateContextMenu(CONTEXT_MENU_IDS.inspectProduct, { visible: productCommands.includes("inspect_product") }),
+    updateContextMenu(CONTEXT_MENU_IDS.saveRepair, { visible: productCommands.includes("save_repair_page") }),
     updateContextMenu(CONTEXT_MENU_IDS.inspectDrawings, { visible: drawingCommands.includes("inspect_drawings") }),
     updateContextMenu(CONTEXT_MENU_IDS.reconnect, { visible: idleCommands.includes("reconnect_trackalacker") }),
     updateContextMenu(CONTEXT_MENU_IDS.sync, { visible: idleCommands.includes("sync_products") })
@@ -7135,6 +7138,7 @@ async function updateContextMenuHealth(state) {
 function contextMenuCommand(menuItemId) {
   if (menuItemId === CONTEXT_MENU_IDS.open) return "open_yoink";
   if (menuItemId === CONTEXT_MENU_IDS.inspectProduct) return "inspect_product";
+  if (menuItemId === CONTEXT_MENU_IDS.saveRepair) return "save_repair_page";
   if (menuItemId === CONTEXT_MENU_IDS.inspectDrawings) return "inspect_drawings";
   if (menuItemId === CONTEXT_MENU_IDS.reconnect) return "reconnect_trackalacker";
   if (menuItemId === CONTEXT_MENU_IDS.sync) return "sync_products";
@@ -7147,7 +7151,7 @@ function appViewUrl(destination = "dashboard") {
 }
 
 function contextMenuPermission(command, page) {
-  if (command === "inspect_product" && page.kind === "product") {
+  if (["inspect_product", "save_repair_page"].includes(command) && page.kind === "product") {
     return chrome.permissions.request({ origins: PopupState.RETAILER_ORIGINS[page.retailerId] });
   }
   if (command === "inspect_drawings" && page.kind === "walmart_draw") {
@@ -7196,7 +7200,7 @@ async function handleContextMenuClick(command, presentedPage, permissionPromise,
     });
     if (!allowed.includes(command)) throw new Error("This action is no longer available.");
     if (current.page.key !== presentedPage.key
-      && (command === "inspect_product" || command === "inspect_drawings")) {
+      && (command === "inspect_product" || command === "save_repair_page" || command === "inspect_drawings")) {
       throw new Error("The active page changed. Open the extension and try again.");
     }
     if (!await permissionPromise) throw new Error("Required page access wasn’t approved.");
@@ -7211,6 +7215,11 @@ async function handleContextMenuClick(command, presentedPage, permissionPromise,
     if (command === "inspect_product") {
       const result = await inspectAndQualifyPopupOperation();
       await showContextMenuOutcome(result.popupResult);
+      return;
+    }
+    if (command === "save_repair_page") {
+      await saveCurrentPageForRepair(current.tab.id);
+      await showContextMenuOutcome({ summary: "Saved on this computer" });
       return;
     }
     if (command === "inspect_drawings") {
@@ -7247,6 +7256,7 @@ async function initialize() {
   void reconcileActionHandoffs(ACTION_HANDOFF_WAIT_MS);
   await reconcileReverificationRestart();
   await drainAdapterDiagnosticQueue();
+  await drainEvidenceCapsuleQueue();
   const signalDelivery = await runSignalDeliveryCycle();
   // A cold worker may have server-originated Discord/API/admin work waiting
   // even when its local TrackaLacker queue is empty. Establish both bounded
@@ -7314,6 +7324,7 @@ chrome.commands?.onCommand?.addListener((command) => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEALTH_ALARM) {
     void drainAdapterDiagnosticQueue();
+    void drainEvidenceCapsuleQueue();
     void checkHealth().then((health) =>
       runSignalDeliveryCycle().finally(() => requestWarmReadinessCycle(health)));
     // Re-read the lightweight plan on the health cadence so a newly logged
@@ -7337,11 +7348,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const inspection = message?.type === "yoink:inspect-target";
   const walmartDrawInspection = message?.type === "yoink:inspect-walmart-draw";
   const retailerInspection = message?.type === "yoink:inspect-retailer";
+  const repairPageSave = message?.type === "yoink:save-repair-page";
   const communityContribution = message?.type === "yoink:contribute-retailer";
-  const rehearsal = message?.type === "yoink:rehearse-target";
-  const walmartRehearsal = message?.type === "yoink:rehearse-walmart";
-  const amazonRehearsal = message?.type === "yoink:rehearse-amazon";
-  const bestBuyRehearsal = message?.type === "yoink:rehearse-bestbuy";
+  const rehearsalRetailerId = /^yoink:rehearse-([a-z][a-z0-9]{1,31})$/.exec(
+    String(message?.type || "")
+  )?.[1] || "";
   const trackalackerConnection = message?.type === "yoink:connect-trackalacker";
   const trackalackerSync = message?.type === "yoink:sync-trackalacker";
   const extensionUpdate = message?.type === "yoink:check-update";
@@ -7361,7 +7372,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     "yoink:trackalacker-sync-item",
     "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
-  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || communityContribution || rehearsal || walmartRehearsal || amazonRehearsal || bestBuyRehearsal || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || automaticReverificationGet || automaticReverificationSet || automaticReverificationRun || contentOperation;
+  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || repairPageSave || communityContribution || Boolean(rehearsalRetailerId) || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || automaticReverificationGet || automaticReverificationSet || automaticReverificationRun || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : message?.type === "yoink:pair-device"
@@ -7376,16 +7387,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             ? inspectWalmartDrawPopupOperation()
           : retailerInspection
             ? inspectRetailerTab()
+          : repairPageSave
+            ? saveCurrentPageForRepair()
           : communityContribution
             ? contributeRetailerTab()
-          : rehearsal
-            ? rehearseTargetTab()
-            : walmartRehearsal
-              ? rehearseWalmartTab()
-            : amazonRehearsal
-              ? rehearseAmazonTab()
-            : bestBuyRehearsal
-              ? rehearseBestBuyTab()
+          : ADD_LANES[rehearsalRetailerId]
+            ? rehearseAddTab(rehearsalRetailerId)
             : trackalackerConnection
               ? connectTrackalacker(false)
               : trackalackerSync

@@ -1,0 +1,24 @@
+{
+  "capsuleId": "cap_promoted_walmart_third_party",
+  "capturedAt": "2026-09-04T22:01:00.000Z",
+  "url": "https://www.walmart.com/ip/example/17354421975",
+  "retailerId": "walmart",
+  "retailerSku": "17354421975",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "walmart-observer-v7",
+  "addAdapterVersion": "walmart-add-v8",
+  "packVersion": "walmart-pack-v1",
+  "sha256": "c2b7cc7800129ffc26eb33e44db69e1c3a647af507b57ee88976a5fbb213fbd7",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified",
+    "availability": "in_stock",
+    "unitPriceCents": 8999,
+    "sellerType": "third_party",
+    "fulfillment": "shipping"
+  },
+  "notes": "Promoted from a sanitized Walmart third party page capture.",
+  "allowReason": ""
+}

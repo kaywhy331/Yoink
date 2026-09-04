@@ -3,6 +3,10 @@ import { canonicalPortabilityJson } from "./portability.js";
 import { YoinkDatabase } from "./database.js";
 
 export const POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION = 2;
+export const POSTGRES_ADAPTER_PACK_VERSION_TABLES = Object.freeze([
+  "retailer_adapter_diagnostics",
+  "retailer_adapter_trials"
+] as const);
 
 export interface PostgresForeignKeyColumn {
   from: string;
@@ -362,6 +366,10 @@ export function buildPostgresSchemaManifest(): PostgresSchemaManifest {
     const tables = tableRows.map((row): PostgresTableSchemaDescriptor => {
       const tableName = identifier(row.name, "table name");
       const columns = db.all<TableColumnRow>(`PRAGMA table_xinfo(${quotedSqliteIdentifier(tableName)})`);
+      if (POSTGRES_ADAPTER_PACK_VERSION_TABLES.includes(tableName as (typeof POSTGRES_ADAPTER_PACK_VERSION_TABLES)[number])
+        && !columns.some((column) => column.name === "pack_version" && Number(column.notnull) === 0)) {
+        throw new Error(`Canonical table ${tableName} requires its nullable selector-pack version signal.`);
+      }
       const directTenantScope = columns.some((column) => column.name === "tenant_id");
 
       const foreignKeyRows = db.all<ForeignKeyRow>(`PRAGMA foreign_key_list(${quotedSqliteIdentifier(tableName)})`);

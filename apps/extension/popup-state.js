@@ -59,7 +59,367 @@ var YoinkPopupStateModule = (() => {
     pokemoncenter: ["pokemoncenter.com"]
   });
 
+  // packages/contracts/src/add-lanes.ts
+  function lane(definition) {
+    return Object.freeze({
+      ...definition,
+      capability: Object.freeze({ ...definition.capability }),
+      operations: Object.freeze({ ...definition.operations }),
+      supportedFulfillment: Object.freeze([...definition.supportedFulfillment]),
+      rehearsalGuidance: Object.freeze({ ...definition.rehearsalGuidance })
+    });
+  }
+  var ADD_LANES = Object.freeze({
+    target: lane({
+      id: "target",
+      name: "Target",
+      domain: "target.com",
+      contractVersion: "target-add-v8",
+      packVersion: "target-pack-v1",
+      observerVersion: "target-observer-v6",
+      activationConfirmation: "ENABLE_TARGET_ADD_V8",
+      firstPartySeller: "Target",
+      capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "target-add-qualification-evidence-v1",
+      cartUrl: "https://www.target.com/cart",
+      runnerFile: "target-action.js",
+      runnerGlobal: "YoinkTargetAction",
+      operations: {
+        rehearse: "rehearseTargetAdd",
+        baseline: "inspectTargetCartBaseline",
+        prepare: "prepareTargetAdd",
+        commit: "commitTargetAdd",
+        verifyCart: "verifyTargetAddedCart"
+      },
+      skuPattern: "^\\d{6,20}$",
+      supportedFulfillment: ["shipping", "pickup"],
+      trialRouteSlug: "target-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Target-sold product with Shipping or same-day Delivery available before running the no-click rehearsal."
+      }
+    }),
+    walmart: lane({
+      id: "walmart",
+      name: "Walmart",
+      domain: "walmart.com",
+      contractVersion: "walmart-add-v8",
+      packVersion: "walmart-pack-v1",
+      observerVersion: "walmart-observer-v7",
+      activationConfirmation: "ENABLE_WALMART_ADD_V8",
+      firstPartySeller: "Walmart",
+      capability: { enabled: "walmartAddOnly", version: "walmartAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "walmart-add-qualification-evidence-v1",
+      cartUrl: "https://www.walmart.com/cart",
+      runnerFile: "walmart-action.js",
+      runnerGlobal: "YoinkWalmartAction",
+      operations: {
+        rehearse: "rehearseWalmartAdd",
+        baseline: "inspectWalmartCartBaseline",
+        prepare: "prepareWalmartAdd",
+        commit: "commitWalmartAdd",
+        verifyCart: "verifyWalmartAddedCart"
+      },
+      skuPattern: "^\\d{5,20}$",
+      supportedFulfillment: ["shipping", "pickup"],
+      trialRouteSlug: "walmart-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Walmart-sold product with shipping explicitly available before running the no-click rehearsal."
+      }
+    }),
+    amazon: lane({
+      id: "amazon",
+      name: "Amazon",
+      domain: "amazon.com",
+      contractVersion: "amazon-add-v9",
+      packVersion: "amazon-pack-v1",
+      observerVersion: "amazon-observer-v8",
+      activationConfirmation: "ENABLE_AMAZON_ADD_V9",
+      firstPartySeller: "Amazon.com",
+      capability: { enabled: "amazonAddOnly", version: "amazonAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
+      qualificationEvidenceNamespace: "amazon-add-qualification-evidence-v1",
+      cartUrl: "https://www.amazon.com/gp/cart/view.html",
+      runnerFile: "amazon-action.js",
+      runnerGlobal: "YoinkAmazonAction",
+      operations: {
+        rehearse: "rehearseAmazonAdd",
+        baseline: "inspectAmazonCartBaseline",
+        prepare: "prepareAmazonAdd",
+        commit: "commitAmazonAdd",
+        verifyCart: "verifyAmazonAddedCart"
+      },
+      skuPattern: "^[A-Z0-9]{10}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "amazon-add",
+      rehearsalPolicy: "first_party_exact_route",
+      rehearsalGuidance: {
+        default: "Open an available Amazon.com-sold product with a unique shipping offer before running the no-click rehearsal."
+      }
+    }),
+    bestbuy: lane({
+      id: "bestbuy",
+      name: "Best Buy",
+      domain: "bestbuy.com",
+      contractVersion: "bestbuy-add-v11",
+      packVersion: "bestbuy-pack-v1",
+      observerVersion: "bestbuy-observer-v10",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V11",
+      firstPartySeller: "Best Buy",
+      capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "bestbuy-add-qualification-evidence-v1",
+      cartUrl: "https://www.bestbuy.com/cart",
+      runnerFile: "bestbuy-action.js",
+      runnerGlobal: "YoinkBestBuyAction",
+      operations: {
+        rehearse: "rehearseBestBuyAdd",
+        baseline: "inspectBestBuyCartBaseline",
+        prepare: "prepareBestBuyAdd",
+        commit: "commitBestBuyAdd",
+        verifyCart: "verifyBestBuyAddedCart"
+      },
+      skuPattern: "^\\d{5,20}$",
+      supportedFulfillment: ["shipping", "pickup"],
+      trialRouteSlug: "bestbuy-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available offer explicitly sold by Best Buy, select Shipping, and verify a usable Add to cart or Pre-order control before rehearsing.",
+        highDemand: "Best Buy high-demand or queue evidence was recorded, but automated demand-gate handling remains closed.",
+        securityChallenge: "Complete the visible Best Buy security check in this tab, then retry qualification.",
+        auth: "Sign in to Best Buy in this tab, confirm your location, then retry qualification.",
+        mfa: "Complete Best Buy account verification in this tab, then retry qualification.",
+        location: "Confirm your Best Buy location and select Shipping, then retry qualification.",
+        pickup: "Best Buy pickup evidence was recorded. Select Shipping on an available Best Buy-sold offer before rehearsing."
+      }
+    })
+  });
+
+  // packages/contracts/src/index.ts
+  var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
+
+  // packages/browser-adapters/packs/amazon.json
+  var amazon_default = {
+    packVersion: "amazon-pack-v1",
+    retailerId: "amazon",
+    fields: {
+      addControl: { selectors: ["#add-to-cart-button", "input[name='submit.add-to-cart']", "button[name='submit.add-to-cart']"] },
+      price: { selectors: ["#corePrice_feature_div .a-offscreen", "#priceblock_ourprice", "#priceblock_dealprice", ".a-price .a-offscreen", "meta[itemprop='price']"] },
+      seller: { selectors: ["#merchant-info", "#sellerProfileTriggerId", "[data-feature-name='shipsFromSoldBy']", "#tabular-buybox"] },
+      availability: { selectors: ["[itemprop='availability']", "button[disabled]"] },
+      fulfillmentRoot: { selectors: ["#buybox", "#desktop_buybox", "[data-feature-name='buybox']", "form"] },
+      fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
+      quantity: { selectors: ["select#quantity", "select[name='quantity']", "input[name='quantity']", "input[name='items[0.base][quantity]']"] },
+      primaryScope: { selectors: ["#qualifiedBuybox", "#desktop_qualifiedBuyBox", "[data-feature-name*='qualifiedBuyBox' i]", "#buybox", "#desktop_buybox", "[data-feature-name='buybox']"] },
+      merchandisingScope: { selectors: ["[data-cel-widget*='recommend' i]", "[data-feature-name*='recommend' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "#similarities_feature_div", "#sp_detail"] },
+      secondaryActionScope: { selectors: [] },
+      structuredData: { selectors: [] },
+      offerInput: { selectors: ["input[name='offerListingID']", "input[name='offerListingId']", "input[name='items[0.base][offerListingID]']", "input[name='items[0.base][offerListingId]']", "input[name='offeringID.1']", "input[name='ASIN']", "input[name='asin']", "input[name='items[0.base][asin]']"] }
+    }
+  };
+
+  // packages/browser-adapters/packs/bestbuy.json
+  var bestbuy_default = {
+    packVersion: "bestbuy-pack-v1",
+    retailerId: "bestbuy",
+    fields: {
+      addControl: { selectors: ["button.add-to-cart-button", "button[data-button-state='ADD_TO_CART']", "button[data-testid*='add-to-cart' i]", "button[data-test-id*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"] },
+      price: { selectors: ["[data-testid='customer-price']", "[data-testid*='customer-price' i]", ".priceView-customer-price", ".priceView-hero-price", "meta[itemprop='price']", "[itemprop='price']"] },
+      seller: { selectors: ["[data-testid='sold-by']", "[data-testid*='sold-by' i]", "[data-testid*='seller' i]", "[class*='seller' i]", "[data-track*='marketplace' i]"] },
+      availability: { selectors: ["[data-testid*='availability' i]", "[data-testid*='out-of-stock' i]", "[aria-label*='out of stock' i]", "[itemprop='availability']", "button[disabled]"] },
+      fulfillmentRoot: { selectors: [] },
+      fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
+      quantity: { selectors: ["select[name*='quantity' i]", "select[aria-label*='quantity' i]", "input[name*='quantity' i]", "input[aria-label*='quantity' i]"] },
+      primaryScope: { selectors: ["[data-testid*='buy-box' i]", "[data-testid*='fulfillment' i]", "[data-testid*='purchase' i]", "[class*='fulfillment-add-to-cart' i]", "[class*='buy-box' i]", "[class*='purchase' i]"] },
+      merchandisingScope: { selectors: ["[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
+      secondaryActionScope: { selectors: ["[data-testid*='sticky' i]", "[data-automation-id*='sticky' i]", "[class*='sticky' i]", "[class*='floating' i]", "[class*='mobile-drawer' i]"] },
+      structuredData: { selectors: [] },
+      offerInput: { selectors: ["[data-sku-id]", "[data-sku]", "[data-product-id]", "input[name*='sku' i]"] }
+    }
+  };
+
+  // packages/browser-adapters/packs/retailers.json
+  var retailers_default = {
+    packVersion: "retailers-pack-v1",
+    retailers: {
+      disney: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-testid*='add-to-bag' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to bag' i]", "button[aria-label*='add to cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='product-price' i]", "[class*='product-price' i]"],
+        seller: []
+      },
+      ravensburger: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        seller: []
+      },
+      riot: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        seller: []
+      },
+      booksamillion: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='our-price' i]", "[class*='sale-price' i]"],
+        seller: []
+      },
+      fanatics: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["[data-talos='pdpProductPrice'] .money-value", "[data-trk-id='pdp-price'] .money-value", "meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='current-price' i]", "[class*='sale-price' i]"],
+        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='shipping' i]"]
+      },
+      kohls: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
+        seller: ["[data-testid*='seller' i]", "[class*='seller' i]"]
+      },
+      macys: {
+        addControl: ["button[data-testid*='add-to-bag' i]", "button[name*='add-to-bag' i]", "button[aria-label*='add to bag' i]", "button[class*='add-to-bag' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
+        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='marketplace' i]"]
+      },
+      pbandai: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-cart' i]", "button[class*='pre-order' i]", "a[class*='add-cart' i]", "a[class*='pre-order' i]", "button", "a[role='button']"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='item-price' i]", "[class*='product-price' i]"],
+        seller: []
+      },
+      pokemoncenter: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]", "[class*='sales-price' i]"],
+        seller: []
+      }
+    }
+  };
+
+  // packages/browser-adapters/packs/target.json
+  var target_default = {
+    packVersion: "target-pack-v1",
+    retailerId: "target",
+    fields: {
+      addControl: { selectors: ["button[id^='addToCartButtonOrTextIdFor']", "button[data-test='shipItButton']", "button[data-test='shippingButton']", "button[data-test='orderPickupButton']", "button[data-test*='addToCart' i]"] },
+      price: { selectors: ["[data-test='product-price']", "[data-test*='current-price' i]", "meta[itemprop='price']", "[itemprop='price']", "[data-module-type='ProductDetailPrice']"] },
+      seller: { selectors: ["[data-test*='sold-by' i]", "[data-test*='seller' i]", "[data-testid*='seller' i]"] },
+      availability: { selectors: ["[data-test*='availability' i]", "[data-testid*='availability' i]", "[data-test*='out-of-stock' i]", "[data-testid*='out-of-stock' i]", "[itemprop='availability']", "button[disabled]"] },
+      fulfillmentRoot: { selectors: ["[data-test='module-product-detail-fulfillment-v1'][aria-label='Fulfillment']", "[data-module-type='ProductDetailFulfillment'] [aria-label='Fulfillment']", "[aria-label='Fulfillment']"] },
+      fulfillmentTile: { selectors: ["button[data-test='fulfillment-cell-pickup']", "button[data-test='fulfillment-cell-delivery']", "button[data-test='fulfillment-cell-shipping']", "button#PICKUP", "button#DELIVERY", "button#SHIPPING", "button[aria-label]"] },
+      quantity: { selectors: ["select[name*='quantity' i]", "input[name*='quantity' i]", "[data-test*='quantity' i]"] },
+      primaryScope: { selectors: ["[data-test*='buy-box' i]", "[data-test='product-detail']", "main"] },
+      merchandisingScope: { selectors: ["[data-test*='recommend' i]", "[data-testid*='carousel' i]", "[aria-label*='similar items' i]", "[data-test*='productCard' i]", "[data-strategy-id]", "[data-module-type*='Recommended' i]"] },
+      secondaryActionScope: { selectors: [] },
+      structuredData: { selectors: [] },
+      offerInput: { selectors: ["[data-tcin]", "button[id^='addToCartButtonOrTextIdFor']"] }
+    }
+  };
+
+  // packages/browser-adapters/packs/walmart.json
+  var walmart_default = {
+    packVersion: "walmart-pack-v1",
+    retailerId: "walmart",
+    fields: {
+      addControl: { selectors: ["button[data-automation-id='atc']", "button[data-testid='add-to-cart-button']", "button[aria-label*='add to cart' i]"] },
+      price: { selectors: ["[data-automation-id='product-price']", "[data-testid='price-wrap']", "meta[itemprop='price']", "[itemprop='price']"] },
+      seller: { selectors: ["[data-testid='seller-display-name']", "[data-automation-id='seller-name']", "[data-testid*='seller' i]"] },
+      availability: { selectors: ["[data-testid*='availability' i]", "[data-automation-id*='availability' i]", "[data-testid*='fulfillment' i]", "[data-automation-id*='fulfillment' i]", "[data-testid*='out-of-stock' i]", "[data-automation-id*='out-of-stock' i]", "[aria-label*='out of stock' i]", "[itemprop='availability']", "button[disabled]"] },
+      fulfillmentRoot: { selectors: [] },
+      fulfillmentTile: { selectors: ["[aria-selected='true']", "[data-selected='true']", "input:checked"] },
+      quantity: { selectors: ["select[name*='quantity' i]", "select[aria-label*='quantity' i]", "input[name*='quantity' i]", "input[aria-label*='quantity' i]"] },
+      primaryScope: { selectors: ["[data-testid*='buy-box' i]", "[data-automation-id*='buy-box' i]", "[data-testid*='purchase' i]", "[data-automation-id*='purchase' i]", "[data-testid*='add-to-cart-section' i]"] },
+      merchandisingScope: { selectors: ["[data-testid*='recommend' i]", "[data-automation-id*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[data-testid*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]"] },
+      secondaryActionScope: { selectors: ["[data-testid*='sticky' i]", "[data-automation-id*='sticky' i]", "[class*='sticky' i]", "[class*='floating' i]", "[class*='mobile-drawer' i]"] },
+      structuredData: { selectors: ["script#__NEXT_DATA__"] },
+      offerInput: { selectors: ["[data-us-item-id]", "[data-item-id]", "[data-product-id]"] }
+    }
+  };
+
+  // packages/browser-adapters/src/selector-packs.ts
+  var SELECTOR_PACK_FIELDS = [
+    "addControl",
+    "price",
+    "seller",
+    "availability",
+    "fulfillmentRoot",
+    "fulfillmentTile",
+    "quantity",
+    "primaryScope",
+    "merchandisingScope",
+    "secondaryActionScope",
+    "structuredData",
+    "offerInput"
+  ];
+  function selectorList(value) {
+    return Object.freeze(Array.isArray(value) ? value.map(String) : []);
+  }
+  function freezePack(value) {
+    const fields = Object.fromEntries(SELECTOR_PACK_FIELDS.map((field) => [
+      field,
+      selectorList(value.fields[field]?.selectors)
+    ]));
+    return Object.freeze({
+      packVersion: value.packVersion,
+      retailerId: value.retailerId,
+      fields: Object.freeze(fields)
+    });
+  }
+  var ADD_SELECTOR_PACKS = Object.freeze({
+    target: freezePack(target_default),
+    walmart: freezePack(walmart_default),
+    amazon: freezePack(amazon_default),
+    bestbuy: freezePack(bestbuy_default)
+  });
+  var observeOnlyRetailers = Object.fromEntries(Object.entries(retailers_default.retailers).map(([retailerId, fields]) => [
+    retailerId,
+    Object.freeze({
+      addControl: selectorList(fields.addControl),
+      price: selectorList(fields.price),
+      seller: selectorList(fields.seller)
+    })
+  ]));
+  var OBSERVE_ONLY_SELECTOR_PACK = Object.freeze({
+    packVersion: retailers_default.packVersion,
+    retailers: Object.freeze(observeOnlyRetailers)
+  });
+  var OBSERVE_ONLY_FULFILLMENT_TILES = Object.freeze([
+    "[aria-selected='true']",
+    "[data-selected='true']",
+    "input:checked"
+  ]);
+  var SELECTOR_PACK_VERSIONS = Object.freeze({
+    target: ADD_SELECTOR_PACKS.target.packVersion,
+    walmart: ADD_SELECTOR_PACKS.walmart.packVersion,
+    amazon: ADD_SELECTOR_PACKS.amazon.packVersion,
+    bestbuy: ADD_SELECTOR_PACKS.bestbuy.packVersion,
+    disney: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    ravensburger: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    riot: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    booksamillion: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    fanatics: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    kohls: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    macys: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    pbandai: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion
+  });
+  function selectorsFor(retailerId, field) {
+    if (retailerId in ADD_SELECTOR_PACKS) {
+      return ADD_SELECTOR_PACKS[retailerId].fields[field];
+    }
+    if (field === "fulfillmentTile") return OBSERVE_ONLY_FULFILLMENT_TILES;
+    if (field !== "addControl" && field !== "price" && field !== "seller") return Object.freeze([]);
+    return OBSERVE_ONLY_SELECTOR_PACK.retailers[retailerId][field];
+  }
+
   // packages/browser-adapters/src/target.ts
+  var TARGET_PRICE_SELECTORS = selectorsFor("target", "price");
+  var TARGET_CURRENT_PRICE_SELECTORS = TARGET_PRICE_SELECTORS.slice(0, -1);
+  var TARGET_PRICE_MODULE_SELECTOR = TARGET_PRICE_SELECTORS.at(-1) ?? "meta:not(*)";
+  var TARGET_ADD_CONTROL_SELECTORS = selectorsFor("target", "addControl");
+  var TARGET_SELLER_SELECTORS = selectorsFor("target", "seller");
+  var TARGET_AVAILABILITY_SELECTORS = selectorsFor("target", "availability");
+  var TARGET_QUANTITY_SELECTORS = selectorsFor("target", "quantity");
+  var TARGET_PRIMARY_SCOPE_SELECTOR = selectorsFor("target", "primaryScope").join(", ");
+  var TARGET_RECOMMENDATION_SCOPE_SELECTOR = selectorsFor("target", "merchandisingScope").join(", ");
+  var TARGET_OFFER_INPUT_SELECTOR = selectorsFor("target", "offerInput").join(", ");
   function extractTargetSku(urlValue) {
     try {
       const url = new URL(urlValue);
@@ -75,21 +435,8 @@ var YoinkPopupStateModule = (() => {
       return "";
     }
   }
-  var TARGET_FULFILLMENT_ROOT_SELECTOR = [
-    "[data-test='@web/AddToCart/FulfillmentSection'][aria-label='Fulfillment']",
-    "[data-test='module-product-detail-fulfillment-v1'][aria-label='Fulfillment']",
-    "[data-module-type='ProductDetailFulfillment'] [aria-label='Fulfillment']",
-    "[aria-label='Fulfillment']"
-  ].join(", ");
-  var TARGET_FULFILLMENT_TILE_SELECTOR = [
-    "button[data-test='fulfillment-cell-pickup']",
-    "button[data-test='fulfillment-cell-delivery']",
-    "button[data-test='fulfillment-cell-shipping']",
-    "button#PICKUP",
-    "button#DELIVERY",
-    "button#SHIPPING",
-    "button[aria-label]"
-  ].join(", ");
+  var TARGET_FULFILLMENT_ROOT_SELECTOR = selectorsFor("target", "fulfillmentRoot").join(", ");
+  var TARGET_FULFILLMENT_TILE_SELECTOR = selectorsFor("target", "fulfillmentTile").join(", ");
 
   // packages/browser-adapters/src/retailers.ts
   function fanaticsProductId(url) {
@@ -101,22 +448,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["walmart.com"],
       skuPattern: /^\d{5,20}$/,
       skuFromUrl: (url) => url.pathname.match(/\/ip\/(?:[^/?#]+\/)?(\d{5,20})(?:\/|$)/i)?.[1] || url.searchParams.get("items")?.match(/^\d{5,20}$/)?.[0] || "",
-      addSelectors: [
-        "button[data-automation-id='atc']",
-        "button[data-testid='add-to-cart-button']",
-        "button[aria-label*='add to cart' i]"
-      ],
-      priceSelectors: [
-        "[data-automation-id='product-price']",
-        "[data-testid='price-wrap']",
-        "meta[itemprop='price']",
-        "[itemprop='price']"
-      ],
-      sellerSelectors: [
-        "[data-testid='seller-display-name']",
-        "[data-automation-id='seller-name']",
-        "[data-testid*='seller' i]"
-      ],
+      addSelectors: selectorsFor("walmart", "addControl"),
+      priceSelectors: selectorsFor("walmart", "price"),
+      sellerSelectors: selectorsFor("walmart", "seller"),
       firstPartyPattern: /sold\s+(?:and|&)\s+shipped\s+by\s+walmart(?:\.com)?|sold\s+by\s+walmart(?:\.com)?(?:\s+(?:and|&)\s+(?:shipped|fulfilled)\s+by\s+walmart(?:\.com)?)?/i,
       marketplacePattern: /sold\s+(?:and|&)\s+shipped\s+by\s+(?!walmart\b)|sold\s+by\s+(?!walmart\b)|marketplace\s+seller/i,
       shippingPattern: /shipping|ship to|delivery/i,
@@ -130,24 +464,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["amazon.com"],
       skuPattern: /^[A-Z0-9]{10}$/,
       skuFromUrl: (url) => (url.pathname.match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})(?:\/|$)/i)?.[1] || url.searchParams.get("asin")?.match(/^[A-Z0-9]{10}$/i)?.[0] || "").toUpperCase(),
-      addSelectors: [
-        "#add-to-cart-button",
-        "input[name='submit.add-to-cart']",
-        "button[name='submit.add-to-cart']"
-      ],
-      priceSelectors: [
-        "#corePrice_feature_div .a-offscreen",
-        "#priceblock_ourprice",
-        "#priceblock_dealprice",
-        ".a-price .a-offscreen",
-        "meta[itemprop='price']"
-      ],
-      sellerSelectors: [
-        "#merchant-info",
-        "#sellerProfileTriggerId",
-        "[data-feature-name='shipsFromSoldBy']",
-        "#tabular-buybox"
-      ],
+      addSelectors: selectorsFor("amazon", "addControl"),
+      priceSelectors: selectorsFor("amazon", "price"),
+      sellerSelectors: selectorsFor("amazon", "seller"),
       firstPartyPattern: /ships\s+from\s+amazon(?:\.com)?[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?|sold\s+by\s+amazon(?:\.com)?[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?/i,
       marketplacePattern: /sold\s+by\s+(?!amazon(?:\.com)?\b)|seller:\s*(?!amazon(?:\.com)?\b)/i,
       shippingPattern: /shipping|delivery|ships from/i,
@@ -161,33 +480,10 @@ var YoinkPopupStateModule = (() => {
       domains: ["bestbuy.com"],
       skuPattern: /^\d{5,20}$/,
       skuFromUrl: (url) => url.pathname.match(/^\/product\/[^/]+\/(?:[^/]+\/sku\/)?(\d{5,20})(?:\/|$)/i)?.[1] || url.pathname.match(/^\/site\/[^/]+\/(\d{5,20})\.p(?:\/|$)/i)?.[1] || url.searchParams.get("skuId")?.match(/^\d{5,20}$/)?.[0] || "",
-      addSelectors: [
-        "button.add-to-cart-button",
-        "button[data-button-state='ADD_TO_CART']",
-        "button[data-testid*='add-to-cart' i]",
-        "button[data-test-id*='add-to-cart' i]",
-        "button[data-automation-id*='add-to-cart' i]",
-        "button[name*='add-to-cart' i]",
-        "button[aria-label*='add to cart' i]",
-        "input[type='submit'][value*='add to cart' i]",
-        "button"
-      ],
+      addSelectors: selectorsFor("bestbuy", "addControl"),
       addIntentPattern: /\b(?:add(?:\s+(?:item\s+)?to)?\s+(?:cart|bag)|pre[ -]?order(?:\s+now|\s+(?:item\s+)?to\s+(?:cart|bag))?|atc)\b/i,
-      priceSelectors: [
-        "[data-testid='customer-price']",
-        "[data-testid*='customer-price' i]",
-        ".priceView-customer-price",
-        ".priceView-hero-price",
-        "meta[itemprop='price']",
-        "[itemprop='price']"
-      ],
-      sellerSelectors: [
-        "[data-testid='sold-by']",
-        "[data-testid*='sold-by' i]",
-        "[data-testid*='seller' i]",
-        "[class*='seller' i]",
-        "[data-track*='marketplace' i]"
-      ],
+      priceSelectors: selectorsFor("bestbuy", "price"),
+      sellerSelectors: selectorsFor("bestbuy", "seller"),
       firstPartyPattern: /sold\s+(?:and|&)\s+shipped\s+by\s+best\s*buy|sold\s+by\s+best\s*buy/i,
       marketplacePattern: /sold\s+(?:and|&)\s+shipped\s+by\s+(?!best\s*buy\b)|sold\s+by\s+(?!best\s*buy\b)|marketplace\s+seller/i,
       shippingPattern: /shipping|ship to|delivery/i,
@@ -201,22 +497,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["disneystore.com"],
       skuPattern: /^\d{10,20}$/,
       skuFromUrl: (url) => url.pathname.match(/-(\d{10,20})\.html(?:\/|$)/i)?.[1] || "",
-      addSelectors: [
-        "button[data-testid*='add-to-cart' i]",
-        "button[data-testid*='add-to-bag' i]",
-        "button[name*='add-to-cart' i]",
-        "button[aria-label*='add to bag' i]",
-        "button[aria-label*='add to cart' i]",
-        "button"
-      ],
-      priceSelectors: [
-        "meta[itemprop='price']",
-        "meta[property='product:price:amount']",
-        "[itemprop='price']",
-        "[data-testid*='product-price' i]",
-        "[class*='product-price' i]"
-      ],
-      sellerSelectors: [],
+      addSelectors: selectorsFor("disney", "addControl"),
+      priceSelectors: selectorsFor("disney", "price"),
+      sellerSelectors: selectorsFor("disney", "seller"),
       firstPartyPattern: /sold\s+by\s+disney\s*store/i,
       marketplacePattern: /sold\s+by\s+(?!disney\s*store\b)/i,
       shippingPattern: /shipping|ship to|delivery/i,
@@ -230,21 +513,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["ravensburger.us"],
       skuPattern: /^\d{5,20}$/,
       skuFromUrl: (url) => /^\/en-US\/products\//i.test(url.pathname) ? url.pathname.match(/-(\d{5,20})(?:\/|$)/i)?.[1] || "" : "",
-      addSelectors: [
-        "button[data-testid*='add-to-cart' i]",
-        "button[name*='add-to-cart' i]",
-        "button[aria-label*='add to cart' i]",
-        "button[class*='add-to-cart' i]",
-        "button"
-      ],
-      priceSelectors: [
-        "meta[itemprop='price']",
-        "meta[property='product:price:amount']",
-        "[itemprop='price']",
-        "[data-testid*='price' i]",
-        "[class*='product-price' i]"
-      ],
-      sellerSelectors: [],
+      addSelectors: selectorsFor("ravensburger", "addControl"),
+      priceSelectors: selectorsFor("ravensburger", "price"),
+      sellerSelectors: selectorsFor("ravensburger", "seller"),
       firstPartyPattern: /sold\s+by\s+ravensburger/i,
       marketplacePattern: /sold\s+by\s+(?!ravensburger\b)/i,
       shippingPattern: /shipping|ship to|delivery/i,
@@ -258,21 +529,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["merch.riotgames.com"],
       skuPattern: /^[A-Z0-9](?:[A-Z0-9-]{1,118}[A-Z0-9])?$/,
       skuFromUrl: (url) => url.pathname.match(/^\/en-us\/product\/([a-z0-9](?:[a-z0-9-]{1,118}[a-z0-9])?)\/?$/i)?.[1] || "",
-      addSelectors: [
-        "button[data-testid*='add-to-cart' i]",
-        "button[name*='add-to-cart' i]",
-        "button[aria-label*='add to cart' i]",
-        "button[class*='add-to-cart' i]",
-        "button"
-      ],
-      priceSelectors: [
-        "meta[itemprop='price']",
-        "meta[property='product:price:amount']",
-        "[itemprop='price']",
-        "[data-testid*='price' i]",
-        "[class*='product-price' i]"
-      ],
-      sellerSelectors: [],
+      addSelectors: selectorsFor("riot", "addControl"),
+      priceSelectors: selectorsFor("riot", "price"),
+      sellerSelectors: selectorsFor("riot", "seller"),
       firstPartyPattern: /sold\s+by\s+riot\s+games/i,
       marketplacePattern: /sold\s+by\s+(?!riot\s+games\b)/i,
       shippingPattern: /shipping|ships|delivery|fulfillment/i,
@@ -286,22 +545,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["booksamillion.com"],
       skuPattern: /^[A-Z0-9]{10,20}$/,
       skuFromUrl: (url) => url.pathname.match(/^\/p\/-\/([a-z0-9]{10,20})(?:\/|$)/i)?.[1] || url.pathname.match(/^\/p\/([a-z0-9]{10,20})(?:\/|$)/i)?.[1] || "",
-      addSelectors: [
-        "button[data-testid*='add-to-cart' i]",
-        "button[name*='add-to-cart' i]",
-        "button[aria-label*='add to cart' i]",
-        "input[type='submit'][value*='add to cart' i]",
-        "button"
-      ],
-      priceSelectors: [
-        "meta[itemprop='price']",
-        "meta[property='product:price:amount']",
-        "[itemprop='price']",
-        "[data-testid*='price' i]",
-        "[class*='our-price' i]",
-        "[class*='sale-price' i]"
-      ],
-      sellerSelectors: [],
+      addSelectors: selectorsFor("booksamillion", "addControl"),
+      priceSelectors: selectorsFor("booksamillion", "price"),
+      sellerSelectors: selectorsFor("booksamillion", "seller"),
       firstPartyPattern: /sold\s+by\s+(?:bam!?|books-a-million|books\s+a\s+million)/i,
       marketplacePattern: /sold\s+by\s+(?!(?:bam!?|books-a-million|books\s+a\s+million)\b)/i,
       shippingPattern: /shipping|ship to|delivery/i,
@@ -315,24 +561,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["fanatics.com"],
       skuPattern: /^\d{6,20}$/,
       skuFromUrl: fanaticsProductId,
-      addSelectors: [
-        "button[data-testid*='add-to-cart' i]",
-        "button[name*='add-to-cart' i]",
-        "button[aria-label*='add to cart' i]",
-        "button[class*='add-to-cart' i]",
-        "button"
-      ],
-      priceSelectors: [
-        "[data-talos='pdpProductPrice'] .money-value",
-        "[data-trk-id='pdp-price'] .money-value",
-        "meta[itemprop='price']",
-        "meta[property='product:price:amount']",
-        "[itemprop='price']",
-        "[data-testid*='price' i]",
-        "[class*='current-price' i]",
-        "[class*='sale-price' i]"
-      ],
-      sellerSelectors: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='shipping' i]"],
+      addSelectors: selectorsFor("fanatics", "addControl"),
+      priceSelectors: selectorsFor("fanatics", "price"),
+      sellerSelectors: selectorsFor("fanatics", "seller"),
       firstPartyPattern: /sold\s+by\s+fanatics|ships?\s+(?:from|by)\s+fanatics/i,
       marketplacePattern: /ships?\s+directly\s+from\s+a\s+trusted\s+partner|sold\s+by\s+(?!fanatics\b)/i,
       shippingPattern: /shipping|ships|delivery/i,
@@ -346,22 +577,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["kohls.com"],
       skuPattern: /^\d{5,12}$/,
       skuFromUrl: (url) => url.pathname.match(/^\/product\/prd-(\d{5,12})\//i)?.[1] || "",
-      addSelectors: [
-        "button[data-testid*='add-to-cart' i]",
-        "button[name*='add-to-cart' i]",
-        "button[aria-label*='add to cart' i]",
-        "button[class*='add-to-cart' i]",
-        "button"
-      ],
-      priceSelectors: [
-        "meta[itemprop='price']",
-        "meta[property='product:price:amount']",
-        "[itemprop='price']",
-        "[data-testid*='sale-price' i]",
-        "[data-testid*='price' i]",
-        "[class*='sale-price' i]"
-      ],
-      sellerSelectors: ["[data-testid*='seller' i]", "[class*='seller' i]"],
+      addSelectors: selectorsFor("kohls", "addControl"),
+      priceSelectors: selectorsFor("kohls", "price"),
+      sellerSelectors: selectorsFor("kohls", "seller"),
       firstPartyPattern: /sold\s+by\s+kohl'?s|ships?\s+(?:from|by)\s+kohl'?s/i,
       marketplacePattern: /sold\s+by\s+(?!kohl'?s\b)|marketplace\s+seller/i,
       shippingPattern: /ship to me|shipping|delivery/i,
@@ -375,22 +593,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["macys.com"],
       skuPattern: /^\d{5,20}$/,
       skuFromUrl: (url) => /^\/shop\/product\//i.test(url.pathname) ? url.searchParams.get("ID")?.match(/^\d{5,20}$/)?.[0] || url.searchParams.get("id")?.match(/^\d{5,20}$/)?.[0] || "" : "",
-      addSelectors: [
-        "button[data-testid*='add-to-bag' i]",
-        "button[name*='add-to-bag' i]",
-        "button[aria-label*='add to bag' i]",
-        "button[class*='add-to-bag' i]",
-        "button"
-      ],
-      priceSelectors: [
-        "meta[itemprop='price']",
-        "meta[property='product:price:amount']",
-        "[itemprop='price']",
-        "[data-testid*='sale-price' i]",
-        "[data-testid*='price' i]",
-        "[class*='sale-price' i]"
-      ],
-      sellerSelectors: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='marketplace' i]"],
+      addSelectors: selectorsFor("macys", "addControl"),
+      priceSelectors: selectorsFor("macys", "price"),
+      sellerSelectors: selectorsFor("macys", "seller"),
       firstPartyPattern: /(?:shipped\s+and\s+)?sold\s+by\s+macy'?s/i,
       marketplacePattern: /(?:shipped\s+and\s+)?sold\s+by\s+(?!macy'?s\b)/i,
       shippingPattern: /shipping|ship to|delivery/i,
@@ -404,27 +609,10 @@ var YoinkPopupStateModule = (() => {
       domains: ["p-bandai.com"],
       skuPattern: /^[A-Z]\d{10}$/,
       skuFromUrl: (url) => url.pathname.match(/^\/us\/item\/([a-z]\d{10})(?:\/|$)/i)?.[1] || "",
-      addSelectors: [
-        "button[data-testid*='add-to-cart' i]",
-        "button[data-automation-id*='add-to-cart' i]",
-        "button[aria-label*='add to cart' i]",
-        "button[class*='add-cart' i]",
-        "button[class*='pre-order' i]",
-        "a[class*='add-cart' i]",
-        "a[class*='pre-order' i]",
-        "button",
-        "a[role='button']"
-      ],
+      addSelectors: selectorsFor("pbandai", "addControl"),
       addIntentPattern: /\b(?:add(?:\s+(?:item\s+)?to)?\s+(?:cart|bag)|pre[ -]?order(?:\s+now|\s+(?:item\s+)?to\s+(?:cart|bag))?|atc)\b/i,
-      priceSelectors: [
-        "meta[itemprop='price']",
-        "meta[property='product:price:amount']",
-        "[itemprop='price']",
-        "[data-testid*='price' i]",
-        "[class*='item-price' i]",
-        "[class*='product-price' i]"
-      ],
-      sellerSelectors: [],
+      priceSelectors: selectorsFor("pbandai", "price"),
+      sellerSelectors: selectorsFor("pbandai", "seller"),
       firstPartyPattern: /sold\s+by\s+premium\s+bandai/i,
       marketplacePattern: /sold\s+by\s+(?!premium\s+bandai\b)/i,
       shippingPattern: /shipping|ships|delivery/i,
@@ -438,23 +626,9 @@ var YoinkPopupStateModule = (() => {
       domains: ["pokemoncenter.com"],
       skuPattern: /^\d{2,3}-\d{5}(?:-\d{3})?$/,
       skuFromUrl: (url) => url.pathname.match(/^\/product\/(\d{2,3}-\d{5}(?:-\d{3})?)(?:\/|$)/i)?.[1] || "",
-      addSelectors: [
-        "button[data-testid*='add-to-cart' i]",
-        "button[data-automation-id*='add-to-cart' i]",
-        "button[name*='add-to-cart' i]",
-        "button[aria-label*='add to cart' i]",
-        "button[class*='add-to-cart' i]",
-        "button"
-      ],
-      priceSelectors: [
-        "meta[itemprop='price']",
-        "meta[property='product:price:amount']",
-        "[itemprop='price']",
-        "[data-testid*='price' i]",
-        "[class*='product-price' i]",
-        "[class*='sales-price' i]"
-      ],
-      sellerSelectors: [],
+      addSelectors: selectorsFor("pokemoncenter", "addControl"),
+      priceSelectors: selectorsFor("pokemoncenter", "price"),
+      sellerSelectors: selectorsFor("pokemoncenter", "seller"),
       firstPartyPattern: /sold\s+by\s+pok[eé]mon\s+center/i,
       marketplacePattern: /sold\s+by\s+(?!pok[eé]mon\s+center\b)/i,
       shippingPattern: /shipping|ships|delivery/i,
@@ -531,71 +705,17 @@ var YoinkPopupStateModule = (() => {
     "itemprop"
   ];
   var REPAIR_STRUCTURAL_SELECTOR = REPAIR_LANDMARK_ATTRIBUTES.map((attribute) => `[${attribute}]`).join(", ");
-  var WALMART_PRIMARY_SCOPE = [
-    "[data-testid*='buy-box' i]",
-    "[data-automation-id*='buy-box' i]",
-    "[data-testid*='purchase' i]",
-    "[data-automation-id*='purchase' i]",
-    "[data-testid*='add-to-cart-section' i]"
-  ].join(", ");
-  var WALMART_MERCHANDISING_SCOPE = [
-    "[data-testid*='recommend' i]",
-    "[data-automation-id*='recommend' i]",
-    "[aria-label*='similar' i]",
-    "[aria-label*='sponsored' i]",
-    "[data-testid*='sponsored' i]",
-    "[class*='carousel' i]",
-    "[class*='related-products' i]"
-  ].join(", ");
-  var WALMART_SECONDARY_ACTION_SCOPE = [
-    "[data-testid*='sticky' i]",
-    "[data-automation-id*='sticky' i]",
-    "[class*='sticky' i]",
-    "[class*='floating' i]",
-    "[class*='mobile-drawer' i]"
-  ].join(", ");
-  var AMAZON_MERCHANDISING_SCOPE = [
-    "[data-cel-widget*='recommend' i]",
-    "[data-feature-name*='recommend' i]",
-    "[aria-label*='sponsored' i]",
-    "[class*='carousel' i]",
-    "#similarities_feature_div",
-    "#sp_detail"
-  ].join(", ");
-  var BESTBUY_PRIMARY_SCOPE = [
-    "[data-testid*='buy-box' i]",
-    "[data-testid*='fulfillment' i]",
-    "[data-testid*='purchase' i]",
-    "[class*='fulfillment-add-to-cart' i]",
-    "[class*='buy-box' i]",
-    "[class*='purchase' i]"
-  ].join(", ");
-  var BESTBUY_MERCHANDISING_SCOPE = [
-    "[data-testid*='recommend' i]",
-    "[aria-label*='similar' i]",
-    "[aria-label*='sponsored' i]",
-    "[class*='carousel' i]",
-    "[class*='related-products' i]",
-    "[class*='recommend' i]"
-  ].join(", ");
-  var AMAZON_CANONICAL_OFFER_INPUT_SELECTOR = [
-    "input[name='offerListingID']",
-    "input[name='offerListingId']",
-    "input[name='items[0.base][offerListingID]']",
-    "input[name='items[0.base][offerListingId]']"
-  ].join(", ");
-  var AMAZON_EXPLICIT_ASIN_SELECTOR = [
-    "input[name='ASIN']",
-    "input[name='asin']",
-    "input[name='items[0.base][asin]']"
-  ].join(", ");
-  var BESTBUY_SECONDARY_ACTION_SCOPE = [
-    "[data-testid*='sticky' i]",
-    "[data-automation-id*='sticky' i]",
-    "[class*='sticky' i]",
-    "[class*='floating' i]",
-    "[class*='mobile-drawer' i]"
-  ].join(", ");
+  var WALMART_PRIMARY_SCOPE = selectorsFor("walmart", "primaryScope").join(", ");
+  var WALMART_MERCHANDISING_SCOPE = selectorsFor("walmart", "merchandisingScope").join(", ");
+  var WALMART_SECONDARY_ACTION_SCOPE = selectorsFor("walmart", "secondaryActionScope").join(", ");
+  var AMAZON_MERCHANDISING_SCOPE = selectorsFor("amazon", "merchandisingScope").join(", ");
+  var BESTBUY_PRIMARY_SCOPE = selectorsFor("bestbuy", "primaryScope").join(", ");
+  var BESTBUY_MERCHANDISING_SCOPE = selectorsFor("bestbuy", "merchandisingScope").join(", ");
+  var AMAZON_OFFER_INPUT_SELECTORS = selectorsFor("amazon", "offerInput");
+  var AMAZON_CANONICAL_OFFER_INPUT_SELECTOR = AMAZON_OFFER_INPUT_SELECTORS.slice(0, 4).join(", ");
+  var AMAZON_ALTERNATE_OFFER_INPUT_SELECTOR = AMAZON_OFFER_INPUT_SELECTORS[4] ?? "input:not(*)";
+  var AMAZON_EXPLICIT_ASIN_SELECTOR = AMAZON_OFFER_INPUT_SELECTORS.slice(5).join(", ");
+  var BESTBUY_SECONDARY_ACTION_SCOPE = selectorsFor("bestbuy", "secondaryActionScope").join(", ");
 
   // packages/extension-ui/src/popup-state.ts
   var POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
@@ -936,6 +1056,7 @@ var YoinkPopupStateModule = (() => {
     if (stage === "opening_cart") return action === "open_purchase" ? "Opening Walmart\u2026" : "Opening cart\u2026";
     if (stage === "updating") return "Checking update\u2026";
     if (stage === "sharing") return "Sharing\u2026";
+    if (stage === "saving") return "Saving\u2026";
     return null;
   }
   function runningSync(health, now) {
@@ -1227,6 +1348,7 @@ var YoinkPopupStateModule = (() => {
       menu: {
         syncProducts: health.connected === true && health.paired === true,
         shareEvidence: hardBlocker === null && input.page.kind === "product" && sharingRetailers.has(input.page.retailerId),
+        saveRepairPage: !input.production && hardBlocker === null && input.page.kind === "product" && health.localEvidenceCapsules === true && health.evidenceCapsuleTransport === "loopback",
         checkUpdates: !input.production && health.connected === true
       }
     };
@@ -1236,6 +1358,7 @@ var YoinkPopupStateModule = (() => {
     const commands = ["open_yoink"];
     if (view.hardBlocker === null) {
       if (input.page.kind === "product") commands.push("inspect_product");
+      if (!input.production && input.page.kind === "product" && input.health?.localEvidenceCapsules === true && input.health?.evidenceCapsuleTransport === "loopback") commands.push("save_repair_page");
       if (input.page.kind === "walmart_draw") commands.push("inspect_drawings");
       commands.push(input.health?.trackalackerPush?.ready === true ? "sync_products" : "reconnect_trackalacker");
     }

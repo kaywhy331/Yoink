@@ -112,6 +112,8 @@ const witnessDependencies = observerRecipeWitness ? {
 };
 const server = createYoinkServer({
   db,
+  dataDirectory: config.dataDirectory,
+  hosted: config.hosted !== null,
   webRoot: config.webRoot,
   releaseRoot: config.releaseRoot,
   observerRecipeTrust,

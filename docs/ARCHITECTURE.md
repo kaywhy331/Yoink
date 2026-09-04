@@ -25,6 +25,19 @@ Sources -> normalized signals -> identity resolution -> incidents/dedupe
 Yoink 0.1 created `shadow_ready` jobs only. Retailer execution remains
 qualification-gated rather than implied by a strategy match.
 
+Yoink 1.22 adds a local-only adapter repair loop. Failed local store checks can
+capture a bounded, sanitized gzip page snapshot plus a decision trace beside —
+never inside — the hosted-safe diagnostic. Files live under `data/evidence`
+with a JSON index and retention limits; they are excluded from hosted traffic,
+alerts, community evidence, observer recipes, backups, and portability. Source
+and packaged replay use stamped visibility through an explicit adapter
+environment, and promoted, re-scanned snapshots form an offline regression
+corpus. Selector packs remain packaged and code-signed, so a selector-only fix
+can be replayed and automatically rechecked without remotely changing Add
+controls or retiring a contract authorization. One generated add-lane registry
+now drives companion rehearsal metadata and the generic server trial and
+activation paths.
+
 Yoink 0.2 adds authenticated device pairing and a dormant lease/reconciliation
 protocol. Leasing is independently gated by execution mode, the global pause,
 device capability, and an explicit retailer/action qualification record. See

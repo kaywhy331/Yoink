@@ -5,15 +5,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { ADD_LANES, ADD_LANE_IDS } from "../packages/contracts/src/index.js";
 
-test("the extension release allowlist contains every packaged observer and mutation runner", () => {
+test("the extension release allowlist contains every observer and derives mutation runners from the lane registry", () => {
   const script = readFileSync(join(process.cwd(), "scripts", "package-extension.mjs"), "utf8");
   for (const file of [
     "target-shadow.js",
-    "target-action.js",
-    "walmart-action.js",
-    "amazon-action.js",
-    "bestbuy-action.js",
     "retailer-shadow.js",
     "observer-recipe-oracle.js",
     "trackalacker-push.js",
@@ -26,6 +23,11 @@ test("the extension release allowlist contains every packaged observer and mutat
     "options.css"
   ]) {
     assert.match(script, new RegExp(`\\"${file.replaceAll(".", "\\.")}\\"`), `${file} must be included in the release zip`);
+  }
+  assert.match(script, /add-lanes\.ts/);
+  assert.match(script, /\.\.\.actionFiles/);
+  for (const retailerId of ADD_LANE_IDS) {
+    assert.match(ADD_LANES[retailerId].runnerFile, /^[a-z0-9]+-action\.js$/);
   }
 });
 
@@ -64,7 +66,12 @@ test("the production extension profile is deterministic, HTTPS-pinned, and conta
 
     const packagedFiles = spawnSync("unzip", ["-Z1", archive], { encoding: "utf8" });
     assert.equal(packagedFiles.status, 0, packagedFiles.stderr);
-    for (const file of ["options.html", "options.js", "options.css"]) {
+    for (const file of [
+      "options.html",
+      "options.js",
+      "options.css",
+      ...ADD_LANE_IDS.map((retailerId) => ADD_LANES[retailerId].runnerFile)
+    ]) {
       assert.match(packagedFiles.stdout, new RegExp(`^${file.replaceAll(".", "\\.")}$`, "m"));
     }
 

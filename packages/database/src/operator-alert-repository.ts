@@ -75,7 +75,7 @@ export interface OperatorAlertIncident {
   ruleName: string;
   eventFamily: OperatorAlertEventFamily;
   severity: OperatorAlertSeverity;
-  status: "open" | "acknowledged" | "resolved";
+  status: "open" | "acknowledged" | "fixed_pending_live" | "resolved";
   privacyClassification: "operational_aggregate";
   sourceCohort: string;
   title: string;
@@ -96,6 +96,21 @@ export interface OperatorAlertIncident {
   escalationDue: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AdapterRepairRecheckInput {
+  capsuleId: string;
+  packagedVersions: {
+    adapterVersion: string;
+    packVersion: string;
+    extensionVersion: string;
+  };
+  result: {
+    outcome: string;
+    failureStage: string;
+    reasonCode: string;
+    diagnosticClass: string;
+  };
 }
 
 interface RuleRow {
@@ -123,7 +138,7 @@ interface IncidentRow {
   ruleName: string;
   eventFamily: OperatorAlertEventFamily;
   severity: OperatorAlertSeverity;
-  status: "open" | "acknowledged" | "resolved";
+  status: "open" | "acknowledged" | "fixed_pending_live" | "resolved";
   privacyClassification: "operational_aggregate";
   incidentKeyHash: string;
   title: string;
@@ -221,7 +236,7 @@ function ruleFromRow(row: RuleRow): OperatorAlertRule {
 }
 
 function incidentFromRow(row: IncidentRow, now = Date.now()): OperatorAlertIncident {
-  const escalationDue = row.status !== "resolved"
+  const escalationDue = ["open", "acknowledged"].includes(row.status)
     && !row.escalatedAt
     && row.escalationAfterSeconds > 0
     && new Date(row.firstSeenAt).getTime() + row.escalationAfterSeconds * 1_000 <= now;
@@ -450,12 +465,130 @@ export class OperatorAlertRepository {
     return this.db.get<IncidentRow>(
       `${INCIDENT_SELECT}
        WHERE i.tenant_id = ? AND i.subject_user_id = ? AND i.rule_id = ?
-         AND i.incident_key_hash = ? AND i.status IN ('open', 'acknowledged')`,
+         AND i.incident_key_hash = ? AND i.status IN ('open', 'acknowledged', 'fixed_pending_live')`,
       scope.tenantId,
       scope.userId,
       ruleId,
       incidentKeyHash
     );
+  }
+
+  private latestAdapterRepairRecheck(incidentId: string): {
+    createdAt: string;
+    adapterVersion: string;
+    packVersion: string;
+    extensionVersion: string;
+  } | null {
+    const scope = currentRequestScope();
+    const row = this.db.get<{ dataJson: string; createdAt: string }>(
+      `SELECT data_json AS dataJson, created_at AS createdAt
+       FROM audit_events
+       WHERE tenant_id = ? AND user_id = ? AND correlation_id = ?
+         AND event_type = 'adapter_repair_recheck'
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      scope.tenantId,
+      scope.userId,
+      incidentId
+    );
+    if (!row) return null;
+    try {
+      const data = JSON.parse(row.dataJson) as {
+        packagedVersions?: { adapterVersion?: unknown; packVersion?: unknown; extensionVersion?: unknown };
+      };
+      return {
+        createdAt: row.createdAt,
+        adapterVersion: cleanText(data.packagedVersions?.adapterVersion, 80),
+        packVersion: cleanText(data.packagedVersions?.packVersion, 40),
+        extensionVersion: cleanText(data.packagedVersions?.extensionVersion, 40)
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Records the local release replay receipt and holds the alert open in a
+   * distinct state until the same packaged adapter is exercised by a live
+   * diagnostic. The capsule itself and its trace never enter either ledger.
+   */
+  markAdapterRepairFixedPendingLive(
+    item: AdapterRepairQueueItem,
+    input: AdapterRepairRecheckInput,
+    now = Date.now()
+  ): OperatorAlertIncident[] {
+    if (!item || !["open", "superseded"].includes(item.status)) return [];
+    const scope = currentRequestScope();
+    const timestamp = nowIso(now);
+    const incidentKeyHash = stableHash(
+      "yoink_operator_alert_adapter_repair_v1",
+      item.retailerId,
+      item.operation,
+      item.layoutFingerprint
+    );
+    const updated: OperatorAlertIncident[] = [];
+    this.db.transaction(() => {
+      for (const rule of this.loadRules().filter((candidate) => candidate.eventFamily === "adapter_repair"
+        && (candidate.retailerScope === "*" || candidate.retailerScope === item.retailerId)
+        && (candidate.operationScope === "*" || candidate.operationScope === item.operation))) {
+        let incident = this.db.get<IncidentRow>(
+          `${INCIDENT_SELECT}
+           WHERE i.tenant_id = ? AND i.subject_user_id = ? AND i.rule_id = ?
+             AND i.incident_key_hash = ?
+             AND (i.status IN ('open', 'acknowledged', 'fixed_pending_live')
+               OR (i.status = 'resolved' AND i.resolution_code = 'superseded_by_release'))
+           ORDER BY CASE i.status WHEN 'fixed_pending_live' THEN 0 WHEN 'open' THEN 1
+                    WHEN 'acknowledged' THEN 2 ELSE 3 END,
+                    i.updated_at DESC, i.id DESC LIMIT 1`,
+          scope.tenantId,
+          scope.userId,
+          rule.id,
+          incidentKeyHash
+        );
+        if (!incident) continue;
+        const version = cleanText(input.packagedVersions.extensionVersion, 40) || "the packaged release";
+        const summary = `Passes since ${version}; waiting for a live check.`;
+        this.db.run(
+          `UPDATE operator_alert_incidents
+           SET status = 'fixed_pending_live', summary = ?, last_seen_at = MAX(last_seen_at, ?),
+               resolved_by_actor_id = '', resolved_at = '', resolution_code = '', updated_at = ?
+           WHERE id = ? AND tenant_id = ?`,
+          summary,
+          item.lastSeenAt,
+          timestamp,
+          incident.id,
+          scope.tenantId
+        );
+        incident = this.db.get<IncidentRow>(
+          `${INCIDENT_SELECT} WHERE i.id = ? AND i.tenant_id = ?`,
+          incident.id,
+          scope.tenantId
+        ) as IncidentRow;
+        this.audit.record({
+          correlationId: incident.id,
+          aggregateType: "adapter_repair",
+          eventType: "adapter_repair_recheck",
+          reasonCode: "adapter_fixed_by_replay",
+          message: `${displayRetailer(item.retailerId)} repair evidence passed the packaged adapter and is waiting for a live check.`,
+          data: {
+            groupKey: `${item.retailerId}:${item.operation}:${item.layoutFingerprint}`,
+            capsuleId: cleanText(input.capsuleId, 120),
+            packagedVersions: {
+              adapterVersion: cleanText(input.packagedVersions.adapterVersion, 80),
+              packVersion: cleanText(input.packagedVersions.packVersion, 40),
+              extensionVersion: version
+            },
+            result: {
+              outcome: cleanText(input.result.outcome, 24),
+              failureStage: cleanText(input.result.failureStage, 40),
+              reasonCode: cleanText(input.result.reasonCode, 80),
+              diagnosticClass: cleanText(input.result.diagnosticClass, 40)
+            }
+          }
+        }, now);
+        updated.push(incidentFromRow(incident, now));
+      }
+    });
+    return updated;
   }
 
   private lifecycle(
@@ -710,9 +843,86 @@ export class OperatorAlertRepository {
             item.layoutFingerprint
           );
           let incident = this.activeIncident(rule.id, incidentKeyHash);
-          if (item.status === "recovered" || item.status === "aged_out") {
+          if (incident?.status === "fixed_pending_live") {
+            const recheck = this.latestAdapterRepairRecheck(incident.id);
+            const isLaterPackagedDiagnostic = Boolean(recheck)
+              && item.latestReceivedAt > String(recheck?.createdAt || "")
+              && item.latestAdapterVersion === recheck?.adapterVersion
+              && item.latestPackVersion === recheck?.packVersion;
+            if (!isLaterPackagedDiagnostic) continue;
+            const timestamp = nowIso(now);
+            if (item.latestOutcome !== "failed"
+              && ["none", "listing_state"].includes(item.latestDiagnosticClass)) {
+              this.db.run(
+                `UPDATE operator_alert_incidents SET status = 'resolved',
+                   summary = ?, last_seen_at = MAX(last_seen_at, ?),
+                   resolved_by_actor_id = ?, resolved_at = ?,
+                   resolution_code = 'adapter_fixed_by_replay', updated_at = ?
+                 WHERE id = ? AND tenant_id = ? AND status = 'fixed_pending_live'`,
+                `Fixed in ${recheck?.extensionVersion || "the packaged release"}; the live check passed.`,
+                item.latestReceivedAt,
+                scope.actorId,
+                timestamp,
+                timestamp,
+                incident.id,
+                scope.tenantId
+              );
+              incident = this.db.get<IncidentRow>(
+                `${INCIDENT_SELECT} WHERE i.id = ? AND i.tenant_id = ?`,
+                incident.id,
+                scope.tenantId
+              ) as IncidentRow;
+              this.lifecycle(incident, rule, "auto_resolved", "adapter_fixed_by_replay", safeCorrelationId, {
+                retailerId: item.retailerId,
+                operation: item.operation,
+                layoutFingerprint: item.layoutFingerprint,
+                adapterVersion: item.latestAdapterVersion,
+                packVersion: item.latestPackVersion
+              }, now);
+              result.resolved += 1;
+              result.routed += rule.routes.length;
+              continue;
+            }
+            if (["failed", "rejected"].includes(item.latestOutcome)
+              && item.latestDiagnosticClass === "adapter_defect") {
+              const summary = `${displayRetailer(item.retailerId)} store repair regressed after the packaged replay fix; ${item.reasonCode.replaceAll("_", " ")} was seen in a live check.`;
+              this.db.run(
+                `UPDATE operator_alert_incidents SET status = 'open', summary = ?,
+                   reason_code = 'regressed_after_replay_fix', failure_stage = ?,
+                   last_seen_at = MAX(last_seen_at, ?), last_failure_at = MAX(last_failure_at, ?),
+                   resolved_by_actor_id = '', resolved_at = '', resolution_code = '',
+                   last_routed_at = ?, updated_at = ?
+                 WHERE id = ? AND tenant_id = ? AND status = 'fixed_pending_live'`,
+                summary,
+                item.failureStage,
+                item.latestReceivedAt,
+                item.latestReceivedAt,
+                timestamp,
+                timestamp,
+                incident.id,
+                scope.tenantId
+              );
+              incident = this.db.get<IncidentRow>(
+                `${INCIDENT_SELECT} WHERE i.id = ? AND i.tenant_id = ?`,
+                incident.id,
+                scope.tenantId
+              ) as IncidentRow;
+              this.lifecycle(incident, rule, "repeated", "regressed_after_replay_fix", safeCorrelationId, {
+                retailerId: item.retailerId,
+                operation: item.operation,
+                layoutFingerprint: item.layoutFingerprint,
+                adapterVersion: item.latestAdapterVersion,
+                packVersion: item.latestPackVersion
+              }, now);
+              result.updated += 1;
+              result.routed += rule.routes.length;
+            }
+            continue;
+          }
+          if (item.status === "recovered" || item.status === "aged_out" || item.status === "superseded") {
             if (!incident) continue;
-            const resolutionCode = item.status === "aged_out" ? "adapter_aged_out" : "adapter_recovered";
+            const resolutionCode = item.status === "aged_out" ? "adapter_aged_out"
+              : item.status === "superseded" ? "superseded_by_release" : "adapter_recovered";
             const timestamp = nowIso(now);
             this.db.run(
               `UPDATE operator_alert_incidents SET status = 'resolved', last_seen_at = ?,
@@ -940,7 +1150,7 @@ export class OperatorAlertRepository {
       this.db.run(
         `UPDATE operator_alert_incidents SET status = 'resolved', resolved_by_actor_id = ?,
            resolved_at = ?, resolution_code = ?, last_routed_at = ?, updated_at = ?
-         WHERE id = ? AND tenant_id = ? AND status IN ('open', 'acknowledged')`,
+         WHERE id = ? AND tenant_id = ? AND status IN ('open', 'acknowledged', 'fixed_pending_live')`,
         scope.actorId,
         timestamp,
         reasonCode,
@@ -957,14 +1167,15 @@ export class OperatorAlertRepository {
     return incidentFromRow(incident, now);
   }
 
-  incidents(status: "open" | "acknowledged" | "resolved" | "all" = "all", limit = 200, now = Date.now()): OperatorAlertIncident[] {
+  incidents(status: "open" | "acknowledged" | "fixed_pending_live" | "resolved" | "all" = "all", limit = 200, now = Date.now()): OperatorAlertIncident[] {
     this.authorization.require("admin.read");
     const scope = currentRequestScope();
-    const normalizedStatus = ["open", "acknowledged", "resolved"].includes(status) ? status : "all";
+    const normalizedStatus = ["open", "acknowledged", "fixed_pending_live", "resolved"].includes(status) ? status : "all";
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 200)));
     return this.db.all<IncidentRow>(
       `${INCIDENT_SELECT} WHERE i.tenant_id = ? AND (? = 'all' OR i.status = ?)
-       ORDER BY CASE i.status WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END,
+       ORDER BY CASE i.status WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1
+                WHEN 'fixed_pending_live' THEN 2 ELSE 3 END,
                 i.last_seen_at DESC,
                 CASE i.severity WHEN 'critical' THEN 0 WHEN 'error' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END,
                 i.id DESC LIMIT ?`,
@@ -1021,6 +1232,7 @@ export class OperatorAlertRepository {
     enabledOperatorAlertRules: number;
     openOperatorAlerts: number;
     acknowledgedOperatorAlerts: number;
+    fixedPendingLiveOperatorAlerts: number;
     resolvedOperatorAlerts: number;
     criticalOperatorAlerts: number;
     operatorAlertDeliveries: number;
@@ -1031,10 +1243,11 @@ export class OperatorAlertRepository {
       "SELECT COUNT(*) AS total, SUM(enabled) AS enabled FROM operator_alert_rules WHERE tenant_id = ?",
       scope.tenantId
     );
-    const incidentCounts = this.db.get<{ open: number; acknowledged: number; resolved: number; critical: number }>(
+    const incidentCounts = this.db.get<{ open: number; acknowledged: number; fixedPendingLive: number; resolved: number; critical: number }>(
       `SELECT SUM(status = 'open') AS open, SUM(status = 'acknowledged') AS acknowledged,
+              SUM(status = 'fixed_pending_live') AS fixedPendingLive,
               SUM(status = 'resolved') AS resolved,
-              SUM(status IN ('open', 'acknowledged') AND severity = 'critical') AS critical
+              SUM(status IN ('open', 'acknowledged', 'fixed_pending_live') AND severity = 'critical') AS critical
        FROM operator_alert_incidents WHERE tenant_id = ?`,
       scope.tenantId
     );
@@ -1047,6 +1260,7 @@ export class OperatorAlertRepository {
       enabledOperatorAlertRules: Number(ruleCounts?.enabled ?? 0),
       openOperatorAlerts: Number(incidentCounts?.open ?? 0),
       acknowledgedOperatorAlerts: Number(incidentCounts?.acknowledged ?? 0),
+      fixedPendingLiveOperatorAlerts: Number(incidentCounts?.fixedPendingLive ?? 0),
       resolvedOperatorAlerts: Number(incidentCounts?.resolved ?? 0),
       criticalOperatorAlerts: Number(incidentCounts?.critical ?? 0),
       operatorAlertDeliveries: deliveries

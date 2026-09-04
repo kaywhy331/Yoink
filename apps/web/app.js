@@ -965,7 +965,8 @@ function renderActionPlatformAdmin() {
     const warning = lane.qualification?.warning || "none";
     const qualificationNeedsAttention = warning !== "none";
     const readinessLabel = lane.degraded ? "Degraded"
-      : qualificationNeedsAttention ? warning.replaceAll("_", " ")
+      : warning === "pack_unverified" ? "Store check pending after update"
+        : qualificationNeedsAttention ? warning.replaceAll("_", " ")
         : lane.readyForGuardedAdd ? "Ready" : "Needs setup";
     const degradedReasons = (lane.degradedReasons || []).map((reason) => LANE_DEGRADATION_LABELS[reason] || String(reason).replaceAll("_", " "));
     const blockedLabel = LANE_BLOCKED_LABELS[lane.blockedReason || ""] || "";
@@ -1388,28 +1389,50 @@ function renderAdapterRepairQueue() {
   const open = Number(state.snapshot.counts.openAdapterRepairGroups || 0);
   const recovered = Number(state.snapshot.counts.recoveredAdapterRepairGroups || 0);
   const agedOut = Number(state.snapshot.counts.agedOutAdapterRepairGroups || 0);
+  const superseded = Number(state.snapshot.counts.supersededAdapterRepairGroups || 0);
   const events = Number(state.snapshot.counts.adapterDiagnosticEvents || 0);
   const gate = $("#adapterRepairGate");
   gate.textContent = open ? "Attention" : "OK";
   gate.classList.toggle("danger", open > 0);
-  $("#adapterRepairSummary").innerHTML = `<strong>${open.toLocaleString()} open repair group${open === 1 ? "" : "s"}</strong><span>${events.toLocaleString()} sanitized events · ${recovered.toLocaleString()} recovered groups${agedOut ? ` · ${agedOut.toLocaleString()} aged out` : ""}</span>`;
+  $("#adapterRepairSummary").innerHTML = `<strong>${open.toLocaleString()} open repair group${open === 1 ? "" : "s"}</strong><span>${events.toLocaleString()} sanitized events · ${recovered.toLocaleString()} recovered groups${superseded ? ` · ${superseded.toLocaleString()} superseded` : ""}${agedOut ? ` · ${agedOut.toLocaleString()} aged out` : ""}</span>`;
   $("#adapterRepairList").innerHTML = queue.length ? queue.map((item) => {
-    const isOpen = item.status === "open";
+    const repairStatus = item.repairIncidentStatus || item.status;
+    const isFixedPendingLive = repairStatus === "fixed_pending_live";
+    const isOpen = repairStatus === "open" || repairStatus === "acknowledged";
     const isAgedOut = item.status === "aged_out";
-    const statusLabel = isOpen ? "Repair needed" : isAgedOut ? "Aged out" : "Recovered";
+    const isSuperseded = item.status === "superseded";
+    const statusLabel = isFixedPendingLive ? "Fixed, waiting for a live check" : isOpen ? "Repair needed" : isSuperseded ? "Superseded by a newer version" : isAgedOut ? "Aged out" : "Recovered";
+    const classLabel = {
+      adapter_defect: "Store page changed",
+      listing_state: "Item not purchasable",
+      interactive_block: "Store asked for a person",
+      policy: "Outside plan limits",
+      infrastructure: "Check could not run",
+      none: "No repair needed"
+    }[item.diagnosticClass] || "Check could not run";
     const retailer = retailerName(item.retailerId);
     const operation = String(item.operation || "observe").replaceAll("_", " ");
     const stage = String(item.failureStage || "unknown").replaceAll("_", " ");
     const reason = String(item.reasonCode || "unknown").replaceAll("_", " ");
     const fingerprint = String(item.layoutFingerprint || "").slice(0, 12);
+    const capsuleCount = Number(item.evidenceCapsuleCount || 0);
+    const capsuleSummary = capsuleCount
+      ? `${capsuleCount.toLocaleString()} snapshot${capsuleCount === 1 ? "" : "s"} · latest ${relativeTime(item.latestEvidenceCapsuleAt)}`
+      : "No local snapshots";
+    const replaySummary = isFixedPendingLive
+      ? String(item.repairIncidentSummary || `Passes since ${item.currentReleaseVersion} · waiting for a live check`).replace(";", " ·")
+      : isOpen && capsuleCount
+        ? `Current version: still fails (replayed ${item.currentReleaseVersion})`
+        : "";
     const suggestions = Array.isArray(item.repairSuggestions) ? item.repairSuggestions.slice(0, 5) : [];
     const suggestionRows = suggestions.map((suggestion) => {
       const ready = suggestion.reviewState === "maintainer_ready";
       return `<div class="card-meta"><span class="tag">${escapeHtml(observerFieldName(suggestion.field))}</span><span class="tag ${ready ? "warning" : ""}">${ready ? "Ready for candidate evaluation" : "Collecting evidence"}</span><span class="tag">never auto-promoted</span><span class="tag">non-executable</span><code>${escapeHtml(suggestion.selector || "")}</code><span>${Number(suggestion.distinctDeviceCount || 0).toLocaleString()}/${Number(suggestion.minimumDeviceCount || 3).toLocaleString()} Chrome companions · ${Number(suggestion.distinctSkuCount || 0).toLocaleString()}/${Number(suggestion.minimumSkuCount || 2).toLocaleString()} exact SKUs</span></div>`;
     }).join("");
-    return `<article class="adapter-repair-row ${isOpen ? "open" : isAgedOut ? "aged-out" : "recovered"}">
+    return `<article class="adapter-repair-row ${isOpen ? "open" : isAgedOut || isSuperseded ? "aged-out" : "recovered"}">
       <div>${statusDot(isOpen ? "bad" : isAgedOut ? "warning" : "good", statusLabel)}<div><h3>${escapeHtml(retailer)} · ${escapeHtml(operation)} · ${escapeHtml(item.latestRetailerSku || "unknown SKU")}</h3><p>${escapeHtml(stage)} · ${escapeHtml(reason)} · layout ${escapeHtml(fingerprint || "unknown")}</p></div></div>
-      <div class="adapter-repair-meta"><span class="tag ${isOpen ? "bad" : isAgedOut ? "" : "good"}">${statusLabel}</span><span>${Number(item.occurrenceCount || 0).toLocaleString()} occurrences · ${Number(item.affectedSkuCount || 0).toLocaleString()} SKUs${item.domChangedSeen ? " · DOM changed during retry" : ""}</span><time>${escapeHtml(relativeTime(item.lastSeenAt))}</time></div>
+      <div class="adapter-repair-meta"><span class="tag ${isOpen ? "bad" : isAgedOut || isSuperseded ? "" : "good"}">${statusLabel}</span><span class="tag">${escapeHtml(classLabel)}</span><span>${Number(item.occurrenceCount || 0).toLocaleString()} occurrences · ${Number(item.affectedSkuCount || 0).toLocaleString()} SKUs${item.domChangedSeen ? " · DOM changed during retry" : ""}</span><span>${escapeHtml(capsuleSummary)}</span>${replaySummary ? `<span>${escapeHtml(replaySummary)}</span>` : ""}<time>${escapeHtml(relativeTime(item.lastSeenAt))}</time></div>
+      <div class="card-actions">${item.latestEvidenceCapsuleId ? `<button class="button secondary" data-download-evidence-capsule="${escapeHtml(item.latestEvidenceCapsuleId)}" type="button">Download latest snapshot</button>` : ""}<button class="button secondary" data-copy-repair-command="${escapeHtml(`npm run repair -- ${item.retailerId}:${item.layoutFingerprint}`)}" type="button">Copy repair command</button></div>
       ${suggestionRows}
     </article>`;
   }).join("") : empty("No adapter repair incidents have been captured. The server is listening for sanitized extension diagnostics.");
@@ -1653,7 +1676,8 @@ function renderAddQualification(retailerId) {
   const warningLabel = {
     expiring: "Qualification expires soon",
     expired: "Qualification expired",
-    version_changed: "Runner changed · re-qualify"
+    version_changed: "Runner changed · re-qualify",
+    pack_unverified: "Store check pending after update"
   }[qualificationWarning];
   const label = warningLabel || (active ? "Guarded adds active" : qualified ? "Qualified · paused" : evidenceReady ? "Ready for explicit activation" : liveReady ? "Ready for no-click rehearsal" : "Collecting required evidence");
   const kind = ["expired", "version_changed"].includes(qualificationWarning)
@@ -1674,6 +1698,8 @@ function renderAddQualification(retailerId) {
     ? "Expired"
     : qualificationWarning === "version_changed"
       ? "Check again"
+      : qualificationWarning === "pack_unverified"
+        ? "Check pending"
       : qualificationWarning === "expiring"
         ? "Expiring"
         : active ? "Active" : qualified ? "Paused" : evidenceReady ? "Ready" : "Closed";
@@ -1850,6 +1876,9 @@ function renderSettings() {
   for (const retailer of ["target", "walmart", "amazon", "bestbuy"]) {
     form.elements[`${retailer}Allowance`].value = (Number(settings.storeAllowancesCents?.[retailer] || 0) / 100).toFixed(2);
   }
+  const evidenceToggle = $("#evidenceCapsulesEnabled");
+  evidenceToggle.checked = settings.evidenceCapsulesEnabled === true;
+  evidenceToggle.disabled = state.snapshot.capabilities?.evidenceCapsuleTransport === "none";
 }
 
 function renderJobs() {
@@ -2024,7 +2053,7 @@ function renderOperatorAlerts() {
   const incidents = alerts.incidents || [];
   const rules = alerts.rules || [];
   const deliveries = alerts.deliveries || [];
-  const activeCount = Number(counts.openOperatorAlerts || 0) + Number(counts.acknowledgedOperatorAlerts || 0);
+  const activeCount = Number(counts.openOperatorAlerts || 0) + Number(counts.acknowledgedOperatorAlerts || 0) + Number(counts.fixedPendingLiveOperatorAlerts || 0);
   const criticalCount = Number(counts.criticalOperatorAlerts || 0);
   const gate = $("#operatorAlertGate");
   gate.textContent = activeCount ? "Attention" : "OK";
@@ -2040,12 +2069,12 @@ function renderOperatorAlerts() {
   addConnectorButton.title = alerts.canManage === true ? "Bind a deployment-owned connector reference." : "Permission alert.manage is required.";
   $("#operatorAlertIncidentList").innerHTML = incidents.length ? incidents.map((incident) => {
     const severityKind = ["critical", "error"].includes(incident.severity) ? "bad" : incident.severity === "warning" ? "warning" : "good";
-    const statusKind = incident.status === "resolved" ? "good" : incident.status === "acknowledged" ? "warning" : severityKind;
+    const statusKind = ["resolved", "fixed_pending_live"].includes(incident.status) ? "good" : incident.status === "acknowledged" ? "warning" : severityKind;
     const actions = alerts.canManage === true && incident.status !== "resolved"
       ? `<div class="card-actions">${incident.status === "open" ? `<button class="button secondary" data-operator-alert-acknowledge="${escapeHtml(incident.id)}" type="button">Acknowledge</button>` : ""}<button class="button primary" data-operator-alert-resolve="${escapeHtml(incident.id)}" type="button">Resolve</button></div>`
       : "";
     return `<article class="card operator-alert-card ${escapeHtml(statusKind)}">
-      <div class="card-top"><div><h3>${escapeHtml(incident.title)}</h3><p>${escapeHtml(incident.summary)}</p></div><span class="tag ${statusKind}">${escapeHtml(incident.status)}</span></div>
+      <div class="card-top"><div><h3>${escapeHtml(incident.title)}</h3><p>${escapeHtml(incident.summary)}</p></div><span class="tag ${statusKind}">${escapeHtml(incident.status === "fixed_pending_live" ? "Fixed, waiting for a live check" : incident.status)}</span></div>
       <div class="card-meta"><span class="tag ${severityKind}">${escapeHtml(incident.severity)}</span><span class="tag">${escapeHtml(retailerName(incident.retailerId))}</span><span class="tag">${escapeHtml(String(incident.operation).replaceAll("_", " "))}</span><span class="tag">${Number(incident.occurrenceCount || 0).toLocaleString()} occurrences</span><span class="tag">${Number(incident.affectedEntityCount || 0).toLocaleString()} products</span>${incident.escalationDue ? '<span class="tag bad">Escalation due</span>' : incident.escalatedAt ? '<span class="tag bad">Escalated</span>' : ""}</div>
       <p class="operator-alert-detail">Reason ${escapeHtml(String(incident.reasonCode).replaceAll("_", " "))} · stage ${escapeHtml(String(incident.failureStage).replaceAll("_", " "))} · layout ${escapeHtml(String(incident.layoutFingerprint).slice(0, 12))} · cohort ${escapeHtml(incident.sourceCohort)} · last seen ${escapeHtml(relativeTime(incident.lastSeenAt))}</p>
       ${actions}
@@ -2979,6 +3008,24 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.copyCorrelation) {
       await navigator.clipboard.writeText(button.dataset.copyCorrelation);
       toast("Activity id copied.");
+      return;
+    }
+    if (button.dataset.copyRepairCommand) {
+      await navigator.clipboard.writeText(button.dataset.copyRepairCommand);
+      toast("Repair command copied.");
+      return;
+    }
+    if (button.dataset.downloadEvidenceCapsule) {
+      const id = button.dataset.downloadEvidenceCapsule;
+      const payload = await api(`/api/v1/admin/evidence-capsules/${encodeURIComponent(id)}`);
+      const blob = new Blob([`${JSON.stringify(payload.capsule, null, 2)}\n`], { type: "application/json" });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = `${id}.json`;
+      link.click();
+      URL.revokeObjectURL(href);
+      toast("Page snapshot downloaded.");
       return;
     }
     if (button.hasAttribute("data-close-dialog")) {
@@ -4407,6 +4454,21 @@ $("#observerRecipeForm").addEventListener("submit", async (event) => {
 });
 
 $("#settingsForm").addEventListener("input", () => { state.settingsDirty = true; });
+$("#evidenceCapsulesEnabled").addEventListener("change", async (event) => {
+  try {
+    const enabled = event.currentTarget.checked;
+    await api("/api/v1/admin/evidence-capsules/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ enabled })
+    });
+    state.settingsDirty = false;
+    await refresh(false);
+    toast(enabled ? "Store repair snapshots enabled." : "Store repair snapshots disabled.");
+  } catch (error) {
+    event.currentTarget.checked = !event.currentTarget.checked;
+    toast(error.message || "Store repair snapshot setting could not be saved.", true);
+  }
+});
 $("#settingsForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {

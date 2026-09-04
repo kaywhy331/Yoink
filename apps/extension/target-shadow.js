@@ -25,8 +25,174 @@ var YoinkTargetShadowModule = (() => {
     collectTargetShadowObservation: () => collectTargetShadowObservation
   });
 
+  // packages/contracts/src/add-lanes.ts
+  function lane(definition) {
+    return Object.freeze({
+      ...definition,
+      capability: Object.freeze({ ...definition.capability }),
+      operations: Object.freeze({ ...definition.operations }),
+      supportedFulfillment: Object.freeze([...definition.supportedFulfillment]),
+      rehearsalGuidance: Object.freeze({ ...definition.rehearsalGuidance })
+    });
+  }
+  var ADD_LANES = Object.freeze({
+    target: lane({
+      id: "target",
+      name: "Target",
+      domain: "target.com",
+      contractVersion: "target-add-v8",
+      packVersion: "target-pack-v1",
+      observerVersion: "target-observer-v6",
+      activationConfirmation: "ENABLE_TARGET_ADD_V8",
+      firstPartySeller: "Target",
+      capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "target-add-qualification-evidence-v1",
+      cartUrl: "https://www.target.com/cart",
+      runnerFile: "target-action.js",
+      runnerGlobal: "YoinkTargetAction",
+      operations: {
+        rehearse: "rehearseTargetAdd",
+        baseline: "inspectTargetCartBaseline",
+        prepare: "prepareTargetAdd",
+        commit: "commitTargetAdd",
+        verifyCart: "verifyTargetAddedCart"
+      },
+      skuPattern: "^\\d{6,20}$",
+      supportedFulfillment: ["shipping", "pickup"],
+      trialRouteSlug: "target-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Target-sold product with Shipping or same-day Delivery available before running the no-click rehearsal."
+      }
+    }),
+    walmart: lane({
+      id: "walmart",
+      name: "Walmart",
+      domain: "walmart.com",
+      contractVersion: "walmart-add-v8",
+      packVersion: "walmart-pack-v1",
+      observerVersion: "walmart-observer-v7",
+      activationConfirmation: "ENABLE_WALMART_ADD_V8",
+      firstPartySeller: "Walmart",
+      capability: { enabled: "walmartAddOnly", version: "walmartAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "walmart-add-qualification-evidence-v1",
+      cartUrl: "https://www.walmart.com/cart",
+      runnerFile: "walmart-action.js",
+      runnerGlobal: "YoinkWalmartAction",
+      operations: {
+        rehearse: "rehearseWalmartAdd",
+        baseline: "inspectWalmartCartBaseline",
+        prepare: "prepareWalmartAdd",
+        commit: "commitWalmartAdd",
+        verifyCart: "verifyWalmartAddedCart"
+      },
+      skuPattern: "^\\d{5,20}$",
+      supportedFulfillment: ["shipping", "pickup"],
+      trialRouteSlug: "walmart-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Walmart-sold product with shipping explicitly available before running the no-click rehearsal."
+      }
+    }),
+    amazon: lane({
+      id: "amazon",
+      name: "Amazon",
+      domain: "amazon.com",
+      contractVersion: "amazon-add-v9",
+      packVersion: "amazon-pack-v1",
+      observerVersion: "amazon-observer-v8",
+      activationConfirmation: "ENABLE_AMAZON_ADD_V9",
+      firstPartySeller: "Amazon.com",
+      capability: { enabled: "amazonAddOnly", version: "amazonAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
+      qualificationEvidenceNamespace: "amazon-add-qualification-evidence-v1",
+      cartUrl: "https://www.amazon.com/gp/cart/view.html",
+      runnerFile: "amazon-action.js",
+      runnerGlobal: "YoinkAmazonAction",
+      operations: {
+        rehearse: "rehearseAmazonAdd",
+        baseline: "inspectAmazonCartBaseline",
+        prepare: "prepareAmazonAdd",
+        commit: "commitAmazonAdd",
+        verifyCart: "verifyAmazonAddedCart"
+      },
+      skuPattern: "^[A-Z0-9]{10}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "amazon-add",
+      rehearsalPolicy: "first_party_exact_route",
+      rehearsalGuidance: {
+        default: "Open an available Amazon.com-sold product with a unique shipping offer before running the no-click rehearsal."
+      }
+    }),
+    bestbuy: lane({
+      id: "bestbuy",
+      name: "Best Buy",
+      domain: "bestbuy.com",
+      contractVersion: "bestbuy-add-v11",
+      packVersion: "bestbuy-pack-v1",
+      observerVersion: "bestbuy-observer-v10",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V11",
+      firstPartySeller: "Best Buy",
+      capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "bestbuy-add-qualification-evidence-v1",
+      cartUrl: "https://www.bestbuy.com/cart",
+      runnerFile: "bestbuy-action.js",
+      runnerGlobal: "YoinkBestBuyAction",
+      operations: {
+        rehearse: "rehearseBestBuyAdd",
+        baseline: "inspectBestBuyCartBaseline",
+        prepare: "prepareBestBuyAdd",
+        commit: "commitBestBuyAdd",
+        verifyCart: "verifyBestBuyAddedCart"
+      },
+      skuPattern: "^\\d{5,20}$",
+      supportedFulfillment: ["shipping", "pickup"],
+      trialRouteSlug: "bestbuy-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available offer explicitly sold by Best Buy, select Shipping, and verify a usable Add to cart or Pre-order control before rehearsing.",
+        highDemand: "Best Buy high-demand or queue evidence was recorded, but automated demand-gate handling remains closed.",
+        securityChallenge: "Complete the visible Best Buy security check in this tab, then retry qualification.",
+        auth: "Sign in to Best Buy in this tab, confirm your location, then retry qualification.",
+        mfa: "Complete Best Buy account verification in this tab, then retry qualification.",
+        location: "Confirm your Best Buy location and select Shipping, then retry qualification.",
+        pickup: "Best Buy pickup evidence was recorded. Select Shipping on an available Best Buy-sold offer before rehearsing."
+      }
+    })
+  });
+
   // packages/contracts/src/index.ts
   var TARGET_OBSERVER_VERSION = "target-observer-v6";
+  function boundedTraceText(value, maximum) {
+    if (value === void 0) return void 0;
+    return String(value).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
+  }
+  function createAdapterTraceBuffer(maximumEntries = 300) {
+    const maximum = Math.max(1, Math.min(300, Math.trunc(maximumEntries) || 300));
+    const entries = [];
+    let truncated = false;
+    return {
+      entries,
+      record(entry) {
+        if (truncated) return;
+        if (entries.length >= maximum) {
+          entries[maximum - 1] = { step: "trace", truncated: true };
+          truncated = true;
+          return;
+        }
+        const normalized = { ...entry };
+        if (entry.selector !== void 0) normalized.selector = boundedTraceText(entry.selector, 200) ?? "";
+        if (entry.condition !== void 0) normalized.condition = boundedTraceText(entry.condition, 80) ?? "";
+        if (entry.expected !== void 0) normalized.expected = boundedTraceText(entry.expected, 60) ?? "";
+        if (entry.actual !== void 0) normalized.actual = boundedTraceText(entry.actual, 60) ?? "";
+        entries.push(normalized);
+      }
+    };
+  }
+  var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
   var SELECTED_OFFER_SCOPE_VERSION = 1;
 
   // packages/browser-safety/src/index.ts
@@ -143,16 +309,262 @@ var YoinkTargetShadowModule = (() => {
     };
   }
 
+  // packages/browser-adapters/packs/amazon.json
+  var amazon_default = {
+    packVersion: "amazon-pack-v1",
+    retailerId: "amazon",
+    fields: {
+      addControl: { selectors: ["#add-to-cart-button", "input[name='submit.add-to-cart']", "button[name='submit.add-to-cart']"] },
+      price: { selectors: ["#corePrice_feature_div .a-offscreen", "#priceblock_ourprice", "#priceblock_dealprice", ".a-price .a-offscreen", "meta[itemprop='price']"] },
+      seller: { selectors: ["#merchant-info", "#sellerProfileTriggerId", "[data-feature-name='shipsFromSoldBy']", "#tabular-buybox"] },
+      availability: { selectors: ["[itemprop='availability']", "button[disabled]"] },
+      fulfillmentRoot: { selectors: ["#buybox", "#desktop_buybox", "[data-feature-name='buybox']", "form"] },
+      fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
+      quantity: { selectors: ["select#quantity", "select[name='quantity']", "input[name='quantity']", "input[name='items[0.base][quantity]']"] },
+      primaryScope: { selectors: ["#qualifiedBuybox", "#desktop_qualifiedBuyBox", "[data-feature-name*='qualifiedBuyBox' i]", "#buybox", "#desktop_buybox", "[data-feature-name='buybox']"] },
+      merchandisingScope: { selectors: ["[data-cel-widget*='recommend' i]", "[data-feature-name*='recommend' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "#similarities_feature_div", "#sp_detail"] },
+      secondaryActionScope: { selectors: [] },
+      structuredData: { selectors: [] },
+      offerInput: { selectors: ["input[name='offerListingID']", "input[name='offerListingId']", "input[name='items[0.base][offerListingID]']", "input[name='items[0.base][offerListingId]']", "input[name='offeringID.1']", "input[name='ASIN']", "input[name='asin']", "input[name='items[0.base][asin]']"] }
+    }
+  };
+
+  // packages/browser-adapters/packs/bestbuy.json
+  var bestbuy_default = {
+    packVersion: "bestbuy-pack-v1",
+    retailerId: "bestbuy",
+    fields: {
+      addControl: { selectors: ["button.add-to-cart-button", "button[data-button-state='ADD_TO_CART']", "button[data-testid*='add-to-cart' i]", "button[data-test-id*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"] },
+      price: { selectors: ["[data-testid='customer-price']", "[data-testid*='customer-price' i]", ".priceView-customer-price", ".priceView-hero-price", "meta[itemprop='price']", "[itemprop='price']"] },
+      seller: { selectors: ["[data-testid='sold-by']", "[data-testid*='sold-by' i]", "[data-testid*='seller' i]", "[class*='seller' i]", "[data-track*='marketplace' i]"] },
+      availability: { selectors: ["[data-testid*='availability' i]", "[data-testid*='out-of-stock' i]", "[aria-label*='out of stock' i]", "[itemprop='availability']", "button[disabled]"] },
+      fulfillmentRoot: { selectors: [] },
+      fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
+      quantity: { selectors: ["select[name*='quantity' i]", "select[aria-label*='quantity' i]", "input[name*='quantity' i]", "input[aria-label*='quantity' i]"] },
+      primaryScope: { selectors: ["[data-testid*='buy-box' i]", "[data-testid*='fulfillment' i]", "[data-testid*='purchase' i]", "[class*='fulfillment-add-to-cart' i]", "[class*='buy-box' i]", "[class*='purchase' i]"] },
+      merchandisingScope: { selectors: ["[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
+      secondaryActionScope: { selectors: ["[data-testid*='sticky' i]", "[data-automation-id*='sticky' i]", "[class*='sticky' i]", "[class*='floating' i]", "[class*='mobile-drawer' i]"] },
+      structuredData: { selectors: [] },
+      offerInput: { selectors: ["[data-sku-id]", "[data-sku]", "[data-product-id]", "input[name*='sku' i]"] }
+    }
+  };
+
+  // packages/browser-adapters/packs/retailers.json
+  var retailers_default = {
+    packVersion: "retailers-pack-v1",
+    retailers: {
+      disney: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-testid*='add-to-bag' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to bag' i]", "button[aria-label*='add to cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='product-price' i]", "[class*='product-price' i]"],
+        seller: []
+      },
+      ravensburger: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        seller: []
+      },
+      riot: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        seller: []
+      },
+      booksamillion: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='our-price' i]", "[class*='sale-price' i]"],
+        seller: []
+      },
+      fanatics: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["[data-talos='pdpProductPrice'] .money-value", "[data-trk-id='pdp-price'] .money-value", "meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='current-price' i]", "[class*='sale-price' i]"],
+        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='shipping' i]"]
+      },
+      kohls: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
+        seller: ["[data-testid*='seller' i]", "[class*='seller' i]"]
+      },
+      macys: {
+        addControl: ["button[data-testid*='add-to-bag' i]", "button[name*='add-to-bag' i]", "button[aria-label*='add to bag' i]", "button[class*='add-to-bag' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
+        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='marketplace' i]"]
+      },
+      pbandai: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-cart' i]", "button[class*='pre-order' i]", "a[class*='add-cart' i]", "a[class*='pre-order' i]", "button", "a[role='button']"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='item-price' i]", "[class*='product-price' i]"],
+        seller: []
+      },
+      pokemoncenter: {
+        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
+        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]", "[class*='sales-price' i]"],
+        seller: []
+      }
+    }
+  };
+
+  // packages/browser-adapters/packs/target.json
+  var target_default = {
+    packVersion: "target-pack-v1",
+    retailerId: "target",
+    fields: {
+      addControl: { selectors: ["button[id^='addToCartButtonOrTextIdFor']", "button[data-test='shipItButton']", "button[data-test='shippingButton']", "button[data-test='orderPickupButton']", "button[data-test*='addToCart' i]"] },
+      price: { selectors: ["[data-test='product-price']", "[data-test*='current-price' i]", "meta[itemprop='price']", "[itemprop='price']", "[data-module-type='ProductDetailPrice']"] },
+      seller: { selectors: ["[data-test*='sold-by' i]", "[data-test*='seller' i]", "[data-testid*='seller' i]"] },
+      availability: { selectors: ["[data-test*='availability' i]", "[data-testid*='availability' i]", "[data-test*='out-of-stock' i]", "[data-testid*='out-of-stock' i]", "[itemprop='availability']", "button[disabled]"] },
+      fulfillmentRoot: { selectors: ["[data-test='module-product-detail-fulfillment-v1'][aria-label='Fulfillment']", "[data-module-type='ProductDetailFulfillment'] [aria-label='Fulfillment']", "[aria-label='Fulfillment']"] },
+      fulfillmentTile: { selectors: ["button[data-test='fulfillment-cell-pickup']", "button[data-test='fulfillment-cell-delivery']", "button[data-test='fulfillment-cell-shipping']", "button#PICKUP", "button#DELIVERY", "button#SHIPPING", "button[aria-label]"] },
+      quantity: { selectors: ["select[name*='quantity' i]", "input[name*='quantity' i]", "[data-test*='quantity' i]"] },
+      primaryScope: { selectors: ["[data-test*='buy-box' i]", "[data-test='product-detail']", "main"] },
+      merchandisingScope: { selectors: ["[data-test*='recommend' i]", "[data-testid*='carousel' i]", "[aria-label*='similar items' i]", "[data-test*='productCard' i]", "[data-strategy-id]", "[data-module-type*='Recommended' i]"] },
+      secondaryActionScope: { selectors: [] },
+      structuredData: { selectors: [] },
+      offerInput: { selectors: ["[data-tcin]", "button[id^='addToCartButtonOrTextIdFor']"] }
+    }
+  };
+
+  // packages/browser-adapters/packs/walmart.json
+  var walmart_default = {
+    packVersion: "walmart-pack-v1",
+    retailerId: "walmart",
+    fields: {
+      addControl: { selectors: ["button[data-automation-id='atc']", "button[data-testid='add-to-cart-button']", "button[aria-label*='add to cart' i]"] },
+      price: { selectors: ["[data-automation-id='product-price']", "[data-testid='price-wrap']", "meta[itemprop='price']", "[itemprop='price']"] },
+      seller: { selectors: ["[data-testid='seller-display-name']", "[data-automation-id='seller-name']", "[data-testid*='seller' i]"] },
+      availability: { selectors: ["[data-testid*='availability' i]", "[data-automation-id*='availability' i]", "[data-testid*='fulfillment' i]", "[data-automation-id*='fulfillment' i]", "[data-testid*='out-of-stock' i]", "[data-automation-id*='out-of-stock' i]", "[aria-label*='out of stock' i]", "[itemprop='availability']", "button[disabled]"] },
+      fulfillmentRoot: { selectors: [] },
+      fulfillmentTile: { selectors: ["[aria-selected='true']", "[data-selected='true']", "input:checked"] },
+      quantity: { selectors: ["select[name*='quantity' i]", "select[aria-label*='quantity' i]", "input[name*='quantity' i]", "input[aria-label*='quantity' i]"] },
+      primaryScope: { selectors: ["[data-testid*='buy-box' i]", "[data-automation-id*='buy-box' i]", "[data-testid*='purchase' i]", "[data-automation-id*='purchase' i]", "[data-testid*='add-to-cart-section' i]"] },
+      merchandisingScope: { selectors: ["[data-testid*='recommend' i]", "[data-automation-id*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[data-testid*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]"] },
+      secondaryActionScope: { selectors: ["[data-testid*='sticky' i]", "[data-automation-id*='sticky' i]", "[class*='sticky' i]", "[class*='floating' i]", "[class*='mobile-drawer' i]"] },
+      structuredData: { selectors: ["script#__NEXT_DATA__"] },
+      offerInput: { selectors: ["[data-us-item-id]", "[data-item-id]", "[data-product-id]"] }
+    }
+  };
+
+  // packages/browser-adapters/src/selector-packs.ts
+  var SELECTOR_PACK_FIELDS = [
+    "addControl",
+    "price",
+    "seller",
+    "availability",
+    "fulfillmentRoot",
+    "fulfillmentTile",
+    "quantity",
+    "primaryScope",
+    "merchandisingScope",
+    "secondaryActionScope",
+    "structuredData",
+    "offerInput"
+  ];
+  function selectorList(value) {
+    return Object.freeze(Array.isArray(value) ? value.map(String) : []);
+  }
+  function freezePack(value) {
+    const fields = Object.fromEntries(SELECTOR_PACK_FIELDS.map((field) => [
+      field,
+      selectorList(value.fields[field]?.selectors)
+    ]));
+    return Object.freeze({
+      packVersion: value.packVersion,
+      retailerId: value.retailerId,
+      fields: Object.freeze(fields)
+    });
+  }
+  var ADD_SELECTOR_PACKS = Object.freeze({
+    target: freezePack(target_default),
+    walmart: freezePack(walmart_default),
+    amazon: freezePack(amazon_default),
+    bestbuy: freezePack(bestbuy_default)
+  });
+  var observeOnlyRetailers = Object.fromEntries(Object.entries(retailers_default.retailers).map(([retailerId, fields]) => [
+    retailerId,
+    Object.freeze({
+      addControl: selectorList(fields.addControl),
+      price: selectorList(fields.price),
+      seller: selectorList(fields.seller)
+    })
+  ]));
+  var OBSERVE_ONLY_SELECTOR_PACK = Object.freeze({
+    packVersion: retailers_default.packVersion,
+    retailers: Object.freeze(observeOnlyRetailers)
+  });
+  var OBSERVE_ONLY_FULFILLMENT_TILES = Object.freeze([
+    "[aria-selected='true']",
+    "[data-selected='true']",
+    "input:checked"
+  ]);
+  var SELECTOR_PACK_VERSIONS = Object.freeze({
+    target: ADD_SELECTOR_PACKS.target.packVersion,
+    walmart: ADD_SELECTOR_PACKS.walmart.packVersion,
+    amazon: ADD_SELECTOR_PACKS.amazon.packVersion,
+    bestbuy: ADD_SELECTOR_PACKS.bestbuy.packVersion,
+    disney: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    ravensburger: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    riot: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    booksamillion: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    fanatics: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    kohls: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    macys: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    pbandai: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion
+  });
+  function selectorsFor(retailerId, field) {
+    if (retailerId in ADD_SELECTOR_PACKS) {
+      return ADD_SELECTOR_PACKS[retailerId].fields[field];
+    }
+    if (field === "fulfillmentTile") return OBSERVE_ONLY_FULFILLMENT_TILES;
+    if (field !== "addControl" && field !== "price" && field !== "seller") return Object.freeze([]);
+    return OBSERVE_ONLY_SELECTOR_PACK.retailers[retailerId][field];
+  }
+
   // packages/browser-adapters/src/target.ts
+  var activeAdapterEnvironment;
+  function withAdapterEnvironment(environment, work) {
+    const previous = activeAdapterEnvironment;
+    activeAdapterEnvironment = environment;
+    try {
+      return work();
+    } finally {
+      activeAdapterEnvironment = previous;
+    }
+  }
+  function recordTrace(entry) {
+    activeAdapterEnvironment?.trace?.record(entry);
+  }
+  function selectorTrace(step, root, selector) {
+    if (!activeAdapterEnvironment?.trace) return;
+    let matches = [];
+    try {
+      matches = [...root.querySelectorAll(selector)];
+    } catch {
+      recordTrace({ step, selector, matched: 0, visible: 0, scoped: 0, reject: "pattern_mismatch" });
+      return;
+    }
+    const visibleMatches = matches.filter(visible2);
+    recordTrace({
+      step,
+      selector,
+      matched: matches.length,
+      visible: visibleMatches.length,
+      scoped: root.nodeType === 9 ? 0 : visibleMatches.length,
+      ...matches.length > 0 && visibleMatches.length === 0 ? { reject: "not_visible" } : {}
+    });
+  }
+  function selectorListTrace(step, root, selectors) {
+    for (const selector of selectors) selectorTrace(step, root, selector);
+  }
   var MARKETPLACE_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+(?!target\b)|sold\s+by\s+(?!target\b)|target\s*plus|marketplace\s+seller/i;
   var FIRST_PARTY_PATTERN = /sold\s+(?:and|&)\s+shipped\s+by\s+target\b|sold\s+by\s+target\b/i;
-  var TARGET_CURRENT_PRICE_SELECTORS = [
-    "[data-test='product-price']",
-    "[data-test*='current-price' i]",
-    "meta[itemprop='price']",
-    "[itemprop='price']"
-  ];
-  var TARGET_PRICE_MODULE_SELECTOR = "[data-module-type='ProductDetailPrice']";
+  var TARGET_PRICE_SELECTORS = selectorsFor("target", "price");
+  var TARGET_CURRENT_PRICE_SELECTORS = TARGET_PRICE_SELECTORS.slice(0, -1);
+  var TARGET_PRICE_MODULE_SELECTOR = TARGET_PRICE_SELECTORS.at(-1) ?? "meta:not(*)";
+  var TARGET_ADD_CONTROL_SELECTORS = selectorsFor("target", "addControl");
+  var TARGET_SELLER_SELECTORS = selectorsFor("target", "seller");
+  var TARGET_AVAILABILITY_SELECTORS = selectorsFor("target", "availability");
+  var TARGET_QUANTITY_SELECTORS = selectorsFor("target", "quantity");
+  var TARGET_PRIMARY_SCOPE_SELECTOR = selectorsFor("target", "primaryScope").join(", ");
+  var TARGET_RECOMMENDATION_SCOPE_SELECTOR = selectorsFor("target", "merchandisingScope").join(", ");
+  var TARGET_OFFER_INPUT_SELECTOR = selectorsFor("target", "offerInput").join(", ");
   function text(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
@@ -185,6 +597,13 @@ var YoinkTargetShadowModule = (() => {
   }
   function visible2(element) {
     if (!element) return false;
+    if (activeAdapterEnvironment?.isVisible) {
+      try {
+        return activeAdapterEnvironment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
     const view = element.ownerDocument.defaultView;
     let current = element;
     while (current) {
@@ -243,6 +662,8 @@ var YoinkTargetShadowModule = (() => {
     return null;
   }
   function adaptiveTargetPrice(root, selectors) {
+    selectorListTrace("price", root, selectors);
+    selectorTrace("price", root, TARGET_PRICE_MODULE_SELECTOR);
     const packaged = readPrice(root, selectors);
     if (packaged !== null) return packaged;
     const modulePrices = [...root.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)].filter((element) => visible2(element) && !recommendationControl(element)).map((element) => readPrice(element, selectors) ?? parseUsPrice(observableText(element, 1200))).filter((price) => price !== null);
@@ -267,7 +688,16 @@ var YoinkTargetShadowModule = (() => {
       "[id*='captcha' i]"
     ])) || /verify you are human|unusual traffic|security challenge/i.test(observableText(document.body, 5e4));
   }
-  function targetInteractiveBlock(document) {
+  function targetInteractiveBlock(document, environment) {
+    if (environment) return withAdapterEnvironment(environment, () => targetInteractiveBlock(document));
+    selectorListTrace("interactive_block", document, [
+      "input[autocomplete='one-time-code']",
+      "input[name*='otp' i]",
+      "[role='dialog']",
+      "dialog[open]",
+      "form[action*='login' i] input[type='password']",
+      "input[autocomplete='current-password']"
+    ]);
     const visibleText = observableText(document.body, 8e4);
     if (queryVisible(document, ["input[autocomplete='one-time-code']", "input[name*='otp' i]"])) return "mfa";
     const dialog = queryVisible(document, ["[role='dialog']", "dialog[open]"]);
@@ -292,21 +722,8 @@ var YoinkTargetShadowModule = (() => {
       return "other";
     }
   }
-  var TARGET_FULFILLMENT_ROOT_SELECTOR = [
-    "[data-test='@web/AddToCart/FulfillmentSection'][aria-label='Fulfillment']",
-    "[data-test='module-product-detail-fulfillment-v1'][aria-label='Fulfillment']",
-    "[data-module-type='ProductDetailFulfillment'] [aria-label='Fulfillment']",
-    "[aria-label='Fulfillment']"
-  ].join(", ");
-  var TARGET_FULFILLMENT_TILE_SELECTOR = [
-    "button[data-test='fulfillment-cell-pickup']",
-    "button[data-test='fulfillment-cell-delivery']",
-    "button[data-test='fulfillment-cell-shipping']",
-    "button#PICKUP",
-    "button#DELIVERY",
-    "button#SHIPPING",
-    "button[aria-label]"
-  ].join(", ");
+  var TARGET_FULFILLMENT_ROOT_SELECTOR = selectorsFor("target", "fulfillmentRoot").join(", ");
+  var TARGET_FULFILLMENT_TILE_SELECTOR = selectorsFor("target", "fulfillmentTile").join(", ");
   var TARGET_FULFILLMENT_UNAVAILABLE_PATTERN = /\b(?:not available|unavailable|out of stock|sold out|loading|check availability|choose (?:a |your )?(?:store|location|address)|select (?:a |your )?(?:store|location|address)|set (?:a |your )?(?:store|location|address))\b/i;
   var TARGET_FULFILLMENT_AVAILABLE_PATTERN = /\b(?:arrives?|ready|available|get it|same[ -]?day|today|tomorrow|within|deliver(?:ed|y) by)\b/i;
   function fulfillmentKind(element) {
@@ -333,6 +750,8 @@ var YoinkTargetShadowModule = (() => {
     return fulfillmentTileSelected(element) || TARGET_FULFILLMENT_AVAILABLE_PATTERN.test(evidence);
   }
   function controlFulfillment(control, root) {
+    selectorTrace("fulfillment", root, TARGET_FULFILLMENT_TILE_SELECTOR);
+    selectorListTrace("fulfillment", root, ["[aria-selected='true']", "[data-selected='true']", "input:checked"]);
     const own = fulfillmentKind(control);
     const selectedTiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter((element) => visible2(element) && fulfillmentKind(element) !== "unknown" && fulfillmentTileSelected(element));
     if (selectedTiles.length === 1 && selectedTiles[0]) {
@@ -359,24 +778,18 @@ var YoinkTargetShadowModule = (() => {
     return methodScope && root.contains(methodScope) ? fulfillmentKind(methodScope) : "unknown";
   }
   function recommendationControl(candidate) {
-    return Boolean(candidate.closest([
-      "[data-test*='recommend' i]",
-      "[data-testid*='carousel' i]",
-      "[aria-label*='similar items' i]",
-      "[data-test*='productCard' i]",
-      "[data-strategy-id]",
-      "[data-module-type*='Recommended' i]"
-    ].join(", ")));
+    return Boolean(candidate.closest(TARGET_RECOMMENDATION_SCOPE_SELECTOR));
   }
   function exactAddControls(root, sku) {
     if (!/^\d{6,}$/.test(sku)) return [];
+    selectorTrace("add_control", root, `button[id='addToCartButtonOrTextIdFor${sku}']`);
     return [...root.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`)].filter((candidate) => visible2(candidate) && !recommendationControl(candidate));
   }
   function targetSkuEvidence(root) {
     const skus = /* @__PURE__ */ new Set();
     const elements = [
       ...root.nodeType === 1 ? [root] : [],
-      ...root.querySelectorAll("[data-tcin], button[id^='addToCartButtonOrTextIdFor']")
+      ...root.querySelectorAll(TARGET_OFFER_INPUT_SELECTOR)
     ];
     for (const element of elements) {
       const dataTcin = String(element.getAttribute("data-tcin") || "").trim();
@@ -397,12 +810,25 @@ var YoinkTargetShadowModule = (() => {
       candidate.getAttribute("data-testid"),
       text(candidate, 300)
     ].filter(Boolean).join(" ")));
+    recordTrace({
+      step: "add_control",
+      selector: "semantic:add-intent",
+      matched: candidates.length,
+      visible: candidates.length,
+      scoped: root.nodeType === 9 ? 0 : candidates.length,
+      chosen: candidates.length === 1 ? 1 : 0,
+      ...candidates.length === 1 ? {} : { reject: "ambiguous" }
+    });
     return candidates.length === 1 ? candidates : [];
   }
   function addControls(document, sku) {
+    selectorListTrace("add_control", document, [
+      `button[id='addToCartButtonOrTextIdFor${sku}']`,
+      ...TARGET_ADD_CONTROL_SELECTORS
+    ]);
     const candidates = [
       ...exactAddControls(document, sku),
-      ...document.querySelectorAll("button[data-test='shipItButton'], button[data-test='shippingButton'], button[data-test='orderPickupButton'], button[data-test*='addToCart' i]")
+      ...document.querySelectorAll(TARGET_ADD_CONTROL_SELECTORS.join(", "))
     ];
     return [...new Set(candidates)].filter((candidate) => {
       if (!visible2(candidate)) return false;
@@ -417,8 +843,19 @@ var YoinkTargetShadowModule = (() => {
     return { control: null, fulfillmentControl: null, fulfillment: "unknown", selectionRequired: false, offerRoot: null };
   }
   function modernTargetAddBinding(document, sku, required) {
+    selectorTrace("offer_scope", document, TARGET_FULFILLMENT_ROOT_SELECTOR);
     const visibleRoots = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))].filter((root2) => visible2(root2) && !recommendationControl(root2));
     const roots = visibleRoots.filter((root2) => !visibleRoots.some((candidate) => candidate !== root2 && root2.contains(candidate)));
+    recordTrace({
+      step: "offer_scope",
+      condition: "target.fulfillmentRoot",
+      matched: visibleRoots.length,
+      visible: visibleRoots.length,
+      scoped: roots.length,
+      chosen: roots.length === 1 ? 1 : 0,
+      passed: roots.length > 0,
+      ...roots.length > 0 ? {} : { reject: "outside_offer_root" }
+    });
     if (roots.length === 0) return null;
     const scoped = roots.map((root2) => {
       const exact = exactAddControls(root2, sku);
@@ -451,15 +888,7 @@ var YoinkTargetShadowModule = (() => {
     return preferred ? { control, fulfillmentControl: preferred.fulfillmentControl, fulfillment: required, selectionRequired: true, offerRoot: root } : emptyTargetAddBinding();
   }
   function targetExplicitlyUnavailable(document) {
-    const selectors = [
-      "[data-test*='availability' i]",
-      "[data-testid*='availability' i]",
-      "[data-test*='out-of-stock' i]",
-      "[data-testid*='out-of-stock' i]",
-      "[itemprop='availability']",
-      "button[disabled]"
-    ];
-    return [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible2(element) && !recommendationControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
+    return [...document.querySelectorAll(TARGET_AVAILABILITY_SELECTORS.join(", "))].filter((element) => visible2(element) && !recommendationControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
     ));
   }
@@ -469,8 +898,20 @@ var YoinkTargetShadowModule = (() => {
     const matching = candidates.find((entry) => entry.fulfillment === required);
     return matching ? { ...matching, fulfillmentControl: null, selectionRequired: false, offerRoot: null } : emptyTargetAddBinding();
   }
-  function targetAddBinding(document, urlValue, expectedSku, requiredFulfillment) {
-    if (extractTargetSku(urlValue) !== expectedSku) return emptyTargetAddBinding();
+  function targetAddBinding(document, urlValue, expectedSku, requiredFulfillment, environment) {
+    if (environment) {
+      return withAdapterEnvironment(environment, () => targetAddBinding(document, urlValue, expectedSku, requiredFulfillment));
+    }
+    const pageSku = extractTargetSku(urlValue);
+    recordTrace({
+      step: "page_identity",
+      condition: "retailerSku",
+      expected: expectedSku,
+      actual: pageSku,
+      passed: pageSku === expectedSku,
+      ...pageSku === expectedSku ? {} : { reject: "sku_mismatch" }
+    });
+    if (pageSku !== expectedSku) return emptyTargetAddBinding();
     return modernTargetAddBinding(document, expectedSku, requiredFulfillment) ?? legacyTargetAddBinding(document, expectedSku, requiredFulfillment);
   }
   function closestOfferContainer(anchor) {
@@ -486,8 +927,8 @@ var YoinkTargetShadowModule = (() => {
   function sellerEvidence(document, anchor) {
     const cartRoot = anchor?.closest("[data-test='cart-item'], [data-test='cartItem'], [data-testid='cart-item']") ?? null;
     const offerRoot = cartRoot ? null : closestOfferContainer(anchor);
-    const root = cartRoot || offerRoot || anchor?.closest("[data-test*='buy-box' i], [data-test='product-detail'], [data-test*='fulfillment' i]") || document;
-    const region = queryVisible(root, ["[data-test*='sold-by' i]", "[data-test*='seller' i]", "[data-testid*='seller' i]"]);
+    const root = cartRoot || offerRoot || anchor?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document;
+    const region = queryVisible(root, TARGET_SELLER_SELECTORS);
     const seller = text(region, 500);
     const scope = text(root, 6e4);
     if (FIRST_PARTY_PATTERN.test(seller)) return { sellerName: "Target", sellerType: "first_party" };
@@ -500,15 +941,32 @@ var YoinkTargetShadowModule = (() => {
     if (!MARKETPLACE_PATTERN.test(text(document.body, 12e4))) return { sellerName: "Target", sellerType: "first_party" };
     return { sellerName: seller.slice(0, 160), sellerType: "unknown" };
   }
-  function observeTargetOffer(document, urlValue, expectedSku, requiredFulfillment, observedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  function observeTargetOffer(document, urlValue, expectedSku, requiredFulfillment, observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
+    if (environment) {
+      return withAdapterEnvironment(environment, () => observeTargetOffer(
+        document,
+        urlValue,
+        expectedSku,
+        requiredFulfillment,
+        observedAt
+      ));
+    }
     const pageSku = extractTargetSku(urlValue);
     const selected = pageSku === expectedSku ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment) : emptyTargetAddBinding();
     const seller = sellerEvidence(document, selected.control);
-    const priceRoot = selected.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || selected.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || document;
+    const priceRoot = selected.offerRoot?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document;
     const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS);
     const blocked = targetInteractiveBlock(document);
     const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
     const availability = blocked ? "unknown" : selectedControlActionable ? "in_stock" : pageSku === expectedSku && targetExplicitlyUnavailable(document) ? "out_of_stock" : "unknown";
+    recordTrace({
+      step: "availability",
+      condition: "offer.availability",
+      expected: "in_stock",
+      actual: availability,
+      passed: availability === "in_stock",
+      ...availability === "in_stock" ? {} : { reject: "not_actionable" }
+    });
     return {
       contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
       observedAt,
@@ -527,7 +985,15 @@ var YoinkTargetShadowModule = (() => {
       interactiveBlock: blocked
     };
   }
-  function observeTargetSelectedOfferScope(document, urlValue, expectedSku, requiredFulfillment = "shipping") {
+  function observeTargetSelectedOfferScope(document, urlValue, expectedSku, requiredFulfillment = "shipping", environment) {
+    if (environment) {
+      return withAdapterEnvironment(environment, () => observeTargetSelectedOfferScope(
+        document,
+        urlValue,
+        expectedSku,
+        requiredFulfillment
+      ));
+    }
     const pageSku = extractTargetSku(urlValue);
     if (!pageSku || pageSku !== expectedSku) throw new Error("The exact Target listing identity is unavailable.");
     const selected = targetAddBinding(document, urlValue, expectedSku, requiredFulfillment);
@@ -535,14 +1001,14 @@ var YoinkTargetShadowModule = (() => {
       document,
       "target",
       pageSku,
-      selected.control?.closest("[data-test='product-detail'], main") || document
+      selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document
     );
   }
   function boundedDiagnosticCount(value) {
     return Math.max(0, Math.min(50, Math.trunc(value)));
   }
   function targetGenericAddIntentControls(document) {
-    return [...document.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((candidate) => visible2(candidate) && !recommendationControl(candidate)).filter((candidate) => /\b(?:add(?:\s+(?:item\s+)?to)?\s+cart|pre[ -]?order)\b/i.test([
+    const controls = [...document.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((candidate) => visible2(candidate) && !recommendationControl(candidate)).filter((candidate) => /\b(?:add(?:\s+(?:item\s+)?to)?\s+cart|pre[ -]?order)\b/i.test([
       candidate.getAttribute("aria-label"),
       candidate.getAttribute("name"),
       candidate.getAttribute("value"),
@@ -550,12 +1016,22 @@ var YoinkTargetShadowModule = (() => {
       candidate.getAttribute("data-testid"),
       text(candidate, 300)
     ].filter(Boolean).join(" ")));
+    recordTrace({
+      step: "add_control",
+      selector: "semantic:add-intent",
+      matched: controls.length,
+      visible: controls.length,
+      scoped: 0,
+      chosen: controls.length === 1 ? 1 : 0,
+      ...controls.length === 1 ? {} : { reject: "ambiguous" }
+    });
+    return controls;
   }
   function targetDiagnosticScopeKind(control) {
     if (!control) return "none";
     if (control.closest("form")) return "form";
-    if (control.closest("[data-test*='buy-box' i], [data-testid*='buy-box' i]")) return "buybox";
-    if (control.closest(`${TARGET_FULFILLMENT_ROOT_SELECTOR}, [data-test='product-detail'], main`)) return "other";
+    if (control.closest(TARGET_PRIMARY_SCOPE_SELECTOR)) return "buybox";
+    if (control.closest(TARGET_FULFILLMENT_ROOT_SELECTOR)) return "other";
     return "other";
   }
   function targetDiagnosticFulfillmentShape(root) {
@@ -570,11 +1046,19 @@ var YoinkTargetShadowModule = (() => {
     const textPickup = /\bpick[ -]?up\b/i.test(evidence);
     return textShipping && textPickup ? "mixed" : textShipping ? "shipping" : textPickup ? "pickup" : "none";
   }
-  function targetAdapterLayoutEvidence(document, urlValue, expectedSku, requiredFulfillment = "shipping") {
+  function targetAdapterLayoutEvidence(document, urlValue, expectedSku, requiredFulfillment = "shipping", environment) {
+    if (environment) {
+      return withAdapterEnvironment(environment, () => targetAdapterLayoutEvidence(
+        document,
+        urlValue,
+        expectedSku,
+        requiredFulfillment
+      ));
+    }
     const pageSku = extractTargetSku(urlValue);
     const binding = pageSku === expectedSku ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment) : emptyTargetAddBinding();
     const packagedControls = pageSku === expectedSku ? [.../* @__PURE__ */ new Set([...addControls(document, expectedSku), ...binding.control ? [binding.control] : []])] : [];
-    const evidenceRoot = binding.offerRoot?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || binding.control?.closest("[data-test*='buy-box' i], [data-test='product-detail'], main") || binding.offerRoot || document;
+    const evidenceRoot = binding.offerRoot?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || binding.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || binding.offerRoot || document;
     const packagedPriceCandidates = [...evidenceRoot.querySelectorAll(TARGET_CURRENT_PRICE_SELECTORS.join(", "))].filter((element) => (element.tagName === "META" || visible2(element)) && !recommendationControl(element)).filter((element) => [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)].some((candidate) => parseUsPrice(candidate) !== null));
     const modulePriceCandidates = packagedPriceCandidates.length ? [] : [...evidenceRoot.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)].filter((element) => visible2(element) && !recommendationControl(element)).filter((element) => (readPrice(element, TARGET_CURRENT_PRICE_SELECTORS) ?? parseUsPrice(observableText(element, 1200))) !== null);
     const priceCandidates = packagedPriceCandidates.length ? packagedPriceCandidates : modulePriceCandidates;
@@ -598,7 +1082,7 @@ var YoinkTargetShadowModule = (() => {
       alternateOfferDistinctCount: 0,
       priceCandidateCount: boundedDiagnosticCount(priceCandidates.length),
       quantityControlCount: boundedDiagnosticCount([
-        ...evidenceRoot.querySelectorAll("select[name*='quantity' i], input[name*='quantity' i], [data-test*='quantity' i]")
+        ...evidenceRoot.querySelectorAll(TARGET_QUANTITY_SELECTORS.join(", "))
       ].filter(visible2).length),
       securityChallenge: targetSecurityChallenge(document),
       interactiveBlock: targetInteractiveBlock(document)
@@ -606,12 +1090,19 @@ var YoinkTargetShadowModule = (() => {
   }
 
   // apps/extension/src/target-shadow.ts
-  function collectTargetShadowObservation(documentValue = globalThis.document, urlValue = globalThis.location?.href ?? "", requiredFulfillment = "shipping") {
+  function collectTargetShadowObservation(documentValue = globalThis.document, urlValue = globalThis.location?.href ?? "", requiredFulfillment = "shipping", environment) {
     if (!documentValue) throw new Error("The current Target page is unavailable.");
     const retailerSku = extractTargetSku(urlValue);
     if (!retailerSku) throw new Error("Open an exact Target product page before inspecting it.");
     const fulfillmentPreference = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-    const observation = observeTargetOffer(documentValue, urlValue, retailerSku, fulfillmentPreference);
+    const observation = observeTargetOffer(
+      documentValue,
+      urlValue,
+      retailerSku,
+      fulfillmentPreference,
+      void 0,
+      environment
+    );
     if (observation.pageKind !== "product" || observation.retailerId !== "target" || observation.retailerSku !== retailerSku) {
       throw new Error("The exact Target product page could not be verified.");
     }
@@ -632,7 +1123,13 @@ var YoinkTargetShadowModule = (() => {
       addControlActionable: observation.addControlActionable,
       securityChallenge: observation.securityChallenge,
       interactiveBlock: observation.interactiveBlock,
-      selectedOffer: observeTargetSelectedOfferScope(documentValue, urlValue, retailerSku, fulfillmentPreference)
+      selectedOffer: observeTargetSelectedOfferScope(
+        documentValue,
+        urlValue,
+        retailerSku,
+        fulfillmentPreference,
+        environment
+      )
     });
   }
   function targetObservationDiagnosticState(observation, layout) {
@@ -647,10 +1144,10 @@ var YoinkTargetShadowModule = (() => {
       };
     }
     if (observation.availability === "out_of_stock") {
-      return { outcome: "rejected", failureStage: "availability_binding", reasonCode: "out_of_stock" };
+      return { outcome: "rejected", failureStage: "availability_binding", reasonCode: "listing_unavailable_layout" };
     }
     if (observation.selectedOffer?.selectionState === "unresolved") {
-      return { outcome: "failed", failureStage: "offer_binding", reasonCode: "selected_offer_binding_unresolved" };
+      return { outcome: "rejected", failureStage: "offer_binding", reasonCode: "listing_variant_unselected" };
     }
     if (layout.addControlCount === 0) {
       return {
@@ -679,13 +1176,24 @@ var YoinkTargetShadowModule = (() => {
     }
     return { outcome: "passed", failureStage: "complete", reasonCode: "verified" };
   }
-  function collectTargetShadowAttempt(documentValue = globalThis.document, urlValue = globalThis.location?.href ?? "", requiredFulfillment = "shipping", attemptCount = 1, domChanged = false) {
-    const observation = collectTargetShadowObservation(documentValue, urlValue, requiredFulfillment);
+  function collectTargetShadowAttempt(documentValue = globalThis.document, urlValue = globalThis.location?.href ?? "", requiredFulfillment = "shipping", attemptCount = 1, domChanged = false, environment) {
+    const traceBuffer = environment ? createAdapterTraceBuffer() : null;
+    const tracedEnvironment = environment && traceBuffer ? {
+      ...environment,
+      trace: {
+        record(entry) {
+          traceBuffer.record(entry);
+          environment.trace?.record(entry);
+        }
+      }
+    } : void 0;
+    const observation = collectTargetShadowObservation(documentValue, urlValue, requiredFulfillment, tracedEnvironment);
     const layout = targetAdapterLayoutEvidence(
       documentValue,
       urlValue,
       observation.retailerSku,
-      requiredFulfillment
+      requiredFulfillment,
+      tracedEnvironment
     );
     const state = targetObservationDiagnosticState(observation, layout);
     return {
@@ -703,7 +1211,8 @@ var YoinkTargetShadowModule = (() => {
         attemptCount: Math.max(1, Math.min(3, Math.trunc(attemptCount) || 1)),
         domChanged: domChanged === true,
         layout
-      }
+      },
+      ...traceBuffer ? { trace: traceBuffer.entries } : {}
     };
   }
   Object.defineProperty(globalThis, "YoinkTargetShadow", {

@@ -62,6 +62,9 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/admin/workers/restart") return "worker.manage";
   if (pathname === "/api/v1/admin/settings/actions") return "admin.users.support";
   if (pathname === "/api/v1/admin/capabilities") return "admin.read";
+  if (pathname.startsWith("/api/v1/admin/evidence-capsules")) {
+    return method === "GET" ? "admin.read" : "admin.maintainer";
+  }
   if (pathname.startsWith("/api/v1/admin/analytics")) return "admin.read";
 
   if (pathname === "/api/v1/snapshot") return "admin.read";
@@ -164,6 +167,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname === "/api/v1/admin/workers/restart"
     || pathname === "/api/v1/admin/settings/actions"
     || pathname === "/api/v1/admin/capabilities"
+    || pathname.startsWith("/api/v1/admin/evidence-capsules")
     || pathname.startsWith("/api/v1/admin/analytics")) {
     return { pathname, requestedSurface: "admin" };
   }
@@ -261,12 +265,14 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     "attribution-receipts": "attribution",
     "drop-windows": "sources",
     "restock-patterns": "sources",
-    analytics: "analytics"
+    analytics: "analytics",
+    "evidence-capsules": "alerts"
   }),
   device: Object.freeze({
     heartbeat: "heartbeat",
     "credential-rotation": "credential_rotation",
     "adapter-diagnostics": "adapter_diagnostics",
+    "evidence-capsules": "adapter_diagnostics",
     "shadow-observations": "observations",
     "walmart-draw": "drawings",
     "qualification-trials": "qualification_trials",

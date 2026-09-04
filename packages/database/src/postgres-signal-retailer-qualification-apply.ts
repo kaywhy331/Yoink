@@ -2,15 +2,9 @@ import { createHash } from "node:crypto";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import type { BackgroundWorkerPrincipal } from "../../contracts/src/background-worker.js";
 import {
-  AMAZON_ADD_ACTIVATION_CONFIRMATION,
-  AMAZON_ADD_ADAPTER_VERSION,
-  AMAZON_OBSERVER_VERSION,
-  BESTBUY_ADD_ACTIVATION_CONFIRMATION,
-  BESTBUY_ADD_ADAPTER_VERSION,
-  BESTBUY_OBSERVER_VERSION,
-  WALMART_ADD_ACTIVATION_CONFIRMATION,
-  WALMART_ADD_ADAPTER_VERSION,
-  WALMART_OBSERVER_VERSION
+  ADD_LANES,
+  ADD_LANE_IDS,
+  type AddLaneId
 } from "../../contracts/src/index.js";
 import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
@@ -79,10 +73,17 @@ const PROTECTED_SHARED_CATALOG_TABLES = Object.freeze([
   "retailers"
 ] as const);
 
+type PostgresSignalRetailerQualificationLaneId = Exclude<AddLaneId, "target">;
 export type PostgresSignalRetailerQualificationOperation =
-  | "activate_walmart_add"
-  | "activate_amazon_add"
-  | "activate_bestbuy_add";
+  `activate_${PostgresSignalRetailerQualificationLaneId}_add`;
+
+const POSTGRES_SIGNAL_RETAILER_QUALIFICATION_LANE_IDS = ADD_LANE_IDS.filter(
+  (retailerId): retailerId is PostgresSignalRetailerQualificationLaneId => retailerId !== "target"
+);
+const POSTGRES_SIGNAL_RETAILER_QUALIFICATION_OPERATIONS =
+  POSTGRES_SIGNAL_RETAILER_QUALIFICATION_LANE_IDS.map(
+    (retailerId) => `activate_${retailerId}_add` as PostgresSignalRetailerQualificationOperation
+  );
 
 export interface PostgresSignalRetailerQualificationApplyManifest {
   contractVersion: 1;
@@ -107,8 +108,8 @@ export interface PostgresSignalRetailerQualificationApplyManifest {
     bypassRls: false;
     directTableAccess: false;
   };
-  operationCount: 3;
-  supportedRetailerCount: 3;
+  operationCount: number;
+  supportedRetailerCount: number;
   protectedTenantTableCount: 9;
   forcedRlsTableCount: 9;
   tenantMutationTableCount: 5;
@@ -193,8 +194,8 @@ export interface PostgresSignalRetailerQualificationCapabilityProjection {
   configurationWriterParity: false;
   reservationWriterParity: false;
   writerLockProtocolParity: false;
-  operationCount: 3;
-  supportedRetailerCount: 3;
+  operationCount: number;
+  supportedRetailerCount: number;
   protectedTenantTableCount: 9;
   forcedRlsTableCount: 9;
   tenantMutationTableCount: 5;
@@ -308,6 +309,38 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(canonicalPortabilityJson(value)).digest("hex");
 }
 
+function sqlText(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function postgresRetailerQualificationLaneRows(): string {
+  return POSTGRES_SIGNAL_RETAILER_QUALIFICATION_LANE_IDS.map((retailerId) => {
+    const lane = ADD_LANES[retailerId];
+    const operation = `activate_${retailerId}_add`;
+    const actionReasonCode = `${retailerId}_add_v1_activated`;
+    const actionMessage = `A fresh shadow job entered the guarded ${lane.name} add-only executor after explicit activation.`;
+    const auditReasonCode = `explicit_${retailerId}_add_v1_activation`;
+    const auditMessage = `${lane.contractVersion} was explicitly enabled for ${lane.firstPartySeller}-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.`;
+    return `      (${[
+      operation,
+      retailerId,
+      lane.name,
+      lane.domain,
+      lane.observerVersion,
+      lane.contractVersion,
+      lane.activationConfirmation,
+      lane.firstPartySeller,
+      lane.capability.enabled,
+      lane.capability.version,
+      lane.qualificationEvidenceNamespace,
+      actionReasonCode,
+      actionMessage,
+      auditReasonCode,
+      auditMessage
+    ].map(sqlText).join(", ")})`;
+  }).join(",\n");
+}
+
 function predecessorNamespaces(manifest: PostgresSignalSourceTrustApplyManifest): string[] {
   const target = manifest.predecessorManifest;
   const action = target.predecessorManifest;
@@ -380,8 +413,8 @@ export function buildPostgresSignalRetailerQualificationApplyManifest(
       bypassRls: false,
       directTableAccess: false
     },
-    operationCount: 3,
-    supportedRetailerCount: 3,
+    operationCount: POSTGRES_SIGNAL_RETAILER_QUALIFICATION_OPERATIONS.length,
+    supportedRetailerCount: POSTGRES_SIGNAL_RETAILER_QUALIFICATION_LANE_IDS.length,
     protectedTenantTableCount: 9,
     forcedRlsTableCount: 9,
     tenantMutationTableCount: 5,
@@ -490,7 +523,7 @@ BEGIN
   IF pg_catalog.octet_length(expected_tenant_id) NOT BETWEEN 1 AND 200
     OR pg_catalog.octet_length(expected_user_id) NOT BETWEEN 1 AND 200
     OR operation_name NOT IN (
-      'activate_walmart_add', 'activate_amazon_add', 'activate_bestbuy_add'
+      ${POSTGRES_SIGNAL_RETAILER_QUALIFICATION_OPERATIONS.map(sqlText).join(", ")}
     )
     OR request_id !~ '^[A-Za-z0-9][A-Za-z0-9_-]{2,159}$'
     OR pg_catalog.octet_length(request_payload_json) > ${MAXIMUM_REQUEST_PAYLOAD_BYTES} THEN
@@ -498,57 +531,31 @@ BEGIN
       MESSAGE = 'signal retailer-qualification request is invalid';
   END IF;
 
-  IF operation_name = 'activate_walmart_add' THEN
-    retailer_id_value := 'walmart';
-    display_name_value := 'Walmart';
-    domain_value := 'walmart.com';
-    observer_version_value := '${WALMART_OBSERVER_VERSION}';
-    adapter_version_value := '${WALMART_ADD_ADAPTER_VERSION}';
-    activation_confirmation_value := '${WALMART_ADD_ACTIVATION_CONFIRMATION}';
-    first_party_seller_value := 'Walmart';
-    capability_flag_value := 'walmartAddOnly';
-    capability_version_flag_value := 'walmartAddAdapterVersion';
-    evidence_namespace_value := 'walmart-add-qualification-evidence-v1';
-    action_reason_code_value := 'walmart_add_v1_activated';
-    action_message_value :=
-      'A fresh shadow job entered the guarded Walmart add-only executor after explicit activation.';
-    audit_reason_code_value := 'explicit_walmart_add_v1_activation';
-    audit_message_value :=
-      'Walmart add v5 was explicitly enabled for Walmart-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.';
-  ELSIF operation_name = 'activate_amazon_add' THEN
-    retailer_id_value := 'amazon';
-    display_name_value := 'Amazon';
-    domain_value := 'amazon.com';
-    observer_version_value := '${AMAZON_OBSERVER_VERSION}';
-    adapter_version_value := '${AMAZON_ADD_ADAPTER_VERSION}';
-    activation_confirmation_value := '${AMAZON_ADD_ACTIVATION_CONFIRMATION}';
-    first_party_seller_value := 'Amazon.com';
-    capability_flag_value := 'amazonAddOnly';
-    capability_version_flag_value := 'amazonAddAdapterVersion';
-    evidence_namespace_value := 'amazon-add-qualification-evidence-v1';
-    action_reason_code_value := 'amazon_add_v1_activated';
-    action_message_value :=
-      'A fresh shadow job entered the guarded Amazon add-only executor after explicit activation.';
-    audit_reason_code_value := 'explicit_amazon_add_v1_activation';
-    audit_message_value :=
-      'Amazon add v7 was explicitly enabled for Amazon.com-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.';
-  ELSE
-    retailer_id_value := 'bestbuy';
-    display_name_value := 'Best Buy';
-    domain_value := 'bestbuy.com';
-    observer_version_value := '${BESTBUY_OBSERVER_VERSION}';
-    adapter_version_value := '${BESTBUY_ADD_ADAPTER_VERSION}';
-    activation_confirmation_value := '${BESTBUY_ADD_ACTIVATION_CONFIRMATION}';
-    first_party_seller_value := 'Best Buy';
-    capability_flag_value := 'bestBuyAddOnly';
-    capability_version_flag_value := 'bestBuyAddAdapterVersion';
-    evidence_namespace_value := 'bestbuy-add-qualification-evidence-v1';
-    action_reason_code_value := 'bestbuy_add_v1_activated';
-    action_message_value :=
-      'A fresh shadow job entered the guarded Best Buy add-only executor after explicit activation.';
-    audit_reason_code_value := 'explicit_bestbuy_add_v1_activation';
-    audit_message_value :=
-      'Best Buy add v5 was explicitly enabled for Best Buy-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.';
+  SELECT lane.retailer_id, lane.display_name, lane.domain,
+         lane.observer_version, lane.adapter_version,
+         lane.activation_confirmation, lane.first_party_seller,
+         lane.capability_flag, lane.capability_version_flag,
+         lane.evidence_namespace, lane.action_reason_code,
+         lane.action_message, lane.audit_reason_code, lane.audit_message
+    INTO retailer_id_value, display_name_value, domain_value,
+         observer_version_value, adapter_version_value,
+         activation_confirmation_value, first_party_seller_value,
+         capability_flag_value, capability_version_flag_value,
+         evidence_namespace_value, action_reason_code_value,
+         action_message_value, audit_reason_code_value, audit_message_value
+  FROM (VALUES
+${postgresRetailerQualificationLaneRows()}
+  ) AS lane(
+    requested_operation, retailer_id, display_name, domain,
+    observer_version, adapter_version, activation_confirmation,
+    first_party_seller, capability_flag, capability_version_flag,
+    evidence_namespace, action_reason_code, action_message,
+    audit_reason_code, audit_message
+  )
+  WHERE lane.requested_operation = operation_name;
+  IF retailer_id_value IS NULL THEN
+    RAISE EXCEPTION USING ERRCODE = '22023',
+      MESSAGE = 'signal retailer-qualification operation is unavailable';
   END IF;
 
   BEGIN
@@ -1146,8 +1153,8 @@ function boundarySpec(
       cutoverContractVersion: 3,
       sourceTrustApplyContractVersion: 1,
       writerLockProtocolContractVersion: 1,
-      operationCount: 3,
-      supportedRetailerIds: ["amazon", "bestbuy", "walmart"],
+      operationCount: POSTGRES_SIGNAL_RETAILER_QUALIFICATION_OPERATIONS.length,
+      supportedRetailerIds: [...POSTGRES_SIGNAL_RETAILER_QUALIFICATION_LANE_IDS].sort(),
       protectedSharedCatalogTableNames: [...PROTECTED_SHARED_CATALOG_TABLES],
       sharedCatalogMutationTableNames: [...PROTECTED_SHARED_CATALOG_TABLES],
       sharedCatalogMutationTableCount: 2,
@@ -1228,8 +1235,8 @@ PostgresSignalRetailerQualificationCapabilityProjection {
     configurationWriterParity: false,
     reservationWriterParity: false,
     writerLockProtocolParity: false,
-    operationCount: 3,
-    supportedRetailerCount: 3,
+    operationCount: POSTGRES_SIGNAL_RETAILER_QUALIFICATION_OPERATIONS.length,
+    supportedRetailerCount: POSTGRES_SIGNAL_RETAILER_QUALIFICATION_LANE_IDS.length,
     protectedTenantTableCount: 9,
     forcedRlsTableCount: 9,
     tenantMutationTableCount: 5,
@@ -1395,11 +1402,9 @@ export class NodePostgresSignalRetailerQualificationApplyDatabase {
     } catch {
       payloadJson = "";
     }
-    if (!new Set<PostgresSignalRetailerQualificationOperation>([
-      "activate_walmart_add",
-      "activate_amazon_add",
-      "activate_bestbuy_add"
-    ]).has(operation)
+    if (!new Set<PostgresSignalRetailerQualificationOperation>(
+      POSTGRES_SIGNAL_RETAILER_QUALIFICATION_OPERATIONS
+    ).has(operation)
       || !REQUEST_ID.test(requestId)
       || !payloadJson
       || Buffer.byteLength(payloadJson, "utf8") > MAXIMUM_REQUEST_PAYLOAD_BYTES) {

@@ -1,0 +1,24 @@
+{
+  "capsuleId": "cap_corpusbestbuy0320260904",
+  "capturedAt": "2026-09-04T20:00:00.000Z",
+  "url": "https://www.bestbuy.com/site/example/6588149.p",
+  "retailerId": "bestbuy",
+  "retailerSku": "6588149",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "bestbuy-observer-v10",
+  "addAdapterVersion": "bestbuy-add-v11",
+  "packVersion": "bestbuy-pack-v1",
+  "sha256": "9434a247648aadcdde6cb7dc3c6e09d86a56b0d0ee39eee87d6e983b748b84d8",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified",
+    "availability": "in_stock",
+    "unitPriceCents": 699,
+    "sellerType": "first_party",
+    "fulfillment": "shipping"
+  },
+  "notes": "Promoted from the sanitized acceptance-page capture used to bootstrap the repair corpus.",
+  "allowReason": ""
+}

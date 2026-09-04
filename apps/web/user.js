@@ -762,7 +762,8 @@ const DRAW_SCAN_LABELS = Object.freeze({
 const STORE_CHECK_WARNING_LABELS = Object.freeze({
   expiring: "Check again soon",
   expired: "Sign in again",
-  version_changed: "Store changed, check again"
+  version_changed: "Store changed, check again",
+  pack_unverified: "Store check pending after update"
 });
 
 function labelFor(map, value, fallback = words(value)) {

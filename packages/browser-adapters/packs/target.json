@@ -1,0 +1,18 @@
+{
+  "packVersion": "target-pack-v1",
+  "retailerId": "target",
+  "fields": {
+    "addControl": { "selectors": ["button[id^='addToCartButtonOrTextIdFor']", "button[data-test='shipItButton']", "button[data-test='shippingButton']", "button[data-test='orderPickupButton']", "button[data-test*='addToCart' i]"] },
+    "price": { "selectors": ["[data-test='product-price']", "[data-test*='current-price' i]", "meta[itemprop='price']", "[itemprop='price']", "[data-module-type='ProductDetailPrice']"] },
+    "seller": { "selectors": ["[data-test*='sold-by' i]", "[data-test*='seller' i]", "[data-testid*='seller' i]"] },
+    "availability": { "selectors": ["[data-test*='availability' i]", "[data-testid*='availability' i]", "[data-test*='out-of-stock' i]", "[data-testid*='out-of-stock' i]", "[itemprop='availability']", "button[disabled]"] },
+    "fulfillmentRoot": { "selectors": ["[data-test='module-product-detail-fulfillment-v1'][aria-label='Fulfillment']", "[data-module-type='ProductDetailFulfillment'] [aria-label='Fulfillment']", "[aria-label='Fulfillment']"] },
+    "fulfillmentTile": { "selectors": ["button[data-test='fulfillment-cell-pickup']", "button[data-test='fulfillment-cell-delivery']", "button[data-test='fulfillment-cell-shipping']", "button#PICKUP", "button#DELIVERY", "button#SHIPPING", "button[aria-label]"] },
+    "quantity": { "selectors": ["select[name*='quantity' i]", "input[name*='quantity' i]", "[data-test*='quantity' i]"] },
+    "primaryScope": { "selectors": ["[data-test*='buy-box' i]", "[data-test='product-detail']", "main"] },
+    "merchandisingScope": { "selectors": ["[data-test*='recommend' i]", "[data-testid*='carousel' i]", "[aria-label*='similar items' i]", "[data-test*='productCard' i]", "[data-strategy-id]", "[data-module-type*='Recommended' i]"] },
+    "secondaryActionScope": { "selectors": [] },
+    "structuredData": { "selectors": [] },
+    "offerInput": { "selectors": ["[data-tcin]", "button[id^='addToCartButtonOrTextIdFor']"] }
+  }
+}

@@ -4,6 +4,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   utimesSync,
@@ -61,10 +62,38 @@ if (packageJson.version !== manifest.version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-
   throw new Error("The package and extension manifest versions must match before packaging.");
 }
 
+if (profile === "local") {
+  const recheck = spawnSync(process.execPath, ["--import", "tsx", "scripts/recheck-capsules.mjs"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: process.env
+  });
+  if (recheck.status !== 0) {
+    throw new Error(recheck.stderr || recheck.stdout || "Evidence capsule release recheck failed.");
+  }
+  if (recheck.stdout) process.stdout.write(recheck.stdout);
+}
+
+const registrySource = readFileSync(join(projectRoot, "packages", "contracts", "src", "add-lanes.ts"), "utf8");
+const actionFiles = [...registrySource.matchAll(/runnerFile:\s*"([a-z0-9]+-action\.js)"/g)]
+  .map((match) => match[1]);
+if (!actionFiles.length || new Set(actionFiles).size !== actionFiles.length) {
+  throw new Error("The add-lane registry must name unique packaged action runners.");
+}
+const builtActionFiles = new Set(
+  readdirSync(extensionRoot).filter((file) => /^[a-z0-9]+-action\.js$/.test(file))
+);
+for (const file of actionFiles) {
+  if (!builtActionFiles.has(file)) throw new Error(`The registered action runner ${file} has not been built.`);
+}
+
 const files = [
   "manifest.json",
   "runtime-config.js",
+  "adapter-versions.js",
+  "add-lanes.js",
   "background.js",
+  "evidence-capsule.js",
   "popup.html",
   "popup-state.js",
   "popup.js",
@@ -75,10 +104,7 @@ const files = [
   "offscreen.html",
   "offscreen.js",
   "target-shadow.js",
-  "target-action.js",
-  "walmart-action.js",
-  "amazon-action.js",
-  "bestbuy-action.js",
+  ...actionFiles,
   "retailer-shadow.js",
   "observer-recipe-oracle.js",
   "trackalacker-push.js",

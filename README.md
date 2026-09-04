@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.19.5 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.22.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
@@ -16,6 +16,30 @@ one, and the exact saved fulfillment choice: Shipping by default or explicit
 Pickup. Amazon additionally requires a unique ASIN-bound offer token that
 remains only in page memory. Buy Now, checkout, and order submission are not
 authorized.
+
+## Adapter release checklist
+
+- Bump an observer or add-adapter contract version for only the store whose
+  adapter or runner changed; do not move unrelated stores in lockstep.
+- Regenerate `apps/extension/adapter-versions.js`, run `npm run check`, build
+  and package the companion, and replay that store's promoted capsule corpus.
+- Follow the local repair workflow in
+  [`docs/ADAPTER_REPAIR_PLAYBOOK.md`](docs/ADAPTER_REPAIR_PLAYBOOK.md), and add
+  lanes through [`docs/ADD_LANE_REGISTRY.md`](docs/ADD_LANE_REGISTRY.md). The
+  complete contract is in
+  [`docs/ADAPTER_REPAIR_LOOP_SPEC.md`](docs/ADAPTER_REPAIR_LOOP_SPEC.md).
+
+Version 1.22.0 closes the adapter repair loop without sending page captures or
+selector traces to the hosted app. The local companion stores bounded,
+sanitized evidence capsules for adapter failures, exposes deliberate local
+capture and retention controls, and replays promoted captures against both
+source and packaged adapters. Versioned selector packs and per-store adapter
+constants detect release skew and renew qualification after pack-only changes.
+The server classifies all diagnostic reasons, groups and degrades current
+adapter defects, rechecks open groups during packaging, records fixed-pending-
+live repair state, and links repairs to incidents and readiness. All four add
+lanes now use one typed registry and shared qualification lifecycle; the same
+registry generates the companion and PostgreSQL lane configuration.
 
 Version 1.19.5 makes automatic store checks self-correcting in both
 directions. Candidate selection prefers products that are currently

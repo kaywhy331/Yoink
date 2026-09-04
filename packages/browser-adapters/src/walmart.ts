@@ -3,7 +3,7 @@ import {
   type CartInventoryEvidence,
   type LiveOfferObservation
 } from "../../browser-safety/src/index.js";
-import { WALMART_OBSERVER_VERSION, type Fulfillment, type SellerType } from "../../contracts/src/index.js";
+import { WALMART_OBSERVER_VERSION, type AdapterEnvironment, type Fulfillment, type SellerType } from "../../contracts/src/index.js";
 import {
   extractRetailerSku,
   observeRetailerOffer,
@@ -79,11 +79,12 @@ export function walmartAddControl(
   document: Document,
   urlValue: string,
   expectedSku: string,
-  requiredFulfillment: Fulfillment
+  requiredFulfillment: Fulfillment,
+  environment?: AdapterEnvironment
 ): Element | null {
   if (requiredFulfillment !== "shipping" && requiredFulfillment !== "pickup") return null;
-  if (retailerInteractiveBlock(document, urlValue)) return null;
-  return retailerAddControl(document, urlValue, "walmart", expectedSku, requiredFulfillment);
+  if (retailerInteractiveBlock(document, urlValue, environment)) return null;
+  return retailerAddControl(document, urlValue, "walmart", expectedSku, requiredFulfillment, environment);
 }
 
 export function observeWalmartOffer(
@@ -91,7 +92,8 @@ export function observeWalmartOffer(
   urlValue: string,
   expectedSku: string,
   requiredFulfillment: Fulfillment,
-  observedAt = new Date().toISOString()
+  observedAt = new Date().toISOString(),
+  environment?: AdapterEnvironment
 ): LiveOfferObservation {
   const observation = observeRetailerOffer(
     document,
@@ -99,7 +101,8 @@ export function observeWalmartOffer(
     "walmart",
     expectedSku,
     requiredFulfillment,
-    observedAt
+    observedAt,
+    environment
   );
   return { ...observation, pageKind: walmartPageKind(urlValue) };
 }

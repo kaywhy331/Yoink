@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "packs": {
+    "amazon.json": {
+      "packVersion": "amazon-pack-v1",
+      "sha256": "8d36906c4eef0a397a805deae52e786a96642752a4a70946e17c0ecf57de1dcd"
+    },
+    "bestbuy.json": {
+      "packVersion": "bestbuy-pack-v1",
+      "sha256": "12f56d69d617f6278873bf46cda318001ec198ba3b6f2adfc95e8a89b95b8254"
+    },
+    "retailers.json": {
+      "packVersion": "retailers-pack-v1",
+      "sha256": "f5967925296b6b0ca4f0b2ab72ffaf602a29fbddfc7cc7c501f03e376c20d894"
+    },
+    "target.json": {
+      "packVersion": "target-pack-v1",
+      "sha256": "7a62a1a114dcf607b02fb098e4a8e1396b9a6037cea28c265cf6643f3277c573"
+    },
+    "walmart.json": {
+      "packVersion": "walmart-pack-v1",
+      "sha256": "ce4fe322d723b30eec5d807ecb7c18d12cf270cc9dec5814c975a6752dc03920"
+    }
+  }
+}

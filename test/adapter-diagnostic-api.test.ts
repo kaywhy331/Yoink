@@ -155,7 +155,7 @@ test("the authenticated diagnostic endpoint immediately feeds the sanitized repa
     // later success closes repair work for the same raw page structure.
     assert.equal(JSON.stringify(db.all("SELECT * FROM retailer_adapter_diagnostics")).includes("DO_NOT_STORE"), false);
 
-    const runtimeFailureResponse = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/amazon`, {
+    const unsupportedFieldResponse = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/amazon`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -164,6 +164,12 @@ test("the authenticated diagnostic endpoint immediately feeds the sanitized repa
         canonicalUrl: "https://www.amazon.com/dp/B0FB21526X?secret=DO_NOT_STORE"
       })
     });
+    assert.equal(unsupportedFieldResponse.status, 400);
+    const runtimeFailureResponse = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/amazon`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...runtimeDiagnostic(), packVersion: "amazon-pack-v1" })
+    });
     assert.equal(runtimeFailureResponse.status, 201);
     const runtimeSnapshot = await fetch(`${baseUrl}/api/v1/snapshot`).then((response) => response.json()) as {
       counts: Record<string, number>;
@@ -171,8 +177,8 @@ test("the authenticated diagnostic endpoint immediately feeds the sanitized repa
     };
     const runtimeRepair = runtimeSnapshot.adapterRepairQueue.find((item) => item.reasonCode === "observer_bundle_injection_failed");
     assert.equal(runtimeSnapshot.counts.adapterDiagnosticEvents, 3);
-    assert.equal(runtimeSnapshot.counts.openAdapterRepairGroups, 1);
-    assert.equal(runtimeRepair?.status, "open");
+    assert.equal(runtimeSnapshot.counts.openAdapterRepairGroups, 0);
+    assert.equal(runtimeRepair?.status, "recovered");
     assert.equal(runtimeRepair?.failureStage, "runner");
     assert.equal(runtimeRepair?.layout.addControlCount, 0);
     assert.equal(JSON.stringify(runtimeSnapshot).includes("DO_NOT_STORE"), false);

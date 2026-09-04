@@ -15,7 +15,7 @@ import {
   observeBestBuyCart,
   observeBestBuyOffer
 } from "../../../packages/browser-adapters/src/bestbuy.js";
-import { BESTBUY_ADD_ADAPTER_VERSION } from "../../../packages/contracts/src/index.js";
+import { BESTBUY_ADD_ADAPTER_VERSION, type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
 
 export interface BestBuyAddJob extends BrowserActionContract {
   adapterVersion: typeof BESTBUY_ADD_ADAPTER_VERSION;
@@ -45,6 +45,15 @@ const AUTHORIZATION_MAX_AGE_MS = 10_000;
 let sequence = 0;
 let pending: PendingAuthorization | null = null;
 
+function traceElement(environment: AdapterEnvironment | undefined, condition: "authorized" | "rebound", element: Element | null): void {
+  if (!environment?.trace) return;
+  const attributes = ["id", "name", "type", "role", "data-test", "data-testid", "data-test-id", "data-automation-id", "aria-label"]
+    .map((name) => element?.hasAttribute(name) ? `${name}=${JSON.stringify(String(element.getAttribute(name)).slice(0, 80))}` : "")
+    .filter(Boolean).join(" ");
+  const content = String(element?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  environment.trace.record({ step: "add_control", condition, actual: element ? `${element.tagName.toLowerCase()} ${attributes} ${content}`.trim() : "missing" });
+}
+
 function bestBuyJobReason(job: BestBuyAddJob): string {
   if (job?.adapterVersion !== BESTBUY_ADD_ADAPTER_VERSION) return "adapter_version_mismatch";
   if (job?.retailerId !== "bestbuy" || job?.action !== "add_to_cart") return "unsupported_action";
@@ -69,7 +78,8 @@ export function prepareBestBuyAdd(
   documentValue: Document,
   urlValue: string,
   job: BestBuyAddJob,
-  now = Date.now()
+  now = Date.now(),
+  environment?: AdapterEnvironment
 ): BestBuyAddPreparation {
   pending = null;
   const invalid = bestBuyJobReason(job);
@@ -79,11 +89,12 @@ export function prepareBestBuyAdd(
     urlValue,
     job.retailerSku,
     job.fulfillment,
-    new Date(now).toISOString()
+    new Date(now).toISOString(),
+    environment
   );
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return verified;
-  const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment);
+  const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
   if (!control) return { ok: false, reason: "add_control_unavailable" };
   const id = authorizationId(now);
   pending = { id, jobId: job.jobId, createdAt: now, control, proof: verified.proof };
@@ -94,9 +105,10 @@ export function rehearseBestBuyAdd(
   documentValue: Document,
   urlValue: string,
   job: BestBuyAddJob,
-  now = Date.now()
+  now = Date.now(),
+  environment?: AdapterEnvironment
 ): BestBuyAddRehearsal {
-  const prepared = prepareBestBuyAdd(documentValue, urlValue, job, now);
+  const prepared = prepareBestBuyAdd(documentValue, urlValue, job, now, environment);
   if (!prepared.ok) return prepared;
   abandonBestBuyAdd(prepared.authorizationId);
   return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
@@ -107,7 +119,8 @@ export function commitBestBuyAdd(
   urlValue: string,
   job: BestBuyAddJob,
   value: string,
-  now = Date.now()
+  now = Date.now(),
+  environment?: AdapterEnvironment
 ): BestBuyAddCommit {
   const authorization = pending;
   pending = null;
@@ -124,12 +137,17 @@ export function commitBestBuyAdd(
     urlValue,
     job.retailerSku,
     job.fulfillment,
-    new Date(now).toISOString()
+    new Date(now).toISOString(),
+    environment
   );
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ...verified, clicked: false };
-  const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment);
-  if (!control || control !== authorization.control) return { ok: false, reason: "add_control_changed", clicked: false };
+  const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
+  if (!control || control !== authorization.control) {
+    traceElement(environment, "authorized", authorization.control);
+    traceElement(environment, "rebound", control);
+    return { ok: false, reason: "add_control_changed", clicked: false };
+  }
   try {
     (control as HTMLElement).click();
     return { ok: true, reason: "clicked", clicked: true, proof: verified.proof };

@@ -1,6 +1,26 @@
 # Yoink roadmap
 
-## Shipped through 1.19.5
+## Shipped through 1.22.0
+
+### Local adapter evidence and repair loop (1.22.0)
+
+- Captures bounded, sanitized page evidence and selector traces only in the
+  local companion after repairable adapter failures, with explicit manual
+  capture, retention, review, and delete controls
+- Replays local captures offline and promotes scanned, compressed examples into
+  a four-store regression corpus, including the Walmart 20895014480 unavailable
+  layout and Target 95238329 missed Add-control layout
+- Classifies every diagnostic reason as an adapter defect, retailer state,
+  policy rejection, or infrastructure failure before grouping incidents,
+  degrading a lane, or opening an operator alert
+- Loads versioned selector packs through all observe and add adapters, locks pack
+  content to its version, detects companion/server skew, and permits safe
+  pack-only qualification renewal
+- Rechecks open repair groups during extension packaging, records fixed-pending-
+  live state until current evidence arrives, and documents the repair and
+  resolution-code workflow
+- Drives the four add lanes from one typed registry across server qualification,
+  companion rehearsal, generated constants, and PostgreSQL configuration
 
 ### Self-correcting store checks (1.19.5)
 

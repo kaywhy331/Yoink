@@ -425,6 +425,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
       separateExtensionRuntimeProfiles: true,
       explicitExtensionOriginPolicy: false,
       localExtensionUpdates: true,
+      localEvidenceCapsules: true,
+      evidenceCapsuleTransport: "loopback",
       backgroundWorkerRuntime: "stopped",
       backgroundWorkerHealthy: false,
       backgroundWorkerDeployment: "local_in_process",

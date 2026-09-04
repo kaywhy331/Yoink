@@ -10,6 +10,7 @@ import {
   TARGET_ADD_ACTIVATION_CONFIRMATION,
   TARGET_ADD_ADAPTER_VERSION,
   TARGET_OBSERVER_VERSION,
+  TARGET_SELECTOR_PACK_VERSION,
   WALMART_ADD_ACTIVATION_CONFIRMATION,
   WALMART_ADD_ADAPTER_VERSION,
   WALMART_OBSERVER_VERSION,
@@ -36,6 +37,7 @@ function observation(observedAt: string): TargetShadowObservationInput {
     pageKind: "product",
     retailerId: "target",
     retailerSku: "1011483414",
+    canonicalUrl: "https://www.target.com/p/-/A-1011483414",
     availability: "in_stock",
     unitPriceCents: 5999,
     currency: "USD",
@@ -290,6 +292,36 @@ test("explicit activation requires two Target-sold shipping samples, one rehears
       storeAllowancesCents: { target: 3000, walmart: 3000, amazon: 3000, bestbuy: 3000 }
     });
     assert.equal(repository.targetAddQualified(NOW + 10_000), true);
+    db.run("UPDATE retailer_adapter_trials SET pack_version = 'target-pack-v0'");
+    const packPending = new RetailerReadinessRepository(db).lane("target", NOW + 10_500);
+    assert.equal(packPending.qualification.warning, "pack_unverified");
+    assert.equal(packPending.readyForGuardedAdd, false);
+    assert.equal(packPending.automaticCheckNeeded, true);
+    assert.equal(db.get<{ status: string }>(
+      "SELECT status FROM retailer_adapter_qualifications WHERE retailer_id = 'target'"
+    )?.status, "qualified", "a pack-only change never retires the qualification row");
+    const packCheck = shadows.record(device.id, {
+      ...observation(new Date(NOW + 11_000).toISOString()),
+      retailerSku: "202258620",
+      canonicalUrl: "https://www.target.com/p/-/A-202258620"
+    }, NOW + 12_000);
+    repository.recordTargetAddRehearsal(device.id, {
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION,
+      observerVersion: TARGET_OBSERVER_VERSION,
+      packVersion: TARGET_SELECTOR_PACK_VERSION,
+      contractVersion: 1,
+      shadowObservationId: packCheck.id,
+      observedAt: new Date(NOW + 13_000).toISOString(),
+      outcome: "passed",
+      reasonCode: "verified"
+    }, NOW + 14_000);
+    const packVerified = new RetailerReadinessRepository(db).lane("target", NOW + 15_000);
+    assert.equal(packVerified.qualification.warning, "none");
+    assert.equal(packVerified.expectedPackVersion, TARGET_SELECTOR_PACK_VERSION);
+    assert.equal(repository.targetAddQualified(NOW + 15_000), true);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'retailer_adapter_pack_verified'"
+    )?.count, 2);
     const qualificationExpiresAt = new Date(activated.readiness.qualification?.expiresAt ?? "").getTime();
     assert.equal(Number.isFinite(qualificationExpiresAt), true);
     const expiring = shadows.targetQualificationReadiness(qualificationExpiresAt - 6 * 24 * 60 * 60_000);

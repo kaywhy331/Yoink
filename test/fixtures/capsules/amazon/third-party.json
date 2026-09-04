@@ -1,0 +1,24 @@
+{
+  "capsuleId": "cap_promoted_amazon_third_party",
+  "capturedAt": "2026-09-04T22:02:00.000Z",
+  "url": "https://www.amazon.com/dp/B0GYTRYV7P",
+  "retailerId": "amazon",
+  "retailerSku": "B0GYTRYV7P",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "amazon-observer-v8",
+  "addAdapterVersion": "amazon-add-v9",
+  "packVersion": "amazon-pack-v1",
+  "sha256": "f042ff574c27adde567bc16454ea2c2098e57c0265a9faa36177f0c50eed9324",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified",
+    "availability": "in_stock",
+    "unitPriceCents": 12186,
+    "sellerType": "third_party",
+    "fulfillment": "shipping"
+  },
+  "notes": "Promoted from a sanitized Amazon third party page capture.",
+  "allowReason": ""
+}

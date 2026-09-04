@@ -1,0 +1,22 @@
+{
+  "capsuleId": "cap_corpuswalmart0120260904",
+  "capturedAt": "2026-09-04T20:00:00.000Z",
+  "url": "https://www.walmart.com/ip/20895014480",
+  "retailerId": "walmart",
+  "retailerSku": "20895014480",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "walmart-observer-v7",
+  "addAdapterVersion": "walmart-add-v8",
+  "packVersion": "walmart-pack-v1",
+  "sha256": "d9c14bd1bef1187188b702f8557582009a08257dfb7f41e0dbb06410266c26ed",
+  "expectations": {
+    "outcome": "rejected",
+    "failureStage": "availability_binding",
+    "reasonCode": "listing_unavailable_layout",
+    "availability": "out_of_stock",
+    "sellerType": "first_party"
+  },
+  "notes": "Promoted from the sanitized acceptance-page capture used to bootstrap the repair corpus.",
+  "allowReason": ""
+}

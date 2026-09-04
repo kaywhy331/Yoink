@@ -71,6 +71,9 @@ Each request is stable JSON with contract version 1 and only:
 
 The request contains no exact product ID, URL, DOM/text, cookie, token, actor
 identity, free-form note, account field, payment field, or action capability.
+Evidence-capsule IDs, snapshot content, and adapter decision traces are also
+excluded. They remain local even when an adapter-repair incident is routed to
+an external connector.
 Headers include opaque delivery/event IDs and
 `X-Yoink-Signature: sha256=<HMAC-SHA256 of exact body>`. Receivers should verify
 the HMAC before parsing and deduplicate on `X-Yoink-Delivery-ID`.
@@ -144,3 +147,14 @@ To recover:
 Email, pager/on-call providers, a managed secret provider, DNS/IP egress
 enforcement, production connector-retention jobs, and independent delivery SLO
 monitoring remain open.
+
+## Replay-verified repair state
+
+A local release recheck can move an adapter-repair incident to
+`fixed_pending_live`. Connector copy says that the packaged replay passes and
+that a live store check is still required; it never includes the capsule ID,
+snapshot, trace, candidate selector, or repair command. The first later
+matching packaged diagnostic resolves it with `adapter_fixed_by_replay`. A
+matching adapter-defect failure reopens it with
+`regressed_after_replay_fix`. See the
+[adapter repair playbook](ADAPTER_REPAIR_PLAYBOOK.md).

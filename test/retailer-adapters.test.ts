@@ -369,9 +369,9 @@ test("selected-offer scope captures allowlisted variants and fails closed on amb
   `);
   const attempt = collectRetailerShadowAttempt(liveAmbiguous, url, "macys", "shipping");
   assert.equal(attempt.observation.selectedOffer?.selectionState, "unresolved");
-  assert.equal(attempt.diagnostic.outcome, "failed");
+  assert.equal(attempt.diagnostic.outcome, "rejected");
   assert.equal(attempt.diagnostic.failureStage, "offer_binding");
-  assert.equal(attempt.diagnostic.reasonCode, "selected_offer_binding_unresolved");
+  assert.equal(attempt.diagnostic.reasonCode, "listing_variant_unselected");
 });
 
 test("new read-only observers fail closed on ambiguous controls and unnamed marketplace fulfillment", () => {
@@ -402,7 +402,7 @@ test("new read-only observers fail closed on ambiguous controls and unnamed mark
   const unavailableAttempt = collectRetailerShadowAttempt(unavailable, fanaticsUrl, "fanatics", "shipping");
   assert.equal(unavailableAttempt.observation.availability, "out_of_stock");
   assert.equal(unavailableAttempt.diagnostic.outcome, "rejected");
-  assert.equal(unavailableAttempt.diagnostic.reasonCode, "add_control_disabled");
+  assert.equal(unavailableAttempt.diagnostic.reasonCode, "listing_unavailable_layout");
 });
 
 test("Premium Bandai preserves exact item identity and distinguishes preorder, stock, and closed preorder", () => {
@@ -641,7 +641,7 @@ test("Walmart records explicit product-level out-of-stock fulfillment as an expe
   assert.equal(attempt.observation.addControlActionable, false);
   assert.equal(attempt.diagnostic.outcome, "rejected");
   assert.equal(attempt.diagnostic.failureStage, "availability_binding");
-  assert.equal(attempt.diagnostic.reasonCode, "out_of_stock");
+  assert.equal(attempt.diagnostic.reasonCode, "listing_unavailable_layout");
   assert.equal(attempt.diagnostic.layout.addControlCount, 0);
   assert.equal(attempt.diagnostic.layout.scopedControlCount, 0);
 });

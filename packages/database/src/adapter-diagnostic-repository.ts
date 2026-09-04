@@ -17,9 +17,14 @@ import {
   type RetailerAdapterRepairLandmark,
   type ObserverRecipeField,
   type ObserverRecipeMode,
+  type AddLaneId,
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
+import {
+  classifyAdapterDiagnostic,
+  type AdapterDiagnosticClass
+} from "../../domain/src/adapter-diagnostic-class.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -107,6 +112,15 @@ const DEGRADATION_REHEARSAL_WINDOW = 3;
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const MAX_DIAGNOSTIC_AGE_MS = 10 * 60_000;
 const RETENTION_LIMIT = 2_000;
+const PACK_VERSION_PATTERN = /^[a-z]+-pack-v\d{1,4}$/;
+const DIAGNOSTIC_FIELDS = new Set([
+  "contractVersion", "observedAt", "retailerId", "retailerSku", "adapterVersion", "packVersion",
+  "operation", "outcome", "failureStage", "reasonCode", "attemptCount", "domChanged", "layout"
+]);
+// These three fields were accepted and discarded by the original sanitizer.
+// Keep that compatibility without widening the hosted contract to any new
+// field (especially capsule, snapshot, or trace material).
+const LEGACY_DISCARDED_DIAGNOSTIC_FIELDS = new Set(["rawDom", "cookie", "offerListingID"]);
 
 const SKU_PATTERNS: Record<SupportedRetailerId, RegExp> = {
   target: /^\d{6,20}$/,
@@ -145,12 +159,38 @@ const COUNT_FIELDS = [
   "quantityControlCount"
 ] as const satisfies readonly (keyof RetailerAdapterLayoutEvidence)[];
 
+/** Shared with the local capsule index so one sanitized page joins the same
+ * repair group without putting a fingerprint field into the hosted payload. */
+export function adapterDiagnosticLayoutFingerprint(
+  retailerId: SupportedRetailerId,
+  layout: RetailerAdapterLayoutEvidence
+): string {
+  const ordered: Record<string, unknown> = {
+    schemaVersion: layout.schemaVersion,
+    pageKind: layout.pageKind,
+    scopeKind: layout.scopeKind,
+    sellerShape: layout.sellerShape,
+    fulfillmentShape: layout.fulfillmentShape
+  };
+  for (const field of COUNT_FIELDS) ordered[field] = field === "scopedControlCount" ? 0 : layout[field];
+  ordered.genericAddIntentCount = layout.genericAddIntentCount ?? 0;
+  for (const field of Object.values(REPAIR_COUNT_FIELDS)) {
+    const count = layout[field];
+    if (typeof count === "number" && count > 0) ordered[field] = count;
+  }
+  ordered.securityChallenge = layout.securityChallenge;
+  ordered.interactiveBlock = layout.interactiveBlock;
+  if (layout.repairLandmarks?.length) ordered.repairLandmarks = layout.repairLandmarks;
+  return stableHash("retailer-adapter-layout-v1", retailerId, JSON.stringify(ordered));
+}
+
 interface DiagnosticRow {
   id: string;
   deviceId: string;
   retailerId: SupportedRetailerId;
   retailerSku: string;
   adapterVersion: string;
+  packVersion: string;
   contractVersion: 1;
   operation: RetailerAdapterDiagnosticOperation;
   outcome: RetailerAdapterDiagnosticOutcome;
@@ -169,7 +209,7 @@ export interface StoredRetailerAdapterDiagnostic extends Omit<DiagnosticRow, "do
   layout: RetailerAdapterLayoutEvidence;
 }
 
-export type AdapterRepairQueueStatus = "open" | "recovered" | "aged_out";
+export type AdapterRepairQueueStatus = "open" | "superseded" | "recovered" | "aged_out";
 
 export type LaneDegradationReason =
   | "open_repair_current_version"
@@ -190,6 +230,11 @@ export interface AdapterRepairQueueItem {
   latestRetailerSku: string;
   failureStage: RetailerAdapterDiagnosticStage;
   reasonCode: string;
+  diagnosticClass: AdapterDiagnosticClass;
+  latestDiagnosticClass: AdapterDiagnosticClass;
+  latestOutcome: RetailerAdapterDiagnosticOutcome;
+  latestPackVersion: string;
+  latestReceivedAt: string;
   occurrenceCount: number;
   affectedSkuCount: number;
   repairRetailerSkus: string[];
@@ -404,6 +449,10 @@ export class AdapterDiagnosticRepository {
 
   record(deviceId: string, input: RetailerAdapterDiagnosticInput, now = Date.now()): StoredRetailerAdapterDiagnostic {
     if (!input || typeof input !== "object") throw new Error("A retailer adapter diagnostic is required.");
+    if (Object.keys(input).some((field) =>
+      !DIAGNOSTIC_FIELDS.has(field) && !LEGACY_DISCARDED_DIAGNOSTIC_FIELDS.has(field))) {
+      throw new Error("The adapter diagnostic contains an unsupported field.");
+    }
     const cleanDeviceId = cleanText(deviceId, 120);
     if (!this.db.get("SELECT id FROM extension_devices WHERE id = ? AND user_id = ? AND status = 'active'", cleanDeviceId, currentRequestScope().userId)) {
       throw new Error("The paired Chrome device is unavailable.");
@@ -417,6 +466,10 @@ export class AdapterDiagnosticRepository {
     }
     const expectedVersion = input.operation === "observe" ? RETAILER_OBSERVER_VERSIONS[retailerId] : ADD_VERSIONS[retailerId];
     if (!expectedVersion || input.adapterVersion !== expectedVersion) throw new Error("The adapter diagnostic version is unsupported.");
+    const packVersion = cleanText(input.packVersion, 40).toLocaleLowerCase("en-US");
+    if (packVersion && !PACK_VERSION_PATTERN.test(packVersion)) {
+      throw new Error("The adapter diagnostic selector-pack version is invalid.");
+    }
     if ((input.outcome === "passed") !== (input.failureStage === "complete")) {
       throw new Error("Adapter diagnostic outcome and failure stage are inconsistent.");
     }
@@ -457,11 +510,11 @@ export class AdapterDiagnosticRepository {
     // scopedControlCount reflects the adapter's interpretation, not the page's
     // raw structure. Excluding it keeps a layout fingerprint stable when a
     // newer adapter learns to bind the same markup successfully.
-    const fingerprintLayout = { ...layout, scopedControlCount: 0 };
-    const layoutFingerprint = stableHash("retailer-adapter-layout-v1", retailerId, JSON.stringify(fingerprintLayout));
+    const layoutFingerprint = adapterDiagnosticLayoutFingerprint(retailerId, layout);
     const existing = this.db.get<DiagnosticRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
               retailer_sku AS retailerSku, adapter_version AS adapterVersion,
+              COALESCE(pack_version, '') AS packVersion,
               contract_version AS contractVersion, operation, outcome,
               failure_stage AS failureStage, reason_code AS reasonCode,
               attempt_count AS attemptCount, dom_changed AS domChanged,
@@ -469,7 +522,7 @@ export class AdapterDiagnosticRepository {
               observed_at AS observedAt, received_at AS receivedAt
        FROM retailer_adapter_diagnostics
        WHERE user_id = ? AND device_id = ? AND retailer_id = ?
-         AND retailer_sku = ? AND adapter_version = ? AND operation = ?
+         AND retailer_sku = ? AND adapter_version = ? AND COALESCE(pack_version, '') = ? AND operation = ?
          AND outcome = ? AND failure_stage = ? AND reason_code = ?
          AND attempt_count = ? AND dom_changed = ? AND layout_fingerprint = ?
          AND layout_json = ? AND observed_at = ?
@@ -479,6 +532,7 @@ export class AdapterDiagnosticRepository {
       retailerId,
       retailerSku,
       expectedVersion,
+      packVersion,
       input.operation,
       input.outcome,
       input.failureStage,
@@ -496,10 +550,10 @@ export class AdapterDiagnosticRepository {
       this.db.run(
         `INSERT INTO retailer_adapter_diagnostics(
            id, tenant_id, user_id, device_id, retailer_id, retailer_sku,
-           adapter_version, contract_version, operation, outcome, failure_stage,
+           adapter_version, pack_version, contract_version, operation, outcome, failure_stage,
            reason_code, attempt_count, dom_changed, layout_fingerprint,
            layout_json, observed_at, received_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         currentRequestScope().tenantId,
         currentRequestScope().userId,
@@ -507,6 +561,7 @@ export class AdapterDiagnosticRepository {
         retailerId,
         retailerSku,
         expectedVersion,
+        packVersion || null,
         input.operation,
         input.outcome,
         input.failureStage,
@@ -535,6 +590,7 @@ export class AdapterDiagnosticRepository {
       retailerId,
       retailerSku,
       adapterVersion: expectedVersion,
+      packVersion,
       contractVersion: 1,
       operation: input.operation,
       outcome: input.outcome,
@@ -554,6 +610,7 @@ export class AdapterDiagnosticRepository {
     return this.db.all<DiagnosticRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
               retailer_sku AS retailerSku, adapter_version AS adapterVersion,
+              COALESCE(pack_version, '') AS packVersion,
               contract_version AS contractVersion, operation, outcome,
               failure_stage AS failureStage, reason_code AS reasonCode,
               attempt_count AS attemptCount, dom_changed AS domChanged,
@@ -580,7 +637,7 @@ export class AdapterDiagnosticRepository {
       group.rows.push(row);
       if (row.outcome === "failed" || row.outcome === "recovered") {
         group.repairs.push(row);
-        group.skus.add(row.retailerSku);
+        if (row.outcome === "failed") group.skus.add(row.retailerSku);
       }
       groups.set(key, group);
     }
@@ -589,19 +646,21 @@ export class AdapterDiagnosticRepository {
       if (!group.repairs.length) continue;
       const latest = group.rows[0] as StoredRetailerAdapterDiagnostic;
       const latestRepair = group.repairs[0] as StoredRetailerAdapterDiagnostic;
-      const failures = group.rows.filter((row) => row.outcome === "failed");
+      const failures = group.rows.filter((row) => row.outcome === "failed" || row.outcome === "rejected");
+      const defectFailures = failures.filter((row) => classifyAdapterDiagnostic(row) === "adapter_defect");
       const recoveries = group.rows.filter((row) => row.outcome === "passed" || row.outcome === "recovered");
       const lastFailureAt = failures[0]?.receivedAt ?? "";
       let lastRecoveryAt = recoveries[0]?.receivedAt ?? "";
       const supersedingRows: StoredRetailerAdapterDiagnostic[] = [];
-      const failedSkus = [...new Set(failures.map((row) => row.retailerSku))];
+      const failedSkus = [...new Set(defectFailures.map((row) => row.retailerSku))];
       const repairRetailerSkus = failedSkus.filter((retailerSku) => {
-        const latestFailure = failures.find((row) => row.retailerSku === retailerSku);
+        const latestFailure = defectFailures.find((row) => row.retailerSku === retailerSku);
         if (!latestFailure) return false;
         const replacement = recent.find((row) => row.retailerId === latestFailure.retailerId
           && row.retailerSku === retailerSku
           && row.receivedAt > latestFailure.receivedAt
           && row.outcome !== "failed"
+          && ["none", "listing_state"].includes(classifyAdapterDiagnostic(row))
           && (row.adapterVersion === latestFailure.adapterVersion
             || strictlyNewerAdapterVersion(row.adapterVersion, latestFailure.adapterVersion))
           && (row.operation === latestFailure.operation
@@ -612,9 +671,17 @@ export class AdapterDiagnosticRepository {
         if (replacement) supersedingRows.push(replacement);
         return !replacement;
       });
-      const unresolved = repairRetailerSkus.length > 0;
+      const latestFailure = failures[0] ?? latestRepair;
+      const diagnosticClass = classifyAdapterDiagnostic(latestFailure);
+      const unresolved = repairRetailerSkus.length > 0 && diagnosticClass === "adapter_defect";
       const agedOut = unresolved && lastFailureAt !== "" && lastFailureAt < ageOutCutoff;
-      const open = unresolved && !agedOut;
+      const packagedVersion = latestFailure.operation === "observe"
+        ? RETAILER_OBSERVER_VERSIONS[latestFailure.retailerId]
+        : ADD_VERSIONS[latestFailure.retailerId];
+      const superseded = unresolved && !agedOut && Boolean(packagedVersion)
+        && strictlyNewerAdapterVersion(String(packagedVersion), latestFailure.adapterVersion)
+        && !failures.some((row) => row.adapterVersion === packagedVersion);
+      const open = unresolved && !agedOut && !superseded;
       lastRecoveryAt = supersedingRows
         .map((row) => row.receivedAt)
         .reduce((value, candidate) => candidate > value ? candidate : value, lastRecoveryAt);
@@ -622,12 +689,17 @@ export class AdapterDiagnosticRepository {
       queue.push({
         retailerId: latest.retailerId,
         operation: latest.operation,
-        status: open ? "open" : agedOut ? "aged_out" : "recovered",
+        status: open ? "open" : superseded ? "superseded" : agedOut ? "aged_out" : "recovered",
         layoutFingerprint: latest.layoutFingerprint,
-        latestAdapterVersion: latest.adapterVersion,
-        latestRetailerSku: latestRepair.retailerSku,
-        failureStage: latestRepair.failureStage,
-        reasonCode: latestRepair.reasonCode,
+        latestAdapterVersion: latestFailure.adapterVersion,
+        latestRetailerSku: latestFailure.retailerSku,
+        failureStage: latestFailure.failureStage,
+        reasonCode: latestFailure.reasonCode,
+        diagnosticClass,
+        latestDiagnosticClass: classifyAdapterDiagnostic(latest),
+        latestOutcome: latest.outcome,
+        latestPackVersion: latest.packVersion,
+        latestReceivedAt: latest.receivedAt,
         occurrenceCount: group.repairs.length,
         affectedSkuCount: group.skus.size,
         repairRetailerSkus,
@@ -637,7 +709,7 @@ export class AdapterDiagnosticRepository {
         lastSeenAt: lastRecoveryAt > latest.receivedAt ? lastRecoveryAt : latest.receivedAt,
         lastFailureAt,
         lastRecoveryAt,
-        layout: latestRepair.layout,
+        layout: latestFailure.layout,
         repairSuggestions: repairSuggestions(group.rows, open)
       });
     }
@@ -651,6 +723,7 @@ export class AdapterDiagnosticRepository {
     openAdapterRepairGroups: number;
     recoveredAdapterRepairGroups: number;
     agedOutAdapterRepairGroups: number;
+    supersededAdapterRepairGroups: number;
   } {
     const adapterDiagnosticEvents = Number(this.db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics WHERE user_id = ?",
@@ -661,7 +734,8 @@ export class AdapterDiagnosticRepository {
       adapterDiagnosticEvents,
       openAdapterRepairGroups: queue.filter((item) => item.status === "open").length,
       recoveredAdapterRepairGroups: queue.filter((item) => item.status === "recovered").length,
-      agedOutAdapterRepairGroups: queue.filter((item) => item.status === "aged_out").length
+      agedOutAdapterRepairGroups: queue.filter((item) => item.status === "aged_out").length,
+      supersededAdapterRepairGroups: queue.filter((item) => item.status === "superseded").length
     };
   }
 }
@@ -673,7 +747,7 @@ export class AdapterDiagnosticRepository {
  */
 export function laneDegradation(
   db: YoinkDatabase,
-  retailerId: "target" | "walmart" | "amazon" | "bestbuy",
+  retailerId: AddLaneId,
   versions: { add: string; observer: string },
   now = Date.now()
 ): LaneDegradation {
@@ -686,8 +760,8 @@ export function laneDegradation(
     for (const retailerSku of group.repairRetailerSkus) repairSkus.add(retailerSku);
   }
   if (repairSkus.size >= DEGRADATION_MINIMUM_REPAIR_SKUS) reasons.push("open_repair_current_version");
-  const rehearsals = db.all<{ outcome: string }>(
-    `SELECT outcome FROM retailer_adapter_trials
+  const rehearsals = db.all<{ outcome: string; reasonCode: string }>(
+    `SELECT outcome, reason_code AS reasonCode FROM retailer_adapter_trials
      WHERE tenant_id = ? AND user_id = ? AND retailer_id = ? AND adapter_version = ?
        AND trial_kind = 'pre_click_rehearsal'
      ORDER BY received_at DESC, id DESC LIMIT ?`,
@@ -697,7 +771,17 @@ export function laneDegradation(
     versions.add,
     DEGRADATION_REHEARSAL_WINDOW
   );
-  if (rehearsals.length === DEGRADATION_REHEARSAL_WINDOW && rehearsals.every((row) => row.outcome === "rejected")) {
+  const defectRehearsals = rehearsals.filter((row) => {
+    const diagnosticClass = classifyAdapterDiagnostic({
+      operation: "rehearse_add",
+      outcome: row.outcome,
+      failureStage: "runner",
+      reasonCode: row.reasonCode
+    });
+    return diagnosticClass === "adapter_defect" || diagnosticClass === "infrastructure";
+  });
+  if (defectRehearsals.length === DEGRADATION_REHEARSAL_WINDOW
+    && defectRehearsals.every((row) => row.outcome === "rejected")) {
     reasons.push("recent_rehearsals_rejected");
   }
   const latestLiveFailure = db.get<{ receivedAt: string }>(

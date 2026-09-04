@@ -15,7 +15,7 @@ import {
   targetPageKind,
   targetSecurityChallenge
 } from "../../../packages/browser-adapters/src/target.js";
-import { TARGET_ADD_ADAPTER_VERSION } from "../../../packages/contracts/src/index.js";
+import { TARGET_ADD_ADAPTER_VERSION, type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
 
 export interface TargetAddJob extends BrowserActionContract {
   adapterVersion: typeof TARGET_ADD_ADAPTER_VERSION;
@@ -49,6 +49,20 @@ const FULFILLMENT_SELECTION_MAX_WAIT_MS = 5_000;
 let sequence = 0;
 let pending: PendingAuthorization | null = null;
 
+function traceElement(environment: AdapterEnvironment | undefined, condition: "authorized" | "rebound", element: Element | null): void {
+  if (!environment?.trace) return;
+  const attributes = ["id", "name", "type", "role", "data-test", "data-testid", "data-test-id", "data-automation-id", "aria-label"]
+    .map((name) => element?.hasAttribute(name) ? `${name}=${JSON.stringify(String(element.getAttribute(name)).slice(0, 80))}` : "")
+    .filter(Boolean)
+    .join(" ");
+  const content = String(element?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  environment.trace.record({
+    step: "add_control",
+    condition,
+    actual: element ? `${element.tagName.toLocaleLowerCase("en-US")} ${attributes} ${content}`.trim() : "missing"
+  });
+}
+
 function targetJobReason(job: TargetAddJob): string {
   if (job?.adapterVersion !== TARGET_ADD_ADAPTER_VERSION) return "adapter_version_mismatch";
   if (job?.retailerId !== "target" || job?.action !== "add_to_cart") return "unsupported_action";
@@ -73,7 +87,8 @@ export function prepareTargetAdd(
   documentValue: Document,
   urlValue: string,
   job: TargetAddJob,
-  now = Date.now()
+  now = Date.now(),
+  environment?: AdapterEnvironment
 ): TargetAddPreparation {
   pending = null;
   const invalid = targetJobReason(job);
@@ -83,11 +98,12 @@ export function prepareTargetAdd(
     urlValue,
     job.retailerSku,
     job.fulfillment,
-    new Date(now).toISOString()
+    new Date(now).toISOString(),
+    environment
   );
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return verified;
-  const binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment);
+  const binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
   if (!binding.control || binding.fulfillment !== job.fulfillment
     || (binding.selectionRequired && !binding.fulfillmentControl)) {
     return { ok: false, reason: "add_control_unavailable" };
@@ -110,9 +126,10 @@ export function rehearseTargetAdd(
   documentValue: Document,
   urlValue: string,
   job: TargetAddJob,
-  now = Date.now()
+  now = Date.now(),
+  environment?: AdapterEnvironment
 ): TargetAddRehearsal {
-  const prepared = prepareTargetAdd(documentValue, urlValue, job, now);
+  const prepared = prepareTargetAdd(documentValue, urlValue, job, now, environment);
   if (!prepared.ok) return prepared;
   abandonTargetAdd(prepared.authorizationId);
   return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
@@ -121,12 +138,13 @@ export function rehearseTargetAdd(
 async function waitForSelectedFulfillmentBinding(
   documentValue: Document,
   urlValue: string,
-  job: TargetAddJob
+  job: TargetAddJob,
+  environment?: AdapterEnvironment
 ) {
   const deadline = Date.now() + FULFILLMENT_SELECTION_MAX_WAIT_MS;
   while (Date.now() <= deadline) {
-    if (targetSecurityChallenge(documentValue) || targetInteractiveBlock(documentValue)) return null;
-    const binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment);
+    if (targetSecurityChallenge(documentValue) || targetInteractiveBlock(documentValue, environment)) return null;
+    const binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
     if (binding.control && binding.fulfillment === job.fulfillment && !binding.selectionRequired) return binding;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -138,7 +156,8 @@ export async function commitTargetAdd(
   urlValue: string,
   job: TargetAddJob,
   value: string,
-  now = Date.now()
+  now = Date.now(),
+  environment?: AdapterEnvironment
 ): Promise<TargetAddCommit> {
   const authorization = pending;
   pending = null;
@@ -155,15 +174,18 @@ export async function commitTargetAdd(
     urlValue,
     job.retailerSku,
     job.fulfillment,
-    new Date(now).toISOString()
+    new Date(now).toISOString(),
+    environment
   );
   const initiallyVerified = verifyLiveOffer(job, beforeSelection, now);
   if (!initiallyVerified.ok) return { ...initiallyVerified, clicked: false };
-  let binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment);
+  let binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
   if (!binding.control || binding.control !== authorization.control
     || binding.fulfillmentControl !== authorization.fulfillmentControl
     || binding.selectionRequired !== authorization.selectionRequired
     || binding.offerRoot !== authorization.offerRoot) {
+    traceElement(environment, "authorized", authorization.control);
+    traceElement(environment, "rebound", binding.control);
     return { ok: false, reason: "add_control_changed", clicked: false };
   }
   if (binding.selectionRequired) {
@@ -172,7 +194,7 @@ export async function commitTargetAdd(
     } catch {
       return { ok: false, reason: "fulfillment_selection_failed", clicked: false };
     }
-    const selected = await waitForSelectedFulfillmentBinding(documentValue, urlValue, job);
+    const selected = await waitForSelectedFulfillmentBinding(documentValue, urlValue, job, environment);
     if (!selected) return { ok: false, reason: "fulfillment_selection_failed", clicked: false };
     binding = selected;
   }
@@ -181,7 +203,8 @@ export async function commitTargetAdd(
     urlValue,
     job.retailerSku,
     job.fulfillment,
-    new Date(now).toISOString()
+    new Date(now).toISOString(),
+    environment
   );
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ...verified, clicked: false };

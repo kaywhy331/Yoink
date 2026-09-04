@@ -152,7 +152,8 @@ test("adapter diagnostics persist only normalized structural evidence and group 
       adapterDiagnosticEvents: 2,
       openAdapterRepairGroups: 0,
       recoveredAdapterRepairGroups: 1,
-      agedOutAdapterRepairGroups: 0
+      agedOutAdapterRepairGroups: 0,
+      supersededAdapterRepairGroups: 0
     });
 
     const durable = JSON.stringify(db.all("SELECT * FROM retailer_adapter_diagnostics"));
@@ -430,10 +431,10 @@ test("a later successful inspection closes zero-content runtime incidents for ev
       layout: runtimeLayout()
     }), NOW + 4_000);
     let runtimeRepair = repository.listRepairQueue()[0];
-    assert.equal(runtimeRepair?.status, "open");
+    assert.equal(runtimeRepair?.status, "recovered");
     assert.equal(runtimeRepair?.occurrenceCount, 2);
     assert.equal(runtimeRepair?.affectedSkuCount, 2);
-    assert.deepEqual(new Set(runtimeRepair?.repairRetailerSkus), new Set(["B0FB21526X", "B0GYTRYV7P"]));
+    assert.deepEqual(runtimeRepair?.repairRetailerSkus, []);
 
     repository.record(device.id, diagnostic({
       observedAt: new Date(NOW + 5_000).toISOString(),
@@ -443,9 +444,9 @@ test("a later successful inspection closes zero-content runtime incidents for ev
       layout: layout({ scopedControlCount: 1, canonicalOfferDistinctCount: 1 })
     }), NOW + 6_000);
     runtimeRepair = repository.listRepairQueue().find((item) => item.failureStage === "runner");
-    assert.equal(runtimeRepair?.status, "open");
-    assert.deepEqual(runtimeRepair?.repairRetailerSkus, ["B0GYTRYV7P"],
-      "one recovered product must not hide another unresolved product in the same layout group");
+    assert.equal(runtimeRepair?.status, "recovered");
+    assert.deepEqual(runtimeRepair?.repairRetailerSkus, [],
+      "infrastructure evidence remains visible but cannot become adapter repair work");
 
     repository.record(device.id, diagnostic({
       observedAt: new Date(NOW + 7_000).toISOString(),
@@ -458,7 +459,7 @@ test("a later successful inspection closes zero-content runtime incidents for ev
     runtimeRepair = repository.listRepairQueue().find((item) => item.failureStage === "runner");
     assert.equal(runtimeRepair?.status, "recovered");
     assert.deepEqual(runtimeRepair?.repairRetailerSkus, []);
-    assert.equal(runtimeRepair?.lastRecoveryAt, new Date(NOW + 8_000).toISOString());
+    assert.equal(runtimeRepair?.lastRecoveryAt, "");
     assert.equal(repository.counts().openAdapterRepairGroups, 0);
   } finally {
     db.close();
@@ -496,7 +497,7 @@ test("a strictly newer packaged observer can supersede an older exact-SKU repair
       "UPDATE retailer_adapter_diagnostics SET adapter_version = 'bestbuy-observer-v3' WHERE id = ?",
       failed.id
     );
-    assert.equal(repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing")?.status, "open");
+    assert.equal(repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing")?.status, "superseded");
 
     repository.record(device.id, diagnostic({
       observedAt: new Date(NOW + 3_000).toISOString(),
@@ -509,8 +510,7 @@ test("a strictly newer packaged observer can supersede an older exact-SKU repair
       layout: { ...bestBuyLayout, interactiveBlock: "location" }
     }), NOW + 4_000);
     const repaired = repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing");
-    assert.equal(repaired?.status, "recovered");
-    assert.equal(repaired?.lastRecoveryAt, new Date(NOW + 4_000).toISOString());
+    assert.equal(repaired?.status, "superseded");
   } finally {
     db.close();
   }
@@ -650,8 +650,8 @@ test("a passing no-click rehearsal supersedes an earlier live-add binding failur
       observedAt: new Date(NOW + 7_000).toISOString()
     }), NOW + 8_000);
     const runnerGroup = repository.listRepairQueue(50, NOW + 8_000)
-      .find((item) => item.operation === "live_add" && item.repairRetailerSkus.includes("B0RUNNER01"));
-    assert.equal(runnerGroup?.status, "open", "runner-infrastructure failures keep the strict same-operation rule");
+      .find((item) => item.operation === "live_add" && item.latestRetailerSku === "B0RUNNER01");
+    assert.equal(runnerGroup?.status, "recovered", "infrastructure failures never open adapter repair work");
   } finally {
     db.close();
   }
@@ -672,7 +672,8 @@ test("an unresolved repair ages out after fourteen days and stops driving replay
       adapterDiagnosticEvents: 1,
       openAdapterRepairGroups: 0,
       recoveredAdapterRepairGroups: 0,
-      agedOutAdapterRepairGroups: 1
+      agedOutAdapterRepairGroups: 1,
+      supersededAdapterRepairGroups: 0
     });
   } finally {
     db.close();

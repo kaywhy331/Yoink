@@ -102,6 +102,20 @@ interactive-block rejections keep the strict same-operation rule.
 
 ## Maintainer workflow
 
+The local repair loop is specified in
+[Adapter repair loop](ADAPTER_REPAIR_LOOP_SPEC.md). A local-profile Chrome
+companion may save a sanitized page snapshot and adapter trace beside this
+hosted-safe diagnostic. Those capsules remain under `data/evidence` on the
+machine that captured them; they never enter this diagnostic, alerts,
+community evidence, portability archives, hosted delivery, or observer
+recipes. A production-profile companion and every hosted server keep capsule
+transport disabled.
+
+The executable eight-step workflow, release recheck states, verification
+commands, and resolution-distribution query are in the
+[adapter repair playbook](ADAPTER_REPAIR_PLAYBOOK.md). Start there after
+claiming a queue item; `npm run repair` is the read-only entry point.
+
 The suggestion appears in **Admin → Retailers → Adapter repair queue**. A
 maintainer may use it to reproduce the layout and update a packaged observer or
 manually author a read-only observer recipe. Starting in 0.48, the dedicated

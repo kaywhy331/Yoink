@@ -1,4 +1,5 @@
 export const ACTIONS = ["notify", "add_to_cart", "prepare_checkout", "submit_order"] as const;
+export { ADD_LANE_IDS, ADD_LANES, addLane, type AddLaneDefinition, type AddLaneId } from "./add-lanes.js";
 export type Action = (typeof ACTIONS)[number];
 
 /**
@@ -62,13 +63,46 @@ export const RETAILER_OBSERVER_VERSIONS = {
 export type SupportedRetailerId = keyof typeof RETAILER_OBSERVER_VERSIONS;
 export type RetailerObserverVersion = (typeof RETAILER_OBSERVER_VERSIONS)[SupportedRetailerId];
 export const TARGET_ADD_ADAPTER_VERSION = "target-add-v8";
+export const TARGET_ADD_CONTRACT_VERSION = TARGET_ADD_ADAPTER_VERSION;
+export const TARGET_SELECTOR_PACK_VERSION = "target-pack-v1";
 export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V8";
 export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v8";
+export const WALMART_ADD_CONTRACT_VERSION = WALMART_ADD_ADAPTER_VERSION;
+export const WALMART_SELECTOR_PACK_VERSION = "walmart-pack-v1";
 export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V8";
 export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v9";
+export const AMAZON_ADD_CONTRACT_VERSION = AMAZON_ADD_ADAPTER_VERSION;
+export const AMAZON_SELECTOR_PACK_VERSION = "amazon-pack-v1";
 export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V9";
 export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v11";
+export const BESTBUY_ADD_CONTRACT_VERSION = BESTBUY_ADD_ADAPTER_VERSION;
+export const BESTBUY_SELECTOR_PACK_VERSION = "bestbuy-pack-v1";
 export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V11";
+export const RETAILERS_SELECTOR_PACK_VERSION = "retailers-pack-v1";
+export const DISNEY_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const RAVENSBURGER_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const RIOT_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const BOOKSAMILLION_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const FANATICS_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const KOHLS_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const MACYS_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const PBANDAI_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const POKEMONCENTER_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const RETAILER_SELECTOR_PACK_VERSIONS = {
+  target: TARGET_SELECTOR_PACK_VERSION,
+  walmart: WALMART_SELECTOR_PACK_VERSION,
+  amazon: AMAZON_SELECTOR_PACK_VERSION,
+  bestbuy: BESTBUY_SELECTOR_PACK_VERSION,
+  disney: DISNEY_SELECTOR_PACK_VERSION,
+  ravensburger: RAVENSBURGER_SELECTOR_PACK_VERSION,
+  riot: RIOT_SELECTOR_PACK_VERSION,
+  booksamillion: BOOKSAMILLION_SELECTOR_PACK_VERSION,
+  fanatics: FANATICS_SELECTOR_PACK_VERSION,
+  kohls: KOHLS_SELECTOR_PACK_VERSION,
+  macys: MACYS_SELECTOR_PACK_VERSION,
+  pbandai: PBANDAI_SELECTOR_PACK_VERSION,
+  pokemoncenter: POKEMONCENTER_SELECTOR_PACK_VERSION
+} as const satisfies Record<SupportedRetailerId, string>;
 
 export const RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS = ["observe", "rehearse_add", "live_add"] as const;
 export type RetailerAdapterDiagnosticOperation = (typeof RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS)[number];
@@ -126,6 +160,8 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "fulfillment_selector_miss",
   "fulfillment_binding_missing",
   "selected_offer_binding_unresolved",
+  "listing_unavailable_layout",
+  "listing_variant_unselected",
   "offer_scope_not_actionable",
   "not_applicable",
   "offer_not_actionable",
@@ -271,6 +307,7 @@ export interface RetailerAdapterDiagnosticInput {
   retailerId: SupportedRetailerId;
   retailerSku: string;
   adapterVersion: string;
+  packVersion?: string;
   operation: RetailerAdapterDiagnosticOperation;
   outcome: RetailerAdapterDiagnosticOutcome;
   failureStage: RetailerAdapterDiagnosticStage;
@@ -278,6 +315,174 @@ export interface RetailerAdapterDiagnosticInput {
   attemptCount: number;
   domChanged: boolean;
   layout: RetailerAdapterLayoutEvidence;
+}
+
+export const ADAPTER_TRACE_STEPS = [
+  "page_identity",
+  "interactive_block",
+  "structured_offer",
+  "offer_scope",
+  "add_control",
+  "availability",
+  "price",
+  "seller",
+  "fulfillment",
+  "quantity",
+  "route",
+  "sku_binding",
+  "trace"
+] as const;
+export type AdapterTraceStep = (typeof ADAPTER_TRACE_STEPS)[number];
+export const ADAPTER_TRACE_REJECTIONS = [
+  "not_visible",
+  "outside_offer_root",
+  "merchandising_scope",
+  "sku_mismatch",
+  "disabled",
+  "ambiguous",
+  "intent_mismatch",
+  "pattern_mismatch",
+  "no_price_text",
+  "foreign_currency",
+  "condition_failed",
+  "not_selected",
+  "not_actionable"
+] as const;
+export type AdapterTraceRejection = (typeof ADAPTER_TRACE_REJECTIONS)[number];
+
+/** Local-only adapter decision detail. This type is never part of the hosted diagnostic contract. */
+export interface AdapterTraceEntry {
+  step: AdapterTraceStep;
+  selector?: string;
+  matched?: number;
+  visible?: number;
+  scoped?: number;
+  chosen?: number;
+  reject?: AdapterTraceRejection;
+  condition?: string;
+  expected?: string;
+  actual?: string;
+  passed?: boolean;
+  truncated?: true;
+}
+
+export interface AdapterTraceSink {
+  record(entry: AdapterTraceEntry): void;
+}
+
+export interface AdapterEnvironment {
+  trace?: AdapterTraceSink;
+  /** Supplied only by offline replay. Production adapters do not derive visibility from page attributes. */
+  isVisible?: (element: Element) => boolean;
+}
+
+/** A privacy-bounded, local-only trace sink used by capture and offline replay. */
+export interface AdapterTraceBuffer extends AdapterTraceSink {
+  readonly entries: AdapterTraceEntry[];
+}
+
+function boundedTraceText(value: unknown, maximum: number): string | undefined {
+  if (value === undefined) return undefined;
+  return String(value).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
+}
+
+export function createAdapterTraceBuffer(maximumEntries = 300): AdapterTraceBuffer {
+  const maximum = Math.max(1, Math.min(300, Math.trunc(maximumEntries) || 300));
+  const entries: AdapterTraceEntry[] = [];
+  let truncated = false;
+  return {
+    entries,
+    record(entry) {
+      if (truncated) return;
+      if (entries.length >= maximum) {
+        entries[maximum - 1] = { step: "trace", truncated: true };
+        truncated = true;
+        return;
+      }
+      const normalized: AdapterTraceEntry = { ...entry };
+      if (entry.selector !== undefined) normalized.selector = boundedTraceText(entry.selector, 200) ?? "";
+      if (entry.condition !== undefined) normalized.condition = boundedTraceText(entry.condition, 80) ?? "";
+      if (entry.expected !== undefined) normalized.expected = boundedTraceText(entry.expected, 60) ?? "";
+      if (entry.actual !== undefined) normalized.actual = boundedTraceText(entry.actual, 60) ?? "";
+      entries.push(normalized);
+    }
+  };
+}
+
+export const EVIDENCE_CAPSULE_CONTRACT_VERSION = 1;
+export const EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
+export const EVIDENCE_CAPSULE_TRIGGERS = [
+  "diagnostic_failed",
+  "rehearsal_non_pass",
+  "live_add_non_pass",
+  "manual"
+] as const;
+export type EvidenceCapsuleTrigger = (typeof EVIDENCE_CAPSULE_TRIGGERS)[number];
+
+export interface EvidenceCapsuleSnapshot {
+  encoding: "gzip+base64";
+  bytes: number;
+  sha256: string;
+  html: string;
+}
+
+export interface EvidenceCapsuleRedactions {
+  scriptsRemoved: number;
+  jsonBlocksKept: number;
+  keysRedacted: number;
+  inputsCleared: number;
+  iframesReduced: number;
+  mediaStripped: number;
+  textRedactions: number;
+}
+
+export interface EvidenceCapsuleEnvelope {
+  contractVersion: typeof EVIDENCE_CAPSULE_CONTRACT_VERSION;
+  id: string;
+  capturedAt: string;
+  retailerId: SupportedRetailerId;
+  retailerSku: string;
+  operation: RetailerAdapterDiagnosticOperation;
+  trigger: EvidenceCapsuleTrigger;
+  outcome: RetailerAdapterDiagnosticOutcome;
+  failureStage: RetailerAdapterDiagnosticStage;
+  reasonCode: string;
+  observerVersion: string;
+  addAdapterVersion: string;
+  packVersion: string;
+  extensionVersion: string;
+  url: string;
+  viewport: { width: number; height: number; devicePixelRatio: number };
+  requiredFulfillment: "shipping" | "pickup";
+  diagnostic: RetailerAdapterDiagnosticInput;
+  trace: AdapterTraceEntry[];
+  snapshot: EvidenceCapsuleSnapshot;
+  redactions: EvidenceCapsuleRedactions;
+  reductionApplied: Array<"svg_children" | "styles" | "hidden_elements" | "cut_at_cap">;
+  truncated: boolean;
+}
+
+export interface EvidenceCapsuleIndexEntry {
+  id: string;
+  retailerId: SupportedRetailerId;
+  retailerSku: string;
+  operation: RetailerAdapterDiagnosticOperation;
+  trigger: EvidenceCapsuleTrigger;
+  outcome: RetailerAdapterDiagnosticOutcome;
+  failureStage: RetailerAdapterDiagnosticStage;
+  reasonCode: string;
+  observerVersion: string;
+  addAdapterVersion: string;
+  packVersion: string;
+  extensionVersion: string;
+  layoutFingerprint: string;
+  sha256: string;
+  bytes: number;
+  capturedAt: string;
+  receivedAt: string;
+  expiresAt: string;
+  incidentKeyHash: string;
+  path: string;
 }
 
 export const OPERATOR_ALERT_EVENT_FAMILIES = ["adapter_repair", "qualification_stalled"] as const;
@@ -305,9 +510,15 @@ export const OPERATOR_ALERT_RESOLUTION_REASON_CODES = [
   "maintainer_resolved",
   "maintainer_triaged",
   "false_positive",
-  "superseded_by_release"
+  "superseded_by_release",
+  "adapter_fixed_by_replay"
 ] as const;
 export type OperatorAlertResolutionReasonCode = (typeof OPERATOR_ALERT_RESOLUTION_REASON_CODES)[number];
+export const ADAPTER_REPAIR_RECHECK_REASON_CODES = [
+  "adapter_fixed_by_replay",
+  "regressed_after_replay_fix"
+] as const;
+export type AdapterRepairRecheckReasonCode = (typeof ADAPTER_REPAIR_RECHECK_REASON_CODES)[number];
 
 /**
  * Operator alerts are deliberately limited to sanitized aggregate diagnostics.
@@ -366,6 +577,7 @@ export interface OperatorAlertResolveInput {
 export interface TargetAddRehearsalInput {
   adapterVersion: typeof TARGET_ADD_ADAPTER_VERSION;
   observerVersion: typeof TARGET_OBSERVER_VERSION;
+  packVersion?: string;
   contractVersion: 1;
   shadowObservationId: string;
   observedAt: string;
@@ -382,6 +594,7 @@ export interface TargetAddActivationInput {
 export interface WalmartAddRehearsalInput {
   adapterVersion: typeof WALMART_ADD_ADAPTER_VERSION;
   observerVersion: typeof WALMART_OBSERVER_VERSION;
+  packVersion?: string;
   contractVersion: 1;
   shadowObservationId: string;
   observedAt: string;
@@ -398,6 +611,7 @@ export interface WalmartAddActivationInput {
 export interface AmazonAddRehearsalInput {
   adapterVersion: typeof AMAZON_ADD_ADAPTER_VERSION;
   observerVersion: typeof AMAZON_OBSERVER_VERSION;
+  packVersion?: string;
   contractVersion: 1;
   shadowObservationId: string;
   observedAt: string;
@@ -414,6 +628,7 @@ export interface AmazonAddActivationInput {
 export interface BestBuyAddRehearsalInput {
   adapterVersion: typeof BESTBUY_ADD_ADAPTER_VERSION;
   observerVersion: typeof BESTBUY_OBSERVER_VERSION;
+  packVersion?: string;
   contractVersion: 1;
   shadowObservationId: string;
   observedAt: string;

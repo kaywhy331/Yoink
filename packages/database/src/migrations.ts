@@ -4097,5 +4097,64 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       CREATE INDEX user_action_connector_deliveries_queue_idx
         ON user_action_connector_deliveries(tenant_id, user_id, state, next_attempt_at, created_at, id);
     `
+  },
+  {
+    version: 65,
+    name: "adapter_selector_pack_versions",
+    sql: `
+      ALTER TABLE retailer_adapter_trials ADD COLUMN pack_version TEXT;
+      ALTER TABLE retailer_adapter_diagnostics ADD COLUMN pack_version TEXT;
+    `
+  },
+  {
+    version: 66,
+    name: "adapter_repair_fixed_pending_live_status",
+    foreignKeysDisabled: true,
+    sql: `
+      PRAGMA defer_foreign_keys = ON;
+
+      CREATE TABLE operator_alert_incidents_v66 (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        subject_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        rule_id TEXT NOT NULL REFERENCES operator_alert_rules(id) ON DELETE RESTRICT,
+        event_family TEXT NOT NULL CHECK (event_family IN ('adapter_repair', 'qualification_stalled')),
+        incident_key_hash TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'error', 'critical')),
+        status TEXT NOT NULL CHECK (status IN ('open', 'acknowledged', 'fixed_pending_live', 'resolved')),
+        privacy_classification TEXT NOT NULL DEFAULT 'operational_aggregate'
+          CHECK (privacy_classification = 'operational_aggregate'),
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        retailer_id TEXT NOT NULL REFERENCES retailers(id) ON DELETE RESTRICT,
+        operation TEXT NOT NULL CHECK (operation IN ('observe', 'rehearse_add', 'live_add')),
+        failure_stage TEXT NOT NULL,
+        reason_code TEXT NOT NULL,
+        layout_fingerprint TEXT NOT NULL,
+        occurrence_count INTEGER NOT NULL CHECK (occurrence_count >= 1),
+        affected_entity_count INTEGER NOT NULL CHECK (affected_entity_count >= 1),
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        last_failure_at TEXT NOT NULL,
+        last_routed_at TEXT NOT NULL DEFAULT '',
+        escalated_at TEXT NOT NULL DEFAULT '',
+        acknowledged_by_actor_id TEXT NOT NULL DEFAULT '',
+        acknowledged_at TEXT NOT NULL DEFAULT '',
+        resolved_by_actor_id TEXT NOT NULL DEFAULT '',
+        resolved_at TEXT NOT NULL DEFAULT '',
+        resolution_code TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO operator_alert_incidents_v66 SELECT * FROM operator_alert_incidents;
+
+      DROP TABLE operator_alert_incidents;
+      ALTER TABLE operator_alert_incidents_v66 RENAME TO operator_alert_incidents;
+      CREATE UNIQUE INDEX operator_alert_incidents_active_unique
+        ON operator_alert_incidents(tenant_id, subject_user_id, rule_id, incident_key_hash)
+        WHERE status IN ('open', 'acknowledged', 'fixed_pending_live');
+      CREATE INDEX operator_alert_incidents_queue_idx
+        ON operator_alert_incidents(tenant_id, status, severity, last_seen_at DESC, id DESC);
+    `
   }
 ]);

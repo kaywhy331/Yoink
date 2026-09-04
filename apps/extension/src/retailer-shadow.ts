@@ -10,6 +10,8 @@ import {
 } from "../../../packages/browser-adapters/src/retailers.js";
 import { observeWalmartDrawHub } from "../../../packages/browser-adapters/src/walmart-draw.js";
 import type {
+  AdapterEnvironment,
+  AdapterTraceEntry,
   Fulfillment,
   RetailerAdapterDiagnosticInput,
   RetailerAdapterDiagnosticOutcome,
@@ -18,6 +20,7 @@ import type {
   RetailerShadowObservationInput,
   SupportedRetailerId
 } from "../../../packages/contracts/src/index.js";
+import { createAdapterTraceBuffer } from "../../../packages/contracts/src/index.js";
 
 const SUPPORTED = new Set<SupportedRetailerId>([
   "walmart", "amazon", "bestbuy", "disney", "ravensburger", "riot",
@@ -48,10 +51,20 @@ function boundedDiagnosticLayout(
   return bounded;
 }
 
-export function rehearseAmazonBuyNowRoute(documentValue: Document, urlValue: string) {
+export function rehearseAmazonBuyNowRoute(
+  documentValue: Document,
+  urlValue: string,
+  environment?: AdapterEnvironment
+) {
+  environment?.trace?.record({
+    step: "route",
+    condition: "amazon.buyNow",
+    expected: "verified",
+    actual: "evaluating"
+  });
   const asin = extractRetailerSku("amazon", urlValue);
   if (!asin) return { purchaseRouteKind: "amazon_buy_now" as const, purchaseRouteReady: false, routeReasonCode: "offer_not_actionable" as const };
-  const observation = observeRetailerOffer(documentValue, urlValue, "amazon", asin, "shipping");
+  const observation = observeRetailerOffer(documentValue, urlValue, "amazon", asin, "shipping", undefined, environment);
   if (!observation.addControlActionable || observation.securityChallenge || observation.interactiveBlock
     || observation.fulfillment !== "shipping" || !["in_stock", "preorder"].includes(observation.availability)) {
     return { purchaseRouteKind: "amazon_buy_now" as const, purchaseRouteReady: false, routeReasonCode: "offer_not_actionable" as const };
@@ -82,18 +95,21 @@ export function collectRetailerShadowObservation(
   documentValue: Document,
   urlValue: string,
   retailerId: SupportedRetailerId,
-  requiredFulfillment: Fulfillment = "shipping"
+  requiredFulfillment: Fulfillment = "shipping",
+  environment?: AdapterEnvironment
 ): RetailerShadowObservationInput {
   if (!documentValue || !SUPPORTED.has(retailerId)) throw new Error("A supported retailer page is required.");
   const exactRetailer = retailerId as Exclude<SupportedRetailerId, "target">;
   const retailerSku = extractRetailerSku(exactRetailer, urlValue);
   if (!retailerSku) throw new Error("Open an exact supported retailer product page before inspecting it.");
-  const observation = observeRetailerOffer(documentValue, urlValue, exactRetailer, retailerSku, requiredFulfillment);
+  const observation = observeRetailerOffer(
+    documentValue, urlValue, exactRetailer, retailerSku, requiredFulfillment, undefined, environment
+  );
   if (observation.pageKind !== "product" || observation.retailerSku !== retailerSku) {
     throw new Error("The exact retailer product page could not be verified.");
   }
   const routeEvidence = retailerId === "amazon"
-    ? rehearseAmazonBuyNowRoute(documentValue, urlValue)
+    ? rehearseAmazonBuyNowRoute(documentValue, urlValue, environment)
     : { purchaseRouteKind: "none" as const, purchaseRouteReady: false, routeReasonCode: "not_applicable" as const };
   return {
     adapterVersion: retailerObserverVersion(retailerId),
@@ -114,7 +130,7 @@ export function collectRetailerShadowObservation(
     securityChallenge: observation.securityChallenge,
     interactiveBlock: observation.interactiveBlock,
     selectedOffer: observeRetailerSelectedOfferScope(
-      documentValue, urlValue, exactRetailer, retailerSku, requiredFulfillment
+      documentValue, urlValue, exactRetailer, retailerSku, requiredFulfillment, environment
     ),
     ...routeEvidence
   };
@@ -132,19 +148,18 @@ function observationDiagnosticState(
       reasonCode: layout.securityChallenge ? "security_challenge" : `interactive_${layout.interactiveBlock}`
     };
   }
-  // Walmart may retain unrelated recommendation controls on an unavailable
-  // product page. Exact fulfillment unavailability is an expected stock stop,
-  // not evidence that the adapter itself is broken.
-  if (observation.retailerId === "walmart"
+  const unavailableWithoutAction = !observation.addControlActionable
     && observation.availability === "out_of_stock"
-    && !observation.addControlActionable) {
-    return { outcome: "rejected", failureStage: "availability_binding", reasonCode: "out_of_stock" };
+    && (layout.addControlCount === 1
+      || (layout.addControlCount === 0 && (layout.genericAddIntentCount ?? 0) === 0));
+  if (unavailableWithoutAction) {
+    return { outcome: "rejected", failureStage: "availability_binding", reasonCode: "listing_unavailable_layout" };
   }
   if (observation.selectedOffer?.selectionState === "unresolved") {
     return {
-      outcome: "failed",
+      outcome: "rejected",
       failureStage: "offer_binding",
-      reasonCode: "selected_offer_binding_unresolved"
+      reasonCode: "listing_variant_unselected"
     };
   }
   const semanticControlRecovered = layout.addControlCount === 0
@@ -223,11 +238,30 @@ export function collectRetailerShadowAttempt(
   retailerId: SupportedRetailerId,
   requiredFulfillment: Fulfillment = "shipping",
   attemptCount = 1,
-  domChanged = false
-): { observation: ReturnType<typeof collectRetailerShadowObservation>; diagnostic: RetailerAdapterDiagnosticInput } {
+  domChanged = false,
+  environment?: AdapterEnvironment
+): {
+  observation: ReturnType<typeof collectRetailerShadowObservation>;
+  diagnostic: RetailerAdapterDiagnosticInput;
+  trace?: AdapterTraceEntry[];
+} {
   if (retailerId === "target") throw new Error("Target uses its separate shadow observer.");
-  const observation = collectRetailerShadowObservation(documentValue, urlValue, retailerId, requiredFulfillment);
-  const layout = retailerAdapterLayoutEvidence(documentValue, urlValue, retailerId, observation.retailerSku);
+  const traceBuffer = environment ? createAdapterTraceBuffer() : null;
+  const tracedEnvironment = environment && traceBuffer ? {
+    ...environment,
+    trace: {
+      record(entry: AdapterTraceEntry) {
+        traceBuffer.record(entry);
+        environment.trace?.record(entry);
+      }
+    }
+  } satisfies AdapterEnvironment : undefined;
+  const observation = collectRetailerShadowObservation(
+    documentValue, urlValue, retailerId, requiredFulfillment, tracedEnvironment
+  );
+  const layout = retailerAdapterLayoutEvidence(
+    documentValue, urlValue, retailerId, observation.retailerSku, tracedEnvironment
+  );
   const state = observationDiagnosticState(observation, layout);
   const diagnosticLayout = boundedDiagnosticLayout(layout, state.reasonCode);
   return {
@@ -245,7 +279,8 @@ export function collectRetailerShadowAttempt(
       attemptCount: Math.max(1, Math.min(3, Math.trunc(attemptCount) || 1)),
       domChanged: domChanged === true,
       layout: diagnosticLayout
-    }
+    },
+    ...(traceBuffer ? { trace: traceBuffer.entries } : {})
   };
 }
 

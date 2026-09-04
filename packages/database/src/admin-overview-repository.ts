@@ -88,7 +88,7 @@ export class AdminOverviewRepository {
          (SELECT COUNT(*) FROM admin_change_requests
            WHERE tenant_id = ? AND status = 'pending') AS changeRequests,
          (SELECT COUNT(*) FROM operator_alert_incidents
-           WHERE tenant_id = ? AND status IN ('open', 'acknowledged')) AS incidents,
+           WHERE tenant_id = ? AND status IN ('open', 'acknowledged', 'fixed_pending_live')) AS incidents,
          (SELECT COUNT(*) FROM extension_devices
            WHERE tenant_id = ? AND status = 'active' AND last_seen_at >= ?) AS devicesOnline`,
       scope.tenantId,

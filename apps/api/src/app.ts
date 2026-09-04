@@ -3,16 +3,12 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
 import {
-  AMAZON_ADD_ACTIVATION_CONFIRMATION,
-  AMAZON_ADD_ADAPTER_VERSION,
+  ADD_LANES,
+  ADD_LANE_IDS,
+  addLane,
   RETAILER_OBSERVER_VERSIONS,
-  BESTBUY_ADD_ACTIVATION_CONFIRMATION,
-  BESTBUY_ADD_ADAPTER_VERSION,
   JOB_STATES,
-  TARGET_ADD_ACTIVATION_CONFIRMATION,
-  TARGET_ADD_ADAPTER_VERSION,
-  WALMART_ADD_ACTIVATION_CONFIRMATION,
-  WALMART_ADD_ADAPTER_VERSION,
+  type AddLaneId,
   type CommunityConsentUpdateInput,
   type CommunityContributionInput,
   type IdentityClaimInput,
@@ -103,6 +99,10 @@ import { CatalogIdentityGovernanceRepository } from "../../../packages/database/
 import { AttributionRepository } from "../../../packages/database/src/attribution-repository.js";
 import { BackgroundTaskRepository } from "../../../packages/database/src/background-task-repository.js";
 import { AdapterDiagnosticRepository } from "../../../packages/database/src/adapter-diagnostic-repository.js";
+import {
+  EvidenceCapsuleStore,
+  EvidenceCapsuleStoreError
+} from "../../../packages/database/src/evidence-capsule-store.js";
 import {
   ADMIN_CHANGE_OPERATION_POLICIES,
   AdminChangeControlRepository,
@@ -270,6 +270,7 @@ import {
 } from "./internal-service-capabilities.js";
 
 const MAX_BODY_BYTES = 1_000_000;
+const MAX_EVIDENCE_CAPSULE_BODY_BYTES = 5 * 1024 * 1024;
 const STATIC_FILES = new Map([
   ["/", "user.html"],
   ["/index.html", "user.html"],
@@ -337,6 +338,10 @@ export interface AppDependencies {
   mutationOriginValidator?: (request: IncomingMessage) => boolean;
   extensionOriginValidator?: (request: IncomingMessage) => boolean;
   localExtensionReleaseEnabled?: boolean;
+  /** Explicit deployment boundary: hosted services never accept or expose page capsules. */
+  hosted?: boolean;
+  /** Root containing yoink.sqlite; local capsules use its filesystem-only evidence/ child. */
+  dataDirectory?: string;
   backgroundWorkerStatus?: () => {
     state: "running" | "waiting" | "stopped" | "starting" | "stopping" | "disabled";
     healthy: boolean;
@@ -485,7 +490,7 @@ function userPurchaseIntentUpdateInput(body: Record<string, unknown>): MissionUp
   return normalized as unknown as MissionUpdateInput;
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(request: IncomingMessage, maximumBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
   const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLocaleLowerCase("en-US");
   if (contentType !== "application/json") {
     throw new ApiError("unsupported_media_type", 415, "Requests with a body must use application/json.");
@@ -495,7 +500,7 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
-    if (total > MAX_BODY_BYTES) throw new ApiError("request_body_too_large", 413, "The request body is too large.");
+    if (total > maximumBytes) throw new ApiError("request_body_too_large", 413, "The request body is too large.");
     chunks.push(buffer);
   }
   let value: unknown;
@@ -565,6 +570,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const mutationOriginValidator = dependencies.mutationOriginValidator ?? sameOriginMutation;
   const extensionOriginValidator = dependencies.extensionOriginValidator ?? chromeExtensionOrigin;
   const localExtensionReleaseEnabled = dependencies.localExtensionReleaseEnabled !== false;
+  const hosted = dependencies.hosted === true;
+  const evidenceCapsules = new EvidenceCapsuleStore(dependencies.dataDirectory ?? join(process.cwd(), "data"));
   const notifyActionJobAvailability = (rapid = false): void => {
     try {
       dependencies.actionJobAvailability?.notify(rapid ? { rapid: true } : undefined);
@@ -695,6 +702,28 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const attribution = new AttributionRepository(db);
   const backgroundTasks = new BackgroundTaskRepository(db);
   const adapterDiagnostics = new AdapterDiagnosticRepository(db);
+  const adapterRepairQueueWithCapsules = (limit: number) => {
+    const summaries = hosted ? {} : evidenceCapsules.summaries();
+    const incidents = operatorAlerts.incidents("all", 500)
+      .filter((incident) => incident.eventFamily === "adapter_repair");
+    return adapterDiagnostics.listRepairQueue(limit).map((item) => {
+      const summary = summaries[`${item.retailerId}:${item.layoutFingerprint}`]
+        ?? summaries[item.layoutFingerprint];
+      const incident = incidents.find((candidate) => candidate.retailerId === item.retailerId
+        && candidate.operation === item.operation
+        && candidate.layoutFingerprint === item.layoutFingerprint);
+      return {
+        ...item,
+        evidenceCapsuleCount: summary?.count ?? 0,
+        latestEvidenceCapsuleAt: summary?.latestCapturedAt ?? "",
+        latestEvidenceCapsuleId: summary?.latestId ?? "",
+        repairIncidentId: incident?.id ?? "",
+        repairIncidentStatus: incident?.status ?? item.status,
+        repairIncidentSummary: incident?.summary ?? "",
+        currentReleaseVersion: version
+      };
+    });
+  };
   const adminChanges = new AdminChangeControlRepository(db);
   const authorization = new AuthorizationRepository(db);
   const adminOverview = new AdminOverviewRepository(db);
@@ -803,25 +832,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       signOutUrl: ""
     };
   };
-  const guardedAddLanes = () => ({
-    target: qualifications.targetAddQualified(),
-    walmart: qualifications.walmartAddQualified(),
-    amazon: qualifications.amazonAddQualified(),
-    bestbuy: qualifications.bestBuyAddQualified()
-  });
+  const guardedAddLanes = () => Object.fromEntries(
+    ADD_LANE_IDS.map((retailerId) => [retailerId, qualifications.addQualified(retailerId)])
+  ) as Record<AddLaneId, boolean>;
   const activateAndReconcileProfiles = <T extends object>(
-    retailerId: "target" | "walmart" | "amazon" | "bestbuy",
+    retailerId: AddLaneId,
     activate: () => T
   ) => ({
     ...activate(),
     profileReconciliation: control.reconcilePurchaseProfilesForRetailer(retailerId)
   });
-  const ADD_ADAPTER_VERSIONS: Record<"target" | "walmart" | "amazon" | "bestbuy", string> = {
-    target: TARGET_ADD_ADAPTER_VERSION,
-    walmart: WALMART_ADD_ADAPTER_VERSION,
-    amazon: AMAZON_ADD_ADAPTER_VERSION,
-    bestbuy: BESTBUY_ADD_ADAPTER_VERSION
-  };
+  const ADD_ADAPTER_VERSIONS = Object.fromEntries(
+    ADD_LANE_IDS.map((retailerId) => [retailerId, ADD_LANES[retailerId].contractVersion])
+  ) as Record<AddLaneId, string>;
   // Companion and app releases can land minutes apart. A packaged-version
   // mismatch is a distinct, typed conflict so the companion can park its
   // automatic checks and ask for an update instead of logging a repair.
@@ -834,7 +857,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     );
   };
   const recordAndRenewQualification = <T extends { outcome: "passed" | "rejected" }>(
-    retailerId: "target" | "walmart" | "amazon" | "bestbuy",
+    retailerId: AddLaneId,
     deviceId: string,
     record: () => T
   ) => {
@@ -1036,6 +1059,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const operatorAlertConnectorMatch = /^\/api\/v1\/alerts\/connectors\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
       const operatorAlertConnectorDeliveryRetryMatch = /^\/api\/v1\/alerts\/connector-deliveries\/([A-Za-z0-9_-]{3,120})\/retry$/.exec(requestUrl.pathname);
       const operatorAlertIncidentActionMatch = /^\/api\/v1\/alerts\/incidents\/([A-Za-z0-9_-]{3,120})\/(acknowledge|resolve)$/.exec(requestUrl.pathname);
+      const adminEvidenceCapsuleMatch = /^\/api\/v1\/admin\/evidence-capsules\/(cap_[A-Za-z0-9_-]{8,120})$/.exec(requestUrl.pathname);
       const adminChangeRequestDetailMatch = /^\/api\/v1\/change-requests\/(admin_change_[a-f0-9]{32})$/.exec(requestUrl.pathname);
       const adminChangeRequestDecisionMatch = /^\/api\/v1\/change-requests\/(admin_change_[a-f0-9]{32})\/decision$/.exec(requestUrl.pathname);
       const backgroundScheduleMatch = /^\/api\/v1\/workers\/schedules\/([A-Za-z0-9_-]{3,160})$/.exec(requestUrl.pathname);
@@ -1105,7 +1129,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           backgroundWorkerLastErrorCode: backgroundWorker.lastErrorCode,
           observerRecipeWitnessRequired: witness.required === true,
           observerRecipeWitnessState: String(witness.state ?? "disabled"),
-          observerRecipeWitnessHealthy: witness.healthy === true
+          observerRecipeWitnessHealthy: witness.healthy === true,
+          localEvidenceCapsules: !hosted && evidenceCapsules.enabled(),
+          evidenceCapsuleTransport: hosted ? "none" : "loopback"
         });
         return;
       }
@@ -1238,6 +1264,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           observerRecipeWitnessRefreshConfigured: dependencies.observerRecipeWitness !== undefined,
           standaloneWitnessRefreshLoadsSigningKeys: false,
           privacyBoundedRepairLandmarks: true,
+          localEvidenceCapsules: !hosted && evidenceCapsules.enabled(),
+          evidenceCapsuleTransport: hosted ? "none" : "loopback",
           nonExecutableRepairSuggestions: true,
           rotatableDeviceCredentials: true,
           recoverableTwoPhaseDeviceCredentialRotation: true,
@@ -1850,6 +1878,25 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           });
           return;
         }
+        const evidenceCapsuleMatch = /^\/api\/v1\/devices\/self\/evidence-capsules\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+        if (request.method === "POST" && evidenceCapsuleMatch) {
+          if (hosted) {
+            throw new ApiError("evidence_capsules_hosted_forbidden", 403, "Page snapshots for store repairs are local-only.");
+          }
+          const body = await readJson(request, MAX_EVIDENCE_CAPSULE_BODY_BYTES);
+          if (body.retailerId !== evidenceCapsuleMatch[1]) {
+            throw new ApiError("request_rejected", 400, "The evidence capsule route and payload must match.");
+          }
+          try {
+            json(response, 202, evidenceCapsules.accept(body));
+          } catch (error) {
+            if (error instanceof EvidenceCapsuleStoreError) {
+              throw new ApiError(error.code, error.status, error.message);
+            }
+            throw error;
+          }
+          return;
+        }
         const adapterDiagnosticMatch = /^\/api\/v1\/devices\/self\/adapter-diagnostics\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && adapterDiagnosticMatch) {
           const body = await readJson(request);
@@ -1861,14 +1908,23 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               : ADD_ADAPTER_VERSIONS[diagnosticRetailer as keyof typeof ADD_ADAPTER_VERSIONS];
             if (expectedDiagnosticVersion) requireAdapterVersion(body.adapterVersion, expectedDiagnosticVersion, "adapter diagnostic");
           }
-          const recorded = db.transaction(() => {
-            const diagnostic = adapterDiagnostics.record(device.id, body as unknown as RetailerAdapterDiagnosticInput);
-            const alertReconciliation = operatorAlerts.reconcileAdapterRepairs(
-              adapterDiagnostics.listRepairQueue(2_000),
-              correlationId
-            );
-            return { diagnostic, alertReconciliation };
-          });
+          let recorded;
+          try {
+            recorded = db.transaction(() => {
+              const diagnostic = adapterDiagnostics.record(device.id, body as unknown as RetailerAdapterDiagnosticInput);
+              const alertReconciliation = operatorAlerts.reconcileAdapterRepairs(
+                adapterDiagnostics.listRepairQueue(2_000),
+                correlationId
+              );
+              return { diagnostic, alertReconciliation };
+            });
+          } catch (error) {
+            if (error instanceof Error
+              && error.message === "The adapter diagnostic contains an unsupported field.") {
+              throw new ApiError("request_rejected", 400, error.message);
+            }
+            throw error;
+          }
           json(response, 201, {
             ...recorded
           });
@@ -1933,36 +1989,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           });
           return;
         }
-        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/target-add") {
+        const addTrialMatch = /^\/api\/v1\/devices\/self\/qualification-trials\/([a-z][a-z0-9]{1,31})-add$/.exec(requestUrl.pathname);
+        if (request.method === "POST" && addTrialMatch) {
+          const lane = addLane(addTrialMatch[1] ?? "");
+          if (!lane) throw new ApiError("not_found", 404, "The guarded store lane was not found.");
+          const retailerId = lane.id;
           const body = await readJson(request);
-          requireAdapterVersion(body.adapterVersion, TARGET_ADD_ADAPTER_VERSION, "add runner");
-          requireAdapterVersion(body.observerVersion, RETAILER_OBSERVER_VERSIONS.target, "retailer observer");
-          json(response, 201, recordAndRenewQualification("target", device.id,
-            () => qualifications.recordTargetAddRehearsal(device.id, body as unknown as TargetAddRehearsalInput)));
-          return;
-        }
-        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/walmart-add") {
-          const body = await readJson(request);
-          requireAdapterVersion(body.adapterVersion, WALMART_ADD_ADAPTER_VERSION, "add runner");
-          requireAdapterVersion(body.observerVersion, RETAILER_OBSERVER_VERSIONS.walmart, "retailer observer");
-          json(response, 201, recordAndRenewQualification("walmart", device.id,
-            () => qualifications.recordWalmartAddRehearsal(device.id, body as unknown as WalmartAddRehearsalInput)));
-          return;
-        }
-        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/amazon-add") {
-          const body = await readJson(request);
-          requireAdapterVersion(body.adapterVersion, AMAZON_ADD_ADAPTER_VERSION, "add runner");
-          requireAdapterVersion(body.observerVersion, RETAILER_OBSERVER_VERSIONS.amazon, "retailer observer");
-          json(response, 201, recordAndRenewQualification("amazon", device.id,
-            () => qualifications.recordAmazonAddRehearsal(device.id, body as unknown as AmazonAddRehearsalInput)));
-          return;
-        }
-        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/qualification-trials/bestbuy-add") {
-          const body = await readJson(request);
-          requireAdapterVersion(body.adapterVersion, BESTBUY_ADD_ADAPTER_VERSION, "add runner");
-          requireAdapterVersion(body.observerVersion, RETAILER_OBSERVER_VERSIONS.bestbuy, "retailer observer");
-          json(response, 201, recordAndRenewQualification("bestbuy", device.id,
-            () => qualifications.recordBestBuyAddRehearsal(device.id, body as unknown as BestBuyAddRehearsalInput)));
+          requireAdapterVersion(body.adapterVersion, lane.contractVersion, "add runner");
+          requireAdapterVersion(body.observerVersion, lane.observerVersion, "retailer observer");
+          json(response, 201, recordAndRenewQualification(retailerId, device.id,
+            () => qualifications.recordAddRehearsal(retailerId, device.id, body as never)));
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/status") {
@@ -2465,6 +2501,45 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (requestUrl.pathname === "/api/v1/admin/evidence-capsules" && request.method === "GET") {
+        if (hosted) throw new ApiError("evidence_capsules_hosted_forbidden", 403, "Page snapshots for store repairs are local-only.");
+        const retailerId = String(requestUrl.searchParams.get("retailerId") ?? "");
+        const fingerprint = String(requestUrl.searchParams.get("fingerprint") ?? "");
+        const limit = Number(requestUrl.searchParams.get("limit") ?? 50);
+        json(response, 200, {
+          evidenceCapsulesEnabled: evidenceCapsules.enabled(),
+          items: evidenceCapsules.list({ retailerId, fingerprint, limit })
+        });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/v1/admin/evidence-capsules/settings" && request.method === "PATCH") {
+        if (hosted) throw new ApiError("evidence_capsules_hosted_forbidden", 403, "Page snapshots for store repairs are local-only.");
+        const body = await readJson(request);
+        if (typeof body.enabled !== "boolean") {
+          throw new ApiError("request_rejected", 400, "Choose whether to keep page snapshots for store repairs on this device.");
+        }
+        json(response, 200, evidenceCapsules.setEnabled(body.enabled));
+        return;
+      }
+
+      if (adminEvidenceCapsuleMatch && request.method === "GET") {
+        if (hosted) throw new ApiError("evidence_capsules_hosted_forbidden", 403, "Page snapshots for store repairs are local-only.");
+        const capsule = evidenceCapsules.detail(adminEvidenceCapsuleMatch[1] ?? "");
+        if (!capsule) throw new ApiError("evidence_capsule_not_found", 404, "The page snapshot no longer exists.");
+        json(response, 200, { capsule });
+        return;
+      }
+
+      if (adminEvidenceCapsuleMatch && request.method === "DELETE") {
+        if (hosted) throw new ApiError("evidence_capsules_hosted_forbidden", 403, "Page snapshots for store repairs are local-only.");
+        if (!evidenceCapsules.delete(adminEvidenceCapsuleMatch[1] ?? "")) {
+          throw new ApiError("evidence_capsule_not_found", 404, "The page snapshot no longer exists.");
+        }
+        json(response, 200, { deleted: true, id: adminEvidenceCapsuleMatch[1] });
+        return;
+      }
+
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/change-requests") {
         const status = String(requestUrl.searchParams.get("status") ?? "all") as AdminChangeStatus | "all";
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
@@ -2513,13 +2588,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             pendingCatalogProposals: catalogProposalCounts.pendingCatalogProposals,
             pendingAdminChanges: protectedChangeCounts.pending,
             openIncidents: incidentCounts.openOperatorAlerts + incidentCounts.acknowledgedOperatorAlerts
+              + incidentCounts.fixedPendingLiveOperatorAlerts
           };
           const scopedSnapshot: Record<string, unknown> = {
             view: scopedView,
             version,
             actor: actorProjection(),
             permissions: authorization.permissions(),
-            settings: control.settings(),
+            settings: { ...control.settings(), evidenceCapsulesEnabled: !hosted && evidenceCapsules.enabled() },
             counts: scopedCounts,
             trackalacker: sourceRuntime.trackalackerStatus(),
             capabilities: {
@@ -2531,7 +2607,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               amazonAddQualified: amazonQualification.addToCartQualified,
               amazonAddMutationAuthorized: amazonQualification.mutationAuthorized,
               bestBuyAddQualified: bestBuyQualification.addToCartQualified,
-              bestBuyAddMutationAuthorized: bestBuyQualification.mutationAuthorized
+              bestBuyAddMutationAuthorized: bestBuyQualification.mutationAuthorized,
+              localEvidenceCapsules: !hosted && evidenceCapsules.enabled(),
+              evidenceCapsuleTransport: hosted ? "none" : "loopback"
             }
           };
 
@@ -2545,7 +2623,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               { auditEvents: audit.count(), missions: control.missionCount() }
             );
             scopedCounts.openIncidents = incidentCounts.openOperatorAlerts
-              + incidentCounts.acknowledgedOperatorAlerts;
+              + incidentCounts.acknowledgedOperatorAlerts
+              + incidentCounts.fixedPendingLiveOperatorAlerts;
             scopedSnapshot.sources = control.listSources();
             scopedSnapshot.strategies = control.listStrategies();
             scopedSnapshot.overview = adminOverview.snapshot();
@@ -2702,7 +2781,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           version,
           actor: actorProjection(),
-          settings: control.settings(),
+          settings: { ...control.settings(), evidenceCapsulesEnabled: !hosted && evidenceCapsules.enabled() },
           counts: {
             ...catalog.counts(),
             ...signals.counts(),
@@ -2760,7 +2839,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             latestScan: walmartDraws.latestScan(),
             items: walmartDraws.currentItems()
           },
-          adapterRepairQueue: adapterDiagnostics.listRepairQueue(50),
+          adapterRepairQueue: adapterRepairQueueWithCapsules(50),
           community: {
             privacyVersion: "community-readonly-v1",
             advisoryOnly: true,
@@ -2922,6 +3001,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             observerRecipeWitnessRefreshConfigured: dependencies.observerRecipeWitness !== undefined,
             standaloneWitnessRefreshLoadsSigningKeys: false,
             privacyBoundedRepairLandmarks: true,
+            localEvidenceCapsules: !hosted && evidenceCapsules.enabled(),
+            evidenceCapsuleTransport: hosted ? "none" : "loopback",
             nonExecutableRepairSuggestions: true,
             rotatableDeviceCredentials: true,
             recoverableTwoPhaseDeviceCredentialRotation: true,
@@ -3911,115 +3992,47 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, { plan: retailerReadiness.reverifyPlan() });
         return;
       }
-      const retireQualificationMatch = /^\/api\/v1\/qualifications\/(target|walmart|amazon|bestbuy)\/retire$/.exec(requestUrl.pathname);
+      const retireQualificationMatch = /^\/api\/v1\/qualifications\/([a-z][a-z0-9]{1,31})\/retire$/.exec(requestUrl.pathname);
       if (request.method === "POST" && retireQualificationMatch) {
+        const addLaneDefinition = addLane(retireQualificationMatch[1] ?? "");
+        if (!addLaneDefinition) throw new ApiError("not_found", 404, "The guarded store lane was not found.");
         const body = await readJson(request);
         if (body.confirmation !== "RETIRE_ONE_RETAILER_LANE") {
           throw new ApiError("request_rejected", 400, "Explicit single-lane retirement confirmation is required.");
         }
         const lane = retailerReadiness.retireLane(
-          retireQualificationMatch[1] ?? "",
+          addLaneDefinition.id,
           body.reasonCode ?? "operator_retired"
         );
         notifyActionJobAvailability();
         json(response, 200, { lane });
         return;
       }
-      if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/target-add/activate") {
+      const activateAddMatch = /^\/api\/v1\/qualifications\/([a-z][a-z0-9]{1,31})-add\/activate$/.exec(requestUrl.pathname);
+      if (request.method === "POST" && activateAddMatch) {
+        const lane = addLane(activateAddMatch[1] ?? "");
+        if (!lane) throw new ApiError("not_found", 404, "The guarded store lane was not found.");
+        const retailerId = lane.id;
         const body = await readJson(request);
-        if (body.adapterVersion !== TARGET_ADD_ADAPTER_VERSION
-          || body.confirmation !== TARGET_ADD_ACTIVATION_CONFIRMATION
+        if (body.adapterVersion !== lane.contractVersion
+          || body.confirmation !== lane.activationConfirmation
           || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
-          throw new ApiError("request_rejected", 400, "Explicit Target add-only activation confirmation and current evidence are required.");
+          throw new ApiError(
+            "request_rejected",
+            400,
+            "Explicit " + lane.name + " add-only activation confirmation and current evidence are required."
+          );
         }
         const governed = adminChanges.execute({
           operationType: "retailer_lane_activate",
-          targetKey: "target",
+          targetKey: retailerId,
           payload: body,
-          summary: { retailerId: "target", action: "Activate guarded add-only execution" },
+          summary: { retailerId, action: "Activate guarded add-only execution" },
           correlationId,
           ...adminChangeRequestId(request)
         }, () => activateAndReconcileProfiles(
-          "target",
-          () => qualifications.activateTargetAdd(body as unknown as TargetAddActivationInput)
-        ));
-        if (governed.disposition === "pending_approval") {
-          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
-          return;
-        }
-        notifyActionJobAvailability();
-        json(response, 200, governed.result);
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/walmart-add/activate") {
-        const body = await readJson(request);
-        if (body.adapterVersion !== WALMART_ADD_ADAPTER_VERSION
-          || body.confirmation !== WALMART_ADD_ACTIVATION_CONFIRMATION
-          || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
-          throw new ApiError("request_rejected", 400, "Explicit Walmart add-only activation confirmation and current evidence are required.");
-        }
-        const governed = adminChanges.execute({
-          operationType: "retailer_lane_activate",
-          targetKey: "walmart",
-          payload: body,
-          summary: { retailerId: "walmart", action: "Activate guarded add-only execution" },
-          correlationId,
-          ...adminChangeRequestId(request)
-        }, () => activateAndReconcileProfiles(
-          "walmart",
-          () => qualifications.activateWalmartAdd(body as unknown as WalmartAddActivationInput)
-        ));
-        if (governed.disposition === "pending_approval") {
-          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
-          return;
-        }
-        notifyActionJobAvailability();
-        json(response, 200, governed.result);
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/amazon-add/activate") {
-        const body = await readJson(request);
-        if (body.adapterVersion !== AMAZON_ADD_ADAPTER_VERSION
-          || body.confirmation !== AMAZON_ADD_ACTIVATION_CONFIRMATION
-          || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
-          throw new ApiError("request_rejected", 400, "Explicit Amazon add-only activation confirmation and current evidence are required.");
-        }
-        const governed = adminChanges.execute({
-          operationType: "retailer_lane_activate",
-          targetKey: "amazon",
-          payload: body,
-          summary: { retailerId: "amazon", action: "Activate guarded add-only execution" },
-          correlationId,
-          ...adminChangeRequestId(request)
-        }, () => activateAndReconcileProfiles(
-          "amazon",
-          () => qualifications.activateAmazonAdd(body as unknown as AmazonAddActivationInput)
-        ));
-        if (governed.disposition === "pending_approval") {
-          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
-          return;
-        }
-        notifyActionJobAvailability();
-        json(response, 200, governed.result);
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/api/v1/qualifications/bestbuy-add/activate") {
-        const body = await readJson(request);
-        if (body.adapterVersion !== BESTBUY_ADD_ADAPTER_VERSION
-          || body.confirmation !== BESTBUY_ADD_ACTIVATION_CONFIRMATION
-          || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
-          throw new ApiError("request_rejected", 400, "Explicit Best Buy add-only activation confirmation and current evidence are required.");
-        }
-        const governed = adminChanges.execute({
-          operationType: "retailer_lane_activate",
-          targetKey: "bestbuy",
-          payload: body,
-          summary: { retailerId: "bestbuy", action: "Activate guarded add-only execution" },
-          correlationId,
-          ...adminChangeRequestId(request)
-        }, () => activateAndReconcileProfiles(
-          "bestbuy",
-          () => qualifications.activateBestBuyAdd(body as unknown as BestBuyAddActivationInput)
+          retailerId,
+          () => qualifications.activateAdd(retailerId, body as never)
         ));
         if (governed.disposition === "pending_approval") {
           json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });

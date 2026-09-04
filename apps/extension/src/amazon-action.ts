@@ -15,7 +15,7 @@ import {
   observeAmazonCart,
   observeAmazonOffer
 } from "../../../packages/browser-adapters/src/amazon.js";
-import { AMAZON_ADD_ADAPTER_VERSION } from "../../../packages/contracts/src/index.js";
+import { AMAZON_ADD_ADAPTER_VERSION, type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
 
 export interface AmazonAddJob extends BrowserActionContract {
   adapterVersion: typeof AMAZON_ADD_ADAPTER_VERSION;
@@ -46,6 +46,15 @@ const AUTHORIZATION_MAX_AGE_MS = 10_000;
 let sequence = 0;
 let pending: PendingAuthorization | null = null;
 
+function traceElement(environment: AdapterEnvironment | undefined, condition: "authorized" | "rebound", element: Element | null): void {
+  if (!environment?.trace) return;
+  const attributes = ["id", "name", "type", "role", "data-test", "data-testid", "data-test-id", "data-automation-id", "aria-label"]
+    .map((name) => element?.hasAttribute(name) ? `${name}=${JSON.stringify(String(element.getAttribute(name)).slice(0, 80))}` : "")
+    .filter(Boolean).join(" ");
+  const content = String(element?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  environment.trace.record({ step: "add_control", condition, actual: element ? `${element.tagName.toLowerCase()} ${attributes} ${content}`.trim() : "missing" });
+}
+
 function amazonJobReason(job: AmazonAddJob): string {
   if (job?.adapterVersion !== AMAZON_ADD_ADAPTER_VERSION) return "adapter_version_mismatch";
   if (job?.retailerId !== "amazon" || job?.action !== "add_to_cart") return "unsupported_action";
@@ -70,7 +79,8 @@ export function prepareAmazonAdd(
   documentValue: Document,
   urlValue: string,
   job: AmazonAddJob,
-  now = Date.now()
+  now = Date.now(),
+  environment?: AdapterEnvironment
 ): AmazonAddPreparation {
   pending = null;
   const invalid = amazonJobReason(job);
@@ -80,11 +90,12 @@ export function prepareAmazonAdd(
     urlValue,
     job.retailerSku,
     job.fulfillment,
-    new Date(now).toISOString()
+    new Date(now).toISOString(),
+    environment
   );
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return verified;
-  const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment);
+  const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
   if (!binding?.offerListingId) return { ok: false, reason: "offer_id_missing_or_ambiguous" };
   const id = authorizationId(now);
   pending = {
@@ -102,9 +113,10 @@ export function rehearseAmazonAdd(
   documentValue: Document,
   urlValue: string,
   job: AmazonAddJob,
-  now = Date.now()
+  now = Date.now(),
+  environment?: AdapterEnvironment
 ): AmazonAddRehearsal {
-  const prepared = prepareAmazonAdd(documentValue, urlValue, job, now);
+  const prepared = prepareAmazonAdd(documentValue, urlValue, job, now, environment);
   if (!prepared.ok) return prepared;
   abandonAmazonAdd(prepared.authorizationId);
   return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
@@ -115,7 +127,8 @@ export function commitAmazonAdd(
   urlValue: string,
   job: AmazonAddJob,
   value: string,
-  now = Date.now()
+  now = Date.now(),
+  environment?: AdapterEnvironment
 ): AmazonAddCommit {
   const authorization = pending;
   pending = null;
@@ -132,15 +145,20 @@ export function commitAmazonAdd(
     urlValue,
     job.retailerSku,
     job.fulfillment,
-    new Date(now).toISOString()
+    new Date(now).toISOString(),
+    environment
   );
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ...verified, clicked: false };
-  const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment);
+  const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
   if (!binding || binding.control !== authorization.control) {
+    traceElement(environment, "authorized", authorization.control);
+    traceElement(environment, "rebound", binding?.control || null);
     return { ok: false, reason: "add_control_changed", clicked: false };
   }
   if (binding.offerListingId !== authorization.offerListingId) {
+    traceElement(environment, "authorized", authorization.control);
+    traceElement(environment, "rebound", binding.control);
     return { ok: false, reason: "offer_binding_changed", clicked: false };
   }
   try {

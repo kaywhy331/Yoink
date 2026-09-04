@@ -1,0 +1,18 @@
+{
+  "packVersion": "walmart-pack-v1",
+  "retailerId": "walmart",
+  "fields": {
+    "addControl": { "selectors": ["button[data-automation-id='atc']", "button[data-testid='add-to-cart-button']", "button[aria-label*='add to cart' i]"] },
+    "price": { "selectors": ["[data-automation-id='product-price']", "[data-testid='price-wrap']", "meta[itemprop='price']", "[itemprop='price']"] },
+    "seller": { "selectors": ["[data-testid='seller-display-name']", "[data-automation-id='seller-name']", "[data-testid*='seller' i]"] },
+    "availability": { "selectors": ["[data-testid*='availability' i]", "[data-automation-id*='availability' i]", "[data-testid*='fulfillment' i]", "[data-automation-id*='fulfillment' i]", "[data-testid*='out-of-stock' i]", "[data-automation-id*='out-of-stock' i]", "[aria-label*='out of stock' i]", "[itemprop='availability']", "button[disabled]"] },
+    "fulfillmentRoot": { "selectors": [] },
+    "fulfillmentTile": { "selectors": ["[aria-selected='true']", "[data-selected='true']", "input:checked"] },
+    "quantity": { "selectors": ["select[name*='quantity' i]", "select[aria-label*='quantity' i]", "input[name*='quantity' i]", "input[aria-label*='quantity' i]"] },
+    "primaryScope": { "selectors": ["[data-testid*='buy-box' i]", "[data-automation-id*='buy-box' i]", "[data-testid*='purchase' i]", "[data-automation-id*='purchase' i]", "[data-testid*='add-to-cart-section' i]"] },
+    "merchandisingScope": { "selectors": ["[data-testid*='recommend' i]", "[data-automation-id*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[data-testid*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]"] },
+    "secondaryActionScope": { "selectors": ["[data-testid*='sticky' i]", "[data-automation-id*='sticky' i]", "[class*='sticky' i]", "[class*='floating' i]", "[class*='mobile-drawer' i]"] },
+    "structuredData": { "selectors": ["script#__NEXT_DATA__"] },
+    "offerInput": { "selectors": ["[data-us-item-id]", "[data-item-id]", "[data-product-id]"] }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "capsuleId": "cap_promoted_bestbuy_third_party",
+  "capturedAt": "2026-09-04T22:03:00.000Z",
+  "url": "https://www.bestbuy.com/product/pokemon-tin/JJG2TL3V8K/sku/12716513",
+  "retailerId": "bestbuy",
+  "retailerSku": "12716513",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "bestbuy-observer-v10",
+  "addAdapterVersion": "bestbuy-add-v11",
+  "packVersion": "bestbuy-pack-v1",
+  "sha256": "63b19606d2979a33295c73d704bf8bf4a35b38e8d150d042acf0993fc82a65b6",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified",
+    "availability": "in_stock",
+    "unitPriceCents": 26799,
+    "sellerType": "third_party",
+    "fulfillment": "shipping"
+  },
+  "notes": "Promoted from a sanitized Best Buy third party page capture.",
+  "allowReason": ""
+}

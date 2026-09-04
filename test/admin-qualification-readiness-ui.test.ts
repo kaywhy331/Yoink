@@ -23,6 +23,17 @@ const { JSDOM } = require("jsdom") as {
   };
 };
 
+test("adapter repair rows expose replay state, snapshot download, and copy-command controls", () => {
+  const source = readFileSync(join(process.cwd(), "apps", "web", "app.js"), "utf8");
+  assert.match(source, /Fixed, waiting for a live check/);
+  assert.match(source, /Passes since .*waiting for a live check/);
+  assert.match(source, /Current version: still fails \(replayed/);
+  assert.match(source, />Download latest snapshot<\/button>/);
+  assert.match(source, />Copy repair command<\/button>/);
+  assert.match(source, /navigator\.clipboard\.writeText\(button\.dataset\.copyRepairCommand\)/);
+  assert.match(source, /\/api\/v1\/admin\/evidence-capsules\/\$\{encodeURIComponent\(id\)\}/);
+});
+
 async function eventually(assertion: () => void, attempts = 300): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {

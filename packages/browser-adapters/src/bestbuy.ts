@@ -3,7 +3,7 @@ import {
   type CartInventoryEvidence,
   type LiveOfferObservation
 } from "../../browser-safety/src/index.js";
-import { BESTBUY_OBSERVER_VERSION, type Fulfillment, type SellerType } from "../../contracts/src/index.js";
+import { BESTBUY_OBSERVER_VERSION, type AdapterEnvironment, type Fulfillment, type SellerType } from "../../contracts/src/index.js";
 import {
   extractRetailerSku,
   observeRetailerOffer,
@@ -85,11 +85,12 @@ export function bestBuyAddControl(
   documentValue: Document,
   urlValue: string,
   expectedSku: string,
-  requiredFulfillment: Fulfillment
+  requiredFulfillment: Fulfillment,
+  environment?: AdapterEnvironment
 ): Element | null {
   if (requiredFulfillment !== "shipping" && requiredFulfillment !== "pickup") return null;
   if (bestBuyInteractiveBlock(documentValue, urlValue)) return null;
-  return retailerAddControl(documentValue, urlValue, "bestbuy", expectedSku, requiredFulfillment);
+  return retailerAddControl(documentValue, urlValue, "bestbuy", expectedSku, requiredFulfillment, environment);
 }
 
 export function observeBestBuyOffer(
@@ -97,7 +98,8 @@ export function observeBestBuyOffer(
   urlValue: string,
   expectedSku: string,
   requiredFulfillment: Fulfillment,
-  observedAt = new Date().toISOString()
+  observedAt = new Date().toISOString(),
+  environment?: AdapterEnvironment
 ): LiveOfferObservation {
   const observation = observeRetailerOffer(
     documentValue,
@@ -105,7 +107,8 @@ export function observeBestBuyOffer(
     "bestbuy",
     expectedSku,
     requiredFulfillment,
-    observedAt
+    observedAt,
+    environment
   );
   return { ...observation, pageKind: bestBuyPageKind(urlValue) };
 }
