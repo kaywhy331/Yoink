@@ -32,8 +32,12 @@ test("user and admin navigation expose task areas with contextual disclosure", (
   try {
     const userTabs = [...user.window.document.querySelectorAll("main > .tabs > [data-tab]")];
     assert.deepEqual(userTabs.map((item) => item.textContent?.trim()), [
-      "Home", "Products", "Calls", "Plans", "Activity", "Settings"
+      "Home", "Products", "Stores", "Calls", "Plans", "Activity", "Settings"
     ]);
+    assert.deepEqual(
+      [...user.window.document.querySelectorAll("#shopCategoryList")].map((item) => item.id),
+      ["shopCategoryList"]
+    );
     assert.equal(user.window.document.querySelectorAll("main > .tabs [data-tab=drawings]").length, 0);
     assert.equal(user.window.document.querySelector('[data-panel="drawings"]'), null);
     assert.equal(user.window.document.querySelectorAll('#calls .subtabs').length, 0);
@@ -319,6 +323,121 @@ test("Products sends filters to the server and renders the authoritative total b
       ["preorder", "Preorder"],
       ["out_of_stock", "Out of stock"]
     ]);
+  } finally {
+    browser.close();
+  }
+});
+
+test("Stores keeps a selected-store view exclusive and applies popular categories inside it", async () => {
+  const webRoot = join(process.cwd(), "apps", "web");
+  const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
+    url: "http://127.0.0.1:32991/",
+    runScripts: "outside-only",
+    pretendToBeVisual: true
+  });
+  const browser = dom.window;
+  const requests: string[] = [];
+  const overview = {
+    settings: { actionsPaused: false, executionMode: "live", taxBps: 0, storeAllowancesCents: {} },
+    counts: { products: 1, purchaseIntents: 0, actions: 0, pendingCatalogProposals: 0 },
+    sources: [], permissions: [],
+    spend: {
+      activeReservationCount: 0, activeReservedCents: 0, spentTodayCents: 0,
+      policy: { revision: 1, perOrderCapCents: null, dailyCapCents: null, monthlyCapCents: null }
+    },
+    walmartDraws: { latestScan: null, items: [] }
+  };
+  const sharedGroup = {
+    variantId: "variant_pokemon_shared",
+    familyId: "family_pokemon_shared",
+    title: "Pokémon Shared Product",
+    brand: "Pokémon",
+    imageUrl: "",
+    variantAttributes: {},
+    createdAt: "2026-09-01T08:00:00.000Z",
+    storeCount: 2,
+    listingCount: 2,
+    availableListingCount: 2,
+    inStockListingCount: 2,
+    preorderListingCount: 0,
+    outOfStockListingCount: 0,
+    bestPriceCents: 1299,
+    currency: "USD",
+    lastActivityAt: "2026-09-01T08:00:00.000Z",
+    listings: [
+      {
+        listingId: "listing_target_store_page",
+        retailerId: "target",
+        retailerName: "Target",
+        retailerSku: "95123456",
+        canonicalUrl: "https://www.target.com/p/-/A-95123456",
+        status: "in_stock",
+        executionSupported: true,
+        currentPriceCents: 1299,
+        currency: "USD"
+      },
+      {
+        listingId: "listing_walmart_store_page",
+        retailerId: "walmart",
+        retailerName: "Walmart",
+        retailerSku: "5700000001",
+        canonicalUrl: "https://www.walmart.com/ip/5700000001",
+        status: "in_stock",
+        executionSupported: true,
+        currentPriceCents: 1399,
+        currency: "USD"
+      }
+    ]
+  };
+  Object.defineProperty(browser, "fetch", {
+    configurable: true,
+    value: async (pathValue: string) => {
+      const path = String(pathValue);
+      requests.push(path);
+      const payload = path === "/api/v1/user/overview" ? overview
+        : path === "/api/v1/affiliate-routing" ? { affiliateRouting: null }
+          : path.startsWith("/api/v1/user/library/products?") ? {
+            items: [sharedGroup],
+            total: 1,
+            facets: { stores: [
+              { retailerId: "target", retailerName: "Target", productCount: 1 },
+              { retailerId: "walmart", retailerName: "Walmart", productCount: 1 }
+            ] }
+          }
+            : { items: [], total: 0 };
+      return { ok: true, status: 200, json: async () => payload };
+    }
+  });
+  Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
+  Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.setAttribute("open", ""); }
+  });
+
+  try {
+    browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=store-browse-ui-test.js`);
+    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent?.trim(), "Running"));
+    (browser.document.querySelector('.tabs [data-tab="stores"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.document.querySelectorAll("#storeDirectory [data-shop-store]").length, 2));
+    assert.match(browser.document.querySelector("#shopCategoryList")?.textContent ?? "", /NeeDoh.*Pokémon.*Disney Lorcana.*One Piece/s);
+
+    (browser.document.querySelector('#storeDirectory [data-shop-store="target"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.document.querySelector("#storePageTitle")?.textContent, "Target"));
+    assert.equal((browser.document.querySelector("#storeDirectorySection") as HTMLElement).hidden, true);
+    assert.equal(browser.document.querySelectorAll("#storeProductList .product-card").length, 1);
+    assert.match(browser.document.querySelector("#storeProductList")?.textContent ?? "", /Target/);
+    assert.doesNotMatch(browser.document.querySelector("#storeProductList")?.textContent ?? "", /Walmart/);
+    assert.equal(requests.some((path) => path.includes("store=target") && path.includes("sort=title")), true);
+
+    (browser.document.querySelector('#shopCategoryList [data-shop-category="pokemon"]') as HTMLButtonElement).click();
+    await eventually(() => {
+      assert.equal(requests.some((path) => path.includes("store=target") && path.includes("category=pokemon")), true);
+      assert.equal(browser.document.querySelector('#shopCategoryList [data-shop-category="pokemon"]')?.getAttribute("aria-pressed"), "true");
+    });
+    (browser.document.querySelector("#storeProductList [data-product-detail]") as HTMLButtonElement).click();
+    const storeLinks = [...browser.document.querySelectorAll<HTMLAnchorElement>("#productDialogBody [data-store-link]")];
+    assert.deepEqual(storeLinks.map((link) => link.href), ["https://www.target.com/p/-/A-95123456"]);
+    assert.doesNotMatch(browser.document.querySelector("#productDialogBody")?.textContent ?? "", /Walmart/);
   } finally {
     browser.close();
   }

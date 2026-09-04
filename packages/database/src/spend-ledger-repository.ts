@@ -215,9 +215,6 @@ export class SpendLedgerRepository {
     if (action === "submit_order" && !spend.orderSubmissionEnabled) {
       return rejected("order_submission_closed", "Order submission remains disabled for this account.");
     }
-    if (spend.perOrderCapCents !== null && amountCents > spend.perOrderCapCents) {
-      return rejected("per_order_cap_exceeded", "The reservation exceeds the user per-order spending cap.");
-    }
     const fulfilled = Number(this.db.get<{ quantity: number }>(
       "SELECT fulfilled_quantity AS quantity FROM missions WHERE id = ? AND user_id = ?",
       missionId,
@@ -233,16 +230,36 @@ export class SpendLedgerRepository {
     if (fulfilled + reservedQuantity + quantity > policy.quantity) {
       return rejected("reserved_quantity_exceeded", "Concurrent actions would exceed the remaining purchase-intent quantity.");
     }
-    const summary = this.summary(now, false);
-    if (spend.dailyCapCents !== null
-      && summary.spentTodayCents + summary.activeReservedCents + amountCents > spend.dailyCapCents) {
-      return rejected("daily_spend_cap_exceeded", "Concurrent reservations would exceed the daily spending cap.");
-    }
-    if (spend.monthlyCapCents !== null
-      && summary.spentThisMonthCents + summary.activeReservedCents + amountCents > spend.monthlyCapCents) {
-      return rejected("monthly_spend_cap_exceeded", "Concurrent reservations would exceed the monthly spending cap.");
-    }
+    const spendingLimit = this.evaluatePlannedAmount(amountCents, now);
+    if (!spendingLimit.allowed) return spendingLimit;
     return { allowed: true, reasonCode: "spend_reserved", message: "Quantity and spending capacity are available." };
+  }
+
+  evaluatePlannedAmount(amountCents: number, now = Date.now()): ReservationDecision {
+    const rejected = (reasonCode: string, message: string): ReservationDecision => ({ allowed: false, reasonCode, message });
+    if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+      return rejected("reservation_amount_invalid", "Set a positive maximum total before using cart adds.");
+    }
+    const summary = this.summary(now, false);
+    if (summary.policy.perOrderCapCents !== null && amountCents > summary.policy.perOrderCapCents) {
+      return rejected(
+        "per_order_cap_exceeded",
+        `This plan's maximum total is above your $${(summary.policy.perOrderCapCents / 100).toFixed(2)} per-order spending limit.`
+      );
+    }
+    if (summary.availableTodayCents !== null && amountCents > summary.availableTodayCents) {
+      return rejected(
+        "daily_spend_cap_exceeded",
+        `This plan needs $${(amountCents / 100).toFixed(2)}, but only $${(summary.availableTodayCents / 100).toFixed(2)} remains in today's spending limit.`
+      );
+    }
+    if (summary.availableThisMonthCents !== null && amountCents > summary.availableThisMonthCents) {
+      return rejected(
+        "monthly_spend_cap_exceeded",
+        `This plan needs $${(amountCents / 100).toFixed(2)}, but only $${(summary.availableThisMonthCents / 100).toFixed(2)} remains in this month's spending limit.`
+      );
+    }
+    return { allowed: true, reasonCode: "within_spending_limits", message: "The reviewed maximum fits your current spending limits." };
   }
 
   reserve(input: {
@@ -453,7 +470,12 @@ export class SpendLedgerRepository {
     });
   }
 
-  commitUserReportedAddForJob(actionJobId: string, actualAmountCents: number, now = Date.now()): SpendReservation {
+  commitUserReportedAddForJob(
+    actionJobId: string,
+    actualAmountCents: number,
+    now = Date.now(),
+    options: { allowExpiredReservation?: boolean } = {}
+  ): SpendReservation {
     if (!Number.isSafeInteger(actualAmountCents) || actualAmountCents <= 0) {
       throw new PurchaseSafetyError("user_reported_total_required", 409, "Enter the positive amount charged for this item before recording this purchase.");
     }
@@ -469,8 +491,10 @@ export class SpendLedgerRepository {
         }
         return reservation;
       }
-      if (reservation.status !== "released"
-        || reservation.releaseReason !== "add_to_cart_confirmed_without_order") {
+      const releaseReasonAccepted = reservation.releaseReason === "add_to_cart_confirmed_without_order"
+        || (options.allowExpiredReservation === true
+          && reservation.releaseReason === SPEND_RESERVATION_EXPIRY_REASON);
+      if (reservation.status !== "released" || !releaseReasonAccepted) {
         throw new PurchaseSafetyError(
           "user_reported_order_reservation_invalid",
           409,
@@ -482,10 +506,11 @@ export class SpendLedgerRepository {
       this.db.run(
         `UPDATE spend_reservations
          SET status = 'committed', committed_amount_cents = ?, release_reason = '', updated_at = ?
-         WHERE id = ? AND status = 'released' AND release_reason = 'add_to_cart_confirmed_without_order'`,
+         WHERE id = ? AND status = 'released' AND release_reason = ?`,
         actualAmountCents,
         timestamp,
-        reservation.id
+        reservation.id,
+        reservation.releaseReason
       );
       this.recordLedger(
         reservation.id,

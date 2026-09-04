@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
+import { LOCAL_TENANT_ID, LOCAL_USER_ID, MIGRATION_BACKUP_RETENTION_COUNT, YoinkDatabase } from "../packages/database/src/database.js";
 import { MIGRATIONS } from "../packages/database/src/migrations.js";
 
 test("initial migration creates the normalized graph and safe local defaults", () => {
@@ -97,6 +97,23 @@ test("initial migration creates the normalized graph and safe local defaults", (
     db.assertIntegrity();
   } finally {
     db.close();
+  }
+});
+
+test("database startup retains only the newest bounded migration backups", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-backup-retention-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    new YoinkDatabase(filePath).close();
+    for (let index = 0; index < 6; index += 1) {
+      writeFileSync(`${filePath}.before-v${index + 1}.2026-09-0${index + 1}T00-00-00-000Z.sqlite`, "fixture");
+    }
+    new YoinkDatabase(filePath).close();
+    const backups = readdirSync(directory).filter((name) => name.startsWith("yoink.sqlite.before-v")).sort();
+    assert.equal(backups.length, MIGRATION_BACKUP_RETENTION_COUNT);
+    assert.deepEqual(backups.map((name) => name.match(/before-v(\d+)/)?.[1]), ["4", "5", "6"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

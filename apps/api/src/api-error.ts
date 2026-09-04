@@ -1,4 +1,6 @@
 import { sanitizeDiagnosticData } from "../../../packages/domain/src/redaction.js";
+import { SignalValidationError } from "../../../packages/domain/src/normalize.js";
+import { InputValidationError } from "../../../packages/domain/src/input-validation-error.js";
 import { AuthorizationError } from "../../../packages/database/src/authorization-repository.js";
 import { PurchaseSafetyError } from "../../../packages/database/src/purchase-policy-repository.js";
 import { CatalogIdentityGovernanceError } from "../../../packages/database/src/catalog-identity-governance-repository.js";
@@ -29,6 +31,18 @@ export class ApiError extends Error {
 }
 
 export function apiErrorPayload(error: unknown, correlationId: string): { status: number; payload: ApiErrorPayload } {
+  if (error instanceof InputValidationError) {
+    return {
+      status: error.status,
+      payload: { error: error.code, message: error.message, correlationId }
+    };
+  }
+  if (error instanceof SignalValidationError) {
+    return {
+      status: error.status,
+      payload: { error: error.code, message: error.message, correlationId }
+    };
+  }
   if (error instanceof AdminSignalSimulationError) {
     return {
       status: error.status,
@@ -104,23 +118,15 @@ export function apiErrorPayload(error: unknown, correlationId: string): { status
   const rawMessage = error instanceof Error ? error.message : "The request failed.";
   const message = String(sanitizeDiagnosticData(rawMessage));
   const authenticationFailure = /authenticated request scope|authenticated tenant\/user principal/i.test(message);
-  const internalFailure = error instanceof TypeError
-    || /(?:SQLITE|database is (?:locked|malformed)|no such (?:table|column)|FOREIGN KEY constraint failed)/i.test(message);
-  if (internalFailure) {
-    return {
-      status: 500,
-      payload: {
-        error: "internal_error",
-        message: "Yoink could not complete the request safely.",
-        correlationId
-      }
-    };
-  }
+  if (authenticationFailure) return {
+    status: 401,
+    payload: { error: "authentication_required", message, correlationId }
+  };
   return {
-    status: authenticationFailure ? 401 : 400,
+    status: 500,
     payload: {
-      error: authenticationFailure ? "authentication_required" : "request_rejected",
-      message,
+      error: "internal_error",
+      message: "Yoink could not complete the request safely.",
       correlationId
     }
   };

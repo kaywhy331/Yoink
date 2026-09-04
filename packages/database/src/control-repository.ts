@@ -39,6 +39,7 @@ import { currentRequestScope } from "./request-scope.js";
 import { AuditRepository } from "./audit-repository.js";
 import { PurchasePolicyRepository, PurchaseSafetyError } from "./purchase-policy-repository.js";
 import { SignalRepository } from "./signal-repository.js";
+import { SpendLedgerRepository } from "./spend-ledger-repository.js";
 
 interface StrategyRow {
   id: string;
@@ -127,6 +128,11 @@ interface ValidatedConfiguredMission {
     reviewedAllInCents: number;
     headroomCents: number;
     autoRaised: boolean;
+    spendingLimit: {
+      allowed: boolean;
+      reasonCode: string;
+      message: string;
+    };
   };
 }
 
@@ -147,6 +153,11 @@ export interface AppSettings {
   affiliateMode: "prefer_fallback" | "require" | "disabled";
   taxBps: number;
   storeAllowancesCents: Record<string, number>;
+}
+
+export interface TenantActionSettingsUpdate {
+  settings: AppSettings;
+  affectedUserCount: number;
 }
 
 function parseStrategy(row: StrategyRow): StrategyDefinition {
@@ -245,11 +256,13 @@ export class ControlRepository {
   private readonly auditEvents: AuditRepository;
   private readonly purchasePolicies: PurchasePolicyRepository;
   private readonly signals: SignalRepository;
+  private readonly spendLedger: SpendLedgerRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.auditEvents = new AuditRepository(db);
     this.purchasePolicies = new PurchasePolicyRepository(db);
     this.signals = new SignalRepository(db);
+    this.spendLedger = new SpendLedgerRepository(db);
   }
 
   settings(): AppSettings {
@@ -294,6 +307,38 @@ export class ControlRepository {
       data: { paused, reason: normalizedReason }
     }, now);
     return this.settings();
+  }
+
+  setTenantActionsPaused(
+    paused: boolean,
+    reason = "An administrator changed the tenant action state.",
+    now = Date.now()
+  ): TenantActionSettingsUpdate {
+    const scope = currentRequestScope();
+    const normalizedReason = cleanText(reason, 240);
+    const affectedUserCount = this.db.transaction(() => {
+      const updated = this.db.run(
+        `UPDATE app_settings
+         SET actions_paused = ?, pause_reason = ?, updated_at = ?
+         WHERE user_id IN (SELECT id FROM users WHERE tenant_id = ?)`,
+        paused ? 1 : 0,
+        normalizedReason,
+        nowIso(now),
+        scope.tenantId
+      );
+      this.auditEvents.record({
+        correlationId: scope.actorId,
+        aggregateType: "tenant_settings",
+        eventType: "tenant_actions_pause_changed",
+        reasonCode: paused ? "tenant_actions_paused" : "tenant_actions_resumed",
+        message: paused
+          ? "Retailer actions were paused for every shopper in the tenant."
+          : "Qualified retailer actions were resumed for every shopper in the tenant.",
+        data: { paused, reason: normalizedReason, affectedUserCount: Number(updated.changes ?? 0) }
+      }, now);
+      return Number(updated.changes ?? 0);
+    });
+    return { settings: this.settings(), affectedUserCount };
   }
 
   updateSettings(input: AppSettingsUpdateInput, now = Date.now()): AppSettings {
@@ -487,6 +532,19 @@ export class ControlRepository {
       }, now);
       return next;
     });
+  }
+
+  purchaseProfileLinkedMissionIds(id: string): string[] {
+    const profileId = cleanText(id, 120);
+    if (!/^[A-Za-z0-9_-]{3,120}$/.test(profileId)) return [];
+    return this.db.all<{ id: string }>(
+      `SELECT id FROM missions
+       WHERE tenant_id = ? AND user_id = ? AND quick_add_profile_id = ? AND status <> 'deleted'
+       ORDER BY id`,
+      currentRequestScope().tenantId,
+      currentRequestScope().userId,
+      profileId
+    ).map((row) => row.id);
   }
 
   private resolveProfileUnitPriceCents(
@@ -1081,6 +1139,12 @@ export class ControlRepository {
     // creation, and the preflight fingerprint below binds to this raised value.
     const autoRaised = mode === "preview" && tooLow;
     const reviewedAllInCents = autoRaised ? minimumAllInCents : maxAllInCents;
+    const spendingLimit = input.actionCeiling === "add_to_cart"
+      ? this.spendLedger.evaluatePlannedAmount(reviewedAllInCents, now)
+      : { allowed: true, reasonCode: "notifications_only", message: "Notifications do not reserve spending capacity." };
+    if (mode === "create" && !spendingLimit.allowed) {
+      throw new PurchaseSafetyError(spendingLimit.reasonCode, 409, `${spendingLimit.message} Lower this plan's maximum or raise the spending limit first.`);
+    }
     return {
       listingId,
       listing,
@@ -1104,7 +1168,8 @@ export class ControlRepository {
         minimumAllInCents,
         reviewedAllInCents,
         headroomCents: reviewedAllInCents - minimumAllInCents,
-        autoRaised
+        autoRaised,
+        spendingLimit
       }
     };
   }
@@ -1137,6 +1202,7 @@ export class ControlRepository {
         status: "active",
         title: validated.listing.title,
         targetQuantity: validated.draft.targetQuantity,
+        maxAllInCents: validated.draft.maxAllInCents,
         actionCeiling: validated.draft.actionCeiling,
         decisionMode: "purchase_intent",
         expiresAt: validated.draft.expiresAt,

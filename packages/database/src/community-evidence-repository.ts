@@ -9,6 +9,7 @@ import {
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { AuditRepository } from "./audit-repository.js";
 import { YoinkDatabase } from "./database.js";
@@ -150,7 +151,7 @@ function consentFromRow(row: ConsentRow): CommunityConsentStatus {
 function normalizedLocationScope(value: unknown): string {
   const scope = cleanText(value, 96);
   if (!LOCATION_SCOPE_PATTERN.test(scope)) {
-    throw new Error("Community evidence location scope must be a country, region, or one-way store fingerprint.");
+    throw new InputValidationError("Community evidence location scope must be a country, region, or one-way store fingerprint.");
   }
   return scope;
 }
@@ -241,13 +242,13 @@ export class CommunityEvidenceRepository {
 
   updateConsent(input: CommunityConsentUpdateInput, now = Date.now()): CommunityConsentStatus {
     if (!input || typeof input !== "object" || !Object.hasOwn(RETAILER_OBSERVER_VERSIONS, input.retailerId)) {
-      throw new Error("A supported retailer is required for community evidence consent.");
+      throw new InputValidationError("A supported retailer is required for community evidence consent.");
     }
-    if (typeof input.enabled !== "boolean") throw new Error("Community evidence consent must be enabled or disabled explicitly.");
+    if (typeof input.enabled !== "boolean") throw new InputValidationError("Community evidence consent must be enabled or disabled explicitly.");
     const locationScope = input.enabled ? normalizedLocationScope(input.locationScope) : "";
     if (input.enabled && (input.privacyVersion !== COMMUNITY_PRIVACY_VERSION
       || input.confirmation !== COMMUNITY_CONTRIBUTION_CONFIRMATION)) {
-      throw new Error("The current read-only community evidence disclosure must be explicitly accepted.");
+      throw new InputValidationError("The current read-only community evidence disclosure must be explicitly accepted.");
     }
     const timestamp = nowIso(now);
     this.db.transaction(() => {
@@ -291,15 +292,15 @@ export class CommunityEvidenceRepository {
 
   issueNonce(deviceId: string, retailerId: SupportedRetailerId, now = Date.now()): { nonce: string; expiresAt: string } {
     const cleanDeviceId = cleanText(deviceId, 120);
-    if (!Object.hasOwn(RETAILER_OBSERVER_VERSIONS, retailerId)) throw new Error("A supported retailer is required for a contribution nonce.");
+    if (!Object.hasOwn(RETAILER_OBSERVER_VERSIONS, retailerId)) throw new InputValidationError("A supported retailer is required for a contribution nonce.");
     const device = this.db.get<{ id: string }>(
       "SELECT id FROM extension_devices WHERE id = ? AND user_id = ? AND status = 'active'",
       cleanDeviceId,
       currentRequestScope().userId
     );
-    if (!device) throw new Error("The paired Chrome device is unavailable.");
+    if (!device) throw new InputValidationError("The paired Chrome device is unavailable.");
     const consent = this.consents().find((item) => item.retailerId === retailerId);
-    if (!consent?.enabled) throw new Error("Enable read-only evidence sharing for this retailer in Yoink first.");
+    if (!consent?.enabled) throw new InputValidationError("Enable read-only evidence sharing for this retailer in Yoink first.");
     const nonce = randomBytes(32).toString("base64url");
     const timestamp = nowIso(now);
     const expiresAt = nowIso(now + NONCE_TTL_MS);
@@ -336,16 +337,16 @@ export class CommunityEvidenceRepository {
     now = Date.now()
   ): { receipt: CommunityContributionReceipt; assertion: Record<string, unknown> } {
     const cleanDeviceId = cleanText(deviceId, 120);
-    if (!Object.hasOwn(RETAILER_OBSERVER_VERSIONS, retailerId)) throw new Error("A supported retailer is required for a community contribution.");
+    if (!Object.hasOwn(RETAILER_OBSERVER_VERSIONS, retailerId)) throw new InputValidationError("A supported retailer is required for a community contribution.");
     if (!input || typeof input !== "object" || input.contractVersion !== COMMUNITY_EVIDENCE_CONTRACT_VERSION) {
-      throw new Error("The community evidence contract version is unsupported.");
+      throw new InputValidationError("The community evidence contract version is unsupported.");
     }
     const nonce = cleanText(input.nonce, 120);
     const shadowObservationId = cleanText(input.shadowObservationId, 120);
     const adapterDiagnosticId = cleanText(input.adapterDiagnosticId, 120);
     if (!NONCE_PATTERN.test(nonce) || !ID_PATTERN.test(shadowObservationId)
       || (adapterDiagnosticId && !ID_PATTERN.test(adapterDiagnosticId))) {
-      throw new Error("The community contribution envelope is malformed.");
+      throw new InputValidationError("The community contribution envelope is malformed.");
     }
     const timestamp = nowIso(now);
     const nonceRow = this.db.get<{ id: string }>(
@@ -358,10 +359,10 @@ export class CommunityEvidenceRepository {
       nonceHash(nonce),
       timestamp
     );
-    if (!nonceRow) throw new Error("The community contribution nonce is invalid, expired, or already used.");
+    if (!nonceRow) throw new InputValidationError("The community contribution nonce is invalid, expired, or already used.");
     const consent = this.consents().find((item) => item.retailerId === retailerId);
     if (!consent?.enabled || consent.privacyVersion !== COMMUNITY_PRIVACY_VERSION) {
-      throw new Error("Read-only community evidence sharing is not enabled for this retailer.");
+      throw new InputValidationError("Read-only community evidence sharing is not enabled for this retailer.");
     }
     const observation = this.db.get<ObservationRow>(
       `SELECT id, device_id AS deviceId, retailer_id AS retailerId,
@@ -388,20 +389,20 @@ export class CommunityEvidenceRepository {
     const observedTime = new Date(observation?.observedAt ?? "").getTime();
     if (!observation || observation.adapterVersion !== RETAILER_OBSERVER_VERSIONS[retailerId]
       || !Number.isFinite(observedTime) || now - observedTime > MAX_OBSERVATION_AGE_MS || observedTime > now + 5 * 60_000) {
-      throw new Error("A current server-accepted observation from this exact device and adapter is required.");
+      throw new InputValidationError("A current server-accepted observation from this exact device and adapter is required.");
     }
     if (observation.securityChallenge === 1 || observation.interactiveBlock || observation.observationState === "manual_block") {
-      throw new Error("Security challenges and interactive account steps cannot be contributed.");
+      throw new InputValidationError("Security challenges and interactive account steps cannot be contributed.");
     }
     if (!(["in_stock", "preorder", "out_of_stock"] as const).includes(observation.availability as "in_stock")) {
-      throw new Error("Unknown availability cannot be contributed as community stock evidence.");
+      throw new InputValidationError("Unknown availability cannot be contributed as community stock evidence.");
     }
     if (observation.fulfillment === "pickup" && !consent.locationScope.startsWith("store:")) {
-      throw new Error("Pickup evidence requires a one-way store fingerprint in the consent location scope.");
+      throw new InputValidationError("Pickup evidence requires a one-way store fingerprint in the consent location scope.");
     }
     let diagnostic: DiagnosticRow | undefined;
     if (retailerId !== "target") {
-      if (!adapterDiagnosticId) throw new Error("A sanitized adapter diagnostic must accompany this contribution.");
+      if (!adapterDiagnosticId) throw new InputValidationError("A sanitized adapter diagnostic must accompany this contribution.");
       diagnostic = this.db.get<DiagnosticRow>(
         `SELECT id, retailer_id AS retailerId, retailer_sku AS retailerSku,
                 adapter_version AS adapterVersion,
@@ -417,7 +418,7 @@ export class CommunityEvidenceRepository {
       );
       if (!diagnostic || diagnostic.adapterVersion !== observation.adapterVersion
         || Math.abs(new Date(diagnostic.observedAt).getTime() - observedTime) > 5_000) {
-        throw new Error("The sanitized adapter diagnostic does not match the contributed observation.");
+        throw new InputValidationError("The sanitized adapter diagnostic does not match the contributed observation.");
       }
     }
     const layoutFingerprint = diagnostic?.layoutFingerprint
@@ -454,14 +455,14 @@ export class CommunityEvidenceRepository {
       cleanDeviceId,
       nowIso(now - 60 * 60_000)
     )?.count ?? 0);
-    if (hourCount >= DEVICE_HOURLY_LIMIT) throw new Error("The device community contribution rate limit has been reached.");
+    if (hourCount >= DEVICE_HOURLY_LIMIT) throw new InputValidationError("The device community contribution rate limit has been reached.");
     return this.db.transaction(() => {
       const consumed = this.db.run(
         "UPDATE community_contribution_nonces SET used_at = ? WHERE id = ? AND used_at = ''",
         timestamp,
         nonceRow.id
       );
-      if (Number(consumed.changes) !== 1) throw new Error("The community contribution nonce is invalid, expired, or already used.");
+      if (Number(consumed.changes) !== 1) throw new InputValidationError("The community contribution nonce is invalid, expired, or already used.");
       const duplicate = this.db.get<AssertionRow>(
         `SELECT id, user_id AS userId, device_id AS deviceId,
                 retailer_id AS retailerId, retailer_sku AS retailerSku,
@@ -746,7 +747,7 @@ export class CommunityEvidenceRepository {
   deleteContributions(retailerId = "", now = Date.now()): { deletedAssertions: number; deletedReceipts: number } {
     const cleanRetailer = cleanText(retailerId, 40).toLocaleLowerCase("en-US");
     if (cleanRetailer && !Object.hasOwn(RETAILER_OBSERVER_VERSIONS, cleanRetailer)) {
-      throw new Error("A supported retailer is required for community evidence deletion.");
+      throw new InputValidationError("A supported retailer is required for community evidence deletion.");
     }
     return this.db.transaction(() => {
       const filter = cleanRetailer ? " AND retailer_id = ?" : "";

@@ -111,21 +111,39 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string): Li
     filters.retailerId,
     filters.retailerId
   ];
+  // Source-only product shells are useful while identity reconciliation runs,
+  // but they are not shopper products until at least one exact store listing
+  // has been approved and mapped.
+  where.push("EXISTS (SELECT 1 FROM listings visible_listing WHERE visible_listing.variant_id = v.id)");
   if (filters.search) {
     const pattern = `%${filters.search.replace(/[\\%_]/g, "\\$&")}%`;
-    where.push(`EXISTS (
+    where.push(`(v.title LIKE ? ESCAPE '\\' COLLATE NOCASE OR EXISTS (
       SELECT 1 FROM listings search_listing
       JOIN retailers search_retailer ON search_retailer.id = search_listing.retailer_id
       WHERE search_listing.variant_id = v.id
-        AND (v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
-          OR search_retailer.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+        AND (search_retailer.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
           OR search_listing.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)
-    )`);
+    ))`);
     parameters.push(pattern, pattern, pattern);
   }
   if (filters.retailerId) {
     where.push("EXISTS (SELECT 1 FROM listings store_listing WHERE store_listing.variant_id = v.id AND store_listing.retailer_id = ?)");
     parameters.push(filters.retailerId);
+  }
+  if (filters.category) {
+    const patterns: Record<Exclude<LibraryProductFilters["category"], "">, string[]> = {
+      needoh: ["%needoh%"],
+      pokemon: ["%pokemon%", "%pokémon%"],
+      disney_lorcana: ["%lorcana%"],
+      one_piece: ["%one piece%"]
+    };
+    const categoryPatterns = patterns[filters.category];
+    const clauses = categoryPatterns.map(() => `(v.title LIKE ? COLLATE NOCASE OR EXISTS (
+      SELECT 1 FROM product_families category_family
+      WHERE category_family.id = v.family_id AND category_family.brand LIKE ? COLLATE NOCASE
+    ))`);
+    where.push(`(${clauses.join(" OR ")})`);
+    for (const pattern of categoryPatterns) parameters.push(pattern, pattern);
   }
   if (filters.availability === "in_stock" || filters.availability === "preorder") {
     where.push(`EXISTS (
@@ -191,13 +209,15 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string): Li
              ), '')) AS activityAt
       FROM listings l
     ), variant_facts AS (
-      SELECT variantId,
+      SELECT variant.id AS variantId,
              COALESCE(
                MIN(CASE WHEN (? = '' OR retailerId = ?) AND status IN ('in_stock', 'preorder') THEN effectivePriceCents END),
                MIN(CASE WHEN (? = '' OR retailerId = ?) THEN effectivePriceCents END)
              ) AS bestPriceCents,
              MAX(CASE WHEN (? = '' OR retailerId = ?) THEN activityAt END) AS lastActivityAt
-      FROM listing_facts GROUP BY variantId
+      FROM variants variant
+      LEFT JOIN listing_facts ON listing_facts.variantId = variant.id
+      GROUP BY variant.id
     )`,
     where: where.length ? `WHERE ${where.join(" AND ")}` : "",
     parameters,
@@ -295,8 +315,16 @@ export class CatalogRepository {
         normalized.sourceConnectionId,
         normalized.sourceProductId
       );
-      const existingListing = this.db.get<{ id: string; variant_id: string }>(
-        "SELECT id, variant_id FROM listings WHERE retailer_id = ? AND retailer_sku = ?",
+      const existingListing = this.db.get<{
+        id: string;
+        variant_id: string;
+        canonical_url: string;
+        status: string;
+        execution_supported: number;
+        currency: string;
+      }>(
+        `SELECT id, variant_id, canonical_url, status, execution_supported, currency
+         FROM listings WHERE retailer_id = ? AND retailer_sku = ?`,
         normalized.retailerId,
         normalized.retailerSku
       );
@@ -383,7 +411,13 @@ export class CatalogRepository {
 
       const listingId = existingListing?.id ?? newId("listing");
       const createdListing = !existingListing;
-      const executionSupported = retailer.execution_supported === 1 && normalized.requestedExecutionSupport ? 1 : 0;
+      const preserveObservedListing = normalized.source === "user_link" && Boolean(existingListing);
+      const canonicalUrl = preserveObservedListing ? existingListing!.canonical_url : normalized.canonicalUrl;
+      const listingStatus = preserveObservedListing ? existingListing!.status : normalized.listingStatus;
+      const executionSupported = preserveObservedListing
+        ? existingListing!.execution_supported
+        : retailer.execution_supported === 1 && normalized.requestedExecutionSupport ? 1 : 0;
+      const currency = preserveObservedListing ? existingListing!.currency : normalized.currency;
       this.db.run(
         `INSERT INTO listings(
            id, variant_id, retailer_id, retailer_sku, canonical_url, status,
@@ -400,11 +434,11 @@ export class CatalogRepository {
         variantId,
         normalized.retailerId,
         normalized.retailerSku,
-        normalized.canonicalUrl,
-        normalized.listingStatus,
+        canonicalUrl,
+        listingStatus,
         executionSupported,
         normalized.msrpCents,
-        normalized.currency,
+        currency,
         timestamp,
         timestamp
       );
@@ -747,8 +781,10 @@ export class CatalogRepository {
        FROM listings l
        JOIN retailers r ON r.id = l.retailer_id
        WHERE l.variant_id IN (${placeholders})
+         ${query.filters.retailerId ? "AND l.retailer_id = ?" : ""}
        ORDER BY r.display_name COLLATE NOCASE, l.retailer_sku`,
-      ...variants.map((variant) => variant.variantId)
+      ...variants.map((variant) => variant.variantId),
+      ...(query.filters.retailerId ? [query.filters.retailerId] : [])
     );
     const listingsByVariant = new Map<string, Array<Record<string, unknown>>>();
     for (const row of listingRows) {

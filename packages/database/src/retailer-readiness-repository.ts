@@ -19,6 +19,7 @@ import {
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
 import { nowIso } from "../../domain/src/ids.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import {
   AdapterDiagnosticRepository,
@@ -205,7 +206,7 @@ export interface RetailerSessionBlocker {
 
 function actionRetailer(value: unknown): ActionRetailer {
   const normalized = cleanText(value, 40).toLocaleLowerCase("en-US") as ActionRetailer;
-  if (!ACTION_RETAILERS.includes(normalized)) throw new Error("A supported store is required.");
+  if (!ACTION_RETAILERS.includes(normalized)) throw new InputValidationError("A supported store is required.");
   return normalized;
 }
 
@@ -214,7 +215,7 @@ function exactTimestamp(value: unknown, optional = false): { iso: string; time: 
   if (!normalized && optional) return null;
   const parsed = new Date(normalized);
   const time = parsed.getTime();
-  if (!Number.isFinite(time)) throw new Error("A valid retailer-readiness timestamp is required.");
+  if (!Number.isFinite(time)) throw new InputValidationError("A valid retailer-readiness timestamp is required.");
   return { iso: parsed.toISOString(), time };
 }
 
@@ -232,7 +233,7 @@ export class RetailerReadinessRepository {
 
   record(deviceId: string, input: RetailerSessionReadinessInput, now = Date.now()): ReadinessRow {
     if (input?.contractVersion !== WATCH_QUEUE_CONTRACT_VERSION) {
-      throw new Error("The retailer-readiness contract version is unsupported.");
+      throw new InputValidationError("The retailer-readiness contract version is unsupported.");
     }
     const retailerId = actionRetailer(input.retailerId);
     const safeDeviceId = cleanText(deviceId, 120);
@@ -242,12 +243,12 @@ export class RetailerReadinessRepository {
        WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'active'`,
       safeDeviceId, scope.tenantId, scope.userId
     );
-    if (!device) throw new Error("The paired device is unavailable.");
+    if (!device) throw new InputValidationError("The paired device is unavailable.");
     if (!(["unknown", "ready", "signed_out", "challenged"] as const).includes(input.signedInState)) {
-      throw new Error("The retailer signed-in state is invalid.");
+      throw new InputValidationError("The retailer signed-in state is invalid.");
     }
     if (!(["unknown", "ready", "stale", "unavailable"] as const).includes(input.cartBaselineState)) {
-      throw new Error("The cart-baseline state is invalid.");
+      throw new InputValidationError("The cart-baseline state is invalid.");
     }
     const baseline = exactTimestamp(input.baselineObservedAt, true);
     const expires = exactTimestamp(input.expiresAt, true);
@@ -255,7 +256,7 @@ export class RetailerReadinessRepository {
       if (!baseline || !expires || baseline.time > now + 5 * 60_000
         || now - baseline.time > BASELINE_MAX_AGE_MS
         || expires.time <= now || expires.time > baseline.time + BASELINE_MAX_AGE_MS) {
-        throw new Error("A ready cart baseline must carry a fresh bounded five-minute lifetime.");
+        throw new InputValidationError("A ready cart baseline must carry a fresh bounded five-minute lifetime.");
       }
     }
     const timestamp = nowIso(now);
@@ -460,9 +461,9 @@ export class RetailerReadinessRepository {
     input: RetailerReverificationRunInput,
     now = Date.now()
   ): StoredRetailerReverificationRun {
-    if (!input || typeof input !== "object") throw new Error("A store re-verification run receipt is required.");
+    if (!input || typeof input !== "object") throw new InputValidationError("A store re-verification run receipt is required.");
     if (input.contractVersion !== RETAILER_REVERIFICATION_RUN_CONTRACT_VERSION) {
-      throw new Error("The store re-verification run contract version is unsupported.");
+      throw new InputValidationError("The store re-verification run contract version is unsupported.");
     }
     const retailerId = actionRetailer(input.retailerId);
     const safeDeviceId = cleanText(deviceId, 120);
@@ -472,30 +473,30 @@ export class RetailerReadinessRepository {
        WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'active'`,
       safeDeviceId, scope.tenantId, scope.userId
     );
-    if (!device) throw new Error("The paired device is unavailable.");
+    if (!device) throw new InputValidationError("The paired device is unavailable.");
     const runId = cleanText(input.runId, 80);
-    if (!RUN_ID_PATTERN.test(runId)) throw new Error("A valid store re-verification run ID is required.");
-    if (typeof input.automatic !== "boolean") throw new Error("The store re-verification automatic flag must be boolean.");
-    if (!RUN_TRIGGERS.has(String(input.trigger))) throw new Error("The store re-verification trigger is invalid.");
-    if (!RUN_OUTCOMES.has(String(input.outcome))) throw new Error("The store re-verification outcome is invalid.");
+    if (!RUN_ID_PATTERN.test(runId)) throw new InputValidationError("A valid store re-verification run ID is required.");
+    if (typeof input.automatic !== "boolean") throw new InputValidationError("The store re-verification automatic flag must be boolean.");
+    if (!RUN_TRIGGERS.has(String(input.trigger))) throw new InputValidationError("The store re-verification trigger is invalid.");
+    if (!RUN_OUTCOMES.has(String(input.outcome))) throw new InputValidationError("The store re-verification outcome is invalid.");
     const reasonCode = cleanText(input.reasonCode, 80).toLocaleLowerCase("en-US");
-    if (!REASON_PATTERN.test(reasonCode)) throw new Error("The store re-verification reason code is invalid.");
+    if (!REASON_PATTERN.test(reasonCode)) throw new InputValidationError("The store re-verification reason code is invalid.");
     const attempted = Number(input.attemptedProductCount);
     const passed = Number(input.passedProductCount);
     if (!Number.isInteger(attempted) || attempted < 0 || attempted > RETAILER_REVERIFICATION_RUN_MAX_PRODUCTS
       || !Number.isInteger(passed) || passed < 0 || passed > RETAILER_REVERIFICATION_RUN_MAX_PRODUCTS
       || passed > attempted) {
-      throw new Error("Store re-verification product counts are out of bounds.");
+      throw new InputValidationError("Store re-verification product counts are out of bounds.");
     }
     const started = exactTimestamp(input.startedAt);
     const finished = exactTimestamp(input.finishedAt);
     if (!started || !finished || started.time > finished.time
       || finished.time > now + RUN_RECEIPT_CLOCK_SKEW_MS
       || now - finished.time > RUN_RECEIPT_MAX_AGE_MS) {
-      throw new Error("The store re-verification run receipt is stale or has invalid timestamps.");
+      throw new InputValidationError("The store re-verification run receipt is stale or has invalid timestamps.");
     }
     const extensionVersion = cleanText(input.extensionVersion, 40);
-    if (!SEMVER_PATTERN.test(extensionVersion)) throw new Error("A valid companion version is required on the run receipt.");
+    if (!SEMVER_PATTERN.test(extensionVersion)) throw new InputValidationError("A valid companion version is required on the run receipt.");
     const planSignature = cleanText(input.planSignature, 200);
     const existing = this.runRows(retailerId, RUN_RECEIPT_READ_LIMIT)
       .find((row) => row.runId === runId && row.deviceId === safeDeviceId);

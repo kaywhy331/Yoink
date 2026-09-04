@@ -4012,5 +4012,90 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       CREATE INDEX operator_alert_incidents_queue_idx
         ON operator_alert_incidents(tenant_id, status, severity, last_seen_at DESC, id DESC);
     `
+  },
+  {
+    version: 63,
+    name: "compact_no_work_background_cycles",
+    sql: `
+      DROP TRIGGER background_task_events_no_delete;
+      DROP TRIGGER background_tasks_bounded_delete;
+
+      CREATE TRIGGER background_task_events_no_delete
+      BEFORE DELETE ON background_task_events
+      WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.subject_user_id)
+        AND EXISTS (SELECT 1 FROM background_tasks WHERE id = OLD.task_id)
+        AND NOT EXISTS (
+          SELECT 1 FROM background_tasks
+          WHERE id = OLD.task_id AND state = 'succeeded'
+            AND json_extract(result_json, '$.historyDisposition') = 'no_work'
+        )
+      BEGIN SELECT RAISE(ABORT, 'background task events are append-only'); END;
+
+      CREATE TRIGGER background_tasks_bounded_delete
+      BEFORE DELETE ON background_tasks
+      WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.subject_user_id)
+        AND NOT (
+          OLD.state = 'succeeded'
+          AND json_extract(OLD.result_json, '$.historyDisposition') = 'no_work'
+        )
+        AND NOT (
+          OLD.state IN ('succeeded', 'cancelled')
+          AND OLD.completed_at <> ''
+          AND OLD.completed_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')
+        )
+      BEGIN SELECT RAISE(ABORT, 'background tasks are retained until bounded cleanup'); END;
+    `
+  },
+  {
+    version: 64,
+    name: "user_connector_notify_delivery_event",
+    foreignKeysDisabled: true,
+    sql: `
+      PRAGMA defer_foreign_keys = ON;
+
+      CREATE TABLE user_action_connector_deliveries_v64 (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        connector_id TEXT NOT NULL REFERENCES user_action_connectors(id) ON DELETE CASCADE,
+        endpoint_reference TEXT NOT NULL CHECK (length(endpoint_reference) BETWEEN 3 AND 120),
+        endpoint_binding_fingerprint TEXT NOT NULL DEFAULT '' CHECK (
+          endpoint_binding_fingerprint = '' OR (
+            length(endpoint_binding_fingerprint) = 64
+            AND endpoint_binding_fingerprint NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        action_job_id TEXT REFERENCES action_jobs(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL CHECK (event_type IN ('notify', 'carted', 'needs_you', 'missed', 'test')),
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND length(payload_json) <= 4000),
+        idempotency_key_hash TEXT NOT NULL UNIQUE CHECK (
+          length(idempotency_key_hash) = 64
+          AND idempotency_key_hash NOT GLOB '*[^a-f0-9]*'
+        ),
+        state TEXT NOT NULL CHECK (state IN (
+          'pending', 'leased', 'retry_wait', 'delivered', 'dead_letter', 'cancelled'
+        )),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 12),
+        lease_capability_hash TEXT NOT NULL DEFAULT '' CHECK (
+          lease_capability_hash = '' OR (
+            length(lease_capability_hash) = 64
+            AND lease_capability_hash NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        lease_expires_at TEXT NOT NULL DEFAULT '',
+        next_attempt_at TEXT NOT NULL DEFAULT '',
+        last_error_code TEXT NOT NULL DEFAULT '' CHECK (length(last_error_code) <= 80),
+        delivered_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE
+      ) STRICT;
+      INSERT INTO user_action_connector_deliveries_v64 SELECT * FROM user_action_connector_deliveries;
+
+      DROP TABLE user_action_connector_deliveries;
+      ALTER TABLE user_action_connector_deliveries_v64 RENAME TO user_action_connector_deliveries;
+      CREATE INDEX user_action_connector_deliveries_queue_idx
+        ON user_action_connector_deliveries(tenant_id, user_id, state, next_attempt_at, created_at, id);
+    `
   }
 ]);

@@ -75,7 +75,7 @@ export interface WatchQueueObservationInput {
 }
 
 export type UserConnectorKind = "discord" | "slack" | "webhook";
-export type UserConnectorEvent = "carted" | "needs_you" | "missed" | "test";
+export type UserConnectorEvent = "notify" | "carted" | "needs_you" | "missed" | "test";
 
 export interface UserActionConnectorInput {
   contractVersion: typeof USER_CONNECTOR_CONTRACT_VERSION;

@@ -50,6 +50,8 @@ test("shopper routes push history, restore tabs, and canonicalize aliases", asyn
     assert.equal(browser.location.hash, "#home");
     click(browser, browser.document.querySelector('[data-tab="products"]') as Element);
     assert.equal(browser.location.hash, "#products");
+    click(browser, browser.document.querySelector('[data-tab="stores"]') as Element);
+    assert.equal(browser.location.hash, "#stores");
     click(browser, browser.document.querySelector('.tabs [data-tab="calls"]') as Element);
     assert.equal(browser.location.hash, "#calls");
     click(browser, browser.document.querySelector('[data-call-filter="drawings"]') as Element);
@@ -66,6 +68,11 @@ test("shopper routes push history, restore tabs, and canonicalize aliases", asyn
     });
     browser.history.back();
     await eventually(() => assert.equal(browser.location.hash, "#calls"));
+    browser.history.back();
+    await eventually(() => {
+      assert.equal(browser.location.hash, "#stores");
+      assert.equal(browser.document.querySelector('[data-panel="stores"]')?.classList.contains("active"), true);
+    });
     browser.history.back();
     await eventually(() => {
       assert.equal(browser.location.hash, "#products");

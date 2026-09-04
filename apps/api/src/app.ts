@@ -303,6 +303,19 @@ const ADMIN_SNAPSHOT_VIEW_IDS = [
 type AdminSnapshotView = typeof ADMIN_SNAPSHOT_VIEW_IDS[number];
 const ADMIN_SNAPSHOT_VIEWS = new Set<string>(ADMIN_SNAPSHOT_VIEW_IDS);
 
+function companionCompatibility(appVersion: string, installedVersion: string): {
+  compatible: boolean;
+  reason: "compatible" | "major_minor_mismatch" | "development_version";
+} {
+  const parse = (value: string) => /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(value || "").trim());
+  const app = parse(appVersion);
+  const installed = parse(installedVersion);
+  if (!app || !installed) return { compatible: true, reason: "development_version" };
+  return app[1] === installed[1] && app[2] === installed[2]
+    ? { compatible: true, reason: "compatible" }
+    : { compatible: false, reason: "major_minor_mismatch" };
+}
+
 export interface AppDependencies {
   db: YoinkDatabase;
   webRoot: string;
@@ -444,6 +457,11 @@ function purchaseAutomationPlanInput(plan: Record<string, unknown>): PurchaseAut
     status: String(plan.status ?? ""),
     title: String(plan.title ?? ""),
     targetQuantity: Number(plan.targetQuantity ?? 1),
+    maxAllInCents: plan.maxAllInCents === null || plan.maxAllInCents === undefined
+      ? intentPolicy.maxAllInCents === null || intentPolicy.maxAllInCents === undefined
+        ? null
+        : Number(intentPolicy.maxAllInCents)
+      : Number(plan.maxAllInCents),
     actionCeiling: String(plan.actionCeiling ?? intentPolicy.actionCeiling ?? "notify"),
     decisionMode: String(plan.decisionMode ?? intentPolicy.decisionMode ?? "strategy"),
     expiresAt: String(plan.expiresAt ?? intentPolicy.expiresAt ?? ""),
@@ -469,22 +487,26 @@ function userPurchaseIntentUpdateInput(body: Record<string, unknown>): MissionUp
 
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLocaleLowerCase("en-US");
-  if (contentType !== "application/json") throw new Error("Requests with a body must use application/json.");
+  if (contentType !== "application/json") {
+    throw new ApiError("unsupported_media_type", 415, "Requests with a body must use application/json.");
+  }
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
-    if (total > MAX_BODY_BYTES) throw new Error("The request body is too large.");
+    if (total > MAX_BODY_BYTES) throw new ApiError("request_body_too_large", 413, "The request body is too large.");
     chunks.push(buffer);
   }
   let value: unknown;
   try {
     value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    throw new Error("The request body is not valid JSON.");
+    throw new ApiError("invalid_json", 400, "The request body is not valid JSON.");
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("A JSON object is required.");
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError("json_object_required", 400, "A JSON object is required.");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -841,6 +863,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     const settings = input.settings ?? control.settings();
     const sources = input.sources ?? control.listSources();
     const deviceList = input.deviceList ?? devices.listDevices(now);
+    const spend = spendLedger.summary(now, false);
     const context = {
       version,
       executionMode: settings.executionMode,
@@ -848,6 +871,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       sources,
       devices: deviceList,
       qualifications: input.laneQualifications ?? guardedAddLanes(),
+      spend,
       sessionBlockers: input.sessionBlockers ?? retailerReadiness.freshSessionBlockers(now),
       now
     };
@@ -873,6 +897,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       sources: control.listSources(),
       devices: devices.listDevices(now),
       qualifications: guardedAddLanes(),
+      spend: spendLedger.summary(now, false),
       sessionBlockers: retailerReadiness.freshSessionBlockers(now),
       now
     });
@@ -965,6 +990,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         });
         return;
       }
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method ?? "")
+        && !pairingRoute && !selfDeviceRoute && !mutationOriginValidator(request)) {
+        json(response, 403, { error: "origin_rejected", message: "This mutation requires an explicitly allowed Yoink origin or trusted service/device scope." });
+        return;
+      }
       const pairingBody = request.method === "POST"
         && initialRequestUrl.pathname === "/api/v1/devices/pair"
         ? await readJson(request)
@@ -1032,6 +1062,55 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const observerRecoveryReviewMatch = /^\/api\/v1\/community\/recovery-evidence\/([A-Za-z0-9_-]{3,120})\/review$/.exec(requestUrl.pathname);
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/health") {
+        let databaseReady = false;
+        try {
+          databaseReady = Number(db.get<{ ok: number }>("SELECT 1 AS ok")?.ok) === 1;
+        } catch {
+          databaseReady = false;
+        }
+        const witness = observerRecipes.witnessStatus() as {
+          required?: boolean;
+          state?: string;
+          healthy?: boolean;
+        };
+        const backgroundWorker = await dependencies.backgroundWorkerStatus?.() ?? {
+          state: "disabled" as const,
+          healthy: true,
+          runtimeKind: "local_in_process" as const,
+          mode: "disabled" as const,
+          lastHeartbeatAt: "",
+          lastErrorCode: "",
+          deploymentAttested: false,
+          deploymentContractVersion: BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION
+        };
+        const workerRequired = (backgroundWorker.mode ?? "embedded") !== "disabled";
+        const reasons = [
+          ...(!databaseReady ? ["database_unavailable"] : []),
+          ...(workerRequired && !backgroundWorker.healthy ? ["background_worker_unhealthy"] : []),
+          ...(witness.required === true && witness.healthy !== true ? ["observer_witness_unhealthy"] : [])
+        ];
+        const ready = reasons.length === 0;
+        json(response, ready ? 200 : 503, {
+          status: ready ? "ready" : "degraded",
+          version,
+          database: databaseReady ? "ready" : "unavailable",
+          reasons,
+          backgroundWorkerRuntime: backgroundWorker.state,
+          backgroundWorkerHealthy: backgroundWorker.healthy,
+          backgroundWorkerMode: backgroundWorker.mode ?? "embedded",
+          backgroundWorkerDeployment: backgroundWorker.runtimeKind,
+          backgroundWorkerDeploymentAttested: backgroundWorker.deploymentAttested,
+          backgroundWorkerDeploymentContractVersion: backgroundWorker.deploymentContractVersion,
+          backgroundWorkerLastHeartbeatAt: backgroundWorker.lastHeartbeatAt,
+          backgroundWorkerLastErrorCode: backgroundWorker.lastErrorCode,
+          observerRecipeWitnessRequired: witness.required === true,
+          observerRecipeWitnessState: String(witness.state ?? "disabled"),
+          observerRecipeWitnessHealthy: witness.healthy === true
+        });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/capabilities") {
         const settings = control.settings();
         const targetAddQualified = qualifications.targetAddQualified();
         const walmartAddQualified = qualifications.walmartAddQualified();
@@ -1273,7 +1352,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (body.confirmation !== "OPEN_WALMART_PURCHASE_HANDOFF"
           || !["howl", "direct"].includes(String(body.routeKind))
           || !["calls", "home"].includes(String(body.surface ?? "calls"))) {
-          throw new Error("A confirmed Walmart purchase handoff route is required.");
+          throw new ApiError("request_rejected", 400, "A confirmed Walmart purchase handoff route is required.");
         }
         const click = walmartPurchaseHandoffInteractions.recordClick(
           walmartPurchaseHandoffClickMatch[1] ?? "",
@@ -1303,6 +1382,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           unitPriceCents: signal.unitPriceCents ?? null,
           currency: String(signal.currency ?? "USD"),
           actionJobId: String(signal.actionJobId ?? ""),
+          notificationDeliveryState: String(signal.actionJobNotificationState ?? ""),
+          notificationDeliveredAt: String(signal.actionJobNotificationDeliveredAt ?? ""),
+          notificationFailureCode: String(signal.actionJobNotificationFailureCode ?? ""),
+          notificationConnectorState: String(signal.actionJobConnectorState ?? ""),
           source: String(signal.source ?? ""),
           sourceChannelId: String(signal.sourceChannelId ?? ""),
           falsePositiveReported: Number(signal.falsePositiveReported ?? 0) === 1,
@@ -1341,7 +1424,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/source-feedback/false-positive") {
         const body = await readJson(request);
         if (body.confirmation !== "REPORT_FALSE_POSITIVE") {
-          throw new Error("Explicit false-positive feedback confirmation is required.");
+          throw new ApiError("request_rejected", 400, "Explicit false-positive feedback confirmation is required.");
         }
         json(response, 200, signalProviders.reportSignalFalsePositive(String(body.channelId ?? ""), body.signalId));
         return;
@@ -1693,6 +1776,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/heartbeat") {
           const body = await readJson(request);
           const updated = devices.heartbeat(device.id, body as Omit<PairDeviceInput, "pairingCode" | "name">);
+          const compatibility = companionCompatibility(version, updated.extensionVersion);
           const settings = control.settings();
           const targetAddQualified = qualifications.targetAddQualified();
           const walmartAddQualified = qualifications.walmartAddQualified();
@@ -1702,6 +1786,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             device: updated,
             credential: devices.credentialStatus(device.id),
             controlPlane: {
+              companionCompatible: compatibility.compatible,
+              companionCompatibilityReason: compatibility.reason,
               executionMode: settings.executionMode,
               actionsPaused: settings.actionsPaused,
               retailerMutationEnabled: targetAddQualified || walmartAddQualified || amazonAddQualified || bestBuyAddQualified,
@@ -1742,7 +1828,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const shadowObservationMatch = /^\/api\/v1\/devices\/self\/shadow-observations\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && shadowObservationMatch) {
           const body = await readJson(request);
-          if (body.retailerId !== shadowObservationMatch[1]) throw new Error("The retailer observation route and payload must match.");
+          if (body.retailerId !== shadowObservationMatch[1]) throw new ApiError("request_rejected", 400, "The retailer observation route and payload must match.");
           requireAdapterVersion(body.adapterVersion, RETAILER_OBSERVER_VERSIONS[shadowObservationMatch[1] as SupportedRetailerId], "retailer observer");
           const observation = shadowObservations.record(device.id, body as unknown as RetailerShadowObservationInput);
           const listing = catalog.exactRetailerListing(observation.retailerId, observation.retailerSku);
@@ -1767,7 +1853,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const adapterDiagnosticMatch = /^\/api\/v1\/devices\/self\/adapter-diagnostics\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && adapterDiagnosticMatch) {
           const body = await readJson(request);
-          if (body.retailerId !== adapterDiagnosticMatch[1]) throw new Error("The adapter diagnostic route and payload must match.");
+          if (body.retailerId !== adapterDiagnosticMatch[1]) throw new ApiError("request_rejected", 400, "The adapter diagnostic route and payload must match.");
           {
             const diagnosticRetailer = adapterDiagnosticMatch[1] as SupportedRetailerId;
             const expectedDiagnosticVersion = body.operation === "observe"
@@ -1799,7 +1885,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const communityNonceMatch = /^\/api\/v1\/devices\/self\/community\/nonces\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && communityNonceMatch) {
           if (!device.capabilities.communityReadOnlyEvidence || !device.capabilities.exactSelectedOfferEvidence) {
-            throw new Error("Upgrade the Chrome companion before sharing read-only community evidence.");
+            throw new ApiError("request_rejected", 400, "Upgrade the Chrome companion before sharing read-only community evidence.");
           }
           const retailerId = communityNonceMatch[1] as SupportedRetailerId;
           json(response, 201, community.issueNonce(device.id, retailerId));
@@ -1808,7 +1894,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const communityContributionMatch = /^\/api\/v1\/devices\/self\/community\/contributions\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && communityContributionMatch) {
           if (!device.capabilities.communityReadOnlyEvidence || !device.capabilities.exactSelectedOfferEvidence) {
-            throw new Error("Upgrade the Chrome companion before sharing read-only community evidence.");
+            throw new ApiError("request_rejected", 400, "Upgrade the Chrome companion before sharing read-only community evidence.");
           }
           const retailerId = communityContributionMatch[1] as SupportedRetailerId;
           const body = await readJson(request);
@@ -1822,7 +1908,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const observerRecipeMatch = /^\/api\/v1\/devices\/self\/observer-recipes\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
         if (request.method === "GET" && observerRecipeMatch) {
           if (!device.capabilities.observerRecipeShadow) {
-            throw new Error("Upgrade the Chrome companion before requesting observer recipes.");
+            throw new ApiError("request_rejected", 400, "Upgrade the Chrome companion before requesting observer recipes.");
           }
           const retailerId = observerRecipeMatch[1] as SupportedRetailerId;
           const recipe = observerRecipes.active(retailerId, Date.now(), currentRequestScope().userId);
@@ -1841,7 +1927,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && observerTrialMatch) {
           const retailerId = observerTrialMatch[1] as SupportedRetailerId;
           const body = await readJson(request);
-          if (body.retailerId !== retailerId) throw new Error("The observer recipe trial route and payload must match.");
+          if (body.retailerId !== retailerId) throw new ApiError("request_rejected", 400, "The observer recipe trial route and payload must match.");
           json(response, 201, {
             trial: observerRecipes.recordTrial(device.id, body as unknown as ObserverRecipeTrialInput)
           });
@@ -1915,11 +2001,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/signals/batch") {
           const body = await readJson(request);
           if (!Array.isArray(body.signals) || body.signals.length < 1 || body.signals.length > 50) {
-            throw new Error("A TrackaLacker signal batch must contain 1 through 50 signals.");
+            throw new ApiError("request_rejected", 400, "A TrackaLacker signal batch must contain 1 through 50 signals.");
           }
           const envelopes = body.signals.map((entry) => {
             if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-              throw new Error("Every TrackaLacker batch entry must be an object.");
+              throw new ApiError("request_rejected", 400, "Every TrackaLacker batch entry must be an object.");
             }
             const item = entry as Record<string, unknown>;
             return {
@@ -2029,7 +2115,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && readinessDeviceMatch) {
           const body = await readJson(request);
           if (body.retailerId !== readinessDeviceMatch[1]) {
-            throw new Error("The retailer-readiness route and payload must match.");
+            throw new ApiError("request_rejected", 400, "The retailer-readiness route and payload must match.");
           }
           const readiness = retailerReadiness.record(
             device.id,
@@ -2054,7 +2140,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/action-handoffs/reconcile") {
           const body = await readJson(request);
           if (body.contractVersion !== 1 || !Array.isArray(body.jobIds)) {
-            throw new Error("The action-handoff reconciliation contract is invalid.");
+            throw new ApiError("request_rejected", 400, "The action-handoff reconciliation contract is invalid.");
           }
           const jobIds = body.jobIds.map((value) => String(value ?? ""));
           const waitMs = Math.max(0, Math.min(
@@ -2113,7 +2199,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             || body.sessionCleared !== true
             || !Array.isArray(body.retainedKeys)
             || body.retainedKeys.length !== 0) {
-            throw new Error("Local deletion must clear both Chrome storage areas and retain no extension keys.");
+            throw new ApiError("request_rejected", 400, "Local deletion must clear both Chrome storage areas and retain no extension keys.");
           }
           json(response, 200, {
             compliance: privacyCompliance.record("local_deletion", "deletion_completed", device.id)
@@ -2127,7 +2213,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             || !Array.isArray(body.deliveryIds)
             || body.deliveryIds.length > 100
             || body.deliveryIds.some((value) => !/^[A-Za-z0-9_-]{3,160}$/.test(String(value)))) {
-            throw new Error("Valid closed notification delivery IDs are required.");
+            throw new ApiError("request_rejected", 400, "Valid closed notification delivery IDs are required.");
           }
           json(response, 200, {
             closures: notifications.acknowledgeClosedDeliveries(device.id, body.deliveryIds)
@@ -2138,7 +2224,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && notificationAckMatch) {
           const body = await readJson(request);
           if (typeof body.capabilityToken !== "string" || !["delivered", "failed"].includes(String(body.outcome))) {
-            throw new Error("A valid notification capability and delivery outcome are required.");
+            throw new ApiError("request_rejected", 400, "A valid notification capability and delivery outcome are required.");
           }
           json(response, 200, {
             notification: notifications.acknowledge(
@@ -2155,7 +2241,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && notificationInteractionMatch) {
           const body = await readJson(request);
           if (!["clicked", "dismissed"].includes(String(body.interaction))) {
-            throw new Error("A valid notification interaction is required.");
+            throw new ApiError("request_rejected", 400, "A valid notification interaction is required.");
           }
           json(response, 200, {
             notification: notifications.recordInteraction(
@@ -2167,6 +2253,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/jobs/next") {
+          const compatibility = companionCompatibility(version, device.extensionVersion);
+          if (!compatibility.compatible) {
+            json(response, 200, {
+              job: null,
+              reason: "companion_incompatible",
+              companionCompatible: false,
+              companionCompatibilityReason: compatibility.reason
+            });
+            return;
+          }
           const waitMs = Math.max(0, Math.min(
             DEVICE_ACTION_JOB_WAIT_MAX_MS,
             Math.floor(Number(requestUrl.searchParams.get("wait") ?? 0) || 0)
@@ -2212,15 +2308,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && jobEventsBatchMatch) {
           const body = await readJson(request);
           if (typeof body.capabilityToken !== "string" || !Array.isArray(body.events)) {
-            throw new Error("A valid action-job capability and progress event batch are required.");
+            throw new ApiError("request_rejected", 400, "A valid action-job capability and progress event batch are required.");
           }
           const events = body.events.map((entry) => {
             if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-              throw new Error("Every action-job progress event must be an object.");
+              throw new ApiError("request_rejected", 400, "Every action-job progress event must be an object.");
             }
             const event = entry as Record<string, unknown>;
             if (!JOB_STATES.includes(event.state as JobState)) {
-              throw new Error("The action-job progress batch contains an invalid state.");
+              throw new ApiError("request_rejected", 400, "The action-job progress batch contains an invalid state.");
             }
             return {
               state: event.state as JobState,
@@ -2254,7 +2350,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && deviceCartOutcomeMatch) {
           const body = await readJson(request);
           if (!["got_it", "missed_it"].includes(String(body.outcome))) {
-            throw new Error("Choose Got it or Missed it for this cart action.");
+            throw new ApiError("request_rejected", 400, "Choose Got it or Missed it for this cart action.");
           }
           const outcome = signals.reportCartOutcome(
             deviceCartOutcomeMatch[1] ?? "",
@@ -2273,7 +2369,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (request.method === "POST" && eventMatch) {
           const body = await readJson(request);
           if (typeof body.capabilityToken !== "string" || !JOB_STATES.includes(body.state as JobState)) {
-            throw new Error("A valid action-job capability and next state are required.");
+            throw new ApiError("request_rejected", 400, "A valid action-job capability and next state are required.");
           }
           const evidence = body.evidence && typeof body.evidence === "object" && !Array.isArray(body.evidence)
             ? body.evidence as Record<string, unknown>
@@ -2967,6 +3063,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           plan: planFilter || (plannedFilter === "true" || plannedFilter === "planned"
             ? "planned"
             : plannedFilter === "false" || plannedFilter === "unplanned" ? "unplanned" : ""),
+          category: requestUrl.searchParams.get("category") ?? "",
           priceMinCents: requestUrl.searchParams.get("priceMin") ?? "",
           priceMaxCents: requestUrl.searchParams.get("priceMax") ?? "",
           sort: requestUrl.searchParams.get("sort") ?? "newest"
@@ -3061,11 +3158,6 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/strategies") {
         json(response, 200, { items: control.listStrategies() });
-        return;
-      }
-
-      if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method ?? "") && !mutationOriginValidator(request)) {
-        json(response, 403, { error: "origin_rejected", message: "This mutation requires an explicitly allowed Yoink origin or trusted service/device scope." });
         return;
       }
 
@@ -3255,7 +3347,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/user/watch-queue/settings") {
         const body = await readJson(request);
         if (body.confirmation !== WATCH_QUEUE_MODE_CONFIRMATION) {
-          throw new Error("Explicit watch-queue mode confirmation is required.");
+          throw new ApiError("request_rejected", 400, "Explicit watch-queue mode confirmation is required.");
+        }
+        if (!["manual", "auto_armed"].includes(String(body.mode ?? ""))) {
+          throw new ApiError("request_rejected", 400, "Choose a supported watch-queue mode.");
         }
         json(response, 200, {
           watchQueue: dropWindows.setWatchQueueMode(String(body.mode ?? "") as WatchQueueMode)
@@ -3433,7 +3528,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/hosted-delivery/signals/batch") {
         const body = await readJson(request);
-        if (!Array.isArray(body.signals)) throw new Error("A provider signal batch is required.");
+        if (!Array.isArray(body.signals)) throw new ApiError("request_rejected", 400, "A provider signal batch is required.");
         json(response, 202, signalIngress.acceptProviderBatch(
           body.signals as unknown as SignalProviderEnvelope[]
         ));
@@ -3533,7 +3628,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && sourceChannelReplayMatch) {
         const body = await readJson(request);
         const channel = signalProviders.getChannel(sourceChannelReplayMatch[1] ?? "");
-        if (!channel) throw new Error("The signal provider channel does not exist.");
+        if (!channel) throw new ApiError("not_found", 404, "The signal provider channel does not exist.");
         const maximum = Math.max(1, Math.min(20, Math.floor(Number(body.maximum ?? 10) || 10)));
         const candidates = db.all<{ id: string }>(
           `SELECT id FROM inbox_messages
@@ -3650,7 +3745,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const retailerId = communityConsentMatch[1] as SupportedRetailerId;
         const body = await readJson(request);
         if (body.retailerId !== undefined && body.retailerId !== retailerId) {
-          throw new Error("The community consent route and payload must match.");
+          throw new ApiError("request_rejected", 400, "The community consent route and payload must match.");
         }
         json(response, 200, {
           consent: community.updateConsent({ ...body, retailerId } as unknown as CommunityConsentUpdateInput)
@@ -3685,7 +3780,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/observer-recipes/witness/publish") {
         const body = await readJson(request);
         if (body.confirmation !== "PUBLISH_OBSERVER_RECIPE_CHECKPOINT") {
-          throw new Error("Explicit observer recipe witness publication confirmation is required.");
+          throw new ApiError("request_rejected", 400, "Explicit observer recipe witness publication confirmation is required.");
         }
         adminChanges.requireFreshStepUp();
         const publisher = dependencies.observerRecipeWitness;
@@ -3716,7 +3811,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const generation = Number((body.manifest as { payload?: { generation?: unknown } } | undefined)?.payload?.generation);
         if (body.confirmation !== "INSTALL_ROOTED_OBSERVER_RECIPE_TRUST_MANIFEST"
           || !Number.isSafeInteger(generation) || generation < 1) {
-          throw new Error("A valid rooted trust manifest and explicit installation confirmation are required.");
+          throw new ApiError("request_rejected", 400, "A valid rooted trust manifest and explicit installation confirmation are required.");
         }
         const governed = adminChanges.execute({
           operationType: "observer_recipe_trust_install",
@@ -3746,7 +3841,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (action === "promote") {
           if (body.confirmation !== "PROMOTE_SIGNED_OBSERVER_RECIPE"
             || !["shadow", "canary", "trusted_read_only"].includes(String(body.targetState))) {
-            throw new Error("A valid signed observer recipe promotion is required.");
+            throw new ApiError("request_rejected", 400, "A valid signed observer recipe promotion is required.");
           }
           const governed = adminChanges.execute({
             operationType: "observer_recipe_promote",
@@ -3763,7 +3858,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           json(response, 200, { recipe: governed.result });
         } else if (action === "resign") {
           if (body.confirmation !== "RESIGN_ROOTED_OBSERVER_RECIPE") {
-            throw new Error("Explicit rooted observer recipe re-signing is required.");
+            throw new ApiError("request_rejected", 400, "Explicit rooted observer recipe re-signing is required.");
           }
           const governed = adminChanges.execute({
             operationType: "observer_recipe_resign",
@@ -3779,7 +3874,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           }
           json(response, 200, { recipe: governed.result });
         } else if (action === "disable") {
-          if (body.confirmation !== "DISABLE_OBSERVER_RECIPE") throw new Error("Explicit observer recipe kill-switch confirmation is required.");
+          if (body.confirmation !== "DISABLE_OBSERVER_RECIPE") throw new ApiError("request_rejected", 400, "Explicit observer recipe kill-switch confirmation is required.");
           const reasonCode = String(body.reasonCode ?? "maintainer_kill_switch");
           const governed = adminChanges.execute({
             operationType: "observer_recipe_disable",
@@ -3795,7 +3890,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           }
           json(response, 200, { recipe: governed.result });
         } else {
-          if (body.confirmation !== "ROLLBACK_OBSERVER_RECIPE") throw new Error("Explicit observer recipe rollback confirmation is required.");
+          if (body.confirmation !== "ROLLBACK_OBSERVER_RECIPE") throw new ApiError("request_rejected", 400, "Explicit observer recipe rollback confirmation is required.");
           const governed = adminChanges.execute({
             operationType: "observer_recipe_rollback",
             targetKey: recipeId,
@@ -3820,7 +3915,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && retireQualificationMatch) {
         const body = await readJson(request);
         if (body.confirmation !== "RETIRE_ONE_RETAILER_LANE") {
-          throw new Error("Explicit single-lane retirement confirmation is required.");
+          throw new ApiError("request_rejected", 400, "Explicit single-lane retirement confirmation is required.");
         }
         const lane = retailerReadiness.retireLane(
           retireQualificationMatch[1] ?? "",
@@ -3835,7 +3930,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (body.adapterVersion !== TARGET_ADD_ADAPTER_VERSION
           || body.confirmation !== TARGET_ADD_ACTIVATION_CONFIRMATION
           || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
-          throw new Error("Explicit Target add-only activation confirmation and current evidence are required.");
+          throw new ApiError("request_rejected", 400, "Explicit Target add-only activation confirmation and current evidence are required.");
         }
         const governed = adminChanges.execute({
           operationType: "retailer_lane_activate",
@@ -3861,7 +3956,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (body.adapterVersion !== WALMART_ADD_ADAPTER_VERSION
           || body.confirmation !== WALMART_ADD_ACTIVATION_CONFIRMATION
           || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
-          throw new Error("Explicit Walmart add-only activation confirmation and current evidence are required.");
+          throw new ApiError("request_rejected", 400, "Explicit Walmart add-only activation confirmation and current evidence are required.");
         }
         const governed = adminChanges.execute({
           operationType: "retailer_lane_activate",
@@ -3887,7 +3982,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (body.adapterVersion !== AMAZON_ADD_ADAPTER_VERSION
           || body.confirmation !== AMAZON_ADD_ACTIVATION_CONFIRMATION
           || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
-          throw new Error("Explicit Amazon add-only activation confirmation and current evidence are required.");
+          throw new ApiError("request_rejected", 400, "Explicit Amazon add-only activation confirmation and current evidence are required.");
         }
         const governed = adminChanges.execute({
           operationType: "retailer_lane_activate",
@@ -3913,7 +4008,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (body.adapterVersion !== BESTBUY_ADD_ADAPTER_VERSION
           || body.confirmation !== BESTBUY_ADD_ACTIVATION_CONFIRMATION
           || !/^[a-f0-9]{64}$/.test(String(body.evidenceHash ?? ""))) {
-          throw new Error("Explicit Best Buy add-only activation confirmation and current evidence are required.");
+          throw new ApiError("request_rejected", 400, "Explicit Best Buy add-only activation confirmation and current evidence are required.");
         }
         const governed = adminChanges.execute({
           operationType: "retailer_lane_activate",
@@ -3964,7 +4059,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && reviewResolutionMatch) {
         const body = await readJson(request);
         if (!["confirmed", "cancelled"].includes(String(body.outcome))) {
-          throw new Error("A supported manual-review outcome is required.");
+          throw new ApiError("request_rejected", 400, "A supported manual-review outcome is required.");
         }
         const job = signals.resolveReviewJob(
           reviewResolutionMatch[1] ?? "",
@@ -3980,7 +4075,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && cartOutcomeMatch) {
         const body = await readJson(request);
         if (!["got_it", "missed_it"].includes(String(body.outcome))) {
-          throw new Error("Choose Got it or Missed it for this cart action.");
+          throw new ApiError("request_rejected", 400, "Choose Got it or Missed it for this cart action.");
         }
         const outcome = signals.reportCartOutcome(
           cartOutcomeMatch[1] ?? "",
@@ -3995,7 +4090,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       if (request.method === "PUT" && requestUrl.pathname === "/api/v1/strategies") {
         const body = await readJson(request);
-        if (!Array.isArray(body.strategies)) throw new Error("The strategies field must be a list.");
+        if (!Array.isArray(body.strategies)) throw new ApiError("request_rejected", 400, "The strategies field must be a list.");
         json(response, 200, { items: control.replaceStrategies(body.strategies as StrategyDefinition[]) });
         return;
       }
@@ -4012,7 +4107,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/purchase-profiles") {
-        json(response, 200, { items: control.listPurchaseProfiles() });
+        json(response, 200, {
+          items: control.listPurchaseProfiles().map((profile) => ({
+            ...profile,
+            linkedMissionCount: control.purchaseProfileLinkedMissionIds(profile.id).length
+          }))
+        });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/purchase-profiles") {
@@ -4030,7 +4130,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       const purchaseProfileMatch = /^\/api\/v1\/purchase-profiles\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
       if (request.method === "DELETE" && purchaseProfileMatch) {
-        json(response, 200, { items: control.deletePurchaseProfile(purchaseProfileMatch[1] ?? "") });
+        const profileId = purchaseProfileMatch[1] ?? "";
+        const profile = control.listPurchaseProfiles().find((candidate) => candidate.id === profileId);
+        const unlinkedMissionIds = control.purchaseProfileLinkedMissionIds(profileId);
+        const items = control.deletePurchaseProfile(profileId);
+        json(response, 200, {
+          items,
+          deleted: profile ? { profile, unlinkedMissionIds, unlinkedMissionCount: unlinkedMissionIds.length } : null
+        });
         return;
       }
       if (request.method === "PUT" && [
@@ -4038,7 +4145,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         "/api/v1/admin/attribution-policies"
       ].includes(requestUrl.pathname)) {
         const body = await readJson(request);
-        if (!Array.isArray(body.policies)) throw new Error("The policies field must be a list.");
+        if (!Array.isArray(body.policies)) throw new ApiError("request_rejected", 400, "The policies field must be a list.");
         const enabledCount = body.policies.filter((policy) => policy && typeof policy === "object"
           && (policy as Record<string, unknown>).enabled === true).length;
         const governed = adminChanges.execute({
@@ -4060,15 +4167,41 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, { policies: governed.result });
         return;
       }
+      if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/admin/settings/actions") {
+        const body = await readJson(request);
+        if (typeof body.paused !== "boolean") throw new ApiError("request_rejected", 400, "The paused field must be true or false.");
+        const reason = String(body.reason ?? (body.paused
+          ? "Administrator paused purchase actions for every shopper."
+          : "Administrator resumed qualified purchase actions for every shopper."));
+        if (body.paused === true) {
+          json(response, 200, control.setTenantActionsPaused(true, reason));
+          return;
+        }
+        const scope = currentRequestScope();
+        const governed = adminChanges.execute({
+          operationType: "global_actions_resume",
+          targetKey: `tenant:${scope.tenantId}:actions`,
+          payload: body,
+          summary: { action: "Resume purchase actions for every shopper" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => control.setTenantActionsPaused(false, reason));
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        json(response, 200, governed.result);
+        return;
+      }
       if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/settings/actions") {
         const body = await readJson(request);
-        if (typeof body.paused !== "boolean") throw new Error("The paused field must be true or false.");
+        if (typeof body.paused !== "boolean") throw new ApiError("request_rejected", 400, "The paused field must be true or false.");
         if (body.paused === false
           && !qualifications.targetAddQualified()
           && !qualifications.walmartAddQualified()
           && !qualifications.amazonAddQualified()
           && !qualifications.bestBuyAddQualified()) {
-          throw new Error("Turn on cart adds for at least one store in Stores before resuming actions.");
+          throw new ApiError("request_rejected", 400, "Turn on cart adds for at least one store in Stores before resuming actions.");
         }
         if (body.paused === true) {
           json(response, 200, { settings: control.setActionsPaused(true, String(body.reason ?? "User paused global purchase actions.")) });
@@ -4090,6 +4223,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (routePolicy?.classified) {
+        json(response, 405, { error: "method_not_allowed", message: "That HTTP method is not supported for this Yoink route." });
+        return;
+      }
       json(response, 404, { error: "not_found", message: "The requested Yoink route does not exist." });
       });
     } catch (error) {

@@ -7,6 +7,7 @@ import { ControlRepository } from "../packages/database/src/control-repository.j
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
 import { SpendLedgerRepository } from "../packages/database/src/spend-ledger-repository.js";
+import { UserActionConnectorRepository } from "../packages/database/src/user-action-connector-repository.js";
 import { runWithRequestScope } from "../packages/database/src/request-scope.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
@@ -163,6 +164,41 @@ test("an exact under-MSRP signal creates one mission and a bounded shadow action
   }
 });
 
+test("a verified cart extends the manual checkout handoff window to thirty-five minutes", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const created = engine.process(trackalackerSignal({ externalEventId: "cart-handoff-window" }), NOW);
+    const signals = new SignalRepository(db);
+    const transitions = [
+      "awaiting_executor",
+      "leased",
+      "navigating",
+      "verifying_listing",
+      "offer_verified",
+      "add_authorized",
+      "adding",
+      "cart_verified",
+      "confirmed"
+    ] as const;
+    transitions.forEach((state, index) => signals.transitionJob(
+      created.actionJobId,
+      state,
+      "fixture",
+      "Fixture cart handoff transition.",
+      {},
+      NOW + (index + 1) * 1_000
+    ));
+    const confirmedAt = NOW + transitions.length * 1_000;
+    const expiresAt = new Date(db.get<{ expiresAt: string }>(
+      "SELECT expires_at AS expiresAt FROM action_jobs WHERE id = ?",
+      created.actionJobId
+    )?.expiresAt ?? "").getTime();
+    assert.equal(expiresAt, confirmedAt + 35 * 60_000);
+  } finally {
+    db.close();
+  }
+});
+
 test("a live multi-unit strategy match degrades before spend reservation because guarded runners add one", () => {
   const { db, engine } = seededEngine();
   try {
@@ -186,6 +222,13 @@ test("a live multi-unit strategy match degrades before spend reservation because
 test("an unqualified live add lane becomes a notification before spend reservation", () => {
   const { db, engine } = seededEngine();
   try {
+    new UserActionConnectorRepository(db, { restock_updates: "a".repeat(64) }).save({
+      contractVersion: 1,
+      kind: "webhook",
+      name: "Restock updates",
+      endpointReference: "restock_updates",
+      events: ["notify"]
+    }, "", NOW - 1_000);
     engine.control.replaceStrategies([{ ...purchaseStrategies()[0]!, quantity: 1 }], NOW);
     db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
     const result = engine.process(trackalackerSignal({ externalEventId: "unqualified-live-add" }), NOW);
@@ -198,6 +241,70 @@ test("an unqualified live add lane becomes a notification before spend reservati
     );
     assert.deepEqual({ ...job }, { action: "notify", quantity: 1, reservationId: null });
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM spend_reservations")?.count, 0);
+    assert.deepEqual({ ...db.get<{ eventType: string; state: string }>(
+      "SELECT event_type AS eventType, state FROM user_action_connector_deliveries WHERE action_job_id = ?",
+      result.actionJobId
+    ) }, { eventType: "notify", state: "pending" });
+    const projected = new SignalRepository(db).listJobs().find((item) => item.id === result.actionJobId);
+    assert.equal(projected?.notificationDeliveryState, "pending");
+    assert.equal(projected?.notificationConnectorState, "pending");
+  } finally {
+    db.close();
+  }
+});
+
+test("a fresh signal re-evaluates an open incident after its earlier notification-only job", () => {
+  const { db, engine } = seededEngine();
+  try {
+    engine.control.replaceStrategies([purchaseStrategies()[1]!], NOW);
+    const notified = engine.process(trackalackerSignal({ externalEventId: "notify-before-plan-upgrade" }), NOW);
+    assert.equal(notified.actionJobState, "notify_only");
+
+    engine.control.replaceStrategies([{ ...purchaseStrategies()[0]!, quantity: 1 }], NOW + 100);
+    qualifyTargetAdd(db);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    const actionable = engine.process(trackalackerSignal({
+      externalEventId: "cart-after-plan-upgrade",
+      observedAt: new Date(NOW + 500).toISOString()
+    }), NOW + 1_000);
+
+    assert.equal(actionable.incidentId, notified.incidentId);
+    assert.equal(actionable.corroborated, false);
+    assert.equal(actionable.decision, "qualified");
+    assert.equal(actionable.actionJobState, "awaiting_executor");
+    assert.notEqual(actionable.actionJobId, notified.actionJobId);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 2);
+    assert.equal(new SpendLedgerRepository(db).reservationForJob(actionable.actionJobId)?.status, "active");
+  } finally {
+    db.close();
+  }
+});
+
+test("fresh signal evaluation retires an expired pre-mutation browser lease", () => {
+  const { db, engine } = seededEngine();
+  try {
+    engine.control.replaceStrategies([{ ...purchaseStrategies()[0]!, quantity: 1 }], NOW);
+    qualifyTargetAdd(db);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    const stale = engine.process(trackalackerSignal({ externalEventId: "stale-browser-lease" }), NOW);
+    db.run(
+      `UPDATE action_jobs
+       SET state = 'leased', leased_at = ?, lease_expires_at = ?
+       WHERE id = ?`,
+      new Date(NOW).toISOString(),
+      new Date(NOW + 500).toISOString(),
+      stale.actionJobId
+    );
+
+    const fresh = engine.process(trackalackerSignal({
+      externalEventId: "fresh-after-expired-browser-lease",
+      observedAt: new Date(NOW + 1_000).toISOString()
+    }), NOW + 2_000);
+
+    assert.equal(db.get<{ state: string }>("SELECT state FROM action_jobs WHERE id = ?", stale.actionJobId)?.state, "expired");
+    assert.equal(fresh.corroborated, false);
+    assert.equal(fresh.actionJobState, "awaiting_executor");
+    assert.notEqual(fresh.actionJobId, stale.actionJobId);
   } finally {
     db.close();
   }
@@ -236,14 +343,17 @@ test("a reviewed cart plan creates a bounded job without any signal strategy", (
       decision_source: string;
       strategy_id: string | null;
       strategy_revision: number | null;
-    }>(`SELECT action, quantity, decision_source, strategy_id, strategy_revision
+      max_order_total_cents: number;
+    }>(`SELECT action, quantity, decision_source, strategy_id, strategy_revision,
+               max_order_total_cents
         FROM action_jobs WHERE id = ?`, result.actionJobId);
     assert.deepEqual({ ...storedJob }, {
       action: "add_to_cart",
       quantity: 1,
       decision_source: "purchase_intent",
       strategy_id: null,
-      strategy_revision: null
+      strategy_revision: null,
+      max_order_total_cents: 18_680
     });
     assert.equal(db.get<{ decision_source: string }>(
       "SELECT decision_source FROM mission_decisions WHERE mission_id = ?",
@@ -474,6 +584,58 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
       "",
       NOW + 4_000
     ), /different checkout result/);
+  } finally {
+    db.close();
+  }
+});
+
+test("Got it closes a Needs you cart action after its exact reservation expires", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const listingId = db.get<{ id: string }>(
+      "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+    )?.id;
+    assert.ok(listingId);
+    engine.control.replaceStrategies([], NOW);
+    const configured = engine.control.createConfiguredMission({
+      contractVersion: 1,
+      listingId,
+      targetQuantity: 1,
+      maxUnitPriceCents: 7_000,
+      maxAllInCents: 12_000,
+      actionCeiling: "add_to_cart",
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 900,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, NOW);
+    qualifyTargetAdd(db);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    const created = engine.process(trackalackerSignal({ externalEventId: "expired-needs-you-order" }), NOW);
+    db.run("UPDATE action_jobs SET state = 'manual_review' WHERE id = ?", created.actionJobId);
+    db.run("UPDATE signal_incidents SET status = 'locked' WHERE id = ?", created.incidentId);
+
+    const spend = new SpendLedgerRepository(db);
+    spend.releaseExpired(NOW + 121_000);
+    assert.equal(spend.reservationForJob(created.actionJobId)?.status, "released");
+    assert.equal(spend.reservationForJob(created.actionJobId)?.releaseReason, "reservation_expired");
+    const recorded = new SignalRepository(db).reportCartOutcome(
+      created.actionJobId,
+      "got_it",
+      "I_REVIEWED_CHECKOUT_RESULT",
+      7_250,
+      "Completed checkout after reviewing the store cart",
+      NOW + 122_000
+    );
+
+    assert.equal(recorded.outcome, "got_it");
+    assert.equal(recorded.state, "confirmed");
+    assert.equal(recorded.reservationStatus, "committed");
+    assert.deepEqual({ ...db.get<{ fulfilled: number; status: string }>(
+      "SELECT fulfilled_quantity AS fulfilled, status FROM missions WHERE id = ?",
+      configured.mission.id
+    ) }, { fulfilled: 1, status: "satisfied" });
   } finally {
     db.close();
   }

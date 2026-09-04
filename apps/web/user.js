@@ -6,6 +6,12 @@ const state = {
   productStores: [],
   productRequestSequence: 0,
   browse: { store: "", availability: "", plan: "", price: "", sort: "newest" },
+  storeProductGroups: [],
+  storeProducts: [],
+  storeProductTotal: 0,
+  storeProductStores: [],
+  storeRequestSequence: 0,
+  storeBrowse: { store: "", category: "" },
   profiles: [],
   quickAddBusy: false,
   quickMenuTrigger: null,
@@ -26,6 +32,7 @@ const state = {
   cartOutcomeActionId: "",
   cartOutcomeReturnFocus: null,
   proposals: [],
+  dismissedProposalIds: new Set(),
   editingPlan: null,
   setupProduct: null,
   setupPreflight: null,
@@ -49,6 +56,7 @@ const state = {
   affiliateRouting: null,
   query: "",
   loadedRoutes: new Set(),
+  routeLoadErrors: new Map(),
   routeLoadPromise: null,
   productPageSize: 48,
   productView: "grid",
@@ -73,6 +81,12 @@ const requestConfirmation = (options) => {
 const DISMISSED_ANNOUNCEMENT_KEY = "yoinkDismissedAnnouncementV1";
 const ANNOUNCEMENT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1_000;
 const PRODUCT_VIEW_KEY = "yoinkProductViewV1";
+const POPULAR_SHOP_CATEGORIES = Object.freeze([
+  { id: "needoh", label: "NeeDoh" },
+  { id: "pokemon", label: "Pokémon" },
+  { id: "disney_lorcana", label: "Disney Lorcana" },
+  { id: "one_piece", label: "One Piece" }
+]);
 try { state.productView = localStorage.getItem(PRODUCT_VIEW_KEY) === "list" ? "list" : "grid"; } catch { /* Grid remains the default. */ }
 const RETAILER_CART_URLS = Object.freeze({
   target: "https://www.target.com/cart",
@@ -553,6 +567,7 @@ const PRIMARY_TAB_FOR_PANEL = Object.freeze({ insights: "activity" });
 const USER_PANEL_ROUTES = Object.freeze({
   home: "home",
   products: "products",
+  stores: "stores",
   calls: "calls",
   plans: "plans",
   activity: "activity",
@@ -575,6 +590,7 @@ const USER_ROUTE_ALIASES = Object.freeze({
 const USER_SKELETON_TARGETS = Object.freeze({
   home: "#homeRecentList",
   products: "#productList",
+  stores: "#storeDirectory",
   calls: "#callList",
   plans: "#planList",
   activity: "#actionList",
@@ -648,6 +664,7 @@ function applyHashRoute() {
   const panel = ({
     home: "home",
     products: "products",
+    stores: "stores",
     calls: "calls",
     "calls/drawings": "calls",
     plans: "plans",
@@ -1205,7 +1222,8 @@ function renderProducts() {
 function renderProductReviewStatus() {
   const panel = $("#productReviewStatus");
   const proposals = (state.proposals || [])
-    .filter((proposal) => ["pending", "approved"].includes(String(proposal.status)))
+    .filter((proposal) => ["pending", "approved", "rejected"].includes(String(proposal.status))
+      && !state.dismissedProposalIds.has(proposal.id))
     .sort((first, second) => new Date(second.updatedAt || second.createdAt || 0).getTime()
       - new Date(first.updatedAt || first.createdAt || 0).getTime())
     .slice(0, 5);
@@ -1216,6 +1234,7 @@ function renderProductReviewStatus() {
   }
   $("#productReviewList").innerHTML = proposals.map((proposal) => {
     const approved = proposal.status === "approved";
+    const rejected = proposal.status === "rejected";
     const title = proposal.payload?.title || `${retailerDisplayName(proposal.retailerId)} product`;
     const group = approved ? state.productGroups.find((candidate) => (candidate.listings || []).some((listing) =>
       listing.listingId === proposal.appliedListingId
@@ -1223,7 +1242,14 @@ function renderProductReviewStatus() {
     const titleMarkup = group
       ? `<button class="title-link" data-product-detail="${escapeHtml(group.variantId)}" type="button">${escapeHtml(title)}</button>`
       : `<strong>${escapeHtml(title)}</strong>`;
-    return `<div class="mini-row" data-product-review="${escapeHtml(proposal.id)}"><span>${titleMarkup}<small>${escapeHtml(retailerDisplayName(proposal.retailerId))} · ${escapeHtml(proposal.retailerSku || proposal.payload?.retailerSku || "Item")}${approved ? " · Available in Products" : ""}</small></span><span class="tag ${approved ? "good" : "warn"}">${approved ? "Approved" : "In review"}</span></div>`;
+    const status = approved ? "Approved" : rejected ? "Rejected" : "In review";
+    const note = rejected && proposal.reviewNote
+      ? `<small><strong>Review note:</strong> ${escapeHtml(proposal.reviewNote)}</small>`
+      : "";
+    const actions = rejected
+      ? `<span class="inline-actions"><button class="button quiet" data-open-product-link type="button">Try another link</button><button class="button quiet" data-dismiss-proposal="${escapeHtml(proposal.id)}" type="button" aria-label="Dismiss rejected product suggestion">Dismiss</button></span>`
+      : `<span class="tag ${approved ? "good" : "warn"}">${status}</span>`;
+    return `<div class="mini-row" data-product-review="${escapeHtml(proposal.id)}"><span>${titleMarkup}<small>${escapeHtml(retailerDisplayName(proposal.retailerId))} · ${escapeHtml(proposal.retailerSku || proposal.payload?.retailerSku || "Item")}${approved ? " · Available in Products" : ""}</small>${note}</span>${actions}</div>`;
   }).join("");
 }
 
@@ -1251,22 +1277,24 @@ function quickAddMarkup(listing, group) {
   </span>`;
 }
 
-function productCardMarkup(group, missionByVariant, { eagerImage = false } = {}) {
+function productCardMarkup(group, missionByVariant, { eagerImage = false, storeId = state.browse.store } = {}) {
   const plan = missionByVariant.get(group.variantId);
   const listings = group.listings || [];
   const exactVariant = variantSummary(group.variantAttributes);
   const inStockCount = Number(group.inStockListingCount ?? listings.filter((listing) => listing.status === "in_stock").length);
   const preorderCount = Number(group.preorderListingCount ?? listings.filter((listing) => listing.status === "preorder").length);
   const outOfStockCount = Number(group.outOfStockListingCount ?? listings.filter((listing) => listing.status === "out_of_stock").length);
-  const focusListing = state.browse.store
-    ? listings.find((listing) => String(listing.retailerId) === state.browse.store) || null
+  const focusListing = storeId
+    ? listings.find((listing) => String(listing.retailerId) === storeId) || null
     : null;
   const primary = focusListing || bestListing(group);
   const primaryPrice = listingEffectivePrice(primary || {});
   const storeCount = Number(group.storeCount ?? listings.length);
   const storeSummary = focusListing
     ? focusListing.retailerName
-    : `${storeCount.toLocaleString()} store${storeCount === 1 ? "" : "s"}`;
+    : storeCount > 0
+      ? `${storeCount.toLocaleString()} store${storeCount === 1 ? "" : "s"}`
+      : "No supported store yet";
   const availabilitySummary = focusListing
     ? labelFor(AVAILABILITY_LABELS, focusListing.status)
     : inStockCount > 0
@@ -1275,7 +1303,7 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false } = {})
         ? `${preorderCount.toLocaleString()} preorder`
         : outOfStockCount > 0
           ? "Out of stock"
-          : "Availability unknown";
+          : listings.length ? "Availability unknown" : "Watch only";
   // The badge colour honours the server's purchasable flag when listings are
   // present; the counts still drive the wording so stock and buyability both show.
   const available = focusListing
@@ -1401,7 +1429,7 @@ $("#quickAddMenu").addEventListener("keydown", (event) => {
 async function quickAdd(listingId, profileId = "", options = {}) {
   if (state.quickAddBusy) return;
   const actionElement = options.element || statusUi.currentTrigger();
-  const product = state.products.find((item) => item.listingId === listingId);
+  const product = currentCatalogProducts().find((item) => item.listingId === listingId);
   if (!product) throw new Error("That product is no longer in this catalog view. Refresh and try again.");
   const existing = state.plans.find((plan) => plan.variantId === product.variantId);
   if (existing) return openPlan(existing.id);
@@ -1502,7 +1530,7 @@ function selectedProductListing(group) {
 }
 
 function renderProductDetail(variantId) {
-  const group = state.productGroups.find((candidate) => candidate.variantId === variantId);
+  const group = currentCatalogProductGroups().find((candidate) => candidate.variantId === variantId);
   if (!group) throw new Error("That product is no longer in the current catalog view. Refresh and try again.");
   const plan = state.plans.find((candidate) => candidate.variantId === variantId);
   const exactVariant = variantSummary(group.variantAttributes);
@@ -1538,7 +1566,7 @@ function renderProductDetail(variantId) {
       ${group.imageUrl ? `<img class="detail-image" src="${escapeHtml(group.imageUrl)}" alt="" referrerpolicy="no-referrer">` : ""}
       <div>${detailSummary ? `<p>${detailSummary}</p>` : ""}<div class="inline-actions" data-product-primary-actions>${primaryActions}</div></div>
     </div>
-    <div class="detail-rows">${rows}</div>`;
+    <div class="detail-rows">${rows || '<div class="empty"><p>No supported store is mapped yet. This followed product remains visible for monitoring.</p><button class="button secondary" data-open-product-link type="button">Add a supported store link</button></div>'}</div>`;
   for (const image of $$("#productDialogBody img")) {
     image.addEventListener("error", () => { image.remove(); }, { once: true });
   }
@@ -1563,7 +1591,7 @@ function renderProfiles() {
   const list = $("#profileList");
   if (!list) return;
   list.innerHTML = state.profiles.length
-    ? state.profiles.map((profile) => `<div class="mini-row profile-row"><span><strong>${escapeHtml(profile.name)}</strong><small> · ${escapeHtml(profileSummary(profile))}</small></span><span class="inline-actions"><button class="button quiet" data-profile-edit="${escapeHtml(profile.id)}" type="button">Edit</button><button class="button quiet" data-profile-delete="${escapeHtml(profile.id)}" type="button">Remove</button></span></div>`).join("")
+    ? state.profiles.map((profile) => `<div class="mini-row profile-row"><span><strong>${escapeHtml(profile.name)}</strong><small> · ${escapeHtml(profileSummary(profile))}${Number(profile.linkedMissionCount || 0) ? ` · ${Number(profile.linkedMissionCount).toLocaleString()} linked plan${Number(profile.linkedMissionCount) === 1 ? "" : "s"}` : ""}</small></span><span class="inline-actions"><button class="button quiet" data-profile-edit="${escapeHtml(profile.id)}" type="button">Edit</button><button class="button quiet" data-profile-delete="${escapeHtml(profile.id)}" type="button">Remove</button></span></div>`).join("")
     : '<div class="mini-row"><span>No Quick add setups yet. Quick add uses the Notify-only setup until you save one.</span></div>';
 }
 
@@ -2127,13 +2155,21 @@ function renderActions() {
     const confirmation = (state.actionPlatform?.orderConfirmations || [])
       .find((item) => item.actionJobId === action.id);
     const canClose = closeableCartAction(action);
+    const deliverySummary = action.action === "notify" && action.notificationDeliveryState
+      ? `Chrome ${words(action.notificationDeliveryState)}${action.notificationDeliveredAt ? ` ${relative(action.notificationDeliveredAt)}` : ""}${action.notificationFailureCode ? ` · ${words(action.notificationFailureCode)}` : ""}${action.notificationConnectorState ? ` · destination ${words(action.notificationConnectorState)}` : ""}`
+      : "";
+    const deliveryFailed = ["failed", "expired"].includes(String(action.notificationDeliveryState));
+    const actionStatusLabel = action.action === "notify" && action.notificationDeliveryState
+      ? deliveryFailed ? "Not delivered" : action.notificationDeliveryState === "pending" || action.notificationDeliveryState === "leased" ? "Delivery pending" : "Delivered"
+      : action.statusLabel || (stage === "needs_you" ? "Needs you" : labelFor(ACTION_STATE_LABELS, action.state));
     return `<article class="action-card" data-action-job="${escapeHtml(action.id)}" data-store="${escapeHtml(action.retailerId || "")}" data-stage="${escapeHtml(stage)}">
-    <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${stage === "ready_to_checkout" || action.userReportOutcome === "got_it" ? "good" : stage === "needs_you" ? "warn" : stage === "checking" ? "info" : ""}">${escapeHtml(action.statusLabel || (stage === "needs_you" ? "Needs you" : labelFor(ACTION_STATE_LABELS, action.state)))}</span></div>
+    <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${stage === "ready_to_checkout" || action.userReportOutcome === "got_it" || (action.action === "notify" && !deliveryFailed && !["pending", "leased"].includes(String(action.notificationDeliveryState))) ? "good" : stage === "needs_you" || deliveryFailed ? "warn" : stage === "checking" ? "info" : ""}">${escapeHtml(actionStatusLabel)}</span></div>
     <p>${escapeHtml(retailerDisplayName(action.retailerId))} · ${escapeHtml(action.retailerSku)}</p>
     ${confirmation ? `<p><strong>Checkout confirmation observed</strong> · ${escapeHtml(relative(confirmation.observedAt))}. Confirm the result below; Yoink did not collect order or payment details.</p>` : ""}
     <details class="action-evidence"><summary>Details</summary>
-      <p>${escapeHtml(labelFor(ACTION_KIND_LABELS, action.action))} · ${escapeHtml(labelFor(DECISION_SOURCE_LABELS, action.decisionSource, "default rules"))} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))}${action.spendReservationStatus ? ` · ${escapeHtml(labelFor(RESERVATION_LABELS, action.spendReservationStatus))}` : ""}</p>
+      <p>${escapeHtml(labelFor(ACTION_KIND_LABELS, action.action))} · ${escapeHtml(labelFor(DECISION_SOURCE_LABELS, action.decisionSource, "default rules"))} · unit cap ${escapeHtml(money(action.maxUnitPriceCents, action.currency))} · reviewed maximum ${escapeHtml(money(action.maxOrderTotalCents, action.currency))}${action.spendReservationStatus ? ` · ${escapeHtml(labelFor(RESERVATION_LABELS, action.spendReservationStatus))}` : ""}</p>
       ${action.statusSummary ? `<p>${escapeHtml(action.statusSummary)}</p>` : ""}
+      ${deliverySummary ? `<p><strong>Delivery:</strong> ${escapeHtml(deliverySummary)}</p>` : ""}
       ${action.decisionReason ? `<p><strong>Latest:</strong> ${escapeHtml(action.decisionReason)}${action.decisionReasonCode ? ` · ${escapeHtml(labelFor(REASON_LABELS, action.decisionReasonCode))}` : ""}</p>` : ""}
     </details></div>
     <div class="action-controls"><div class="inline-actions">
@@ -2315,13 +2351,16 @@ function renderCalls() {
       call.unitPriceCents ? money(call.unitPriceCents, call.currency) : "",
       relative(call.occurredAt),
       membership ? `Access: ${membership}` : "",
-      queueExpected ? "Queue expected" : ""
+      queueExpected ? "Queue expected" : "",
+      call.notificationDeliveryState ? `Chrome ${words(call.notificationDeliveryState)}` : "",
+      call.notificationDeliveredAt ? relative(call.notificationDeliveredAt) : "",
+      call.notificationConnectorState ? `Destination ${words(call.notificationConnectorState)}` : ""
     ].filter(Boolean);
     return `<article class="action-card call-card" data-store="${escapeHtml(call.retailerId || "")}">
       <label class="call-select"><input type="checkbox" data-call-select="${escapeHtml(call.listingId)}" ${eligible ? "" : "disabled"}><span class="sr-only">Select ${escapeHtml(call.title)}</span></label>
       <div><div class="card-top"><h3>${escapeHtml(call.title || `${retailerDisplayName(call.retailerId)} product`)}</h3><span class="tag">${escapeHtml(typeTag)}</span></div>
       <p>${details.map((detail) => escapeHtml(detail)).join(" · ")}</p>
-      <div class="call-tags"><span class="tag ${stateClass}">${escapeHtml(stateTag)}</span>${qualifierTag ? `<span class="tag ${qualifierClass}">${escapeHtml(qualifierTag)}</span>` : ""}</div>
+      <div class="call-tags"><span class="tag ${stateClass}">${escapeHtml(stateTag)}</span>${call.notificationDeliveryState ? `<span class="tag ${["failed", "expired"].includes(call.notificationDeliveryState) ? "warn" : ["delivered", "clicked", "dismissed"].includes(call.notificationDeliveryState) ? "good" : ""}">${escapeHtml(["failed", "expired"].includes(call.notificationDeliveryState) ? "Not delivered" : ["delivered", "clicked", "dismissed"].includes(call.notificationDeliveryState) ? "Delivered" : "Delivery pending")}</span>` : ""}${qualifierTag ? `<span class="tag ${qualifierClass}">${escapeHtml(qualifierTag)}</span>` : ""}</div>
       ${call.closesAt ? `<p>${escapeHtml(watchWindowSummary(call))}</p>` : ""}
       ${watch ? `<p class="watch-readiness">${escapeHtml(watchReadinessSummary(watch))}</p>` : ""}</div>
       <div class="action-controls"><div class="inline-actions">
@@ -2398,6 +2437,14 @@ function activeUserRoute() {
   return $("[data-panel].active")?.dataset.panel || "home";
 }
 
+function currentCatalogProductGroups() {
+  return activeUserRoute() === "stores" ? state.storeProductGroups : state.productGroups;
+}
+
+function currentCatalogProducts() {
+  return activeUserRoute() === "stores" ? state.storeProducts : state.products;
+}
+
 function applyProductPage(products, append = false) {
   const incoming = products.items || [];
   state.productGroups = append ? [...state.productGroups, ...incoming] : incoming;
@@ -2425,8 +2472,31 @@ function applyProductPage(products, append = false) {
   })));
 }
 
+function applyStoreProductPage(products, append = false) {
+  const selectedStore = state.storeBrowse.store;
+  const incoming = (products.items || []).map((group) => {
+    if (!selectedStore) return group;
+    const listings = (group.listings || []).filter((listing) => listing.retailerId === selectedStore);
+    return { ...group, listings, storeCount: listings.length ? 1 : 0 };
+  }).filter((group) => !selectedStore || group.listings.length > 0);
+  state.storeProductGroups = append ? [...state.storeProductGroups, ...incoming] : incoming;
+  state.storeProductTotal = Number(products.total ?? state.storeProductGroups.length);
+  if (Array.isArray(products.facets?.stores)) state.storeProductStores = products.facets.stores;
+  state.storeProducts = state.storeProductGroups.flatMap((group) => (group.listings || []).map((listing) => ({
+    variantId: group.variantId,
+    title: group.title,
+    variantAttributes: group.variantAttributes,
+    ...listing
+  })));
+}
+
 function loadedProductLimit() {
   const loaded = Number(state.productGroups.length) || state.productPageSize;
+  return Math.max(state.productPageSize, Math.min(200, loaded));
+}
+
+function loadedStoreProductLimit() {
+  const loaded = Number(state.storeProductGroups.length) || state.productPageSize;
   return Math.max(state.productPageSize, Math.min(200, loaded));
 }
 
@@ -2449,9 +2519,74 @@ function productLibraryPath(offset = 0, { filtered = true, limit = state.product
   return `/api/v1/user/library/products?${parameters.toString()}`;
 }
 
+function storeLibraryPath(offset = 0, { limit = state.productPageSize } = {}) {
+  const parameters = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+    sort: "title"
+  });
+  if (state.storeBrowse.store) parameters.set("store", state.storeBrowse.store);
+  if (state.storeBrowse.category) parameters.set("category", state.storeBrowse.category);
+  return `/api/v1/user/library/products?${parameters.toString()}`;
+}
+
+function renderStores() {
+  const selectedStore = state.storeProductStores.find((store) => store.retailerId === state.storeBrowse.store) || null;
+  const selectedCategory = POPULAR_SHOP_CATEGORIES.find((category) => category.id === state.storeBrowse.category) || null;
+  const browsing = Boolean(state.storeBrowse.store || selectedCategory);
+  const storeName = selectedStore?.retailerName || retailerDisplayName(state.storeBrowse.store);
+  const title = state.storeBrowse.store ? storeName : selectedCategory ? selectedCategory.label : "Stores";
+  $("#storePageTitle").textContent = title;
+  $("#storePageSummary").textContent = state.storeBrowse.store
+    ? `Only ${storeName} listings are shown here${selectedCategory ? `, filtered to ${selectedCategory.label}` : ""}.`
+    : selectedCategory
+      ? `Browse ${selectedCategory.label} across supported stores, or choose one store.`
+      : "Choose a store or category.";
+  $("#clearStorePage").hidden = !state.storeBrowse.store;
+
+  $("#shopCategoryList").innerHTML = POPULAR_SHOP_CATEGORIES.map((category) => {
+    const active = category.id === state.storeBrowse.category;
+    return `<button class="shop-category${active ? " active" : ""}" data-shop-category="${escapeHtml(category.id)}" type="button" aria-pressed="${active}">${escapeHtml(category.label)}</button>`;
+  }).join("");
+
+  const directorySection = $("#storeDirectorySection");
+  directorySection.hidden = Boolean(state.storeBrowse.store);
+  $("#storeDirectory").innerHTML = state.storeBrowse.store ? "" : state.storeProductStores.map((store) => `
+    <button class="store-directory-card" data-shop-store="${escapeHtml(store.retailerId)}" data-store="${escapeHtml(store.retailerId)}" type="button">
+      <span>${escapeHtml(store.retailerName)}</span>
+      <strong>${Number(store.productCount || 0).toLocaleString()} product${Number(store.productCount || 0) === 1 ? "" : "s"}</strong>
+      <small>Shop this store <span aria-hidden="true">→</span></small>
+    </button>`).join("") || '<div class="empty">No supported stores have products yet.</div>';
+
+  const resultHeading = $("#storeResultHeading");
+  resultHeading.hidden = !browsing;
+  $("#storeResultCount").textContent = browsing
+    ? `${state.storeProductTotal.toLocaleString()} ${title} product${state.storeProductTotal === 1 ? "" : "s"}`
+    : "";
+  const productList = $("#storeProductList");
+  productList.dataset.productView = "grid";
+  if (!browsing) {
+    productList.innerHTML = "";
+    $("#loadMoreStoreProducts").hidden = true;
+    return;
+  }
+  const missionByVariant = new Map(state.plans.map((plan) => [plan.variantId, plan]));
+  productList.innerHTML = state.storeProductGroups.length
+    ? state.storeProductGroups.map((group, index) => productCardMarkup(group, missionByVariant, {
+      eagerImage: index < 6,
+      storeId: state.storeBrowse.store
+    })).join("")
+    : '<div class="empty"><p>No products match this store and category.</p></div>';
+  $("#loadMoreStoreProducts").hidden = state.storeProductGroups.length >= state.storeProductTotal;
+  for (const image of $$("#storeProductList .card-media img")) {
+    image.addEventListener("error", () => { image.remove(); }, { once: true });
+  }
+}
+
 function renderUserRoute(route) {
   if (route === "home") renderHomeSections();
   if (route === "products") renderProducts();
+  if (route === "stores") renderStores();
   if (route === "calls") renderCalls();
   if (route === "plans") renderPlans();
   if (route === "activity") renderActions();
@@ -2460,16 +2595,43 @@ function renderUserRoute(route) {
     renderActionPlatform(); renderPrivacy(); renderProfiles();
     setSettingsView(state.settingsView);
   }
+  renderRouteLoadError(route);
+}
+
+function renderRouteLoadError(route) {
+  const panel = document.querySelector(`[data-panel="${route}"]`);
+  if (!panel) return;
+  panel.querySelector("[data-route-load-error]")?.remove();
+  const error = state.routeLoadErrors.get(route);
+  if (!error) return;
+  const alert = document.createElement("div");
+  alert.className = "inline-status error";
+  alert.dataset.routeLoadError = route;
+  alert.setAttribute("role", "alert");
+  const message = document.createElement("span");
+  message.className = "inline-status-message";
+  message.textContent = "Some information could not be loaded. Existing information may be out of date.";
+  const retry = document.createElement("button");
+  retry.className = "inline-status-action";
+  retry.type = "button";
+  retry.dataset.retryRoute = route;
+  retry.textContent = "Retry";
+  alert.append(message, retry);
+  panel.prepend(alert);
 }
 
 async function loadUserRoute(route, { force = false, preservePagination = false } = {}) {
   if (!force && state.loadedRoutes.has(route)) {
     renderUserRoute(route);
-    return;
+    return true;
   }
+  state.routeLoadErrors.delete(route);
   const routeRequest = (path, fallback) => {
     const request = api(path);
-    return preservePagination ? request : request.catch(() => fallback);
+    return preservePagination ? request : request.catch((error) => {
+      state.routeLoadErrors.set(route, { path, code: String(error?.code || "request_failed") });
+      return fallback;
+    });
   };
   if (route === "home") {
     const [dropWindowResponse, recentActions, actionPlatform] = await Promise.all([
@@ -2503,6 +2665,20 @@ async function loadUserRoute(route, { force = false, preservePagination = false 
     state.legacyTransition = legacyTransition.preview || null;
     state.profiles = profiles.items || [];
     state.proposals = proposals.items || [];
+  } else if (route === "stores") {
+    const requestSequence = state.storeRequestSequence + 1;
+    state.storeRequestSequence = requestSequence;
+    const [products, plans, profiles] = await Promise.all([
+      api(storeLibraryPath(0, {
+        limit: preservePagination ? loadedStoreProductLimit() : state.productPageSize
+      })),
+      api("/api/v1/user/purchase-intents?limit=200&offset=0"),
+      routeRequest("/api/v1/user/purchase-profiles", { items: [] })
+    ]);
+    if (requestSequence !== state.storeRequestSequence) return false;
+    applyStoreProductPage(products);
+    state.plans = plans.items || [];
+    state.profiles = profiles.items || [];
   } else if (route === "calls") {
     const [calls, dropWindows, actionPlatform, profiles, plans, products] = await Promise.all([
       routeRequest("/api/v1/user/calls", { items: [] }),
@@ -2549,9 +2725,11 @@ async function loadUserRoute(route, { force = false, preservePagination = false 
     state.profiles = profiles.items || [];
     state.actionPlatform = actionPlatform || null;
   }
-  state.loadedRoutes.add(route);
+  const complete = !state.routeLoadErrors.has(route);
+  if (complete) state.loadedRoutes.add(route);
+  else state.loadedRoutes.delete(route);
   renderUserRoute(route);
-  return true;
+  return complete;
 }
 
 async function loadMoreProducts() {
@@ -2560,6 +2738,15 @@ async function loadMoreProducts() {
   if (requestSequence !== state.productRequestSequence) return false;
   applyProductPage(products, true);
   renderProducts();
+  return true;
+}
+
+async function loadMoreStoreProducts() {
+  const requestSequence = state.storeRequestSequence;
+  const products = await api(storeLibraryPath(state.storeProductGroups.length));
+  if (requestSequence !== state.storeRequestSequence) return false;
+  applyStoreProductPage(products, true);
+  renderStores();
   return true;
 }
 
@@ -2587,17 +2774,18 @@ async function refresh({ priorityRoute = "", priorityRouteLoad = null, preserveP
   state.affiliateRouting = affiliateRouting?.affiliateRouting || overview.affiliateRouting || state.affiliateRouting;
   renderOverview();
   renderWalmartDraws();
+  let routeComplete = true;
   if (priorityRoute === route && priorityRouteLoad) {
     if (await priorityRouteLoad) {
       state.loadedRoutes.add(route);
       renderUserRoute(route);
     } else {
-      await loadUserRoute(route, { force: true, preservePagination });
+      routeComplete = await loadUserRoute(route, { force: true, preservePagination });
     }
   } else {
-    await loadUserRoute(route, { force: true, preservePagination });
+    routeComplete = await loadUserRoute(route, { force: true, preservePagination });
   }
-  setUserDataStale(false);
+  setUserDataStale(!routeComplete);
 }
 
 function applyActionActivity(actions) {
@@ -2624,7 +2812,6 @@ async function refreshCompactActionHandoff(waitMs = 0) {
   const version = normalizedActionHandoffVersion(state.actionHandoffAvailabilityVersion) ?? 0;
   const epochQuery = epoch ? `&epoch=${encodeURIComponent(epoch)}` : "";
   const payload = await api(`/api/v1/user/action-handoff?wait=${boundedWaitMs}&version=${version}${epochQuery}`);
-  setUserDataStale(false);
   if (!applyActionHandoffCursor(payload.availabilityEpoch, payload.availabilityVersion, requestSequence)) return;
   const actionHandoff = payload.actionHandoff || null;
   if (!state.overview) {
@@ -2640,8 +2827,11 @@ async function refreshVisibleActionState(waitMs = 0) {
   const route = activeUserRoute();
   if (route === "activity") return refreshActionActivity();
   const handoff = refreshCompactActionHandoff(waitMs);
-  if (["products", "calls", "plans"].includes(route)) {
-    return Promise.all([handoff, loadUserRoute(route, { force: true, preservePagination: true })]);
+  if (["products", "stores", "calls", "plans"].includes(route)) {
+    return Promise.all([handoff, loadUserRoute(route, { force: true, preservePagination: true })])
+      .then(([, complete]) => {
+        if (complete === false) throw new Error("The visible workspace refresh was incomplete.");
+      });
   }
   return handoff;
 }
@@ -2767,6 +2957,7 @@ function renderSetupPreflight(mode, headline, copy, preflight = null) {
     <div><small>Required total</small><b>${escapeHtml(money(cost.minimumAllInCents, currency))}</b></div>
     <div><small>Tax and store hold</small><b>${escapeHtml(money(Number(cost.taxReserveCents || 0) + Number(cost.storeReserveCents || 0), currency))}</b></div>
     <div><small>Room within your limit</small><b>${escapeHtml(money(cost.headroomCents, currency))}</b></div>
+    <div><small>Spending limit</small><b>${cost.spendingLimit?.allowed === false ? "Needs change" : "Within limits"}</b></div>
   </div>` : "";
   const autoRaisedNote = cost?.autoRaised
     ? `<p class="boundary-note good">Your maximum total was automatically raised to ${escapeHtml(money(cost.reviewedAllInCents, currency))} to cover taxes and store fees — the item price above stays your real cap.</p>`
@@ -2778,7 +2969,9 @@ function renderSetupPreflight(mode, headline, copy, preflight = null) {
 function updateSetupCreateState() {
   const form = $("#setupForm");
   const reviewed = form.elements.reviewed;
-  $("#createPlanButton").disabled = !state.setupPreflight || reviewed.checked !== true;
+  $("#createPlanButton").disabled = !state.setupPreflight
+    || state.setupPreflight.cost?.spendingLimit?.allowed === false
+    || reviewed.checked !== true;
 }
 
 function setupPreflightInputSignature() {
@@ -2865,13 +3058,16 @@ async function requestSetupPreflight(revision, signature) {
     state.setupPreflight = preflight;
     state.setupPreflightSignature = signature;
     const readiness = preflight.automationReadiness || {};
+    const spendingBlocked = preflight.cost?.spendingLimit?.allowed === false;
     renderSetupPreflight(
-      "ready",
-      "Ready for your review",
-      `After saving: ${readiness.headline || "the plan will use these limits"}. ${readiness.summary || "Fresh offer checks still apply."} No plan was saved by this check.`,
+      spendingBlocked ? "error" : "ready",
+      spendingBlocked ? "Review your spending limits" : "Ready for your review",
+      spendingBlocked
+        ? `${preflight.cost.spendingLimit.message} Lower this plan's maximum or change the spending limit before saving.`
+        : `After saving: ${readiness.headline || "the plan will use these limits"}. ${readiness.summary || "Fresh offer checks still apply."} No plan was saved by this check.`,
       preflight
     );
-    $("#setupForm").elements.reviewed.disabled = false;
+    $("#setupForm").elements.reviewed.disabled = spendingBlocked;
     updateSetupCreateState();
   } catch (error) {
     if (revision !== state.setupPreflightRevision || signature !== setupPreflightInputSignature()) return;
@@ -2930,7 +3126,7 @@ function renderSetupReview() {
 }
 
 function openSetup(listingId) {
-  const product = state.products.find((item) => item.listingId === listingId);
+  const product = currentCatalogProducts().find((item) => item.listingId === listingId);
   if (!product) throw new Error("That product is no longer in this catalog view. Refresh and try again.");
   const existing = state.plans.find((plan) => plan.variantId === product.variantId);
   if (existing) return openPlan(existing.id);
@@ -2955,7 +3151,7 @@ function openSetup(listingId) {
   addRadio.disabled = product.executionSupported !== true;
   if (addRadio.disabled) form.elements.actionCeiling.value = "notify";
   const exactVariant = variantSummary(product.variantAttributes);
-  const group = state.productGroups.find((candidate) => candidate.variantId === product.variantId);
+  const group = currentCatalogProductGroups().find((candidate) => candidate.variantId === product.variantId);
   const storeOffers = group?.listings?.length ? group.listings : [product];
   $("#setupProductSummary").innerHTML = `<div><span class="store">${escapeHtml(product.retailerName)}</span><h3>${escapeHtml(product.title)}</h3><p>SKU ${escapeHtml(product.retailerSku)}${exactVariant ? ` · ${escapeHtml(exactVariant)}` : ""}</p></div><strong class="exact-price">${escapeHtml(hasCurrentPrice ? money(knownPrice, product.currency) : money(product.msrpCents, product.currency))}</strong>`;
   $("#setupStore").textContent = product.retailerName;
@@ -3242,13 +3438,16 @@ async function checkProductLink() {
     state.productLinkPreview = preview;
     state.productLinkPreviewInput = url;
     $("#productLinkPreview").hidden = false;
-    $("#productLinkPreview").innerHTML = `<div class="card-top"><span class="store">${escapeHtml(preview.retailerName)}</span><span class="tag good">Product found</span></div>
+    $("#productLinkPreview").innerHTML = `<div class="card-top"><span class="store">${escapeHtml(preview.retailerName)}</span><span class="tag good">${preview.alreadyInProducts ? "Already in Products" : "Product found"}</span></div>
       <h3>${escapeHtml(preview.retailerSku)}</h3>
-      <p>${escapeHtml(preview.capabilityLabel)}</p>
-      <p><strong>Not accepted from this link:</strong> stock status, price, seller, fulfillment, or permission to purchase.</p>
+      <p>${escapeHtml(preview.alreadyInProducts ? "This exact store item is already available in Products; no review request is needed." : preview.capabilityLabel)}</p>
+      ${preview.alreadyInProducts ? `<button class="button secondary" data-product-detail="${escapeHtml(preview.existingVariantId)}" type="button">View product</button>` : "<p><strong>Not accepted from this link:</strong> stock status, price, seller, fulfillment, or permission to purchase.</p>"}
       ${retailerLinkMarkup(preview.canonicalUrl, `${preview.retailerName} product preview`, `${preview.canonicalUrl} ↗`)}`;
-    $("#productLinkConfirm").hidden = false;
-    $("#productLinkConfirm").querySelector("input").focus();
+    $("#productLinkConfirm").hidden = preview.alreadyInProducts === true;
+    $("#submitProductLinkButton").disabled = preview.alreadyInProducts === true;
+    (preview.alreadyInProducts
+      ? $("#productLinkPreview [data-product-detail]")
+      : $("#productLinkConfirm").querySelector("input"))?.focus();
   } finally {
     button.disabled = false;
     button.textContent = "Check link";
@@ -3265,6 +3464,11 @@ document.addEventListener("click", async (event) => {
   if (!quickMenu.hidden && !quickMenu.contains(event.target) && !(button && button.dataset.quickMenu)) closeQuickMenu();
   if (!button) return;
   try {
+    if (button.dataset.retryRoute) {
+      button.disabled = true;
+      await resumeVisibleDashboard();
+      return;
+    }
     if (button.id === "userDataFreshness") {
       button.disabled = true;
       try { await resumeVisibleDashboard(); } finally { button.disabled = false; }
@@ -3289,6 +3493,28 @@ document.addEventListener("click", async (event) => {
     if (button.id === "loadMoreProducts") {
       button.disabled = true;
       try { await loadMoreProducts(); } finally { button.disabled = false; }
+    }
+    if (button.id === "loadMoreStoreProducts") {
+      button.disabled = true;
+      try { await loadMoreStoreProducts(); } finally { button.disabled = false; }
+      return;
+    }
+    if (button.dataset.shopStore) {
+      state.storeBrowse.store = button.dataset.shopStore;
+      await loadUserRoute("stores", { force: true });
+      return;
+    }
+    if (button.hasAttribute("data-clear-shop-store")) {
+      state.storeBrowse.store = "";
+      await loadUserRoute("stores", { force: true });
+      return;
+    }
+    if (button.dataset.shopCategory) {
+      state.storeBrowse.category = state.storeBrowse.category === button.dataset.shopCategory
+        ? ""
+        : button.dataset.shopCategory;
+      await loadUserRoute("stores", { force: true });
+      return;
     }
     if (button.id === "showMoreCalls") {
       state.callDisplayLimit += 25;
@@ -3453,11 +3679,68 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.dataset.profileDelete) {
+      const profile = state.profiles.find((candidate) => candidate.id === button.dataset.profileDelete);
+      if (!profile) throw new Error("Refresh before removing this Quick add setup.");
+      const linkedCount = Number(profile.linkedMissionCount || 0);
+      if (!(await requestConfirmation({
+        title: `Remove “${profile.name}”?`,
+        summary: linkedCount
+          ? `This unlinks ${linkedCount.toLocaleString()} purchase plan${linkedCount === 1 ? "" : "s"}. Their current limits stay in place.`
+          : "This setup is not linked to a current purchase plan.",
+        scope: [profileSummary(profile)],
+        confirmLabel: "Remove setup",
+        danger: true
+      })).confirmed) return;
       const result = await api(`/api/v1/user/purchase-profiles/${encodeURIComponent(button.dataset.profileDelete)}`, { method: "DELETE" });
       state.profiles = result.items || [];
       renderProfiles();
       renderProducts();
-      toast("Quick add setup removed.");
+      const deleted = result.deleted || { profile, unlinkedMissionIds: [] };
+      toast(linkedCount
+        ? `Quick add setup removed and ${linkedCount.toLocaleString()} plan${linkedCount === 1 ? " was" : "s were"} unlinked.`
+        : "Quick add setup removed.", false, {
+        durationMs: 12_000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              const restored = await api("/api/v1/user/purchase-profiles", {
+                method: "POST",
+                body: JSON.stringify({
+                  name: deleted.profile.name,
+                  targetQuantity: deleted.profile.targetQuantity,
+                  actionCeiling: deleted.profile.actionCeiling,
+                  fulfillment: deleted.profile.fulfillment,
+                  priceMode: deleted.profile.priceMode,
+                  maxUnitPriceCents: deleted.profile.maxUnitPriceCents,
+                  msrpOffsetPercent: deleted.profile.msrpOffsetPercent,
+                  isDefault: deleted.profile.isDefault,
+                  cooldownSeconds: deleted.profile.cooldownSeconds
+                })
+              });
+              const restoredProfile = (restored.items || []).find((candidate) => candidate.name === deleted.profile.name);
+              const missionIds = Array.isArray(deleted.unlinkedMissionIds) ? deleted.unlinkedMissionIds : [];
+              if (restoredProfile && missionIds.length) {
+                for (let index = 0; index < missionIds.length; index += 200) {
+                  await api("/api/v1/user/purchase-profiles/apply", {
+                    method: "POST",
+                    body: JSON.stringify({
+                      profileId: restoredProfile.id,
+                      missionIds: missionIds.slice(index, index + 200),
+                      confirmation: "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS"
+                    })
+                  });
+                }
+              }
+              await loadUserRoute("preferences", { force: true });
+              renderProfiles();
+              toast("Quick add setup restored.");
+            } catch (error) {
+              toast(error.message || "The Quick add setup could not be restored.", true);
+            }
+          }
+        }
+      });
     }
     if (button.id === "pauseButton") await toggleActions();
     if (button.id === "dismissReleaseAnnouncement") {
@@ -3465,7 +3748,15 @@ document.addEventListener("click", async (event) => {
       try { if (id) localStorage.setItem(DISMISSED_ANNOUNCEMENT_KEY, id); } catch { /* Dismissal remains best effort. */ }
       $("#releaseAnnouncement").hidden = true;
     }
-    if (button.id === "addProductButton" || button.hasAttribute("data-open-product-link")) openProductLinkDialog();
+    if (button.id === "addProductButton" || button.hasAttribute("data-open-product-link")) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      openProductLinkDialog();
+    }
+    if (button.dataset.dismissProposal) {
+      state.dismissedProposalIds.add(button.dataset.dismissProposal);
+      renderProductReviewStatus();
+      return;
+    }
     if (button.hasAttribute("data-clear-browse")) {
       state.browse = { store: "", availability: "", plan: "", price: "", sort: state.browse.sort };
       for (const id of ["browseStore", "browseAvailability", "browsePlan", "browsePrice"]) {

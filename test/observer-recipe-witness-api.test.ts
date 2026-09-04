@@ -115,7 +115,7 @@ test("hosted observer recipe delivery requires the current independently witness
     });
     assert.equal(delivered.status, 200);
     assert.equal((await delivered.json() as { recipe: { payload: { recipeId: string } } }).recipe.payload.recipeId, proposed.recipe.id);
-    const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const health = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(health.observerRecipeWitnessRequired, true);
     assert.equal(health.observerRecipeWitnessHealthy, true);
     assert.equal(health.durableObserverRecipeWitnessRefresh, true);

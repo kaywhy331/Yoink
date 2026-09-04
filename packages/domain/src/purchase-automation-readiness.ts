@@ -17,6 +17,7 @@ export type PurchaseAutomationReadinessState =
   | "companion_offline"
   | "notification_ready"
   | "guarded_add_policy_incomplete"
+  | "spend_limit_exceeded"
   | "guarded_add_lane_closed"
   | "guarded_add_device_incapable"
   | "guarded_add_session_blocked"
@@ -53,6 +54,7 @@ export interface PurchaseAutomationPlanInput {
   status: string;
   title?: string;
   targetQuantity: number;
+  maxAllInCents: number | null;
   actionCeiling: string;
   decisionMode: string;
   expiresAt?: string;
@@ -66,6 +68,15 @@ export interface PurchaseAutomationReadinessContext {
   sources: Array<Record<string, unknown>>;
   devices: Array<Record<string, unknown>>;
   qualifications: Partial<Record<GuardedRetailerId, boolean>>;
+  spend: {
+    policy: {
+      perOrderCapCents: number | null;
+      dailyCapCents: number | null;
+      monthlyCapCents: number | null;
+    };
+    availableTodayCents: number | null;
+    availableThisMonthCents: number | null;
+  };
   sessionBlockers?: Array<{
     deviceId: string;
     retailerId: GuardedRetailerId;
@@ -276,6 +287,27 @@ export function buildPurchaseAutomationReadiness(
   const active = plan.status === "active";
   const expiry = plan.expiresAt ? new Date(plan.expiresAt).getTime() : Number.POSITIVE_INFINITY;
   const expired = Boolean(plan.expiresAt) && (!Number.isFinite(expiry) || expiry <= now);
+  const reviewedAllInCents = plan.maxAllInCents === null ? null : Number(plan.maxAllInCents);
+  const spendingLimitsSatisfied = configuredAction !== "add_to_cart"
+    || (Number.isSafeInteger(reviewedAllInCents) && Number(reviewedAllInCents) > 0
+      && (context.spend.policy.perOrderCapCents === null
+        || Number(reviewedAllInCents) <= context.spend.policy.perOrderCapCents)
+      && (context.spend.availableTodayCents === null
+        || Number(reviewedAllInCents) <= context.spend.availableTodayCents)
+      && (context.spend.availableThisMonthCents === null
+        || Number(reviewedAllInCents) <= context.spend.availableThisMonthCents));
+  const spendingLimitDetail = configuredAction !== "add_to_cart"
+    ? "Notifications do not reserve spending capacity."
+    : reviewedAllInCents === null || !Number.isSafeInteger(reviewedAllInCents) || reviewedAllInCents <= 0
+      ? "Set a maximum total before using cart adds."
+      : context.spend.policy.perOrderCapCents !== null
+          && reviewedAllInCents > context.spend.policy.perOrderCapCents
+        ? `Lower the plan maximum to $${(context.spend.policy.perOrderCapCents / 100).toFixed(2)} or raise your per-order spending limit.`
+        : context.spend.availableTodayCents !== null && reviewedAllInCents > context.spend.availableTodayCents
+          ? `Only $${(context.spend.availableTodayCents / 100).toFixed(2)} remains in today's spending limit.`
+          : context.spend.availableThisMonthCents !== null && reviewedAllInCents > context.spend.availableThisMonthCents
+            ? `Only $${(context.spend.availableThisMonthCents / 100).toFixed(2)} remains in this month's spending limit.`
+            : "The reviewed maximum fits your current spending limits.";
   const policyTargetsSafe = enabledTargets.length > 0 && enabledTargets.every((target) =>
     target.executionSupported === true
       && Number.isSafeInteger(Number(target.maxUnitPriceCents))
@@ -297,6 +329,7 @@ export function buildPurchaseAutomationReadiness(
     const sessionBlocked = companionCapable
       && capableDevices.every((device) => deviceSessionBlocked(context, device, target.retailerId));
     const globallyReady = active && !expired && directPlan && configuredAction === "add_to_cart"
+      && spendingLimitsSatisfied
       && connectedSignal && context.executionMode === "live" && !context.actionsPaused;
     const readyForGuardedAdd = globallyReady && policyTargetsSafe && packagedMapping && laneQualified
       && companionCapable && !sessionBlocked;
@@ -417,6 +450,7 @@ export function buildPurchaseAutomationReadiness(
       policyTargetsSafe
         ? "Each selected item has a price cap, Store only seller, and a Shipping or Pickup choice."
         : "Set a price cap, choose Store only, and select Shipping or Pickup for every item."),
+    check("spend", "Spending limit", spendingLimitsSatisfied ? "pass" : "attention", spendingLimitDetail),
     check("lane", "Store cart adds", targetReadiness.some((target) => target.laneQualified && target.packagedMapping)
       ? "pass" : "attention",
     targetReadiness.some((target) => target.laneQualified && target.packagedMapping)
@@ -445,6 +479,12 @@ export function buildPurchaseAutomationReadiness(
       "Review this plan's store limits",
       "Complete the price, seller, and Shipping or Pickup choices for each selected item.",
       "review_plan", "Review limits", addChecks, targetReadiness);
+  }
+  if (!spendingLimitsSatisfied) {
+    return result("spend_limit_exceeded", "attention", "add_to_cart", "none", readyForMonitoring,
+      "This plan is above your spending limit",
+      spendingLimitDetail,
+      "review_plan", "Review spending limits", addChecks, targetReadiness);
   }
   const laneTargets = enabledTargets.filter((target) => {
     const retailerId = guardedRetailer(target.retailerId);

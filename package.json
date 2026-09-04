@@ -5,11 +5,13 @@
   "type": "module",
   "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",
   "scripts": {
+    "predev": "npm run package:extension",
     "dev": "tsx apps/api/src/server.ts",
     "dev:worker": "tsx apps/worker/src/server.ts",
     "build": "npm run build:extension && npm run build:types",
     "build:extension": "node scripts/generate-extension-tokens.mjs && esbuild packages/extension-ui/src/popup-state.ts --bundle --format=iife --global-name=YoinkPopupStateModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/popup-state.js && esbuild apps/extension/src/target-shadow.ts --bundle --format=iife --global-name=YoinkTargetShadowModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/target-shadow.js && esbuild apps/extension/src/target-action.ts --bundle --format=iife --global-name=YoinkTargetActionModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/target-action.js && esbuild apps/extension/src/retailer-shadow.ts --bundle --format=iife --global-name=YoinkRetailerShadowModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/retailer-shadow.js && esbuild apps/extension/src/observer-recipe-oracle.ts --bundle --format=iife --global-name=YoinkObserverRecipeOracleModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/observer-recipe-oracle.js && esbuild apps/extension/src/walmart-action.ts --bundle --format=iife --global-name=YoinkWalmartActionModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/walmart-action.js && esbuild apps/extension/src/amazon-action.ts --bundle --format=iife --global-name=YoinkAmazonActionModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/amazon-action.js && esbuild apps/extension/src/bestbuy-action.ts --bundle --format=iife --global-name=YoinkBestBuyActionModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/bestbuy-action.js && esbuild apps/extension/src/trackalacker-sync.ts --bundle --format=iife --global-name=YoinkTrackalackerSyncModule --platform=browser --target=chrome120 --legal-comments=none --outfile=apps/extension/trackalacker-sync.js",
     "build:types": "tsc -p tsconfig.build.json",
+    "prestart": "npm run package:extension",
     "start": "node dist/apps/api/src/server.js",
     "start:worker": "node dist/apps/worker/src/server.js",
     "check": "node --stack-size=4096 node_modules/typescript/bin/tsc -p tsconfig.json && npm run lint:ui-tokens",

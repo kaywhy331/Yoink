@@ -224,6 +224,8 @@ export interface PopupHealthState {
   deviceName?: string;
   checkedAt?: string;
   version?: string;
+  companionCompatible?: boolean;
+  companionCompatibilityReason?: string;
   executionMode?: string;
   actionsPaused?: boolean;
   chromeMutationEnabled?: boolean;
@@ -764,60 +766,10 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   };
   let primaryAction: PopupViewModel["primaryAction"] = null;
 
-  if (health.connected !== true) {
-    hardBlocker = "unavailable";
-    context = {
-      visible: true,
-      eyebrow: "YOINK",
-      title: "Yoink unavailable",
-      supporting: input.production ? "Check your connection, then retry." : "Start Yoink, then retry.",
-      pairing: false
-    };
-    primaryAction = { id: "retry", label: "Retry", disabled: false };
-  } else if (health.paired !== true) {
-    hardBlocker = "unpaired";
-    context = {
-      visible: true,
-      eyebrow: "BROWSER",
-      title: "Pair this browser",
-      supporting: "Enter the code from Yoink › Settings › Chrome.",
-      pairing: true
-    };
-    primaryAction = { id: "pair", label: "Pair browser", disabled: false };
-  } else if (versionDifference > 0) {
-    hardBlocker = "companion_update";
-    if (readyUpdateHandoff) {
-      context = {
-        visible: true,
-        eyebrow: readyUpdateHandoff.channel === "managed" ? "UPDATE READY" : "UPDATE DOWNLOADED",
-        title: readyUpdateHandoff.channel === "managed" ? "Reload Chrome companion" : "Replace extension files",
-        supporting: readyUpdateHandoff.channel === "managed"
-          ? `Reload to finish installing Yoink ${readyUpdateHandoff.releaseVersion}.`
-          : `Use the Yoink ${readyUpdateHandoff.releaseVersion} files, then reload.`,
-        pairing: false
-      };
-      primaryAction = { id: "reload_companion", label: "Reload Chrome companion", disabled: false };
-    } else {
-      context = {
-        visible: true,
-        eyebrow: "UPDATE REQUIRED",
-        title: "Update Chrome companion",
-        supporting: `Yoink ${health.version || ""} requires the matching Chrome companion.`,
-        pairing: false
-      };
-      primaryAction = { id: "update_companion", label: "Update Chrome companion", disabled: false };
-    }
-  } else if (versionDifference < 0) {
-    hardBlocker = "app_update";
-    context = {
-      visible: true,
-      eyebrow: "VERSION MISMATCH",
-      title: "Update Yoink",
-      supporting: "The Chrome companion is newer than the running Yoink app.",
-      pairing: false
-    };
-    primaryAction = { id: "open_yoink", label: "Open Yoink", disabled: false };
-  } else if (preferredHandoff) {
+  // A locally persisted cart/review handoff stays actionable even if the
+  // control plane is temporarily unavailable or asks for an update. The
+  // shopper must always be able to finish or close out an already-started add.
+  if (preferredHandoff) {
     status = "attention";
     if (preferredHandoff.kind === "needs_you") {
       context = {
@@ -854,6 +806,59 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
         disabled: false
       };
     }
+  } else if (health.connected !== true) {
+    hardBlocker = "unavailable";
+    context = {
+      visible: true,
+      eyebrow: "YOINK",
+      title: "Yoink unavailable",
+      supporting: input.production ? "Check your connection, then retry." : "Start Yoink, then retry.",
+      pairing: false
+    };
+    primaryAction = { id: "retry", label: "Retry", disabled: false };
+  } else if (health.paired !== true) {
+    hardBlocker = "unpaired";
+    context = {
+      visible: true,
+      eyebrow: "BROWSER",
+      title: "Pair this browser",
+      supporting: "Enter the code from Yoink › Settings › Chrome.",
+      pairing: true
+    };
+    primaryAction = { id: "pair", label: "Pair browser", disabled: false };
+  } else if (versionDifference > 0) {
+    if (health.companionCompatible === false) hardBlocker = "companion_update";
+    if (readyUpdateHandoff) {
+      context = {
+        visible: true,
+        eyebrow: readyUpdateHandoff.channel === "managed" ? "UPDATE READY" : "UPDATE DOWNLOADED",
+        title: readyUpdateHandoff.channel === "managed" ? "Reload Chrome companion" : "Replace extension files",
+        supporting: readyUpdateHandoff.channel === "managed"
+          ? `1. Let Chrome finish the Yoink ${readyUpdateHandoff.releaseVersion} update. 2. Choose Reload Chrome companion.`
+          : `1. Open Downloads and extract Yoink-Companion-${readyUpdateHandoff.releaseVersion}.zip. 2. Copy those files over the current Yoink extension folder. 3. Return here and choose Reload Chrome companion.`,
+        pairing: false
+      };
+      primaryAction = { id: "reload_companion", label: "Reload Chrome companion", disabled: false };
+    } else {
+      context = {
+        visible: true,
+        eyebrow: "UPDATE REQUIRED",
+        title: "Update Chrome companion",
+        supporting: `Yoink ${health.version || ""} requires the matching Chrome companion.`,
+        pairing: false
+      };
+      primaryAction = { id: "update_companion", label: "Update Chrome companion", disabled: false };
+    }
+  } else if (versionDifference < 0) {
+    if (health.companionCompatible === false) hardBlocker = "app_update";
+    context = {
+      visible: true,
+      eyebrow: "VERSION MISMATCH",
+      title: "Update Yoink",
+      supporting: "The Chrome companion is newer than the running Yoink app.",
+      pairing: false
+    };
+    primaryAction = { id: "open_yoink", label: "Open Yoink", disabled: false };
   } else if (input.confirmation === "share_evidence" && input.page.kind === "product") {
     context = {
       visible: true,

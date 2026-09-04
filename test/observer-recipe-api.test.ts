@@ -259,7 +259,7 @@ test("the signed observer registry distributes only promoted recipes to capable 
     assert.equal(snapshot.observerRegistry.recoveryEvidence[0]?.normalizedValue, 798);
     assert.equal(snapshot.observerRegistry.recoveryEvidence[0]?.reviewState, "revoked");
 
-    const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const health = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(health.observerRecipeRecoveryEvidenceStorageImplemented, true);
     assert.equal(health.observerRecipeRecoveryUserReviewImplemented, true);
     assert.equal(health.observerRecipeRecoveryReviewRevocationImplemented, true);

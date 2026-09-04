@@ -8,6 +8,7 @@ import { CatalogRepository, type ResolutionResult } from "../../database/src/cat
 import { AttributionRepository } from "../../database/src/attribution-repository.js";
 import { ControlRepository } from "../../database/src/control-repository.js";
 import { YoinkDatabase } from "../../database/src/database.js";
+import { ExecutionRepository } from "../../database/src/execution-repository.js";
 import { SignalRepository } from "../../database/src/signal-repository.js";
 import { normalizeSignal } from "../../domain/src/normalize.js";
 import { evaluateSignalPolicySnapshot } from "../../domain/src/signal-policy-evaluation.js";
@@ -35,12 +36,14 @@ export class SignalEngine {
   readonly catalog: CatalogRepository;
   readonly attribution: AttributionRepository;
   readonly control: ControlRepository;
+  readonly execution: ExecutionRepository;
   readonly signals: SignalRepository;
 
   constructor(private readonly db: YoinkDatabase) {
     this.catalog = new CatalogRepository(db);
     this.attribution = new AttributionRepository(db);
     this.control = new ControlRepository(db);
+    this.execution = new ExecutionRepository(db);
     this.signals = new SignalRepository(db);
   }
 
@@ -48,6 +51,12 @@ export class SignalEngine {
     const signal = normalizeSignal(input, now);
     const duplicate = this.signals.transportDuplicate(signal);
     if (duplicate) return this.signals.duplicateResult(signal, duplicate);
+
+    // A fresh opportunity must be evaluated against current work, not a
+    // browser lease or signal window that already expired. Post-mutation
+    // recovery remains locked for review and therefore still owns the claim.
+    this.execution.recoverExpiredLeases(now);
+    this.execution.expirePendingJobs(now);
 
     return this.db.transaction(() => {
       const eventId = this.signals.insertEvent(signal, now);
@@ -119,7 +128,7 @@ export class SignalEngine {
       this.signals.recordOccurrence(eventId, signal, incident.id, now);
       result.incidentId = incident.id;
 
-      const existingJob = this.signals.jobForIncident(incident.id);
+      const existingJob = this.signals.jobForIncident(incident.id, now);
       if (existingIncident && existingJob) {
         const reason = "This signal corroborates an active opportunity; the existing action job remains authoritative.";
         this.signals.recordMissionDecision(eventId, incident.id, existingJob.missionId, null, "corroborated", reason, now);

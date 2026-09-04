@@ -34,6 +34,9 @@ export const AUDIT_ACTOR_KINDS = Object.freeze([
 export type AuditEventFamily = typeof AUDIT_EVENT_FAMILIES[number];
 export type AuditActorKind = typeof AUDIT_ACTOR_KINDS[number];
 
+export const AUDIT_HISTORY_RETENTION_DAYS = 365;
+export const DELIVERED_OUTBOX_RETENTION_DAYS = 30;
+
 export interface AuditQueryFilters {
   search?: string;
   type?: AuditEventFamily | string;
@@ -50,6 +53,11 @@ interface NormalizedAuditQueryFilters {
 
 const AUDIT_FAMILY_INPUT_SQL = "lower(event_type || ' ' || reason_code)";
 const AUDIT_EVENT_FAMILY_SQL = `CASE
+  WHEN ${AUDIT_FAMILY_INPUT_SQL} LIKE '%authorization_role%'
+    OR ${AUDIT_FAMILY_INPUT_SQL} LIKE '%role_grant%'
+    OR ${AUDIT_FAMILY_INPUT_SQL} LIKE '%role_revoke%'
+    OR ${AUDIT_FAMILY_INPUT_SQL} LIKE '%role_membership%'
+    THEN 'access'
   WHEN ${AUDIT_FAMILY_INPUT_SQL} LIKE '%guardrail%'
     OR ${AUDIT_FAMILY_INPUT_SQL} LIKE '%qualif%'
     OR ${AUDIT_FAMILY_INPUT_SQL} LIKE '%approval%'
@@ -271,5 +279,64 @@ export class AuditRepository {
       currentRequestScope().tenantId
     );
     return { outboxEvents: Number(row?.total ?? 0), pendingOutboxEvents: Number(row?.pending ?? 0) };
+  }
+
+  pruneRetainedHistory(now = Date.now()): {
+    deletedAuditEvents: number;
+    deletedDeliveredOutboxEvents: number;
+    auditHistoryCutoffAt: string;
+    deliveredOutboxCutoffAt: string;
+    auditRetentionReceiptId: string;
+  } {
+    const scope = currentRequestScope();
+    if (scope.actorKind !== "service") throw new Error("Audit retention requires a trusted worker scope.");
+    const dayMs = 24 * 60 * 60_000;
+    const auditHistoryCutoffAt = nowIso(now - AUDIT_HISTORY_RETENTION_DAYS * dayMs);
+    const deliveredOutboxCutoffAt = nowIso(now - DELIVERED_OUTBOX_RETENTION_DAYS * dayMs);
+    return this.db.transaction(() => {
+      const deletedDeliveredOutboxEvents = Number(this.db.run(
+        `DELETE FROM outbox_events
+         WHERE tenant_id = ? AND delivery_state = 'delivered'
+           AND delivered_at <> '' AND delivered_at <= ?
+           AND NOT EXISTS (
+             SELECT 1 FROM operator_alert_deliveries delivery
+             WHERE delivery.outbox_event_id = outbox_events.id
+           )`,
+        scope.tenantId,
+        deliveredOutboxCutoffAt
+      ).changes);
+      const deletedAuditEvents = Number(this.db.run(
+        `DELETE FROM audit_events
+         WHERE tenant_id = ? AND user_id = ? AND created_at <= ?`,
+        scope.tenantId,
+        scope.userId,
+        auditHistoryCutoffAt
+      ).changes);
+      let auditRetentionReceiptId = "";
+      if (deletedAuditEvents || deletedDeliveredOutboxEvents) {
+        auditRetentionReceiptId = String(this.record({
+          correlationId: `retention_${now}`,
+          aggregateType: "retention",
+          eventType: "audit_history_retention_applied",
+          reasonCode: "retention_window_elapsed",
+          message: "Expired audit and delivered outbox history was removed under the documented retention policy.",
+          data: {
+            deletedAuditEvents,
+            deletedDeliveredOutboxEvents,
+            auditHistoryCutoffAt,
+            deliveredOutboxCutoffAt,
+            auditHistoryRetentionDays: AUDIT_HISTORY_RETENTION_DAYS,
+            deliveredOutboxRetentionDays: DELIVERED_OUTBOX_RETENTION_DAYS
+          }
+        }, now).id ?? "");
+      }
+      return {
+        deletedAuditEvents,
+        deletedDeliveredOutboxEvents,
+        auditHistoryCutoffAt,
+        deliveredOutboxCutoffAt,
+        auditRetentionReceiptId
+      };
+    });
   }
 }

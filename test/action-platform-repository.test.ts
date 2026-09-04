@@ -631,7 +631,7 @@ test("readiness, privacy deletion, connectors, and restock aggregates stay bound
       kind: "webhook",
       name: "Checkout handoff",
       endpointReference: "checkout_hook",
-      events: ["carted", "needs_you", "missed", "test"]
+      events: ["notify", "carted", "needs_you", "missed", "test"]
     }, "", NOW + 600);
     assert.equal(connector.runtimeBound, true);
     const queued = connectors.queueTest(connector.id, NOW + 700);

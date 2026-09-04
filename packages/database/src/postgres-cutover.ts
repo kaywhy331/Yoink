@@ -356,11 +356,16 @@ function checkSql(schema: string, table: PostgresTableSchemaDescriptor): string[
 }
 
 function triggerCondition(expression: string): string {
-  const translated = expression.replace(
+  let translated = expression.replace(
     /strftime\(\s*'%Y-%m-%dT%H:%M:%fZ'\s*,\s*'now'\s*,\s*'-(30|90) days'\s*\)/gi,
     (_match, days: string) => `to_char((clock_timestamp() - interval '${days} days') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
   );
-  if (/\b(?:strftime|RAISE)\b/i.test(translated) || /[;]|--|\/\*/.test(translated)) {
+  translated = translated.replace(
+    /\bjson_extract\s*\(\s*((?:(?:OLD|NEW)\.)?[A-Za-z_][A-Za-z0-9_]*)\s*,\s*'\$\.([A-Za-z_][A-Za-z0-9_]*)'\s*\)/gi,
+    (_match, subject: string, path: string) =>
+      `pg_catalog.jsonb_extract_path_text((${subject})::jsonb, ${postgresRegexLiteral(path)})`
+  );
+  if (/\b(?:strftime|json_extract|RAISE)\b/i.test(translated) || /[;]|--|\/\*/.test(translated)) {
     throw new Error("A canonical SQLite trigger condition is not safely translatable to PostgreSQL.");
   }
   return translated;

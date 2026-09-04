@@ -921,7 +921,7 @@ function harness(options: HarnessOptions = {}) {
         injections.push(injection);
         if ("files" in injection) {
           if (options.retailerObserverFailure === "bundle_injection"
-            && (injection.files as string[]).includes("retailer-shadow.js")) {
+            && ["retailer-shadow.js", "target-shadow.js"].some((file) => (injection.files as string[]).includes(file))) {
             throw new Error(`RAW_BROWSER_ERROR token=${TOKEN} url=${AMAZON_PRODUCT_URL}?secret=DO_NOT_SEND`);
           }
           return [];
@@ -2067,6 +2067,7 @@ function harness(options: HarnessOptions = {}) {
     fireUpdateAvailable: (version: string) => updateAvailableListener?.({ version }),
     managedUpdateChecks: () => managedUpdateChecks,
     tabRemovals,
+    tabCreates,
     invokeBackground: (source: string) => runInContext(source, context) as Promise<unknown>,
     clickContextMenu: (menuItemId: string, presentedUrl?: string) => contextMenuClickedListener?.(
       { menuItemId, pageUrl: presentedUrl ?? tabs.get(17)?.url },
@@ -2097,7 +2098,6 @@ function harness(options: HarnessOptions = {}) {
     badgeTexts,
     badgeColors,
     tabUpdates,
-    tabCreates,
     hotPathTimeline,
     runtimeMessages,
     offscreenCreates: () => offscreenCreates,
@@ -2171,6 +2171,41 @@ test("a Target price-binding block is posted through the repair incident diagnos
   assert.equal(body.attemptCount, 2);
   assert.equal(JSON.stringify(body).includes(PRODUCT_URL), false);
   assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
+});
+
+test("a Target observer startup error is immediately posted to the incident diagnostic path", async () => {
+  const runtime = harness({ retailerObserverFailure: "bundle_injection" });
+  const response = await runtime.send({ type: "yoink:inspect-target" });
+  assert.equal(response.ok, false);
+  const diagnosticPosts = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/target"));
+  assert.equal(diagnosticPosts.length, 1);
+  const body = JSON.parse(String(diagnosticPosts[0]?.options.body)) as Record<string, unknown>;
+  assert.equal(body.retailerId, "target");
+  assert.equal(body.outcome, "failed");
+  assert.equal(body.failureStage, "runner");
+  assert.equal(body.reasonCode, "observer_bundle_injection_failed");
+  assert.equal(JSON.stringify(body).includes(PRODUCT_URL), false);
+  assert.equal(JSON.stringify(body).includes(TOKEN), false);
+});
+
+test("marked prior-product tabs automatically inspect and run no-click qualification", async () => {
+  const markedUrl = `${PRODUCT_URL}#yoink-inspect-and-qualify`;
+  const runtime = harness({ activeUrl: markedUrl });
+  runtime.fireTabUpdated(17, markedUrl);
+  await waitFor(() => runtime.fetchCalls.some((entry) =>
+    entry.url.endsWith("/devices/self/qualification-trials/target-add")),
+  "the marked Target tab did not automatically run qualification");
+  await runtime.invokeBackground("qualificationLaunchQueue");
+  assert.equal(runtime.fetchCalls.filter((entry) =>
+    entry.url.endsWith("/devices/self/shadow-observations/target")).length, 1);
+  assert.equal(runtime.fetchCalls.filter((entry) =>
+    entry.url.endsWith("/devices/self/qualification-trials/target-add")).length, 1);
+  assert.equal(runtime.injections.some((entry) =>
+    String((entry.args as unknown[] | undefined)?.[0]).startsWith("commit")), false);
+  const result = runtime.runtimeMessages.find((message) => message.type === "yoink:auto-qualification-result");
+  assert.equal(result?.retailerId, "target");
+  assert.equal(result?.retailerSku, "1011483414");
+  assert.equal(result?.ok, true);
 });
 
 test("a Target price placeholder waits for hydration and reports one recovered diagnostic", async () => {
@@ -3837,6 +3872,14 @@ test("a cold worker cancels pre-boundary work without clicking", async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.deepEqual(runtime.jobStates, ["cancelled"]);
   assert.equal(runtime.injections.some((entry) => (entry.args as unknown[] | undefined)?.[0] === "commitTargetAdd"), false);
+  const stopped = runtime.shownNotifications.find((entry) => entry.id === "yoink-action-stopped:job_target_fixture");
+  assert.ok(stopped, "a pre-boundary stop must be handed off to the shopper");
+  assert.match(String(stopped.options.message), /Chrome restarted.*No Add click was authorized/);
+  runtime.clickNotification(stopped.id);
+  await waitFor(
+    () => runtime.tabCreates.some((entry) => entry.url === "http://127.0.0.1:32991/#activity" && entry.active),
+    "The stopped-action notification did not open Activity."
+  );
   assert.equal("activeTargetJob" in runtime.storage, false);
 });
 
@@ -4938,6 +4981,15 @@ test("drop-window observation is exact, read-only, bounded, and closes its inact
   assert.equal(publicWatchState.watchItemId, watchId);
   assert.equal(JSON.stringify(publicWatchState).includes("W".repeat(43)), false);
   assert.equal(JSON.stringify(publicWatchState).includes(PRODUCT_URL), false);
+  const watchNotificationId = `yoink-watch-ready:${watchId}`;
+  const watchNotification = runtime.shownNotifications.find((entry) => entry.id === watchNotificationId);
+  assert.ok(watchNotification, "an opted-in in-stock sighting must notify the watcher");
+  assert.match(String(watchNotification.options.title), /In stock at Target/);
+  assert.equal(watchNotification.options.requireInteraction, true);
+  runtime.clickNotification(watchNotificationId);
+  await waitFor(() => runtime.tabCreates.some((entry) =>
+    entry.url === "https://www.target.com/p/-/A-1011483414" && entry.active === true),
+    "clicking the watch notification did not open the exact store page");
   const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
   assert.equal(runtime.jobLeaseRequests(), 1);

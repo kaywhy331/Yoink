@@ -85,6 +85,13 @@ const loadedCollectionLimit = (items, maximum = COLLECTION_POLL_LIMIT) => Math.m
 );
 const TRACKALACKER_SETUP_INSTRUCTIONS = "Connect TrackaLacker to Yoink:\n1. Stay signed in to TrackaLacker in Chrome.\n2. Open the Yoink extension popup.\n3. Choose Reconnect.\n4. Allow TrackaLacker page access when Chrome asks.";
 const NON_SENSITIVE_NOTE_HELP = "Do not include page text, account data, product IDs, tokens, payment details, or personal information.";
+const QUALIFICATION_LAUNCH_HASH = "yoink-inspect-and-qualify";
+const QUALIFICATION_RETAILER_HOSTS = Object.freeze({
+  target: "target.com",
+  walmart: "walmart.com",
+  amazon: "amazon.com",
+  bestbuy: "bestbuy.com"
+});
 const ADMIN_NAV_GROUPS = Object.freeze({
   overview: [{ view: "overview", label: "Overview" }],
   inbox: [
@@ -704,7 +711,7 @@ function renderStatus() {
   inboxBadge.textContent = inboxCount > 99 ? "99+" : String(inboxCount);
   inboxBadge.setAttribute("aria-label", `${inboxCount} inbox item${inboxCount === 1 ? "" : "s"}`);
   const toggle = $("#actionsToggle");
-  toggle.textContent = settings.actionsPaused ? "Resume actions" : "Pause actions";
+  toggle.textContent = settings.actionsPaused ? "Resume all actions" : "Pause all actions";
   toggle.classList.toggle("enabled", !settings.actionsPaused);
   const targetQualified = capabilities.targetAddQualified === true;
   const walmartQualified = capabilities.walmartAddQualified === true;
@@ -718,7 +725,7 @@ function renderStatus() {
   const toggleReason = $("#actionsToggleReason");
   toggleReason.hidden = !toggle.disabled;
   toggleReason.textContent = toggle.disabled ? "Set up a store before resuming actions." : "";
-  toggle.title = toggle.disabled ? toggleReason.textContent : "Pause or resume store actions.";
+  toggle.title = toggle.disabled ? toggleReason.textContent : "Pause or resume store actions for every shopper in this tenant.";
   const modeChip = $("#modeChip");
   const actionState = settings.actionsPaused ? "Paused" : "Running";
   modeChip.textContent = actionState;
@@ -967,13 +974,39 @@ function renderActionPlatformAdmin() {
     const automaticSummary = lastRun
       ? `Last automatic check: ${escapeHtml(String(lastRun.outcome).replaceAll("_", " "))} · ${escapeHtml(String(lastRun.reasonCode || "").replaceAll("_", " "))} · ${escapeHtml(relativeTime(lastRun.finishedAt))}${stalledCount > 0 ? ` · ${stalledCount.toLocaleString()} non-passing run${stalledCount === 1 ? "" : "s"} in a row` : ""}`
       : "No automatic check has reported yet.";
-    container.innerHTML = `<div class="adapter-repair-summary"><span>Guarded add readiness</span><strong>${escapeHtml(readinessLabel)}</strong></div><div class="card-meta">${lane.degraded ? `<span class="tag bad">Degraded · ${escapeHtml(degradedReasons.join(", ") || "current checks failing")}</span>` : ""}${blockedLabel ? `<span class="tag warning">${escapeHtml(blockedLabel)}</span>` : ""}${(lane.checklist || []).map((check) => `<span class="tag ${check.ready ? "good" : ""}"><span aria-hidden="true">${check.ready ? "✓" : "○"}</span> ${escapeHtml(check.label)}</span>`).join("")}</div><p class="fine-print" data-lane-automatic-run="${escapeHtml(lane.retailerId)}">${automaticSummary}</p><div class="card-actions">${lane.candidate?.canonicalUrl ? `<a class="button secondary" href="${escapeHtml(lane.candidate.canonicalUrl)}" target="_blank" rel="noopener">Open prior passing SKU</a>` : ""}${lane.qualification?.status === "qualified" ? `<button class="button danger" data-retire-lane="${escapeHtml(lane.retailerId)}" type="button">Retire this lane</button>` : ""}</div>`;
+    const candidates = qualificationLaunchCandidates(lane);
+    const candidateLinks = candidates.map((candidate) => `<a class="canonical-link" href="${escapeHtml(candidate.url)}" target="_blank" rel="noopener noreferrer">SKU ${escapeHtml(candidate.retailerSku)} ↗</a>`).join("");
+    container.innerHTML = `<div class="adapter-repair-summary"><span>Guarded add readiness</span><strong>${escapeHtml(readinessLabel)}</strong></div><div class="card-meta">${lane.degraded ? `<span class="tag bad">Degraded · ${escapeHtml(degradedReasons.join(", ") || "current checks failing")}</span>` : ""}${blockedLabel ? `<span class="tag warning">${escapeHtml(blockedLabel)}</span>` : ""}${(lane.checklist || []).map((check) => `<span class="tag ${check.ready ? "good" : ""}"><span aria-hidden="true">${check.ready ? "✓" : "○"}</span> ${escapeHtml(check.label)}</span>`).join("")}</div><p class="fine-print" data-lane-automatic-run="${escapeHtml(lane.retailerId)}">${automaticSummary}</p>${candidateLinks ? `<div class="qualification-candidate-links" aria-label="${escapeHtml(retailerName(lane.retailerId))} qualification products">${candidateLinks}</div>` : ""}<div class="card-actions">${candidates.length ? `<button class="button secondary" data-open-qualification-candidates="${escapeHtml(lane.retailerId)}" type="button">Open prior passing SKUs (${candidates.length})</button>` : ""}${lane.qualification?.status === "qualified" ? `<button class="button danger" data-retire-lane="${escapeHtml(lane.retailerId)}" type="button">Retire this lane</button>` : ""}</div>`;
   }
   populateTimezoneSelect($("#dropWindowTimezone"), $("#dropWindowTimezone").value || state.dropWindowTimezone);
   populateTimezoneSelect($("#restockPatternTimezone"), $("#restockPatternTimezone").value || state.dropWindowTimezone);
   renderDropWindowProductPicker();
   renderRestockPatternProductPicker();
   renderDropWindowDuration();
+}
+
+function qualificationLaunchCandidates(lane) {
+  const source = Array.isArray(lane?.candidates) && lane.candidates.length
+    ? lane.candidates : lane?.candidate ? [lane.candidate] : [];
+  const seen = new Set();
+  const candidates = [];
+  for (const candidate of source.slice(0, 8)) {
+    try {
+      const url = new URL(String(candidate?.canonicalUrl || ""));
+      const expectedHost = QUALIFICATION_RETAILER_HOSTS[lane.retailerId];
+      const host = url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "");
+      if (url.protocol !== "https:" || url.username || url.password || url.port
+        || !expectedHost || host !== expectedHost || !candidate?.retailerSku) continue;
+      const identity = `${lane.retailerId}:${String(candidate.retailerSku).toUpperCase()}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      url.hash = QUALIFICATION_LAUNCH_HASH;
+      candidates.push({ retailerSku: String(candidate.retailerSku).toUpperCase(), url: url.href });
+    } catch {
+      // A malformed server candidate is omitted rather than launched.
+    }
+  }
+  return candidates;
 }
 
 function syncSourceChannelReferenceField() {
@@ -1007,11 +1040,88 @@ function confidenceOption(value) {
   return confidence >= 9000 ? "10000" : confidence >= 6500 ? "8000" : "5000";
 }
 
-function localDateTimeValue(value) {
+function zonedDateTimeParts(value, timeZone) {
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date).filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value]));
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second)
+  };
+}
+
+function localDateTimeValue(value, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC") {
+  const parts = zonedDateTimeParts(value, timeZone);
+  if (!parts) return "";
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}`;
+}
+
+function zonedDateTimeIso(value, timeZone) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(value || ""));
+  if (!match) throw new Error("Choose a complete date and time.");
+  const desired = {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hour: Number(match[4]),
+    minute: Number(match[5]),
+    second: 0
+  };
+  const naiveUtc = Date.UTC(
+    desired.year,
+    desired.month - 1,
+    desired.day,
+    desired.hour,
+    desired.minute
+  );
+  const normalized = new Date(naiveUtc);
+  if (normalized.getUTCFullYear() !== desired.year
+    || normalized.getUTCMonth() + 1 !== desired.month
+    || normalized.getUTCDate() !== desired.day
+    || normalized.getUTCHours() !== desired.hour
+    || normalized.getUTCMinutes() !== desired.minute) {
+    throw new Error("Choose a valid calendar date and time.");
+  }
+  // Solve instant + zoneOffset(instant) = the entered wall-clock value. The
+  // offset is sampled repeatedly so DST boundaries settle without assuming a
+  // fixed offset for the selected IANA zone.
+  let instant = naiveUtc;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const represented = zonedDateTimeParts(instant, timeZone);
+    if (!represented) throw new Error("Choose a valid timezone.");
+    const representedUtc = Date.UTC(
+      represented.year,
+      represented.month - 1,
+      represented.day,
+      represented.hour,
+      represented.minute,
+      represented.second
+    );
+    const adjustment = naiveUtc - representedUtc;
+    if (adjustment === 0) break;
+    instant += adjustment;
+  }
+  const verified = zonedDateTimeParts(instant, timeZone);
+  if (!verified || ["year", "month", "day", "hour", "minute"]
+    .some((part) => verified[part] !== desired[part])) {
+    throw new Error(`That local time does not exist in ${timeZone} because of a clock change.`);
+  }
+  return new Date(instant).toISOString();
 }
 
 function populateTimezoneSelect(select, selected = "") {
@@ -1031,8 +1141,15 @@ function renderDropWindowDuration() {
   const form = $("#dropWindowForm");
   const output = $("#dropWindowDuration");
   if (!form || !output) return;
-  const starts = new Date(form.elements.startsAt.value).getTime();
-  const closes = new Date(form.elements.closesAt.value).getTime();
+  let starts;
+  let closes;
+  try {
+    starts = new Date(zonedDateTimeIso(form.elements.startsAt.value, form.elements.timezone.value)).getTime();
+    closes = new Date(zonedDateTimeIso(form.elements.closesAt.value, form.elements.timezone.value)).getTime();
+  } catch (error) {
+    output.textContent = error.message || "Choose start and close times.";
+    return;
+  }
   if (!Number.isFinite(starts) || !Number.isFinite(closes) || closes <= starts) {
     output.textContent = "Choose start and close times.";
     return;
@@ -1040,7 +1157,14 @@ function renderDropWindowDuration() {
   const minutes = Math.round((closes - starts) / 60_000);
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
-  output.textContent = `${hours ? `${hours} h` : ""}${hours && remainder ? " " : ""}${remainder ? `${remainder} min` : ""} window`;
+  const duration = `${hours ? `${hours} h` : ""}${hours && remainder ? " " : ""}${remainder ? `${remainder} min` : ""} window`;
+  const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const browserTime = new Intl.DateTimeFormat(undefined, {
+    timeZone: browserZone,
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+  output.textContent = `${duration} · resolves to ${browserTime.format(starts)}–${browserTime.format(closes)} ${browserZone.replaceAll("_", " ")}`;
 }
 
 function listingPickerRow(item, action, disabled = false) {
@@ -1133,8 +1257,8 @@ async function openDropWindow(windowId, { historyMode = "push" } = {}) {
   form.reset();
   form.elements.id.value = window.id;
   form.elements.title.value = window.title;
-  form.elements.startsAt.value = localDateTimeValue(window.startsAt);
-  form.elements.closesAt.value = localDateTimeValue(window.closesAt);
+  form.elements.startsAt.value = localDateTimeValue(window.startsAt, window.timezone);
+  form.elements.closesAt.value = localDateTimeValue(window.closesAt, window.timezone);
   form.elements.staggerMinutes.value = Math.round(Number(window.spreadSeconds || 0) / 60);
   form.elements.confidenceBps.value = confidenceOption(window.confidenceBps);
   form.elements.earlyAccessNote.value = window.items?.find((item) => item.earlyAccess?.note)?.earlyAccess?.note || "";
@@ -1179,8 +1303,8 @@ function replaceDropWindowDraft() {
   form.elements.kind.value = window.kind;
   const replacementStart = Math.max(Date.now() + 5 * 60_000, new Date(window.startsAt).getTime());
   const duration = Math.max(15 * 60_000, new Date(window.closesAt).getTime() - new Date(window.startsAt).getTime());
-  form.elements.startsAt.value = localDateTimeValue(replacementStart);
-  form.elements.closesAt.value = localDateTimeValue(replacementStart + duration);
+  form.elements.startsAt.value = localDateTimeValue(replacementStart, window.timezone);
+  form.elements.closesAt.value = localDateTimeValue(replacementStart + duration, window.timezone);
   form.elements.staggerMinutes.value = Math.round(Number(window.spreadSeconds || 0) / 60);
   form.elements.confidenceBps.value = confidenceOption(window.confidenceBps);
   form.elements.earlyAccessNote.value = window.items?.find((item) => item.earlyAccess?.note)?.earlyAccess?.note || "";
@@ -1562,11 +1686,20 @@ function renderAddQualification(retailerId) {
       ? "Reconnect the Chrome companion before activation."
       : "One confirmation enables only the narrow add-to-cart scope above; the global pause remains available."
     : liveReady ? `Run the safe qualification rehearsal once from the extension on a ${displayName}-sold shipping offer.` : "Complete only the checks marked Required; optional coverage can arrive naturally.";
-  $(`#${prefix}QualificationChecks`).innerHTML = (readiness.checks || []).map((check) => `<article class="qualification-check ${check.met ? "met" : "missing"} ${check.requiredForQualification === false ? "optional" : ""}">
-    <span class="qualification-check-mark" aria-hidden="true">${check.met ? "✓" : "○"}</span>
-    <div><h3>${escapeHtml(check.label)} · ${check.requiredForQualification === false ? "Optional" : "Required"}</h3><p>${escapeHtml(check.detail)}</p></div>
-    <strong>${Number(check.observed || 0)}/${Number(check.required || 0)}</strong>
-  </article>`).join("");
+  $(`#${prefix}QualificationChecks`).innerHTML = (readiness.checks || []).map((check) => {
+    const products = Array.isArray(check.products) ? check.products : [];
+    const productEvidence = products.length
+      ? `<div class="qualification-product-list">${products.map((product) => {
+        const passed = product.status === "passed";
+        return `<a class="qualification-product" href="${escapeHtml(product.canonicalUrl)}" target="_blank" rel="noopener noreferrer"><span><strong>SKU ${escapeHtml(product.retailerSku)}</strong><small>${escapeHtml(product.detail || "Inspected product")}</small></span><span class="tag ${passed ? "good" : "bad"}">${passed ? "Passed" : "Did not pass"}</span></a>`;
+      }).join("")}</div>`
+      : '<p class="qualification-no-products">No products inspected for this guard.</p>';
+    return `<article class="qualification-check ${check.met ? "met" : "missing"} ${check.requiredForQualification === false ? "optional" : ""}">
+      <span class="qualification-check-mark" aria-hidden="true">${check.met ? "✓" : "○"}</span>
+      <div><h3>${escapeHtml(check.label)} · ${check.requiredForQualification === false ? "Optional" : "Required"}</h3><p>${escapeHtml(check.detail)}</p>${productEvidence}</div>
+      <strong>${Number(check.observed || 0)}/${Number(check.required || 0)}</strong>
+    </article>`;
+  }).join("");
 }
 
 function renderQualifications() {
@@ -1817,10 +1950,12 @@ function renderAdminUserDetail() {
   $("#adminUserDialogTitle").textContent = user.displayName;
   $("#adminUserDialogSummary").textContent = `${user.planCount} plan${user.planCount === 1 ? "" : "s"} · ${user.onlineDevices} Chrome companion${user.onlineDevices === 1 ? "" : "s"} online`;
   const grantableRoles = state.authorizationRoles.filter((role) => !user.activeRoles.includes(role.id));
+  const revocableRoles = user.activeRoles.filter((roleId) => roleId !== "yoink_user");
   $("#adminUserSupportActions").innerHTML = [
     canSupport ? `<button class="button primary" data-admin-user-pairing type="button" ${active ? "" : "disabled"}>Issue pairing code</button>` : "",
     canSupport ? `<button class="button secondary" data-admin-user-pause type="button" ${active ? "" : "disabled"}>${actionsPaused ? "Resume actions" : "Pause actions"}</button>` : "",
     canGrant && grantableRoles.length ? `<select id="adminUserRoleSelection" aria-label="Role to grant">${grantableRoles.map((role) => `<option value="${escapeHtml(role.id)}">${escapeHtml(role.displayName)}</option>`).join("")}</select><button class="button secondary" data-admin-user-role-grant type="button">Grant role</button>` : "",
+    canGrant && revocableRoles.length ? `<div class="card-meta" aria-label="Assigned roles">${revocableRoles.map((roleId) => `<button class="tag" data-admin-user-role-revoke="${escapeHtml(roleId)}" type="button" aria-label="Revoke ${escapeHtml(authorizationRoleName(roleId))}">${escapeHtml(authorizationRoleName(roleId))} · Revoke</button>`).join("")}</div>` : "",
     canManage ? `<button class="button ${active ? "danger" : "secondary"}" data-admin-user-status="${active ? "disabled" : "active"}" type="button">${active ? "Disable user" : "Enable user"}</button>` : ""
   ].join("");
   const pairing = state.adminUserPairing;
@@ -2138,6 +2273,7 @@ function renderBackgroundWork() {
   if (!model) {
     $("#backgroundWorkerMetricGrid").innerHTML = empty("Background work is loading.");
     $("#backgroundWorkerScheduleList").innerHTML = "";
+    $("#backgroundWorkerDeadLetterList").innerHTML = "";
     $("#backgroundWorkerTaskList").innerHTML = "";
     $("#signalInboxDeadLetterList").innerHTML = "";
     $("#backgroundWorkerInstanceList").innerHTML = "";
@@ -2170,12 +2306,19 @@ function renderBackgroundWork() {
     <div class="card-meta"><span class="tag">every ${Number(schedule.intervalSeconds).toLocaleString()}s</span><span class="tag">next ${escapeHtml(relativeTime(schedule.nextRunAt))}</span>${schedule.lastEnqueuedAt ? `<span class="tag">last queued ${escapeHtml(relativeTime(schedule.lastEnqueuedAt))}</span>` : ""}</div>
     <div class="card-actions"><button class="button secondary" data-worker-schedule-run="${escapeHtml(schedule.id)}" type="button" ${model.canManage ? "" : "disabled"}>Run once</button><button class="button ${schedule.enabled ? "danger" : "primary"}" data-worker-schedule-toggle="${escapeHtml(schedule.id)}" type="button" ${model.canManage ? "" : "disabled"}>${schedule.enabled ? "Pause schedule" : "Resume schedule"}</button></div>
   </article>`).join("") : empty("No background schedules have been initialized yet.");
-  const recentTasks = (model.tasks || []).slice(0, 18);
-  $("#backgroundWorkerTaskList").innerHTML = recentTasks.length ? recentTasks.map((task) => {
+  const taskCard = (task) => {
     const kind = task.state === "succeeded" ? "good" : task.state === "dead_letter" ? "bad" : "warning";
     const results = Object.entries(task.result || {}).slice(0, 8).map(([key, value]) => `<span class="tag">${escapeHtml(operationalLabel(key))}: ${escapeHtml(value)}</span>`).join("");
     return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(backgroundTaskLabel(task.taskKind))}</h3><p>Attempt ${Number(task.attemptCount)} of ${Number(task.maximumAttempts)} · queued ${escapeHtml(relativeTime(task.createdAt))}</p></div><span class="tag ${kind}">${escapeHtml(String(task.state).replaceAll("_", " "))}</span></div><div class="card-meta">${task.lastErrorCode ? `<span class="tag bad">${escapeHtml(operationalLabel(task.lastErrorCode))}</span>` : ""}${results || '<span class="tag">no sensitive payload</span>'}</div>${task.state === "dead_letter" ? `<div class="card-actions"><button class="button primary" data-worker-task-retry="${escapeHtml(task.id)}" type="button" ${model.canManage ? "" : "disabled"}>Retry safely</button></div>` : ""}</article>`;
-  }).join("") : empty("No background task has run yet.");
+  };
+  const deadLetterTasks = model.deadLetterTasks || [];
+  $("#backgroundWorkerDeadLetterList").innerHTML = deadLetterTasks.length
+    ? deadLetterTasks.map(taskCard).join("")
+    : empty("No background task is in dead letter.");
+  const recentTasks = (model.tasks || []).filter((task) => task.state !== "dead_letter").slice(0, 18);
+  $("#backgroundWorkerTaskList").innerHTML = recentTasks.length
+    ? recentTasks.map(taskCard).join("")
+    : empty("No recent background task has run yet.");
   $("#signalInboxDeadLetterList").innerHTML = (model.signalDeadLetters || []).length ? model.signalDeadLetters.map((message) => `<article class="card"><div class="card-top"><div><h3>TrackaLacker call evaluation stopped</h3><p>Attempt ${Number(message.attempt)} · received ${escapeHtml(relativeTime(message.receivedAt))}</p></div><span class="tag bad">dead letter</span></div><div class="card-meta"><span class="tag bad">${escapeHtml(operationalLabel(message.lastErrorCode || "signal_processing_failed"))}</span><span class="tag">${escapeHtml(message.privacyClassification || "operational_aggregate")}</span><span class="tag operational-correlation">${escapeHtml(message.id)}</span><span>updated ${escapeHtml(relativeTime(message.updatedAt))}</span></div><div class="card-actions"><button class="button primary" data-signal-inbox-retry="${escapeHtml(message.id)}" type="button" ${model.canManage ? "" : "disabled"}>Retry corrected call</button></div></article>`).join("") : empty("No call is in dead letter.");
   $("#backgroundWorkerInstanceList").innerHTML = (model.workers || []).length ? model.workers.map((worker) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(worker.runtimeKind.replaceAll("_", " "))}</h3><p>${escapeHtml(worker.workerId)} · version ${escapeHtml(worker.runtimeVersion)}</p></div><span class="tag ${worker.online ? "good" : "warning"}">${worker.online ? "online" : worker.state}</span></div><div class="card-meta"><span class="tag">heartbeat ${escapeHtml(relativeTime(worker.heartbeatAt))}</span>${worker.lastErrorCode ? `<span class="tag warning">${escapeHtml(operationalLabel(worker.lastErrorCode))}</span>` : ""}<span class="tag ${worker.deploymentFingerprintPresent ? "good" : "warning"}">${worker.deploymentFingerprintPresent ? "attestation presented" : "legacy heartbeat"}</span><span class="tag">operational aggregate</span><span class="tag">bounded principals</span></div></article>`).join("") : empty("No worker heartbeat has been recorded. Start Yoink in embedded mode or start the standalone worker after the API initializes the database.");
 }
@@ -2812,6 +2955,13 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.operationsView) setOperationsView(button.dataset.operationsView, { historyMode: "push" });
     if (button.dataset.alertsView) setAlertsView(button.dataset.alertsView, { historyMode: "push" });
     if (button.dataset.openView) setView(button.dataset.openView, { historyMode: "push" });
+    if (button.dataset.openQualificationCandidates) {
+      const lane = (state.laneReadiness || []).find((item) => item.retailerId === button.dataset.openQualificationCandidates);
+      const candidates = qualificationLaunchCandidates(lane);
+      for (const candidate of candidates) window.open(candidate.url, "_blank", "noopener,noreferrer");
+      toast(`${candidates.length.toLocaleString()} ${retailerName(button.dataset.openQualificationCandidates)} qualification product${candidates.length === 1 ? "" : "s"} opened. The Chrome companion will inspect and run the no-click qualification on each page.`);
+      return;
+    }
     if (button.dataset.openRoute) {
       location.hash = `#${button.dataset.openRoute}`;
       return;
@@ -2895,6 +3045,25 @@ document.addEventListener("click", async (event) => {
         await reloadSelectedAdminUser();
         toast("Role membership granted and audited.");
       }
+    }
+    if (button.dataset.adminUserRoleRevoke) {
+      const userId = state.selectedAdminUser?.user?.id;
+      const roleId = button.dataset.adminUserRoleRevoke;
+      if (!userId || !roleId) throw new Error("Refresh before revoking this role.");
+      if (!(await requestConfirmation({
+        title: `Revoke ${authorizationRoleName(roleId)}?`,
+        summary: `This removes the role from ${state.selectedAdminUser.user.displayName} and is recorded in Access activity.`,
+        confirmLabel: "Revoke role",
+        danger: true
+      })).confirmed) return;
+      const result = await api(`/api/v1/admin/authorization/users/${encodeURIComponent(userId)}/roles/${encodeURIComponent(roleId)}`, { method: "DELETE" });
+      if (protectedChangePending(result)) {
+        $("#adminUserDialog").close();
+      } else {
+        await reloadSelectedAdminUser();
+        toast("Role membership revoked and audited.");
+      }
+      return;
     }
     if (button.dataset.adminUserStatus) {
       const userId = state.selectedAdminUser?.user?.id;
@@ -3319,9 +3488,16 @@ document.addEventListener("click", async (event) => {
     }
     if (button.id === "actionsToggle") {
       const paused = !state.snapshot.settings.actionsPaused;
-      const result = await api("/api/v1/user/settings/actions", { method: "PATCH", body: JSON.stringify({ paused, reason: paused ? "Paused from the control center." : "Enabled from the control center." }) });
+      const result = await api("/api/v1/admin/settings/actions", { method: "PATCH", body: JSON.stringify({
+        paused,
+        reason: paused
+          ? "Administrator paused purchase actions for every shopper from the control center."
+          : "Administrator resumed qualified purchase actions for every shopper from the control center."
+      }) });
       await refresh();
-      if (!protectedChangePending(result)) toast(paused ? "Actions paused. Calls will continue to be recorded." : "Qualified store add-only actions resumed.");
+      if (!protectedChangePending(result)) toast(paused
+        ? `Actions paused for ${Number(result.affectedUserCount || 0).toLocaleString()} shopper${Number(result.affectedUserCount || 0) === 1 ? "" : "s"}.`
+        : `Qualified actions resumed for ${Number(result.affectedUserCount || 0).toLocaleString()} shopper${Number(result.affectedUserCount || 0) === 1 ? "" : "s"}.`);
     }
     if (button.dataset.communityEnable) {
       const card = button.closest("[data-community-retailer]");
@@ -3687,8 +3863,8 @@ $("#dropWindowForm").addEventListener("submit", async (event) => {
         kind: values.kind,
         retailerId: values.retailerId,
         title: values.title,
-        startsAt: new Date(values.startsAt).toISOString(),
-        closesAt: new Date(values.closesAt).toISOString(),
+        startsAt: zonedDateTimeIso(values.startsAt, values.timezone),
+        closesAt: zonedDateTimeIso(values.closesAt, values.timezone),
         spreadSeconds: Number(values.staggerMinutes) * 60,
         confidenceBps: Number(values.confidenceBps),
         timezone: values.timezone,
@@ -3717,8 +3893,8 @@ $("#dropWindowEditForm").addEventListener("submit", async (event) => {
       method: "PATCH",
       body: JSON.stringify({
         title: values.title,
-        startsAt: new Date(values.startsAt).toISOString(),
-        closesAt: new Date(values.closesAt).toISOString(),
+        startsAt: zonedDateTimeIso(values.startsAt, values.timezone),
+        closesAt: zonedDateTimeIso(values.closesAt, values.timezone),
         spreadSeconds: Number(values.staggerMinutes) * 60,
         confidenceBps: Number(values.confidenceBps),
         timezone: values.timezone,
@@ -3769,7 +3945,7 @@ $("#restockPatternProductSearch").addEventListener("input", (event) => {
 });
 
 $("#dropWindowForm").addEventListener("input", (event) => {
-  if (["startsAt", "closesAt"].includes(event.target.name)) renderDropWindowDuration();
+  if (["startsAt", "closesAt", "timezone"].includes(event.target.name)) renderDropWindowDuration();
 });
 
 let librarySearchTimer;

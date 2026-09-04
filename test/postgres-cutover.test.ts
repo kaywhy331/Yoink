@@ -1730,6 +1730,40 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     );
     await postgres.query("ROLLBACK");
 
+    const compactedAt = new Date().toISOString();
+    await postgres.query(
+      `INSERT INTO yoink_cutover_test.background_tasks(
+         id, tenant_id, subject_user_id, task_kind, dedupe_key, state,
+         maximum_attempts, scheduled_for, result_json, completed_at, created_at, updated_at
+       ) VALUES (
+         'task_postgres_no_work_compaction', 'tenant_cutover_other', 'user_cutover_other',
+         'operational_telemetry_retention', 'postgres-no-work-compaction', 'succeeded',
+         3, $1, '{"historyDisposition":"no_work"}', $1, $1, $1
+       )`,
+      [compactedAt]
+    );
+    await postgres.query(
+      `INSERT INTO yoink_cutover_test.background_task_events(
+         id, tenant_id, subject_user_id, task_id, sequence,
+         event_type, attempt, reason_code, created_at
+       ) VALUES (
+         'task_event_postgres_no_work_compaction', 'tenant_cutover_other', 'user_cutover_other',
+         'task_postgres_no_work_compaction', 1, 'succeeded', 1, 'handler_completed', $1
+       )`,
+      [compactedAt]
+    );
+    await postgres.query(
+      "DELETE FROM yoink_cutover_test.background_tasks WHERE id = 'task_postgres_no_work_compaction'"
+    );
+    const compacted = await postgres.query<{ task_count: number; event_count: number }>(
+      `SELECT
+         (SELECT COUNT(*)::integer FROM yoink_cutover_test.background_tasks
+          WHERE id = 'task_postgres_no_work_compaction') AS task_count,
+         (SELECT COUNT(*)::integer FROM yoink_cutover_test.background_task_events
+          WHERE task_id = 'task_postgres_no_work_compaction') AS event_count`
+    );
+    assert.deepEqual(compacted.rows[0], { task_count: 0, event_count: 0 });
+
     await postgres.query("CREATE ROLE yoink_cutover_reader NOLOGIN");
     await postgres.query("GRANT USAGE ON SCHEMA yoink_cutover_test TO yoink_cutover_reader");
     await postgres.query("GRANT SELECT, INSERT, UPDATE ON yoink_cutover_test.users TO yoink_cutover_reader");

@@ -37,7 +37,7 @@ test("API problems preserve safe status taxonomy and correlation IDs", () => {
       correlationId
     }
   });
-  assert.equal(apiErrorPayload(new Error("The request body is invalid."), correlationId).status, 400);
+  assert.equal(apiErrorPayload(new Error("The request body is invalid."), correlationId).status, 500);
   assert.equal(apiErrorPayload(new Error("The authenticated request scope is invalid."), correlationId).status, 401);
 });
 

@@ -1,6 +1,7 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { cleanText } from "../../domain/src/normalize.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
@@ -115,7 +116,7 @@ function pairingCode(): string {
 function normalizedPairingCode(value: unknown): string {
   const normalized = cleanText(value, 32).toUpperCase().replace(/[\s-]/g, "");
   if (normalized.length !== PAIRING_CODE_LENGTH || [...normalized].some((character) => !PAIRING_ALPHABET.includes(character))) {
-    throw new Error("The pairing code is invalid or expired.");
+    throw new InputValidationError("The pairing code is invalid or expired.");
   }
   return normalized;
 }
@@ -218,14 +219,14 @@ export class DeviceRepository {
 
   createPairingCodeForUser(userId: string, now = Date.now()): PairingCodeResult {
     const subjectUserId = cleanText(userId, 120);
-    if (!USER_ID_PATTERN.test(subjectUserId)) throw new Error("The pairing-code user is invalid.");
+    if (!USER_ID_PATTERN.test(subjectUserId)) throw new InputValidationError("The pairing-code user is invalid.");
     const subject = this.db.get<{ status: string }>(
       "SELECT status FROM users WHERE tenant_id = ? AND id = ?",
       currentRequestScope().tenantId,
       subjectUserId
     );
-    if (!subject) throw new Error("The pairing-code user does not exist in this tenant.");
-    if (subject.status !== "active") throw new Error("Enable this user before issuing a pairing code.");
+    if (!subject) throw new InputValidationError("The pairing-code user does not exist in this tenant.");
+    if (subject.status !== "active") throw new InputValidationError("Enable this user before issuing a pairing code.");
     return this.db.transaction(() => {
       const timestamp = nowIso(now);
       const code = pairingCode();
@@ -305,13 +306,13 @@ export class DeviceRepository {
         codeHash(normalizedCode),
         timestamp
       );
-      if (!pairing) throw new Error("The pairing code is invalid or expired.");
+      if (!pairing) throw new InputValidationError("The pairing code is invalid or expired.");
       const consumed = this.db.run(
         "UPDATE device_pairing_codes SET used_at = ? WHERE id = ? AND used_at = ''",
         timestamp,
         pairing.id
       );
-      if (Number(consumed.changes) !== 1) throw new Error("The pairing code is invalid or expired.");
+      if (Number(consumed.changes) !== 1) throw new InputValidationError("The pairing code is invalid or expired.");
 
       const token = randomBytes(32).toString("base64url");
       const id = newId("device");
@@ -403,7 +404,7 @@ export class DeviceRepository {
       deviceId,
       currentRequestScope().userId
     );
-    if (!current) throw new Error("The paired device is unavailable or revoked.");
+    if (!current) throw new InputValidationError("The paired device is unavailable or revoked.");
     const timestamp = nowIso(now);
     const platform = cleanText(input.platform || "desktop-chrome", 80) || "desktop-chrome";
     const extensionVersion = cleanText(input.extensionVersion, 40);
@@ -439,13 +440,13 @@ export class DeviceRepository {
       cleanText(deviceId, 120),
       currentRequestScope().userId
     );
-    if (!row) throw new Error("The paired device is unavailable or revoked.");
+    if (!row) throw new InputValidationError("The paired device is unavailable or revoked.");
     return credentialStatus(row, now);
   }
 
   beginCredentialRotation(device: AuthenticatedDevice, now = Date.now()): DeviceCredentialRotationStart {
     if (device.credentialSlot !== "current") {
-      throw new Error("The current device credential is required to begin rotation.");
+      throw new InputValidationError("The current device credential is required to begin rotation.");
     }
     return this.db.transaction(() => {
       const row = this.db.get<DeviceCredentialRow>(
@@ -458,7 +459,7 @@ export class DeviceRepository {
         currentRequestScope().userId
       );
       if (!row || Number(row.credential_generation) !== device.credentialGeneration) {
-        throw new Error("The current device credential changed before rotation began.");
+        throw new InputValidationError("The current device credential changed before rotation began.");
       }
       const token = randomBytes(32).toString("base64url");
       const generation = Number(row.credential_generation) + 1;
@@ -476,7 +477,7 @@ export class DeviceRepository {
         row.credential_generation
       );
       if (Number(updated.changes) !== 1) {
-        throw new Error("The current device credential changed before rotation began.");
+        throw new InputValidationError("The current device credential changed before rotation began.");
       }
       this.audit(
         device.id,

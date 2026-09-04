@@ -55,32 +55,13 @@ test("the async runtime executes every due idempotent maintenance handler outsid
     });
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE state = 'succeeded'"
-    )?.count, BACKGROUND_TASK_KINDS.length);
+    )?.count, 0, "successful no-work cycles are compacted instead of retained");
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE state IN ('leased', 'retry_wait', 'dead_letter')"
     )?.count, 0);
-    const retentionResult = JSON.parse(db.get<{ resultJson: string }>(
-      "SELECT result_json AS resultJson FROM background_tasks WHERE task_kind = 'operational_telemetry_retention'"
-    )?.resultJson ?? "{}") as Record<string, unknown>;
-    assert.equal(retentionResult.deletedTaskRuns, 0);
-    assert.equal(retentionResult.deletedRecoveryEvidence, 0);
-    assert.equal(retentionResult.deletedRecoveryReviewEvents, 0);
-    assert.equal(retentionResult.recoveryEvidenceRetentionDays, 90);
-    assert.equal(retentionResult.recoveryEvidenceRetentionReceiptId, "");
-    assert.match(String(retentionResult.taskHistoryCutoffAt), /^\d{4}-\d{2}-\d{2}T/);
-    assert.match(String(retentionResult.recoveryEvidenceCutoffAt), /^\d{4}-\d{2}-\d{2}T/);
-    const witnessResult = JSON.parse(db.get<{ resultJson: string }>(
-      "SELECT result_json AS resultJson FROM background_tasks WHERE task_kind = 'observer_recipe_witness_refresh'"
-    )?.resultJson ?? "{}") as Record<string, unknown>;
-    assert.deepEqual(witnessResult, {
-      witnessConfigured: false,
-      checkpointReady: false,
-      refreshAttempted: false,
-      receiptAccepted: false,
-      deliveryAllowed: true,
-      witnessState: "disabled",
-      witnessSequence: 0
-    });
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM background_task_events"
+    )?.count, 0, "compacting a no-work task also removes its transient events");
     const second = await runtime.runOnce(NOW + 1_000);
     assert.equal(second.enqueued, 0);
     assert.equal(second.leased, 0);
@@ -296,10 +277,10 @@ test("bounded pagination eventually runs every persisted principal without a que
       "SELECT COUNT(*) AS count FROM background_tasks WHERE tenant_id = ? AND subject_user_id = ? AND state = 'succeeded'",
       LOCAL_TENANT_ID,
       LOCAL_USER_ID
-    )?.count, 5);
+    )?.count, 0);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE tenant_id = 'tenant_runtime_second' AND subject_user_id = 'user_runtime_second' AND state = 'succeeded'"
-    )?.count, 5);
+    )?.count, 0);
     assert.equal(runtime.status(NOW + 1).principalsVisited, 2);
   } finally {
     db.close();

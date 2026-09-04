@@ -37,7 +37,7 @@ test("the admin worker API exposes safe controls without lease capability materi
   const address = server.address() as AddressInfo;
   const baseUrl = `http://127.0.0.1:${address.port}`;
   try {
-    const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const health = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(health.durableBackgroundTasks, true);
     assert.equal(health.durableSignalIngress, true);
     assert.equal(health.signalEvaluationOutsideDeviceRequest, true);

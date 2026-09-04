@@ -286,6 +286,15 @@ export interface TargetQualificationCheck {
   required: number;
   requiredForQualification: boolean;
   met: boolean;
+  products: QualificationCheckProduct[];
+}
+
+export interface QualificationCheckProduct {
+  retailerSku: string;
+  canonicalUrl: string;
+  observedAt: string;
+  status: "passed" | "did_not_pass";
+  detail: string;
 }
 
 export type AddQualificationWarning = "none" | "expiring" | "expired" | "version_changed";
@@ -471,6 +480,7 @@ interface ObservationRow {
 
 interface QualificationEvidenceRow {
   retailerSku: string;
+  canonicalUrl: string;
   availability: Availability;
   sellerName: string;
   sellerType: SellerType;
@@ -479,6 +489,7 @@ interface QualificationEvidenceRow {
   purchaseRouteReady: number;
   observationState: ShadowObservationState;
   evidenceHash: string;
+  observedAt: string;
 }
 
 interface QualificationRow {
@@ -522,7 +533,63 @@ function qualificationState(
 }
 
 interface QualificationTrialRow {
+  retailerSku: string;
+  canonicalUrl: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
   evidenceHash: string;
+  observedAt: string;
+}
+
+type QualificationCheckId = TargetQualificationCheckId | AmazonQualificationCheckId;
+
+function latestBySku<T extends { retailerSku: string; observedAt: string }>(rows: T[]): T[] {
+  const latest = new Map<string, T>();
+  for (const row of rows) {
+    const current = latest.get(row.retailerSku);
+    if (!current || row.observedAt >= current.observedAt) latest.set(row.retailerSku, row);
+  }
+  return [...latest.values()].sort((left, right) => right.observedAt.localeCompare(left.observedAt));
+}
+
+function qualificationCheckProducts(
+  checkId: QualificationCheckId,
+  rows: QualificationEvidenceRow[],
+  trials: QualificationTrialRow[],
+  firstPartyName: string
+): QualificationCheckProduct[] {
+  if (checkId === "pre_click_rehearsal") {
+    return latestBySku(trials).map((trial) => ({
+      retailerSku: trial.retailerSku,
+      canonicalUrl: trial.canonicalUrl,
+      observedAt: trial.observedAt,
+      status: trial.outcome === "passed" ? "passed" : "did_not_pass",
+      detail: trial.outcome === "passed" ? "No-click rehearsal passed" : trial.reasonCode.replaceAll("_", " ")
+    }));
+  }
+  return latestBySku(rows).map((row) => {
+    const actionable = row.observationState === "actionable_candidate";
+    const passed = checkId === "first_party_actionable"
+      ? actionable && row.sellerType === "first_party" && row.sellerName === firstPartyName
+      : checkId === "named_marketplace_actionable"
+        ? actionable && row.sellerType === "third_party" && Boolean(row.sellerName)
+        : checkId === "shipping_actionable"
+          ? actionable && row.fulfillment === "shipping"
+          : checkId === "pickup_actionable"
+            ? actionable && row.fulfillment === "pickup"
+            : checkId === "offer_route_ready"
+              ? actionable && row.purchaseRouteReady === 1
+              : checkId === "unavailable_fail_closed"
+                ? row.availability === "out_of_stock" && row.addControlActionable === 0 && row.observationState === "not_actionable"
+                : checkId === "sku_diversity";
+    return {
+      retailerSku: row.retailerSku,
+      canonicalUrl: row.canonicalUrl,
+      observedAt: row.observedAt,
+      status: passed ? "passed" : "did_not_pass",
+      detail: `${row.observationState.replaceAll("_", " ")} · ${row.availability.replaceAll("_", " ")} · ${row.sellerName || "seller unknown"} · ${row.fulfillment}`
+    };
+  });
 }
 
 function requiredBoolean(value: unknown, label: string): boolean {
@@ -866,10 +933,12 @@ export class ShadowObservationRepository {
   targetQualificationReadiness(now = Date.now()): TargetQualificationReadiness {
     const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
     const rows = this.db.all<QualificationEvidenceRow>(
-      `SELECT retailer_sku AS retailerSku, availability,
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
               seller_name AS sellerName, seller_type AS sellerType, fulfillment,
               add_control_actionable AS addControlActionable,
-              observation_state AS observationState, evidence_hash AS evidenceHash
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
        FROM retailer_shadow_observations
        WHERE user_id = ? AND retailer_id = 'target' AND adapter_version = ?
          AND observed_at >= ?
@@ -880,16 +949,20 @@ export class ShadowObservationRepository {
     );
     const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
     const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
-    const rehearsals = this.db.all<QualificationTrialRow>(
-      `SELECT evidence_hash AS evidenceHash FROM retailer_adapter_trials
-       WHERE user_id = ? AND retailer_id = 'target' AND adapter_version = ?
-         AND trial_kind = 'pre_click_rehearsal' AND outcome = 'passed'
-         AND observed_at >= ?
-       ORDER BY observed_at, id`,
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'target' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
       currentRequestScope().userId,
       TARGET_ADD_ADAPTER_VERSION,
       cutoff
     );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
     const counts: Record<TargetQualificationCheckId, number> = {
       first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "Target").length,
       named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
@@ -899,7 +972,7 @@ export class ShadowObservationRepository {
       sku_diversity: distinctSkuCount,
       pre_click_rehearsal: rehearsals.length
     };
-    const definitions: Array<Omit<TargetQualificationCheck, "observed" | "met">> = [
+    const definitions: Array<Omit<TargetQualificationCheck, "observed" | "met" | "products">> = [
       {
         id: "first_party_actionable",
         label: "First-party offer",
@@ -953,7 +1026,8 @@ export class ShadowObservationRepository {
     const checks = definitions.map((definition) => ({
       ...definition,
       observed: counts[definition.id],
-      met: counts[definition.id] >= definition.required
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "Target")
     }));
     const liveEvidenceReady = checks
       .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
@@ -1026,10 +1100,12 @@ export class ShadowObservationRepository {
   walmartQualificationReadiness(now = Date.now()): WalmartQualificationReadiness {
     const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
     const rows = this.db.all<QualificationEvidenceRow>(
-      `SELECT retailer_sku AS retailerSku, availability,
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
               seller_name AS sellerName, seller_type AS sellerType, fulfillment,
               add_control_actionable AS addControlActionable,
-              observation_state AS observationState, evidence_hash AS evidenceHash
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
        FROM retailer_shadow_observations
        WHERE user_id = ? AND retailer_id = 'walmart' AND adapter_version = ?
          AND observed_at >= ?
@@ -1040,16 +1116,20 @@ export class ShadowObservationRepository {
     );
     const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
     const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
-    const rehearsals = this.db.all<QualificationTrialRow>(
-      `SELECT evidence_hash AS evidenceHash FROM retailer_adapter_trials
-       WHERE user_id = ? AND retailer_id = 'walmart' AND adapter_version = ?
-         AND trial_kind = 'pre_click_rehearsal' AND outcome = 'passed'
-         AND observed_at >= ?
-       ORDER BY observed_at, id`,
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'walmart' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
       currentRequestScope().userId,
       WALMART_ADD_ADAPTER_VERSION,
       cutoff
     );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
     const counts: Record<WalmartQualificationCheckId, number> = {
       first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "Walmart").length,
       named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
@@ -1059,7 +1139,7 @@ export class ShadowObservationRepository {
       sku_diversity: distinctSkuCount,
       pre_click_rehearsal: rehearsals.length
     };
-    const definitions: Array<Omit<WalmartQualificationCheck, "observed" | "met">> = [
+    const definitions: Array<Omit<WalmartQualificationCheck, "observed" | "met" | "products">> = [
       {
         id: "first_party_actionable",
         label: "First-party offer",
@@ -1113,7 +1193,8 @@ export class ShadowObservationRepository {
     const checks = definitions.map((definition) => ({
       ...definition,
       observed: counts[definition.id],
-      met: counts[definition.id] >= definition.required
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "Walmart")
     }));
     const liveEvidenceReady = checks
       .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
@@ -1186,11 +1267,12 @@ export class ShadowObservationRepository {
   amazonQualificationReadiness(now = Date.now()): AmazonQualificationReadiness {
     const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
     const rows = this.db.all<QualificationEvidenceRow>(
-      `SELECT retailer_sku AS retailerSku, availability,
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
               seller_name AS sellerName, seller_type AS sellerType, fulfillment,
               add_control_actionable AS addControlActionable,
               purchase_route_ready AS purchaseRouteReady,
-              observation_state AS observationState, evidence_hash AS evidenceHash
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
        FROM retailer_shadow_observations
        WHERE user_id = ? AND retailer_id = 'amazon' AND adapter_version = ?
          AND observed_at >= ?
@@ -1201,16 +1283,20 @@ export class ShadowObservationRepository {
     );
     const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
     const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
-    const rehearsals = this.db.all<QualificationTrialRow>(
-      `SELECT evidence_hash AS evidenceHash FROM retailer_adapter_trials
-       WHERE user_id = ? AND retailer_id = 'amazon' AND adapter_version = ?
-         AND trial_kind = 'pre_click_rehearsal' AND outcome = 'passed'
-         AND observed_at >= ?
-       ORDER BY observed_at, id`,
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'amazon' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
       currentRequestScope().userId,
       AMAZON_ADD_ADAPTER_VERSION,
       cutoff
     );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
     const counts: Record<AmazonQualificationCheckId, number> = {
       first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "Amazon.com").length,
       named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
@@ -1220,7 +1306,7 @@ export class ShadowObservationRepository {
       sku_diversity: distinctSkuCount,
       pre_click_rehearsal: rehearsals.length
     };
-    const definitions: Array<Omit<AmazonQualificationCheck, "observed" | "met">> = [
+    const definitions: Array<Omit<AmazonQualificationCheck, "observed" | "met" | "products">> = [
       {
         id: "first_party_actionable",
         label: "First-party offer",
@@ -1274,7 +1360,8 @@ export class ShadowObservationRepository {
     const checks = definitions.map((definition) => ({
       ...definition,
       observed: counts[definition.id],
-      met: counts[definition.id] >= definition.required
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "Amazon.com")
     }));
     const liveEvidenceReady = checks
       .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
@@ -1347,10 +1434,12 @@ export class ShadowObservationRepository {
   bestBuyQualificationReadiness(now = Date.now()): BestBuyQualificationReadiness {
     const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
     const rows = this.db.all<QualificationEvidenceRow>(
-      `SELECT retailer_sku AS retailerSku, availability,
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
               seller_name AS sellerName, seller_type AS sellerType, fulfillment,
               add_control_actionable AS addControlActionable,
-              observation_state AS observationState, evidence_hash AS evidenceHash
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
        FROM retailer_shadow_observations
        WHERE user_id = ? AND retailer_id = 'bestbuy' AND adapter_version = ?
          AND observed_at >= ?
@@ -1361,16 +1450,20 @@ export class ShadowObservationRepository {
     );
     const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
     const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
-    const rehearsals = this.db.all<QualificationTrialRow>(
-      `SELECT evidence_hash AS evidenceHash FROM retailer_adapter_trials
-       WHERE user_id = ? AND retailer_id = 'bestbuy' AND adapter_version = ?
-         AND trial_kind = 'pre_click_rehearsal' AND outcome = 'passed'
-         AND observed_at >= ?
-       ORDER BY observed_at, id`,
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'bestbuy' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
       currentRequestScope().userId,
       BESTBUY_ADD_ADAPTER_VERSION,
       cutoff
     );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
     const counts: Record<BestBuyQualificationCheckId, number> = {
       first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "Best Buy").length,
       named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
@@ -1380,7 +1473,7 @@ export class ShadowObservationRepository {
       sku_diversity: distinctSkuCount,
       pre_click_rehearsal: rehearsals.length
     };
-    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met">> = [
+    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met" | "products">> = [
       {
         id: "first_party_actionable",
         label: "First-party offer",
@@ -1434,7 +1527,8 @@ export class ShadowObservationRepository {
     const checks = definitions.map((definition) => ({
       ...definition,
       observed: counts[definition.id],
-      met: counts[definition.id] >= definition.required
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "Best Buy")
     }));
     const liveEvidenceReady = checks
       .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")

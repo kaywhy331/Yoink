@@ -201,7 +201,7 @@ test("successful task history is retained for 30 days and then pruned without de
       tasks.enqueueDueSchedules(oldNow);
       const lease = tasks.leaseNext("background_worker_retention", 60, oldNow + 1);
       assert.ok(lease);
-      return tasks.complete(lease.id, lease.capabilityToken, { handled: 0 }, oldNow + 2);
+      return tasks.complete(lease.id, lease.capabilityToken, { handled: 1 }, oldNow + 2);
     });
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_task_events WHERE task_id = ?",

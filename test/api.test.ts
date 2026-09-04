@@ -235,7 +235,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(affiliateDirectory.affiliateRouting.stores.some((store) => store.website === "amazon.com"), false);
     assert.ok(affiliateDirectory.affiliateRouting.registeredRetailerDomains.includes("amazon.com"));
 
-    const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const health = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
     const emptyInternalServices = emptyInternalServiceCapabilityProjection();
     const postgresCutover = postgresCutoverCapabilityProjection();
     const postgresRuntimeReadRoles = postgresRuntimeReadRoleCapabilityProjection();
@@ -509,6 +509,28 @@ test("the loopback API serves the control center and processes a dry-run signal"
     const signal = await signalResponse.json() as Record<string, unknown>;
     assert.equal(signal.decision, "test_signal");
     assert.equal(signal.actionJobId, "");
+
+    const missingIdentityResponse = await fetch(`${baseUrl}/api/v1/signals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({
+        sourceConnectionId: "source_trackalacker_local",
+        source: "trackalacker",
+        externalEventId: "api-event-missing-identity",
+        eventType: "restock",
+        observedAt: new Date().toISOString(),
+        offer: { availability: "in_stock", unitPriceCents: 6999, currency: "USD" }
+      })
+    });
+    assert.equal(missingIdentityResponse.status, 400);
+    assert.deepEqual(
+      await missingIdentityResponse.json() as Record<string, unknown>,
+      {
+        error: "invalid_signal",
+        message: "Signal identity is required.",
+        correlationId: missingIdentityResponse.headers.get("x-request-id")
+      }
+    );
 
     const snapshot = await fetch(`${baseUrl}/api/v1/snapshot`).then((response) => response.json()) as {
       counts: Record<string, number>;
@@ -873,7 +895,12 @@ test("the loopback API serves the control center and processes a dry-run signal"
       reviewedAllInCents: 6999,
       headroomCents: 0,
       autoRaised: false,
-      currency: "USD"
+      currency: "USD",
+      spendingLimit: {
+        allowed: true,
+        reasonCode: "notifications_only",
+        message: "Notifications do not reserve spending capacity."
+      }
     });
     assert.equal(preflight.automationReadiness.configuredAction, "notify");
     assert.equal(preflight.automationReadiness.guardedAddAttemptQuantity, 1);
@@ -1754,7 +1781,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(activationBody.readiness.addToCartQualified, true);
     assert.equal(activationBody.readiness.mutationAuthorized, false);
     assert.equal(activationBody.profileReconciliation.retailerId, "target");
-    const liveHealth = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const liveHealth = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(liveHealth.executionMode, "live");
     assert.equal(liveHealth.actionsPaused, true);
     assert.equal(liveHealth.chromeMutationEnabled, true);
@@ -1841,7 +1868,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(walmartActivationBody.readiness.addToCartQualified, true);
     assert.equal(walmartActivationBody.readiness.mutationAuthorized, true);
     assert.equal(walmartActivationBody.profileReconciliation.retailerId, "walmart");
-    const dualLaneHealth = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const dualLaneHealth = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(dualLaneHealth.targetAddExecutionEnabled, true);
     assert.equal(dualLaneHealth.walmartAddExecutionEnabled, true);
 
@@ -1917,7 +1944,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(amazonActivationBody.readiness.addToCartQualified, true);
     assert.equal(amazonActivationBody.readiness.mutationAuthorized, true);
     assert.equal(amazonActivationBody.profileReconciliation.retailerId, "amazon");
-    const tripleLaneHealth = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const tripleLaneHealth = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(tripleLaneHealth.amazonAddExecutionEnabled, true);
 
     const bestBuyShadowIds: string[] = [];
@@ -1989,7 +2016,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
     assert.equal(bestBuyActivationBody.readiness.addToCartQualified, true);
     assert.equal(bestBuyActivationBody.readiness.mutationAuthorized, true);
     assert.equal(bestBuyActivationBody.profileReconciliation.retailerId, "bestbuy");
-    const fourLaneHealth = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const fourLaneHealth = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(fourLaneHealth.bestBuyAddExecutionEnabled, true);
 
     const disneyObservation = await fetch(`${baseUrl}/api/v1/devices/self/shadow-observations/disney`, {

@@ -174,6 +174,19 @@ test("Access creates and supports a shopper through subject-bound pairing and us
     assert.equal(confirmations.length, 1);
     assert.match(String(confirmations[0]?.title || ""), /Pause actions for Support Test Shopper/);
 
+    (browser.document.querySelector("[data-admin-user-role-grant]") as HTMLButtonElement).click();
+    await eventually(() => assert.ok(browser.document.querySelector("[data-admin-user-role-revoke]")));
+    const revokeRole = browser.document.querySelector("[data-admin-user-role-revoke]") as HTMLButtonElement;
+    const revokedRoleId = revokeRole.dataset.adminUserRoleRevoke;
+    assert.ok(revokedRoleId);
+    revokeRole.click();
+    await eventually(() => assert.equal(db.get<{ status: string }>(
+      "SELECT status FROM authorization_memberships WHERE user_id = ? AND role_id = ?",
+      createdUser.id,
+      revokedRoleId
+    )?.status, "revoked"));
+    assert.match(String(confirmations.at(-1)?.title || ""), /Revoke/);
+
     const disable = browser.document.querySelector('[data-admin-user-status="disabled"]') as HTMLButtonElement;
     disable.click();
     assert.equal(disable.textContent, "Confirm disable");

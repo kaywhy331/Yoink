@@ -60,6 +60,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (["/api/v1/admin/notifications", "/api/v1/admin/attribution-receipts"].includes(pathname)) return "admin.read";
   if (pathname === "/api/v1/admin/signals/simulate") return "source.manage";
   if (pathname === "/api/v1/admin/workers/restart") return "worker.manage";
+  if (pathname === "/api/v1/admin/settings/actions") return "admin.users.support";
+  if (pathname === "/api/v1/admin/capabilities") return "admin.read";
   if (pathname.startsWith("/api/v1/admin/analytics")) return "admin.read";
 
   if (pathname === "/api/v1/snapshot") return "admin.read";
@@ -160,6 +162,8 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname === "/api/v1/admin/attribution-receipts"
     || pathname === "/api/v1/admin/signals/simulate"
     || pathname === "/api/v1/admin/workers/restart"
+    || pathname === "/api/v1/admin/settings/actions"
+    || pathname === "/api/v1/admin/capabilities"
     || pathname.startsWith("/api/v1/admin/analytics")) {
     return { pathname, requestedSurface: "admin" };
   }

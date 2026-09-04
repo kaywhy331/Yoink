@@ -8,7 +8,6 @@ import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
 import { loadWorkerConfig } from "../apps/worker/src/config.js";
-import { BACKGROUND_TASK_KINDS } from "../packages/domain/src/background-task.js";
 import { ObserverRecipeSigner } from "../packages/observer-registry/src/signer.js";
 import { SqliteBackgroundWorkerStore } from "../packages/database/src/background-worker-store.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
@@ -176,7 +175,10 @@ test("a separate worker process serves every principal and drives truthful exter
     assert.equal(status.deploymentAttested, true);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_tasks WHERE state = 'succeeded'"
-    )?.count, BACKGROUND_TASK_KINDS.length * 2);
+    )?.count, 0);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM background_task_events"
+    )?.count, 0);
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM background_worker_heartbeats WHERE runtime_kind = 'local_in_process'"
     )?.count, 0);
@@ -198,19 +200,23 @@ test("a separate worker process serves every principal and drives truthful exter
     await once(server, "listening");
     const address = server.address() as AddressInfo;
     const baseUrl = `http://127.0.0.1:${address.port}`;
-    const running = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const runningResponse = await fetch(`${baseUrl}/api/v1/health`);
+    assert.equal(runningResponse.status, 200);
+    const running = await runningResponse.json() as Record<string, unknown>;
     assert.equal(running.backgroundWorkerMode, "external");
     assert.equal(running.backgroundWorkerDeployment, "standalone");
     assert.equal(running.backgroundWorkerRuntime, "running");
     assert.equal(running.backgroundWorkerHealthy, true);
     assert.equal(running.backgroundWorkerDeploymentAttested, true);
-    assert.equal(running.productionWorkerFleetReady, false);
+    assert.equal("productionWorkerFleetReady" in running, false);
 
     child.kill("SIGTERM");
     const [exitCode] = await once(child, "exit") as [number | null, NodeJS.Signals | null];
     assert.equal(exitCode, 0, captured.output());
     await eventually(async () => {
-      const stopped = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+      const stoppedResponse = await fetch(`${baseUrl}/api/v1/health`);
+      assert.equal(stoppedResponse.status, 503);
+      const stopped = await stoppedResponse.json() as Record<string, unknown>;
       assert.equal(stopped.backgroundWorkerRuntime, "stopped");
       assert.equal(stopped.backgroundWorkerHealthy, false);
     });

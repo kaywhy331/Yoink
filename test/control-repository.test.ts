@@ -4,6 +4,40 @@ import { CatalogRepository } from "../packages/database/src/catalog-repository.j
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 
+test("an administrator action pause applies to every shopper in the tenant", () => {
+  const db = new YoinkDatabase();
+  try {
+    const now = "2026-09-04T18:00:00.000Z";
+    db.run(
+      "INSERT INTO users(id, tenant_id, display_name, created_at) VALUES (?, ?, ?, ?)",
+      "user_tenant_pause_fixture",
+      "tenant_local",
+      "Tenant pause fixture",
+      now
+    );
+    db.run("INSERT INTO app_settings(user_id, actions_paused, updated_at) VALUES (?, 0, ?)", "user_tenant_pause_fixture", now);
+    db.run("UPDATE app_settings SET actions_paused = 0 WHERE user_id = 'user_local'");
+
+    const paused = new ControlRepository(db).setTenantActionsPaused(true, "Tenant safety pause", Date.parse(now));
+    assert.equal(paused.affectedUserCount, 2);
+    assert.deepEqual(
+      db.all<{ userId: string; paused: number }>(
+        `SELECT user_id AS userId, actions_paused AS paused
+         FROM app_settings WHERE user_id IN ('user_local', 'user_tenant_pause_fixture') ORDER BY user_id`
+      ).map((row) => ({ ...row })),
+      [
+        { userId: "user_local", paused: 1 },
+        { userId: "user_tenant_pause_fixture", paused: 1 }
+      ]
+    );
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'tenant_actions_pause_changed'"
+    )?.count, 1);
+  } finally {
+    db.close();
+  }
+});
+
 test("missions edit the complete exact retailer target set atomically", () => {
   const db = new YoinkDatabase();
   try {

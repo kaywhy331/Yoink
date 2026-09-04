@@ -4,6 +4,7 @@ import {
   type ObserverRecipeContributorEligibilityInput
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { AuditRepository } from "./audit-repository.js";
 import { AuthorizationRepository } from "./authorization-repository.js";
@@ -59,7 +60,7 @@ export interface ObserverRecipeContributorEligibilitySnapshot {
 
 function timestamp(value: unknown, label: string): number {
   const parsed = new Date(String(value ?? "")).getTime();
-  if (!Number.isFinite(parsed)) throw new Error(`The contributor eligibility ${label} is invalid.`);
+  if (!Number.isFinite(parsed)) throw new InputValidationError(`The contributor eligibility ${label} is invalid.`);
   return parsed;
 }
 
@@ -99,7 +100,7 @@ export class ObserverRecipeContributorEligibilityRepository {
   attest(input: ObserverRecipeContributorEligibilityInput, now = Date.now()): Record<string, unknown> {
     const scope = currentRequestScope();
     if (scope.actorKind !== "service") {
-      throw new Error("A trusted identity-risk service scope is required for contributor eligibility.");
+      throw new InputValidationError("A trusted identity-risk service scope is required for contributor eligibility.");
     }
     this.authorization.require("internal.eligibility");
     if (!input || typeof input !== "object" || Array.isArray(input)
@@ -113,7 +114,7 @@ export class ObserverRecipeContributorEligibilityRepository {
       || typeof input.accountEligible !== "boolean"
       || typeof input.deviceEligible !== "boolean"
       || typeof input.regionEligible !== "boolean") {
-      throw new Error("A valid contributor eligibility attestation is required.");
+      throw new InputValidationError("A valid contributor eligibility attestation is required.");
     }
     const rawDeviceId = String(input.deviceId ?? "");
     const deviceId = cleanText(rawDeviceId, 120);
@@ -123,14 +124,14 @@ export class ObserverRecipeContributorEligibilityRepository {
     if (rawDeviceId !== deviceId || !ID_PATTERN.test(deviceId) || !HASH_PATTERN.test(contributorRefHash)
       || !HASH_PATTERN.test(proofHash) || !REGION_PATTERN.test(regionScope)
       || (input.regionEligible && !SUBDIVISION_PATTERN.test(regionScope))) {
-      throw new Error("Contributor eligibility contains an invalid pseudonym, proof, device, or coarse region.");
+      throw new InputValidationError("Contributor eligibility contains an invalid pseudonym, proof, device, or coarse region.");
     }
     const attestedTime = timestamp(input.attestedAt, "attestation time");
     const expiresTime = timestamp(input.expiresAt, "expiry");
     if (attestedTime > now + 60_000 || now - attestedTime > OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_MAXIMUM_AGE_MS
       || expiresTime <= now + 60_000
       || expiresTime - attestedTime > OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_MAXIMUM_TTL_MS) {
-      throw new Error("Contributor eligibility must be fresh and expire within 24 hours.");
+      throw new InputValidationError("Contributor eligibility must be fresh and expire within 24 hours.");
     }
     const device = this.db.get<{ id: string }>(
       `SELECT id FROM extension_devices
@@ -139,12 +140,12 @@ export class ObserverRecipeContributorEligibilityRepository {
       scope.userId,
       deviceId
     );
-    if (!device) throw new Error("The contributor eligibility device is not an active device for this principal.");
+    if (!device) throw new InputValidationError("The contributor eligibility device is not an active device for this principal.");
     const existing = this.row(deviceId);
     if (existing) {
       const existingTime = new Date(existing.attestedAt).getTime();
       if (attestedTime < existingTime) {
-        throw new Error("Contributor eligibility cannot be replaced by an older attestation.");
+        throw new InputValidationError("Contributor eligibility cannot be replaced by an older attestation.");
       }
       if (attestedTime === existingTime) {
         const exactReplay = existing.proofHash === proofHash
@@ -154,7 +155,7 @@ export class ObserverRecipeContributorEligibilityRepository {
           && existing.deviceEligible === (input.deviceEligible ? 1 : 0)
           && existing.regionEligible === (input.regionEligible ? 1 : 0)
           && existing.expiresAt === new Date(expiresTime).toISOString();
-        if (!exactReplay) throw new Error("Contributor eligibility conflicts with an attestation at the same time.");
+        if (!exactReplay) throw new InputValidationError("Contributor eligibility conflicts with an attestation at the same time.");
         return rowProjection(existing, true, now);
       }
     }

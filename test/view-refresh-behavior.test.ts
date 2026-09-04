@@ -52,12 +52,13 @@ test("dashboard refreshes preserve route caches and use state-aware polling", ()
   assert.doesNotMatch(shopper, /ACTION_HANDOFF_REARM_MS|setInterval\(poll/);
   assert.match(shopper, /queued \+ checking > 0\) return 3_000/);
   assert.match(shopper, /activeUserRoute\(\) === "activity" \? 15_000 : 30_000/);
-  assert.match(shopper, /\["products", "calls", "plans"\]\.includes\(route\)/);
+  assert.match(shopper, /\["products", "stores", "calls", "plans"\]\.includes\(route\)/);
   assert.match(shopper, /loadUserRoute\(route, \{ force: true, preservePagination: true \}\)/);
   assert.match(shopper, /preservePagination \? loadedProductLimit\(\) : state\.productPageSize/);
+  assert.match(shopper, /preservePagination \? loadedStoreProductLimit\(\) : state\.productPageSize/);
   assert.match(shopper, /button\.id === "userDataFreshness"[\s\S]+?await resumeVisibleDashboard\(\)/);
   assert.match(shopper, /preservePagination: true/);
-  assert.match(shopper, /return preservePagination \? request : request\.catch\(\(\) => fallback\)/,
+  assert.match(shopper, /return preservePagination \? request : request\.catch\(\(error\) => \{[\s\S]+?return fallback;[\s\S]+?\}\)/,
     "Background workspace requests must surface a stale state instead of replacing live data with fallbacks.");
   assert.match(shopper, /\.catch\(\(\) => setUserDataStale\(true\)\)/);
 

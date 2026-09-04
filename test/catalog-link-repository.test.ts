@@ -8,6 +8,7 @@ import {
   APPROVE_CATALOG_PROPOSAL_CONFIRMATION,
   CatalogGovernanceRepository
 } from "../packages/database/src/catalog-governance-repository.js";
+import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import {
   HOSTED_PRINCIPAL_CONFIRMATION,
@@ -71,9 +72,9 @@ test("a user product link creates only a normalized review proposal", () => {
 
     const duplicate = links.propose({
       url: "https://www.walmart.com/ip/20009805270",
-      title: "99 Nights in the Forest Collectible Pins",
+      title: "A changed title must not bypass exact-item deduplication",
       confirmation: PROPOSE_EXACT_PRODUCT_LINK_CONFIRMATION
-    }, NOW);
+    }, NOW + 1_000);
     assert.equal(duplicate.disposition, "duplicate_pending");
     assert.equal(duplicate.proposal.id, first.proposal.id);
 
@@ -94,6 +95,60 @@ test("a user product link creates only a normalized review proposal", () => {
     assert.equal(approved.application?.listing.executionSupported, false);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count, 0);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM offer_observations")?.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("a known product link is identified without review and approval preserves observed listing facts", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    const existing = catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "known-link-product",
+      sourceListingId: "known-link-listing",
+      title: "Known live product",
+      retailerId: "target",
+      retailerSku: "95280894",
+      canonicalUrl: "https://www.target.com/p/known-live-product/-/A-95280894",
+      listingStatus: "in_stock",
+      executionSupported: true,
+      observedPriceCents: 4_499,
+      currency: "USD"
+    }, NOW);
+    db.run(
+      "UPDATE listings SET canonical_url = ? WHERE id = ?",
+      "https://www.target.com/p/preserved-observed-copy/-/A-95280894",
+      existing.listing.id
+    );
+    const links = new CatalogLinkRepository(db);
+    const preview = links.preview("https://www.target.com/p/alternate-copy/-/A-95280894");
+    assert.equal(preview.alreadyInProducts, true);
+    assert.equal(preview.existingVariantId, existing.listing.variantId);
+    assert.equal(preview.existingListingId, existing.listing.id);
+
+    // A direct API caller can still submit a proposal, but its approval is
+    // provenance-only and cannot downgrade current observed catalog facts.
+    const proposed = links.propose({
+      url: "https://www.target.com/p/alternate-copy/-/A-95280894",
+      title: "Alternate user-entered title",
+      confirmation: PROPOSE_EXACT_PRODUCT_LINK_CONFIRMATION
+    }, NOW + 1_000);
+    new CatalogGovernanceRepository(db).decide(proposed.proposal.id, {
+      outcome: "approve",
+      note: "The exact item identifier matches the existing product.",
+      confirmation: APPROVE_CATALOG_PROPOSAL_CONFIRMATION
+    }, NOW + 2_000);
+    assert.deepEqual({ ...db.get<Record<string, unknown>>(
+      "SELECT canonical_url AS canonicalUrl, status, execution_supported AS executionSupported FROM listings WHERE id = ?",
+      existing.listing.id
+    ) }, {
+      canonicalUrl: "https://www.target.com/p/preserved-observed-copy/-/A-95280894",
+      status: "in_stock",
+      executionSupported: 1
+    });
   } finally {
     db.close();
   }

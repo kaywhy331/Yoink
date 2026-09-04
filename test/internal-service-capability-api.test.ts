@@ -125,7 +125,7 @@ test("health and scoped admin workspaces expose only safe workload capability st
   });
 
   try {
-    const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as Record<string, unknown>;
+    const health = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(health.workloadScopedInternalServiceAuthorization, true);
     assert.equal(health.unconfiguredInternalServicesDenied, true);
     assert.equal(health.internalServiceCapabilityHeaderAccepted, false);

@@ -1,11 +1,12 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementResultingChanges } from "node:sqlite";
 import { nowIso } from "../../domain/src/ids.js";
 import { MIGRATIONS } from "./migrations.js";
 
 export const LOCAL_TENANT_ID = "tenant_local";
 export const LOCAL_USER_ID = "user_local";
+export const MIGRATION_BACKUP_RETENTION_COUNT = 3;
 
 type Row = Record<string, unknown>;
 
@@ -75,6 +76,7 @@ export class YoinkDatabase {
     try {
       this.applyMigrations(existed);
       this.seedLocalDefaults();
+      this.pruneMigrationBackups();
     } catch (error) {
       this.connection.close();
       throw error;
@@ -203,6 +205,19 @@ export class YoinkDatabase {
       if (Number(foreignKeys?.foreign_keys) !== 1) {
         throw new Error(`Yoink migration ${migration.version} did not restore foreign-key enforcement.`);
       }
+    }
+  }
+
+  private pruneMigrationBackups(): void {
+    if (this.path === ":memory:") return;
+    const directory = dirname(this.path);
+    const prefix = `${basename(this.path)}.before-v`;
+    const backups = readdirSync(directory)
+      .filter((name) => name.startsWith(prefix) && name.endsWith(".sqlite"))
+      .map((name) => ({ name, timestamp: /\.before-v\d+\.(.+)\.sqlite$/.exec(name)?.[1] ?? "" }))
+      .sort((left, right) => right.timestamp.localeCompare(left.timestamp) || right.name.localeCompare(left.name));
+    for (const backup of backups.slice(MIGRATION_BACKUP_RETENTION_COUNT)) {
+      unlinkSync(join(directory, backup.name));
     }
   }
 

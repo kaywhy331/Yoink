@@ -126,7 +126,15 @@ export class CatalogGovernanceRepository {
     const scope = currentRequestScope();
     const payload = this.catalog.normalizedListingInput(input, now);
     const payloadJson = JSON.stringify(payload);
-    const payloadHash = stableHash("yoink_catalog_proposal_v1", payloadJson);
+    // Review identity is the exact store item, not volatile observation time
+    // or user-entered display copy. Repeated submissions reuse the pending row.
+    const payloadHash = stableHash(
+      "yoink_catalog_proposal_v2",
+      scope.userId,
+      payload.source,
+      payload.retailerId,
+      payload.retailerSku
+    );
     const existing = this.db.get<ProposalRow>(
       `${SELECT_PROPOSAL} WHERE proposal.tenant_id = ? AND proposal.payload_hash = ? AND proposal.status = 'pending'`,
       scope.tenantId,

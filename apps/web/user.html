@@ -40,6 +40,7 @@
     <nav class="tabs" aria-label="Workspace">
       <button class="tab active" data-tab="home" type="button">Home</button>
       <button class="tab" data-tab="products" type="button">Products</button>
+      <button class="tab" data-tab="stores" type="button">Stores</button>
       <button class="tab" data-tab="calls" type="button">Calls</button>
       <button class="tab" data-tab="plans" type="button">Plans</button>
       <button class="tab" data-tab="activity" type="button">Activity</button>
@@ -126,6 +127,24 @@
       </section>
       <div class="card-grid" id="productList" data-product-view="grid"></div>
       <div class="load-more-row"><button class="button quiet" id="loadMoreProducts" type="button" hidden>Load more products</button></div>
+    </section>
+
+    <section class="workspace" data-panel="stores">
+      <div class="section-heading">
+        <div><p class="eyebrow">Shop</p><h2 id="storePageTitle">Stores</h2><p id="storePageSummary">Choose a store or category.</p></div>
+        <button class="button quiet" id="clearStorePage" data-clear-shop-store type="button" hidden>All stores</button>
+      </div>
+      <section class="shop-filter-section" aria-labelledby="popularCategoryTitle">
+        <h3 id="popularCategoryTitle">Popular categories</h3>
+        <div class="shop-category-list" id="shopCategoryList"></div>
+      </section>
+      <section class="shop-filter-section" id="storeDirectorySection" aria-labelledby="storeDirectoryTitle">
+        <h3 id="storeDirectoryTitle">Shop by store</h3>
+        <div class="store-directory" id="storeDirectory"></div>
+      </section>
+      <div class="shop-result-heading" id="storeResultHeading" hidden><strong id="storeResultCount" role="status"></strong></div>
+      <div class="card-grid store-product-grid" id="storeProductList"></div>
+      <div class="load-more-row"><button class="button quiet" id="loadMoreStoreProducts" type="button" hidden>Load more products</button></div>
     </section>
 
     <section class="workspace" data-panel="calls" id="calls">
@@ -220,7 +239,7 @@
         <article class="preference-card" data-settings-panel="chrome"><div><h3>Chrome companion</h3><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><div class="pairing" id="pairing" hidden></div></div></article>
         <article class="preference-card connector-card" data-settings-panel="notifications" id="notifications"><div><h3>Send updates to Discord, Slack or a webhook</h3><div class="mini-list" id="connectorList"></div><form id="connectorForm">
           <div class="profile-fields"><label><span>Name</span><input name="name" maxlength="80" required></label><label><span>Type</span><select name="kind"><option value="discord">Discord</option><option value="slack">Slack</option><option value="webhook">Webhook</option></select></label><label><span>Source key</span><input name="endpointReference" maxlength="120" autocomplete="off" aria-describedby="connectorKeyHelp" required><small class="field-help" id="connectorKeyHelp">Enter the key provided by your Yoink administrator. Webhook URLs and secrets are never entered here.</small></label></div>
-          <fieldset class="connector-events"><legend>Updates</legend><label class="check"><input name="events" type="checkbox" value="carted" checked><span>Carted</span></label><label class="check"><input name="events" type="checkbox" value="needs_you" checked><span>Needs you</span></label><label class="check"><input name="events" type="checkbox" value="missed" checked><span>Missed</span></label><label class="check"><input name="events" type="checkbox" value="test" checked><span>Test</span></label></fieldset>
+          <fieldset class="connector-events"><legend>Updates</legend><label class="check"><input name="events" type="checkbox" value="notify" checked><span>In stock</span></label><label class="check"><input name="events" type="checkbox" value="carted" checked><span>Carted</span></label><label class="check"><input name="events" type="checkbox" value="needs_you" checked><span>Needs you</span></label><label class="check"><input name="events" type="checkbox" value="missed" checked><span>Missed</span></label><label class="check"><input name="events" type="checkbox" value="test" checked><span>Test</span></label></fieldset>
           <button class="button secondary" type="submit">Add destination</button>
         </form></div></article>
         <article class="preference-card profile-card" data-settings-panel="purchase"><div><div class="card-top"><h3>Quick add setups</h3><button class="button secondary" id="newProfileButton" type="button">New setup</button></div><div class="mini-list" id="profileList"></div></div></article>

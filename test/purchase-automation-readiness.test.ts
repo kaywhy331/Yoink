@@ -40,6 +40,7 @@ function plan(overrides: Partial<PurchaseAutomationPlanInput> = {}): PurchaseAut
     status: "active",
     title: "Exact readiness fixture",
     targetQuantity: 2,
+    maxAllInCents: 10_000,
     actionCeiling: "add_to_cart",
     decisionMode: "purchase_intent",
     expiresAt: "",
@@ -69,6 +70,11 @@ function context(overrides: Partial<PurchaseAutomationReadinessContext> = {}): P
       }
     }],
     qualifications: { target: true, walmart: false, amazon: false, bestbuy: false },
+    spend: {
+      policy: { perOrderCapCents: null, dailyCapCents: null, monthlyCapCents: null },
+      availableTodayCents: null,
+      availableThisMonthCents: null
+    },
     now: NOW,
     ...overrides
   };
@@ -87,6 +93,24 @@ test("an exact direct plan is armed only for a qualified lane and a capable onli
   assert.equal(readiness.targets[0]?.readyForGuardedAdd, true);
   assert.equal(readiness.checks.at(-1)?.state, "runtime");
   assert.match(readiness.summary, /exactly one item/);
+});
+
+test("a cart plan is not ready when its reviewed maximum exceeds current spending headroom", () => {
+  const readiness = buildPurchaseAutomationReadiness(
+    plan({ maxAllInCents: 10_000 }),
+    context({
+      spend: {
+        policy: { perOrderCapCents: 9_000, dailyCapCents: 20_000, monthlyCapCents: 100_000 },
+        availableTodayCents: 20_000,
+        availableThisMonthCents: 100_000
+      }
+    })
+  );
+  assert.equal(readiness.state, "spend_limit_exceeded");
+  assert.equal(readiness.readyForGuardedAdd, false);
+  assert.equal(readiness.effectiveAutomation, "none");
+  assert.equal(readiness.checks.find((item) => item.id === "spend")?.state, "attention");
+  assert.match(readiness.summary, /\$90\.00.*per-order spending limit/);
 });
 
 test("a packaged Amazon mapping is reported as closed until its separate lane is qualified", () => {

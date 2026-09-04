@@ -30,9 +30,18 @@ async function eventually(assertion: () => void, attempts = 400): Promise<void> 
   throw lastError;
 }
 
-function localDateTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+function localDateTimeInZone(value: string, timeZone: string): string {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(new Date(value)).filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
 
 test("admin authors, inspects, edits, and cancels a drop window through product pickers", async () => {
@@ -105,13 +114,31 @@ test("admin authors, inspects, edits, and cancels a drop window through product 
 
     const form = browser.document.querySelector("#dropWindowForm") as HTMLFormElement;
     (form.elements.namedItem("title") as HTMLInputElement).value = "Target collector drop";
-    (form.elements.namedItem("startsAt") as HTMLInputElement).value = localDateTime(Date.now() + 60 * 60_000);
-    (form.elements.namedItem("closesAt") as HTMLInputElement).value = localDateTime(Date.now() + 3 * 60 * 60_000);
+    const enteredStart = localDateTimeInZone(new Date(Date.now() + 60 * 60_000).toISOString(), "America/New_York");
+    (form.elements.namedItem("startsAt") as HTMLInputElement).value = enteredStart;
+    (form.elements.namedItem("closesAt") as HTMLInputElement).value = localDateTimeInZone(
+      new Date(Date.now() + 3 * 60 * 60_000).toISOString(),
+      "America/New_York"
+    );
+    (form.elements.namedItem("timezone") as HTMLSelectElement).value = "America/New_York";
     (form.elements.namedItem("staggerMinutes") as HTMLInputElement).value = "20";
     (form.elements.namedItem("confidenceBps") as HTMLSelectElement).value = "10000";
     form.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
-    await eventually(() => assert.match(browser.document.querySelector("#dropWindowList")?.textContent ?? "", /Target collector drop/));
+    await eventually(() => assert.match(
+      browser.document.querySelector("#dropWindowList")?.textContent ?? "",
+      /Target collector drop/,
+      browser.document.querySelector("#toast")?.textContent ?? "Drop window submission did not complete."
+    ));
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM drop_windows")?.count, 1);
+    const storedWindow = db.get<{ startsAt: string; timezone: string }>(
+      "SELECT starts_at AS startsAt, timezone FROM drop_windows"
+    );
+    assert.equal(storedWindow?.timezone, "America/New_York");
+    assert.equal(
+      localDateTimeInZone(storedWindow?.startsAt ?? "", "America/New_York"),
+      enteredStart,
+      "the entered wall-clock time must be interpreted in the selected zone"
+    );
     assert.equal(browser.document.querySelector("#dropWindowGate")?.textContent, "1 scheduled");
     assert.match(browser.document.querySelector("#dropWindowList")?.textContent ?? "", /0 opted in/);
 

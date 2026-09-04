@@ -2,7 +2,7 @@ import type {
   SignalEventInput,
   TrackalackerPushEnvelope
 } from "../../contracts/src/index.js";
-import { cleanText } from "../../domain/src/normalize.js";
+import { cleanText, SignalValidationError } from "../../domain/src/normalize.js";
 
 const TRACKALACKER_DOMAIN = "trackalacker.com";
 const ALLOWED_TRANSPORTS = new Set(["chrome_extension_web_push", "synthetic_replay"]);
@@ -93,7 +93,7 @@ function cleanBody(value: unknown): string {
 
 function timestamp(value: unknown, field: string): string {
   const parsed = new Date(cleanText(value, 80));
-  if (Number.isNaN(parsed.getTime())) throw new Error(`${field} must be a valid timestamp.`);
+  if (Number.isNaN(parsed.getTime())) throw new SignalValidationError(`${field} must be a valid timestamp.`);
   return parsed.toISOString();
 }
 
@@ -136,29 +136,29 @@ function canonicalRetailerUrl(retailer: string, sku: string): string {
 }
 
 export function validateTrackalackerPushEnvelope(input: unknown): TrackalackerPushEnvelope {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("TrackaLacker signal payload must be an object.");
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new SignalValidationError("TrackaLacker signal payload must be an object.");
   const value = input as Partial<TrackalackerPushEnvelope>;
-  if (value.schemaVersion !== 1) throw new Error("TrackaLacker signal schemaVersion must be 1.");
+  if (value.schemaVersion !== 1) throw new SignalValidationError("TrackaLacker signal schemaVersion must be 1.");
   const signalId = cleanText(value.signalId, 180);
-  if (!/^[A-Za-z0-9:._-]{8,180}$/.test(signalId)) throw new Error("TrackaLacker signal ID is invalid.");
+  if (!/^[A-Za-z0-9:._-]{8,180}$/.test(signalId)) throw new SignalValidationError("TrackaLacker signal ID is invalid.");
   const source = value.source && typeof value.source === "object" ? value.source : null;
   const notification = value.notification && typeof value.notification === "object" ? value.notification : null;
-  if (!source || !notification) throw new Error("TrackaLacker source and notification objects are required.");
+  if (!source || !notification) throw new SignalValidationError("TrackaLacker source and notification objects are required.");
   const transport = cleanText(source.transport, 60).toLocaleLowerCase("en-US");
   if (cleanText(source.provider, 40).toLocaleLowerCase("en-US") !== "trackalacker" || !ALLOWED_TRANSPORTS.has(transport)) {
-    throw new Error("TrackaLacker signal transport is not allowed.");
+    throw new SignalValidationError("TrackaLacker signal transport is not allowed.");
   }
   const domain = cleanText(source.domain, 200).toLocaleLowerCase("en-US").replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
-  if (domain !== TRACKALACKER_DOMAIN) throw new Error("TrackaLacker signal domain is invalid.");
+  if (domain !== TRACKALACKER_DOMAIN) throw new SignalValidationError("TrackaLacker signal domain is invalid.");
   const notificationId = cleanText(source.notificationId, 180);
-  if (!notificationId) throw new Error("TrackaLacker notification ID is required.");
+  if (!notificationId) throw new SignalValidationError("TrackaLacker notification ID is required.");
   const title = cleanText(notification.title, 500);
   const body = cleanBody(notification.body);
   const textElements = (Array.isArray(notification.textElements) ? notification.textElements : [])
     .slice(0, 16)
     .map((entry) => cleanText(entry, 500))
     .filter(Boolean);
-  if (!title && !body && !textElements.length) throw new Error("TrackaLacker notification text is empty.");
+  if (!title && !body && !textElements.length) throw new SignalValidationError("TrackaLacker notification text is empty.");
   const identity = retailerIdentity(notification.sourceRetailer, notification.sourceRetailerSku);
   return {
     schemaVersion: 1,
@@ -309,7 +309,7 @@ export function trackalackerSignalInput(
 ): SignalEventInput {
   const parsed = parseTrackalackerNotification(input);
   const key = cleanText(idempotencyKey, 180);
-  if (!key || key !== parsed.envelope.signalId) throw new Error("Idempotency-Key must match the TrackaLacker signal ID.");
+  if (!key || key !== parsed.envelope.signalId) throw new SignalValidationError("Idempotency-Key must match the TrackaLacker signal ID.");
   return {
     schemaVersion: 1,
     signalId: parsed.envelope.signalId,

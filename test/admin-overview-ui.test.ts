@@ -172,7 +172,7 @@ test("Admin Overview reduces healthy, paused, and setup-needed state to one prio
     assert.equal(healthy.browser.document.querySelector("#adminAccountRole")?.textContent, "Tenant administrator");
     assert.equal(healthy.browser.document.querySelector("#adminAccountSession")?.textContent, "Local session");
     assert.equal((healthy.browser.document.querySelector("#adminSignOutLink") as HTMLElement).hidden, true);
-    assert.equal(healthy.browser.document.querySelector("#actionsToggle")?.textContent, "Pause actions");
+    assert.equal(healthy.browser.document.querySelector("#actionsToggle")?.textContent, "Pause all actions");
     assert.equal(healthy.browser.document.querySelector("#modeChip")?.textContent, "Running");
     assert.equal((healthy.browser.document.querySelector("#actionsToggleReason") as HTMLElement).hidden, true);
     assert.doesNotMatch(healthy.browser.document.querySelector("#heroStatus")?.textContent ?? "", /Local control plane|Target add-only/);
@@ -189,7 +189,7 @@ test("Admin Overview reduces healthy, paused, and setup-needed state to one prio
     assert.match(paused.browser.document.querySelector("#overviewHeadline")?.textContent ?? "", /actions are paused/i);
     assert.match(paused.browser.document.querySelector("#heroStatus")?.textContent ?? "", /Paused/);
     assert.match(paused.browser.document.querySelector("#heroStatus")?.textContent ?? "", /1 active · paused/);
-    assert.equal(paused.browser.document.querySelector("#actionsToggle")?.textContent, "Resume actions");
+    assert.equal(paused.browser.document.querySelector("#actionsToggle")?.textContent, "Resume all actions");
     assert.equal(paused.browser.document.querySelector("#modeChip")?.textContent, "Paused");
     assert.equal((paused.browser.document.querySelector("#actionsToggleReason") as HTMLElement).hidden, true);
     assert.equal((paused.browser.document.querySelector("#readinessPanel") as HTMLElement).hidden, true);

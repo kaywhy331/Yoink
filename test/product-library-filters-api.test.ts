@@ -70,11 +70,12 @@ test("the product-library API applies actor-scoped filters before paging and ret
     assert.equal(filteredResponse.status, 200);
     const filtered = await filteredResponse.json() as {
       total: number;
-      items: Array<{ title: string; bestPriceCents: number }>;
+      items: Array<{ title: string; bestPriceCents: number; listings: Array<{ retailerId: string }> }>;
       facets: { stores: Array<{ retailerId: string; productCount: number }> };
     };
     assert.equal(filtered.total, 1);
     assert.deepEqual(filtered.items.map((item) => [item.title, item.bestPriceCents]), [["Walmart Low Product", 1999]]);
+    assert.deepEqual(filtered.items[0]?.listings.map((listing) => listing.retailerId), ["walmart"]);
     assert.deepEqual(filtered.facets.stores.map((store) => [store.retailerId, store.productCount]), [
       ["target", 1],
       ["walmart", 2]
@@ -112,6 +113,12 @@ test("the product-library API applies actor-scoped filters before paging and ret
     const invalidResponse = await fetch(`${baseUrl}/api/v1/user/library/products?availability=available`);
     assert.equal(invalidResponse.status, 400);
     assert.match(String((await invalidResponse.json() as { message: string }).message), /In stock, Preorder, or Out of stock/);
+
+    const categoryResponse = await fetch(`${baseUrl}/api/v1/user/library/products?category=pokemon`);
+    assert.equal(categoryResponse.status, 200);
+    const invalidCategoryResponse = await fetch(`${baseUrl}/api/v1/user/library/products?category=collectibles`);
+    assert.equal(invalidCategoryResponse.status, 400);
+    assert.match(String((await invalidCategoryResponse.json() as { message: string }).message), /popular product category/);
   } finally {
     server.close();
     await once(server, "close");

@@ -10,6 +10,7 @@ import {
   BackgroundTaskRepository
 } from "../../database/src/background-task-repository.js";
 import { AdapterDiagnosticRepository } from "../../database/src/adapter-diagnostic-repository.js";
+import { AuditRepository } from "../../database/src/audit-repository.js";
 import type { YoinkDatabase } from "../../database/src/database.js";
 import { ExecutionRepository } from "../../database/src/execution-repository.js";
 import { HostedDeliveryRepository } from "../../database/src/hosted-delivery-repository.js";
@@ -90,6 +91,7 @@ export interface BackgroundMaintenanceHandlerOptions {
 
 export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler {
   private readonly adapterDiagnostics: AdapterDiagnosticRepository;
+  private readonly audit: AuditRepository;
   private readonly backgroundTasks: BackgroundTaskRepository;
   private readonly execution: ExecutionRepository;
   private readonly hostedDelivery: HostedDeliveryRepository;
@@ -103,6 +105,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
 
   constructor(db: YoinkDatabase, private readonly options: BackgroundMaintenanceHandlerOptions = {}) {
     this.adapterDiagnostics = new AdapterDiagnosticRepository(db);
+    this.audit = new AuditRepository(db);
     this.backgroundTasks = new BackgroundTaskRepository(db);
     this.execution = new ExecutionRepository(db);
     this.hostedDelivery = new HostedDeliveryRepository(db);
@@ -219,13 +222,15 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
         const result = this.operationalTelemetry.pruneExpired(now);
         const taskHistory = this.backgroundTasks.pruneCompletedHistory(now);
         const recoveryEvidence = this.observerRecipeRecoveryRetention.prune(now);
+        const auditHistory = this.audit.pruneRetainedHistory(now);
         return {
           deletedRollupRows: result.deletedRollupRows,
           deletedErrorEvents: result.deletedErrorEvents,
           cutoffAt: result.cutoffAt,
           receiptId: result.receiptId,
           ...taskHistory,
-          ...recoveryEvidence
+          ...recoveryEvidence,
+          ...auditHistory
         };
       }
     }

@@ -90,6 +90,7 @@ const READY: PopupHealthState = {
   connected: true,
   paired: true,
   version: "1.9.1",
+  companionCompatible: true,
   executionMode: "live",
   actionsPaused: false,
   chromeMutationEnabled: true,
@@ -111,7 +112,7 @@ function view(health: PopupHealthState, page: PopupPageContext = PRODUCT) {
   });
 }
 
-test("hard blockers override exact product context", () => {
+test("connection blockers override exact product context while patch updates stay compatible", () => {
   const unavailable = view({ ...READY, connected: false });
   assert.equal(unavailable.hardBlocker, "unavailable");
   assert.equal(unavailable.primaryAction?.id, "retry");
@@ -123,13 +124,17 @@ test("hard blockers override exact product context", () => {
   assert.equal(unpaired.activity, null);
 
   const mismatch = view({ ...READY, version: "1.9.2" });
-  assert.equal(mismatch.hardBlocker, "companion_update");
+  assert.equal(mismatch.hardBlocker, null);
   assert.equal(mismatch.primaryAction?.id, "update_companion");
   assert.equal(mismatch.context.title, "Update Chrome companion");
   assert.equal(mismatch.primaryAction?.label, "Update Chrome companion");
+
+  const incompatible = view({ ...READY, version: "2.0.0", companionCompatible: false });
+  assert.equal(incompatible.hardBlocker, "companion_update");
+  assert.equal(incompatible.primaryAction?.id, "update_companion");
 });
 
-test("a sanitized cart-ready handoff becomes the pending action without weakening hard blockers", () => {
+test("a sanitized cart-ready handoff remains the pending action across control-plane blockers", () => {
   const now = new Date("2026-08-29T18:01:00.000Z").getTime();
   const cartReady = cartReadyState({
     schemaVersion: 1,
@@ -217,7 +222,7 @@ test("a sanitized cart-ready handoff becomes the pending action without weakenin
     error: "Check amount"
   });
 
-  const blocked = derivePopupView({
+  const disconnected = derivePopupView({
     health: { ...READY, connected: false },
     page: PRODUCT,
     installedVersion: "1.9.1",
@@ -226,9 +231,9 @@ test("a sanitized cart-ready handoff becomes the pending action without weakenin
     cartOutcome: { jobId: "job_target_fixture", stage: "choice" },
     now
   });
-  assert.equal(blocked.hardBlocker, "unavailable");
-  assert.equal(blocked.primaryAction?.id, "retry");
-  assert.equal(blocked.cartOutcome, null);
+  assert.equal(disconnected.hardBlocker, null);
+  assert.equal(disconnected.primaryAction?.id, "open_cart");
+  assert.equal(disconnected.cartOutcome?.jobId, "job_target_fixture");
 });
 
 test("a fresh Walmart purchase opportunity is primary only when the current page has no exact action", () => {
@@ -491,8 +496,9 @@ test("an exact, fresh update handoff replaces the mismatch action with explicit 
     updateHandoff: handoff,
     now: new Date("2026-08-29T18:01:00.000Z").getTime()
   });
-  assert.equal(ready.hardBlocker, "companion_update");
+  assert.equal(ready.hardBlocker, null);
   assert.equal(ready.context.title, "Replace extension files");
+  assert.match(ready.context.supporting, /1\. Open Downloads.*2\. Copy.*3\. Return here/);
   assert.equal(ready.primaryAction?.id, "reload_companion");
   assert.equal(ready.primaryAction?.label, "Reload Chrome companion");
 

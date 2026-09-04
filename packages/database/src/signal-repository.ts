@@ -448,7 +448,7 @@ export class SignalRepository {
     );
   }
 
-  jobForIncident(incidentId: string): JobRecord | null {
+  jobForIncident(incidentId: string, now = Date.now()): JobRecord | null {
     const row = this.db.get<{
       id: string;
       incident_id: string;
@@ -459,9 +459,13 @@ export class SignalRepository {
     }>(
       `SELECT id, incident_id, mission_id, state, action, idempotency_key
        FROM action_jobs WHERE incident_id = ? AND user_id = ?
+         AND action <> 'notify'
+         AND state NOT IN ('confirmed', 'expired', 'cancelled', 'offer_rejected', 'notify_only')
+         AND (state IN ('manual_review', 'submission_uncertain') OR expires_at > ?)
        ORDER BY created_at DESC LIMIT 1`,
       incidentId,
-      currentRequestScope().userId
+      currentRequestScope().userId,
+      nowIso(now)
     );
     return row ? {
       id: row.id,
@@ -515,20 +519,27 @@ export class SignalRepository {
     now = Date.now(),
     options: { allowDeferredLiveOfferVerification?: boolean } = {}
   ): JobRecord {
-    const existing = this.jobForIncident(incident.id);
+    const existing = this.jobForIncident(incident.id, now);
     if (existing) return existing;
+    const policy = this.purchasePolicies.ensureCurrent(mission.id, now);
     const unitCap = evaluation.effectiveUnitCapCents;
     const allowance = Number(settings.storeAllowancesCents[listing.retailerId] ?? 0);
     const subtotal = unitCap === null ? null : unitCap * evaluation.effectiveQuantity;
-    const maxOrderTotal = subtotal === null
+    const calculatedOrderMaximum = subtotal === null
       ? null
       : Math.ceil(subtotal * (10_000 + settings.taxBps) / 10_000) + Math.max(0, allowance);
+    // A direct purchase plan is the shopper's reviewed authority. Carry that
+    // exact maximum through the job, reservation, and checkout close-out so a
+    // lower derived estimate never silently replaces the number they approved.
+    const maxOrderTotal = evaluation.decisionSource === "purchase_intent"
+      && policy.maxAllInCents !== null
+      ? policy.maxAllInCents
+      : calculatedOrderMaximum;
     const expiresAtMs = Math.min(
       new Date(signal.observedAt).getTime() + evaluation.maxSignalAgeSeconds * 1_000,
       now + evaluation.maxSignalAgeSeconds * 1_000
     );
     const expiresAt = nowIso(expiresAtMs);
-    const policy = this.purchasePolicies.ensureCurrent(mission.id, now);
     let effectiveAction = evaluation.effectiveAction;
     let decisionReasonCode = "intent_policy_verified";
     let decisionReason = evaluation.reason;
@@ -721,6 +732,7 @@ export class SignalRepository {
       );
       if (effectiveAction === "notify") {
         new NotificationRepository(this.db).ensureForJob(jobId, now);
+        this.userConnectors.queueForJob("notify", jobId, now);
       }
       new AttributionRepository(this.db).recordReceipt(jobId, attribution, listing.canonicalUrl, now);
     }
@@ -808,7 +820,20 @@ export class SignalRepository {
         throw new Error("A job that may have mutated a cart requires manual review instead of ordinary cancellation.");
       }
       const timestamp = nowIso(now);
-      this.db.run("UPDATE action_jobs SET state = ?, updated_at = ? WHERE id = ?", nextState, timestamp, job.id);
+      const handoffExpiresAt = nextState === "confirmed" && job.action === "add_to_cart"
+        ? nowIso(now + 35 * 60_000)
+        : "";
+      this.db.run(
+        `UPDATE action_jobs SET state = ?,
+           expires_at = CASE WHEN ? <> '' AND expires_at < ? THEN ? ELSE expires_at END,
+           updated_at = ? WHERE id = ?`,
+        nextState,
+        handoffExpiresAt,
+        handoffExpiresAt,
+        handoffExpiresAt,
+        timestamp,
+        job.id
+      );
       this.db.run(
         `INSERT INTO action_events(
            id, job_id, state, reason_code, message, evidence_json, created_at
@@ -1009,7 +1034,12 @@ export class SignalRepository {
 
       let reservationStatus = this.spendLedger.reservationForJob(job.id)?.status ?? null;
       if (outcome === "got_it") {
-        reservationStatus = this.spendLedger.commitUserReportedAddForJob(job.id, Number(boundedTotal), now).status;
+        reservationStatus = this.spendLedger.commitUserReportedAddForJob(
+          job.id,
+          Number(boundedTotal),
+          now,
+          { allowExpiredReservation: transitionedFromReview }
+        ).status;
         const timestamp = nowIso(now);
         this.db.run(
           `UPDATE missions
@@ -1136,6 +1166,15 @@ export class SignalRepository {
               COALESCE(NULLIF(json_extract(se.offer_json, '$.fulfillment'), ''), 'unknown') AS fulfillment,
               aj.id AS actionJobId, aj.state AS actionJobState,
               aj.action AS actionJobAction,
+              (SELECT nd.state FROM notification_deliveries nd
+               WHERE nd.job_id = aj.id ORDER BY nd.created_at DESC, nd.id DESC LIMIT 1) AS actionJobNotificationState,
+              (SELECT nd.delivered_at FROM notification_deliveries nd
+               WHERE nd.job_id = aj.id ORDER BY nd.created_at DESC, nd.id DESC LIMIT 1) AS actionJobNotificationDeliveredAt,
+              (SELECT nd.failure_code FROM notification_deliveries nd
+               WHERE nd.job_id = aj.id ORDER BY nd.created_at DESC, nd.id DESC LIMIT 1) AS actionJobNotificationFailureCode,
+              (SELECT delivery.state FROM user_action_connector_deliveries delivery
+               WHERE delivery.action_job_id = aj.id AND delivery.event_type = 'notify'
+               ORDER BY delivery.created_at DESC, delivery.id DESC LIMIT 1) AS actionJobConnectorState,
               aj.expires_at AS actionJobExpiresAt,
               aj.max_unit_price_cents AS actionJobMaxUnitPriceCents,
               aj.seller_policy AS actionJobSellerPolicy,
@@ -1229,6 +1268,15 @@ export class SignalRepository {
               sr.reserved_amount_cents AS reservedAmountCents,
               aj.created_at AS createdAt, v.title,
               l.retailer_id AS retailerId, l.retailer_sku AS retailerSku,
+              (SELECT nd.state FROM notification_deliveries nd
+               WHERE nd.job_id = aj.id ORDER BY nd.created_at DESC, nd.id DESC LIMIT 1) AS notificationDeliveryState,
+              (SELECT nd.delivered_at FROM notification_deliveries nd
+               WHERE nd.job_id = aj.id ORDER BY nd.created_at DESC, nd.id DESC LIMIT 1) AS notificationDeliveredAt,
+              (SELECT nd.failure_code FROM notification_deliveries nd
+               WHERE nd.job_id = aj.id ORDER BY nd.created_at DESC, nd.id DESC LIMIT 1) AS notificationFailureCode,
+              (SELECT delivery.state FROM user_action_connector_deliveries delivery
+               WHERE delivery.action_job_id = aj.id AND delivery.event_type = 'notify'
+               ORDER BY delivery.created_at DESC, delivery.id DESC LIMIT 1) AS notificationConnectorState,
               (SELECT CASE ae.reason_code
                  WHEN 'user_reported_order' THEN 'got_it'
                  WHEN 'user_reported_missed_it' THEN 'missed_it'

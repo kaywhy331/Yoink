@@ -118,6 +118,7 @@ export interface BackgroundWorkSnapshot {
   };
   schedules: BackgroundTaskSchedule[];
   tasks: BackgroundTaskRecord[];
+  deadLetterTasks: BackgroundTaskRecord[];
   events: BackgroundTaskEvent[];
   workers: BackgroundWorkerRecord[];
 }
@@ -248,6 +249,12 @@ function normalizedResult(value: unknown): { value: BackgroundTaskResult; json: 
     throw new BackgroundTaskError("background_task_invalid", 400, "The background task result is too large.");
   }
   return { value: result, json };
+}
+
+function backgroundTaskResultDidWork(result: BackgroundTaskResult): boolean {
+  const workField = /(created|updated|deleted|recovered|expired|released|requeued|processed|accepted|attempted|succeeded|retried|deadLettered|cancelled|mutated|enqueued|handled|evaluated|refreshed|dispatched|reconciled)/i;
+  return Object.entries(result).some(([key, value]) => workField.test(key)
+    && ((typeof value === "number" && value > 0) || value === true));
 }
 
 function taskRecord(row: TaskRow): BackgroundTaskRecord {
@@ -465,6 +472,13 @@ export class BackgroundTaskRepository {
     trustedWorker();
     const safeTaskId = identifier(taskId, "background task ID", 160);
     const normalized = normalizedResult(result);
+    const didWork = backgroundTaskResultDidWork(normalized.value);
+    const storedResult = didWork
+      ? normalized
+      : {
+          value: { ...normalized.value, historyDisposition: "no_work" },
+          json: JSON.stringify({ ...normalized.value, historyDisposition: "no_work" })
+        };
     const timestamp = nowIso(now);
     return this.db.transaction(() => {
       const row = this.assertCapability(safeTaskId, capabilityToken, now);
@@ -474,7 +488,7 @@ export class BackgroundTaskRepository {
              lease_expires_at = '', last_error_code = '', result_json = ?,
              completed_at = ?, updated_at = ?
          WHERE id = ? AND tenant_id = ? AND subject_user_id = ? AND state = 'leased'`,
-        normalized.json,
+        storedResult.json,
         timestamp,
         timestamp,
         safeTaskId,
@@ -482,7 +496,16 @@ export class BackgroundTaskRepository {
         currentRequestScope().userId
       );
       this.event(safeTaskId, "succeeded", Number(row.attemptCount), "handler_completed", row.leaseOwnerId, now);
-      return taskRecord(this.taskRow(safeTaskId) as TaskRow);
+      const completed = taskRecord(this.taskRow(safeTaskId) as TaskRow);
+      if (!didWork) {
+        this.db.run(
+          "DELETE FROM background_tasks WHERE id = ? AND tenant_id = ? AND subject_user_id = ?",
+          safeTaskId,
+          currentRequestScope().tenantId,
+          currentRequestScope().userId
+        );
+      }
+      return completed;
     });
   }
 
@@ -828,6 +851,15 @@ export class BackgroundTaskRepository {
       tasks: this.db.all<TaskRow>(
         `${TASK_SELECT} WHERE tenant_id = ? AND subject_user_id = ?
          ORDER BY created_at DESC, id DESC LIMIT 100`,
+        scope.tenantId,
+        scope.userId
+      ).map(taskRecord),
+      // Recovery work must never disappear merely because 100 newer success
+      // rows exist. This deliberately uncapped view contains only unresolved
+      // operational aggregates; successful history remains bounded above.
+      deadLetterTasks: this.db.all<TaskRow>(
+        `${TASK_SELECT} WHERE tenant_id = ? AND subject_user_id = ? AND state = 'dead_letter'
+         ORDER BY created_at ASC, id ASC`,
         scope.tenantId,
         scope.userId
       ).map(taskRecord),

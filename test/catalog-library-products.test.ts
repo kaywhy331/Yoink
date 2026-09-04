@@ -145,12 +145,75 @@ test("product filters use exact store, stock state, and selected-store price bef
     ]);
     assert.equal(walmartOutOfStock[0]?.bestPriceCents, 2999);
     assert.equal(walmartOutOfStock[1]?.bestPriceCents, 5599);
+    assert.equal(walmartOutOfStock.every((product) => product.listings.every((listing) => listing.retailerId === "walmart")), true,
+      "a store-level response must never leak another store's offer link");
+    assert.deepEqual(walmartOutOfStock.map((product) => product.storeCount), [1, 1]);
     assert.equal(catalog.libraryProductCount({ retailerId: "walmart", priceMaxCents: 4000 }), 1);
     assert.deepEqual(catalog.libraryProductStoreFacets(), [
       { retailerId: "amazon", retailerName: "Amazon", productCount: 1 },
       { retailerId: "target", retailerName: "Target", productCount: 1 },
       { retailerId: "walmart", retailerName: "Walmart", productCount: 2 }
     ]);
+  } finally {
+    db.close();
+  }
+});
+
+test("shopper products exclude source-only shells and support bounded popular categories", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    const timestamp = new Date().toISOString();
+    db.run(
+      "INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES ('family_source_shell', 'All New Needoh', '', ?, ?)",
+      timestamp,
+      timestamp
+    );
+    db.run(
+      "INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at) VALUES ('variant_source_shell', 'family_source_shell', 'All New Needoh', '{}', ?, ?)",
+      timestamp,
+      timestamp
+    );
+    catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "category-needoh",
+      sourceListingId: "category-needoh-target",
+      title: "NeeDoh Nice Cube",
+      retailerId: "target",
+      retailerSku: "95123456",
+      canonicalUrl: "https://www.target.com/p/-/A-95123456",
+      listingStatus: "in_stock",
+      executionSupported: true,
+      observedPriceCents: 699,
+      currency: "USD"
+    });
+    catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "category-lorcana",
+      sourceListingId: "category-lorcana-target",
+      title: "Disney Lorcana Booster Pack",
+      retailerId: "target",
+      retailerSku: "95123457",
+      canonicalUrl: "https://www.target.com/p/-/A-95123457",
+      listingStatus: "in_stock",
+      executionSupported: true,
+      observedPriceCents: 599,
+      currency: "USD"
+    });
+
+    const all = catalog.listLibraryProducts(100, 0, { sort: "title" }) as unknown as LibraryProduct[];
+    assert.equal(all.some((product) => product.title === "All New Needoh"), false);
+    assert.equal(catalog.libraryProductCount(), 2);
+    assert.deepEqual(
+      (catalog.listLibraryProducts(100, 0, { category: "needoh" }) as unknown as LibraryProduct[]).map((product) => product.title),
+      ["NeeDoh Nice Cube"]
+    );
+    assert.deepEqual(
+      (catalog.listLibraryProducts(100, 0, { category: "disney_lorcana" }) as unknown as LibraryProduct[]).map((product) => product.title),
+      ["Disney Lorcana Booster Pack"]
+    );
   } finally {
     db.close();
   }
@@ -290,6 +353,34 @@ test("a TrackaLacker import stores and refreshes the product image for grouped b
     catalog.upsertTrackalackerItem({ ...item, observedAt: new Date().toISOString(), imageUrl: "http://images.trackalacker.example/insecure.jpg" });
     const fourth = catalog.listLibraryProducts(100, 0, "Image Fixture") as unknown as Array<{ imageUrl: string }>;
     assert.equal(fourth[0]?.imageUrl, "https://images.trackalacker.example/products/image-fixture-v2.jpg");
+  } finally {
+    db.close();
+  }
+});
+
+test("source-only products stay out of shopper browsing until a supported store listing is mapped", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    const imported = catalog.upsertTrackalackerItem({
+      sourceProductId: "zero-listing-product",
+      sourceProductSlug: "zebra-zero-listing-product",
+      sourceProductUrl: "https://www.trackalacker.com/products/showcase/zebra-zero-listing-product",
+      title: "Zebra Zero Listing Product",
+      observedAt: new Date().toISOString(),
+      listings: [{
+        sourceListingId: "unsupported-gamestop-listing",
+        storeName: "GameStop",
+        sourceListingUrl: "https://www.trackalacker.com/products/showcase/zebra-zero-listing-product/listings/unsupported-gamestop-listing/item",
+        availability: "unknown"
+      }]
+    });
+    assert.equal(imported.candidatesAccepted, 1);
+    assert.equal(imported.listingsMapped, 0);
+
+    const products = catalog.listLibraryProducts(100, 0, "Zebra") as unknown as LibraryProduct[];
+    assert.deepEqual(products, []);
+    assert.equal(catalog.libraryProductCount("Zebra"), 0);
   } finally {
     db.close();
   }

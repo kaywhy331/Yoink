@@ -117,13 +117,17 @@ const TRACKALACKER_PUSH_QUEUE_KEY = "yoinkTrackalackerPushQueueV1";
 const TRACKALACKER_SYNC_STATE_KEY = "yoinkTrackalackerSyncStateV1";
 const NOTIFICATION_HISTORY_KEY = "yoinkNotificationHistoryV1";
 const NOTIFICATION_ROUTES_KEY = "yoinkNotificationRoutesV1";
+const WATCH_READY_ROUTES_KEY = "yoinkWatchReadyRoutesV1";
 const CART_READY_NOTIFICATION_PREFIX = "yoink-cart-ready:";
 const NEEDS_YOU_NOTIFICATION_PREFIX = "yoink-needs-you:";
+const WATCH_READY_NOTIFICATION_PREFIX = "yoink-watch-ready:";
+const ACTION_STOPPED_NOTIFICATION_PREFIX = "yoink-action-stopped:";
 const COMMUNITY_CONTRIBUTION_TIMES_KEY = "yoinkCommunityContributionTimesV1";
 const LEGACY_OBSERVER_RECIPE_KEY_PIN = "yoinkObserverRecipeKeyPinV1";
 const OBSERVER_RECIPE_TRUST_STATE_KEY = "yoinkObserverRecipeTrustStateV1";
 const OBSERVER_RECIPE_STATUS_KEY = "yoinkObserverRecipeStatusV1";
 const ADAPTER_DIAGNOSTIC_QUEUE_KEY = "yoinkAdapterDiagnosticQueueV1";
+const QUALIFICATION_LAUNCH_HASH = "yoink-inspect-and-qualify";
 const COMMUNITY_CONTRIBUTION_INTERVAL_MS = 60_000;
 const CONTEXT_MENU_IDS = Object.freeze({
   open: "yoink-open",
@@ -136,6 +140,8 @@ const CONTEXT_MENU_IDS = Object.freeze({
 const TRACKALACKER_PUSH_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_MAX_AGE_MS = 9 * 60_000;
+const qualificationLaunchTabs = new Map();
+let qualificationLaunchQueue = Promise.resolve();
 const DEVICE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
 const TRACKALACKER_DEVICE_NICKNAME = "Desktop - Windows - Chrome";
 const TRACKALACKER_SETTINGS_URL = "https://www.trackalacker.com/users/settings/notifications/edit";
@@ -282,6 +288,9 @@ function readiness(connected, details = {}, device = null) {
     deviceName: typeof device?.name === "string" ? device.name.slice(0, 100) : "",
     checkedAt: new Date().toISOString(),
     version: typeof details.version === "string" ? details.version.slice(0, 40) : "",
+    companionCompatible: details.companionCompatible !== false,
+    companionCompatibilityReason: typeof details.companionCompatibilityReason === "string"
+      ? details.companionCompatibilityReason.slice(0, 80) : "",
     executionMode: details.executionMode === "live" ? "live" : "shadow",
     actionsPaused: details.actionsPaused !== false,
     chromeMutationEnabled: details.chromeMutationEnabled === true,
@@ -2687,6 +2696,8 @@ async function checkHealth() {
     state = readiness(true, {
       ...health,
       executionMode: controlPlane?.executionMode ?? health.executionMode,
+      companionCompatible: controlPlane?.companionCompatible ?? health.companionCompatible,
+      companionCompatibilityReason: controlPlane?.companionCompatibilityReason ?? health.companionCompatibilityReason,
       actionsPaused: controlPlane?.actionsPaused ?? health.actionsPaused,
       chromeMutationEnabled: controlPlane?.retailerMutationEnabled ?? health.chromeMutationEnabled,
       targetAddExecutionEnabled: controlPlane?.targetAddExecutionEnabled ?? health.targetAddExecutionEnabled,
@@ -3865,6 +3876,58 @@ async function inspectAndQualifyActiveTab(tabId = null) {
       message: error instanceof Error ? error.message : "The current offer did not qualify."
     };
   }
+}
+
+function markedQualificationLaunch(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.hash !== `#${QUALIFICATION_LAUNCH_HASH}`) return null;
+    return canonicalRetailerIdentity(url.href);
+  } catch {
+    return null;
+  }
+}
+
+async function clearQualificationLaunchMarker(tabId, identity) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    args: [identity.canonicalUrl, QUALIFICATION_LAUNCH_HASH],
+    func: (canonicalUrl, marker) => {
+      if (location.hash === `#${marker}`) history.replaceState(null, "", canonicalUrl);
+    }
+  }).catch(() => undefined);
+}
+
+function scheduleMarkedQualification(tabId, value) {
+  const identity = markedQualificationLaunch(value);
+  if (!Number.isInteger(tabId) || !identity || !ADD_LANES[identity.retailerId]) return false;
+  const key = `${identity.retailerId}:${identity.retailerSku}`;
+  if (qualificationLaunchTabs.get(tabId) === key) return false;
+  qualificationLaunchTabs.set(tabId, key);
+  const run = qualificationLaunchQueue.then(async () => {
+    await clearQualificationLaunchMarker(tabId, identity);
+    try {
+      const result = await inspectAndQualifyActiveTab(tabId);
+      void chrome.runtime.sendMessage({
+        type: "yoink:auto-qualification-result",
+        retailerId: identity.retailerId,
+        retailerSku: identity.retailerSku,
+        ok: result?.rehearsal?.ok === true,
+        reasonCode: safeReasonCode(result?.rehearsal?.reason || result?.diagnostic?.reasonCode || "verified")
+      }).catch(() => undefined);
+    } catch {
+      void chrome.runtime.sendMessage({
+        type: "yoink:auto-qualification-result",
+        retailerId: identity.retailerId,
+        retailerSku: identity.retailerSku,
+        ok: false,
+        reasonCode: "inspection_failed"
+      }).catch(() => undefined);
+    }
+  });
+  qualificationLaunchQueue = run.catch(() => undefined);
+  return true;
 }
 
 const REVERIFICATION_COVERAGE = new Set([
@@ -5624,6 +5687,40 @@ function publishNeedsYou(active, reasonCode, readyAt = Date.now()) {
   return publishActionHandoff(active, "needs_you", reasonCode, readyAt);
 }
 
+function stoppedActionReason(reasonCode) {
+  const reason = safeReasonCode(reasonCode || "action_stopped");
+  const known = {
+    retailer_access_missing: "Chrome access to this store is off.",
+    worker_restarted_before_add: "Chrome restarted before it could finish checking the item.",
+    cart_unverified: "Yoink could not prove the current cart before the add.",
+    cart_baseline_stale: "The saved cart check was no longer fresh.",
+    out_of_stock: "The item was no longer in stock.",
+    price_above_limit: "The current price was above your reviewed limit.",
+    seller_mismatch: "The current seller did not match your plan.",
+    fulfillment_mismatch: "The requested delivery or pickup option was unavailable.",
+    offer_unverified: "The live item details could not be verified."
+  };
+  return known[reason] || "The live item no longer passed every check in your plan.";
+}
+
+async function publishActionStopped(active, reasonCode) {
+  const retailerId = active?.retailerId || active?.runnerJob?.retailerId;
+  const lane = ADD_LANES[retailerId];
+  const jobId = String(active?.id || "");
+  if (!lane || !/^[A-Za-z0-9_-]{3,120}$/.test(jobId)) return false;
+  const retailerSku = String(active?.runnerJob?.retailerSku || "").slice(0, 40);
+  await chrome.notifications?.create?.(`${ACTION_STOPPED_NOTIFICATION_PREFIX}${jobId}`, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+    title: `${lane.name} action stopped safely`,
+    message: `Item ${retailerSku}: ${stoppedActionReason(reasonCode)} No Add click was authorized.`,
+    contextMessage: "Open Yoink Activity for details",
+    priority: 1,
+    requireInteraction: true
+  });
+  return true;
+}
+
 function retailerConfirmationPage(retailerId, value) {
   try {
     const url = new URL(String(value || ""));
@@ -5755,6 +5852,8 @@ async function failActiveJob(active, mutationPossible, reason = "extension_error
   const name = ADD_LANES[retailerId]?.name || "retailer";
   if (mutationPossible) {
     await publishNeedsYou(active, reason).catch(() => undefined);
+  } else {
+    await publishActionStopped(active, reason).catch(() => undefined);
   }
   try {
     await reportJob(
@@ -5794,6 +5893,7 @@ async function executeLeasedRetailerJob(
   let productPageReady = false;
   try {
     if (!await addLaneAccess(retailerId)) {
+      await publishActionStopped(active, "retailer_access_missing").catch(() => undefined);
       await reportJob(active, "cancelled", "retailer_access_missing", `${lane.name} add stopped before mutation because Chrome page access is not granted.`);
       await clearActiveJob();
       return { confirmed: false, tabId: null, continueCycle: true };
@@ -5862,6 +5962,7 @@ async function executeLeasedRetailerJob(
           signedInState: active.signedInState,
           errorCode: baseline?.reason || "cart_unverified"
         });
+        await publishActionStopped(active, baseline?.reason || "cart_unverified").catch(() => undefined);
         await reportJob(active, "cancelled", baseline?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the current cart baseline could not be proven.`);
         await clearActiveJob();
         return { confirmed: false, tabId: active.tabId, continueCycle: true, cartBaseline: null };
@@ -5902,6 +6003,7 @@ async function executeLeasedRetailerJob(
           signedInState: active.signedInState,
           errorCode: baseline?.reason || "cart_unverified"
         });
+        await publishActionStopped(active, baseline?.reason || "cart_unverified").catch(() => undefined);
         await reportJob(active, "cancelled", baseline?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the current cart baseline could not be proven.`);
         await clearActiveJob();
         return { confirmed: false, tabId: active.tabId, continueCycle: true, cartBaseline: null };
@@ -5937,6 +6039,7 @@ async function executeLeasedRetailerJob(
         reasonCode,
         active.runnerJob.fulfillment
       );
+      await publishActionStopped(active, reasonCode).catch(() => undefined);
       await reportJob(active, "offer_rejected", prepared?.reason || "offer_unverified", `The live ${lane.name} offer did not satisfy the immutable action contract.`);
       await clearActiveJob();
       return { confirmed: false, tabId: active.tabId, continueCycle: true };
@@ -6420,6 +6523,52 @@ async function finishWatchLease(lease, reason) {
   ]);
 }
 
+async function publishWatchSeen(lease, now = Date.now()) {
+  const identity = canonicalRetailerIdentity(lease?.canonicalUrl);
+  if (!identity || identity.retailerId !== lease?.retailerId
+    || identity.retailerSku !== String(lease?.retailerSku || "").toUpperCase()) return false;
+  const stored = (await chrome.storage.local.get(WATCH_READY_ROUTES_KEY))[WATCH_READY_ROUTES_KEY];
+  const routes = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+  const retained = Object.fromEntries(Object.entries(routes).filter(([, route]) =>
+    route && typeof route === "object"
+      && Number.isFinite(new Date(String(route.expiresAt || "")).getTime())
+      && new Date(String(route.expiresAt)).getTime() > now));
+  retained[lease.id] = {
+    url: identity.canonicalUrl,
+    expiresAt: new Date(now + 35 * 60_000).toISOString()
+  };
+  await chrome.storage.local.set({ [WATCH_READY_ROUTES_KEY]: retained });
+  const lane = ADD_LANES[identity.retailerId];
+  const retailerName = lane?.name || identity.retailerId.slice(0, 1).toUpperCase() + identity.retailerId.slice(1);
+  await chrome.notifications?.create?.(`${WATCH_READY_NOTIFICATION_PREFIX}${lease.id}`, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+    title: `In stock at ${retailerName}`,
+    message: `Item ${identity.retailerSku} was seen in stock. Open the store page while it is available.`,
+    contextMessage: "Yoink watch",
+    priority: 2,
+    requireInteraction: true
+  });
+  return true;
+}
+
+async function openWatchSeen(watchId) {
+  const stored = (await chrome.storage.local.get(WATCH_READY_ROUTES_KEY))[WATCH_READY_ROUTES_KEY];
+  const routes = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+  const route = routes[watchId];
+  const identity = canonicalRetailerIdentity(route?.url);
+  if (!identity || new Date(String(route?.expiresAt || "")).getTime() <= Date.now()) {
+    delete routes[watchId];
+    await chrome.storage.local.set({ [WATCH_READY_ROUTES_KEY]: routes });
+    throw new Error("This watched item is no longer available from the notification.");
+  }
+  delete routes[watchId];
+  await chrome.storage.local.set({ [WATCH_READY_ROUTES_KEY]: routes });
+  await chrome.tabs.create({ url: identity.canonicalUrl, active: true });
+  await chrome.notifications.clear(`${WATCH_READY_NOTIFICATION_PREFIX}${watchId}`).catch(() => undefined);
+  return true;
+}
+
 async function collectWatchObservation(tabId, lease) {
   if (lease.retailerId === "target") {
     await chrome.scripting.executeScript({
@@ -6517,6 +6666,9 @@ async function runWatchQueueCycle() {
         observation.securityChallenge ? "security_challenge"
           : observation.interactiveBlock ? `interactive_${observation.interactiveBlock}` : "observed");
       await finishWatchLease(lease, observation.availability);
+      if (reported?.item?.state === "seen_in_stock") {
+        await publishWatchSeen(lease).catch(() => undefined);
+      }
       if (reported?.signal) await runSignalActionHandoff();
       return { observed: true, reason: observation.availability };
     } catch (error) {
@@ -6737,6 +6889,10 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
     // unrelated round trips in front of every signal-triggered lease.
     const device = await storedDevice();
     if (!device?.token) return { leased, confirmed, reason: "device_unavailable" };
+    const cachedReadiness = (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY];
+    if (cachedReadiness?.companionCompatible === false) {
+      return { leased, confirmed, reason: "companion_incompatible" };
+    }
     const [targetAccess, walmartAccess, amazonAccess, bestBuyAccess] = await Promise.all([
       addLaneAccess("target"),
       addLaneAccess("walmart"),
@@ -6771,7 +6927,7 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
       const response = await responsePromise;
       const lease = normalizedLeaseJob(response);
       if (!lease) {
-        const leaseReason = ["no_jobs", "actions_paused", "shadow_mode", "device_busy", "device_unavailable"]
+        const leaseReason = ["no_jobs", "actions_paused", "shadow_mode", "device_busy", "device_unavailable", "companion_incompatible"]
           .includes(String(response?.reason || "")) ? String(response.reason) : "jobs_unavailable";
         return {
           leased,
@@ -7465,6 +7621,20 @@ function openStoredNotificationRoute(deliveryId) {
 }
 
 chrome.notifications?.onClicked?.addListener((notificationId) => {
+  const stoppedMatch = /^yoink-action-stopped:([A-Za-z0-9_-]{3,120})$/.exec(String(notificationId || ""));
+  if (stoppedMatch) {
+    void chrome.tabs.create({ url: appViewUrl("actions"), active: true })
+      .then(() => chrome.notifications.clear(notificationId).catch(() => undefined))
+      .catch(() => undefined);
+    return;
+  }
+  const watchMatch = /^yoink-watch-ready:(watch_item_[a-f0-9]{32})$/.exec(String(notificationId || ""));
+  if (watchMatch) {
+    void openWatchSeen(watchMatch[1]).catch(async () => {
+      await chrome.notifications.clear(notificationId).catch(() => undefined);
+    });
+    return;
+  }
   const handoffMatch = /^(?:yoink-cart-ready|yoink-needs-you):([A-Za-z0-9_-]{3,120})$/.exec(String(notificationId || ""));
   if (handoffMatch) {
     void focusCartReady(handoffMatch[1]).catch(async () => {
@@ -7482,6 +7652,16 @@ chrome.notifications?.onClicked?.addListener((notificationId) => {
 
 chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
   if (!byUser) return;
+  const watchMatch = /^yoink-watch-ready:(watch_item_[a-f0-9]{32})$/.exec(String(notificationId || ""));
+  if (watchMatch) {
+    void chrome.storage.local.get(WATCH_READY_ROUTES_KEY).then((stored) => {
+      const routes = stored[WATCH_READY_ROUTES_KEY];
+      if (!routes || typeof routes !== "object" || Array.isArray(routes)) return;
+      delete routes[watchMatch[1]];
+      return chrome.storage.local.set({ [WATCH_READY_ROUTES_KEY]: routes });
+    }).catch(() => undefined);
+    return;
+  }
   const match = /^yoink-opportunity:([A-Za-z0-9_-]{3,160})$/.exec(String(notificationId || ""));
   if (match) void Promise.allSettled([
     forgetNotificationRoute(match[1]),
@@ -7490,6 +7670,7 @@ chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
 });
 
 chrome.tabs.onRemoved?.addListener((tabId) => {
+  qualificationLaunchTabs.delete(tabId);
   void forgetRetailerActionTab(tabId).catch(() => undefined);
   void (async () => {
     const stored = (await chrome.storage.session.get(ORDER_HANDOFF_KEY))[ORDER_HANDOFF_KEY];
@@ -7504,6 +7685,7 @@ chrome.tabs.onRemoved?.addListener((tabId) => {
 chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" && tab?.status !== "complete") return;
   const url = tab?.url || changeInfo.url;
+  scheduleMarkedQualification(tabId, url);
   void observeOrderConfirmation(tabId, url).catch(() => undefined);
   void refreshRetailerSessionFromTab(tabId, url).catch(() => undefined);
 });

@@ -84,7 +84,7 @@ test("Operations tools keep simulation dry and require an explicit Live review b
     await browser.eval(`(async () => { ${script}\n })()`);
     await eventually(() => assert.match(
       browser.document.querySelector("#actionsToggle")?.textContent ?? "",
-      /(?:Pause|Resume) actions/
+      /(?:Pause|Resume) all actions/
     ));
     assert.equal(browser.document.querySelector("#heroStatus")?.textContent?.trim(), "");
     assert.equal(browser.location.hash, "#operations/tools");

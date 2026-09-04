@@ -36,6 +36,9 @@ export interface ExactProductLinkPreview {
   reviewRequired: true;
   stockEvidenceAccepted: false;
   purchasePlanCreated: false;
+  existingListingId?: string;
+  existingVariantId?: string;
+  alreadyInProducts?: true;
 }
 
 export class CatalogLinkError extends Error {
@@ -82,6 +85,12 @@ export class CatalogLinkRepository {
     }
     const guardedAddCandidate = PACKAGED_ADD_RETAILERS.has(retailer.id)
       && retailer.executionSupported === 1;
+    const existing = this.db.get<{ listingId: string; variantId: string }>(
+      `SELECT id AS listingId, variant_id AS variantId
+       FROM listings WHERE retailer_id = ? AND retailer_sku = ?`,
+      retailer.id,
+      exact.retailerSku
+    );
     return {
       retailerId: retailer.id,
       retailerName: retailer.displayName,
@@ -93,7 +102,12 @@ export class CatalogLinkRepository {
         : "Monitoring and notifications only unless this retailer's separate guarded lane is qualified later.",
       reviewRequired: true,
       stockEvidenceAccepted: false,
-      purchasePlanCreated: false
+      purchasePlanCreated: false,
+      ...(existing ? {
+        existingListingId: existing.listingId,
+        existingVariantId: existing.variantId,
+        alreadyInProducts: true as const
+      } : {})
     };
   }
 

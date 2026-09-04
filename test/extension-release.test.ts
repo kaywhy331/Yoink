@@ -83,7 +83,7 @@ test("the local unpacked-extension release channel is absent when explicitly dis
       assert.equal(response.status, 404);
       assert.equal((await response.json() as { error: string }).error, "local_extension_release_disabled");
     }
-    const health = await fetch(`${baseUrl}/api/v1/health`).then((response) => response.json()) as {
+    const health = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as {
       localExtensionUpdates: boolean;
     };
     assert.equal(health.localExtensionUpdates, false);

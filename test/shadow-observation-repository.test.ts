@@ -275,6 +275,16 @@ test("Target qualification readiness requires diverse live evidence and never se
     assert.equal(readiness.distinctSkuCount, 3);
     assert.equal(readiness.checks.filter((check) => check.id !== "pre_click_rehearsal").every((check) => check.met), true);
     assert.equal(readiness.checks.find((check) => check.id === "pre_click_rehearsal")?.met, false);
+    const firstPartyProducts = readiness.checks.find((check) => check.id === "first_party_actionable")?.products || [];
+    assert.deepEqual(firstPartyProducts.map((product) => [product.retailerSku, product.status]), [
+      ["333333333", "did_not_pass"],
+      ["222222222", "did_not_pass"],
+      ["111111111", "passed"]
+    ]);
+    assert.equal(firstPartyProducts[2]?.canonicalUrl, "https://www.target.com/p/-/A-111111111");
+    const diversityProducts = readiness.checks.find((check) => check.id === "sku_diversity")?.products || [];
+    assert.equal(diversityProducts.length, 3);
+    assert.equal(diversityProducts.every((product) => product.status === "passed"), true);
     assert.match(readiness.liveEvidenceHash, /^[a-f0-9]{64}$/);
     assert.equal(readiness.qualification, null);
     assert.equal(readiness.addToCartQualified, false);
