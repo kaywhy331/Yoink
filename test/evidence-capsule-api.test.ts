@@ -19,7 +19,7 @@ function diagnostic(): RetailerAdapterDiagnosticInput {
     observedAt: "2026-09-05T18:54:10.000Z",
     retailerId: "walmart",
     retailerSku: "20895014480",
-    adapterVersion: "walmart-observer-v7",
+    adapterVersion: "walmart-observer-v8",
     operation: "observe",
     outcome: "failed",
     failureStage: "price_binding",
@@ -48,8 +48,8 @@ async function capsule(id = "cap_01J9TESTCAPSULE000000000000"): Promise<Evidence
     retailerSku: "20895014480",
     diagnostic: diagnostic(),
     trigger: "diagnostic_failed",
-    observerVersion: "walmart-observer-v7",
-    addAdapterVersion: "walmart-add-v8",
+    observerVersion: "walmart-observer-v8",
+    addAdapterVersion: "walmart-add-v9",
     extensionVersion: "1.20.0",
     environment: { isVisible: () => true }
   });
@@ -75,8 +75,8 @@ test("the filesystem store deduplicates, retains fifty per store, and prunes exp
         url: uniqueDom.window.location.href,
         retailerId: "walmart",
         retailerSku: "20895014480",
-        diagnostic: diagnostic(), trigger: "diagnostic_failed", observerVersion: "walmart-observer-v7",
-        addAdapterVersion: "walmart-add-v8", extensionVersion: "1.20.0", environment: { isVisible: () => true }
+        diagnostic: diagnostic(), trigger: "diagnostic_failed", observerVersion: "walmart-observer-v8",
+        addAdapterVersion: "walmart-add-v9", extensionVersion: "1.20.0", environment: { isVisible: () => true }
       });
       store.accept(unique, new Date(Date.parse("2026-09-05T19:00:00.000Z") + index * 11 * 60_000).toISOString());
     }

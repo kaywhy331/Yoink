@@ -236,7 +236,7 @@ test("a packaged adapter version mismatch is a typed 409 conflict on every evide
     const trialResponse = await fetch(`${baseUrl}/api/v1/devices/self/qualification-trials/target-add`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ adapterVersion: "target-add-v7", observerVersion: "target-observer-v6", contractVersion: 1 })
+      body: JSON.stringify({ adapterVersion: "target-add-v7", observerVersion: "target-observer-v7", contractVersion: 1 })
     });
     assert.equal(trialResponse.status, 409);
     assert.equal((await trialResponse.json() as { error: string }).error, "adapter_version_mismatch");

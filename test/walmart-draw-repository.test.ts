@@ -62,7 +62,7 @@ test("Walmart Draw scans persist only normalized, exact, read-only item evidence
     assert.equal(retry.id, stored.id);
     assert.equal(repository.counts(NOW + 3_000).walmartDrawScans, 1);
     repository.record(device.id, {
-      adapterVersion: "walmart-draw-observer-v1",
+      adapterVersion: "walmart-draw-observer-v2",
       contractVersion: 1,
       observedAt: new Date(NOW + 4_000).toISOString(),
       pageKind: "walmart_draw_hub",
@@ -87,7 +87,7 @@ test("Walmart Draw ledger accepts sanitized failures and rejects inconsistent or
     const device = pairedDevice(db);
     const repository = new WalmartDrawRepository(db);
     const failed: WalmartDrawScanInput = {
-      adapterVersion: "walmart-draw-observer-v1",
+      adapterVersion: "walmart-draw-observer-v2",
       contractVersion: 1,
       observedAt: new Date(NOW + 1_000).toISOString(),
       pageKind: "walmart_draw_hub",

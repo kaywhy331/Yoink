@@ -248,10 +248,10 @@ var YoinkBestBuyActionModule = (() => {
       id: "target",
       name: "Target",
       domain: "target.com",
-      contractVersion: "target-add-v8",
+      contractVersion: "target-add-v9",
       packVersion: "target-pack-v1",
-      observerVersion: "target-observer-v6",
-      activationConfirmation: "ENABLE_TARGET_ADD_V8",
+      observerVersion: "target-observer-v7",
+      activationConfirmation: "ENABLE_TARGET_ADD_V9",
       firstPartySeller: "Target",
       capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
@@ -278,10 +278,10 @@ var YoinkBestBuyActionModule = (() => {
       id: "walmart",
       name: "Walmart",
       domain: "walmart.com",
-      contractVersion: "walmart-add-v8",
+      contractVersion: "walmart-add-v9",
       packVersion: "walmart-pack-v1",
-      observerVersion: "walmart-observer-v7",
-      activationConfirmation: "ENABLE_WALMART_ADD_V8",
+      observerVersion: "walmart-observer-v8",
+      activationConfirmation: "ENABLE_WALMART_ADD_V9",
       firstPartySeller: "Walmart",
       capability: { enabled: "walmartAddOnly", version: "walmartAddAdapterVersion" },
       rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
@@ -308,10 +308,10 @@ var YoinkBestBuyActionModule = (() => {
       id: "amazon",
       name: "Amazon",
       domain: "amazon.com",
-      contractVersion: "amazon-add-v9",
+      contractVersion: "amazon-add-v10",
       packVersion: "amazon-pack-v2",
-      observerVersion: "amazon-observer-v8",
-      activationConfirmation: "ENABLE_AMAZON_ADD_V9",
+      observerVersion: "amazon-observer-v9",
+      activationConfirmation: "ENABLE_AMAZON_ADD_V10",
       firstPartySeller: "Amazon.com",
       capability: { enabled: "amazonAddOnly", version: "amazonAddAdapterVersion" },
       rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
@@ -338,10 +338,10 @@ var YoinkBestBuyActionModule = (() => {
       id: "bestbuy",
       name: "Best Buy",
       domain: "bestbuy.com",
-      contractVersion: "bestbuy-add-v11",
+      contractVersion: "bestbuy-add-v15",
       packVersion: "bestbuy-pack-v1",
-      observerVersion: "bestbuy-observer-v10",
-      activationConfirmation: "ENABLE_BESTBUY_ADD_V11",
+      observerVersion: "bestbuy-observer-v13",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V15",
       firstPartySeller: "Best Buy",
       capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
@@ -373,7 +373,7 @@ var YoinkBestBuyActionModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v11";
+  var BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v15";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
 
   // packages/browser-adapters/packs/amazon.json
@@ -875,7 +875,8 @@ var YoinkBestBuyActionModule = (() => {
     let current = element;
     while (current) {
       if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") return false;
-      const style = String(current.getAttribute("style") || "").replace(/\s+/g, "").toLocaleLowerCase("en-US");
+      const inlineStyle = current.getAttribute("style");
+      const style = inlineStyle ? inlineStyle.replace(/\s+/g, "").toLocaleLowerCase("en-US") : "";
       if (/(?:^|;)display:none(?:;|$)|(?:^|;)visibility:hidden(?:;|$)/.test(style)) return false;
       current = current.parentElement;
     }

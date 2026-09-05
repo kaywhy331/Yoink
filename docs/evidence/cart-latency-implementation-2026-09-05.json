@@ -1,0 +1,1438 @@
+{
+  "generatedAt": "2026-09-05T22:36:06.559Z",
+  "chromium": "145.0.7632.6",
+  "environment": "Headless Chromium, fresh context per case, all network intercepted, synthetic saved HTML, unthrottled local CPU; not live signal-to-cart timing.",
+  "methodology": "5 warmups and 20 measured prepare+commit pairs per cell; alternating baseline/optimized order by store; nearest-rank percentiles; no selector instrumentation; no cart/server/network time included.",
+  "optimization": "Packaged empty-inline-style fast path versus an in-memory reference restoring previous normalization. No cached offer, visibility, authorization, or removed validation.",
+  "bundles": [
+    {
+      "store": "target",
+      "adapterVersion": "target-add-v9",
+      "packagedSha256": "9a49bb0ba679ee70b8b892fa323cc8109fa0323892a815013b986ae03b78456c",
+      "baselineSha256": "f3062692fe02ff317b17c91970a366d6f54623d82bd97ebceec7bdc0a4704f52",
+      "fixtureSha256": "246902818d5f7d29c62e9072f3e0b3c0795d326e777bcb9bf15561946836fed6"
+    },
+    {
+      "store": "walmart",
+      "adapterVersion": "walmart-add-v9",
+      "packagedSha256": "e4273cebd7c88bdde5a269a9340da2b3da871f3f26c790839170bc3c5961b066",
+      "baselineSha256": "a3d12d20c6ea004422d2803107c499fb18557ef3f10c7f35eb8cce868b07405a",
+      "fixtureSha256": "b2ffeb3463fead4d19d6bfcfdc5bd862fda82c1596002b707da26a6415082b45"
+    },
+    {
+      "store": "amazon",
+      "adapterVersion": "amazon-add-v10",
+      "packagedSha256": "d0634eb6dcce65d0be6a98e45e2de5764dd3204f42953e094726b26bb5709d8e",
+      "baselineSha256": "775999167ca6a12bbe7c596d2bf611c7b479d40ae2a6e68c15b1803b2214340a",
+      "fixtureSha256": "f022ce288b0ac965d20b6e8f1dd004a987b1610179ad44a5b3106078a03c8301"
+    },
+    {
+      "store": "bestbuy",
+      "adapterVersion": "bestbuy-add-v15",
+      "packagedSha256": "5ed784b25e512a4117ebaf4fb74de05cc9a2bdb2de3e8d9d81fac5dbed2e366d",
+      "baselineSha256": "7b2bee53f8c522ede834fffd8d6e8c32bcd59bda6f91d592fce971c64e1891fd",
+      "fixtureSha256": "06a2520ee6049433348ac295a46af9dbbc5ae9e4a761d66e80a0bbc0d2790799"
+    }
+  ],
+  "timings": [
+    {
+      "store": "target",
+      "variant": "baseline",
+      "padding": 0,
+      "elements": 9,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 0.8,
+          "p95": 1
+        },
+        "commitMs": {
+          "p50": 1.3,
+          "p95": 2.4
+        },
+        "totalMs": {
+          "p50": 2.1,
+          "p95": 3.4
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "padding": 3000,
+      "elements": 9010,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 460.8,
+          "p95": 905.5
+        },
+        "commitMs": {
+          "p50": 965.3,
+          "p95": 1586.2
+        },
+        "totalMs": {
+          "p50": 1459.5,
+          "p95": 2432.4
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "padding": 0,
+      "elements": 9,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 0.4,
+          "p95": 1.2
+        },
+        "commitMs": {
+          "p50": 0.8,
+          "p95": 1.1
+        },
+        "totalMs": {
+          "p50": 1.2,
+          "p95": 2
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "padding": 3000,
+      "elements": 9010,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 166.2,
+          "p95": 202
+        },
+        "commitMs": {
+          "p50": 332.9,
+          "p95": 403.1
+        },
+        "totalMs": {
+          "p50": 500,
+          "p95": 605.1
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "padding": 0,
+      "elements": 12,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 0.6,
+          "p95": 0.9
+        },
+        "commitMs": {
+          "p50": 0.7,
+          "p95": 1
+        },
+        "totalMs": {
+          "p50": 1.4,
+          "p95": 1.8
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "padding": 3000,
+      "elements": 9013,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 159.5,
+          "p95": 220.2
+        },
+        "commitMs": {
+          "p50": 159.3,
+          "p95": 225.4
+        },
+        "totalMs": {
+          "p50": 319.3,
+          "p95": 413.2
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "padding": 0,
+      "elements": 12,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 1.4,
+          "p95": 1.9
+        },
+        "commitMs": {
+          "p50": 1.4,
+          "p95": 2.2
+        },
+        "totalMs": {
+          "p50": 2.9,
+          "p95": 3.8
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "padding": 3000,
+      "elements": 9013,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 882.6,
+          "p95": 1457.2
+        },
+        "commitMs": {
+          "p50": 876.9,
+          "p95": 1413.4
+        },
+        "totalMs": {
+          "p50": 1816.6,
+          "p95": 2926.5
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "padding": 0,
+      "elements": 12,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 2.5,
+          "p95": 3.8
+        },
+        "commitMs": {
+          "p50": 2.8,
+          "p95": 4.8
+        },
+        "totalMs": {
+          "p50": 6,
+          "p95": 9.3
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "padding": 3000,
+      "elements": 9013,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 1268.7,
+          "p95": 1966.8
+        },
+        "commitMs": {
+          "p50": 1243.2,
+          "p95": 1767.2
+        },
+        "totalMs": {
+          "p50": 2556.2,
+          "p95": 3734
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "padding": 0,
+      "elements": 12,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 1.4,
+          "p95": 1.9
+        },
+        "commitMs": {
+          "p50": 1.3,
+          "p95": 1.8
+        },
+        "totalMs": {
+          "p50": 2.7,
+          "p95": 3.7
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "padding": 3000,
+      "elements": 9013,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 207.6,
+          "p95": 497.8
+        },
+        "commitMs": {
+          "p50": 189.7,
+          "p95": 441.8
+        },
+        "totalMs": {
+          "p50": 440.4,
+          "p95": 884.5
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "padding": 0,
+      "elements": 19,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 3.9,
+          "p95": 5.1
+        },
+        "commitMs": {
+          "p50": 4.1,
+          "p95": 5.9
+        },
+        "totalMs": {
+          "p50": 7.9,
+          "p95": 11
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "padding": 3000,
+      "elements": 9020,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 906.2,
+          "p95": 1074.9
+        },
+        "commitMs": {
+          "p50": 849.3,
+          "p95": 1101.3
+        },
+        "totalMs": {
+          "p50": 1755.5,
+          "p95": 2111.7
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "padding": 0,
+      "elements": 19,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 10.1,
+          "p95": 13.7
+        },
+        "commitMs": {
+          "p50": 9.8,
+          "p95": 12.7
+        },
+        "totalMs": {
+          "p50": 19.7,
+          "p95": 25.1
+        }
+      },
+      "shippingSelectionSupported": false
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "padding": 3000,
+      "elements": 9020,
+      "n": 20,
+      "stats": {
+        "prepareMs": {
+          "p50": 1186.2,
+          "p95": 1733.6
+        },
+        "commitMs": {
+          "p50": 1206.3,
+          "p95": 1784.6
+        },
+        "totalMs": {
+          "p50": 2444.4,
+          "p95": 3748.3
+        }
+      },
+      "shippingSelectionSupported": false
+    }
+  ],
+  "scenarios": [
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "unchanged",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 9.4
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "prior_rehearsal",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 9.3
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "price_changed",
+      "ok": false,
+      "reason": "over_unit_cap",
+      "clicks": 0,
+      "elapsedMs": 7.1
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "seller_changed",
+      "ok": false,
+      "reason": "third_party_seller",
+      "clicks": 0,
+      "elapsedMs": 13.7
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "control_replaced",
+      "ok": false,
+      "reason": "add_control_changed",
+      "clicks": 0,
+      "elapsedMs": 14.5
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "disabled",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 13.6
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "challenge",
+      "ok": false,
+      "reason": "manual_action_required",
+      "clicks": 0,
+      "elapsedMs": 7.6
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "hidden_ancestor",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 7.8
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "expired_authorization",
+      "ok": false,
+      "reason": "authorization_expired",
+      "clicks": 0,
+      "elapsedMs": 5.7
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "duplicate_commit",
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicks": 1,
+      "elapsedMs": 8.1
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "inline_styles_visible",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 9.1
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "visibility_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 8.5
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "aria_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 7.4
+    },
+    {
+      "store": "target",
+      "variant": "baseline",
+      "scenario": "hidden_attribute",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 8
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "unchanged",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 8.7
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "prior_rehearsal",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 8.2
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "price_changed",
+      "ok": false,
+      "reason": "over_unit_cap",
+      "clicks": 0,
+      "elapsedMs": 7.2
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "seller_changed",
+      "ok": false,
+      "reason": "third_party_seller",
+      "clicks": 0,
+      "elapsedMs": 10.9
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "control_replaced",
+      "ok": false,
+      "reason": "add_control_changed",
+      "clicks": 0,
+      "elapsedMs": 6.9
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "disabled",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 7.2
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "challenge",
+      "ok": false,
+      "reason": "manual_action_required",
+      "clicks": 0,
+      "elapsedMs": 7
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "hidden_ancestor",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 7.6
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "expired_authorization",
+      "ok": false,
+      "reason": "authorization_expired",
+      "clicks": 0,
+      "elapsedMs": 6.2
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "duplicate_commit",
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicks": 1,
+      "elapsedMs": 7.1
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "inline_styles_visible",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 8.2
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "visibility_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 6.7
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "aria_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 8.6
+    },
+    {
+      "store": "target",
+      "variant": "optimized",
+      "scenario": "hidden_attribute",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 6.5
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "unchanged",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 11.1
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "prior_rehearsal",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 12.4
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "price_changed",
+      "ok": false,
+      "reason": "over_unit_cap",
+      "clicks": 0,
+      "elapsedMs": 10.1
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "seller_changed",
+      "ok": false,
+      "reason": "third_party_seller",
+      "clicks": 0,
+      "elapsedMs": 9.7
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "control_replaced",
+      "ok": false,
+      "reason": "add_control_changed",
+      "clicks": 0,
+      "elapsedMs": 10.1
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "disabled",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 9.6
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "challenge",
+      "ok": false,
+      "reason": "manual_action_required",
+      "clicks": 0,
+      "elapsedMs": 9
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "hidden_ancestor",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 11.3
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "expired_authorization",
+      "ok": false,
+      "reason": "authorization_expired",
+      "clicks": 0,
+      "elapsedMs": 9.2
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "duplicate_commit",
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicks": 1,
+      "elapsedMs": 10.2
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "inline_styles_visible",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 11.6
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "visibility_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 10.2
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "aria_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 11.2
+    },
+    {
+      "store": "walmart",
+      "variant": "optimized",
+      "scenario": "hidden_attribute",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 9.2
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "unchanged",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 38.7
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "prior_rehearsal",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 24.2
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "price_changed",
+      "ok": false,
+      "reason": "over_unit_cap",
+      "clicks": 0,
+      "elapsedMs": 18.4
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "seller_changed",
+      "ok": false,
+      "reason": "third_party_seller",
+      "clicks": 0,
+      "elapsedMs": 12.6
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "control_replaced",
+      "ok": false,
+      "reason": "add_control_changed",
+      "clicks": 0,
+      "elapsedMs": 20.1
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "disabled",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 16.3
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "challenge",
+      "ok": false,
+      "reason": "manual_action_required",
+      "clicks": 0,
+      "elapsedMs": 13
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "hidden_ancestor",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 49.8
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "expired_authorization",
+      "ok": false,
+      "reason": "authorization_expired",
+      "clicks": 0,
+      "elapsedMs": 10.9
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "duplicate_commit",
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicks": 1,
+      "elapsedMs": 19.8
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "inline_styles_visible",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 14
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "visibility_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 17.1
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "aria_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 18.7
+    },
+    {
+      "store": "walmart",
+      "variant": "baseline",
+      "scenario": "hidden_attribute",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 16
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "unchanged",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 18.1
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "prior_rehearsal",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 21.3
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "price_changed",
+      "ok": false,
+      "reason": "over_unit_cap",
+      "clicks": 0,
+      "elapsedMs": 26.1
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "seller_changed",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 46
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "control_replaced",
+      "ok": false,
+      "reason": "add_control_changed",
+      "clicks": 0,
+      "elapsedMs": 167.2
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "disabled",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 20.9
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "challenge",
+      "ok": false,
+      "reason": "manual_action_required",
+      "clicks": 0,
+      "elapsedMs": 25
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "hidden_ancestor",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 17.8
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "expired_authorization",
+      "ok": false,
+      "reason": "authorization_expired",
+      "clicks": 0,
+      "elapsedMs": 18.7
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "duplicate_commit",
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicks": 1,
+      "elapsedMs": 28
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "inline_styles_visible",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 25.7
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "visibility_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 29
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "aria_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 16.5
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "hidden_attribute",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 29.6
+    },
+    {
+      "store": "amazon",
+      "variant": "baseline",
+      "scenario": "offer_token_changed",
+      "ok": false,
+      "reason": "offer_binding_changed",
+      "clicks": 0,
+      "elapsedMs": 43.7
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "unchanged",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 21.8
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "prior_rehearsal",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 25.3
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "price_changed",
+      "ok": false,
+      "reason": "over_unit_cap",
+      "clicks": 0,
+      "elapsedMs": 45.6
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "seller_changed",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 22.3
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "control_replaced",
+      "ok": false,
+      "reason": "add_control_changed",
+      "clicks": 0,
+      "elapsedMs": 18.7
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "disabled",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 19.5
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "challenge",
+      "ok": false,
+      "reason": "manual_action_required",
+      "clicks": 0,
+      "elapsedMs": 14.2
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "hidden_ancestor",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 24.3
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "expired_authorization",
+      "ok": false,
+      "reason": "authorization_expired",
+      "clicks": 0,
+      "elapsedMs": 15.7
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "duplicate_commit",
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicks": 1,
+      "elapsedMs": 23.3
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "inline_styles_visible",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 14
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "visibility_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 19.9
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "aria_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 18.3
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "hidden_attribute",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 19.2
+    },
+    {
+      "store": "amazon",
+      "variant": "optimized",
+      "scenario": "offer_token_changed",
+      "ok": false,
+      "reason": "offer_binding_changed",
+      "clicks": 0,
+      "elapsedMs": 41.3
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "unchanged",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 16
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "prior_rehearsal",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 22.1
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "price_changed",
+      "ok": false,
+      "reason": "over_unit_cap",
+      "clicks": 0,
+      "elapsedMs": 14.3
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "seller_changed",
+      "ok": false,
+      "reason": "third_party_seller",
+      "clicks": 0,
+      "elapsedMs": 14.1
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "control_replaced",
+      "ok": false,
+      "reason": "add_control_changed",
+      "clicks": 0,
+      "elapsedMs": 15.2
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "disabled",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 20.6
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "challenge",
+      "ok": false,
+      "reason": "manual_action_required",
+      "clicks": 0,
+      "elapsedMs": 13
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "hidden_ancestor",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 19.6
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "expired_authorization",
+      "ok": false,
+      "reason": "authorization_expired",
+      "clicks": 0,
+      "elapsedMs": 11.9
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "duplicate_commit",
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicks": 1,
+      "elapsedMs": 17.5
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "inline_styles_visible",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 18.8
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "visibility_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 20.9
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "aria_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 27.8
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "hidden_attribute",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 13.6
+    },
+    {
+      "store": "bestbuy",
+      "variant": "optimized",
+      "scenario": "pickup_selected",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 16.9
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "unchanged",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 30.1
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "prior_rehearsal",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 31
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "price_changed",
+      "ok": false,
+      "reason": "over_unit_cap",
+      "clicks": 0,
+      "elapsedMs": 20.2
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "seller_changed",
+      "ok": false,
+      "reason": "third_party_seller",
+      "clicks": 0,
+      "elapsedMs": 20.9
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "control_replaced",
+      "ok": false,
+      "reason": "add_control_changed",
+      "clicks": 0,
+      "elapsedMs": 22
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "disabled",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 22.5
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "challenge",
+      "ok": false,
+      "reason": "manual_action_required",
+      "clicks": 0,
+      "elapsedMs": 19.3
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "hidden_ancestor",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 20.1
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "expired_authorization",
+      "ok": false,
+      "reason": "authorization_expired",
+      "clicks": 0,
+      "elapsedMs": 16.5
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "duplicate_commit",
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicks": 1,
+      "elapsedMs": 25.1
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "inline_styles_visible",
+      "ok": true,
+      "reason": "clicked",
+      "clicks": 1,
+      "elapsedMs": 23.6
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "visibility_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 17.6
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "aria_hidden",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 18
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "hidden_attribute",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 17.5
+    },
+    {
+      "store": "bestbuy",
+      "variant": "baseline",
+      "scenario": "pickup_selected",
+      "ok": false,
+      "reason": "out_of_stock",
+      "clicks": 0,
+      "elapsedMs": 32.6
+    }
+  ],
+  "status": "passed"
+}

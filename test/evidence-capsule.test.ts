@@ -17,7 +17,7 @@ function diagnostic(overrides: Partial<RetailerAdapterDiagnosticInput> = {}): Re
     observedAt: "2026-09-05T18:54:10.000Z",
     retailerId: "walmart",
     retailerSku: "20895014480",
-    adapterVersion: "walmart-observer-v7",
+    adapterVersion: "walmart-observer-v8",
     operation: "observe",
     outcome: "failed",
     failureStage: "price_binding",
@@ -100,8 +100,8 @@ test("capture emits a bounded gzip envelope and the ordered reduction ladder", a
     retailerSku: "20895014480",
     diagnostic: diagnostic(),
     trigger: "diagnostic_failed",
-    observerVersion: "walmart-observer-v7",
-    addAdapterVersion: "walmart-add-v8",
+    observerVersion: "walmart-observer-v8",
+    addAdapterVersion: "walmart-add-v9",
     extensionVersion: "1.20.0",
     environment: { isVisible: (element) => element.id !== "hidden" }
   });
@@ -133,8 +133,8 @@ test("a capture deadline emits a privacy-safe truncated capsule", async () => {
     retailerSku: "20895014480",
     diagnostic: diagnostic(),
     trigger: "diagnostic_failed",
-    observerVersion: "walmart-observer-v7",
-    addAdapterVersion: "walmart-add-v8",
+    observerVersion: "walmart-observer-v8",
+    addAdapterVersion: "walmart-add-v9",
     extensionVersion: "1.20.0",
     budgetMs: 1,
     environment: { now: () => tick++ * 2 }

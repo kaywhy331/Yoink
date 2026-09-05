@@ -359,7 +359,8 @@ function visible(element: Element | null): element is Element {
   let current: Element | null = element;
   while (current) {
     if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") return false;
-    const style = String(current.getAttribute("style") || "").replace(/\s+/g, "").toLocaleLowerCase("en-US");
+    const inlineStyle = current.getAttribute("style");
+    const style = inlineStyle ? inlineStyle.replace(/\s+/g, "").toLocaleLowerCase("en-US") : "";
     if (/(?:^|;)display:none(?:;|$)|(?:^|;)visibility:hidden(?:;|$)/.test(style)) return false;
     current = current.parentElement;
   }

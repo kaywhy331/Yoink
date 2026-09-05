@@ -14,11 +14,13 @@ const WALMART_PRODUCT_URL = "https://www.walmart.com/ip/fixture/17354421975";
 const AMAZON_PRODUCT_URL = "https://www.amazon.com/dp/B0GYTRYV7P";
 const BESTBUY_PRODUCT_URL = "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149";
 const PACKAGED_ADD_VERSIONS = {
-  target: "target-add-v8", walmart: "walmart-add-v8", amazon: "amazon-add-v9", bestbuy: "bestbuy-add-v11"
+  target: "target-add-v9", walmart: "walmart-add-v9", amazon: "amazon-add-v10", bestbuy: "bestbuy-add-v15"
 } as const;
 const PACKAGED_OBSERVER_VERSIONS = {
-  target: "target-observer-v6", walmart: "walmart-observer-v7", amazon: "amazon-observer-v8", bestbuy: "bestbuy-observer-v10"
+  target: "target-observer-v7", walmart: "walmart-observer-v8", amazon: "amazon-observer-v9", bestbuy: "bestbuy-observer-v13"
 } as const;
+const FUTURE_TARGET_OBSERVER_VERSION = PACKAGED_OBSERVER_VERSIONS.target.replace(/v(\d+)$/,
+  (_match: string, version: string) => `v${Number(version) + 1}`);
 const DISNEY_PRODUCT_URL = "https://www.disneystore.com/dumbo-jeweled-figurine-409914998395.html";
 const PBANDAI_PRODUCT_URL = "https://p-bandai.com/us/item/N2884150001";
 const POKEMONCENTER_PRODUCT_URL = "https://www.pokemoncenter.com/product/10-10320-101/pokemon-tcg-mewtwo-and-mew-dna-premium-zip-binder";
@@ -331,7 +333,7 @@ const selectedOffer = (childOfferKey: string, selectionState = "exact") => ({
 });
 
 const OBSERVATION = {
-  adapterVersion: "target-observer-v6",
+  adapterVersion: "target-observer-v7",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -351,7 +353,7 @@ const OBSERVATION = {
   cookie: "DO_NOT_SEND"
 };
 const AMAZON_OBSERVATION = {
-  adapterVersion: "amazon-observer-v8",
+  adapterVersion: "amazon-observer-v9",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -372,7 +374,7 @@ const AMAZON_OBSERVATION = {
   selectedOffer: selectedOffer("B0GYTRYV7P")
 };
 const WALMART_OBSERVATION = {
-  adapterVersion: "walmart-observer-v7",
+  adapterVersion: "walmart-observer-v8",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -390,7 +392,7 @@ const WALMART_OBSERVATION = {
   selectedOffer: selectedOffer("17354421975")
 };
 const BESTBUY_OBSERVATION = {
-  adapterVersion: "bestbuy-observer-v10",
+  adapterVersion: "bestbuy-observer-v13",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -408,7 +410,7 @@ const BESTBUY_OBSERVATION = {
   selectedOffer: selectedOffer("6588149")
 };
 const DISNEY_OBSERVATION = {
-  adapterVersion: "disney-observer-v1",
+  adapterVersion: "disney-observer-v2",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -431,7 +433,7 @@ const DISNEY_OBSERVATION = {
 };
 const PBANDAI_OBSERVATION = {
   ...DISNEY_OBSERVATION,
-  adapterVersion: "pbandai-observer-v2",
+  adapterVersion: "pbandai-observer-v3",
   retailerId: "pbandai",
   retailerSku: "N2884150001",
   canonicalUrl: PBANDAI_PRODUCT_URL,
@@ -442,7 +444,7 @@ const PBANDAI_OBSERVATION = {
 };
 const POKEMONCENTER_OBSERVATION = {
   ...DISNEY_OBSERVATION,
-  adapterVersion: "pokemoncenter-observer-v2",
+  adapterVersion: "pokemoncenter-observer-v3",
   retailerId: "pokemoncenter",
   retailerSku: "10-10320-101",
   canonicalUrl: POKEMONCENTER_PRODUCT_URL,
@@ -451,7 +453,7 @@ const POKEMONCENTER_OBSERVATION = {
   selectedOffer: selectedOffer("10-10320-101")
 };
 const WALMART_DRAW_SCAN = {
-  adapterVersion: "walmart-draw-observer-v1",
+  adapterVersion: "walmart-draw-observer-v2",
   contractVersion: 1,
   observedAt: new Date().toISOString(),
   pageKind: "walmart_draw_hub",
@@ -705,7 +707,7 @@ function harness(options: HarnessOptions = {}) {
         lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
       } : null,
       runnerJob: {
-        adapterVersion: "target-add-v8",
+        adapterVersion: "target-add-v9",
         contractVersion: 1,
         jobId: "job_target_fixture",
         retailerId: "target",
@@ -1988,7 +1990,7 @@ function harness(options: HarnessOptions = {}) {
       const jobSuffix = jobsLeased === 1 ? "" : `_${jobsLeased}`;
       const leasedJob = options.amazonJob ? {
         contractVersion: 1,
-        adapterVersion: "amazon-add-v9",
+        adapterVersion: "amazon-add-v10",
         id: `job_amazon_fixture${jobSuffix}`,
         capabilityToken: "A".repeat(43),
         action: "add_to_cart",
@@ -2005,7 +2007,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.walmartJob ? {
         contractVersion: 1,
-        adapterVersion: "walmart-add-v8",
+        adapterVersion: "walmart-add-v9",
         id: `job_walmart_fixture${jobSuffix}`,
         capabilityToken: "W".repeat(43),
         action: "add_to_cart",
@@ -2022,7 +2024,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.bestBuyJob ? {
         contractVersion: 1,
-        adapterVersion: "bestbuy-add-v11",
+        adapterVersion: "bestbuy-add-v15",
         id: `job_bestbuy_fixture${jobSuffix}`,
         capabilityToken: "B".repeat(43),
         action: "add_to_cart",
@@ -2039,7 +2041,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : {
         contractVersion: 1,
-        adapterVersion: "target-add-v8",
+        adapterVersion: "target-add-v9",
         id: `job_target_fixture${jobSuffix}`,
         capabilityToken: "C".repeat(43),
         action: "add_to_cart",
@@ -2465,7 +2467,7 @@ test("the service worker records four sanitized Walmart drawings without enterin
     "adapterVersion", "contractVersion", "expectedCardCount", "interactiveBlock", "items",
     "observedAt", "observedCardCount", "outcome", "pageKind", "reasonCode", "securityChallenge"
   ]);
-  assert.equal(body.adapterVersion, "walmart-draw-observer-v1");
+  assert.equal(body.adapterVersion, "walmart-draw-observer-v2");
   assert.equal(body.observedCardCount, 4);
   assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false);
   assert.equal(JSON.stringify(body).includes(TOKEN), false);
@@ -2518,7 +2520,7 @@ test("the service worker records one sanitized Amazon exact-offer observation", 
   assert.ok(post);
   const body = JSON.parse(String(post.options.body)) as Record<string, unknown>;
   assert.equal(body.retailerSku, "B0GYTRYV7P");
-  assert.equal(body.adapterVersion, "amazon-observer-v8");
+  assert.equal(body.adapterVersion, "amazon-observer-v9");
   assert.equal(body.purchaseRouteReady, true);
   assert.equal("url" in body, false);
   assert.equal("cookie" in body, false);
@@ -2600,7 +2602,7 @@ for (const [failure, reasonCode] of [
     const body = JSON.parse(String(diagnosticPosts[0]?.options.body)) as Record<string, unknown>;
     assert.equal(body.retailerId, "amazon");
     assert.equal(body.retailerSku, "B0GYTRYV7P");
-    assert.equal(body.adapterVersion, "amazon-observer-v8");
+    assert.equal(body.adapterVersion, "amazon-observer-v9");
     assert.equal(body.operation, "observe");
     assert.equal(body.outcome, "failed");
     assert.equal(body.failureStage, "runner");
@@ -3094,7 +3096,7 @@ test("the service worker records Disney Store evidence through the generic read-
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/disney"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "disney-observer-v1");
+  assert.equal(observationBody.adapterVersion, "disney-observer-v2");
   assert.equal(observationBody.retailerSku, "409914998395");
   assert.equal(observationBody.canonicalUrl, DISNEY_PRODUCT_URL);
   assert.equal(JSON.stringify(observationBody).includes("DO_NOT_SEND"), false);
@@ -3108,8 +3110,8 @@ test("the service worker records Disney Store evidence through the generic read-
 
 test("the service worker records Premium Bandai and Pokémon Center through read-only lanes only", async () => {
   const examples = [
-    ["pbandai", PBANDAI_PRODUCT_URL, "pbandai-observer-v2", "N2884150001"],
-    ["pokemoncenter", POKEMONCENTER_PRODUCT_URL, "pokemoncenter-observer-v2", "10-10320-101"]
+    ["pbandai", PBANDAI_PRODUCT_URL, "pbandai-observer-v3", "N2884150001"],
+    ["pokemoncenter", POKEMONCENTER_PRODUCT_URL, "pokemoncenter-observer-v3", "10-10320-101"]
   ] as const;
   for (const [retailerId, activeUrl, adapterVersion, retailerSku] of examples) {
     const runtime = harness({ activeUrl: `${activeUrl}?tracking=DO_NOT_SEND` });
@@ -3229,13 +3231,13 @@ test("the service worker captures observer-v7 evidence and rehearses Walmart add
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/walmart"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "walmart-observer-v7");
+  assert.equal(observationBody.adapterVersion, "walmart-observer-v8");
   assert.equal(observationBody.retailerSku, "17354421975");
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/walmart-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "walmart-add-v8");
-  assert.equal(trialBody.observerVersion, "walmart-observer-v7");
+  assert.equal(trialBody.adapterVersion, "walmart-add-v9");
+  assert.equal(trialBody.observerVersion, "walmart-observer-v8");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("4499"), false);
   assert.equal(JSON.stringify(trialBody).includes(WALMART_PRODUCT_URL), false);
@@ -3252,8 +3254,8 @@ test("the service worker rehearses Amazon add-v9 without persisting its offer to
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/amazon-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "amazon-add-v9");
-  assert.equal(trialBody.observerVersion, "amazon-observer-v8");
+  assert.equal(trialBody.adapterVersion, "amazon-add-v10");
+  assert.equal(trialBody.observerVersion, "amazon-observer-v9");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("offerListing"), false);
   assert.equal(JSON.stringify(trialBody).includes(TOKEN), false);
@@ -3276,13 +3278,13 @@ test("the service worker captures observer-v10 evidence and rehearses Best Buy a
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/bestbuy"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v10");
+  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v13");
   assert.equal(observationBody.retailerSku, "6588149");
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v11");
-  assert.equal(trialBody.observerVersion, "bestbuy-observer-v10");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v15");
+  assert.equal(trialBody.observerVersion, "bestbuy-observer-v13");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("699"), false);
   assert.equal(JSON.stringify(trialBody).includes(BESTBUY_PRODUCT_URL), false);
@@ -3303,7 +3305,7 @@ test("the service worker qualifies an actionable Best Buy preorder through the n
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v11");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v15");
   assert.equal(trialBody.outcome, "passed");
   const diagnostics = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/bestbuy"));
   assert.equal(diagnostics.length, 2);
@@ -5242,8 +5244,8 @@ test("opt-in automatic requalification checks only needed saved products and res
     createdAt: new Date().toISOString(),
     lanes: [{
       retailerId: "target",
-      expectedAdapterVersion: "target-add-v8",
-      expectedObserverVersion: "target-observer-v6",
+      expectedAdapterVersion: "target-add-v9",
+      expectedObserverVersion: "target-observer-v7",
       qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
       evidence: {
         liveEvidenceReady: false,
@@ -5308,7 +5310,7 @@ test("opt-in automatic requalification checks only needed saved products and res
   // A packaged observer version the companion does not ship bypasses the
   // cooldown, but instead of opening tabs the lane is skipped with an update
   // reason so the app and companion can be brought back in step.
-  reverificationPlan.lanes[0]!.expectedObserverVersion = "target-observer-v7";
+  reverificationPlan.lanes[0]!.expectedObserverVersion = FUTURE_TARGET_OBSERVER_VERSION;
   runtime.fireAutoReverificationAlarm();
   await waitFor(() => receiptCount() > firstReceipts,
     "A packaged observer version change should bypass the daily cooldown.");
@@ -5322,7 +5324,7 @@ test("opt-in automatic requalification checks only needed saved products and res
   assert.equal(runtime.tabRemovals.length, 1);
   const skewReceipts = receiptCount();
 
-  reverificationPlan.lanes[0]!.expectedObserverVersion = "target-observer-v6";
+  reverificationPlan.lanes[0]!.expectedObserverVersion = "target-observer-v7";
   reverificationPlan.lanes[0]!.candidates[0]!.repairableObserverFailure = true;
   runtime.fireAutoReverificationAlarm();
   await waitFor(() => runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length > trialCount,
@@ -5536,7 +5538,7 @@ test("an open repair product from a failed live add is replayed and reported eve
 test("a lane whose expected contracts differ from the packaged ones is skipped with an update reason", async () => {
   const newer = harness({
     permission: true,
-    reverificationPlan: targetReverificationPlan({ expectedObserverVersion: "target-observer-v7" })
+    reverificationPlan: targetReverificationPlan({ expectedObserverVersion: FUTURE_TARGET_OBSERVER_VERSION })
   });
   const skipped = await newer.send({ type: "yoink:run-auto-reverification" });
   assert.equal(skipped.ok, true);
@@ -5663,7 +5665,7 @@ test("automatic requalification never prompts for new retailer access or opens a
       createdAt: new Date().toISOString(),
       lanes: [{
         retailerId: "bestbuy",
-        expectedAdapterVersion: "bestbuy-add-v11",
+        expectedAdapterVersion: "bestbuy-add-v15",
         qualification: { status: "missing", warning: "none", expiresAt: "" },
         evidence: {
           liveEvidenceReady: false,

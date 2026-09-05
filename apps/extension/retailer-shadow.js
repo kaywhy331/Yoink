@@ -61,10 +61,10 @@ var YoinkRetailerShadowModule = (() => {
       id: "target",
       name: "Target",
       domain: "target.com",
-      contractVersion: "target-add-v8",
+      contractVersion: "target-add-v9",
       packVersion: "target-pack-v1",
-      observerVersion: "target-observer-v6",
-      activationConfirmation: "ENABLE_TARGET_ADD_V8",
+      observerVersion: "target-observer-v7",
+      activationConfirmation: "ENABLE_TARGET_ADD_V9",
       firstPartySeller: "Target",
       capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
@@ -91,10 +91,10 @@ var YoinkRetailerShadowModule = (() => {
       id: "walmart",
       name: "Walmart",
       domain: "walmart.com",
-      contractVersion: "walmart-add-v8",
+      contractVersion: "walmart-add-v9",
       packVersion: "walmart-pack-v1",
-      observerVersion: "walmart-observer-v7",
-      activationConfirmation: "ENABLE_WALMART_ADD_V8",
+      observerVersion: "walmart-observer-v8",
+      activationConfirmation: "ENABLE_WALMART_ADD_V9",
       firstPartySeller: "Walmart",
       capability: { enabled: "walmartAddOnly", version: "walmartAddAdapterVersion" },
       rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
@@ -121,10 +121,10 @@ var YoinkRetailerShadowModule = (() => {
       id: "amazon",
       name: "Amazon",
       domain: "amazon.com",
-      contractVersion: "amazon-add-v9",
+      contractVersion: "amazon-add-v10",
       packVersion: "amazon-pack-v2",
-      observerVersion: "amazon-observer-v8",
-      activationConfirmation: "ENABLE_AMAZON_ADD_V9",
+      observerVersion: "amazon-observer-v9",
+      activationConfirmation: "ENABLE_AMAZON_ADD_V10",
       firstPartySeller: "Amazon.com",
       capability: { enabled: "amazonAddOnly", version: "amazonAddAdapterVersion" },
       rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
@@ -151,10 +151,10 @@ var YoinkRetailerShadowModule = (() => {
       id: "bestbuy",
       name: "Best Buy",
       domain: "bestbuy.com",
-      contractVersion: "bestbuy-add-v11",
+      contractVersion: "bestbuy-add-v15",
       packVersion: "bestbuy-pack-v1",
-      observerVersion: "bestbuy-observer-v10",
-      activationConfirmation: "ENABLE_BESTBUY_ADD_V11",
+      observerVersion: "bestbuy-observer-v13",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V15",
       firstPartySeller: "Best Buy",
       capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
@@ -186,20 +186,20 @@ var YoinkRetailerShadowModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var TARGET_OBSERVER_VERSION = "target-observer-v6";
-  var WALMART_OBSERVER_VERSION = "walmart-observer-v7";
-  var WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v1";
-  var AMAZON_OBSERVER_VERSION = "amazon-observer-v8";
-  var BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v10";
-  var DISNEY_OBSERVER_VERSION = "disney-observer-v1";
-  var RAVENSBURGER_OBSERVER_VERSION = "ravensburger-observer-v1";
-  var RIOT_OBSERVER_VERSION = "riot-observer-v1";
-  var BOOKSAMILLION_OBSERVER_VERSION = "booksamillion-observer-v1";
-  var FANATICS_OBSERVER_VERSION = "fanatics-observer-v1";
-  var KOHLS_OBSERVER_VERSION = "kohls-observer-v1";
-  var MACYS_OBSERVER_VERSION = "macys-observer-v1";
-  var PBANDAI_OBSERVER_VERSION = "pbandai-observer-v2";
-  var POKEMONCENTER_OBSERVER_VERSION = "pokemoncenter-observer-v2";
+  var TARGET_OBSERVER_VERSION = "target-observer-v7";
+  var WALMART_OBSERVER_VERSION = "walmart-observer-v8";
+  var WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v2";
+  var AMAZON_OBSERVER_VERSION = "amazon-observer-v9";
+  var BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v13";
+  var DISNEY_OBSERVER_VERSION = "disney-observer-v2";
+  var RAVENSBURGER_OBSERVER_VERSION = "ravensburger-observer-v2";
+  var RIOT_OBSERVER_VERSION = "riot-observer-v2";
+  var BOOKSAMILLION_OBSERVER_VERSION = "booksamillion-observer-v2";
+  var FANATICS_OBSERVER_VERSION = "fanatics-observer-v2";
+  var KOHLS_OBSERVER_VERSION = "kohls-observer-v2";
+  var MACYS_OBSERVER_VERSION = "macys-observer-v2";
+  var PBANDAI_OBSERVER_VERSION = "pbandai-observer-v3";
+  var POKEMONCENTER_OBSERVER_VERSION = "pokemoncenter-observer-v3";
   var RETAILER_OBSERVER_VERSIONS = {
     target: TARGET_OBSERVER_VERSION,
     walmart: WALMART_OBSERVER_VERSION,
@@ -837,7 +837,8 @@ var YoinkRetailerShadowModule = (() => {
     let current = element;
     while (current) {
       if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") return false;
-      const style = String(current.getAttribute("style") || "").replace(/\s+/g, "").toLocaleLowerCase("en-US");
+      const inlineStyle = current.getAttribute("style");
+      const style = inlineStyle ? inlineStyle.replace(/\s+/g, "").toLocaleLowerCase("en-US") : "";
       if (/(?:^|;)display:none(?:;|$)|(?:^|;)visibility:hidden(?:;|$)/.test(style)) return false;
       current = current.parentElement;
     }

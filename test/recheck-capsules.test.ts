@@ -67,7 +67,7 @@ async function savePassingReplayCapsule(
     diagnostic,
     trigger: "diagnostic_failed",
     observerVersion: TARGET_OBSERVER_VERSION,
-    addAdapterVersion: "target-add-v8",
+    addAdapterVersion: "target-add-v9",
     packVersion: TARGET_SELECTOR_PACK_VERSION,
     extensionVersion: "1.20.0",
     capturedAt: new Date(now).toISOString(),

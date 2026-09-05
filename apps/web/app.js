@@ -3774,7 +3774,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_TARGET_ADD_V8"
+          confirmation: "ENABLE_TARGET_ADD_V9"
         })
       });
       await refresh();
@@ -3801,7 +3801,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_WALMART_ADD_V8"
+          confirmation: "ENABLE_WALMART_ADD_V9"
         })
       });
       await refresh();
@@ -3828,7 +3828,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_AMAZON_ADD_V9"
+          confirmation: "ENABLE_AMAZON_ADD_V10"
         })
       });
       await refresh();
@@ -3855,7 +3855,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_BESTBUY_ADD_V11"
+          confirmation: "ENABLE_BESTBUY_ADD_V15"
         })
       });
       await refresh();

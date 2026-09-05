@@ -95,3 +95,14 @@ test("the fifth-store dry-run receipt stays within eight changed files", () => {
   assert.ok(paths.some((path) => path === "apps/extension/src/pokemoncenter-action.ts"));
   assert.equal(paths.filter((path) => path?.includes("test/fixtures/capsules/pokemoncenter/")).length, 6);
 });
+
+test("admin activation submits the confirmation required by each current lane", () => {
+  const admin = readFileSync(join(root, "apps/web/app.js"), "utf8");
+  for (const retailerId of ADD_LANE_IDS) {
+    const request = admin.match(new RegExp(
+      `api\\("/api/v1/admin/qualifications/${retailerId}-add/activate", \\{([\\s\\S]*?)\\n      \\}\\);`
+    ));
+    assert.ok(request, `${retailerId} activation request`);
+    assert.equal(request[1]?.match(/confirmation: "([^"]+)"/)?.[1], ADD_LANES[retailerId].activationConfirmation);
+  }
+});
