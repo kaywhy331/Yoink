@@ -7,6 +7,7 @@ import {
   ADD_LANE_IDS,
   addLane,
   RETAILER_OBSERVER_VERSIONS,
+  RETAILER_SELECTOR_PACK_VERSIONS,
   JOB_STATES,
   type AddLaneId,
   type CommunityConsentUpdateInput,
@@ -98,7 +99,7 @@ import {
 import { CatalogIdentityGovernanceRepository } from "../../../packages/database/src/catalog-identity-governance-repository.js";
 import { AttributionRepository } from "../../../packages/database/src/attribution-repository.js";
 import { BackgroundTaskRepository } from "../../../packages/database/src/background-task-repository.js";
-import { AdapterDiagnosticRepository } from "../../../packages/database/src/adapter-diagnostic-repository.js";
+import { AdapterDiagnosticRepository, AdapterDiagnosticValidationError } from "../../../packages/database/src/adapter-diagnostic-repository.js";
 import {
   EvidenceCapsuleStore,
   EvidenceCapsuleStoreError
@@ -252,7 +253,7 @@ import {
   type ObserverRecipeWitnessPublisher
 } from "../../../packages/observer-registry/src/witness.js";
 import { resolveExtensionRelease } from "./extension-release.js";
-import { ApiError, apiErrorPayload } from "./api-error.js";
+import { ApiError, apiErrorLogLine, apiErrorPayload } from "./api-error.js";
 import { operationalRouteKey, resolveApiRoutePolicy } from "./api-route-policy.js";
 import { presentShopperPurchaseIntent } from "./purchase-intent-presentation.js";
 import {
@@ -1131,7 +1132,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           observerRecipeWitnessState: String(witness.state ?? "disabled"),
           observerRecipeWitnessHealthy: witness.healthy === true,
           localEvidenceCapsules: !hosted && evidenceCapsules.enabled(),
-          evidenceCapsuleTransport: hosted ? "none" : "loopback"
+          evidenceCapsuleTransport: hosted ? "none" : "loopback",
+          // The versions this app expects from a companion. A local
+          // development companion compares them with its own bundle and
+          // reloads itself once when they differ.
+          packagedVersions: {
+            extension: version,
+            observer: RETAILER_OBSERVER_VERSIONS,
+            add: ADD_ADAPTER_VERSIONS,
+            pack: RETAILER_SELECTOR_PACK_VERSIONS
+          }
         });
         return;
       }
@@ -1919,8 +1929,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               return { diagnostic, alertReconciliation };
             });
           } catch (error) {
-            if (error instanceof Error
-              && error.message === "The adapter diagnostic contains an unsupported field.") {
+            if (error instanceof AdapterDiagnosticValidationError) {
               throw new ApiError("request_rejected", 400, error.message);
             }
             throw error;
@@ -4245,6 +4254,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     } catch (error) {
       const problem = apiErrorPayload(error, correlationId);
       telemetryErrorCode = problem.payload.error;
+      let rejectedPathname = "/";
+      try { rejectedPathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname; } catch { rejectedPathname = "/"; }
+      if (problem.status >= 500 || (problem.status >= 400 && rejectedPathname.startsWith("/api/v1/devices/self/"))) {
+        process.stderr.write(apiErrorLogLine(problem, error, String(request.method ?? ""), rejectedPathname));
+      }
       json(response, problem.status, problem.payload);
     }
   });

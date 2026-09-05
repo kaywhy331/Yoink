@@ -67,6 +67,14 @@ const WARM_CART_BASELINE_WAIT_MAX_MS = 350;
 const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
 const WARM_READINESS_LANES_PER_CYCLE = 2;
 const AUTO_REVERIFICATION_PERIOD_MINUTES = 6 * 60;
+// While any lane still needs evidence the loop wakes hourly; the per-lane
+// backoffs below keep an individual store from being reopened faster than
+// its last outcome allows. Healthy lanes fall back to the six-hour period.
+const AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES = 60;
+// The first run after install, update, or browser start waits only long
+// enough for the control-plane heartbeat to settle.
+const AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES = 2;
+const LOCAL_RELOAD_SIGNATURE_KEY = "yoinkLocalReloadSignatureV1";
 const AUTO_REVERIFICATION_COOLDOWN_MS = 24 * 60 * 60_000;
 // Automatic store checks back off per lane: a passing lane may be rechecked
 // after 30 minutes, a lane that keeps failing waits 1 h, 4 h, 12 h, then 24 h,
@@ -2836,11 +2844,56 @@ async function showBadge(state) {
     : state.paired ? `Yoink ${state.version || ""} paired` : "Yoink is ready; pairing required" });
 }
 
+function packagedVersionSignature(versions) {
+  if (!versions || typeof versions !== "object") return "";
+  const parts = [String(versions.extension || "")];
+  for (const group of ["observer", "add", "pack"]) {
+    const map = versions[group] && typeof versions[group] === "object" ? versions[group] : {};
+    for (const key of Object.keys(map).sort()) parts.push(`${group}:${key}=${String(map[key] || "")}`);
+  }
+  return parts.join("|");
+}
+
+function installedVersionSignature() {
+  return packagedVersionSignature({
+    extension: EXTENSION_VERSION,
+    observer: ADAPTER_VERSIONS.observer,
+    add: ADAPTER_VERSIONS.add,
+    pack: ADAPTER_VERSIONS.pack
+  });
+}
+
+// A local development install loads straight from the source directory. When
+// the app reports packaged versions this worker does not have, the files on
+// disk have already changed; one reload picks them up without a visit to
+// chrome://extensions. Each version signature reloads at most once, so an
+// install whose files did not change cannot loop. Managed installs never
+// self-reload.
+async function maybeReloadForLocalUpdate(health) {
+  if (RUNTIME_CONFIG.profile !== "local" || typeof chrome.runtime?.reload !== "function") return false;
+  const expected = packagedVersionSignature(health?.packagedVersions);
+  if (!expected || expected === installedVersionSignature()) return false;
+  let installType = "";
+  try {
+    installType = String((await chrome.management?.getSelf?.())?.installType || "");
+  } catch {
+    installType = "";
+  }
+  if (installType !== "development") return false;
+  if (automaticReverificationPromise || retailerReverificationPromise || evidenceCapsuleDrainPromise) return false;
+  const stored = (await chrome.storage.local.get(LOCAL_RELOAD_SIGNATURE_KEY))[LOCAL_RELOAD_SIGNATURE_KEY];
+  if (stored === expected) return false;
+  await chrome.storage.local.set({ [LOCAL_RELOAD_SIGNATURE_KEY]: expected });
+  chrome.runtime.reload();
+  return true;
+}
+
 async function checkHealth() {
   let state;
   try {
     const health = await request("/health");
     if (health?.status !== "ready") throw new Error("not_ready");
+    void maybeReloadForLocalUpdate(health).catch(() => false);
     let device = await storedDevice();
     if (device?.pendingCredential) device = await maintainDeviceCredential(device);
     let controlPlane = null;
@@ -4480,6 +4533,45 @@ function runRetailerReverification(retailerIds = [], metadata = {}) {
   return retailerReverificationPromise;
 }
 
+function automaticCheckPeriodMinutes(plan) {
+  const attention = Array.isArray(plan?.lanes)
+    && plan.lanes.some((lane) => lane?.automaticCheckNeeded === true && !lane?.blockedReason);
+  return attention ? AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES : AUTO_REVERIFICATION_PERIOD_MINUTES;
+}
+
+async function scheduleAutomaticReverification(plan) {
+  const periodInMinutes = automaticCheckPeriodMinutes(plan);
+  try {
+    await chrome.alarms.create(AUTO_REVERIFICATION_ALARM, { delayInMinutes: periodInMinutes, periodInMinutes });
+  } catch {
+    // The alarm registered at startup keeps its period.
+  }
+  return periodInMinutes;
+}
+
+// A held decision is still a decision. Recording it means an empty run
+// history proves the loop is not firing, instead of hiding behind "nothing
+// needed checking".
+async function postAutomaticDecisionReceipts(lanes, reasonCode, planSignature) {
+  const device = await storedDevice();
+  if (!device?.token || !lanes.length) return 0;
+  const now = new Date().toISOString();
+  const run = { runId: newReverificationRunId(), automatic: true, trigger: "scheduled", planSignature };
+  let posted = 0;
+  for (const lane of lanes) {
+    const receipt = await postReverificationRunReceipt(device, run, {
+      retailerId: lane.retailerId,
+      retailerSku: "",
+      outcome: "skipped",
+      reasonCode,
+      attemptedProductCount: 0,
+      passedProductCount: 0
+    }, now);
+    if (receipt) posted += 1;
+  }
+  return posted;
+}
+
 function runAutomaticReverification(force = false, trigger = "") {
   if (automaticReverificationPromise) return automaticReverificationPromise;
   automaticReverificationPromise = (async () => {
@@ -4491,15 +4583,24 @@ function runAutomaticReverification(force = false, trigger = "") {
     const now = Date.now();
     const planChanged = stored?.planSignature !== planSignature;
     const needed = plan.lanes.filter((lane) => lane.automaticCheckNeeded && !lane.blockedReason && lane.candidates.length > 0);
-    if (!needed.length) return { settings, started: false, reason: "no_store_checks_needed", plan };
+    if (!needed.length) {
+      await scheduleAutomaticReverification(plan);
+      return { settings, started: false, reason: "no_store_checks_needed", plan };
+    }
     const lastRunAt = new Date(String(stored?.lastRunAt || "")).getTime();
     const eligible = force || planChanged || !Number.isFinite(lastRunAt)
       ? needed
       : needed.filter((lane) => now - lastRunAt >= laneBackoffMs(stored, lane.retailerId));
-    if (!eligible.length) return { settings, started: false, reason: "automatic_check_cooldown", state: stored, plan };
+    if (!eligible.length) {
+      await scheduleAutomaticReverification(plan);
+      await postAutomaticDecisionReceipts(needed, "automatic_check_cooldown", planSignature);
+      return { settings, started: false, reason: "automatic_check_cooldown", state: stored, plan };
+    }
     const today = new Date(now).toISOString().slice(0, 10);
     const runsToday = stored?.automaticRunsToday?.day === today ? stored.automaticRunsToday.count : 0;
     if (!force && runsToday >= AUTO_REVERIFICATION_DAILY_CAP) {
+      await scheduleAutomaticReverification(plan);
+      await postAutomaticDecisionReceipts(eligible, "automatic_check_daily_cap", planSignature);
       return { settings, started: false, reason: "automatic_check_daily_cap", state: stored, plan };
     }
     const runTrigger = REVERIFICATION_TRIGGERS.has(trigger) ? trigger
@@ -4510,6 +4611,7 @@ function runAutomaticReverification(force = false, trigger = "") {
       planSignature,
       plan
     });
+    await scheduleAutomaticReverification(result.plan || plan);
     return { settings, started: true, reason: result.state, ...result };
   })().finally(() => { automaticReverificationPromise = null; });
   return automaticReverificationPromise;
@@ -7248,7 +7350,8 @@ async function initialize() {
   await chrome.alarms.create(JOB_ALARM, { periodInMinutes: 0.5 });
   await chrome.alarms.create(WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 });
   await chrome.alarms.create(AUTO_REVERIFICATION_ALARM, {
-    periodInMinutes: AUTO_REVERIFICATION_PERIOD_MINUTES
+    delayInMinutes: AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES,
+    periodInMinutes: AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES
   });
   await ensureContextMenus();
   const health = await checkHealth();

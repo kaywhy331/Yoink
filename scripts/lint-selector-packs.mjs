@@ -92,8 +92,13 @@ export function lintSelectorPacks({ writeLock = false, packRoot = PACK_ROOT } = 
   return next;
 }
 
+function packRootArgument(argv) {
+  const index = argv.indexOf("--pack-root");
+  return index >= 0 && argv[index + 1] ? resolve(argv[index + 1]) : PACK_ROOT;
+}
+
 try {
-  lintSelectorPacks({ writeLock: process.argv.includes("--write-lock") });
+  lintSelectorPacks({ writeLock: process.argv.includes("--write-lock"), packRoot: packRootArgument(process.argv) });
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;

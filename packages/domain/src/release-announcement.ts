@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-22-0-local-adapter-repair-loop",
-  version: "1.22.0",
-  publishedAt: "2026-09-04T21:30:00.000Z",
-  title: "Store fixes stay local and verifiable",
-  summary: "Failed store checks can now leave a private local capture, reproduce offline, and return through a measured repair and renewal path.",
+  id: "yoink-1-22-1-store-checks-run-on-their-own",
+  version: "1.22.1",
+  publishedAt: "2026-09-05T02:30:00.000Z",
+  title: "Store checks run on their own",
+  summary: "Target checks work again, automatic store checks start within minutes and run hourly while a store needs attention, and Check stores now starts one on demand.",
   highlights: [
-    "Sanitized page captures and selector traces stay in the Chrome companion and can be reviewed or deleted from local settings.",
-    "Promoted captures replay against source and packaged adapters, while versioned selector packs catch stale releases before packaging.",
-    "Repair groups now distinguish store state from adapter defects, recheck automatically, and show when a fix still needs live confirmation."
+    "Target product pages record their store checks again; a rejected check now says why instead of failing silently.",
+    "Automatic store checks begin two minutes after the companion starts, wake hourly while any store needs evidence, and record every held decision.",
+    "Check stores now in the companion menu runs the store checks immediately, and closed repair groups say whether the fix was re-checked or the item only changed state."
   ],
   docsUrl: "/docs"
 });

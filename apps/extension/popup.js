@@ -253,6 +253,7 @@ function render() {
   $("#shareEvidence").hidden = !view.menu.shareEvidence;
   $("#saveRepairPage").hidden = !view.menu.saveRepairPage;
   $("#checkUpdate").hidden = !view.menu.checkUpdates;
+  $("#checkStoresNow").hidden = !view.menu.checkStoresNow;
   $("#cartReadySound").setAttribute("aria-checked", String(ui.cartReadySoundEnabled));
   $("#cartReadySound").querySelector(".menu-check").textContent = ui.cartReadySoundEnabled ? "On" : "Off";
   $("#syncProducts").disabled = activity?.id === "sync";
@@ -399,6 +400,33 @@ async function reconnectTrackalacker() {
     ui.health = response.state;
     showToast("TrackaLacker connected.");
     announce("TrackaLacker connected.");
+  } catch (error) {
+    showToast(errorMessage(error), true);
+  } finally {
+    setOperation("idle");
+  }
+}
+
+async function checkStoresNow() {
+  setOperation("checking_stores");
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "yoink:run-auto-reverification" });
+    if (!response?.ok) throw new Error(response?.message || "Store checks could not start.");
+    if (response.started) {
+      const results = Array.isArray(response.results) ? response.results : [];
+      const passed = results.filter((result) => result?.outcome === "passed").length;
+      showToast(results.length
+        ? `Store checks finished: ${passed} of ${results.length} store${results.length === 1 ? "" : "s"} passed.`
+        : "Store checks finished.");
+    } else if (response.reason === "no_store_checks_needed") {
+      showToast("Every store already has current checks.");
+    } else if (response.reason === "automatic_checks_disabled") {
+      showToast("Automatic store checks are turned off in extension settings.", true);
+    } else {
+      showToast("Store checks are waiting for their next window.");
+    }
+    await refreshHealth();
+    render();
   } catch (error) {
     showToast(errorMessage(error), true);
   } finally {
@@ -698,6 +726,7 @@ function bindEvents() {
   $("#extensionSettings").addEventListener("click", () => { void openExtensionSettings(); });
   $("#syncProducts").addEventListener("click", () => { void syncProducts(); });
   $("#checkUpdate").addEventListener("click", () => { closePanels(false); void updateCompanion(); });
+  $("#checkStoresNow").addEventListener("click", () => { closePanels(false); void checkStoresNow(); });
   $("#cartReadySound").addEventListener("click", async () => {
     ui.cartReadySoundEnabled = !ui.cartReadySoundEnabled;
     await chrome.storage.local.set({ [CART_READY_SOUND_KEY]: ui.cartReadySoundEnabled });

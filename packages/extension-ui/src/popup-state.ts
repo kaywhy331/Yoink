@@ -209,6 +209,7 @@ export type PopupActionId =
   | "confirm_share_evidence";
 export type PopupOperationStage =
   | "idle"
+  | "checking_stores"
   | "requesting_access"
   | "inspecting"
   | "qualifying"
@@ -641,6 +642,7 @@ export interface PopupViewModel {
     shareEvidence: boolean;
     saveRepairPage: boolean;
     checkUpdates: boolean;
+    checkStoresNow: boolean;
   };
 }
 
@@ -678,6 +680,7 @@ function operationLabel(action: PopupActionId, stage: PopupOperationStage): stri
   if (stage === "reconnecting") return "Reconnecting…";
   if (stage === "opening_cart") return action === "open_purchase" ? "Opening Walmart…" : "Opening cart…";
   if (stage === "updating") return "Checking update…";
+  if (stage === "checking_stores") return "Checking stores…";
   if (stage === "sharing") return "Sharing…";
   if (stage === "saving") return "Saving…";
   return null;
@@ -1027,7 +1030,8 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       shareEvidence: hardBlocker === null && input.page.kind === "product" && sharingRetailers.has(input.page.retailerId),
       saveRepairPage: !input.production && hardBlocker === null && input.page.kind === "product"
         && health.localEvidenceCapsules === true && health.evidenceCapsuleTransport === "loopback",
-      checkUpdates: !input.production && health.connected === true
+      checkUpdates: !input.production && health.connected === true,
+      checkStoresNow: health.connected === true && health.paired === true
     }
   };
 }

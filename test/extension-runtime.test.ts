@@ -768,6 +768,7 @@ function harness(options: HarnessOptions = {}) {
     storage.yoinkAdapterDiagnosticQueueV1 = options.queuedAdapterDiagnostics;
   }
   const fetchCalls: Array<{ url: string; options: Record<string, unknown> }> = [];
+  const alarmCreations: Array<Record<string, unknown>> = [];
   const injections: Array<Record<string, unknown>> = [];
   const jobStates: string[] = [];
   const shownNotifications: Array<{ id: string; options: Record<string, unknown> }> = [];
@@ -1564,7 +1565,7 @@ function harness(options: HarnessOptions = {}) {
       onCommand: { addListener: (listener: typeof commandListener) => { commandListener = listener; } }
     },
     alarms: {
-      create: async () => undefined,
+      create: async (name: string, info: Record<string, unknown>) => { alarmCreations.push({ name, ...info }); },
       onAlarm: { addListener: (listener: typeof alarmListener) => { alarmListener = listener; } }
     },
     notifications: {
@@ -2166,6 +2167,7 @@ function harness(options: HarnessOptions = {}) {
   return {
     send,
     fetchCalls,
+    alarmCreations,
     injections,
     storage,
     jobStates,
@@ -5288,8 +5290,13 @@ test("opt-in automatic requalification checks only needed saved products and res
 
   const receiptCount = () => runtime.fetchCalls.filter((entry) =>
     entry.url.endsWith("/devices/self/readiness/reverification-runs")).length;
+  // The passing run posts one receipt; the alarm tick that lands inside the
+  // pass backoff posts a second, skipped receipt for the held lane.
   const firstReceipts = receiptCount();
-  assert.equal(firstReceipts, 1);
+  assert.equal(firstReceipts, 2);
+  const heldTick = receiptBodies(runtime).at(-1);
+  assert.equal(heldTick?.outcome, "skipped");
+  assert.equal(heldTick?.reasonCode, "automatic_check_cooldown");
   const firstReceipt = JSON.parse(String(runtime.fetchCalls.find((entry) =>
     entry.url.endsWith("/devices/self/readiness/reverification-runs"))?.options.body)) as Record<string, unknown>;
   assert.equal(firstReceipt.outcome, "passed");
@@ -5395,14 +5402,21 @@ test("a blocked automatic check backs off on the next tick and only a trigger ch
   const held = await runtime.invokeBackground("runAutomaticReverification(false)") as Record<string, unknown>;
   assert.equal(held.started, false);
   assert.equal(held.reason, "automatic_check_cooldown");
-  assert.equal(receiptBodies(runtime).length, 1);
+  // A held decision is recorded too, so an empty run history means the loop
+  // is not firing rather than that nothing needed checking.
+  const heldReceipts = receiptBodies(runtime);
+  assert.equal(heldReceipts.length, 2);
+  assert.equal(heldReceipts[1]?.outcome, "skipped");
+  assert.equal(heldReceipts[1]?.reasonCode, "automatic_check_cooldown");
+  assert.equal(heldReceipts[1]?.attemptedProductCount, 0);
+  assert.equal(heldReceipts[1]?.automatic, true);
 
   // A lane status change is trigger material and restarts the check at once.
   (reverificationPlan.lanes[0]!.qualification as Record<string, unknown>).warning = "expired";
   const restarted = await runtime.invokeBackground("runAutomaticReverification(false)") as Record<string, unknown>;
   assert.equal(restarted.started, true);
-  assert.equal(receiptBodies(runtime).length, 2);
-  assert.equal(receiptBodies(runtime)[1]?.trigger, "plan_changed");
+  assert.equal(receiptBodies(runtime).length, 3);
+  assert.equal(receiptBodies(runtime)[2]?.trigger, "plan_changed");
   assert.deepEqual(
     JSON.parse(JSON.stringify((runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown>).consecutiveNonPassingRuns)),
     { target: 2 }
@@ -5956,4 +5970,45 @@ test("local deletion succeeds without pairing and does not invent a remote recei
   assert.deepEqual(Object.keys(runtime.storage), []);
   assert.equal(runtime.fetchCalls.some((entry) =>
     entry.url.endsWith("/devices/self/privacy/local-deletion")), false);
+});
+
+test("the store-check alarm wakes hourly while a lane needs evidence and six-hourly once lanes are current", async () => {
+  const reverificationPlan = targetReverificationPlan();
+  const runtime = harness({ permission: true, tabNeverLoads: true, reverificationPlan });
+  await runtime.invokeBackground("REVERIFICATION_TAB_WAIT_MS = 40");
+  const alarms = () => runtime.alarmCreations.filter((alarm) => alarm.name === "yoink-auto-reverification");
+  await runtime.invokeBackground("initialize()");
+  assert.deepEqual(alarms().at(-1), { name: "yoink-auto-reverification", delayInMinutes: 2, periodInMinutes: 60 },
+    "the first run waits two minutes instead of a full period");
+  await runtime.send({ type: "yoink:set-auto-reverification", enabled: true });
+  await waitFor(() => ["partial", "complete"].includes(String(
+    (runtime.storage.yoinkRetailerReverificationStateV1 as Record<string, unknown> | undefined)?.state)),
+  "The automatic check did not finish.");
+  assert.deepEqual(alarms().at(-1), { name: "yoink-auto-reverification", delayInMinutes: 60, periodInMinutes: 60 },
+    "a lane that still needs evidence keeps the hourly cadence");
+  reverificationPlan.lanes[0]!.automaticCheckNeeded = false;
+  const idle = await runtime.invokeBackground("runAutomaticReverification(false)") as Record<string, unknown>;
+  assert.equal(idle.started, false);
+  assert.equal(idle.reason, "no_store_checks_needed");
+  assert.deepEqual(alarms().at(-1), { name: "yoink-auto-reverification", delayInMinutes: 360, periodInMinutes: 360 },
+    "current lanes fall back to the six-hour period");
+});
+
+test("a local development companion reloads itself once when the app reports newer packaged versions", async () => {
+  const runtime = harness({ permission: true });
+  const reloads: number[] = [];
+  await runtime.invokeBackground(`chrome.runtime.reload = () => { globalThis.__yoinkReloads = (globalThis.__yoinkReloads || 0) + 1; };
+    chrome.management = { getSelf: async () => ({ installType: "development" }) };`);
+  const current = await runtime.invokeBackground("installedVersionSignature()") as string;
+  assert.match(current, /^\d+\.\d+\.\d+\|observer:/);
+  const sameVersions = await runtime.invokeBackground(
+    "maybeReloadForLocalUpdate({ packagedVersions: { extension: EXTENSION_VERSION, observer: ADAPTER_VERSIONS.observer, add: ADAPTER_VERSIONS.add, pack: ADAPTER_VERSIONS.pack } })"
+  );
+  assert.equal(sameVersions, false, "matching versions never reload");
+  const newer = "maybeReloadForLocalUpdate({ packagedVersions: { extension: EXTENSION_VERSION, observer: ADAPTER_VERSIONS.observer, add: ADAPTER_VERSIONS.add, pack: { ...ADAPTER_VERSIONS.pack, target: 'target-pack-v99' } } })";
+  assert.equal(await runtime.invokeBackground(newer), true, "a newer pack reloads the unpacked companion");
+  assert.equal(await runtime.invokeBackground(newer), false, "the same signature never reloads twice");
+  reloads.push(Number(await runtime.invokeBackground("globalThis.__yoinkReloads || 0")));
+  assert.deepEqual(reloads, [1]);
+  assert.equal(runtime.storage.yoinkLocalReloadSignatureV1 !== undefined, true);
 });

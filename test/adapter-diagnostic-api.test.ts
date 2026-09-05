@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
-import { AMAZON_OBSERVER_VERSION, type RetailerAdapterDiagnosticInput } from "../packages/contracts/src/index.js";
+import { AMAZON_OBSERVER_VERSION, RETAILER_OBSERVER_VERSIONS, type RetailerAdapterDiagnosticInput } from "../packages/contracts/src/index.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 
 function diagnostic(outcome: "failed" | "passed" = "failed"): RetailerAdapterDiagnosticInput {
@@ -297,6 +297,99 @@ test("store re-verification run receipts land on the readiness plan through the 
       body: JSON.stringify({ ...receipt, runId: "run_target_api_0002", passedProductCount: 3 })
     });
     assert.equal(invalid.status, 400);
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});
+
+test("an invalid diagnostic is a 400 with its reason, and Target identity counts are accepted", async () => {
+  const db = new YoinkDatabase();
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const extensionOrigin = `chrome-extension://${"d".repeat(32)}`;
+  try {
+    const pairing = await fetch(`${baseUrl}/api/v1/devices/pairing-code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: "{}"
+    }).then((response) => response.json()) as { pairing: { code: string } };
+    const paired = await fetch(`${baseUrl}/api/v1/devices/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: extensionOrigin },
+      body: JSON.stringify({ pairingCode: pairing.pairing.code })
+    }).then((response) => response.json()) as { device: { token: string } };
+    const headers = {
+      "Content-Type": "application/json",
+      Origin: extensionOrigin,
+      Authorization: `Bearer ${paired.device.token}`
+    };
+    const inconsistent = diagnostic("passed");
+    inconsistent.layout = { ...inconsistent.layout, canonicalOfferDistinctCount: 5 };
+    const rejected = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/amazon`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(inconsistent)
+    });
+    assert.equal(rejected.status, 400);
+    const rejectedBody = await rejected.json() as { error: string; message: string };
+    assert.equal(rejectedBody.error, "request_rejected");
+    assert.match(rejectedBody.message, /inconsistent/);
+
+    const target = diagnostic("passed");
+    const targetPayload = {
+      ...target,
+      retailerId: "target",
+      retailerSku: "95280894",
+      adapterVersion: RETAILER_OBSERVER_VERSIONS.target,
+      packVersion: "target-pack-v1",
+      layout: {
+        ...target.layout,
+        scopeKind: "buybox",
+        genericAddIntentCount: 0,
+        explicitSkuInputCount: 0,
+        exactSkuInputCount: 0,
+        variationSkuCount: 4,
+        canonicalOfferInputCount: 0,
+        canonicalOfferDistinctCount: 0,
+        alternateOfferInputCount: 0,
+        alternateOfferDistinctCount: 0
+      }
+    };
+    const accepted = await fetch(`${baseUrl}/api/v1/devices/self/adapter-diagnostics/target`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(targetPayload)
+    });
+    assert.equal(accepted.status, 201);
+    const acceptedBody = await accepted.json() as { diagnostic: { layout: { variationSkuCount: number } } };
+    assert.equal(acceptedBody.diagnostic.layout.variationSkuCount, 0);
+  } finally {
+    server.close();
+    await once(server, "close");
+    db.close();
+  }
+});
+
+test("health reports the packaged versions a companion must match", async () => {
+  const db = new YoinkDatabase();
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "9.9.9-test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address() as AddressInfo;
+  try {
+    const health = await fetch(`http://127.0.0.1:${address.port}/api/v1/health`).then((response) => response.json()) as {
+      packagedVersions: { extension: string; observer: Record<string, string>; add: Record<string, string>; pack: Record<string, string> };
+    };
+    assert.equal(health.packagedVersions.extension, "9.9.9-test");
+    assert.equal(health.packagedVersions.observer.target, RETAILER_OBSERVER_VERSIONS.target);
+    assert.match(String(health.packagedVersions.add.target), /^target-add-v\d+$/);
+    assert.match(String(health.packagedVersions.pack.walmart), /^walmart-pack-v\d+$/);
+    assert.equal(Object.keys(health.packagedVersions.add).sort().join(","), "amazon,bestbuy,target,walmart");
   } finally {
     server.close();
     await once(server, "close");

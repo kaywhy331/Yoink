@@ -1055,6 +1055,7 @@ var YoinkPopupStateModule = (() => {
     if (stage === "reconnecting") return "Reconnecting\u2026";
     if (stage === "opening_cart") return action === "open_purchase" ? "Opening Walmart\u2026" : "Opening cart\u2026";
     if (stage === "updating") return "Checking update\u2026";
+    if (stage === "checking_stores") return "Checking stores\u2026";
     if (stage === "sharing") return "Sharing\u2026";
     if (stage === "saving") return "Saving\u2026";
     return null;
@@ -1349,7 +1350,8 @@ var YoinkPopupStateModule = (() => {
         syncProducts: health.connected === true && health.paired === true,
         shareEvidence: hardBlocker === null && input.page.kind === "product" && sharingRetailers.has(input.page.retailerId),
         saveRepairPage: !input.production && hardBlocker === null && input.page.kind === "product" && health.localEvidenceCapsules === true && health.evidenceCapsuleTransport === "loopback",
-        checkUpdates: !input.production && health.connected === true
+        checkUpdates: !input.production && health.connected === true,
+        checkStoresNow: health.connected === true && health.paired === true
       }
     };
   }

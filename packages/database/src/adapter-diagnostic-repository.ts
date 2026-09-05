@@ -246,6 +246,15 @@ export interface AdapterRepairQueueItem {
   lastRecoveryAt: string;
   layout: RetailerAdapterLayoutEvidence;
   repairSuggestions: AdapterRepairSuggestion[];
+  /**
+   * How a non-open group left the queue: a current pass on the same product
+   * ("passed"), a product-state change such as a restock or sell-out that
+   * says nothing about the adapter ("listing_state"), a newer release with
+   * no evidence yet ("release"), or nothing ("").
+   */
+  recoveryKind: "passed" | "listing_state" | "release" | "";
+  /** True once the packaged version has passed on this exact layout after the last failure. */
+  currentVersionVerified: boolean;
 }
 
 export interface AdapterRepairSuggestion {
@@ -261,26 +270,33 @@ export interface AdapterRepairSuggestion {
   executable: false;
 }
 
+export class AdapterDiagnosticValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AdapterDiagnosticValidationError";
+  }
+}
+
 function boundedCount(value: unknown, field: string): number {
   const count = Number(value);
-  if (!Number.isInteger(count) || count < 0 || count > 50) throw new Error(`Adapter diagnostic ${field} must be an integer from 0 through 50.`);
+  if (!Number.isInteger(count) || count < 0 || count > 50) throw new AdapterDiagnosticValidationError(`Adapter diagnostic ${field} must be an integer from 0 through 50.`);
   return count;
 }
 
 function requiredBoolean(value: unknown, field: string): boolean {
-  if (typeof value !== "boolean") throw new Error(`Adapter diagnostic ${field} must be boolean.`);
+  if (typeof value !== "boolean") throw new AdapterDiagnosticValidationError(`Adapter diagnostic ${field} must be boolean.`);
   return value;
 }
 
 function normalizeRepairLandmarks(value: unknown): RetailerAdapterRepairLandmark[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 5) {
-    throw new Error("Adapter diagnostic repair landmarks must be a bounded list.");
+    throw new AdapterDiagnosticValidationError("Adapter diagnostic repair landmarks must be a bounded list.");
   }
   const seen = new Set<string>();
   return value.map((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new Error("Adapter diagnostic repair landmarks are invalid.");
+      throw new AdapterDiagnosticValidationError("Adapter diagnostic repair landmarks are invalid.");
     }
     const input = item as Record<string, unknown>;
     const field = input.field as ObserverRecipeField;
@@ -298,10 +314,10 @@ function normalizeRepairLandmarks(value: unknown): RetailerAdapterRepairLandmark
       || !landmarkValue.split(/[_.:-]+/).filter(Boolean)
         .every((token) => REPAIR_LANDMARK_TOKENS.has(token.toLocaleLowerCase("en-US")))
       || /\d{4,}|[a-f0-9]{12,}/i.test(landmarkValue)) {
-      throw new Error("Adapter diagnostic repair landmarks are not privacy bounded.");
+      throw new AdapterDiagnosticValidationError("Adapter diagnostic repair landmarks are not privacy bounded.");
     }
     const key = `${field}:${elementKind}:${attribute}:${landmarkValue}`;
-    if (seen.has(key)) throw new Error("Adapter diagnostic repair landmarks must be unique.");
+    if (seen.has(key)) throw new AdapterDiagnosticValidationError("Adapter diagnostic repair landmarks must be unique.");
     seen.add(key);
     return {
       field,
@@ -318,7 +334,7 @@ function repairSelector(landmark: RetailerAdapterRepairLandmark): string {
 }
 
 function normalizeLayout(value: unknown, retailerId: SupportedRetailerId): RetailerAdapterLayoutEvidence {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Adapter diagnostic layout evidence is required.");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new AdapterDiagnosticValidationError("Adapter diagnostic layout evidence is required.");
   const input = value as Record<string, unknown>;
   if (input.schemaVersion !== 1
     || !PAGE_KINDS.has(input.pageKind as RetailerAdapterLayoutEvidence["pageKind"])
@@ -326,7 +342,7 @@ function normalizeLayout(value: unknown, retailerId: SupportedRetailerId): Retai
     || !SELLER_SHAPES.has(input.sellerShape as RetailerAdapterLayoutEvidence["sellerShape"])
     || !FULFILLMENT_SHAPES.has(input.fulfillmentShape as RetailerAdapterLayoutEvidence["fulfillmentShape"])
     || !INTERACTIVE_BLOCKS.has(input.interactiveBlock as RetailerAdapterLayoutEvidence["interactiveBlock"])) {
-    throw new Error("Adapter diagnostic layout enums are invalid.");
+    throw new AdapterDiagnosticValidationError("Adapter diagnostic layout enums are invalid.");
   }
   const counts = Object.fromEntries(COUNT_FIELDS.map((field) => [field, boundedCount(input[field], field)])) as Record<(typeof COUNT_FIELDS)[number], number>;
   const genericAddIntentCount = boundedCount(input.genericAddIntentCount ?? 0, "genericAddIntentCount");
@@ -343,27 +359,33 @@ function normalizeLayout(value: unknown, retailerId: SupportedRetailerId): Retai
     || counts.canonicalOfferDistinctCount > counts.canonicalOfferInputCount
     || counts.alternateOfferDistinctCount > counts.alternateOfferInputCount
     || (counts.scopedControlCount > counts.addControlCount && !semanticControlBinding)) {
-    throw new Error("Adapter diagnostic layout counts are inconsistent.");
+    throw new AdapterDiagnosticValidationError("Adapter diagnostic layout counts are inconsistent.");
   }
-  if (retailerId !== "amazon" && (
-    counts.explicitSkuInputCount
-    || counts.exactSkuInputCount
-    || counts.variationSkuCount
-    || counts.canonicalOfferInputCount
-    || counts.canonicalOfferDistinctCount
-    || counts.alternateOfferInputCount
-    || counts.alternateOfferDistinctCount
-  )) throw new Error("Amazon-only layout fields must be empty for other retailers.");
+  if (retailerId !== "amazon") {
+    if (counts.explicitSkuInputCount
+      || counts.exactSkuInputCount
+      || counts.canonicalOfferInputCount
+      || counts.canonicalOfferDistinctCount
+      || counts.alternateOfferInputCount
+      || counts.alternateOfferDistinctCount) {
+      throw new AdapterDiagnosticValidationError("Amazon-only offer input fields must be empty for other retailers.");
+    }
+    // Non-Amazon observers bind product identity inside the adapter. A
+    // page-wide identity count is not layout evidence for them: it varies
+    // with how many product tiles a page rendered, so it would fragment
+    // repair groups, and it rejected every real Target diagnostic in 1.22.0.
+    counts.variationSkuCount = 0;
+  }
   if (repairLandmarks.length && (
     input.pageKind !== "product"
     || input.securityChallenge !== false
     || input.interactiveBlock !== ""
-  )) throw new Error("Adapter diagnostic repair landmarks require one unblocked selector-miss layout.");
+  )) throw new AdapterDiagnosticValidationError("Adapter diagnostic repair landmarks require one unblocked selector-miss layout.");
   for (const landmark of repairLandmarks) {
     const candidateCount = landmark.field === "addControl"
       ? genericAddIntentCount
       : repairCandidateCounts[REPAIR_COUNT_FIELDS[landmark.field]];
-    if (candidateCount < 1) throw new Error("Adapter diagnostic repair landmarks require matching bounded structural evidence.");
+    if (candidateCount < 1) throw new AdapterDiagnosticValidationError("Adapter diagnostic repair landmarks require matching bounded structural evidence.");
   }
   return {
     schemaVersion: 1,
@@ -448,48 +470,48 @@ export class AdapterDiagnosticRepository {
   constructor(private readonly db: YoinkDatabase) {}
 
   record(deviceId: string, input: RetailerAdapterDiagnosticInput, now = Date.now()): StoredRetailerAdapterDiagnostic {
-    if (!input || typeof input !== "object") throw new Error("A retailer adapter diagnostic is required.");
+    if (!input || typeof input !== "object") throw new AdapterDiagnosticValidationError("A retailer adapter diagnostic is required.");
     if (Object.keys(input).some((field) =>
       !DIAGNOSTIC_FIELDS.has(field) && !LEGACY_DISCARDED_DIAGNOSTIC_FIELDS.has(field))) {
-      throw new Error("The adapter diagnostic contains an unsupported field.");
+      throw new AdapterDiagnosticValidationError("The adapter diagnostic contains an unsupported field.");
     }
     const cleanDeviceId = cleanText(deviceId, 120);
     if (!this.db.get("SELECT id FROM extension_devices WHERE id = ? AND user_id = ? AND status = 'active'", cleanDeviceId, currentRequestScope().userId)) {
-      throw new Error("The paired Chrome device is unavailable.");
+      throw new AdapterDiagnosticValidationError("The paired Chrome device is unavailable.");
     }
-    if (!Object.hasOwn(SKU_PATTERNS, input.retailerId)) throw new Error("The adapter diagnostic retailer is unsupported.");
+    if (!Object.hasOwn(SKU_PATTERNS, input.retailerId)) throw new AdapterDiagnosticValidationError("The adapter diagnostic retailer is unsupported.");
     const retailerId = input.retailerId;
     const retailerSku = cleanText(input.retailerSku, 64).toUpperCase();
-    if (!SKU_PATTERNS[retailerId].test(retailerSku)) throw new Error("A valid exact retailer SKU is required for adapter diagnostics.");
+    if (!SKU_PATTERNS[retailerId].test(retailerSku)) throw new AdapterDiagnosticValidationError("A valid exact retailer SKU is required for adapter diagnostics.");
     if (input.contractVersion !== 1 || !OPERATIONS.has(input.operation) || !OUTCOMES.has(input.outcome) || !STAGES.has(input.failureStage)) {
-      throw new Error("The adapter diagnostic contract is unsupported.");
+      throw new AdapterDiagnosticValidationError("The adapter diagnostic contract is unsupported.");
     }
     const expectedVersion = input.operation === "observe" ? RETAILER_OBSERVER_VERSIONS[retailerId] : ADD_VERSIONS[retailerId];
-    if (!expectedVersion || input.adapterVersion !== expectedVersion) throw new Error("The adapter diagnostic version is unsupported.");
+    if (!expectedVersion || input.adapterVersion !== expectedVersion) throw new AdapterDiagnosticValidationError("The adapter diagnostic version is unsupported.");
     const packVersion = cleanText(input.packVersion, 40).toLocaleLowerCase("en-US");
     if (packVersion && !PACK_VERSION_PATTERN.test(packVersion)) {
-      throw new Error("The adapter diagnostic selector-pack version is invalid.");
+      throw new AdapterDiagnosticValidationError("The adapter diagnostic selector-pack version is invalid.");
     }
     if ((input.outcome === "passed") !== (input.failureStage === "complete")) {
-      throw new Error("Adapter diagnostic outcome and failure stage are inconsistent.");
+      throw new AdapterDiagnosticValidationError("Adapter diagnostic outcome and failure stage are inconsistent.");
     }
     const reasonCode = cleanText(input.reasonCode, 80).toLowerCase();
-    if (!REASON_CODES.has(reasonCode)) throw new Error("The adapter diagnostic reason code is not allowlisted.");
+    if (!REASON_CODES.has(reasonCode)) throw new AdapterDiagnosticValidationError("The adapter diagnostic reason code is not allowlisted.");
     if (REPAIR_SELECTOR_MISS_REASONS.has(reasonCode)
       && input.failureStage !== REPAIR_REASON_STAGES[reasonCode]) {
-      throw new Error("The adapter diagnostic selector-miss stage is inconsistent.");
+      throw new AdapterDiagnosticValidationError("The adapter diagnostic selector-miss stage is inconsistent.");
     }
     if (reasonCode === "product_page_unavailable"
       && (input.operation !== "observe" || input.outcome !== "rejected" || input.failureStage !== "page_identity")) {
-      throw new Error("An unavailable product page is a rejected read-only page-identity result.");
+      throw new AdapterDiagnosticValidationError("An unavailable product page is a rejected read-only page-identity result.");
     }
     const attemptCount = Number(input.attemptCount);
-    if (!Number.isInteger(attemptCount) || attemptCount < 1 || attemptCount > 3) throw new Error("Adapter diagnostic attempt count must be 1 through 3.");
-    if (input.outcome === "recovered" && attemptCount < 2) throw new Error("A recovered diagnostic requires a retry attempt.");
+    if (!Number.isInteger(attemptCount) || attemptCount < 1 || attemptCount > 3) throw new AdapterDiagnosticValidationError("Adapter diagnostic attempt count must be 1 through 3.");
+    if (input.outcome === "recovered" && attemptCount < 2) throw new AdapterDiagnosticValidationError("A recovered diagnostic requires a retry attempt.");
     const domChanged = requiredBoolean(input.domChanged, "domChanged");
     const observedTime = new Date(input.observedAt).getTime();
     if (!Number.isFinite(observedTime) || observedTime > now + MAX_CLOCK_SKEW_MS || now - observedTime > MAX_DIAGNOSTIC_AGE_MS) {
-      throw new Error("The adapter diagnostic is stale or has an invalid timestamp.");
+      throw new AdapterDiagnosticValidationError("The adapter diagnostic is stale or has an invalid timestamp.");
     }
     const observedAt = new Date(observedTime).toISOString();
     const layout = normalizeLayout(input.layout, retailerId);
@@ -499,12 +521,12 @@ export class AdapterDiagnosticRepository {
       || (input.outcome === "passed" && reasonCode === "semantic_layout_recovered")
     );
     if ((layout.repairLandmarks?.length ?? 0) > 0 && !repairEvidenceAllowed) {
-      throw new Error("Adapter diagnostic repair landmarks require one selector-miss or recovered observer result.");
+      throw new AdapterDiagnosticValidationError("Adapter diagnostic repair landmarks require one selector-miss or recovered observer result.");
     }
     const requiredRepairField = REPAIR_REASON_FIELDS[reasonCode];
     if (requiredRepairField && requiredRepairField !== "addControl"
       && !layout.repairLandmarks?.some((landmark) => landmark.field === requiredRepairField)) {
-      throw new Error("The adapter diagnostic selector miss lacks its matching bounded landmark.");
+      throw new AdapterDiagnosticValidationError("The adapter diagnostic selector miss lacks its matching bounded landmark.");
     }
     const layoutJson = JSON.stringify(layout);
     // scopedControlCount reflects the adapter's interpretation, not the page's
@@ -686,6 +708,16 @@ export class AdapterDiagnosticRepository {
         .map((row) => row.receivedAt)
         .reduce((value, candidate) => candidate > value ? candidate : value, lastRecoveryAt);
       const firstSeenAt = group.repairs.reduce((value, row) => value < row.receivedAt ? value : row.receivedAt, latestRepair.receivedAt);
+      const currentVersionVerified = Boolean(packagedVersion) && group.rows.some((row) =>
+        row.adapterVersion === packagedVersion
+        && (row.outcome === "passed" || row.outcome === "recovered")
+        && (lastFailureAt === "" || row.receivedAt > lastFailureAt));
+      const recoveryKind: AdapterRepairQueueItem["recoveryKind"] = open ? ""
+        : superseded ? "release"
+          : supersedingRows.some((row) => row.outcome === "passed") ? "passed"
+            : supersedingRows.length ? "listing_state"
+              : recoveries.some((row) => lastFailureAt === "" || row.receivedAt > lastFailureAt) ? "passed"
+                : "";
       queue.push({
         retailerId: latest.retailerId,
         operation: latest.operation,
@@ -710,7 +742,9 @@ export class AdapterDiagnosticRepository {
         lastFailureAt,
         lastRecoveryAt,
         layout: latestFailure.layout,
-        repairSuggestions: repairSuggestions(group.rows, open)
+        repairSuggestions: repairSuggestions(group.rows, open),
+        recoveryKind,
+        currentVersionVerified
       });
     }
     return queue

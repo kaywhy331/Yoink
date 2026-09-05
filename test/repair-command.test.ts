@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,7 +17,7 @@ import { YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { EvidenceCapsuleStore } from "../packages/database/src/evidence-capsule-store.js";
 // @ts-expect-error The repair CLI is intentionally an importable JavaScript command module.
-import { inspectRepair } from "../scripts/repair.mjs";
+import { applyRepair, inspectRepair } from "../scripts/repair.mjs";
 
 const SKU = "1011483414";
 const URL = `https://www.target.com/p/fixture/A-${SKU}`;
@@ -94,5 +94,102 @@ test("repair command names the failed pack field, candidate, and promotion comma
     assert.match(result.promoteCommand, /--expect-reason add_control_selector_miss/);
   } finally {
     rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("repair --apply proves a selector by replay before it stays in the pack, and restores the pack otherwise", async () => {
+  const dataDirectory = mkdtempSync(join(tmpdir(), "yoink-repair-apply-"));
+  const packRoot = mkdtempSync(join(tmpdir(), "yoink-repair-packs-"));
+  const databasePath = join(dataDirectory, "yoink.sqlite");
+  const now = Date.now();
+  let fingerprint = "";
+  try {
+    for (const name of readdirSync(join(process.cwd(), "packages", "browser-adapters", "packs"))) {
+      copyFileSync(join(process.cwd(), "packages", "browser-adapters", "packs", name), join(packRoot, name));
+    }
+    const db = new YoinkDatabase(databasePath);
+    const devices = new DeviceRepository(db);
+    const pairing = devices.createPairingCode(now - 2_000);
+    const device = devices.pair({ pairingCode: pairing.code }, now - 1_000);
+    const diagnostic: RetailerAdapterDiagnosticInput = {
+      contractVersion: 1,
+      observedAt: new Date(now).toISOString(),
+      retailerId: "target",
+      retailerSku: SKU,
+      adapterVersion: TARGET_OBSERVER_VERSION,
+      packVersion: TARGET_SELECTOR_PACK_VERSION,
+      operation: "observe",
+      outcome: "failed",
+      failureStage: "add_control",
+      reasonCode: "add_control_selector_miss",
+      attemptCount: 1,
+      domChanged: false,
+      layout: layout()
+    };
+    fingerprint = new AdapterDiagnosticRepository(db).record(device.id, diagnostic, now + 100).layoutFingerprint;
+    const dom = new JSDOM(readFileSync(join(process.cwd(), "test", "fixtures", "target", "product-selector-miss.html"), "utf8"), { url: URL });
+    const capsule = await captureEvidenceCapsule({
+      id: "cap_REPAIRAPPLY000000000000000001",
+      document: dom.window.document,
+      url: URL,
+      retailerId: "target",
+      retailerSku: SKU,
+      diagnostic,
+      trigger: "diagnostic_failed",
+      observerVersion: TARGET_OBSERVER_VERSION,
+      addAdapterVersion: "target-add-v8",
+      packVersion: TARGET_SELECTOR_PACK_VERSION,
+      extensionVersion: "1.22.0",
+      trace: [],
+      capturedAt: new Date(now).toISOString(),
+      environment: { isVisible: () => true }
+    });
+    new EvidenceCapsuleStore(dataDirectory).accept(capsule, new Date(now + 200).toISOString());
+    db.close();
+
+    const packBefore = readFileSync(join(packRoot, "target.json"), "utf8");
+    const calls: string[] = [];
+    const hooks = (replayStatus: number) => ({
+      regenerate: () => { calls.push("regenerate"); return { status: 0, output: "" }; },
+      replay: (capsuleId: string) => { calls.push(`replay:${capsuleId}`); return { status: replayStatus, output: replayStatus ? "not reproduced" : "" }; }
+    });
+    const options = {
+      identifier: `target:${fingerprint}`,
+      dataDirectory,
+      databasePath,
+      json: false,
+      selector: "button[data-test='new-cart-action']",
+      packRoot
+    };
+
+    const failed = await applyRepair(options, hooks(1));
+    assert.equal(failed.applied, false);
+    assert.equal(failed.failedStep, "replay");
+    assert.equal(readFileSync(join(packRoot, "target.json"), "utf8"), packBefore, "a failed replay restores the pack byte for byte");
+    assert.equal(readdirSync(packRoot).some((name) => name.includes("repair-backup")), false);
+
+    const applied = await applyRepair(options, hooks(0));
+    assert.equal(applied.applied, true);
+    assert.equal(applied.field, "addControl");
+    assert.equal(applied.previousVersion, TARGET_SELECTOR_PACK_VERSION);
+    assert.equal(applied.packVersion, TARGET_SELECTOR_PACK_VERSION.replace(/v(\d+)$/, (_match, digits: string) => `v${Number(digits) + 1}`));
+    const pack = JSON.parse(readFileSync(join(packRoot, "target.json"), "utf8")) as { packVersion: string; fields: Record<string, { selectors: string[] }> };
+    assert.equal(pack.packVersion, applied.packVersion);
+    assert.ok(pack.fields.addControl?.selectors.includes("button[data-test='new-cart-action']"));
+    const lock = JSON.parse(readFileSync(join(packRoot, "lock.json"), "utf8")) as { packs: Record<string, { packVersion: string }> };
+    assert.equal(lock.packs["target.json"]?.packVersion, applied.packVersion);
+    assert.equal(readFileSync(join(packRoot, "target.json"), "utf8").split("\n").filter((line) => line.includes("\"selectors\"")).length, 12,
+      "the pack keeps its one-line-per-field layout");
+    // Each attempt regenerates the packaged version file before replaying; a
+    // failed replay regenerates once more after the pack is restored.
+    assert.deepEqual(calls, [
+      "regenerate", "replay:cap_REPAIRAPPLY000000000000000001", "regenerate",
+      "regenerate", "replay:cap_REPAIRAPPLY000000000000000001"
+    ]);
+    assert.match(applied.promoteCommand, /--expect-reason verified/);
+    assert.equal(readdirSync(packRoot).some((name) => name.includes("repair-backup")), false);
+  } finally {
+    rmSync(dataDirectory, { recursive: true, force: true });
+    rmSync(packRoot, { recursive: true, force: true });
   }
 });

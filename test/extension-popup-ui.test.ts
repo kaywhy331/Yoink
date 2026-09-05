@@ -561,6 +561,8 @@ test("status and overflow reveals maintain ARIA, keyboard navigation, Escape, an
   assert.equal(menuButton.getAttribute("aria-expanded"), "true");
   assert.equal(document.activeElement?.id, "syncProducts");
   menu.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  assert.equal(document.activeElement?.id, "checkStoresNow");
+  menu.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
   assert.equal(document.activeElement?.id, "checkUpdate");
   menu.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }));
   assert.equal(document.activeElement?.id, "extensionSettings");

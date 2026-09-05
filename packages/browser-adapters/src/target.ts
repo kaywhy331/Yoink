@@ -751,7 +751,8 @@ export function targetAdapterLayoutEvidence(
     scopedControlCount: binding.control ? 1 : 0,
     explicitSkuInputCount: 0,
     exactSkuInputCount: 0,
-    variationSkuCount: boundedDiagnosticCount(identities.size),
+    // Identity evidence binds the control above; the layout field is Amazon-only.
+    variationSkuCount: 0,
     canonicalOfferInputCount: 0,
     canonicalOfferDistinctCount: 0,
     alternateOfferInputCount: 0,

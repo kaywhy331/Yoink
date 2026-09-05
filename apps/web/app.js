@@ -1401,7 +1401,16 @@ function renderAdapterRepairQueue() {
     const isOpen = repairStatus === "open" || repairStatus === "acknowledged";
     const isAgedOut = item.status === "aged_out";
     const isSuperseded = item.status === "superseded";
-    const statusLabel = isFixedPendingLive ? "Fixed, waiting for a live check" : isOpen ? "Repair needed" : isSuperseded ? "Superseded by a newer version" : isAgedOut ? "Aged out" : "Recovered";
+    // A closed group only proves the adapter when the current version passed
+    // on this layout; a restock or a newer release closes it without proof.
+    const unverifiedClosure = !isOpen && !isFixedPendingLive && !isAgedOut
+      && (isSuperseded || item.recoveryKind === "listing_state") && item.currentVersionVerified !== true;
+    const statusLabel = isFixedPendingLive ? "Fixed, waiting for a live check"
+      : isOpen ? "Repair needed"
+        : isSuperseded ? (unverifiedClosure ? "Newer version, not yet re-checked" : "Superseded by a newer version")
+          : isAgedOut ? "Aged out"
+            : unverifiedClosure ? "Item changed, adapter not re-checked"
+              : "Recovered";
     const classLabel = {
       adapter_defect: "Store page changed",
       listing_state: "Item not purchasable",
@@ -1431,7 +1440,7 @@ function renderAdapterRepairQueue() {
     }).join("");
     return `<article class="adapter-repair-row ${isOpen ? "open" : isAgedOut || isSuperseded ? "aged-out" : "recovered"}">
       <div>${statusDot(isOpen ? "bad" : isAgedOut ? "warning" : "good", statusLabel)}<div><h3>${escapeHtml(retailer)} · ${escapeHtml(operation)} · ${escapeHtml(item.latestRetailerSku || "unknown SKU")}</h3><p>${escapeHtml(stage)} · ${escapeHtml(reason)} · layout ${escapeHtml(fingerprint || "unknown")}</p></div></div>
-      <div class="adapter-repair-meta"><span class="tag ${isOpen ? "bad" : isAgedOut || isSuperseded ? "" : "good"}">${statusLabel}</span><span class="tag">${escapeHtml(classLabel)}</span><span>${Number(item.occurrenceCount || 0).toLocaleString()} occurrences · ${Number(item.affectedSkuCount || 0).toLocaleString()} SKUs${item.domChangedSeen ? " · DOM changed during retry" : ""}</span><span>${escapeHtml(capsuleSummary)}</span>${replaySummary ? `<span>${escapeHtml(replaySummary)}</span>` : ""}<time>${escapeHtml(relativeTime(item.lastSeenAt))}</time></div>
+      <div class="adapter-repair-meta"><span class="tag ${isOpen ? "bad" : isAgedOut || isSuperseded || unverifiedClosure ? "warning" : "good"}">${statusLabel}</span><span class="tag">${escapeHtml(classLabel)}</span><span>${Number(item.occurrenceCount || 0).toLocaleString()} occurrences · ${Number(item.affectedSkuCount || 0).toLocaleString()} SKUs${item.domChangedSeen ? " · DOM changed during retry" : ""}</span><span>${escapeHtml(capsuleSummary)}</span>${replaySummary ? `<span>${escapeHtml(replaySummary)}</span>` : ""}<time>${escapeHtml(relativeTime(item.lastSeenAt))}</time></div>
       <div class="card-actions">${item.latestEvidenceCapsuleId ? `<button class="button secondary" data-download-evidence-capsule="${escapeHtml(item.latestEvidenceCapsuleId)}" type="button">Download latest snapshot</button>` : ""}<button class="button secondary" data-copy-repair-command="${escapeHtml(`npm run repair -- ${item.retailerId}:${item.layoutFingerprint}`)}" type="button">Copy repair command</button></div>
       ${suggestionRows}
     </article>`;

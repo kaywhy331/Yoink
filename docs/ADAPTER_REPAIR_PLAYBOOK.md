@@ -26,19 +26,29 @@ portability exports, observer recipes, or any hosted request.
 6. Run the printed `npm run capsule:promote` command. Review the re-sanitized
    output and privacy scan. An `--allow` exception needs a specific, recorded
    reason; it is not a way to bypass review.
-7. Run `npm run check`, the complete non-native application suite, and the
-   capsule corpus. Every retained fixture for that store must still pass. Use
-   a commit such as `fix: walmart price selector (<incident-id>)`.
-8. Run `npm run package:extension`. Local packaging replays the newest capsule
-   for every open or superseded repair group before building. A passing replay
-   moves its incident to **Fixed, waiting for a live check**. Install the
-   package, run one automatic no-click store check, and confirm that the live
-   packaged diagnostic resolves the incident and the store reports renewed.
+7. Run `npm run check` and `npm run test:adapters` while iterating; the fast
+   lane covers pack lint, the promoted corpus, the adapter and runner tests,
+   and the corpus-to-server contract check in about a minute. Run the complete
+   non-native application suite once before the commit. Use a commit such as
+   `fix: walmart price selector (<incident-id>)`.
+8. Run `npm run release:local`. It builds the app, packages the companion
+   (packaging replays the newest capsule for every open or superseded repair
+   group first; a passing replay moves its incident to **Fixed, waiting for a
+   live check**), restarts the `yoink-local-api` user unit, waits for health,
+   and prints the versions the running app now expects. The app must be
+   restarted: it runs from the compiled `dist` tree, and a stale app silently
+   skips renewal for a new pack version and answers a new contract version
+   with a version mismatch. An unpacked local companion reloads itself within
+   a minute of the app reporting new versions; a ZIP install needs a reload on
+   `chrome://extensions`. Then use **Check stores now** in the companion menu
+   (or wait for the hourly automatic run) and confirm that the live packaged
+   diagnostic resolves the incident and the store reports renewed.
 
 The normal verification commands are:
 
 ```bash
 npm run check
+npm run test:adapters                                   # fast lane while iterating
 node --import tsx --test --test-concurrency=2 test/*.test.ts
 npm run build:extension
 npm run test:postgres:native

@@ -7,7 +7,7 @@ import {
   type RetailerAdapterDiagnosticInput,
   type RetailerAdapterLayoutEvidence
 } from "../packages/contracts/src/index.js";
-import { AdapterDiagnosticRepository } from "../packages/database/src/adapter-diagnostic-repository.js";
+import { AdapterDiagnosticRepository, AdapterDiagnosticValidationError } from "../packages/database/src/adapter-diagnostic-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 
@@ -700,6 +700,128 @@ test("an unavailable product page is a rejected page-identity result that closes
     assert.equal(recorded.reasonCode, "product_page_unavailable");
     const group = repository.listRepairQueue(50, NOW + 4_000).find((item) => item.repairSuggestions !== undefined && item.operation === "observe" && item.reasonCode === "offer_binding_ambiguous");
     assert.equal(group?.status, "recovered", "the unreachable product no longer keeps the layout group open");
+  } finally {
+    db.close();
+  }
+});
+
+test("Target identity counts are adapter evidence, never Amazon offer fields", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const repository = new AdapterDiagnosticRepository(db);
+    const targetLayout = (variationSkuCount: number) => layout({
+      scopeKind: "buybox",
+      addControlCount: 1,
+      genericAddIntentCount: 0,
+      scopedControlCount: 1,
+      explicitSkuInputCount: 0,
+      exactSkuInputCount: 0,
+      variationSkuCount,
+      canonicalOfferInputCount: 0,
+      canonicalOfferDistinctCount: 0,
+      alternateOfferInputCount: 0,
+      alternateOfferDistinctCount: 0
+    });
+    const targetDiagnostic = (overrides: Partial<RetailerAdapterDiagnosticInput>) => diagnostic({
+      retailerId: "target",
+      retailerSku: "95280894",
+      adapterVersion: RETAILER_OBSERVER_VERSIONS.target,
+      outcome: "passed",
+      failureStage: "complete",
+      reasonCode: "verified",
+      ...overrides
+    });
+    // A real Target page carries several TCIN identities; the count is not
+    // layout evidence and must neither reject the diagnostic nor change its
+    // fingerprint.
+    const withIdentities = repository.record(device.id, targetDiagnostic({
+      observedAt: new Date(NOW + 1_000).toISOString(),
+      layout: targetLayout(3)
+    }), NOW + 2_000);
+    assert.equal(withIdentities.layout.variationSkuCount, 0);
+    const withoutIdentities = repository.record(device.id, targetDiagnostic({
+      observedAt: new Date(NOW + 2_000).toISOString(),
+      layout: targetLayout(0)
+    }), NOW + 3_000);
+    assert.notEqual(withoutIdentities.id, withIdentities.id);
+    assert.equal(withoutIdentities.layoutFingerprint, withIdentities.layoutFingerprint);
+    // Amazon offer inputs on a non-Amazon page remain a contract violation,
+    // reported as a typed validation error the API maps to a 400.
+    assert.throws(
+      () => repository.record(device.id, targetDiagnostic({
+        observedAt: new Date(NOW + 3_000).toISOString(),
+        layout: { ...targetLayout(0), canonicalOfferInputCount: 1 }
+      }), NOW + 4_000),
+      AdapterDiagnosticValidationError
+    );
+    assert.throws(
+      () => repository.record(device.id, { ...targetDiagnostic({}), attemptCount: 9 }, NOW + 5_000),
+      AdapterDiagnosticValidationError
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("a closed repair group says whether the adapter was re-checked or the item merely changed state", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const repository = new AdapterDiagnosticRepository(db);
+    const walmartLayout = layout({
+      scopeKind: "buybox",
+      addControlCount: 1,
+      genericAddIntentCount: 0,
+      scopedControlCount: 1,
+      explicitSkuInputCount: 0,
+      exactSkuInputCount: 0,
+      canonicalOfferInputCount: 0,
+      canonicalOfferDistinctCount: 0,
+      alternateOfferInputCount: 0,
+      alternateOfferDistinctCount: 0,
+      priceCandidateCount: 0
+    });
+    const walmart = (overrides: Partial<RetailerAdapterDiagnosticInput>) => diagnostic({
+      retailerId: "walmart",
+      retailerSku: "20895014480",
+      adapterVersion: RETAILER_OBSERVER_VERSIONS.walmart,
+      failureStage: "price_binding",
+      reasonCode: "price_binding_missing",
+      layout: walmartLayout,
+      ...overrides
+    });
+    repository.record(device.id, walmart({ observedAt: new Date(NOW + 1_000).toISOString() }), NOW + 2_000);
+    const openItem = repository.listRepairQueue(50, NOW + 2_000)[0];
+    assert.equal(openItem?.status, "open");
+    assert.equal(openItem?.recoveryKind, "");
+    assert.equal(openItem?.currentVersionVerified, false);
+
+    // The product sells out: a listing-state result closes the group but
+    // proves nothing about the price selector.
+    repository.record(device.id, walmart({
+      observedAt: new Date(NOW + 3_000).toISOString(),
+      outcome: "rejected",
+      failureStage: "policy",
+      reasonCode: "out_of_stock",
+      layout: { ...walmartLayout, addControlCount: 0, scopedControlCount: 0 }
+    }), NOW + 4_000);
+    const restocked = repository.listRepairQueue(50, NOW + 4_000).find((item) => item.reasonCode === "price_binding_missing");
+    assert.equal(restocked?.status, "recovered");
+    assert.equal(restocked?.recoveryKind, "listing_state");
+    assert.equal(restocked?.currentVersionVerified, false);
+
+    // A current-version pass on the same layout is the proof.
+    repository.record(device.id, walmart({
+      observedAt: new Date(NOW + 5_000).toISOString(),
+      outcome: "passed",
+      failureStage: "complete",
+      reasonCode: "verified"
+    }), NOW + 6_000);
+    const verified = repository.listRepairQueue(50, NOW + 6_000).find((item) => item.reasonCode === "price_binding_missing");
+    assert.equal(verified?.status, "recovered");
+    assert.equal(verified?.recoveryKind, "passed");
+    assert.equal(verified?.currentVersionVerified, true);
   } finally {
     db.close();
   }

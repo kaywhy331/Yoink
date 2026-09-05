@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -12,6 +13,9 @@ import { loadCapsule, replayCapsuleObject } from "./replay-capsule.mjs";
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom");
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const PACK_ROOT = join(ROOT, "packages", "browser-adapters", "packs");
+const ADD_PACK_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy"]);
+const OBSERVE_ONLY_FIELDS = new Set(["addControl", "price", "seller"]);
 const ALLOWED_ATTRIBUTES = [
   "id", "class", "role", "name", "type", "disabled", "aria-label",
   "data-test", "data-testid", "data-test-id", "data-automation-id", "itemprop"
@@ -24,17 +28,21 @@ function parseArguments(argv) {
     identifier: "",
     dataDirectory: resolve(process.env.YOINK_DATA_DIR || join(ROOT, "data")),
     databasePath: "",
-    json: false
+    json: false,
+    selector: "",
+    packRoot: PACK_ROOT
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--json") options.json = true;
-    else if (["--data-dir", "--database"].includes(value)) {
+    else if (["--data-dir", "--database", "--apply", "--pack-root"].includes(value)) {
       const next = argv[index + 1];
       if (!next) throw new Error(`${value} requires a value.`);
       index += 1;
       if (value === "--data-dir") options.dataDirectory = resolve(next);
-      else options.databasePath = resolve(next);
+      else if (value === "--database") options.databasePath = resolve(next);
+      else if (value === "--apply") options.selector = next;
+      else options.packRoot = resolve(next);
     } else if (value.startsWith("--")) throw new Error(`Unknown option ${value}.`);
     else if (!options.identifier) options.identifier = value;
     else throw new Error("Only one repair incident can be inspected at a time.");
@@ -86,13 +94,127 @@ function traceStep(failureStage) {
   })[failureStage] || failureStage;
 }
 
-function packSelectors(retailerId, field) {
-  if (["target", "walmart", "amazon", "bestbuy"].includes(retailerId)) {
-    const pack = JSON.parse(readFileSync(join(ROOT, "packages", "browser-adapters", "packs", `${retailerId}.json`), "utf8"));
+function packSelectors(retailerId, field, packRoot = PACK_ROOT) {
+  if (ADD_PACK_RETAILERS.has(retailerId)) {
+    const pack = JSON.parse(readFileSync(join(packRoot, `${retailerId}.json`), "utf8"));
     return pack.fields?.[field]?.selectors || [];
   }
-  const pack = JSON.parse(readFileSync(join(ROOT, "packages", "browser-adapters", "packs", "retailers.json"), "utf8"));
+  const pack = JSON.parse(readFileSync(join(packRoot, "retailers.json"), "utf8"));
   return pack.retailers?.[retailerId]?.[field] || [];
+}
+
+function bumpedPackVersion(current) {
+  const match = /^([a-z]+)-pack-v(\d{1,4})$/.exec(String(current || ""));
+  if (!match) throw new Error(`The pack version ${current} cannot be bumped.`);
+  return `${match[1]}-pack-v${Number(match[2]) + 1}`;
+}
+
+// Keeps the hand-maintained one-line-per-field layout so a one-selector
+// repair reads as a one-line diff.
+function formatPack(pack, addPack) {
+  if (addPack) {
+    const fields = Object.entries(pack.fields || {})
+      .map(([field, value]) => `    ${JSON.stringify(field)}: { "selectors": ${JSON.stringify(value.selectors || [])} }`)
+      .join(",\n");
+    return `{\n  "packVersion": ${JSON.stringify(pack.packVersion)},\n  "retailerId": ${JSON.stringify(pack.retailerId)},\n  "fields": {\n${fields}\n  }\n}\n`;
+  }
+  const retailers = Object.entries(pack.retailers || {}).map(([retailerId, fields]) => {
+    const lines = Object.entries(fields).map(([field, selectors]) => `      ${JSON.stringify(field)}: ${JSON.stringify(selectors)}`).join(",\n");
+    return `    ${JSON.stringify(retailerId)}: {\n${lines}\n    }`;
+  }).join(",\n");
+  return `{\n  "packVersion": ${JSON.stringify(pack.packVersion)},\n  "retailers": {\n${retailers}\n  }\n}\n`;
+}
+
+function runCommand(command, args, cwd = ROOT) {
+  const result = spawnSync(command, args, { cwd, encoding: "utf8", env: process.env });
+  return { status: result.status ?? 1, output: `${result.stdout || ""}${result.stderr || ""}`.trim() };
+}
+
+const DEFAULT_APPLY_HOOKS = {
+  lint(packRoot) {
+    return runCommand(process.execPath, ["scripts/lint-selector-packs.mjs", "--write-lock", "--pack-root", packRoot]);
+  },
+  regenerate() {
+    return runCommand(process.execPath, ["scripts/generate-extension-tokens.mjs"]);
+  },
+  replay(capsuleId, dataDirectory) {
+    return runCommand(process.execPath, ["--import", "tsx", "scripts/replay-capsule.mjs", capsuleId, "--expect", "pass", "--data-dir", dataDirectory]);
+  }
+};
+
+/**
+ * Applies one selector to the failing pack field, bumps the pack version,
+ * rewrites the lock, regenerates the packaged version file, and replays the
+ * capsule in a fresh process. A replay that does not pass restores the pack
+ * so the tree never carries an unproven selector.
+ */
+export async function applyRepair(options, hooks = {}) {
+  const apply = { ...DEFAULT_APPLY_HOOKS, ...hooks };
+  const selector = String(options.selector || "").trim();
+  if (!selector) throw new Error("--apply requires a selector.");
+  const inspection = await inspectRepair(options);
+  const { retailerId } = inspection.incident;
+  const field = inspection.pack.field;
+  const packRoot = options.packRoot || PACK_ROOT;
+  const addPack = ADD_PACK_RETAILERS.has(retailerId);
+  if (!addPack && !OBSERVE_ONLY_FIELDS.has(field)) {
+    throw new Error(`The ${retailerId} pack cannot express the ${field} field; repair the adapter source instead.`);
+  }
+  const packPath = join(packRoot, addPack ? `${retailerId}.json` : "retailers.json");
+  const lockPath = join(packRoot, "lock.json");
+  const backups = [[packPath, `${packPath}.repair-backup`], [lockPath, `${lockPath}.repair-backup`]];
+  for (const [source, backup] of backups) if (existsSync(source)) copyFileSync(source, backup);
+  const discardBackups = () => {
+    for (const [, backup] of backups) if (existsSync(backup)) unlinkSync(backup);
+  };
+  const restore = () => {
+    for (const [source, backup] of backups) if (existsSync(backup)) copyFileSync(backup, source);
+    discardBackups();
+  };
+  const pack = JSON.parse(readFileSync(packPath, "utf8"));
+  const previousVersion = pack.packVersion;
+  const selectors = addPack
+    ? (pack.fields[field] ??= { selectors: [] }).selectors
+    : (pack.retailers[retailerId] ??= {})[field] ??= [];
+  const alreadyPresent = selectors.includes(selector);
+  if (!alreadyPresent) selectors.push(selector);
+  pack.packVersion = bumpedPackVersion(previousVersion);
+  writeFileSync(packPath, formatPack(pack, addPack));
+  const steps = [];
+  const fail = (step, output) => {
+    restore();
+    apply.regenerate();
+    return { applied: false, retailerId, field, selector, previousVersion, packVersion: previousVersion, failedStep: step, output, steps };
+  };
+  const lint = apply.lint(packRoot);
+  steps.push({ step: "lint", status: lint.status });
+  if (lint.status !== 0) return fail("lint", lint.output);
+  const regenerate = apply.regenerate();
+  steps.push({ step: "regenerate", status: regenerate.status });
+  if (regenerate.status !== 0) return fail("regenerate", regenerate.output);
+  const capsuleId = inspection.capsules[0].id;
+  const replay = apply.replay(capsuleId, options.dataDirectory);
+  steps.push({ step: "replay", status: replay.status });
+  if (replay.status !== 0) return fail("replay", replay.output);
+  discardBackups();
+  const slug = `${retailerId}-${field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}-${inspection.incident.layoutFingerprint.slice(0, 8)}`;
+  return {
+    applied: true,
+    retailerId,
+    field,
+    selector,
+    alreadyPresent,
+    previousVersion,
+    packVersion: pack.packVersion,
+    capsuleId,
+    steps,
+    promoteCommand: `npm run capsule:promote -- ${capsuleId} --slug ${slug} --expect-outcome passed --expect-stage complete --expect-reason verified`,
+    nextSteps: [
+      "npm run test:adapters",
+      "npm run release:local",
+      "Check stores now in the companion menu, then confirm the incident shows Fixed, waiting for a live check"
+    ]
+  };
 }
 
 export function repairCandidates(html, url) {
@@ -176,7 +298,7 @@ export async function inspectRepair(options) {
     const field = packField(reasonCode, failureStage);
     const step = traceStep(failureStage);
     const filteredTrace = replay.trace.filter((entry) => entry.step === step);
-    const selectors = packSelectors(context.retailerId, field).map((selector) => {
+    const selectors = packSelectors(context.retailerId, field, options.packRoot || PACK_ROOT).map((selector) => {
       const trace = replay.trace.find((entry) => entry.selector === selector);
       return {
         selector,
@@ -239,9 +361,25 @@ function printRepair(result) {
   process.stdout.write(`Promote: ${result.promoteCommand}\n`);
 }
 
+function printApply(result) {
+  if (!result.applied) {
+    process.stdout.write(`Not applied: ${result.failedStep} failed for ${result.retailerId} ${result.field}; the pack was restored to ${result.previousVersion}.\n${result.output}\n`);
+    return;
+  }
+  process.stdout.write(`Applied ${result.selector} to ${result.retailerId} ${result.field}${result.alreadyPresent ? " (already listed)" : ""}: ${result.previousVersion} -> ${result.packVersion}\n`);
+  process.stdout.write(`Replay of ${result.capsuleId} passed under the edited pack.\nPromote: ${result.promoteCommand}\nNext:\n`);
+  for (const step of result.nextSteps) process.stdout.write(`- ${step}\n`);
+}
+
 export async function runRepairCli(argv = process.argv.slice(2)) {
   try {
     const options = parseArguments(argv);
+    if (options.selector) {
+      const applied = await applyRepair(options);
+      if (options.json) process.stdout.write(`${JSON.stringify(applied)}\n`);
+      else printApply(applied);
+      return applied.applied ? 0 : 1;
+    }
     const result = await inspectRepair(options);
     if (options.json) process.stdout.write(`${JSON.stringify(result)}\n`);
     else printRepair(result);

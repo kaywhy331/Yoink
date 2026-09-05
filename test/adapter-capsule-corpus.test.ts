@@ -4,6 +4,16 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import test from "node:test";
+import {
+  ADD_LANES,
+  RETAILER_OBSERVER_VERSIONS,
+  RETAILER_SELECTOR_PACK_VERSIONS,
+  type RetailerAdapterDiagnosticInput,
+  type SupportedRetailerId
+} from "../packages/contracts/src/index.js";
+import { AdapterDiagnosticRepository } from "../packages/database/src/adapter-diagnostic-repository.js";
+import { YoinkDatabase } from "../packages/database/src/database.js";
+import { DeviceRepository } from "../packages/database/src/device-repository.js";
 // @ts-expect-error The replay CLI is intentionally an importable JavaScript command module.
 import { replayCapsuleObject } from "../scripts/replay-capsule.mjs";
 
@@ -63,6 +73,31 @@ for (const metadataPath of fixtures) {
     });
     for (const field of ["availability", "unitPriceCents", "sellerType", "fulfillment"]) {
       if (Object.hasOwn(expectations, field)) assert.equal(result.observation[field], expectations[field], field);
+    }
+    // Contract parity: whatever the packaged observer emits for a real page
+    // must be accepted by the server's diagnostic validator, or the companion
+    // posts it forever and the ledger never sees the failure.
+    const db = new YoinkDatabase();
+    try {
+      const devices = new DeviceRepository(db);
+      const device = devices.pair({ pairingCode: devices.createPairingCode().code });
+      const storeId = retailerId as SupportedRetailerId;
+      const lane = (ADD_LANES as Record<string, { contractVersion: string } | undefined>)[storeId];
+      const stored = new AdapterDiagnosticRepository(db).record(device.id, {
+        ...result.diagnostic,
+        contractVersion: 1,
+        observedAt: new Date().toISOString(),
+        retailerId: storeId,
+        retailerSku: capsule.retailerSku,
+        adapterVersion: capsule.operation === "observe" ? RETAILER_OBSERVER_VERSIONS[storeId] : lane?.contractVersion ?? "",
+        packVersion: RETAILER_SELECTOR_PACK_VERSIONS[storeId],
+        attemptCount: 1,
+        domChanged: false
+      } as RetailerAdapterDiagnosticInput);
+      assert.equal(stored.outcome, expectations.outcome);
+      assert.equal(stored.reasonCode, expectations.reasonCode);
+    } finally {
+      db.close();
     }
   });
 }

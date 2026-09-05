@@ -994,9 +994,28 @@ surfaces to the shopper as "needs you" and to nothing else.
 | Admin setting | Keep page snapshots for store repairs on this device |
 | Readiness checklist while `pack_unverified` | Store check pending after update |
 | Repair queue class tags | Store page changed · Item not purchasable · Store asked for a person · Outside plan limits · Check could not run |
-| Repair queue status | Repair needed · Superseded by a newer version · Recovered · Aged out · Fixed, waiting for a live check |
+| Repair queue status | Repair needed · Superseded by a newer version · Newer version, not yet re-checked · Recovered · Item changed, adapter not re-checked · Aged out · Fixed, waiting for a live check |
+| Popup menu | Check stores now · Checking stores… |
 
 ## Changelog
+
+- 2026-09-04 (evening, 1.22.1): field review found the loop had never run
+  (0 capsules, 0 automatic run receipts). Fixed the Target diagnostic
+  rejection (page-wide TCIN count in an Amazon-only layout field returned a
+  masked 500; the server now zeroes it for non-Amazon stores, Target no longer
+  sends it, validation failures are 400s, and the corpus test records every
+  replayed fixture through the server validator). Automatic checks now start
+  two minutes after startup, wake hourly while any lane needs evidence, and
+  post a skipped receipt for held decisions; **Check stores now** in the
+  companion menu forces a run. The API journals every 5xx and every rejected
+  device post. `/api/v1/health` reports packaged versions and a local
+  unpacked companion reloads itself once when they change.
+  `npm run release:local` builds, packages, restarts the unit, and prints
+  the versions; `npm run test:adapters` is the fast lane;
+  `npm run repair -- <id> --apply "<selector>"` edits the pack, bumps and
+  locks it, and keeps the change only when replay passes. Closed repair groups
+  carry `recoveryKind` and `currentVersionVerified` so a restock or a
+  release no longer reads as a verified fix.
 
 - 2026-09-04: implemented P1–P7 for 1.22.0; recorded engineering verification
   and separated post-release field gates from code completion.

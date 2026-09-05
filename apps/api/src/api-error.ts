@@ -30,6 +30,23 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * One sanitized line for the service journal. Server errors carry their
+ * redacted message so a masked 500 is diagnosable; rejected device posts
+ * carry only route, status, and code.
+ */
+export function apiErrorLogLine(
+  problem: { status: number; payload: ApiErrorPayload },
+  error: unknown,
+  method: string,
+  pathname: string
+): string {
+  const detail = problem.status >= 500 && error instanceof Error
+    ? ` ${String(sanitizeDiagnosticData(error.message)).slice(0, 300)}`
+    : "";
+  return `Yoink request rejected: ${method} ${pathname} -> ${problem.status} ${problem.payload.error} [${problem.payload.correlationId}]${detail}\n`;
+}
+
 export function apiErrorPayload(error: unknown, correlationId: string): { status: number; payload: ApiErrorPayload } {
   if (error instanceof InputValidationError) {
     return {

@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.22.0 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.22.1 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
@@ -28,6 +28,21 @@ authorized.
   lanes through [`docs/ADD_LANE_REGISTRY.md`](docs/ADD_LANE_REGISTRY.md). The
   complete contract is in
   [`docs/ADAPTER_REPAIR_LOOP_SPEC.md`](docs/ADAPTER_REPAIR_LOOP_SPEC.md).
+
+Version 1.22.1 makes the loop run in the field. Target store checks record
+again (a page-wide identity count no longer rejects the diagnostic, and a
+rejected diagnostic is a 400 with its reason rather than a masked server
+error). Automatic store checks start two minutes after the companion starts,
+wake hourly while any store needs evidence, six-hourly once every store is
+current, and post a skipped receipt for each held decision; **Check stores
+now** in the companion menu forces a run. The service journal records every
+server error and every rejected companion post. The health route reports the
+packaged versions, an unpacked local companion reloads itself once when they
+change, `npm run release:local` builds, packages, restarts, and prints those
+versions, `npm run test:adapters` is the fast verification lane, and
+`npm run repair -- <id> --apply "<selector>"` keeps a pack edit only when
+replay passes. Closed repair groups now say whether the current version was
+re-checked or the item merely changed state.
 
 Version 1.22.0 closes the adapter repair loop without sending page captures or
 selector traces to the hosted app. The local companion stores bounded,
@@ -3032,6 +3047,15 @@ the packaged ZIP when newer. Chrome does not allow an unpacked extension to
 replace its own source directory. Extract the ZIP over the same companion
 folder, then reload it on `chrome://extensions`. Pairing and local extension
 state remain in Chrome storage.
+
+`npm run release:local` performs the whole local release in one step: it
+builds the app, packages the companion, restarts the `yoink-local-api` user
+unit, waits for health, and prints the packaged versions the running app now
+expects. The health route reports those versions, and a companion loaded
+unpacked from `apps/extension` in the local profile reloads itself once when
+they differ from its own bundle, so a pack or adapter change reaches Chrome
+within a minute of the app restart. Managed (production) installs never
+self-reload.
 
 For a production-channel artifact, supply exact HTTPS origins explicitly:
 
