@@ -167,7 +167,8 @@
           <div class="upcoming-drop-heading"><div><p class="eyebrow">Upcoming</p><h3 id="callsUpcomingDropsTitle">Drop windows</h3></div></div>
           <div class="upcoming-drop-list" data-upcoming-drop-list></div>
         </section>
-        <div class="stack" id="callList"></div>
+        <details id="watchHistory"><summary>Watch history</summary><label><span>Show</span><select id="watchHistoryFilter"><option value="all">All watches</option><option value="active">Running</option><option value="ended">Ended</option></select></label><div id="watchHistoryList"></div><button class="button quiet" id="moreWatchHistory" type="button" hidden>Show older watches</button></details>
+      <div class="stack" id="callList"></div>
         <div class="load-more-row"><button class="button quiet" id="showMoreCalls" type="button" hidden>Show older calls</button></div>
       </div>
       <section class="call-drawing-results" id="callDrawingResults" aria-labelledby="callDrawingTitle" hidden>
@@ -206,6 +207,7 @@
       <section class="action-handoff" id="actionHandoff" aria-live="polite" hidden>
         <div><p class="eyebrow" id="actionHandoffEyebrow">Ready to check out</p><h3 id="actionHandoffTitle"></h3><p id="actionHandoffCopy"></p></div>
       </section>
+      <p id="activityFilterSummary" role="status" hidden></p><button class="button quiet" id="clearActivityFilters" type="button" hidden>Show all activity</button>
       <div class="action-stage-summary" id="actionStageSummary" aria-label="Action stages"></div>
       <div class="stack" id="actionList"></div>
       <div class="load-more-row"><button class="button quiet" id="showMoreActions" type="button" hidden>Show older actions</button></div>
@@ -220,6 +222,7 @@
     <section class="workspace" data-panel="insights" id="health">
       <nav class="subtabs" aria-label="Activity views"><button class="subtab" data-tab="activity" type="button">Recent</button><button class="subtab active" data-tab="insights" type="button">Insights</button></nav>
       <div class="section-heading"><div><p class="eyebrow">Outcomes and readiness</p><h2>Insights</h2></div><a class="button secondary" id="analyticsCsv" href="/api/v1/user/analytics.csv" download>Download CSV</a></div>
+      <form id="insightsFilters" class="inline-actions"><label><span>Period</span><select name="window"><option value="24h">24 hours</option><option value="7d">7 days</option><option value="30d" selected>30 days</option><option value="90d">90 days</option><option value="all">All time</option></select></label><label><span>Store</span><select name="store" id="insightsStore"><option value="">All stores</option></select></label><label><span>Product or SKU</span><input name="product" type="search" maxlength="200"></label><button class="button secondary" type="submit">Apply filters</button><button class="button quiet" id="insightsActions" type="button">View matching actions</button></form><p id="insightsScope" role="status"></p>
       <section class="metrics" id="analyticsMetrics" aria-label="Action analytics"></section>
       <div class="insight-grid">
         <article class="preference-card"><div><h3>Store readiness</h3><div class="mini-list" id="readinessList"></div></div></article>
@@ -238,8 +241,8 @@
       <div class="preference-grid">
         <article class="preference-card budget-card" data-settings-panel="purchase"><div><h3>Spending limits</h3><p id="spendSummary">Loading…</p><form id="spendForm"><input name="revision" type="hidden"><div class="budget-fields"><label><span>Order</span><input name="perOrder" inputmode="decimal" placeholder="Optional"></label><label><span>Day</span><input name="daily" inputmode="decimal" placeholder="Optional"></label><label><span>Month</span><input name="monthly" inputmode="decimal" placeholder="Optional"></label><label><span>Timezone</span><select name="timezone" required><option value="">Loading…</option></select></label><label><span>Reset hour</span><select name="periodResetHour"></select></label></div><button class="button secondary" type="submit">Save limits</button></form></div></article>
         <article class="preference-card" data-settings-panel="purchase"><div><h3>Scheduled drop watching</h3><label class="watch-mode-setting"><span>Watch mode</span><select id="watchQueueMode" aria-describedby="watchQueueModeStatus"><option value="manual">Watch only when I choose</option><option value="auto_armed">Watch drops for active plans</option></select><small id="watchQueueModeStatus">Choose which scheduled drops Yoink watches without adding to cart.</small></label></div></article>
-        <article class="preference-card" data-settings-panel="chrome"><div><h3>Chrome companion</h3><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><p><a href="/docs#install">Install on desktop</a></p><div class="pairing" id="pairing" hidden></div><div id="pairedDevices" class="mini-list" aria-live="polite"></div></div></article>
-        <article class="preference-card connector-card" data-settings-panel="notifications" id="notifications"><div><h3>Update destinations</h3><div class="mini-list" id="connectorList"></div><p><a href="/docs#notifications">Administrator setup guide</a></p><form id="connectorForm"><input type="hidden" name="id">
+        <article class="preference-card" data-settings-panel="chrome"><div><h3>Chrome companion</h3><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><p><a href="/docs#install">Install on desktop</a></p><div class="pairing" id="pairing" hidden></div><p>Re-pair in Extension settings.</p><div id="pairedDevices" class="mini-list" aria-live="polite"></div></div></article>
+        <article class="preference-card connector-card" data-settings-panel="notifications" id="notifications"><div><h3>Update destinations</h3><div class="mini-list" id="connectorList"></div><details id="notificationHistory"><summary>Delivery history</summary><label><span>Destination</span><select id="deliveryConnectorFilter"><option value="">All destinations</option></select></label><p>Retries can duplicate an update.</p><div class="inline-status error" id="deliveryHistoryError" role="alert" hidden><span>History could not load. Previous updates may be out of date.</span><button class="button quiet" id="retryDeliveryHistory" type="button">Retry history</button></div><div id="deliveryHistoryList"></div><div class="inline-actions"><button class="button quiet" id="previousDeliveries" type="button">Previous updates</button><span id="deliveryPageStatus" role="status"></span><button class="button quiet" id="nextDeliveries" type="button">Next updates</button></div></details><p><a href="/docs#notifications">Administrator setup guide</a></p><form id="connectorForm"><input type="hidden" name="id">
           <div class="profile-fields"><label><span>Name</span><input name="name" maxlength="80" required></label><label><span>Type</span><select name="kind"><option value="discord">Discord</option><option value="slack">Slack</option><option value="webhook">Webhook</option></select></label><label><span>Delivery key</span><input name="endpointReference" maxlength="120" autocomplete="off" aria-describedby="connectorKeyHelp" required><small class="field-help" id="connectorKeyHelp">Use your administrator’s key, never a webhook URL or secret.</small></label></div>
           <fieldset class="connector-events"><legend>Updates</legend><label class="check"><input name="events" type="checkbox" value="notify" checked><span>In stock</span></label><label class="check"><input name="events" type="checkbox" value="carted" checked><span>Carted</span></label><label class="check"><input name="events" type="checkbox" value="needs_you" checked><span>Needs you</span></label><label class="check"><input name="events" type="checkbox" value="missed" checked><span>Missed</span></label><label class="check"><input name="events" type="checkbox" value="test" checked><span>Test</span></label></fieldset>
           <button class="button secondary" type="submit">Add destination</button>
@@ -254,6 +257,7 @@
 
   <dialog id="profileDialog" class="compact-dialog profile-dialog" aria-labelledby="profileDialogTitle">
     <form id="profileForm">
+      <p id="profileEditScope" hidden></p><button class="button quiet" id="separateProfile" type="button" hidden>Save a separate setup</button>
       <div class="dialog-heading">
         <div><p class="eyebrow">Quick add setup</p><h2 id="profileDialogTitle">New setup</h2></div>
         <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
@@ -274,6 +278,8 @@
     </form>
   </dialog>
 
+  <dialog id="browserNameDialog" aria-labelledby="browserNameTitle"><form id="browserNameForm"><div class="dialog-heading"><h2 id="browserNameTitle">Name this browser</h2><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div><input name="id" type="hidden"><label><span>Browser name</span><input name="name" maxlength="80" required autocomplete="off"></label><button class="button primary" type="submit">Save browser name</button></form></dialog>
+  <dialog id="entityErrorDialog" aria-labelledby="entityErrorTitle"><form method="dialog"><h2 id="entityErrorTitle">Detail unavailable</h2><p id="entityErrorMessage"></p><button class="button secondary" id="retryEntity" type="button">Retry detail</button><button class="button quiet" type="submit">Return to list</button></form></dialog>
   <dialog id="productDialog" class="product-detail-dialog" aria-labelledby="productDialogTitle">
     <form method="dialog">
       <div class="dialog-heading">

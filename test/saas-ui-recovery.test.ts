@@ -22,7 +22,7 @@ function shopper() {
   browser.eval(readFileSync(join(root, "user.js"), "utf8") + `
     globalThis.audit = { state, renderSpend, renderCalls, renderProductDetail, renderProducts,
       loadUserRoute, centsInput, applyHashRoute, api, refreshPlans, refreshCalls,
-      refreshActionActivity, renderPairing, fetchLoadedPages, setTab, renderPlans };
+      refreshActionActivity, renderPairing, fetchLoadedPages, setTab, renderPlans, renderWatchHistory, openPlan };
   `);
   browser.audit.state.overview = { walmartDraws: { items: [], latestScan: null } };
   return browser;
@@ -215,5 +215,37 @@ test("HTTP failures retain the server code, status and support reference", async
       assert.match(error.message, /Limits changed elsewhere.*case_fixture_123/);
       return true;
     });
+  } finally { browser.close(); }
+});
+
+
+test("watch history includes terminal reasons beyond the first page and filters running watches", () => {
+  const browser = shopper();
+  try {
+    browser.audit.state.actionPlatform = { watchQueue: Array.from({ length: 36 }, (_, index) => ({ id: `watch_${index}`, title: `Watch ${index}`, state: index === 0 ? "observing" : "window_closed", retailerId: "target", missionId: `mission_${index}`, closedReason: index === 0 ? "" : "window_expired", observationCount: 3, closesAt: "2026-09-05T12:00:00.000Z" })) };
+    browser.audit.renderWatchHistory();
+    assert.equal(browser.document.querySelectorAll("#watchHistoryList .mini-row").length, 25);
+    assert.equal(browser.document.querySelector("#moreWatchHistory").hidden, false);
+    browser.audit.state.watchHistoryLimit = 50;
+    browser.audit.renderWatchHistory();
+    assert.equal(browser.document.querySelectorAll("#watchHistoryList .mini-row").length, 36);
+    assert.match(browser.document.querySelector("#watchHistoryList").textContent, /Window expired/);
+    browser.document.querySelector("#watchHistoryFilter").value = "active";
+    browser.audit.renderWatchHistory();
+    assert.equal(browser.document.querySelectorAll("#watchHistoryList .mini-row").length, 1);
+    assert.equal(browser.document.querySelector("[data-watch-cancel]").dataset.watchCancel, "watch_0");
+  } finally { browser.close(); }
+});
+
+test("a late plan detail response cannot open over another workspace", async () => {
+  const browser = shopper();
+  try {
+    let release: (value: unknown) => void = () => undefined;
+    browser.fetch = () => new Promise((resolve) => { release = resolve; });
+    const pending = browser.audit.openPlan("plan_late");
+    browser.audit.setTab("products", { load: false });
+    release({ ok: true, json: async () => ({ purchaseIntent: { id: "plan_late" } }) });
+    await pending;
+    assert.equal(browser.document.querySelector("#planDialog").open, false);
   } finally { browser.close(); }
 });

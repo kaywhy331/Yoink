@@ -99,7 +99,7 @@ const LIBRARY_PRODUCT_ORDER: Record<LibraryProductFilters["sort"], string> = {
   title: "v.title COLLATE NOCASE, v.id"
 };
 
-function libraryProductQueryParts(input: LibraryProductFilterInput | string): LibraryProductQueryParts {
+function libraryProductQueryParts(input: LibraryProductFilterInput | string, variantId = ""): LibraryProductQueryParts {
   const filters = normalizeLibraryProductFilters(typeof input === "string" ? { search: input } : input);
   const scope = currentRequestScope();
   const where: string[] = [];
@@ -115,6 +115,7 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string): Li
   // but they are not shopper products until at least one exact store listing
   // has been approved and mapped.
   where.push("EXISTS (SELECT 1 FROM listings visible_listing WHERE visible_listing.variant_id = v.id)");
+  if (variantId) { where.push("v.id = ?"); parameters.push(variantId); }
   if (filters.search) {
     const pattern = `%${filters.search.replace(/[\\%_]/g, "\\$&")}%`;
     where.push(`(v.title LIKE ? ESCAPE '\\' COLLATE NOCASE OR EXISTS (
@@ -738,11 +739,12 @@ export class CatalogRepository {
   listLibraryProducts(
     limit = 100,
     offset = 0,
-    input: LibraryProductFilterInput | string = {}
+    input: LibraryProductFilterInput | string = {},
+    variantId = ""
   ): Array<Record<string, unknown>> {
     const safeLimit = Math.max(1, Math.min(200, Math.floor(Number(limit) || 100)));
     const safeOffset = Number.isSafeInteger(Number(offset)) && Number(offset) >= 0 ? Math.floor(Number(offset)) : 0;
-    const query = libraryProductQueryParts(input);
+    const query = libraryProductQueryParts(input, variantId);
     const variants = this.db.all<{
       variantId: string;
       familyId: string;
@@ -852,8 +854,8 @@ export class CatalogRepository {
     });
   }
 
-  libraryProductCount(input: LibraryProductFilterInput | string = {}): number {
-    const query = libraryProductQueryParts(input);
+  libraryProductCount(input: LibraryProductFilterInput | string = {}, variantId = ""): number {
+    const query = libraryProductQueryParts(input, variantId);
     return Number(this.db.get<{ count: number }>(
       `${query.cte}
        SELECT COUNT(*) AS count

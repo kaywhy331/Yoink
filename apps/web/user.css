@@ -527,3 +527,24 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 @media (forced-colors: active) {
   .button, input, select, dialog, .product-card, .plan-card, .action-card, .preference-card, .action-handoff { border: 1px solid ButtonText; }
 }
+
+/* Management controls stay usable when names and histories grow. */
+#connectorList .mini-row > span, #pairedDevices .mini-row > span,
+#deliveryHistoryList .mini-row > span, #watchHistoryList .mini-row > span { min-width: 0; overflow-wrap: anywhere; }
+#connectorList .mini-row strong, #connectorList .mini-row small,
+#pairedDevices .mini-row strong, #pairedDevices .mini-row small,
+#deliveryHistoryList .mini-row strong, #deliveryHistoryList .mini-row small,
+#watchHistoryList .mini-row strong, #watchHistoryList .mini-row small { display: block; }
+#connectorList .inline-actions, #notificationHistory .inline-actions, #pairedDevices .mini-row { flex-wrap: wrap; }
+#notificationHistory, #watchHistory { margin-block: 16px; }
+#notificationHistory summary, #watchHistory summary { cursor: pointer; padding-block: 8px; font-weight: 700; }
+#deliveryHistoryList, #watchHistoryList { display: grid; gap: 12px; margin-block: 12px; }
+#insightsFilters { flex-wrap: wrap; align-items: end; margin-block: 16px; }
+#insightsFilters label { flex: 1 1 160px; min-width: 0; }
+#insightsFilters input, #insightsFilters select { width: 100%; }
+@media (max-width: 560px) {
+  #connectorList .mini-row { flex-direction: column; }
+  #connectorForm .profile-fields { grid-template-columns: minmax(0, 1fr); }
+  #pairedDevices .mini-row > span { flex-basis: 100%; }
+  #deliveryHistoryList .mini-row, #watchHistoryList .mini-row { flex-wrap: wrap; }
+}

@@ -58,6 +58,23 @@ const state = {
   callRequestSequence: 0,
   callSelection: new Set(),
   devices: [],
+  connectorHistory: { items: [], total: 0 },
+  connectorOffset: 0,
+  connectorFilter: "",
+  connectorHistorySequence: 0,
+  connectorHistoryLoaded: false,
+  connectorHistoryLoading: false,
+  connectorHistoryError: false,
+  preferenceRequestSequence: 0,
+  filteredAnalytics: null,
+  insightSequence: 0,
+  insightFilters: { window: "30d", store: "", product: "", asOf: "" },
+  activityFilters: {},
+  watchHistoryLimit: 25,
+  entity: null,
+  entityLoading: null,
+  entityRequestSequence: 0,
+  detailProduct: null,
   pairing: null,
   pairingTimer: null,
   dropWindows: [],
@@ -649,7 +666,7 @@ function showUserRouteSkeleton(route) {
   return true;
 }
 
-function currentUserHashRoute(panel = activeUserRoute()) {
+function baseUserHashRoute(panel = activeUserRoute()) {
   if (panel === "products") {
     const query = new URLSearchParams();
     if (state.query) query.set("q", state.query);
@@ -660,6 +677,15 @@ function currentUserHashRoute(panel = activeUserRoute()) {
   return panel === "preferences"
     ? USER_SETTINGS_ROUTES[state.settingsView] || USER_SETTINGS_ROUTES.purchase
     : USER_PANEL_ROUTES[panel] || USER_PANEL_ROUTES.home;
+}
+
+function currentUserHashRoute(panel = activeUserRoute()) {
+  const [base, raw = ""] = baseUserHashRoute(panel).split("?");
+  const query = new URLSearchParams(raw);
+  if (state.entity?.panel === panel) query.set(`${state.entity.kind}Id`, state.entity.id);
+  const filters = panel === "insights" ? state.insightFilters : panel === "activity" ? state.activityFilters : null;
+  for (const [key, value] of Object.entries(filters || {})) if (value && !(panel === "insights" && key === "window" && value === "30d")) query.set(key, value);
+  return `${base}${query.size ? `?${query}` : ""}`;
 }
 
 function writeUserRoute(mode, panel) {
@@ -677,7 +703,10 @@ function setTab(name, { load = true, historyMode = "replace" } = {}) {
       toast("Your draft is still open. Save it or close it before leaving this workspace.");
       return;
     }
-    for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+    state.entityRequestSequence += 1;
+    state.entityLoading = null;
+    state.entity = null;
+    for (const dialog of document.querySelectorAll("dialog[open]")) { dialog.dataset.entityKey = ""; dialog.close(); }
   }
   const primary = PRIMARY_TAB_FOR_PANEL[name] || name;
   $$("[data-tab]").forEach((button) => {
@@ -706,11 +735,36 @@ function setSettingsView(name, { historyMode = "replace" } = {}) {
     panel.hidden = panel.dataset.settingsPanel !== state.settingsView;
   });
   if (activeUserRoute() === "preferences") writeUserRoute(historyMode, "preferences");
+  if (state.settingsView === "notifications" && state.overview && !state.connectorHistoryLoaded && !state.connectorHistoryLoading && !state.connectorHistoryError) {
+    void loadConnectorHistory().catch(() => undefined);
+  }
 }
 
 function applyHashRoute() {
   const [rawRoute, rawQuery = ""] = location.hash.slice(1).split("?");
   const requested = rawRoute.replace(/^\/+|\/+$/g, "");
+  const routeQuery = new URLSearchParams(rawQuery);
+  const nextEntityId = routeQuery.get("planId") || routeQuery.get("productId") || "";
+  if (document.querySelector('dialog[open][data-dirty="true"]') && location.hash.slice(1) !== currentUserHashRoute()) {
+    writeUserRoute("replace", activeUserRoute());
+    toast("Your draft is still open. Save it or close it before leaving this detail.");
+    return;
+  }
+  if (requested === "activity/insights") {
+    state.insightFilters = { window: routeQuery.get("window") || "30d", store: routeQuery.get("store") || "", product: routeQuery.get("product") || "", asOf: routeQuery.get("asOf") || "" };
+    const form = $("#insightsFilters");
+    for (const key of ["window", "product"]) form.elements[key].value = state.insightFilters[key];
+    state.loadedRoutes.delete("insights");
+  }
+  if (requested === "activity") {
+    const nextFilters = Object.fromEntries(["window", "store", "product", "asOf"].map((key) => [key, routeQuery.get(key) || ""]).filter(([, value]) => value));
+    if (JSON.stringify(nextFilters) !== JSON.stringify(state.activityFilters)) {
+      state.activityFilters = nextFilters;
+      state.actions = [];
+      state.actionDisplayLimit = 25;
+      state.loadedRoutes.delete("activity");
+    }
+  }
   if (requested === "products") {
     const query = new URLSearchParams(rawQuery);
     state.query = query.get("q") || "";
@@ -745,7 +799,14 @@ function applyHashRoute() {
     })[route] || "purchase";
     setSettingsView(settingsView, { historyMode: "none" });
   }
+  const kind = routeQuery.has("planId") && ["plans", "products", "stores", "calls"].includes(panel) ? "plan" : ["products", "stores"].includes(panel) && routeQuery.has("productId") ? "product" : "";
+  state.entityRequestSequence += 1;
+  state.entityLoading = null;
+  state.entity = null;
+  for (const id of ["productDialog", "planDialog", "entityErrorDialog"]) { const dialog = $(`#${id}`); dialog.dataset.entityKey = ""; if (dialog.open) dialog.close(); }
   setTab(panel, { historyMode: "none" });
+  state.entity = kind && nextEntityId ? { kind, id: nextEntityId, panel } : null;
+  void restoreEntityDetail();
   if (panel === "calls") syncCallFilterView();
   const canonical = currentUserHashRoute(panel);
   if (requested !== canonical) history.replaceState(null, "", `#${canonical}`);
@@ -1654,9 +1715,19 @@ function renderProductDetail(variantId) {
   }
 }
 
-function openProductDetail(variantId) {
+async function openProductDetail(variantId, { routed = false } = {}) {
+  const panel = activeUserRoute();
+  const request = ++state.entityRequestSequence;
+  const key = entityKey();
+  if (!currentCatalogProductGroups().some((group) => group.variantId === variantId)) {
+    const page = await api(`/api/v1/user/library/products?variant=${encodeURIComponent(variantId)}&limit=1`);
+    if (request !== state.entityRequestSequence || panel !== activeUserRoute() || (routed && entityKey() !== key)) return;
+    if (!page.items?.length) throw new Error("This product is unavailable or has been removed. Return to the list to find another product.");
+    state.detailProduct = page.items[0];
+  }
   renderProductDetail(variantId);
   $("#productDialog").showModal();
+  if (!routed) { state.entity = { kind: "product", id: variantId, panel }; writeUserRoute("push", panel); $("#productDialog").dataset.entityKey = entityKey(); }
 }
 
 $("#productDialogBody").addEventListener("change", (event) => {
@@ -2194,6 +2265,10 @@ async function reportCartOutcome(action, outcome, actualTotalCents, { dialogForm
 }
 
 function renderActions() {
+  const filtered = Object.values(state.activityFilters).some(Boolean);
+  $("#activityFilterSummary").hidden = !filtered;
+  $("#clearActivityFilters").hidden = !filtered;
+  $("#activityFilterSummary").textContent = `${state.actionTotal} actions matching Insights filters · ${state.activityFilters.window || "all"} · ${state.activityFilters.store || "all stores"} · ${state.activityFilters.product || "all products"}`;
   const stages = state.actionInsights?.stages || {};
   const readyCount = Number(stages.ready_to_checkout || 0);
   const needsYouCount = Number(stages.needs_you || 0);
@@ -2404,6 +2479,7 @@ function syncCallFilterView() {
 }
 
 function renderCalls() {
+  renderWatchHistory();
   renderUpcomingDrops();
   renderWatchQueueSetting();
   renderWalmartDraws();
@@ -2495,8 +2571,9 @@ function syncCallBulkAction() {
 
 function renderActionPlatform() {
   renderWatchQueueSetting();
+  renderWatchHistory();
   const platform = state.actionPlatform || {};
-  const analytics = platform.analytics || {};
+  const analytics = state.filteredAnalytics || platform.analytics || {};
   const funnel = analytics.funnel || {};
   const spend = analytics.spend || {};
   const dailyHeadroom = spend.dailyCapCents === null || spend.dailyCapCents === undefined
@@ -2528,15 +2605,26 @@ function renderActionPlatform() {
     const readinessLabel = qualificationNeedsAttention ? labelFor(STORE_CHECK_WARNING_LABELS, warning) : ready ? "Ready" : "Needs setup";
     return `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(lane.retailerId))}</strong><small>${(lane.checklist || []).map((check) => `<span aria-hidden="true">${check.ready ? "✓" : "○"}</span> ${escapeHtml(check.label)}`).join(" · ")}</small></span><span class="tag ${ready && !qualificationNeedsAttention ? "good" : "warn"}">${escapeHtml(readinessLabel)}</span></div>`;
   }).join("") || '<div class="mini-row"><span>No supported stores are configured.</span></div>';
+  if (activeUserRoute() === "insights") {
+    const count = Object.values(funnel).reduce((sum, value) => sum + Number(value || 0), 0);
+    $("#insightsScope").textContent = `${count} matching actions · ${Number(analytics.reportedOutcomes || 0)} reported outcomes. Period uses action creation time; outcomes are current. Cap headroom covers your whole account.${count ? "" : " Try a wider period or clear the product and store filters."}`;
+    const select = $("#insightsStore");
+    select.innerHTML = '<option value="">All stores</option>' + (platform.analytics?.retailers || []).map((item) => `<option value="${escapeHtml(item.retailerId)}">${escapeHtml(retailerDisplayName(item.retailerId))}</option>`).join("");
+    if (state.insightFilters.store && ![...select.options].some((option) => option.value === state.insightFilters.store)) select.add(new Option(retailerDisplayName(state.insightFilters.store), state.insightFilters.store));
+    select.value = state.insightFilters.store;
+    $("#analyticsCsv").href = `/api/v1/user/analytics.csv?${new URLSearchParams(state.insightFilters)}`;
+    writeUserRoute("replace", "insights");
+  }
   renderConnectors();
 }
 
 function renderConnectors() {
   const connectors = state.actionPlatform?.connectors || [];
   const deliveries = state.actionPlatform?.connectorDeliveries || [];
+  renderConnectorHistory();
   $("#connectorList").innerHTML = connectors.map((connector) => {
     const latest = deliveries.find((delivery) => delivery.connectorId === connector.id);
-    return `<div class="mini-row"><span><strong>${escapeHtml(connector.name)}</strong><small>${escapeHtml(words(connector.kind))} · ${connector.events.map(words).join(", ")}${latest ? ` · latest ${words(latest.state)}` : ""}</small></span><div class="inline-actions"><span class="tag ${connector.enabled && connector.runtimeBound ? "good" : "warn"}">${connector.runtimeBound ? connector.enabled ? "Ready" : "Paused" : "Needs setup"}</span><button class="button quiet" data-connector-edit="${escapeHtml(connector.id)}" type="button">Edit</button><button class="button quiet" data-connector-test="${escapeHtml(connector.id)}" type="button" ${connector.runtimeBound ? "" : "disabled"}>Test</button><button class="button quiet" data-connector-toggle="${escapeHtml(connector.id)}" type="button">${connector.enabled ? "Pause" : "Enable"}</button></div></div>`;
+    return `<div class="mini-row"><span><strong>${escapeHtml(connector.name)}</strong><small>${escapeHtml(words(connector.kind))} · ${connector.events.map(words).join(", ")}${latest ? ` · latest ${words(latest.state)}` : ""}</small></span><div class="inline-actions"><span class="tag ${connector.enabled && connector.runtimeBound ? "good" : "warn"}">${connector.runtimeBound ? connector.enabled ? "Ready" : "Paused" : "Needs setup"}</span><button class="button quiet" data-connector-edit="${escapeHtml(connector.id)}" type="button">Edit</button><button class="button quiet" data-connector-remove="${escapeHtml(connector.id)}" type="button">Remove</button><button class="button quiet" data-connector-test="${escapeHtml(connector.id)}" type="button" ${connector.runtimeBound ? "" : "disabled"}>Test</button><button class="button quiet" data-connector-toggle="${escapeHtml(connector.id)}" type="button">${connector.enabled ? "Pause" : "Enable"}</button></div></div>`;
   }).join("") || '<div class="mini-row"><span>No notification sources yet.</span></div>';
 }
 
@@ -2545,7 +2633,8 @@ function activeUserRoute() {
 }
 
 function currentCatalogProductGroups() {
-  return activeUserRoute() === "stores" ? state.storeProductGroups : state.productGroups;
+  const groups = activeUserRoute() === "stores" ? state.storeProductGroups : state.productGroups;
+  return state.detailProduct && !groups.some((group) => group.variantId === state.detailProduct.variantId) ? [...groups, state.detailProduct] : groups;
 }
 
 function currentCatalogProducts() {
@@ -2708,6 +2797,7 @@ function renderUserRoute(route) {
     setSettingsView(state.settingsView);
   }
   renderRouteLoadError(route);
+  void restoreEntityDetail();
 }
 
 function renderRouteLoadError(route) {
@@ -2824,15 +2914,25 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
   } else if (route === "activity") {
     await refreshActionActivity();
   } else if (route === "insights") {
-    const actionPlatform = await routeRequest("/api/v1/user/action-platform", {});
+    const sequence = ++state.insightSequence;
+    const [actionPlatform, analytics] = await Promise.all([
+      routeRequest("/api/v1/user/action-platform", {}),
+      api(`/api/v1/user/analytics?${new URLSearchParams(state.insightFilters)}`)
+    ]);
     state.actionPlatform = actionPlatform || null;
+    if (sequence !== state.insightSequence) return false;
+    state.filteredAnalytics = analytics.analytics;
+    state.insightFilters.asOf = analytics.analytics.filters.until || analytics.analytics.generatedAt;
   } else if (route === "preferences") {
+    const sequence = ++state.preferenceRequestSequence;
     const [privacy, profiles, actionPlatform, devicePage] = await Promise.all([
       api("/api/v1/user/privacy"),
       routeRequest("/api/v1/user/purchase-profiles", { items: [] }),
       routeRequest("/api/v1/user/action-platform", {}),
-      api("/api/v1/user/devices")
+      api("/api/v1/user/devices"),
+      state.settingsView === "notifications" ? loadConnectorHistory().catch(() => undefined) : Promise.resolve()
     ]);
+    if (sequence !== state.preferenceRequestSequence) return false;
     state.devices = devicePage.items || [];
     renderPairedDevices();
     renderPairing();
@@ -2921,7 +3021,7 @@ function applyActionActivity(actions) {
 async function refreshActionActivity() {
   const requestSequence = state.actionActivityRequestSequence + 1;
   state.actionActivityRequestSequence = requestSequence;
-  const actions = await fetchLoadedPages((offset) => `/api/v1/user/jobs?limit=100&offset=${offset}`, Math.max(100, state.actions.length));
+  const actions = await fetchLoadedPages((offset) => activityPath(offset), Math.max(100, state.actions.length));
   if (requestSequence < state.actionActivityAppliedSequence) return false;
   state.actionActivityAppliedSequence = requestSequence;
   applyActionActivity(actions);
@@ -3341,8 +3441,12 @@ function openSetup(listingId) {
   requestAnimationFrame(() => form.elements.targetQuantity.focus());
 }
 
-async function openPlan(id) {
+async function openPlan(id, { routed = false } = {}) {
+  const panel = activeUserRoute();
+  const request = ++state.entityRequestSequence;
+  const key = entityKey();
   const { purchaseIntent: mission } = await api(`/api/v1/user/purchase-intents/${encodeURIComponent(id)}`);
+  if (request !== state.entityRequestSequence || panel !== activeUserRoute() || (routed && entityKey() !== key)) return;
   state.editingPlan = mission;
   const form = $("#planForm");
   form.elements.id.value = mission.id;
@@ -3398,12 +3502,13 @@ async function openPlan(id) {
   $("#prepareGuardedPlanButton").hidden = supportedTargets.length < 1;
   syncPlanAction();
   $("#planDialog").showModal();
+  if (!routed) { state.entity = { kind: "plan", id, panel: activeUserRoute() }; writeUserRoute("push", activeUserRoute()); $("#planDialog").dataset.entityKey = entityKey(); }
 }
 
 function planTargetDrafts(form, strict = false) {
   return $$("[data-target-id]", form).map((card) => {
     const rawPrice = $("[data-field=maxPrice]", card).value.trim();
-    const dollars = rawPrice ? Number(rawPrice) : null;
+    const dollars = rawPrice ? (strict ? centsInput(rawPrice, "Maximum item price") / 100 : Number(rawPrice)) : null;
     if (strict && dollars !== null && (!Number.isFinite(dollars) || dollars <= 0)) {
       throw new Error("Every enabled store needs a positive maximum item price for cart actions.");
     }
@@ -3529,7 +3634,7 @@ function prepareGuardedPlanDraft() {
 }
 
 function renderPairedDevices() {
-  $("#pairedDevices").innerHTML = state.devices.map((device) => `<div class="mini-row"><span><strong>${escapeHtml(device.name || "Chrome browser")}</strong><small>v${escapeHtml(device.extensionVersion)} · ${escapeHtml(device.status === "revoked" ? "Revoked" : device.online ? "Online" : "Offline")} · Last seen ${escapeHtml(relative(device.lastSeenAt))}</small></span>${device.status === "active" ? `<button type="button" class="button quiet" data-revoke-browser="${escapeHtml(device.id)}">Revoke</button>` : ""}</div>`).join("") || '<p>No paired browsers yet.</p>';
+  $("#pairedDevices").innerHTML = state.devices.map((device) => `<div class="mini-row"><span><strong>${escapeHtml(device.name || "Chrome browser")}</strong><small>v${escapeHtml(device.extensionVersion)} · ${escapeHtml(device.status === "revoked" ? "Revoked" : device.online ? "Online" : "Offline")} · Last seen ${escapeHtml(relative(device.lastSeenAt))}</small></span><button type="button" class="button quiet" data-rename-browser="${escapeHtml(device.id)}">Rename</button>${device.status === "revoked" ? '<button type="button" class="button quiet" data-repair-browser>Pair again</button>' : ""}${device.status === "active" ? `<button type="button" class="button quiet" data-revoke-browser="${escapeHtml(device.id)}">Revoke</button>` : ""}</div>`).join("") || '<p>No paired browsers yet.</p>';
 }
 
 function renderPairing() {
@@ -3671,6 +3776,47 @@ document.addEventListener("click", async (event) => {
       await resumeVisibleDashboard();
       return;
     }
+    if (button.dataset.renameBrowser) {
+      const device = state.devices.find((item) => item.id === button.dataset.renameBrowser);
+      if (!device) return;
+      const form = $("#browserNameForm");
+      form.elements.id.value = device.id;
+      form.elements.name.value = device.name || "Chrome browser";
+      $("#browserNameDialog").showModal();
+      form.elements.name.focus();
+      return;
+    }
+    if (button.hasAttribute("data-repair-browser")) { await createPairingCode(); return; }
+    if (button.dataset.connectorRemove) {
+      if (!(await requestConfirmation({ title: "Remove this destination?", summary: "This stops queued updates and removes this destination’s delivery history. Sent updates cannot be recalled. You can add the destination again later.", confirmLabel: "Remove destination" })).confirmed) return;
+      await api(`/api/v1/user/connectors/${encodeURIComponent(button.dataset.connectorRemove)}`, { method: "DELETE", body: JSON.stringify({ confirmation: "REMOVE_DESTINATION" }) });
+      if ($("#connectorForm").elements.id.value === button.dataset.connectorRemove) { $("#connectorForm").reset(); $("#connectorForm").querySelector('[type="submit"]').textContent = "Add destination"; }
+      if (state.connectorFilter === button.dataset.connectorRemove) { state.connectorFilter = ""; state.connectorOffset = 0; }
+      await refresh();
+      toast("Destination removed.");
+      return;
+    }
+    if (button.dataset.retryDelivery) {
+      const delivery = state.connectorHistory.items.find((item) => item.id === button.dataset.retryDelivery);
+      if (!delivery || !(await requestConfirmation({ title: "Retry this update?", summary: "The same update will be sent to its original destination. It may arrive twice if the destination received the earlier attempt before the request failed.", confirmLabel: "Retry update" })).confirmed) return;
+      await api(`/api/v1/user/connectors/deliveries/${encodeURIComponent(delivery.id)}/retry`, { method: "POST", body: JSON.stringify({ confirmation: "RETRY_NOTIFICATION", updatedAt: delivery.updatedAt, attemptCount: delivery.attemptCount }) });
+      await loadConnectorHistory(); renderConnectorHistory();
+      toast("Update queued for retry."); return;
+    }
+    if (button.id === "retryDeliveryHistory") { await loadConnectorHistory(); return; }
+    if (["previousDeliveries", "nextDeliveries"].includes(button.id)) {
+      const previous = state.connectorOffset;
+      state.connectorOffset = Math.max(0, previous + (button.id === "nextDeliveries" ? 50 : -50));
+      try { await loadConnectorHistory(); } catch (error) { state.connectorOffset = previous; renderConnectorHistory(); throw error; }
+      return;
+    }
+    if (button.id === "retryEntity") { await restoreEntityDetail(); return; }
+    if (button.id === "insightsActions") {
+      state.activityFilters = { ...state.insightFilters }; state.actions = []; state.actionDisplayLimit = 25;
+      state.loadedRoutes.delete("activity"); setTab("activity", { historyMode: "push" }); return;
+    }
+    if (button.id === "clearActivityFilters") { state.activityFilters = {}; state.actions = []; state.actionDisplayLimit = 25; writeUserRoute("replace", "activity"); await loadUserRoute("activity", { force: true }); return; }
+    if (button.id === "moreWatchHistory") { state.watchHistoryLimit += 25; renderWatchHistory(); return; }
     if (button.id === "copyPairing") {
       if (!state.pairing?.code || new Date(state.pairing.expiresAt).getTime() <= Date.now()) { renderPairing(); return; }
       await navigator.clipboard.writeText(state.pairing.code);
@@ -3782,7 +3928,7 @@ document.addEventListener("click", async (event) => {
       try {
         if (state.actions.length < state.actionTotal) {
           const sequence = ++state.actionActivityRequestSequence;
-          const page = await api(`/api/v1/user/jobs?limit=100&offset=${state.actions.length}`);
+          const page = await api(activityPath(state.actions.length));
           if (sequence >= state.actionActivityAppliedSequence) {
             state.actionActivityAppliedSequence = sequence;
             applyActionActivity({ ...page, items: [...new Map([...state.actions, ...(page.items || [])].map((item) => [item.id, item])).values()] });
@@ -3937,7 +4083,7 @@ document.addEventListener("click", async (event) => {
       setTab("preferences");
       toast("Privacy change notice acknowledged.");
     }
-    if (button.dataset.productDetail) openProductDetail(button.dataset.productDetail);
+    if (button.dataset.productDetail) await openProductDetail(button.dataset.productDetail);
     if (button.id === "newProfileButton") {
       openNewProfileDialog();
       return;
@@ -4040,7 +4186,7 @@ document.addEventListener("click", async (event) => {
     if (button.id === "changeSetupStore") {
       const variantId = button.dataset.variantId;
       $("#setupDialog").close();
-      if (variantId) openProductDetail(variantId);
+      if (variantId) await openProductDetail(variantId);
       return;
     }
     if (button.dataset.trackListing) {
@@ -4067,7 +4213,7 @@ document.addEventListener("click", async (event) => {
           method: "DELETE",
           body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
         });
-        $("#planDialog").close();
+        closeEntityDialog($("#planDialog"));
         state.editingPlan = null;
         await refresh();
         setTab("plans");
@@ -4366,7 +4512,7 @@ $("#planForm").addEventListener("submit", async (event) => {
         }
       })
     });
-    $("#planDialog").close(); await refresh(); toast("Plan saved.");
+    closeEntityDialog($("#planDialog")); await refresh(); toast("Plan saved.");
   } catch (error) { toast(error.message || "Plan could not be saved.", true); }
 });
 
@@ -4377,7 +4523,7 @@ async function closeDraftDialog(dialog) {
     if (!result.confirmed) return;
   }
   dialog.dataset.dirty = "false";
-  dialog.close();
+  closeEntityDialog(dialog);
 }
 for (const id of ["setupDialog", "planDialog", "profileDialog", "productLinkDialog"]) {
   const dialog = document.getElementById(id);
@@ -4440,6 +4586,9 @@ function beginProfileEdit(profileId) {
   form.elements.cooldownMinutes.value = Math.round(Number(profile.cooldownSeconds || 0) / 60);
   form.elements.isDefault.checked = profile.isDefault === true;
   syncProfilePriceMode();
+  $("#profileEditScope").textContent = "Saving changes updates linked plans after review. To keep their current settings, save a separate setup for future use.";
+  $("#profileEditScope").hidden = false;
+  $("#separateProfile").hidden = false;
   $("#profileDialogTitle").textContent = "Edit setup";
   $("#saveProfileButton").textContent = "Save changes";
   $("#profileDialog").showModal();
@@ -4453,6 +4602,8 @@ function resetProfileForm() {
   form.elements.fulfillment.value = "shipping";
   form.elements.isDefault.checked = state.profiles.length === 0;
   syncProfilePriceMode();
+  $("#profileEditScope").hidden = true;
+  $("#separateProfile").hidden = true;
   $("#profileDialogTitle").textContent = "New setup";
   $("#saveProfileButton").textContent = "Save setup";
 }
@@ -4788,3 +4939,159 @@ document.addEventListener("visibilitychange", () => {
     scheduleAdaptivePoll();
   }
 });
+
+function entityKey() {
+  return state.entity ? `${state.entity.panel}:${state.entity.kind}:${state.entity.id}` : "";
+}
+
+async function restoreEntityDetail() {
+  const entity = state.entity;
+  const key = entityKey();
+  if (!entity || entity.panel !== activeUserRoute() || state.entityLoading?.key === key) return;
+  const dialog = $(entity.kind === "plan" ? "#planDialog" : "#productDialog");
+  if (dialog.open && dialog.dataset.entityKey === key) return;
+  const pending = { key };
+  state.entityLoading = pending;
+  try {
+    if (entity.kind === "plan") await openPlan(entity.id, { routed: true });
+    else await openProductDetail(entity.id, { routed: true });
+    if (key !== entityKey() || state.entityLoading !== pending) return;
+    dialog.dataset.entityKey = key;
+    const errorDialog = $("#entityErrorDialog");
+    errorDialog.dataset.entityKey = "";
+    if (errorDialog.open) errorDialog.close();
+  } catch (error) {
+    if (key !== entityKey() || state.entityLoading !== pending) return;
+    $("#entityErrorMessage").textContent = error.message || "This detail could not load. Retry or return to the list.";
+    $("#entityErrorDialog").dataset.entityKey = key;
+    if (!$("#entityErrorDialog").open) $("#entityErrorDialog").showModal();
+  } finally {
+    if (state.entityLoading === pending) state.entityLoading = null;
+  }
+}
+
+for (const id of ["productDialog", "planDialog", "entityErrorDialog"]) {
+  const dialog = $(`#${id}`);
+  dialog.addEventListener("close", () => {
+    if (!dialog.open && state.entity && dialog.dataset.entityKey === entityKey()) {
+      state.entityRequestSequence += 1;
+      state.entity = null;
+      writeUserRoute("replace", activeUserRoute());
+    }
+  });
+}
+
+async function loadConnectorHistory() {
+  const sequence = ++state.connectorHistorySequence;
+  state.connectorHistoryLoading = true;
+  state.connectorHistoryError = false;
+  renderConnectorHistory();
+  try {
+    const page = await api(`/api/v1/user/connectors/deliveries?offset=${state.connectorOffset}&connector=${encodeURIComponent(state.connectorFilter)}`);
+    if (sequence !== state.connectorHistorySequence) return;
+    state.connectorHistory = { items: page.items || [], total: Number(page.total || 0) };
+    state.connectorHistoryLoaded = true;
+    if (!page.items?.length && state.connectorOffset > 0) {
+      state.connectorOffset = Math.max(0, Math.floor((state.connectorHistory.total - 1) / 50) * 50);
+      return loadConnectorHistory();
+    }
+  } catch (error) {
+    if (sequence !== state.connectorHistorySequence) return;
+    state.connectorHistoryError = true;
+    throw error;
+  } finally {
+    if (sequence === state.connectorHistorySequence) {
+      state.connectorHistoryLoading = false;
+      renderConnectorHistory();
+    }
+  }
+}
+
+function renderConnectorHistory() {
+  const select = $("#deliveryConnectorFilter");
+  const connectors = state.actionPlatform?.connectors || [];
+  select.innerHTML = '<option value="">All destinations</option>' + connectors.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("");
+  select.value = state.connectorFilter;
+  select.disabled = state.connectorHistoryLoading;
+  $("#deliveryHistoryError").hidden = !state.connectorHistoryError;
+  $("#deliveryHistoryList").setAttribute("aria-busy", String(state.connectorHistoryLoading));
+  const { items, total } = state.connectorHistory;
+  $("#deliveryHistoryList").innerHTML = items.map((item) => `<div class="mini-row"><span><strong>${escapeHtml(item.connectorName)} · ${escapeHtml(words(item.eventType))}</strong><small>${escapeHtml(words(item.state))} · ${Number(item.attemptCount)} attempts · ${escapeHtml(relative(item.createdAt))}${item.lastErrorCode ? ` · ${escapeHtml(words(item.lastErrorCode))}` : ""}</small></span>${item.state === "dead_letter" ? `<button class="button quiet" data-retry-delivery="${escapeHtml(item.id)}" type="button">Retry update</button>` : ""}</div>`).join("") || '<p>No updates in this history. Send a test from a configured destination.</p>';
+  $("#deliveryPageStatus").textContent = state.connectorHistoryLoading ? "Loading updates…" : state.connectorHistoryError ? "History unavailable" : `${items.length ? state.connectorOffset + 1 : 0}–${state.connectorOffset + items.length} of ${total}`;
+  $("#previousDeliveries").disabled = state.connectorHistoryLoading || state.connectorHistoryError || state.connectorOffset === 0;
+  $("#nextDeliveries").disabled = state.connectorHistoryLoading || state.connectorHistoryError || state.connectorOffset + items.length >= total;
+}
+
+$("#deliveryConnectorFilter").addEventListener("change", async (event) => {
+  const previousFilter = state.connectorFilter;
+  const previousOffset = state.connectorOffset;
+  state.connectorFilter = event.target.value;
+  state.connectorOffset = 0;
+  try { await loadConnectorHistory(); renderConnectorHistory(); }
+  catch (error) { state.connectorFilter = previousFilter; state.connectorOffset = previousOffset; renderConnectorHistory(); toast(error.message, true); }
+});
+
+$("#browserNameForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector('[type="submit"]');
+  submit.disabled = true;
+  try {
+    await api(`/api/v1/user/devices/${encodeURIComponent(form.elements.id.value)}`, { method: "PATCH", body: JSON.stringify({ name: form.elements.name.value.trim() }) });
+    state.preferenceRequestSequence += 1;
+    state.devices = state.devices.map((device) => device.id === form.elements.id.value ? { ...device, name: form.elements.name.value.trim() } : device);
+    renderPairedDevices();
+    $("#browserNameDialog").close();
+    await refresh();
+    toast("Browser name saved.");
+  } catch (error) { toast(error.message, true); }
+  finally { submit.disabled = false; }
+});
+
+function activityPath(offset) {
+  const query = new URLSearchParams({ limit: "100", offset: String(offset) });
+  for (const [key, value] of Object.entries(state.activityFilters)) if (value) query.set(key, value);
+  return `/api/v1/user/jobs?${query}`;
+}
+
+$("#insightsFilters").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  state.insightFilters = { window: form.elements.window.value, store: form.elements.store.value, product: form.elements.product.value.trim(), asOf: "" };
+  writeUserRoute("replace", "insights");
+  await loadUserRoute("insights", { force: true });
+});
+
+function renderWatchHistory() {
+  const list = $("#watchHistoryList");
+  if (!list) return;
+  const filter = $("#watchHistoryFilter").value;
+  const all = [...(state.actionPlatform?.watchQueue || [])].filter((item) => filter === "all" || (["queued", "observing"].includes(item.state) ? filter === "active" : filter === "ended"))
+    .sort((a, b) => String(b.updatedAt || b.closesAt).localeCompare(String(a.updatedAt || a.closesAt)) || b.id.localeCompare(a.id));
+  list.innerHTML = all.slice(0, state.watchHistoryLimit).map((item) => `<div class="mini-row"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(retailerDisplayName(item.retailerId))} · ${escapeHtml(words(item.state))}${item.closedReason ? ` · ${escapeHtml(words(item.closedReason))}` : ""} · ${Number(item.observationCount)} checks · ${item.lastObservedAt ? `Last checked ${escapeHtml(relative(item.lastObservedAt))}` : "Not checked yet"}</small></span>${item.missionId ? `<button class="button quiet" data-edit-plan="${escapeHtml(item.missionId)}" type="button">Review plan</button>` : ""}${["queued", "observing"].includes(item.state) ? `<button class="button quiet" data-watch-cancel="${escapeHtml(item.id)}" type="button">Stop watching</button>` : ""}</div>`).join("") || '<p>No matching watches. Choose Watch on a scheduled call to begin.</p>';
+  $("#moreWatchHistory").hidden = all.length <= state.watchHistoryLimit;
+}
+
+$("#watchHistoryFilter")?.addEventListener("change", () => { state.watchHistoryLimit = 25; renderWatchHistory(); });
+
+$("#separateProfile").addEventListener("click", () => {
+  const form = $("#profileForm");
+  form.elements.id.value = "";
+  form.elements.name.value = `${form.elements.name.value.slice(0, 51)} (copy)`;
+  $("#profileDialogTitle").textContent = "New setup";
+  $("#profileEditScope").textContent = "This new setup will apply to future choices. Existing plans keep their current setup. Use as default only affects future Quick adds.";
+  $("#separateProfile").hidden = true;
+  $("#saveProfileButton").textContent = "Save new setup";
+  $("#profileDialog").dataset.dirty = "true";
+  form.elements.name.focus();
+});
+
+function closeEntityDialog(dialog) {
+  if (state.entity && dialog.dataset.entityKey === entityKey()) {
+    state.entityRequestSequence += 1;
+    state.entity = null;
+    writeUserRoute("replace", activeUserRoute());
+  }
+  dialog.dataset.entityKey = "";
+  dialog.close();
+}

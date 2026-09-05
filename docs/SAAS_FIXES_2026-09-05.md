@@ -21,7 +21,7 @@ The implementation was developed and tested against the audited 1.22.6 working t
 - JS/CSS use gzip when accepted, content-hash ETags and mandatory cache revalidation. Private API and HTML responses retain `no-store`; assets are not given an unsafe immutable lifetime at unversioned URLs.
 - Playwright runs five isolated browser journeys and captures mobile evidence. GitHub CI runs checks, builds, the application/PostgreSQL suites and browser tests. No retailer cart or external destination is exercised by these browser fixtures.
 
-## Validation
+## Initial validation · 99ce333
 
 - Final type checking and UI-token/selector-pack checks: passed.
 - Full extension and TypeScript build: passed.
@@ -36,6 +36,21 @@ The proposed commit was also checked against clean HEAD, excluding the pre-exist
 
 Native PostgreSQL proof: `npm run test:postgres:native` passed (1 proof, 0 failures; 11 minutes 45 seconds). This verifies the existing PostgreSQL isolation, concurrent-write and signal lifecycle boundaries in a temporary local database; it does not establish hosted HTTP deployment readiness.
 
+## Follow-up implementation
+
+- Browser names can be changed in Settings without changing their credentials. Revoked browsers have a Pair again action; the API acceptance check proves that re-pairing issues a new identity while the revoked credential stays invalid.
+- Notification history uses 50-row server pages and destination filtering. Switching Settings sections loads history independently, with its own loading/error/retry state; a history outage leaves other Settings usable. Users can remove a destination and its history after explicit confirmation. A live delivery lease blocks removal; the UI explains that sent updates cannot be recalled. Removal retains an audit event and deletes queued deliveries.
+- Failed notifications can be retried explicitly. Attempts remain cumulative, duplicate retry requests do not create new deliveries, and stale review data or changed destination bindings are rejected. The UI explains possible duplicate receipt after a connection failure. Invalid management input now returns readable client errors.
+- Product and plan detail URLs restore records outside the loaded page. Back closes detail before leaving the list; reload restores detail; unavailable records have Retry and Return to list. Dirty plan edits block route departure, and late detail responses cannot open over another workspace.
+- Insights offers 24-hour, 7-day, 30-day, 90-day and all-time periods plus store and product/SKU filters. Summaries, CSV and Activity drill-through share the same creation-time cohort and anchored end time. Outcomes remain current; cap headroom remains account-wide and is labeled accordingly. Empty results offer wider-filter guidance, and CSV text filters cannot become spreadsheet formulas.
+- Editing a setup offers Save a separate setup for future use. Creating the copy preserves existing linked plan policies; making the copy the default affects future Quick adds. Existing-setup edits still require the impact review from the first change. Plan price inputs now also reject excess precision and exponential notation on save.
+- Calls exposes watch history, including terminal reason, observation count, last check, plan review and stop controls for running watches. Filters distinguish running and ended watches; older entries are reachable.
+- Future checkout/order capabilities are collapsed in reference details. Experimental sharing/observer tools state that network coverage is unverified. Notification management, history and Insights controls wrap on phone-sized screens.
+
+Follow-up validation: `npm run check` and `npm run build` passed. All 973 application checks passed in the final full runner (7 minutes 30 seconds); the isolated native PostgreSQL proof passed (1 proof, 0 failures; 11 minutes 45 seconds). The full `npm test` command exited 0. A separate snapshot excluding pre-existing release/extension edits passed all 18 focused API, recovery and copy checks. The added API checks cover 105 delivery records, ownership boundaries, credential preservation/re-pair, retries and removal, exact product lookup, and consistent time/store/product filtering. Eleven browser journeys passed at 390 × 844 and cover the original flows plus entity routing, browser naming, notification history/removal, Insights drill-through and separate-setup preservation. Additional recovery checks cover terminal watch history and late detail responses. Two deterministic browser cases release older requests after newer successful actions to verify browser-name and restored-detail state cannot regress. History failure/retry is exercised while switching between Notifications and Chrome settings. These fixtures send no external notifications and perform no retailer cart actions.
+
+[Mobile notification history evidence](screenshots/saas-fixes-2026-09-05/notifications-mobile.png).
+
 ## Finding-by-finding disposition
 
 “Fixed” refers to the identified application defect or the stated mitigation, not a production-launch certification. “Partial” names both the implemented portion and the remaining acceptance work. “Open” requires additional implementation or deployment acceptance.
@@ -46,13 +61,13 @@ Native PostgreSQL proof: `npm run test:postgres:native` passed (1 proof, 0 failu
 | YS-02 | Open | Select/connect the identity provider and verify full login, invitation, recovery and revocation lifecycle. |
 | YS-03 | Open | Implement governed global catalog curation and tenant-safe propagation; retain the existing guard. |
 | YS-04 | Open | Implement durable account cleanup, identity revocation and receipts; user data export remains available. |
-| YS-05 | Partial | Inventory and revoke added. Browser renaming and full re-pair acceptance remain. |
+| YS-05 | Fixed locally | Inventory, naming, revoke and Pair again controls added; credential preservation and re-pair isolation verified. Installed-extension release acceptance remains under YS-15/YS-32. |
 | YS-06 | Partial | Desktop handoff and product-first guidance added to setup docs. A new intent-choice onboarding flow and first-value timing study remain. |
 | YS-07 | Fixed | Copy/countdown/expiry/regeneration and new-browser success transition implemented. |
 | YS-08 | Partial | Removed the nonexistent Operations credential path. Provision a real authenticated sender and verify a received event through the target deployment. |
 | YS-09 | Fixed mitigation | Discord intake is unavailable before configuration. Shipping an ingestion client remains separate integration work. |
 | YS-10 | Partial | Administrator handoff and test instructions are explicit. A tracked connection request or self-service provisioning flow remains. |
-| YS-11 | Partial | Destination edits and event choices added. Removal, paged delivery history and supported recovery/retry UI remain. |
+| YS-11 | Fixed | Editing, event choices, removal, paged/filterable history and explicit retry are implemented. Removal discloses history deletion and rejects live leases; retries preserve the original binding and attempts. |
 | YS-12 | Open | Unify per-store responsibility, permission, sign-in, rehearsal, activation and return-to-plan actions. |
 | YS-13 | Fixed | Unverified checks no longer read as healthy. |
 | YS-14 | Partial | Cadence copy matches current runtime. Shared scheduling metadata and next-eligible-check presentation remain. |
@@ -61,33 +76,33 @@ Native PostgreSQL proof: `npm run test:postgres:native` passed (1 proof, 0 failu
 | YS-17 | Fixed | Older Calls/Activity retrieval and loaded-page preservation. Offset pages still require refresh to reconcile concurrent inserts. |
 | YS-18 | Fixed | Exact server-side actor-owned associations replace the truncated joins. |
 | YS-19 | Fixed | Product and call plan labels use actual status rather than existence-based readiness. |
-| YS-20 | Partial | Pre-save impact review and stale-impact rejection added. A distinct future-default-only edit choice and detailed skipped-plan preview remain. |
+| YS-20 | Partial | Impact review, stale-impact rejection and a separate-setup choice for future defaults are implemented. Detailed pre-save skipped-plan preview remains. |
 | YS-21 | Fixed | Stable call selection survives refresh and reconciles ineligible products. |
 | YS-22 | Open | Complete proposal history, verified metadata and retained correction drafts. |
 | YS-23 | Fixed | Query-aware empty state with working Clear search and filters. |
-| YS-24 | Partial | Query/filter URLs and dialog route cleanup added. Product/plan entity deep links and invalid-entity recovery remain. |
+| YS-24 | Fixed | Query/filter and product/plan detail URLs restore through reload; Back, invalid-entity recovery and late-response protection are verified. |
 | YS-25 | Partial | Product detail observation age added. Card-level source/freshness states and direct recheck remain. |
 | YS-26 | Partial | Store capability labels added. Per-user readiness in store selection remains. |
 | YS-27 | Partial | Global product/SKU/store/status search added. Dedicated store/action filters and bulk pause/resume remain. |
 | YS-28 | Partial | Explicit dialog discard, navigation protection and unload warnings added. Cross-reload draft storage remains. |
 | YS-29 | Open | Audited corrective spend/refund ledger entries and idempotent correction UI. |
-| YS-30 | Partial | Watch count and consequences reviewed before mode changes. Terminal history/reason/recovery view remains. |
+| YS-30 | Partial | Mode consequences plus terminal watch history/reasons, plan review and running-watch stop controls are implemented. Restart eligibility for cancelled watches remains. |
 | YS-31 | Open | Decide discovery-only versus user-reported drawing participation/reminders and implement that scope. |
 | YS-32 | Open | Authorized installed-extension release acceptance for each store; fixtures never perform real adds. |
-| YS-33 | Open | Shopper Insights period/store/product filters and action drill-through. |
+| YS-33 | Fixed | Period/store/product filters, matching CSV and Activity drill-through, outcome sample counts and no-data guidance are implemented; budget headroom is explicitly account-wide. |
 | YS-34 | Fixed | Reported outcomes shown as alternatives, with window and unreported-outcome caveats. |
-| YS-35 | Open | Move inactive future order gates out of the primary qualification workflow. |
+| YS-35 | Fixed | Inactive order gates are collapsed in reference details with the manual-checkout boundary explained. |
 | YS-36 | Open | Unified incident/case ownership, evidence, next action and customer-visible resolution. |
 | YS-37 | Open | Requester notification, expiry and return-to-operation journey after independent approval. |
 | YS-38 | Open | Production SLOs, ownership, independent monitoring, incident communication and restore exercises. |
-| YS-39 | Open | Explicit experimental/local labels and deployed independent witness/community acceptance. |
+| YS-39 | Partial | Experimental labels and production-coverage limits are explicit; deployed independent witness/community acceptance remains. |
 | YS-40 | Fixed | Spending draft/revision preservation and explicit reload. |
 | YS-41 | Fixed | Initial failure/retry and stale-data recovery. |
 | YS-42 | Partial | Deadlines, cancellation support, stale-read sequencing and safe timeout messaging added. Broader active cancellation of obsolete reads and “still working” states remain. |
 | YS-43 | Fixed locally | Bounded plan DOM, retained expansion/focus and measured local improvement. Slower-device/production measurements remain. |
 | YS-44 | Fixed delivery | Gzip plus content-hash revalidation; private responses remain uncached. Route splitting remains measurement-driven. |
 | YS-45 | Partial | Dialog names and real keyboard focus checks added. Full assistive-technology acceptance and eliminating stacked confirmation dialogs remain. |
-| YS-46 | Partial | Five phone-sized browser journeys and desktop guidance added. Wider device/zoom coverage and duplicated CSS-generated status announcements remain. |
+| YS-46 | Partial | Eleven phone-sized browser journeys and desktop guidance added. Wider device/zoom coverage and duplicated CSS-generated status announcements remain. |
 | YS-47 | Fixed disclosure | Policy and change notice now distinguish local captures from hosted diagnostics; existing controls remain authoritative. |
 | YS-48 | Partial | Install, API source and notification guides added. Searchable troubleshooting, contextual support and release-specific documentation remain. |
 | YS-49 | Partial | Real-browser acceptance and CI workflow added. CI must execute in the hosting repository; broader axe/assistive-technology and live extension coverage remain. |

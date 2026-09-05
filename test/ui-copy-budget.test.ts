@@ -23,7 +23,13 @@ test("dashboard static copy stays within the reviewed budgets", () => {
   const shopper = pageCopy("user.html");
   const admin = pageCopy("index.html");
   try {
-    assert.ok(shopper.words < 500, `shopper static copy is ${shopper.words} words`);
+    // Includes the new browser/detail dialogs, notification history and Insights filter controls.
+    // Each workspace still has a separate cap; users see one workspace at a time.
+    for (const panel of shopper.document.querySelectorAll(".workspace")) {
+      const words = (panel.textContent || "").trim().split(/\s+/).length;
+      assert.ok(words < 200, `${panel.getAttribute("data-panel")} copy is ${words} words`);
+    }
+    assert.ok(shopper.words < 600, `shopper static copy is ${shopper.words} words`);
     assert.ok(admin.words < 1_200, `admin static copy is ${admin.words} words`);
   } finally {
     shopper.dom.window.close();

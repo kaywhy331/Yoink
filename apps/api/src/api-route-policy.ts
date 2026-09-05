@@ -120,6 +120,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
     return method === "GET" ? "user.read" : "user.intent.manage";
   }
   if (pathname === "/api/v1/devices" && method === "GET") return "user.read";
+  if (/^\/api\/v1\/devices\/[A-Za-z0-9_-]{3,120}$/.test(pathname) && method === "PATCH") return "user.device.manage";
   if (pathname === "/api/v1/devices/pairing-code" || /^\/api\/v1\/devices\/[A-Za-z0-9_-]{3,120}\/revoke$/.test(pathname)) {
     return "user.device.manage";
   }

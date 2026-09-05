@@ -81,3 +81,153 @@ test("expired pairing codes stop looking usable and can be regenerated", async (
   await expect(page.getByRole("button", { name: "Copy code" })).toBeVisible();
   expect(codeRequests).toBe(2);
 });
+
+
+test("product and plan links restore off-page details; Back closes detail and missing records recover", async ({ page }) => {
+  const response = await page.request.get("/api/v1/user/library/products?q=Browser+product+205");
+  const { items } = await response.json();
+  const product = items[0];
+  await page.goto(`/#products?productId=${product.variantId}`);
+  await expect(page.getByRole("dialog", { name: "Browser product 205" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("dialog", { name: "Browser product 205" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page).not.toHaveURL(/productId=/);
+  await page.goto(`/#plans?planId=${product.purchaseIntent.id}`);
+  await expect(page.locator("#planDialog")).toBeVisible();
+  await page.reload();
+  await expect(page.locator("#planDialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page).not.toHaveURL(/planId=/);
+  await page.goto("/#products?q=Browser+product+205");
+  await page.locator("[data-product-detail]").first().click();
+  await expect(page).toHaveURL(/productId=/);
+  await page.goBack();
+  await expect(page.locator("#productDialog")).not.toBeVisible();
+  await page.goto("/#products?productId=variant_missing");
+  await expect(page.getByRole("dialog", { name: "Detail unavailable" })).toBeVisible();
+  await page.getByRole("button", { name: "Return to list", exact: true }).click();
+  await expect(page).not.toHaveURL(/productId=/);
+});
+
+test("browser naming persists and notification history reaches older updates before removal", async ({ page }, testInfo) => {
+  await page.goto("/#settings/chrome");
+  await page.getByRole("button", { name: "Rename", exact: true }).first().click();
+  await page.getByRole("textbox", { name: "Browser name", exact: true }).fill("Travel laptop");
+  await page.getByRole("button", { name: "Save browser name", exact: true }).click();
+  await expect(page.locator("#pairedDevices")).toContainText("Travel laptop");
+  await page.reload();
+  await expect(page.locator("#pairedDevices")).toContainText("Travel laptop");
+  await page.route("**/api/v1/user/connectors/deliveries?**", (route) => route.abort("failed"));
+  await page.goto("/#settings/notifications");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.locator("#notificationHistory summary").click();
+  await expect(page.locator("#deliveryHistoryError")).toBeVisible();
+  await expect(page.locator('[data-panel="preferences"] [data-route-load-error]')).toHaveCount(0);
+  await page.locator('[data-settings-view="chrome"]').click();
+  await expect(page.getByRole("button", { name: "Rename", exact: true }).first()).toBeVisible();
+  await page.locator('[data-settings-view="notifications"]').click();
+  await page.unroute("**/api/v1/user/connectors/deliveries?**");
+  await page.getByRole("button", { name: "Retry history", exact: true }).click();
+  await expect(page.locator("#deliveryHistoryError")).not.toBeVisible();
+  await expect(page.locator("#deliveryPageStatus")).toHaveText("1–50 of 55");
+  await page.getByRole("button", { name: "Next updates", exact: true }).click();
+  await expect(page.locator("#deliveryPageStatus")).toHaveText("51–55 of 55");
+  await page.evaluate(async () => { window.scrollTo(0, 0); await new Promise(requestAnimationFrame); });
+  await page.screenshot({ path: testInfo.outputPath("notifications-mobile.png"), fullPage: true });
+  await page.locator("[data-connector-remove]").first().click();
+  await page.getByRole("button", { name: "Remove destination", exact: true }).click();
+  await expect(page.locator("#connectorList")).not.toContainText("Browser acceptance updates");
+  await expect(page.locator("#deliveryPageStatus")).toHaveText("0–0 of 0");
+});
+
+test("Insights filters survive reload and follow the user into Activity and CSV", async ({ page }) => {
+  await page.goto("/#activity/insights");
+  await page.locator('#insightsFilters [name="window"]').selectOption("7d");
+  await page.locator('#insightsFilters [name="product"]').fill("No matching product");
+  await page.getByRole("button", { name: "Apply filters", exact: true }).click();
+  await expect(page.locator("#insightsScope")).toContainText("0 matching actions");
+  await expect(page.locator("#analyticsCsv")).toHaveAttribute("href", /product=No\+matching\+product/);
+  await page.reload();
+  await expect(page.locator('#insightsFilters [name="product"]')).toHaveValue("No matching product");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole("button", { name: "View matching actions", exact: true }).click();
+  await expect(page.locator("#activityFilterSummary")).toContainText("No matching product");
+  await page.getByRole("button", { name: "Show all activity", exact: true }).click();
+  await expect(page.locator("#activityFilterSummary")).not.toBeVisible();
+  await expect(page).not.toHaveURL(/product=/);
+});
+
+test("saving a separate setup keeps the original limits for existing plans", async ({ page }) => {
+  const created = await page.request.post("/api/v1/user/purchase-profiles", { headers: { Origin: "http://127.0.0.1:33993" }, data: { name: "Existing browser setup", targetQuantity: 1, actionCeiling: "notify", priceMode: "fixed_cap", maxUnitPriceCents: 2000, isDefault: true } });
+  expect(created.ok()).toBe(true);
+  const original = (await created.json()).items.find((item: any) => item.name === "Existing browser setup");
+  const plans = await (await page.request.get("/api/v1/user/purchase-intents?limit=10")).json();
+  const planId = plans.items.find((item: any) => item.status === "active").id;
+  const applied = await page.request.post("/api/v1/user/purchase-profiles/apply", { headers: { Origin: "http://127.0.0.1:33993" }, data: { profileId: original.id, missionIds: [planId], confirmation: "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS" } });
+  expect(applied.ok()).toBe(true);
+  const beforePlan = await (await page.request.get(`/api/v1/user/purchase-intents/${planId}`)).json();
+  await page.goto("/#settings");
+  await page.locator(`[data-profile-edit="${original.id}"]`).click();
+  await page.getByRole("button", { name: "Save a separate setup", exact: true }).click();
+  await page.locator('#profileForm [name="name"]').fill("Future browser setup");
+  await page.locator('#profileForm [name="maxUnitPrice"]').fill("35.00");
+  await page.getByRole("button", { name: "Save new setup", exact: true }).click();
+  await expect(page.locator("#profileDialog")).not.toBeVisible();
+  const saved = await (await page.request.get("/api/v1/user/purchase-profiles")).json();
+  expect(saved.items.find((item: any) => item.id === original.id).maxUnitPriceCents).toBe(2000);
+  expect(saved.items.find((item: any) => item.name === "Future browser setup").maxUnitPriceCents).toBe(3500);
+  const afterPlan = await (await page.request.get(`/api/v1/user/purchase-intents/${planId}`)).json();
+  expect(afterPlan.purchaseIntent.intentPolicy).toEqual(beforePlan.purchaseIntent.intentPolicy);
+  expect(saved.items.find((item: any) => item.id === original.id).linkedMissionCount).toBe(1);
+});
+
+test("a delayed settings refresh cannot overwrite a confirmed browser rename", async ({ page }) => {
+  await page.goto("/#settings/chrome");
+  await expect(page.locator("[data-rename-browser]").first()).toBeVisible();
+  let holdNext = true;
+  let captured = false;
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/v1/user/devices", async (route) => {
+    const response = await route.fetch();
+    if (holdNext) { holdNext = false; captured = true; await gate; }
+    await route.fulfill({ response });
+  });
+  try {
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect.poll(() => captured).toBe(true);
+    await page.locator("[data-rename-browser]").first().click();
+    await page.getByRole("textbox", { name: "Browser name", exact: true }).fill("Office browser");
+    await page.getByRole("button", { name: "Save browser name", exact: true }).click();
+    await expect(page.locator("#pairedDevices")).toContainText("Office browser");
+    const staleResponse = page.waitForResponse((response) => response.url().endsWith("/api/v1/user/devices"));
+    release();
+    await (await staleResponse).finished();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    await expect(page.locator("#pairedDevices")).toContainText("Office browser");
+  } finally { release(); }
+});
+
+test("an older detail response cannot close the detail restored by a later route load", async ({ page }) => {
+  const products = await (await page.request.get("/api/v1/user/library/products?q=Browser+product+205")).json();
+  const planId = products.items[0].purchaseIntent.id;
+  let first = true;
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(`**/api/v1/user/purchase-intents/${planId}`, async (route) => {
+    const response = await route.fetch();
+    if (first) { first = false; await gate; }
+    await route.fulfill({ response });
+  });
+  try {
+    await page.goto(`/#plans?planId=${planId}`);
+    await expect(page.locator("#planDialog")).toBeVisible();
+    const staleResponse = page.waitForResponse((response) => response.url().endsWith(`/purchase-intents/${planId}`));
+    release();
+    await (await staleResponse).finished();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    await expect(page).toHaveURL(new RegExp(`planId=${planId}`));
+    await expect(page.locator("#planDialog")).toBeVisible();
+  } finally { release(); }
+});

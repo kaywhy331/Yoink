@@ -2859,6 +2859,10 @@ test("product cards drop the variant line when the summary is empty and render e
   });
   try {
     browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=user-variant-line-test.js`);
+    Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value: function(this: HTMLDialogElement) { this.setAttribute("open", ""); }
+    });
     await eventually(() => assert.equal(browser.document.querySelectorAll("#productList .product-card").length, 2));
     const cards = [...browser.document.querySelectorAll("#productList .product-card")] as HTMLElement[];
     const plain = cards.find((card) => card.textContent?.includes("Plain Fixture")) as HTMLElement;
@@ -2875,6 +2879,7 @@ test("product cards drop the variant line when the summary is empty and render e
     assert.equal(browser.eval('listingAvailable({ status: "out_of_stock", purchasable: true })'), true);
     assert.equal(browser.eval('listingAvailable({ status: "in_stock" })'), true);
     (plain.querySelector("[data-product-detail]") as HTMLButtonElement).click();
+    await eventually(() => assert.equal((browser.document.querySelector("#productDialog") as HTMLDialogElement).open, true));
     const row = browser.document.querySelector("#productDialogBody .detail-row") as HTMLElement;
     assert.equal(row.classList.contains("muted"), true);
     assert.equal(row.querySelector(".tag")?.textContent, "In stock");

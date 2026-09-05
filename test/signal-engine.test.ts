@@ -505,6 +505,15 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
     const analytics = new ActionAnalyticsRepository(db);
     const snapshot = analytics.snapshot(NOW + 2_001);
     assert.equal(snapshot.spend.committedCents, reportedTotalCents);
+    const matching = analytics.snapshot(NOW + 2_001, { since: new Date(NOW - 1).toISOString(), retailerId: "target" });
+    assert.equal(matching.spend.committedCents, reportedTotalCents);
+    assert.equal(matching.reportedOutcomes, 1);
+    const excluded = analytics.snapshot(NOW + 2_001, { since: new Date(NOW + 1).toISOString() });
+    assert.equal(excluded.spend.committedCents, 0);
+    assert.equal(excluded.spend.reportedOrders, 0);
+    assert.equal(excluded.spend.overCapCount, 0);
+    assert.equal(excluded.reportedOutcomes, 0);
+    assert.equal(excluded.retailers.length, 0);
     assert.equal(snapshot.spend.overCapCount, 1);
     assert.equal(snapshot.spend.overCapAmountCents, 500);
     assert.equal(snapshot.spend.reportedOrders, 1);

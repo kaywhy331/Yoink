@@ -583,6 +583,23 @@ export class DeviceRepository {
     return false;
   }
 
+  rename(deviceId: string, value: unknown, now = Date.now()): boolean {
+    if (typeof value !== "string" || !value.trim() || value.trim().length > 80) {
+      throw new InputValidationError("Choose a browser name between 1 and 80 characters.");
+    }
+    const scope = currentRequestScope();
+    return this.db.transaction(() => {
+      const result = this.db.run(
+        `UPDATE extension_devices SET name = ?, updated_at = ?
+         WHERE id = ? AND tenant_id = ? AND user_id = ?`,
+        cleanText(value, 80), nowIso(now), deviceId, scope.tenantId, scope.userId
+      );
+      if (!Number(result.changes)) return false;
+      this.audit(deviceId, "extension_device_renamed", "renamed", "A Chrome companion was renamed.", {}, now);
+      return true;
+    });
+  }
+
   listDevices(now = Date.now()): Array<Record<string, unknown>> {
     return this.db.all<{
       id: string;

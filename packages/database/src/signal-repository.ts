@@ -1,3 +1,4 @@
+import { actionCollectionSql, type ActionCollectionFilter } from "./action-collection-filter.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
@@ -1247,7 +1248,8 @@ export class SignalRepository {
     )?.count ?? 0);
   }
 
-  listJobs(limit = 100, offset = 0, search = ""): Array<Record<string, unknown>> {
+  listJobs(limit = 100, offset = 0, search = "", filters: ActionCollectionFilter = {}): Array<Record<string, unknown>> {
+    const filter = actionCollectionSql("aj", filters);
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
     const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
     const query = cleanText(search, 200);
@@ -1363,7 +1365,8 @@ export class SignalRepository {
          OR EXISTS (SELECT 1 FROM action_events ae WHERE ae.job_id = aj.id
            AND (ae.reason_code LIKE ? ESCAPE '\\' COLLATE NOCASE
              OR ae.message LIKE ? ESCAPE '\\' COLLATE NOCASE)))
-       ORDER BY aj.created_at DESC LIMIT ? OFFSET ?`,
+       ${filter.sql}
+       ORDER BY aj.created_at DESC, aj.id DESC LIMIT ? OFFSET ?`,
       currentRequestScope().userId,
       query,
       pattern,
@@ -1374,6 +1377,7 @@ export class SignalRepository {
       pattern,
       pattern,
       pattern,
+      ...filter.parameters,
       safeLimit,
       safeOffset
     );
@@ -1502,7 +1506,8 @@ export class SignalRepository {
     };
   }
 
-  actionInsights(sampleLimit = 500): Record<string, unknown> {
+  actionInsights(sampleLimit = 500, filters: ActionCollectionFilter = {}): Record<string, unknown> {
+    const filter = actionCollectionSql("aj", filters);
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(sampleLimit) || 500)));
     const counts = Object.fromEntries(USER_ACTION_STAGES.map((stage) => [stage, 0])) as Record<UserActionStage, number>;
     const states = this.db.all<{ state: JobState; action: string; userReportOutcome: string; count: number }>(
@@ -1516,12 +1521,13 @@ export class SignalRepository {
                  WHERE ae.job_id = aj.id
                    AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
                  ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1), '') AS userReportOutcome
-         FROM action_jobs aj WHERE aj.tenant_id = ? AND aj.user_id = ?
+         FROM action_jobs aj WHERE aj.tenant_id = ? AND aj.user_id = ? ${filter.sql}
        )
        SELECT state, action, userReportOutcome, COUNT(*) AS count
        FROM classified GROUP BY state, action, userReportOutcome`,
       currentRequestScope().tenantId,
-      currentRequestScope().userId
+      currentRequestScope().userId,
+      ...filter.parameters
     );
     for (const row of states) {
       const userReportOutcome = ["got_it", "missed_it"].includes(row.userReportOutcome)
@@ -1581,10 +1587,11 @@ export class SignalRepository {
                WHERE ae.job_id = aj.id
                  AND json_type(ae.evidence_json, '$.latency.settleToCartReadyMs') IN ('integer', 'real')
                ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS storedSettleToCartReadyMs
-       FROM action_jobs aj WHERE aj.tenant_id = ? AND aj.user_id = ?
+       FROM action_jobs aj WHERE aj.tenant_id = ? AND aj.user_id = ? ${filter.sql}
        ORDER BY aj.created_at DESC LIMIT ?`,
       currentRequestScope().tenantId,
       currentRequestScope().userId,
+      ...filter.parameters,
       safeLimit
     );
     const samples = sampleRows.map((row) => ({
@@ -1620,7 +1627,8 @@ export class SignalRepository {
     };
   }
 
-  jobCount(search = ""): number {
+  jobCount(search = "", filters: ActionCollectionFilter = {}): number {
+    const filter = actionCollectionSql("aj", filters);
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
     return Number(this.db.get<{ count: number }>(
@@ -1636,7 +1644,7 @@ export class SignalRepository {
          OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR EXISTS (SELECT 1 FROM action_events ae WHERE ae.job_id = aj.id
            AND (ae.reason_code LIKE ? ESCAPE '\\' COLLATE NOCASE
-             OR ae.message LIKE ? ESCAPE '\\' COLLATE NOCASE)))`,
+             OR ae.message LIKE ? ESCAPE '\\' COLLATE NOCASE))) ${filter.sql}`,
       currentRequestScope().userId,
       query,
       pattern,
@@ -1646,7 +1654,8 @@ export class SignalRepository {
       pattern,
       pattern,
       pattern,
-      pattern
+      pattern,
+      ...filter.parameters
     )?.count ?? 0);
   }
 

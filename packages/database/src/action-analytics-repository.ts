@@ -1,3 +1,4 @@
+import { actionCollectionSql, type ActionCollectionFilter } from "./action-collection-filter.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 import { SignalRepository } from "./signal-repository.js";
@@ -6,6 +7,8 @@ import { SpendLedgerRepository } from "./spend-ledger-repository.js";
 export interface UserActionAnalytics {
   contractVersion: 1;
   generatedAt: string;
+  filters: ActionCollectionFilter;
+  reportedOutcomes: number;
   funnel: Record<string, number>;
   hitRateBps: number | null;
   spend: {
@@ -36,7 +39,7 @@ export interface UserActionAnalytics {
 }
 
 function csvCell(value: unknown): string {
-  const text = String(value ?? "");
+  const text = typeof value === "string" && /^[=+@\-\t\r]/.test(value) ? `'${value}` : String(value ?? "");
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
@@ -49,28 +52,32 @@ export class ActionAnalyticsRepository {
     this.spend = new SpendLedgerRepository(db);
   }
 
-  snapshot(now = Date.now()): UserActionAnalytics {
+  snapshot(now = Date.now(), filters: ActionCollectionFilter = {}): UserActionAnalytics {
     const scope = currentRequestScope();
-    const insights = this.signals.actionInsights(500);
+    const filter = actionCollectionSql("job", filters);
+    const insights = this.signals.actionInsights(500, filters);
     const funnel = insights.stages as Record<string, number>;
     const outcomes = this.db.get<{ gotIt: number; missed: number }>(
       `SELECT
          SUM(CASE WHEN event.reason_code = 'user_reported_order' THEN 1 ELSE 0 END) AS gotIt,
          SUM(CASE WHEN event.reason_code = 'user_reported_missed_it' THEN 1 ELSE 0 END) AS missed
        FROM action_events event JOIN action_jobs job ON job.id = event.job_id
-       WHERE job.tenant_id = ? AND job.user_id = ?
+       WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}
          AND event.reason_code IN ('user_reported_order', 'user_reported_missed_it')`,
       scope.tenantId,
-      scope.userId
+      scope.userId,
+      ...filter.parameters
     );
     const gotIt = Number(outcomes?.gotIt ?? 0);
     const closedOutcomes = gotIt + Number(outcomes?.missed ?? 0);
     const spendSummary = this.spend.summary(now, false);
     const committedCents = Number(this.db.get<{ amount: number }>(
-      `SELECT COALESCE(SUM(spent_delta_cents), 0) AS amount FROM spend_ledger_entries
-       WHERE tenant_id = ? AND user_id = ? AND entry_type = 'committed'`,
+      `SELECT COALESCE(SUM(entry.spent_delta_cents), 0) AS amount FROM spend_ledger_entries entry
+       JOIN action_jobs job ON job.id = entry.action_job_id AND job.tenant_id = entry.tenant_id AND job.user_id = entry.user_id
+       WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql} AND entry.entry_type = 'committed'`,
       scope.tenantId,
-      scope.userId
+      scope.userId,
+      ...filter.parameters
     )?.amount ?? 0);
     const savings = this.db.get<{ amount: number; covered: number; reported: number }>(
       `SELECT
@@ -83,11 +90,12 @@ export class ActionAnalyticsRepository {
        FROM action_events event
        JOIN action_jobs job ON job.id = event.job_id
        JOIN listings listing ON listing.id = job.listing_id
-       WHERE job.tenant_id = ? AND job.user_id = ?
+       WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}
          AND event.reason_code = 'user_reported_order'
          AND json_type(event.evidence_json, '$.actualTotalCents') = 'integer'`,
       scope.tenantId,
-      scope.userId
+      scope.userId,
+      ...filter.parameters
     );
     const reportedOrders = Number(savings?.reported ?? 0);
     const savingsCoveredOrders = Number(savings?.covered ?? 0);
@@ -95,11 +103,12 @@ export class ActionAnalyticsRepository {
       `SELECT COUNT(*) AS count,
               COALESCE(SUM(CAST(json_extract(event.evidence_json, '$.overCapAmountCents') AS INTEGER)), 0) AS amount
        FROM action_events event JOIN action_jobs job ON job.id = event.job_id
-       WHERE job.tenant_id = ? AND job.user_id = ?
+       WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}
          AND event.reason_code = 'user_reported_order'
          AND json_extract(event.evidence_json, '$.overCap') = 1`,
       scope.tenantId,
-      scope.userId
+      scope.userId,
+      ...filter.parameters
     );
     const retailers = this.db.all<{
       retailerId: string;
@@ -124,10 +133,11 @@ export class ActionAnalyticsRepository {
        FROM action_jobs job
        JOIN listings listing ON listing.id = job.listing_id
        LEFT JOIN spend_reservations reservation ON reservation.id = job.spend_reservation_id
-       WHERE job.tenant_id = ? AND job.user_id = ?
+       WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}
        GROUP BY listing.retailer_id ORDER BY actions DESC, listing.retailer_id`,
       scope.tenantId,
-      scope.userId
+      scope.userId,
+      ...filter.parameters
     ).map((row) => ({
       retailerId: row.retailerId,
       actions: Number(row.actions),
@@ -139,6 +149,8 @@ export class ActionAnalyticsRepository {
     return {
       contractVersion: 1,
       generatedAt: new Date(now).toISOString(),
+      filters,
+      reportedOutcomes: closedOutcomes,
       funnel,
       hitRateBps: closedOutcomes ? Math.round(gotIt * 10_000 / closedOutcomes) : null,
       spend: {
@@ -164,14 +176,15 @@ export class ActionAnalyticsRepository {
     };
   }
 
-  csv(now = Date.now()): string {
-    const snapshot = this.snapshot(now);
+  csv(now = Date.now(), filters: ActionCollectionFilter = {}): string {
+    const snapshot = this.snapshot(now, filters);
     const latency = snapshot.latency as {
       hops?: Record<string, { samples?: unknown; p50Ms?: unknown; p95Ms?: unknown }>;
     };
     const rows = [
       ["section", "metric", "retailer", "value", "unit", "coverage"],
       ["meta", "generated_at", "", snapshot.generatedAt, "iso8601", ""],
+      ...Object.entries(filters).map(([key, value]) => ["filter", key, "", value, "", "jobs_created_in_period"]),
       ...Object.entries(snapshot.funnel).map(([stage, value]) =>
         ["funnel", stage, "", value, "actions", "complete"]),
       ["outcome", "hit_rate_bps", "", snapshot.hitRateBps ?? "", "basis_points",

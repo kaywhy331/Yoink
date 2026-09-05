@@ -1,3 +1,4 @@
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { randomBytes } from "node:crypto";
 import type {
   UserActionConnectorInput,
@@ -99,7 +100,7 @@ export interface UserActionConnectorLease {
 
 function safeId(value: unknown, pattern: RegExp, label: string): string {
   const normalized = cleanText(value, 120);
-  if (!pattern.test(normalized)) throw new Error(`${label} is invalid.`);
+  if (!pattern.test(normalized)) throw new InputValidationError(`${label} is invalid.`);
   return normalized;
 }
 
@@ -184,16 +185,16 @@ export class UserActionConnectorRepository {
 
   save(input: UserActionConnectorInput, id = "", now = Date.now()): UserActionConnector {
     if (input?.contractVersion !== USER_CONNECTOR_CONTRACT_VERSION || !KINDS.has(input.kind)) {
-      throw new Error("The user connector contract is invalid.");
+      throw new InputValidationError("The user connector contract is invalid.");
     }
     const name = cleanText(input.name, 120);
     const endpointReference = cleanText(input.endpointReference, 120);
     if (name.length < 2 || !ENDPOINT_REFERENCE.test(endpointReference)) {
-      throw new Error("A connector name and deployment-owned endpoint reference are required.");
+      throw new InputValidationError("A connector name and deployment-owned endpoint reference are required.");
     }
     if (!Array.isArray(input.events) || input.events.length < 1
       || input.events.some((event) => !EVENT_TYPES.has(event))) {
-      throw new Error("Choose at least one supported connector event.");
+      throw new InputValidationError("Choose at least one supported connector event.");
     }
     const events = [...new Set(input.events)].sort();
     const connectorId = id ? safeId(id, CONNECTOR_ID, "The user connector") : newId("user_connector");
@@ -229,7 +230,7 @@ export class UserActionConnectorRepository {
   }
 
   queueForJob(eventType: Exclude<UserConnectorEvent, "test">, actionJobId: string, now = Date.now()): number {
-    if (!EVENT_TYPES.has(eventType)) throw new Error("The user connector event type is invalid.");
+    if (!EVENT_TYPES.has(eventType)) throw new InputValidationError("The user connector event type is invalid.");
     const scope = currentRequestScope();
     const job = this.db.get<{
       id: string;
@@ -249,7 +250,7 @@ export class UserActionConnectorRepository {
        WHERE job.id = ? AND job.tenant_id = ? AND job.user_id = ?`,
       cleanText(actionJobId, 120), scope.tenantId, scope.userId
     );
-    if (!job) throw new Error("The action job does not exist.");
+    if (!job) throw new InputValidationError("The action job does not exist.");
     const payload = {
       contractVersion: USER_CONNECTOR_CONTRACT_VERSION,
       eventType,
@@ -276,25 +277,72 @@ export class UserActionConnectorRepository {
       checkoutManual: true
     };
     const created = this.queue("test", "", payload, now, connector.id);
-    if (created !== 1) throw new Error("The connector test delivery could not be queued.");
+    if (created !== 1) throw new InputValidationError("The connector test delivery could not be queued.");
     const delivery = this.db.get<DeliveryRow>(
       `${DELIVERY_SELECT}
        WHERE delivery.connector_id = ? AND delivery.event_type = 'test'
        ORDER BY delivery.created_at DESC LIMIT 1`,
       connector.id
     );
-    if (!delivery) throw new Error("The connector test delivery could not be loaded.");
+    if (!delivery) throw new InputValidationError("The connector test delivery could not be loaded.");
     return this.delivery(delivery);
   }
 
-  listDeliveries(limit = 100): UserActionConnectorDelivery[] {
+  remove(id: string, now = Date.now()): void {
+    this.db.transaction(() => {
+      const connector = this.requireConnectorRow(safeId(id, CONNECTOR_ID, "The user connector"));
+      if (this.db.get(`SELECT id FROM user_action_connector_deliveries
+        WHERE connector_id = ? AND state = 'leased' AND lease_expires_at > ?`, id, nowIso(now))) {
+        throw new InputValidationError("An update is being delivered. Pause this destination and try removing it in a minute.");
+      }
+      this.db.run("DELETE FROM user_action_connectors WHERE id = ?", connector.id);
+      this.audit.record({ correlationId: id, aggregateType: "user_action_connector",
+        eventType: "user_connector_removed", reasonCode: "user_connector_removed",
+        message: "A destination and its delivery history were removed.", data: { connectorId: id } }, now);
+    });
+  }
+
+  retry(id: string, expectedUpdatedAt: string, expectedAttemptCount: number, now = Date.now()): UserActionConnectorDelivery {
+    return this.db.transaction(() => {
+      const row = this.requireDeliveryRow(safeId(id, DELIVERY_ID, "The user connector delivery"));
+      if (row.state === "pending" || row.state === "leased") return this.delivery(row);
+      if (row.state !== "dead_letter" || row.updatedAt !== expectedUpdatedAt || row.attemptCount !== expectedAttemptCount) {
+        throw new InputValidationError("This delivery changed. Refresh its history before retrying.");
+      }
+      const connector = this.requireConnectorRow(row.connectorId);
+      if (!connector.enabled || !parseEvents(connector.eventsJson).includes(row.eventType)) {
+        throw new InputValidationError("Enable this destination and its event before retrying.");
+      }
+      if (!row.endpointBindingFingerprint || row.endpointReference !== connector.endpointReference
+        || row.endpointBindingFingerprint !== connector.endpointBindingFingerprint
+        || this.availableBindings[row.endpointReference] !== row.endpointBindingFingerprint) {
+        throw new InputValidationError("The original destination is unavailable or changed. Save the current delivery key and send a new test instead.");
+      }
+      this.db.run(`UPDATE user_action_connector_deliveries SET state = 'pending', next_attempt_at = '',
+        lease_capability_hash = '', lease_expires_at = '', updated_at = ? WHERE id = ?`, nowIso(now), row.id);
+      this.audit.record({ correlationId: id, aggregateType: "user_action_connector",
+        eventType: "user_connector_delivery_retried", reasonCode: "user_requested_retry",
+        message: "A failed update was queued for another delivery attempt.",
+        data: { deliveryId: id, connectorId: row.connectorId, previousAttempts: row.attemptCount } }, now);
+      return this.delivery(this.requireDeliveryRow(id));
+    });
+  }
+
+  deliveryCount(connectorId = ""): number {
+    const scope = currentRequestScope();
+    return Number(this.db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM user_action_connector_deliveries
+      WHERE tenant_id = ? AND user_id = ? AND (? = '' OR connector_id = ?)`,
+      scope.tenantId, scope.userId, connectorId, connectorId)?.count ?? 0);
+  }
+
+  listDeliveries(limit = 100, offset = 0, connectorId = ""): UserActionConnectorDelivery[] {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
     const scope = currentRequestScope();
     return this.db.all<DeliveryRow>(
       `${DELIVERY_SELECT}
-       WHERE delivery.tenant_id = ? AND delivery.user_id = ?
-       ORDER BY delivery.created_at DESC, delivery.id DESC LIMIT ?`,
-      scope.tenantId, scope.userId, safeLimit
+       WHERE delivery.tenant_id = ? AND delivery.user_id = ? AND (? = '' OR delivery.connector_id = ?)
+       ORDER BY delivery.created_at DESC, delivery.id DESC LIMIT ? OFFSET ?`,
+      scope.tenantId, scope.userId, connectorId, connectorId, safeLimit, (Number.isSafeInteger(offset) && offset >= 0 ? offset : 0)
     ).map((row) => this.delivery(row));
   }
 
@@ -421,7 +469,7 @@ export class UserActionConnectorRepository {
       scope.tenantId, scope.userId, exactConnectorId, exactConnectorId
     ).filter((connector) => parseEvents(connector.eventsJson).includes(eventType));
     const payloadJson = stableJson(payload);
-    if (Buffer.byteLength(payloadJson, "utf8") > 4_000) throw new Error("The connector payload is too large.");
+    if (Buffer.byteLength(payloadJson, "utf8") > 4_000) throw new InputValidationError("The connector payload is too large.");
     let created = 0;
     for (const connector of connectors) {
       const idempotency = stableHash(
@@ -488,7 +536,7 @@ export class UserActionConnectorRepository {
       `${CONNECTOR_SELECT} WHERE id = ? AND tenant_id = ? AND user_id = ?`,
       id, scope.tenantId, scope.userId
     );
-    if (!row) throw new Error("The user action connector does not exist.");
+    if (!row) throw new InputValidationError("The user action connector does not exist.");
     return row;
   }
 
@@ -498,17 +546,17 @@ export class UserActionConnectorRepository {
       `${DELIVERY_SELECT} WHERE delivery.id = ? AND delivery.tenant_id = ? AND delivery.user_id = ?`,
       id, scope.tenantId, scope.userId
     );
-    if (!row) throw new Error("The user connector delivery does not exist.");
+    if (!row) throw new InputValidationError("The user connector delivery does not exist.");
     return row;
   }
 
   private requireLease(id: string, token: string, now: number): DeliveryRow {
     const safeDeliveryId = safeId(id, DELIVERY_ID, "The user connector delivery");
-    if (!CAPABILITY.test(token)) throw new Error("The user connector delivery capability is invalid.");
+    if (!CAPABILITY.test(token)) throw new InputValidationError("The user connector delivery capability is invalid.");
     const row = this.requireDeliveryRow(safeDeliveryId);
     if (row.state !== "leased" || row.leaseExpiresAt <= nowIso(now)
       || row.leaseCapabilityHash !== capabilityHash(row.id, token)) {
-      throw new Error("The user connector delivery capability is invalid or expired.");
+      throw new InputValidationError("The user connector delivery capability is invalid or expired.");
     }
     return row;
   }

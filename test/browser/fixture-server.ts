@@ -1,3 +1,5 @@
+import { DeviceRepository } from "../../packages/database/src/device-repository.js";
+import { UserActionConnectorRepository } from "../../packages/database/src/user-action-connector-repository.js";
 import { join } from "node:path";
 import { createYoinkServer } from "../../apps/api/src/app.js";
 import { CatalogRepository } from "../../packages/database/src/catalog-repository.js";
@@ -21,6 +23,12 @@ db.transaction(() => {
     if (index === 205) db.run("UPDATE missions SET status = 'paused' WHERE id = ?", mission.mission.id);
   }
 });
-const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "browser-test" });
+const devices = new DeviceRepository(db);
+devices.pair({ pairingCode: devices.createPairingCode().code, name: "Browser acceptance laptop", extensionVersion: "test" });
+const bindings = { browser_delivery: "c".repeat(64) };
+const connectors = new UserActionConnectorRepository(db, bindings);
+const destination = connectors.save({ contractVersion: 1, kind: "webhook", name: "Browser acceptance updates", endpointReference: "browser_delivery", events: ["test"] });
+for (let index = 0; index < 55; index++) connectors.queueTest(destination.id, Date.now() - 10000 + index);
+const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "browser-test", userActionConnectorBindings: bindings });
 server.listen(33993, "127.0.0.1");
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => server.close(() => { db.close(); process.exit(0); }));

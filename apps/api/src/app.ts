@@ -1,3 +1,4 @@
+import { actionCollectionFilter } from "../../../packages/database/src/action-collection-filter.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -1513,6 +1514,22 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/connectors/deliveries") {
+        const requestedOffset = Number(requestUrl.searchParams.get("offset") || 0);
+        const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
+        const connectorId = requestUrl.searchParams.get("connector") || "";
+        json(response, 200, { items: userActionConnectors.listDeliveries(50, offset, connectorId),
+          total: userActionConnectors.deliveryCount(connectorId), offset });
+        return;
+      }
+      const retryUserDelivery = /^\/api\/v1\/user\/connectors\/deliveries\/(user_connector_delivery_[a-f0-9]{32})\/retry$/.exec(requestUrl.pathname);
+      if (request.method === "POST" && retryUserDelivery) {
+        const body = await readJson(request);
+        if (body.confirmation !== "RETRY_NOTIFICATION") throw new ApiError("request_rejected", 400, "Confirm another delivery attempt.");
+        json(response, 202, { delivery: userActionConnectors.retry(retryUserDelivery[1]!, String(body.updatedAt || ""), Number(body.attemptCount)) });
+        dependencies.backgroundWorkerWake?.();
+        return;
+      }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/connectors") {
         json(response, 200, {
           items: userActionConnectors.list(),
@@ -1522,12 +1539,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/analytics") {
-        json(response, 200, { analytics: actionAnalytics.snapshot() });
+        json(response, 200, { analytics: actionAnalytics.snapshot(Date.now(), actionCollectionFilter(requestUrl.searchParams)) });
         return;
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/analytics.csv") {
-        const body = Buffer.from(actionAnalytics.csv(), "utf8");
+        const body = Buffer.from(actionAnalytics.csv(Date.now(), actionCollectionFilter(requestUrl.searchParams)), "utf8");
         securityHeaders(response);
         response.statusCode = 200;
         response.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -3224,7 +3241,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           priceMaxCents: requestUrl.searchParams.get("priceMax") ?? "",
           sort: requestUrl.searchParams.get("sort") ?? "newest"
         };
-        const products = catalog.listLibraryProducts(limit, offset, filters);
+        const variantId = requestUrl.searchParams.get("variant") || "";
+        const products = catalog.listLibraryProducts(limit, offset, filters, variantId);
         const variantIds = [...new Set(products.map((product) => String(product.variantId)))];
         const plans: Array<Record<string, unknown>> = [];
         for (let start = 0; start < variantIds.length; start += 500) plans.push(...control.planSummariesForVariants(variantIds.slice(start, start + 500)));
@@ -3234,7 +3252,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }));
         json(response, 200, {
           items,
-          total: catalog.libraryProductCount(filters),
+          total: catalog.libraryProductCount(filters, variantId),
           offset,
           limit: items.length,
           facets: { stores: catalog.libraryProductStoreFacets() }
@@ -3269,13 +3287,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
         const query = String(requestUrl.searchParams.get("q") ?? "");
-        const items = signals.listJobs(limit, offset, query);
+        const filters = actionCollectionFilter(requestUrl.searchParams);
+        const items = signals.listJobs(limit, offset, query, filters);
         json(response, 200, {
           items,
-          total: signals.jobCount(query),
+          total: signals.jobCount(query, filters),
           offset,
           limit: items.length,
-          insights: signals.actionInsights(),
+          insights: signals.actionInsights(500, filters),
           glossary: actionStatusGlossaryProjection()
         });
         return;
@@ -3534,6 +3553,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "DELETE" && userConnectorMatch) {
+        const body = await readJson(request);
+        if (body.confirmation !== "REMOVE_DESTINATION") throw new ApiError("request_rejected", 400, "Confirm removal of the destination and delivery history.");
+        userActionConnectors.remove(userConnectorMatch[1]!);
+        json(response, 200, { removed: true });
+        return;
+      }
       if (request.method === "PATCH" && userConnectorMatch) {
         const body = await readJson(request);
         json(response, 200, {
@@ -3764,6 +3790,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      const renameDevice = /^\/api\/v1\/devices\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
+      if (request.method === "PATCH" && renameDevice) {
+        const body = await readJson(request);
+        if (!devices.rename(renameDevice[1]!, body.name)) throw new ApiError("device_not_found", 404, "This browser is no longer available.");
+        json(response, 200, { renamed: true });
+        return;
+      }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices") {
         json(response, 200, { items: devices.listDevices().map(({ id, name, extensionVersion, status, online, lastSeenAt, createdAt }) => ({ id, name, extensionVersion, status, online, lastSeenAt, createdAt })) });
         return;
