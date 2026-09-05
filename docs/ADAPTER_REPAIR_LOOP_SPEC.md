@@ -1016,6 +1016,19 @@ surfaces to the shopper as "needs you" and to nothing else.
   locks it, and keeps the change only when replay passes. Closed repair groups
   carry `recoveryKind` and `currentVersionVerified` so a restock or a
   release no longer reads as a verified fix.
+- 2026-09-04 (late, 1.22.2): Best Buy reported every product as
+  `listing_unavailable_layout` because the shared observer defaulted
+  availability to out of stock whenever the add control could not be bound
+  (`scopedControlCount 0`, price unread, fulfillment unknown), which the P4
+  taxonomy treated as product state: no capsule, no incident. Availability is
+  now evidence-based for all non-Target stores; a packaged control that no
+  binder scoped reports `fulfillment_binding_missing`, `seller_binding_missing`,
+  `price_binding_missing`, or `offer_binding_missing` (adapter defects that
+  capture), and an offer bound only for the other fulfillment reports
+  `rejected · policy · fulfillment_not_supported`. Amazon pack v2 adds
+  `#availability`. `repair --apply` also bumps the lane registry and the
+  contracts constant. Corrects the P4 assumption that a rejection at
+  `availability_binding` is always product state.
 
 - 2026-09-04: implemented P1–P7 for 1.22.0; recorded engineering verification
   and separated post-release field gates from code completion.

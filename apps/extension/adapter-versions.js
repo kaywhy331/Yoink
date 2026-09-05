@@ -26,7 +26,7 @@ globalThis.YoinkAdapterVersions = Object.freeze({
   pack: Object.freeze({
     "target": "target-pack-v1",
     "walmart": "walmart-pack-v1",
-    "amazon": "amazon-pack-v1",
+    "amazon": "amazon-pack-v2",
     "bestbuy": "bestbuy-pack-v1",
     "disney": "retailers-pack-v1",
     "ravensburger": "retailers-pack-v1",

@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-22-1-store-checks-run-on-their-own",
-  version: "1.22.1",
-  publishedAt: "2026-09-05T02:30:00.000Z",
-  title: "Store checks run on their own",
-  summary: "Target checks work again, automatic store checks start within minutes and run hourly while a store needs attention, and Check stores now starts one on demand.",
+  id: "yoink-1-22-2-store-checks-say-what-failed",
+  version: "1.22.2",
+  publishedAt: "2026-09-05T03:30:00.000Z",
+  title: "Store checks say what actually failed",
+  summary: "A store check no longer calls a product sold out when the page never said so; it reports the binding it lost, keeps a page snapshot, and opens a repair. Target checks work again and automatic checks run on their own.",
   highlights: [
-    "Target product pages record their store checks again; a rejected check now says why instead of failing silently.",
-    "Automatic store checks begin two minutes after the companion starts, wake hourly while any store needs evidence, and record every held decision.",
-    "Check stores now in the companion menu runs the store checks immediately, and closed repair groups say whether the fix was re-checked or the item only changed state."
+    "Best Buy, Amazon, and the other stores report out of stock only from page evidence; a lost price, seller, or shipping binding is now a repair with a snapshot, and a pickup-only offer is a plan result.",
+    "Target product pages record their store checks again, automatic store checks start within minutes and run hourly while any store needs evidence, and Check stores now runs them on demand.",
+    "Closed repair groups say whether the current version was re-checked or the item only changed state."
   ],
   docsUrl: "/docs"
 });

@@ -309,7 +309,7 @@ var YoinkWalmartActionModule = (() => {
       name: "Amazon",
       domain: "amazon.com",
       contractVersion: "amazon-add-v9",
-      packVersion: "amazon-pack-v1",
+      packVersion: "amazon-pack-v2",
       observerVersion: "amazon-observer-v8",
       activationConfirmation: "ENABLE_AMAZON_ADD_V9",
       firstPartySeller: "Amazon.com",
@@ -378,13 +378,13 @@ var YoinkWalmartActionModule = (() => {
 
   // packages/browser-adapters/packs/amazon.json
   var amazon_default = {
-    packVersion: "amazon-pack-v1",
+    packVersion: "amazon-pack-v2",
     retailerId: "amazon",
     fields: {
       addControl: { selectors: ["#add-to-cart-button", "input[name='submit.add-to-cart']", "button[name='submit.add-to-cart']"] },
       price: { selectors: ["#corePrice_feature_div .a-offscreen", "#priceblock_ourprice", "#priceblock_dealprice", ".a-price .a-offscreen", "meta[itemprop='price']"] },
       seller: { selectors: ["#merchant-info", "#sellerProfileTriggerId", "[data-feature-name='shipsFromSoldBy']", "#tabular-buybox"] },
-      availability: { selectors: ["[itemprop='availability']", "button[disabled]"] },
+      availability: { selectors: ["#availability", "[data-testid*='availability' i]", "[itemprop='availability']", "button[disabled]"] },
       fulfillmentRoot: { selectors: ["#buybox", "#desktop_buybox", "[data-feature-name='buybox']", "form"] },
       fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
       quantity: { selectors: ["select#quantity", "select[name='quantity']", "input[name='quantity']", "input[name='items[0.base][quantity]']"] },
@@ -1452,7 +1452,7 @@ var YoinkWalmartActionModule = (() => {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
     const scoped = candidateControls(document, retailer).map((control) => amazonOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
     const matching = scoped.filter((candidate) => candidate.fulfillment === expectedFulfillment);
-    return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: "unknown", offerRoot: null };
+    return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(scoped, expectedFulfillment), offerRoot: null };
   }
   function walmartSkuEvidence(root) {
     const skus = /* @__PURE__ */ new Set();
@@ -1781,12 +1781,18 @@ var YoinkWalmartActionModule = (() => {
     }
     return null;
   }
+  function unmatchedFulfillment(candidates, expected) {
+    const kinds = new Set(candidates.map((candidate) => candidate.fulfillment).filter((kind) => kind !== "unknown"));
+    const only = [...kinds][0];
+    return kinds.size === 1 && only && only !== expected ? only : "unknown";
+  }
   function selectedBestBuyControl(document, retailer, expectedSku, requiredFulfillment) {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
     const scoped = candidateControls(document, retailer).map((control) => bestBuyOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
     const recovered = scoped.length === 0 ? recoveredBestBuyOfferScope(document, retailer, expectedSku) : null;
-    const matching = [...scoped, ...recovered ? [recovered] : []].filter((candidate) => candidate.fulfillment === expectedFulfillment);
-    return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: "unknown", offerRoot: null };
+    const bound = [...scoped, ...recovered ? [recovered] : []];
+    const matching = bound.filter((candidate) => candidate.fulfillment === expectedFulfillment);
+    return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(bound, expectedFulfillment), offerRoot: null };
   }
   function selectedControl(document, retailer, requiredFulfillment, expectedSku = "") {
     recordTrace({
@@ -1808,7 +1814,7 @@ var YoinkWalmartActionModule = (() => {
     }
     const candidates = candidateControls(document, retailer).map((control) => ({ control, fulfillment: fulfillmentEvidence(document, control, retailer) }));
     const matching = candidates.filter((candidate) => candidate.fulfillment === expectedFulfillment);
-    const selected = matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: "unknown" };
+    const selected = matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(candidates, expectedFulfillment) };
     return { ...selected, offerRoot: null };
   }
   function retailerAddControl(document, urlValue, retailerId, expectedSku, requiredFulfillment, environment) {
@@ -1832,11 +1838,16 @@ var YoinkWalmartActionModule = (() => {
     });
     return chosen;
   }
-  function explicitlyUnavailableOffer(document) {
-    const selectors = selectorsFor("walmart", "availability");
-    return [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible(element) && !merchandisingControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
+  var UNAVAILABLE_EVIDENCE = /\b(?:out of stock|sold out|currently unavailable|coming soon)\b/i;
+  function explicitlyUnavailableOffer(document, retailer) {
+    const selectors = selectorsFor(retailer.retailerId, "availability");
+    const flagged = selectors.length > 0 && [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible(element) && !merchandisingControl(element)).some((element) => UNAVAILABLE_EVIDENCE.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
     ));
+    if (flagged) return true;
+    const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
+    const controls = [...new Set(retailer.addSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]))].filter((element) => visible(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
+    return controls.length > 0 && controls.every((control) => !actionable(control));
   }
   function observeRetailerOffer(document, urlValue, retailerId, expectedSku, requiredFulfillment = "shipping", observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
     if (environment) {
@@ -1868,7 +1879,7 @@ var YoinkWalmartActionModule = (() => {
     const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
     const canAdd = selectedControlActionable && !blocked;
     const controlText = text(selected.control, 300);
-    const availability = blocked && !(retainBoundManualEvidence && selectedControlActionable) ? "unknown" : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock" : retailerId === "walmart" ? explicitlyUnavailableOffer(document) ? "out_of_stock" : "unknown" : "out_of_stock";
+    const availability = blocked && !(retainBoundManualEvidence && selectedControlActionable) ? "unknown" : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock" : explicitlyUnavailableOffer(document, retailer) ? "out_of_stock" : "unknown";
     recordTrace({
       step: "availability",
       condition: "offer.availability",

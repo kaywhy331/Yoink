@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.22.1 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.22.2 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
@@ -28,6 +28,19 @@ authorized.
   lanes through [`docs/ADD_LANE_REGISTRY.md`](docs/ADD_LANE_REGISTRY.md). The
   complete contract is in
   [`docs/ADAPTER_REPAIR_LOOP_SPEC.md`](docs/ADAPTER_REPAIR_LOOP_SPEC.md).
+
+Version 1.22.2 stops a lost binding from hiding behind a sold-out label. For
+every store except Target, the shared observer used to report "out of stock"
+whenever it could not bind the add control, and the companion turned that into
+a product-state result that captured nothing. Availability now comes only from
+page evidence (a packaged availability element, or every add control disabled
+or labelled unavailable); a packaged control that no binder could scope is
+reported as the first binding that came back empty (fulfillment, seller, or
+price) so it captures a snapshot and opens a repair, and an offer that binds
+only for the other fulfillment is a plan policy result. The Amazon pack gains
+the page's own availability element (`amazon-pack-v2`). `npm run repair --
+<id> --apply "<selector>"` now bumps the pack, its lock, the lane registry,
+and the contracts constant together, and restores all four when replay fails.
 
 Version 1.22.1 makes the loop run in the field. Target store checks record
 again (a page-wide identity count no longer rejects the diagnostic, and a

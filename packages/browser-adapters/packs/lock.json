@@ -2,8 +2,8 @@
   "version": 1,
   "packs": {
     "amazon.json": {
-      "packVersion": "amazon-pack-v1",
-      "sha256": "8d36906c4eef0a397a805deae52e786a96642752a4a70946e17c0ecf57de1dcd"
+      "packVersion": "amazon-pack-v2",
+      "sha256": "a807bda5dd6e202b1a194445fce21e783f8a1a94a4df5c048da07bf924b0da1e"
     },
     "bestbuy.json": {
       "packVersion": "bestbuy-pack-v1",

@@ -135,7 +135,7 @@ var YoinkPopupStateModule = (() => {
       name: "Amazon",
       domain: "amazon.com",
       contractVersion: "amazon-add-v9",
-      packVersion: "amazon-pack-v1",
+      packVersion: "amazon-pack-v2",
       observerVersion: "amazon-observer-v8",
       activationConfirmation: "ENABLE_AMAZON_ADD_V9",
       firstPartySeller: "Amazon.com",
@@ -203,13 +203,13 @@ var YoinkPopupStateModule = (() => {
 
   // packages/browser-adapters/packs/amazon.json
   var amazon_default = {
-    packVersion: "amazon-pack-v1",
+    packVersion: "amazon-pack-v2",
     retailerId: "amazon",
     fields: {
       addControl: { selectors: ["#add-to-cart-button", "input[name='submit.add-to-cart']", "button[name='submit.add-to-cart']"] },
       price: { selectors: ["#corePrice_feature_div .a-offscreen", "#priceblock_ourprice", "#priceblock_dealprice", ".a-price .a-offscreen", "meta[itemprop='price']"] },
       seller: { selectors: ["#merchant-info", "#sellerProfileTriggerId", "[data-feature-name='shipsFromSoldBy']", "#tabular-buybox"] },
-      availability: { selectors: ["[itemprop='availability']", "button[disabled]"] },
+      availability: { selectors: ["#availability", "[data-testid*='availability' i]", "[itemprop='availability']", "button[disabled]"] },
       fulfillmentRoot: { selectors: ["#buybox", "#desktop_buybox", "[data-feature-name='buybox']", "form"] },
       fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
       quantity: { selectors: ["select#quantity", "select[name='quantity']", "input[name='quantity']", "input[name='items[0.base][quantity]']"] },

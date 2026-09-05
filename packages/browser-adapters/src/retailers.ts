@@ -1370,7 +1370,7 @@ function selectedAmazonControl(
   const matching = scoped.filter((candidate) => candidate.fulfillment === expectedFulfillment);
   return matching.length === 1 && matching[0]
     ? matching[0]
-    : { control: null, fulfillment: "unknown", offerRoot: null };
+    : { control: null, fulfillment: unmatchedFulfillment(scoped, expectedFulfillment), offerRoot: null };
 }
 
 function walmartSkuEvidence(root: Element): Set<string> {
@@ -1775,6 +1775,18 @@ function bestBuyOfferScope(
   return null;
 }
 
+// When every scoped candidate offers only the other fulfillment, the empty
+// selection keeps that fulfillment so the page reads as a fulfillment policy
+// result instead of a lost binding.
+function unmatchedFulfillment(
+  candidates: ReadonlyArray<{ fulfillment: "shipping" | "pickup" | "unknown" }>,
+  expected: "shipping" | "pickup"
+): "shipping" | "pickup" | "unknown" {
+  const kinds = new Set(candidates.map((candidate) => candidate.fulfillment).filter((kind) => kind !== "unknown"));
+  const only = [...kinds][0];
+  return kinds.size === 1 && only && only !== expected ? only : "unknown";
+}
+
 function selectedBestBuyControl(
   document: Document,
   retailer: RetailerObserverConfig,
@@ -1788,11 +1800,11 @@ function selectedBestBuyControl(
   const recovered = scoped.length === 0
     ? recoveredBestBuyOfferScope(document, retailer, expectedSku)
     : null;
-  const matching = [...scoped, ...(recovered ? [recovered] : [])]
-    .filter((candidate) => candidate.fulfillment === expectedFulfillment);
+  const bound = [...scoped, ...(recovered ? [recovered] : [])];
+  const matching = bound.filter((candidate) => candidate.fulfillment === expectedFulfillment);
   return matching.length === 1 && matching[0]
     ? matching[0]
-    : { control: null, fulfillment: "unknown", offerRoot: null };
+    : { control: null, fulfillment: unmatchedFulfillment(bound, expectedFulfillment), offerRoot: null };
 }
 
 function selectedControl(
@@ -1823,7 +1835,7 @@ function selectedControl(
   const matching = candidates.filter((candidate) => candidate.fulfillment === expectedFulfillment);
   const selected = matching.length === 1 && matching[0]
     ? matching[0]
-    : { control: null, fulfillment: "unknown" as const };
+    : { control: null, fulfillment: unmatchedFulfillment(candidates, expectedFulfillment) };
   return { ...selected, offerRoot: null };
 }
 
@@ -1878,13 +1890,25 @@ export function amazonOfferBinding(
   return { control: selected.control, offerListingId: [...offers][0] ?? "" };
 }
 
-function explicitlyUnavailableOffer(document: Document): boolean {
-  const selectors = selectorsFor("walmart", "availability");
-  return [...document.querySelectorAll(selectors.join(", "))]
+const UNAVAILABLE_EVIDENCE = /\b(?:out of stock|sold out|currently unavailable|coming soon)\b/i;
+
+// Page evidence that the offer itself is unavailable: a packaged availability
+// element says so, or every packaged add control on the page is disabled or
+// labelled unavailable. A control that merely failed to bind to an exact
+// offer proves nothing about stock; reporting that as "out of stock" hid
+// adapter defects behind a product-state label and captured no evidence.
+function explicitlyUnavailableOffer(document: Document, retailer: RetailerObserverConfig): boolean {
+  const selectors = selectorsFor(retailer.retailerId, "availability");
+  const flagged = selectors.length > 0 && [...document.querySelectorAll(selectors.join(", "))]
     .filter((element) => visible(element) && !merchandisingControl(element))
-    .some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
+    .some((element) => UNAVAILABLE_EVIDENCE.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
     ));
+  if (flagged) return true;
+  const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
+  const controls = [...new Set(retailer.addSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]))]
+    .filter((element) => visible(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
+  return controls.length > 0 && controls.every((control) => !actionable(control));
 }
 
 export function observeRetailerOffer(
@@ -1937,8 +1961,7 @@ export function observeRetailerOffer(
   const availability = blocked && !(retainBoundManualEvidence && selectedControlActionable)
     ? "unknown"
     : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock"
-      : retailerId === "walmart" ? explicitlyUnavailableOffer(document) ? "out_of_stock" : "unknown"
-        : "out_of_stock";
+      : explicitlyUnavailableOffer(document, retailer) ? "out_of_stock" : "unknown";
   recordTrace({
     step: "availability",
     condition: "offer.availability",

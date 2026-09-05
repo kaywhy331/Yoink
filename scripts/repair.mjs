@@ -14,6 +14,13 @@ const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom");
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACK_ROOT = join(ROOT, "packages", "browser-adapters", "packs");
+// The lane registry repeats each add lane's pack version and the token
+// generator refuses to build when the two disagree, so a pack bump has to
+// land in both places at once.
+const REGISTRY_PATH = join(ROOT, "packages", "contracts", "src", "add-lanes.ts");
+// The contracts module exports each pack version as a constant as well; the
+// selector-pack test refuses a tree where it disagrees with the pack file.
+const CONTRACTS_PATH = join(ROOT, "packages", "contracts", "src", "index.ts");
 const ADD_PACK_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy"]);
 const OBSERVE_ONLY_FIELDS = new Set(["addControl", "price", "seller"]);
 const ALLOWED_ATTRIBUTES = [
@@ -30,18 +37,22 @@ function parseArguments(argv) {
     databasePath: "",
     json: false,
     selector: "",
-    packRoot: PACK_ROOT
+    packRoot: PACK_ROOT,
+    registryPath: REGISTRY_PATH,
+    contractsPath: CONTRACTS_PATH
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--json") options.json = true;
-    else if (["--data-dir", "--database", "--apply", "--pack-root"].includes(value)) {
+    else if (["--data-dir", "--database", "--apply", "--pack-root", "--registry", "--contracts"].includes(value)) {
       const next = argv[index + 1];
       if (!next) throw new Error(`${value} requires a value.`);
       index += 1;
       if (value === "--data-dir") options.dataDirectory = resolve(next);
       else if (value === "--database") options.databasePath = resolve(next);
       else if (value === "--apply") options.selector = next;
+      else if (value === "--registry") options.registryPath = resolve(next);
+      else if (value === "--contracts") options.contractsPath = resolve(next);
       else options.packRoot = resolve(next);
     } else if (value.startsWith("--")) throw new Error(`Unknown option ${value}.`);
     else if (!options.identifier) options.identifier = value;
@@ -162,7 +173,14 @@ export async function applyRepair(options, hooks = {}) {
   }
   const packPath = join(packRoot, addPack ? `${retailerId}.json` : "retailers.json");
   const lockPath = join(packRoot, "lock.json");
-  const backups = [[packPath, `${packPath}.repair-backup`], [lockPath, `${lockPath}.repair-backup`]];
+  const registryPath = options.registryPath || REGISTRY_PATH;
+  const contractsPath = options.contractsPath || CONTRACTS_PATH;
+  const backups = [
+    [packPath, `${packPath}.repair-backup`],
+    [lockPath, `${lockPath}.repair-backup`],
+    [contractsPath, `${contractsPath}.repair-backup`],
+    ...(addPack ? [[registryPath, `${registryPath}.repair-backup`]] : [])
+  ];
   for (const [source, backup] of backups) if (existsSync(source)) copyFileSync(source, backup);
   const discardBackups = () => {
     for (const [, backup] of backups) if (existsSync(backup)) unlinkSync(backup);
@@ -180,6 +198,23 @@ export async function applyRepair(options, hooks = {}) {
   if (!alreadyPresent) selectors.push(selector);
   pack.packVersion = bumpedPackVersion(previousVersion);
   writeFileSync(packPath, formatPack(pack, addPack));
+  if (addPack) {
+    const registry = readFileSync(registryPath, "utf8");
+    const declaration = `packVersion: "${previousVersion}"`;
+    if (!registry.includes(declaration)) {
+      restore();
+      throw new Error(`The lane registry does not declare ${previousVersion} for ${retailerId}; repair the registry by hand.`);
+    }
+    writeFileSync(registryPath, registry.replace(declaration, `packVersion: "${pack.packVersion}"`));
+  }
+  const contracts = readFileSync(contractsPath, "utf8").split("\n");
+  const constantLine = contracts.findIndex((line) => /SELECTOR_PACK_VERSION = "/.test(line) && line.includes(`"${previousVersion}"`));
+  if (constantLine < 0) {
+    restore();
+    throw new Error(`The contracts module does not export ${previousVersion}; repair the constant by hand.`);
+  }
+  contracts[constantLine] = contracts[constantLine].replace(`"${previousVersion}"`, `"${pack.packVersion}"`);
+  writeFileSync(contractsPath, contracts.join("\n"));
   const steps = [];
   const fail = (step, output) => {
     restore();

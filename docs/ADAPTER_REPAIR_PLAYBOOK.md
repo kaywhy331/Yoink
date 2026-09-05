@@ -18,7 +18,14 @@ portability exports, observer recipes, or any hosted request.
    does not reproduce: inspect the recorded versions and trace before editing
    anything.
 4. Prefer a selector-pack edit when the packaged grammar can express the
-   repair. Change adapter code and bump that store's contract only when it
+   repair. `npm run repair -- <id> --apply "<selector>"` adds the selector to
+   the failing pack field, bumps the pack version in the pack file, its lock,
+   the lane registry (`packages/contracts/src/add-lanes.ts`), and the
+   contracts constant (`packages/contracts/src/index.ts`), regenerates the
+   packaged version file, replays the capsule in a fresh process, and restores
+   every file when replay does not pass. A pack version lives in those three
+   source places; the token generator and the selector-pack test refuse a
+   tree where they disagree. Change adapter code and bump that store's contract only when it
    cannot. Never load an Add-control selector remotely, and never infer
    visibility, selection, or scope from page-provided attributes.
 5. Run replay again with `--expect pass`. The stored page must pass under the

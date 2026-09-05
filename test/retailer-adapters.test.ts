@@ -741,7 +741,8 @@ test("Amazon observer binds ASIN, seller, price, and keeps offer IDs ephemeral",
 test("an unavailable Amazon page cannot borrow a recommendation price without an exact Add control", () => {
   const url = "https://www.amazon.com/dp/B0F2BDXW4J";
   const document = new JSDOM(`
-    <main><input id="ASIN" value="B0F2BDXW4J"><h1>Unavailable exact product</h1></main>
+    <main><input id="ASIN" value="B0F2BDXW4J"><h1>Unavailable exact product</h1>
+      <div id="availability"><span>Currently unavailable.</span></div></main>
     <aside aria-label="Recommended products"><span class="a-price"><span class="a-offscreen">$40.00</span></span></aside>
   `, { url }).window.document;
   const observation = observeRetailerOffer(document, url, "amazon", "B0F2BDXW4J", "shipping", NOW);
@@ -950,7 +951,8 @@ test("Best Buy observer binds exact first-party shipping and rejects marketplace
   assert.equal(retailerAddControl(document, url, "bestbuy", "6588149", "shipping")?.textContent, "Add to cart");
   const wrong = observeRetailerOffer(document, url, "bestbuy", "9999999", "shipping", NOW);
   assert.equal(wrong.addControlActionable, false);
-  assert.equal(wrong.availability, "out_of_stock");
+  // A page for another product proves nothing about this product's stock.
+  assert.equal(wrong.availability, "unknown");
 
   const marketplaceUrl = "https://www.bestbuy.com/product/pokemon-tin/JJG2TL3V8K/sku/12716513";
   const marketplace = observeRetailerOffer(
@@ -973,8 +975,15 @@ test("Best Buy observer binds exact first-party shipping and rejects marketplace
     "shipping",
     NOW
   );
-  assert.equal(pickup.fulfillment, "unknown");
+  // The offer binds for pickup only; the empty selection keeps that fact so
+  // the diagnostic reads as a fulfillment policy result, not a lost binding.
+  assert.equal(pickup.fulfillment, "pickup");
+  assert.equal(pickup.availability, "unknown");
   assert.equal(pickup.addControlActionable, false);
+  const pickupAttempt = collectRetailerShadowAttempt(fixture("bestbuy-pickup-selected.html", url), url, "bestbuy", "shipping");
+  assert.equal(pickupAttempt.diagnostic.outcome, "rejected");
+  assert.equal(pickupAttempt.diagnostic.failureStage, "policy");
+  assert.equal(pickupAttempt.diagnostic.reasonCode, "fulfillment_not_supported");
 
   const ambiguous = observeRetailerOffer(
     fixture("bestbuy-ambiguous-sku.html", url),
@@ -1327,4 +1336,49 @@ test("generic observers classify auth, MFA, membership, queue, and challenge as 
   const unavailableShell = new JSDOM(`<title>PAGE NOT AVAILABLE｜PREMIUM BANDAI</title><body>Page unavailable</body>`).window.document;
   assert.equal(retailerSecurityChallenge(unavailableShell), false);
   assert.equal(retailerInteractiveBlock(unavailableShell, "https://p-bandai.com/us/item/N2884150001"), "unknown");
+});
+
+test("Best Buy reports a lost add-control binding as an adapter defect, never as an unavailable listing", () => {
+  const url = "https://www.bestbuy.com/product/panini-prizm-fifa-world-cup-2026-soccer-mega-box/JX58X26VJ9/sku/6680948";
+  const page = (shippingState: string, control: string) => new JSDOM(`
+    <main>
+      <section data-testid="fulfillment-purchase-panel" data-sku-id="6680948">
+        <p>SKU: 6680948</p>
+        <div data-testid="customer-price"><span>$149.99</span></div>
+        <div data-testid="sold-by">Sold and shipped by Best Buy</div>
+        <div data-testid="fulfillment-card-shipping" role="radio" ${shippingState}><strong>Shipping</strong><span>Get it tomorrow</span></div>
+        <div data-testid="fulfillment-card-pickup" role="radio" aria-checked="false"><strong>Pickup</strong><span>Check stores</span></div>
+        ${control}
+      </section>
+    </main>
+  `, { url }).window.document;
+
+  // The shipping tile is rendered but no packaged selector marks it selected:
+  // the control cannot be scoped, and the page said nothing about stock.
+  const lost = collectRetailerShadowAttempt(
+    page(`aria-pressed="true"`, `<button data-button-state="ADD_TO_CART">Add to Cart</button>`), url, "bestbuy", "shipping"
+  );
+  assert.equal(lost.observation.availability, "unknown");
+  assert.equal(lost.observation.addControlActionable, false);
+  assert.equal(lost.diagnostic.outcome, "failed");
+  assert.equal(lost.diagnostic.failureStage, "fulfillment_binding");
+  assert.equal(lost.diagnostic.reasonCode, "fulfillment_binding_missing");
+  assert.equal(lost.diagnostic.layout.addControlCount, 1);
+  assert.equal(lost.diagnostic.layout.scopedControlCount, 0);
+
+  // The same page with a disabled sold-out control is a product-state result.
+  const soldOut = collectRetailerShadowAttempt(
+    page(`aria-checked="true"`, `<button data-button-state="SOLD_OUT" disabled>Sold Out</button>`), url, "bestbuy", "shipping"
+  );
+  assert.equal(soldOut.observation.availability, "out_of_stock");
+  assert.equal(soldOut.diagnostic.outcome, "rejected");
+  assert.equal(soldOut.diagnostic.reasonCode, "listing_unavailable_layout");
+
+  // A selected shipping tile with a usable control passes as before.
+  const passing = collectRetailerShadowAttempt(
+    page(`aria-checked="true"`, `<button data-button-state="ADD_TO_CART">Add to Cart</button>`), url, "bestbuy", "shipping"
+  );
+  assert.equal(passing.observation.availability, "in_stock");
+  assert.equal(passing.observation.fulfillment, "shipping");
+  assert.equal(passing.diagnostic.outcome, "passed");
 });

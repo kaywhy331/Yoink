@@ -138,7 +138,8 @@ export function collectRetailerShadowObservation(
 
 function observationDiagnosticState(
   observation: RetailerShadowObservationInput,
-  layout: RetailerAdapterLayoutEvidence
+  layout: RetailerAdapterLayoutEvidence,
+  requiredFulfillment: Fulfillment = "shipping"
 ): { outcome: RetailerAdapterDiagnosticOutcome; failureStage: RetailerAdapterDiagnosticStage; reasonCode: string } {
   if (layout.pageKind !== "product") return { outcome: "failed", failureStage: "page_identity", reasonCode: "product_identity_missing" };
   if (layout.securityChallenge || layout.interactiveBlock) {
@@ -199,6 +200,31 @@ function observationDiagnosticState(
       ? layout.canonicalOfferDistinctCount : layout.alternateOfferDistinctCount;
     if (primaryOfferCount === 0) return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_missing" };
     if (primaryOfferCount !== 1) return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_ambiguous" };
+  }
+  // A packaged add control exists but no store binder scoped it to an exact
+  // offer, and the page proved nothing about stock. That is a binding the
+  // adapter lost, not a product-state result: it must capture evidence and
+  // open a repair group. Name the first binding that came back empty so the
+  // repair command inspects that pack field first.
+  const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
+  if (layout.addControlCount >= 1 && layout.scopedControlCount === 0 && !observation.addControlActionable
+    && observation.fulfillment !== "unknown" && observation.fulfillment !== expectedFulfillment) {
+    // The offer binds, but only for the other fulfillment: a plan policy
+    // result, not a repair.
+    return { outcome: "rejected", failureStage: "policy", reasonCode: "fulfillment_not_supported" };
+  }
+  if (layout.addControlCount >= 1 && layout.scopedControlCount === 0 && !observation.addControlActionable
+    && layout.priceCandidateCount > 0 && !(layout.repairLandmarks?.length)) {
+    if (observation.fulfillment === "unknown") {
+      return { outcome: "failed", failureStage: "fulfillment_binding", reasonCode: "fulfillment_binding_missing" };
+    }
+    if (observation.sellerType === "unknown") {
+      return { outcome: "failed", failureStage: "seller_binding", reasonCode: "seller_binding_missing" };
+    }
+    if (observation.unitPriceCents === null) {
+      return { outcome: "failed", failureStage: "price_binding", reasonCode: "price_binding_missing" };
+    }
+    return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_missing" };
   }
   if ((!semanticPriceRecovered && layout.priceCandidateCount === 0) || observation.unitPriceCents === null) {
     return (layout.genericPriceCandidateCount ?? 0) === 1 && hasRepairField(layout, "unitPrice")
@@ -262,7 +288,7 @@ export function collectRetailerShadowAttempt(
   const layout = retailerAdapterLayoutEvidence(
     documentValue, urlValue, retailerId, observation.retailerSku, tracedEnvironment
   );
-  const state = observationDiagnosticState(observation, layout);
+  const state = observationDiagnosticState(observation, layout, requiredFulfillment);
   const diagnosticLayout = boundedDiagnosticLayout(layout, state.reasonCode);
   return {
     observation,

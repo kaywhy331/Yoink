@@ -147,6 +147,12 @@ test("repair --apply proves a selector by replay before it stays in the pack, an
     new EvidenceCapsuleStore(dataDirectory).accept(capsule, new Date(now + 200).toISOString());
     db.close();
 
+    const registryPath = join(packRoot, "add-lanes.ts");
+    copyFileSync(join(process.cwd(), "packages", "contracts", "src", "add-lanes.ts"), registryPath);
+    const registryBefore = readFileSync(registryPath, "utf8");
+    const contractsPath = join(packRoot, "index.ts");
+    copyFileSync(join(process.cwd(), "packages", "contracts", "src", "index.ts"), contractsPath);
+    const contractsBefore = readFileSync(contractsPath, "utf8");
     const packBefore = readFileSync(join(packRoot, "target.json"), "utf8");
     const calls: string[] = [];
     const hooks = (replayStatus: number) => ({
@@ -159,13 +165,17 @@ test("repair --apply proves a selector by replay before it stays in the pack, an
       databasePath,
       json: false,
       selector: "button[data-test='new-cart-action']",
-      packRoot
+      packRoot,
+      registryPath,
+      contractsPath
     };
 
     const failed = await applyRepair(options, hooks(1));
     assert.equal(failed.applied, false);
     assert.equal(failed.failedStep, "replay");
     assert.equal(readFileSync(join(packRoot, "target.json"), "utf8"), packBefore, "a failed replay restores the pack byte for byte");
+    assert.equal(readFileSync(registryPath, "utf8"), registryBefore, "a failed replay restores the lane registry too");
+    assert.equal(readFileSync(contractsPath, "utf8"), contractsBefore, "a failed replay restores the contracts constant too");
     assert.equal(readdirSync(packRoot).some((name) => name.includes("repair-backup")), false);
 
     const applied = await applyRepair(options, hooks(0));
@@ -178,6 +188,9 @@ test("repair --apply proves a selector by replay before it stays in the pack, an
     assert.ok(pack.fields.addControl?.selectors.includes("button[data-test='new-cart-action']"));
     const lock = JSON.parse(readFileSync(join(packRoot, "lock.json"), "utf8")) as { packs: Record<string, { packVersion: string }> };
     assert.equal(lock.packs["target.json"]?.packVersion, applied.packVersion);
+    assert.ok(readFileSync(registryPath, "utf8").includes(`packVersion: "${applied.packVersion}"`), "the lane registry declares the new pack version");
+    assert.equal(readFileSync(registryPath, "utf8").includes(`packVersion: "${TARGET_SELECTOR_PACK_VERSION}"`), false);
+    assert.ok(readFileSync(contractsPath, "utf8").includes(`TARGET_SELECTOR_PACK_VERSION = "${applied.packVersion}"`), "the contracts constant follows the pack");
     assert.equal(readFileSync(join(packRoot, "target.json"), "utf8").split("\n").filter((line) => line.includes("\"selectors\"")).length, 12,
       "the pack keeps its one-line-per-field layout");
     // Each attempt regenerates the packaged version file before replaying; a

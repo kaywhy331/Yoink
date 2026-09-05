@@ -119,7 +119,7 @@ export const ADD_LANES: Readonly<Record<AddLaneId, Readonly<AddLaneDefinition>>>
     name: "Amazon",
     domain: "amazon.com",
     contractVersion: "amazon-add-v9",
-    packVersion: "amazon-pack-v1",
+    packVersion: "amazon-pack-v2",
     observerVersion: "amazon-observer-v8",
     activationConfirmation: "ENABLE_AMAZON_ADD_V9",
     firstPartySeller: "Amazon.com",

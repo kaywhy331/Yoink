@@ -122,7 +122,7 @@ var YoinkRetailerShadowModule = (() => {
       name: "Amazon",
       domain: "amazon.com",
       contractVersion: "amazon-add-v9",
-      packVersion: "amazon-pack-v1",
+      packVersion: "amazon-pack-v2",
       observerVersion: "amazon-observer-v8",
       activationConfirmation: "ENABLE_AMAZON_ADD_V9",
       firstPartySeller: "Amazon.com",
@@ -340,13 +340,13 @@ var YoinkRetailerShadowModule = (() => {
 
   // packages/browser-adapters/packs/amazon.json
   var amazon_default = {
-    packVersion: "amazon-pack-v1",
+    packVersion: "amazon-pack-v2",
     retailerId: "amazon",
     fields: {
       addControl: { selectors: ["#add-to-cart-button", "input[name='submit.add-to-cart']", "button[name='submit.add-to-cart']"] },
       price: { selectors: ["#corePrice_feature_div .a-offscreen", "#priceblock_ourprice", "#priceblock_dealprice", ".a-price .a-offscreen", "meta[itemprop='price']"] },
       seller: { selectors: ["#merchant-info", "#sellerProfileTriggerId", "[data-feature-name='shipsFromSoldBy']", "#tabular-buybox"] },
-      availability: { selectors: ["[itemprop='availability']", "button[disabled]"] },
+      availability: { selectors: ["#availability", "[data-testid*='availability' i]", "[itemprop='availability']", "button[disabled]"] },
       fulfillmentRoot: { selectors: ["#buybox", "#desktop_buybox", "[data-feature-name='buybox']", "form"] },
       fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
       quantity: { selectors: ["select#quantity", "select[name='quantity']", "input[name='quantity']", "input[name='items[0.base][quantity]']"] },
@@ -1646,7 +1646,7 @@ var YoinkRetailerShadowModule = (() => {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
     const scoped = candidateControls(document, retailer).map((control) => amazonOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
     const matching = scoped.filter((candidate) => candidate.fulfillment === expectedFulfillment);
-    return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: "unknown", offerRoot: null };
+    return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(scoped, expectedFulfillment), offerRoot: null };
   }
   function walmartSkuEvidence(root) {
     const skus = /* @__PURE__ */ new Set();
@@ -1975,12 +1975,18 @@ var YoinkRetailerShadowModule = (() => {
     }
     return null;
   }
+  function unmatchedFulfillment(candidates, expected) {
+    const kinds = new Set(candidates.map((candidate) => candidate.fulfillment).filter((kind) => kind !== "unknown"));
+    const only = [...kinds][0];
+    return kinds.size === 1 && only && only !== expected ? only : "unknown";
+  }
   function selectedBestBuyControl(document, retailer, expectedSku, requiredFulfillment) {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
     const scoped = candidateControls(document, retailer).map((control) => bestBuyOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
     const recovered = scoped.length === 0 ? recoveredBestBuyOfferScope(document, retailer, expectedSku) : null;
-    const matching = [...scoped, ...recovered ? [recovered] : []].filter((candidate) => candidate.fulfillment === expectedFulfillment);
-    return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: "unknown", offerRoot: null };
+    const bound = [...scoped, ...recovered ? [recovered] : []];
+    const matching = bound.filter((candidate) => candidate.fulfillment === expectedFulfillment);
+    return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(bound, expectedFulfillment), offerRoot: null };
   }
   function selectedControl(document, retailer, requiredFulfillment, expectedSku = "") {
     recordTrace({
@@ -2002,7 +2008,7 @@ var YoinkRetailerShadowModule = (() => {
     }
     const candidates = candidateControls(document, retailer).map((control) => ({ control, fulfillment: fulfillmentEvidence(document, control, retailer) }));
     const matching = candidates.filter((candidate) => candidate.fulfillment === expectedFulfillment);
-    const selected = matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: "unknown" };
+    const selected = matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(candidates, expectedFulfillment) };
     return { ...selected, offerRoot: null };
   }
   function amazonOfferBinding(document, urlValue, expectedAsin, requiredFulfillment = "shipping", environment) {
@@ -2018,11 +2024,16 @@ var YoinkRetailerShadowModule = (() => {
     if (offers.size !== 1) return null;
     return { control: selected.control, offerListingId: [...offers][0] ?? "" };
   }
-  function explicitlyUnavailableOffer(document) {
-    const selectors = selectorsFor("walmart", "availability");
-    return [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible2(element) && !merchandisingControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
+  var UNAVAILABLE_EVIDENCE = /\b(?:out of stock|sold out|currently unavailable|coming soon)\b/i;
+  function explicitlyUnavailableOffer(document, retailer) {
+    const selectors = selectorsFor(retailer.retailerId, "availability");
+    const flagged = selectors.length > 0 && [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible2(element) && !merchandisingControl(element)).some((element) => UNAVAILABLE_EVIDENCE.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
     ));
+    if (flagged) return true;
+    const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
+    const controls = [...new Set(retailer.addSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]))].filter((element) => visible2(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
+    return controls.length > 0 && controls.every((control) => !actionable(control));
   }
   function observeRetailerOffer(document, urlValue, retailerId, expectedSku, requiredFulfillment = "shipping", observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
     if (environment) {
@@ -2054,7 +2065,7 @@ var YoinkRetailerShadowModule = (() => {
     const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
     const canAdd = selectedControlActionable && !blocked;
     const controlText = text(selected.control, 300);
-    const availability = blocked && !(retainBoundManualEvidence && selectedControlActionable) ? "unknown" : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock" : retailerId === "walmart" ? explicitlyUnavailableOffer(document) ? "out_of_stock" : "unknown" : "out_of_stock";
+    const availability = blocked && !(retainBoundManualEvidence && selectedControlActionable) ? "unknown" : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock" : explicitlyUnavailableOffer(document, retailer) ? "out_of_stock" : "unknown";
     recordTrace({
       step: "availability",
       condition: "offer.availability",
@@ -2518,7 +2529,7 @@ var YoinkRetailerShadowModule = (() => {
       ...routeEvidence
     };
   }
-  function observationDiagnosticState(observation, layout) {
+  function observationDiagnosticState(observation, layout, requiredFulfillment = "shipping") {
     if (layout.pageKind !== "product") return { outcome: "failed", failureStage: "page_identity", reasonCode: "product_identity_missing" };
     if (layout.securityChallenge || layout.interactiveBlock) {
       return {
@@ -2567,6 +2578,22 @@ var YoinkRetailerShadowModule = (() => {
       const primaryOfferCount = layout.canonicalOfferInputCount > 0 ? layout.canonicalOfferDistinctCount : layout.alternateOfferDistinctCount;
       if (primaryOfferCount === 0) return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_missing" };
       if (primaryOfferCount !== 1) return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_ambiguous" };
+    }
+    const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
+    if (layout.addControlCount >= 1 && layout.scopedControlCount === 0 && !observation.addControlActionable && observation.fulfillment !== "unknown" && observation.fulfillment !== expectedFulfillment) {
+      return { outcome: "rejected", failureStage: "policy", reasonCode: "fulfillment_not_supported" };
+    }
+    if (layout.addControlCount >= 1 && layout.scopedControlCount === 0 && !observation.addControlActionable && layout.priceCandidateCount > 0 && !layout.repairLandmarks?.length) {
+      if (observation.fulfillment === "unknown") {
+        return { outcome: "failed", failureStage: "fulfillment_binding", reasonCode: "fulfillment_binding_missing" };
+      }
+      if (observation.sellerType === "unknown") {
+        return { outcome: "failed", failureStage: "seller_binding", reasonCode: "seller_binding_missing" };
+      }
+      if (observation.unitPriceCents === null) {
+        return { outcome: "failed", failureStage: "price_binding", reasonCode: "price_binding_missing" };
+      }
+      return { outcome: "failed", failureStage: "offer_binding", reasonCode: "offer_binding_missing" };
     }
     if (!semanticPriceRecovered && layout.priceCandidateCount === 0 || observation.unitPriceCents === null) {
       return (layout.genericPriceCandidateCount ?? 0) === 1 && hasRepairField(layout, "unitPrice") ? { outcome: "failed", failureStage: "price_binding", reasonCode: "price_selector_miss" } : { outcome: "failed", failureStage: "price_binding", reasonCode: "price_binding_missing" };
@@ -2619,7 +2646,7 @@ var YoinkRetailerShadowModule = (() => {
       observation.retailerSku,
       tracedEnvironment
     );
-    const state = observationDiagnosticState(observation, layout);
+    const state = observationDiagnosticState(observation, layout, requiredFulfillment);
     const diagnosticLayout = boundedDiagnosticLayout(layout, state.reasonCode);
     return {
       observation,
