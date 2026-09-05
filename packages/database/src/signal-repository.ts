@@ -1198,7 +1198,7 @@ export class SignalRepository {
          OR COALESCE(v.title, json_extract(se.identity_json, '$.title'), '') LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR COALESCE(l.retailer_id, json_extract(se.identity_json, '$.retailerId'), '') LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR COALESCE(l.retailer_sku, json_extract(se.identity_json, '$.retailerSku'), '') LIKE ? ESCAPE '\\' COLLATE NOCASE)
-       ORDER BY se.received_at DESC LIMIT ? OFFSET ?`,
+       ORDER BY se.received_at DESC, se.id DESC LIMIT ? OFFSET ?`,
       currentRequestScope().userId,
       query,
       pattern,

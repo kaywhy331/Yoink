@@ -178,6 +178,7 @@
     </section>
 
     <section class="workspace" data-panel="plans">
+      <label class="search"><span>Find a plan</span><input id="planSearch" type="search" placeholder="Product, store, SKU, or status"></label>
       <div class="section-heading">
         <div><p class="eyebrow">Your products</p><h2>Plans</h2><p id="planSummary" role="status">Limits by product.</p><div id="planSummaryNotices" aria-live="polite"></div></div>
         <div class="section-actions" id="planFilterControl" hidden>
@@ -190,12 +191,13 @@
           <button class="button quiet" id="togglePlanBulk" type="button" hidden>Select plans</button>
         </div>
       </div>
-      <section class="plan-bulk-bar" id="planBulkBar" aria-label="Apply a Quick add setup to purchase plans" hidden>
+      <section class="plan-bulk-bar" id="planBulkBar" aria-label="Apply a Quick add setup to purchase plans" hidden><small>Selection clears between pages/filters.</small>
         <label class="check"><input id="planBulkSelectVisible" type="checkbox"><span>Select shown</span></label>
         <label class="compact-select"><span>Quick add setup</span><select id="planBulkProfile"><option value="">Choose setup…</option></select></label>
         <button class="button primary" id="applyPlanBulkProfile" type="button" disabled>Apply setup</button>
       </section>
       <div class="stack" id="planList"></div>
+      <div class="load-more-row" id="planPagination" hidden><button class="button quiet" id="previousPlans" type="button">Previous plans</button><span id="planPageStatus" role="status"></span><button class="button quiet" id="nextPlans" type="button">Next plans</button></div>
     </section>
 
     <section class="workspace" data-panel="activity">
@@ -236,9 +238,9 @@
       <div class="preference-grid">
         <article class="preference-card budget-card" data-settings-panel="purchase"><div><h3>Spending limits</h3><p id="spendSummary">Loading…</p><form id="spendForm"><input name="revision" type="hidden"><div class="budget-fields"><label><span>Order</span><input name="perOrder" inputmode="decimal" placeholder="Optional"></label><label><span>Day</span><input name="daily" inputmode="decimal" placeholder="Optional"></label><label><span>Month</span><input name="monthly" inputmode="decimal" placeholder="Optional"></label><label><span>Timezone</span><select name="timezone" required><option value="">Loading…</option></select></label><label><span>Reset hour</span><select name="periodResetHour"></select></label></div><button class="button secondary" type="submit">Save limits</button></form></div></article>
         <article class="preference-card" data-settings-panel="purchase"><div><h3>Scheduled drop watching</h3><label class="watch-mode-setting"><span>Watch mode</span><select id="watchQueueMode" aria-describedby="watchQueueModeStatus"><option value="manual">Watch only when I choose</option><option value="auto_armed">Watch drops for active plans</option></select><small id="watchQueueModeStatus">Choose which scheduled drops Yoink watches without adding to cart.</small></label></div></article>
-        <article class="preference-card" data-settings-panel="chrome"><div><h3>Chrome companion</h3><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><div class="pairing" id="pairing" hidden></div></div></article>
-        <article class="preference-card connector-card" data-settings-panel="notifications" id="notifications"><div><h3>Send updates to Discord, Slack or a webhook</h3><div class="mini-list" id="connectorList"></div><form id="connectorForm">
-          <div class="profile-fields"><label><span>Name</span><input name="name" maxlength="80" required></label><label><span>Type</span><select name="kind"><option value="discord">Discord</option><option value="slack">Slack</option><option value="webhook">Webhook</option></select></label><label><span>Source key</span><input name="endpointReference" maxlength="120" autocomplete="off" aria-describedby="connectorKeyHelp" required><small class="field-help" id="connectorKeyHelp">Enter the key provided by your Yoink administrator. Webhook URLs and secrets are never entered here.</small></label></div>
+        <article class="preference-card" data-settings-panel="chrome"><div><h3>Chrome companion</h3><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><p><a href="/docs#install">Install on desktop</a></p><div class="pairing" id="pairing" hidden></div><div id="pairedDevices" class="mini-list" aria-live="polite"></div></div></article>
+        <article class="preference-card connector-card" data-settings-panel="notifications" id="notifications"><div><h3>Update destinations</h3><div class="mini-list" id="connectorList"></div><p><a href="/docs#notifications">Administrator setup guide</a></p><form id="connectorForm"><input type="hidden" name="id">
+          <div class="profile-fields"><label><span>Name</span><input name="name" maxlength="80" required></label><label><span>Type</span><select name="kind"><option value="discord">Discord</option><option value="slack">Slack</option><option value="webhook">Webhook</option></select></label><label><span>Delivery key</span><input name="endpointReference" maxlength="120" autocomplete="off" aria-describedby="connectorKeyHelp" required><small class="field-help" id="connectorKeyHelp">Use your administrator’s key, never a webhook URL or secret.</small></label></div>
           <fieldset class="connector-events"><legend>Updates</legend><label class="check"><input name="events" type="checkbox" value="notify" checked><span>In stock</span></label><label class="check"><input name="events" type="checkbox" value="carted" checked><span>Carted</span></label><label class="check"><input name="events" type="checkbox" value="needs_you" checked><span>Needs you</span></label><label class="check"><input name="events" type="checkbox" value="missed" checked><span>Missed</span></label><label class="check"><input name="events" type="checkbox" value="test" checked><span>Test</span></label></fieldset>
           <button class="button secondary" type="submit">Add destination</button>
         </form></div></article>
@@ -272,7 +274,7 @@
     </form>
   </dialog>
 
-  <dialog id="productDialog" class="product-detail-dialog">
+  <dialog id="productDialog" class="product-detail-dialog" aria-labelledby="productDialogTitle">
     <form method="dialog">
       <div class="dialog-heading">
         <div><p class="eyebrow">Store offers</p><h2 id="productDialogTitle">Product</h2></div>
@@ -294,10 +296,10 @@
     </form>
   </dialog>
 
-  <dialog id="productLinkDialog" class="product-link-dialog">
+  <dialog id="productLinkDialog" class="product-link-dialog" aria-labelledby="productLinkDialogTitle">
     <form id="productLinkForm">
       <div class="dialog-heading">
-        <div><p class="eyebrow">Product</p><h2>Add a product link</h2></div>
+        <div><p class="eyebrow">Product</p><h2 id="productLinkDialogTitle">Add a product link</h2></div>
         <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
       </div>
 
@@ -313,10 +315,10 @@
     </form>
   </dialog>
 
-  <dialog id="setupDialog" class="setup-dialog">
+  <dialog id="setupDialog" class="setup-dialog" aria-labelledby="setupDialogTitle">
     <form id="setupForm">
       <div class="dialog-heading">
-        <div><p class="eyebrow">Review</p><h2>Set up this purchase</h2></div>
+        <div><p class="eyebrow">Review</p><h2 id="setupDialogTitle">Set up this purchase</h2></div>
         <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
       </div>
       <input name="listingId" type="hidden">
@@ -376,7 +378,7 @@
     </form>
   </dialog>
 
-  <dialog id="planDialog">
+  <dialog id="planDialog" aria-labelledby="planDialogTitle">
     <form id="planForm">
       <div class="dialog-heading"><div><p class="eyebrow">Plan</p><h2 id="planDialogTitle">Product</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <input name="id" type="hidden">
@@ -421,7 +423,7 @@
     </form>
   </dialog>
 
-  <dialog id="planBulkApplyDialog" class="compact-dialog">
+  <dialog id="planBulkApplyDialog" class="compact-dialog" aria-labelledby="planBulkApplyTitle">
     <form id="planBulkApplyForm">
       <div class="dialog-heading"><div><p class="eyebrow">Apply Quick add setup</p><h2 id="planBulkApplyTitle">Review selected plans</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <p class="dialog-copy" id="planBulkApplySummary"></p>

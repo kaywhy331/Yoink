@@ -75,7 +75,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.match(pageBody, /Spending limits/);
     assert.doesNotMatch(pageBody, /Store-reading review|Restart worker|Deployment reference/);
     assert.match(pageBody, /Checkout stays manual/);
-    assert.match(pageBody, /<h2>Set up this purchase<\/h2>/);
+    assert.match(pageBody, /<h2 id="setupDialogTitle">Set up this purchase<\/h2>/);
     assert.match(pageBody, /Price check/);
     assert.match(pageBody, /Create purchase plan/);
     assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);

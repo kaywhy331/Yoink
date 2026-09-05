@@ -443,7 +443,7 @@ export class RetailerReadinessRepository {
       { id: "qualification", ready: qualified && !packUnverified, label: packUnverified
         ? "Store check pending after update"
         : qualified ? "Store checks passed" : "Store checks need a refresh" },
-      { id: "store_checks", ready: !degradation.degraded, label: degradation.degraded ? "Store checks failing" : "Store checks healthy" },
+      { id: "store_checks", ready: qualified && !packUnverified && !degradation.degraded, label: degradation.degraded ? "Store checks failing" : packUnverified ? "Store check pending after update" : qualified ? "Store checks passed" : "Store checks not verified" },
       { id: "device", ready: activeDevice, label: activeDevice ? "Chrome companion online" : "Chrome companion offline" },
       { id: "signed_in", ready: signedIn, label: signedIn ? "Signed in to the store in Chrome" : "Sign in to the store in Chrome" },
       { id: "cart_baseline", ready: warmBaseline, label: warmBaseline ? "Cart warmed up" : "Cart not warmed up yet" }

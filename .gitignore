@@ -9,3 +9,5 @@ data/
 coverage/
 *.log
 release/*.zip
+playwright-report/
+test-results/

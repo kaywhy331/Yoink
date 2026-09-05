@@ -76,13 +76,15 @@
     "postgres:signal-dead-letter-reset-apply": "npm run build:types && node scripts/postgres-signal-dead-letter-reset-apply.mjs",
     "postgres:signal-ingress-composition": "npm run build:types && node scripts/postgres-signal-ingress-composition.mjs",
     "postgres:signal-notification-ensure-apply": "npm run build:types && node scripts/postgres-signal-notification-ensure-apply.mjs",
-    "postgres:signal-handler-composition": "npm run build:types && node scripts/postgres-signal-handler-composition.mjs"
+    "postgres:signal-handler-composition": "npm run build:types && node scripts/postgres-signal-handler-composition.mjs",
+    "test:browser": "playwright test"
   },
   "engines": {
     "node": ">=22.5.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.7",
+    "@playwright/test": "^1.58.2",
     "@types/node": "^22.15.0",
     "@types/pg": "^8.23.1",
     "embedded-postgres": "16.14.0-beta.17",

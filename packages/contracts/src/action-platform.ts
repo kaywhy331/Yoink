@@ -5,7 +5,7 @@ export const WATCH_QUEUE_CONTRACT_VERSION = 1 as const;
 export const USER_CONNECTOR_CONTRACT_VERSION = 1 as const;
 export const ORDER_CONFIRMATION_OBSERVER_CONTRACT_VERSION = 1 as const;
 export const PRIVACY_POLICY_VERSION = "yoink-privacy-v1" as const;
-export const PRIVACY_CHANGE_VERSION = "1.16.0" as const;
+export const PRIVACY_CHANGE_VERSION = "2026-09-05" as const;
 
 export type DropWindowKind = "drop_window" | "queue_open";
 export type DropWindowStatus = "scheduled" | "active" | "superseded" | "closed" | "cancelled";

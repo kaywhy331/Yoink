@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
 import {
@@ -530,7 +531,7 @@ function staticDocumentVersion(version: string, html: boolean): string {
     .replaceAll("'", "&#39;");
 }
 
-function staticResponse(response: ServerResponse, webRoot: string, pathname: string, version: string): boolean {
+function staticResponse(request: IncomingMessage, response: ServerResponse, webRoot: string, pathname: string, version: string): boolean {
   const file = STATIC_FILES.get(pathname);
   if (!file) return false;
   const path = join(webRoot, file);
@@ -559,6 +560,27 @@ function staticResponse(response: ServerResponse, webRoot: string, pathname: str
       : extname(file) === ".woff2"
         ? "font/woff2"
         : extname(file) === ".txt" ? "text/plain; charset=utf-8" : "text/html; charset=utf-8");
+  if ([".js", ".css", ".woff2"].includes(extname(file))) {
+    const etag = `W/"${createHash("sha256").update(body).digest("hex")}"`;
+    response.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+    response.setHeader("ETag", etag);
+    response.setHeader("Vary", "Accept-Encoding");
+    if (String(request.headers["if-none-match"] || "").split(",").map((value) => value.trim()).includes(etag)) {
+      response.statusCode = 304;
+      response.end();
+      return true;
+    }
+    const acceptsGzip = String(request.headers["accept-encoding"] || "").split(",").some((entry) => {
+      const [name, ...parameters] = entry.trim().split(";");
+      const quality = parameters.find((value) => value.trim().startsWith("q="));
+      return name === "gzip" && (!quality || Number(quality.trim().slice(2)) > 0);
+    });
+    if (body.length > 1024 && extname(file) !== ".woff2" && acceptsGzip) {
+      body = gzipSync(body);
+      response.setHeader("Content-Encoding", "gzip");
+    }
+  }
+  response.setHeader("Content-Length", String(body.length));
   response.end(body);
   return true;
 }
@@ -1030,7 +1052,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const requestUrl = initialRequestUrl;
       if (request.method === "GET" && STATIC_FILES.has(requestUrl.pathname)) {
         authorization.require(ADMIN_STATIC_PATHS.has(requestUrl.pathname) ? "admin.read" : "user.read");
-        if (staticResponse(response, webRoot, requestUrl.pathname, version)) return;
+        if (staticResponse(request, response, webRoot, requestUrl.pathname, version)) return;
       }
 
       const routePolicy = resolveApiRoutePolicy(request.method ?? "GET", requestUrl.pathname);
@@ -1407,7 +1429,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/calls") {
         const now = Date.now();
-        const signalCalls = signals.listSignals(100, 0, "").map((signal) => ({
+        const requestedOffset = Number(requestUrl.searchParams.get("offset") ?? 0);
+        const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
+        const signalCalls = signals.listSignals(100, offset, "").map((signal) => ({
           id: `signal:${String(signal.signalId ?? "")}`,
           kind: "signal",
           listingId: String(signal.listingId ?? ""),
@@ -1452,10 +1476,26 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           startsAt: window.startsAt,
           closesAt: window.closesAt
         })));
-        const items = [...windowCalls, ...signalCalls]
-          .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime())
-          .slice(0, 200);
-        json(response, 200, { items, generatedAt: new Date(now).toISOString() });
+        const calls = [...windowCalls, ...signalCalls]
+          .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime()
+            || right.id.localeCompare(left.id));
+        const listingIds = [...new Set(calls.map((call) => call.listingId).filter(Boolean))];
+        const products: Array<Record<string, unknown>> = [];
+        for (let start = 0; start < listingIds.length; start += 500) products.push(...catalog.listLibrary(500, 0, "", listingIds.slice(start, start + 500)));
+        const productByListing = new Map(products.map((product) => [String(product.listingId), product]));
+        const variantIds = [...new Set(products.map((product) => String(product.variantId)))];
+        const plans: Array<Record<string, unknown>> = [];
+        for (let start = 0; start < variantIds.length; start += 500) plans.push(...control.planSummariesForVariants(variantIds.slice(start, start + 500)));
+        const planByVariant = new Map(plans.map((plan) => [String(plan.variantId), plan]));
+        const items = calls.map((call) => {
+          const product = productByListing.get(call.listingId) ?? null;
+          return { ...call, product, purchaseIntent: product ? planByVariant.get(String(product.variantId)) ?? null : null };
+        });
+        const signalTotal = signals.signalCount();
+        const nextSignalOffset = offset + signalCalls.length;
+        json(response, 200, { items, total: signalTotal + windowCalls.length, signalTotal,
+          nextSignalOffset, hasMore: nextSignalOffset < signalTotal,
+          generatedAt: new Date(now).toISOString() });
         return;
       }
 
@@ -1697,8 +1737,34 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
         const query = String(requestUrl.searchParams.get("q") ?? "");
-        const items = decoratePurchaseIntents(control.listMissions(limit, offset, query, true));
-        json(response, 200, { items, total: control.missionCount(query), offset, limit: items.length });
+        const safeLimit = Math.max(1, Math.min(500, Math.floor(limit) || 100));
+        const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
+        const readiness = String(requestUrl.searchParams.get("readiness") ?? "all");
+        let total = control.missionCount(query);
+        let items;
+        if (["ready", "attention", "monitoring"].includes(readiness)) {
+          // Readiness depends on current devices and qualifications, so filter before paging.
+          const now = Date.now();
+          const context = { now, settings: control.settings(), sources: control.listSources(),
+            deviceList: devices.listDevices(now), laneQualifications: guardedAddLanes(),
+            sessionBlockers: retailerReadiness.freshSessionBlockers(now) };
+          const matches: Array<Record<string, unknown>> = [];
+          let matched = 0;
+          for (let start = 0; start < total; start += 500) {
+            for (const plan of decoratePurchaseIntents(control.listMissions(500, start, query, true), context)) {
+              const ready = (plan.automationReadiness as { readyForGuardedAdd?: boolean })?.readyForGuardedAdd === true;
+              const group = plan.status !== "active" ? "attention" : plan.actionCeiling !== "add_to_cart" ? "monitoring" : ready ? "ready" : "attention";
+              if (group !== readiness) continue;
+              if (matched >= safeOffset && matches.length < safeLimit) matches.push(plan);
+              matched += 1;
+            }
+          }
+          items = matches;
+          total = matched;
+        } else {
+          items = decoratePurchaseIntents(control.listMissions(safeLimit, safeOffset, query, true));
+        }
+        json(response, 200, { items, total, offset: safeOffset, limit: items.length });
         return;
       }
 
@@ -3158,7 +3224,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           priceMaxCents: requestUrl.searchParams.get("priceMax") ?? "",
           sort: requestUrl.searchParams.get("sort") ?? "newest"
         };
-        const items = catalog.listLibraryProducts(limit, offset, filters);
+        const products = catalog.listLibraryProducts(limit, offset, filters);
+        const variantIds = [...new Set(products.map((product) => String(product.variantId)))];
+        const plans: Array<Record<string, unknown>> = [];
+        for (let start = 0; start < variantIds.length; start += 500) plans.push(...control.planSummariesForVariants(variantIds.slice(start, start + 500)));
+        const planByVariant = new Map(plans.map((plan) => [String(plan.variantId), plan]));
+        const items = products.map((product) => ({ ...product,
+          purchaseIntent: planByVariant.get(String(product.variantId)) ?? null
+        }));
         json(response, 200, {
           items,
           total: catalog.libraryProductCount(filters),
@@ -3691,6 +3764,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices") {
+        json(response, 200, { items: devices.listDevices().map(({ id, name, extensionVersion, status, online, lastSeenAt, createdAt }) => ({ id, name, extensionVersion, status, online, lastSeenAt, createdAt })) });
+        return;
+      }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/pairing-code") {
         json(response, 201, { pairing: devices.createPairingCode() });
         return;
@@ -4132,14 +4209,22 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           items: control.listPurchaseProfiles().map((profile) => ({
             ...profile,
-            linkedMissionCount: control.purchaseProfileLinkedMissionIds(profile.id).length
+            linkedMissionCount: control.purchaseProfileLinkedMissionIds(profile.id).length,
+            impactFingerprint: stableHash(JSON.stringify(profile), ...control.purchaseProfileLinkedMissionIds(profile.id).sort())
           }))
         });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/purchase-profiles") {
         const body = await readJson(request);
-        const saved = control.savePurchaseProfile(body as unknown as PurchaseProfileInput);
+        const saved = db.transaction(() => {
+          if (body.id && body.impactFingerprint !== undefined) {
+            const profile = control.listPurchaseProfiles().find((item) => item.id === body.id);
+            const expected = profile ? stableHash(JSON.stringify(profile), ...control.purchaseProfileLinkedMissionIds(profile.id).sort()) : "";
+            if (!expected || body.impactFingerprint !== expected) throw new ApiError("purchase_profile_impact_changed", 409, "The setup or linked plans changed. Review the current impact before saving again.");
+          }
+          return control.savePurchaseProfile(body as unknown as PurchaseProfileInput);
+        });
         json(response, 200, { items: saved.profiles, propagation: saved.propagation });
         return;
       }

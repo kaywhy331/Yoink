@@ -102,6 +102,7 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
       const body = options.body ? JSON.parse(options.body) as Record<string, unknown> : {};
       if (method !== "GET") requests.push({ path, method, body });
       if (path === "/api/v1/affiliate-routing") return response({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE });
+      if (path === "/api/v1/user/devices" && method === "GET") return response({ items: [] });
       if (path === "/api/v1/user/devices/pairing-code" && method === "POST") {
         return response({ pairing: { code: "ABCD-EFGH", expiresAt: new Date(Date.now() + 300_000).toISOString() } }, 201);
       }

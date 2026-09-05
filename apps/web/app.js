@@ -196,20 +196,43 @@ function escapeHtml(value) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const reference = String(payload.correlationId || "");
-    const error = new Error(`${payload.message || `Yoink request failed with HTTP ${response.status}.`}${reference ? ` Reference ${reference}.` : ""}`);
-    error.reference = reference;
-    error.code = String(payload.error || "request_failed");
-    error.status = response.status;
+  const controller = new AbortController();
+  const { signal, timeoutMs = 15_000, ...requestOptions } = options;
+  const cancel = () => controller.abort();
+  if (signal?.aborted) cancel();
+  signal?.addEventListener("abort", cancel, { once: true });
+  const timer = setTimeout(cancel, timeoutMs);
+  try {
+    const response = await fetch(path, {
+      ...requestOptions,
+      signal: controller.signal,
+      headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers
+    });
+    const payload = await response.json().catch((error) => {
+      if (controller.signal.aborted) throw error;
+      return {};
+    });
+    if (!response.ok) {
+      const reference = String(payload.correlationId || "");
+      const error = new Error(`${payload.message || `Yoink request failed with HTTP ${response.status}.`}${reference ? ` Reference ${reference}.` : ""}`);
+      error.reference = reference;
+      error.code = String(payload.error || "request_failed");
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  } catch (cause) {
+    if (!controller.signal.aborted) throw cause;
+    const mutation = options.method && options.method !== "GET";
+    const error = new Error(signal?.aborted ? "Request cancelled." : mutation
+      ? "The request timed out. Check the current state before trying again; your change may have been saved."
+      : "The request timed out. Check your connection and retry.");
+    error.code = signal?.aborted ? "request_cancelled" : "request_timeout";
     throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
   }
-  return payload;
 }
 
 let statusFallbackReported = false;
@@ -817,8 +840,8 @@ function renderAdminAnalytics() {
   $("#adminAnalyticsMetrics").innerHTML = metricRows.map(([label, value, note]) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong><small>${escapeHtml(note)}</small></article>`).join("");
   $("#adminAnalyticsFunnel").innerHTML = [
     ["Calls", totals.signals], ["Matched", totals.matched], ["Jobs", totals.jobs],
-    ["Carted", totals.carted], ["Got it", totals.gotIt], ["Missed", totals.missed]
-  ].map(([label, value], index, rows) => `<div class="analytics-funnel-row"><span>${index + 1}. ${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong>${index < rows.length - 1 ? '<i aria-hidden="true">↓</i>' : ""}</div>`).join("");
+    ["Carted", totals.carted]
+  ].map(([label, value], index, rows) => `<div class="analytics-funnel-row"><span>${index + 1}. ${escapeHtml(label)}</span><strong>${Number(value || 0).toLocaleString()}</strong>${index < rows.length - 1 ? '<i aria-hidden="true">↓</i>' : ""}</div>`).join("") + `<div class="analytics-outcomes"><p>Reported outcomes (alternative results; counts can include attempts from before this window)</p><div class="status-row"><span>Got it</span><strong>${Number(totals.gotIt || 0).toLocaleString()}</strong></div><div class="status-row"><span>Missed</span><strong>${Number(totals.missed || 0).toLocaleString()}</strong></div><p>Unreported actions are not counted as a miss.</p></div>`;
   $("#adminAnalyticsAttribution").innerHTML = [
     ["Routes issued", totals.routesIssued],
     ["Affiliate routes", totals.affiliateRoutesIssued],
@@ -910,8 +933,8 @@ function renderSources() {
     const nextStep = source.status === "connected" ? "Receiving calls; no setup needed."
       : source.source === "trackalacker" ? "Connect from the Yoink extension on a signed-in TrackaLacker tab."
         : source.source === "browser" ? "Pair the user’s Chrome companion below."
-          : source.source === "discord" ? "Add the Discord channel ID under Source channels."
-            : source.source === "api" ? "Create the endpoint and key from Operations."
+          : source.source === "discord" ? "Discord ingestion is unavailable in this release."
+            : source.source === "api" ? "Ask your deployment operator to provision an authenticated API sender; see Help → API source setup."
               : "Review this source before relying on it.";
     return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(source.name)}</h3><p>${escapeHtml(sourceKindLabel(source.source))} · ${escapeHtml(sourceTrustLabel(source.trustLevel))}</p></div>${statusDot(source.status === "connected" ? "good" : "warning", sourceStatusLabel(source.status))}</div><p class="source-next-step"><strong>Next:</strong> ${escapeHtml(nextStep)}</p><div class="card-meta"><span class="tag ${source.autoCreateMissions ? "good" : ""}">${source.autoCreateMissions ? "Can create plans" : "Existing plans only"}</span><span class="tag">${signals.toLocaleString()} real calls</span><span class="tag ${signals && Number(source.matchRatePercent) === 100 ? "good" : ""}">${escapeHtml(matchRate)}</span><span class="tag">${Number(source.corroboratedSignalCount || 0).toLocaleString()} corroborated</span><span class="tag">${Number(source.unresolvedSignalCount || 0).toLocaleString()} unresolved</span><span class="tag">${escapeHtml(source.lastEventAt ? relativeTime(source.lastEventAt) : "No events")}</span></div></article>`;
   }).join("") || empty("No sources configured.");
@@ -947,7 +970,7 @@ function renderActionPlatformAdmin() {
     const healthKind = discordPending ? "" : channel.health === "healthy" ? "good" : channel.health === "attention" ? "warning" : "";
     const setup = discordPending
       ? `<p><strong>Not connected yet: client pending.</strong> When the bot ships, invite it to the server, copy the numeric channel ID, then save that ID here.</p>`
-      : `<p><strong>Next:</strong> create the source endpoint and key in Operations, then configure the sender with that credential.</p><button class="text-button" data-open-view="operations" type="button">Open Operations</button>`;
+      : `<p><strong>Deployment setup required:</strong> an operator must provision the authenticated sender outside this screen. Saving this row does not create credentials.</p><a class="text-button" href="/docs#api-sources">API source setup</a>`;
     return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(channel.name)}</h3><p>${escapeHtml(providerName)} · ${escapeHtml(channel.trustLevel.replaceAll("_", " "))}</p></div><span class="tag ${healthKind}">${escapeHtml(healthLabel)}</span></div><div class="channel-setup">${setup}</div><div class="card-meta"><span class="tag">${Number(channel.acceptedEventCount || 0).toLocaleString()} accepted</span><span class="tag">${Number(channel.rejectedEventCount || 0).toLocaleString()} rejected</span><span class="tag">${Number(channel.falsePositiveCount || 0).toLocaleString()} false positive${Number(channel.falsePositiveCount || 0) === 1 ? "" : "s"}</span><span class="tag">${channel.accuracyBps == null ? "No accuracy sample" : `${(Number(channel.accuracyBps) / 100).toFixed(1)}% accuracy`}</span><span class="tag">p50 ${channel.p50ObservedToReceivedMs == null ? "—" : `${Number(channel.p50ObservedToReceivedMs).toLocaleString()} ms`}</span><span class="tag">p95 ${channel.p95ObservedToReceivedMs == null ? "—" : `${Number(channel.p95ObservedToReceivedMs).toLocaleString()} ms`}</span></div><div class="card-actions"><button class="button secondary" data-source-channel-status="${escapeHtml(channel.id)}" type="button">${channel.status === "active" ? "Pause" : "Activate"}</button><button class="button secondary" data-source-channel-trust="${escapeHtml(channel.id)}" type="button">${channel.trustLevel === "trusted_exact" ? "Set informational" : "Trust product match"}</button><button class="button quiet" data-source-channel-replay="${escapeHtml(channel.id)}" type="button">Replay dead letters</button></div></article>`;
   }).join("") || empty("No provider channels configured.");
   const windows = state.dropWindows || [];
@@ -1022,7 +1045,7 @@ function syncSourceChannelReferenceField() {
     input.inputMode = "numeric";
   } else {
     $("#sourceChannelReferenceLabel").textContent = "API key reference";
-    $("#sourceChannelReferenceHelp").textContent = "Use the non-secret reference shown with the endpoint and key in Operations.";
+    $("#sourceChannelReferenceHelp").textContent = "Use the non-secret provider reference agreed with your deployment operator. See Help → API source setup.";
     input.placeholder = "operations:primary-feed";
     input.maxLength = 180;
     input.pattern = "[A-Za-z0-9][A-Za-z0-9_.:-]{1,179}";

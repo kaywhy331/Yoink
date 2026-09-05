@@ -213,6 +213,7 @@ test("Home surfaces one affiliate-aware urgent handoff and polls the compact act
   Object.defineProperty(browser, "setTimeout", {
     configurable: true,
     value: (callback: () => Promise<void>, delay = 0) => {
+      if (delay === 15_000) return -1; // Request deadlines are separate from dashboard polls.
       polls.push({ callback, delay: Number(delay) });
       return polls.length;
     }
@@ -1087,7 +1088,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
       credentialMaterialsExcluded: true,
       categories: [{ id: "catalog_and_plans", label: "Products and purchase plans", recordCount: 12 }]
     } };
-    if (path.startsWith("/api/v1/user/library")) return { items: [libraryGroup], total: 1 };
+    if (path.startsWith("/api/v1/user/library")) return { items: [{ ...libraryGroup, purchaseIntent: created ? planSummary : null }], total: 1 };
     if (path === "/api/v1/user/purchase-intents/legacy-transition") return { preview: {
       contractVersion: 1,
       eligibleCount: transitioned ? 0 : 1,
@@ -1400,17 +1401,19 @@ test("guided dashboard setup does not create a plan before review and submits ex
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Plan created/));
 
     await eventually(() => assert.ok(browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]')));
-    assert.match(browser.document.querySelector("#planSummary")?.textContent ?? "", /2 plans · 1 needs attention · 1 monitoring only/);
+    browser.eval('setTab("plans")');
+    await eventually(() => assert.match(browser.document.querySelector("#planSummary")?.textContent ?? "", /2 plans · 1 needs attention · 1 monitoring only/));
     assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Target is not switched on for cart adds yet/);
     const planFilter = browser.document.querySelector("#planFilter") as HTMLSelectElement;
     planFilter.value = "monitoring";
     planFilter.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    await eventually(() => assert.doesNotMatch(browser.document.querySelector("#planList")?.textContent ?? "", /Target is not switched on for cart adds yet/));
     assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Monitoring-only fixture/);
     assert.doesNotMatch(browser.document.querySelector("#planList")?.textContent ?? "", /Target is not switched on for cart adds yet/);
     planFilter.value = "all";
     planFilter.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Cart attempts add one item and confirm the cart change/);
-    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Store cart adds/);
+    await eventually(() => assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Cart attempts add one item and confirm the cart change/));
+    await eventually(() => assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Store cart adds/));
     const readinessDetails = browser.document.querySelector("#planList .automation-readiness details") as HTMLDetailsElement;
     assert.ok(readinessDetails);
     assert.equal(readinessDetails.open, false);
@@ -2495,8 +2498,11 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
       if (path === "/api/v1/user/purchase-profiles") {
         return { ok: true, status: 200, json: async () => ({ items: [profile] }) };
       }
-      if (path === "/api/v1/user/calls") {
-        return { ok: true, status: 200, json: async () => ({ items: calls() }) };
+      if (path.startsWith("/api/v1/user/calls?")) {
+        return { ok: true, status: 200, json: async () => ({ items: calls().map((call) => ({ ...call,
+          product: listings.find((listing) => listing.listingId === call.listingId) || null,
+          purchaseIntent: createdListingIds.has(call.listingId) ? { id: `mission_${call.listingId}`, status: "active" } : null
+        })) }) };
       }
       if (path === "/api/v1/user/drop-windows") {
         return { ok: true, status: 200, json: async () => ({ items: dropWindows() }) };
@@ -2616,7 +2622,7 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
     assert.equal(outbound.searchParams.get("publisher_slug"), "collectwithdodo");
     (browser.document.querySelector('.tabs [data-tab="preferences"]') as HTMLButtonElement).click();
     (browser.document.querySelector('[data-settings-view="notifications"]') as HTMLButtonElement).click();
-    assert.match(browser.document.querySelector("#notifications")?.textContent ?? "", /Send updates to Discord, Slack or a webhook/);
+    assert.match(browser.document.querySelector("#notifications")?.textContent ?? "", /Update destinations/);
     assert.equal(browser.document.querySelector("#notifications button[type='submit']")?.textContent?.trim(), "Add destination");
     assert.match(browser.document.querySelector("#watchQueueModeStatus")?.textContent ?? "", /watched automatically without adding to cart/);
     await eventually(() => assert.match(browser.document.querySelector("#analyticsMetrics")?.textContent ?? "", /2Over-cap purchases\$5\.00Above reviewed maximum/));
@@ -2652,8 +2658,11 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
       .every((card) => card.querySelectorAll(".tag").length <= 3), true);
 
     const selections = [...browser.document.querySelectorAll("[data-call-select]")] as HTMLInputElement[];
-    for (const input of selections) input.checked = true;
-    selections[0]!.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    for (const input of selections) {
+      if (input.disabled) continue;
+      input.checked = true;
+      input.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    }
     const selectionToolbar = browser.document.querySelector("#callSelectionToolbar") as HTMLElement;
     assert.equal(selectionToolbar.hidden, false);
     assert.equal(browser.document.querySelector("#callSelectionCount")?.textContent?.trim(), "2 selected");
@@ -2661,8 +2670,11 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
     assert.equal(selectionToolbar.hidden, true);
     assert.equal(selections.every((input) => !input.checked), true);
     assert.equal(browser.document.activeElement, selections[0], "Clear restores focus to the selectable Calls list");
-    for (const input of selections) input.checked = true;
-    selections[0]!.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    for (const input of selections) {
+      if (input.disabled) continue;
+      input.checked = true;
+      input.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    }
     const profileSelect = browser.document.querySelector("#callBulkProfile") as HTMLSelectElement;
     const bulk = browser.document.querySelector("#callBulkAdd") as HTMLButtonElement;
     assert.equal(bulk.disabled, true, "bulk Quick add remains closed until an explicit profile is selected");
@@ -2753,7 +2765,7 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
     walmartPurchaseMode = "bad_direct";
     await browser.eval("refresh()");
     assert.equal(browser.document.querySelectorAll("[data-walmart-buy]").length, 0);
-    const pdpFallback = browser.document.querySelector("#callList .call-card:last-child a.canonical") as HTMLAnchorElement;
+    const pdpFallback = [...browser.document.querySelectorAll("#callList a.canonical")].find((link) => new URL((link as HTMLAnchorElement).href).searchParams.get("url") === "https://www.walmart.com/ip/19988614228") as HTMLAnchorElement;
     const pdpAffiliateRoute = new URL(pdpFallback.href);
     assert.equal(pdpAffiliateRoute.origin, "https://howl.link");
     assert.equal(pdpAffiliateRoute.searchParams.get("url"), "https://www.walmart.com/ip/19988614228");

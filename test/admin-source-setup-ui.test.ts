@@ -96,13 +96,13 @@ test("Connections gives Discord, API, and TrackaLacker a concrete next step", as
     const apiCard = [...browser.document.querySelectorAll<HTMLElement>("#sourceChannelList .card")]
       .find((card) => /Private API feed/.test(card.textContent ?? ""));
     assert.ok(apiCard);
-    assert.match(apiCard.textContent ?? "", /create the source endpoint and key in Operations/);
-    assert.ok(apiCard.querySelector('[data-open-view="operations"]'));
+    assert.match(apiCard.textContent ?? "", /operator must provision the authenticated sender/);
+    assert.ok(apiCard.querySelector('a[href="/docs#api-sources"]'));
 
     assert.match(browser.document.querySelector("#connectionList")?.textContent ?? "", /Next:/);
     assert.match(browser.document.querySelector("#connectionList")?.textContent ?? "", /Connect from the Yoink extension/);
-    assert.equal(browser.document.querySelector("#sourceChannelReferenceLabel")?.textContent, "Discord channel ID");
-    assert.equal((browser.document.querySelector("#sourceChannelReference") as HTMLInputElement).pattern, "[0-9]{17,20}");
+    assert.equal((browser.document.querySelector('#sourceChannelProvider option[value="discord"]') as HTMLOptionElement).disabled, true);
+    assert.equal(browser.document.querySelector("#sourceChannelReferenceLabel")?.textContent, "API key reference");
 
     const provider = browser.document.querySelector("#sourceChannelProvider") as HTMLSelectElement;
     provider.value = "api";

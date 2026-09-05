@@ -59,7 +59,7 @@ test("user and admin navigation expose task areas with contextual disclosure", (
     assert.equal(user.window.document.querySelector("#recoveryReviewList"), null);
     assert.equal(user.window.document.querySelector("#connectorForm")?.closest('[data-settings-panel="notifications"]') !== null, true);
     assert.equal(user.window.document.querySelector("#watchQueueMode")?.closest('[data-settings-panel="purchase"]') !== null, true);
-    assert.match(user.window.document.querySelector("#notifications h3")?.textContent ?? "", /Send updates to Discord, Slack or a webhook/);
+    assert.match(user.window.document.querySelector("#notifications h3")?.textContent ?? "", /Update destinations/);
     assert.equal(user.window.document.querySelector("#connections"), null, "the notifications card no longer borrows the sources name");
     assert.deepEqual(
       [...user.window.document.querySelectorAll('[data-panel="activity"] .subtab, [data-panel="insights"] .subtab')].map((item) => item.textContent?.trim()),

@@ -151,7 +151,7 @@ test("shopper shows skeletons only on first load and never replaces existing car
     Object.assign(controls.state, { productGroups: Array.from({ length: 137 }), productPageSize: 48 });
     assert.equal(controls.loadedProductLimit(), 137);
     Object.assign(controls.state, { productGroups: Array.from({ length: 250 }) });
-    assert.equal(controls.loadedProductLimit(), 200);
+    assert.equal(controls.loadedProductLimit(), 250);
 
     const products = browser.document.querySelector("#productList") as HTMLElement;
     products.innerHTML = '<article data-existing-card="true">Existing product</article>';

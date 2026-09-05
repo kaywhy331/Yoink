@@ -655,7 +655,9 @@ export class CatalogRepository {
     return listingContext(row);
   }
 
-  listLibrary(limit = 500, offset = 0, search = ""): Array<Record<string, unknown>> {
+  listLibrary(limit = 500, offset = 0, search = "", listingIds?: string[]): Array<Record<string, unknown>> {
+    const ids = listingIds ? [...new Set(listingIds)].slice(0, 500) : null;
+    if (ids && !ids.length) return [];
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 500)));
@@ -681,6 +683,7 @@ export class CatalogRepository {
        WHERE (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)
+       ${ids ? `AND l.id IN (${ids.map(() => "?").join(",")})` : ""}
        GROUP BY l.id
        ORDER BY v.title COLLATE NOCASE, r.display_name COLLATE NOCASE, l.retailer_sku
        LIMIT ? OFFSET ?`,
@@ -688,6 +691,7 @@ export class CatalogRepository {
       pattern,
       pattern,
       pattern,
+      ...(ids ?? []),
       safeLimit,
       safeOffset
     );

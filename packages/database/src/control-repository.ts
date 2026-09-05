@@ -1844,6 +1844,19 @@ export class ControlRepository {
     });
   }
 
+  planSummariesForVariants(variantIds: string[]): Array<Record<string, unknown>> {
+    const ids = [...new Set(variantIds)].slice(0, 500);
+    if (!ids.length) return [];
+    return this.db.all<Record<string, unknown>>(
+      `SELECT m.id, m.variant_id AS variantId, m.status,
+              (SELECT ir.action_ceiling FROM mission_intent_revisions ir
+               WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS actionCeiling
+       FROM missions m WHERE m.tenant_id = ? AND m.user_id = ? AND m.status <> 'deleted'
+         AND m.variant_id IN (${ids.map(() => "?").join(",")})`,
+      currentRequestScope().tenantId, currentRequestScope().userId, ...ids
+    );
+  }
+
   listMissions(limit = 500, offset = 0, search = "", includeAutomationTargets = false): Array<Record<string, unknown>> {
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
@@ -1904,12 +1917,17 @@ export class ControlRepository {
        WHERE m.user_id = ? AND m.status <> 'deleted'
          AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR m.origin LIKE ? ESCAPE '\\' COLLATE NOCASE
-         OR m.status LIKE ? ESCAPE '\\' COLLATE NOCASE)
+         OR m.status LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR EXISTS (SELECT 1 FROM mission_targets search_mt JOIN listings search_l ON search_l.id = search_mt.listing_id
+           JOIN retailers search_r ON search_r.id = search_l.retailer_id WHERE search_mt.mission_id = m.id
+           AND (search_l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE OR search_r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE)))
        GROUP BY m.id
-       ORDER BY m.updated_at DESC
+       ORDER BY m.updated_at DESC, m.id DESC
        LIMIT ? OFFSET ?`,
       currentRequestScope().userId,
       query,
+      pattern,
+      pattern,
       pattern,
       pattern,
       pattern,
@@ -1960,9 +1978,14 @@ export class ControlRepository {
        WHERE m.user_id = ? AND m.status <> 'deleted'
          AND (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR m.origin LIKE ? ESCAPE '\\' COLLATE NOCASE
-         OR m.status LIKE ? ESCAPE '\\' COLLATE NOCASE)`,
+         OR m.status LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR EXISTS (SELECT 1 FROM mission_targets search_mt JOIN listings search_l ON search_l.id = search_mt.listing_id
+           JOIN retailers search_r ON search_r.id = search_l.retailer_id WHERE search_mt.mission_id = m.id
+           AND (search_l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE OR search_r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE)))`,
       currentRequestScope().userId,
       query,
+      pattern,
+      pattern,
       pattern,
       pattern,
       pattern

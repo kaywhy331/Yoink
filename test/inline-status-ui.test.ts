@@ -115,6 +115,6 @@ test("both dashboards load the shared status assets and route long workflow deta
   const admin = readFileSync(join(root, "app.js"), "utf8");
   assert.match(shopper, /setInlineStatus\(actionElement,[\s\S]*Quick add setup saved/);
   assert.match(shopper, /toast\("Purchase plan added\."/);
-  assert.match(shopper, /error\.reference = String\(payload\.correlationId/);
+  assert.match(shopper, /error\.reference = reference/);
   assert.match(admin, /error\.reference = reference/);
 });

@@ -468,8 +468,8 @@
         <div class="card-list" id="sourceChannelList"></div>
         <form id="sourceChannelForm" class="inline-admin-form">
           <label><span>Name</span><input name="name" maxlength="100" required></label>
-          <label><span>Provider</span><select name="provider" id="sourceChannelProvider"><option value="discord">Discord</option><option value="api">API</option></select></label>
-          <label><span id="sourceChannelReferenceLabel">Discord channel ID</span><input name="externalReference" id="sourceChannelReference" inputmode="numeric" maxlength="20" pattern="[0-9]{17,20}" placeholder="123456789012345678" aria-describedby="sourceChannelReferenceHelp" required><small class="field-help" id="sourceChannelReferenceHelp">In Discord, copy the numeric ID for the channel that will receive product alerts.</small></label>
+          <label><span>Provider</span><select name="provider" id="sourceChannelProvider"><option value="api">API</option><option value="discord" disabled>Discord · unavailable</option></select></label>
+          <label><span id="sourceChannelReferenceLabel">API key reference</span><input name="externalReference" id="sourceChannelReference" maxlength="120" placeholder="operations:primary-feed" aria-describedby="sourceChannelReferenceHelp" required><small class="field-help" id="sourceChannelReferenceHelp">Use your operator’s non-secret provider reference.</small></label>
           <label><span>Trust</span><select name="trustLevel"><option value="informational">Informational</option><option value="trusted_exact">Trusted source</option></select></label>
           <button class="button secondary" type="submit">Add channel</button>
         </form>
