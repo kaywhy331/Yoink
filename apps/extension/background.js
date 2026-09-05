@@ -2873,13 +2873,20 @@ async function maybeReloadForLocalUpdate(health) {
   if (RUNTIME_CONFIG.profile !== "local" || typeof chrome.runtime?.reload !== "function") return false;
   const expected = packagedVersionSignature(health?.packagedVersions);
   if (!expected || expected === installedVersionSignature()) return false;
-  let installType = "";
+  // An unpacked install reports "development"; without the management API,
+  // a manifest with no update_url is the same signal (store and managed
+  // installs always carry one).
+  let development = false;
   try {
-    installType = String((await chrome.management?.getSelf?.())?.installType || "");
+    if (typeof chrome.management?.getSelf === "function") {
+      development = String((await chrome.management.getSelf())?.installType || "") === "development";
+    } else {
+      development = !chrome.runtime.getManifest()?.update_url;
+    }
   } catch {
-    installType = "";
+    development = false;
   }
-  if (installType !== "development") return false;
+  if (!development) return false;
   if (automaticReverificationPromise || retailerReverificationPromise || evidenceCapsuleDrainPromise) return false;
   const stored = (await chrome.storage.local.get(LOCAL_RELOAD_SIGNATURE_KEY))[LOCAL_RELOAD_SIGNATURE_KEY];
   if (stored === expected) return false;

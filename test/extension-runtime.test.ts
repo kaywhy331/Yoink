@@ -6010,5 +6010,13 @@ test("a local development companion reloads itself once when the app reports new
   assert.equal(await runtime.invokeBackground(newer), false, "the same signature never reloads twice");
   reloads.push(Number(await runtime.invokeBackground("globalThis.__yoinkReloads || 0")));
   assert.deepEqual(reloads, [1]);
+  // Without the management API, an unpacked install is recognised by the
+  // absence of update_url in its manifest; a managed manifest never reloads.
+  await runtime.invokeBackground("delete chrome.management; chrome.storage.local.remove('yoinkLocalReloadSignatureV1')");
+  await runtime.invokeBackground("chrome.runtime.getManifest = () => ({ version: EXTENSION_VERSION, update_url: 'https://clients2.google.com/service/update2/crx' })");
+  assert.equal(await runtime.invokeBackground(newer), false, "a managed manifest never self-reloads");
+  await runtime.invokeBackground("chrome.runtime.getManifest = () => ({ version: EXTENSION_VERSION })");
+  assert.equal(await runtime.invokeBackground(newer), true, "an unpacked manifest reloads without the management API");
+  assert.equal(Number(await runtime.invokeBackground("globalThis.__yoinkReloads || 0")), 2);
   assert.equal(runtime.storage.yoinkLocalReloadSignatureV1 !== undefined, true);
 });

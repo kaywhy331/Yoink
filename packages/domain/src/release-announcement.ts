@@ -9,9 +9,9 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-22-2-store-checks-say-what-failed",
-  version: "1.22.2",
-  publishedAt: "2026-09-05T03:30:00.000Z",
+  id: "yoink-1-22-3-store-checks-say-what-failed",
+  version: "1.22.3",
+  publishedAt: "2026-09-05T03:50:00.000Z",
   title: "Store checks say what actually failed",
   summary: "A store check no longer calls a product sold out when the page never said so; it reports the binding it lost, keeps a page snapshot, and opens a repair. Target checks work again and automatic checks run on their own.",
   highlights: [

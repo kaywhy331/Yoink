@@ -4,7 +4,7 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.22.2 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.22.3 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
@@ -28,6 +28,13 @@ authorized.
   lanes through [`docs/ADD_LANE_REGISTRY.md`](docs/ADD_LANE_REGISTRY.md). The
   complete contract is in
   [`docs/ADAPTER_REPAIR_LOOP_SPEC.md`](docs/ADAPTER_REPAIR_LOOP_SPEC.md).
+
+Version 1.22.3 adds `scripts/companion-sync.sh` for the machine that runs
+Chrome: it watches the local app's packaged release over the loopback API,
+verifies the ZIP's SHA-256, extracts it over the unpacked companion folder,
+and lets the companion's own reload finish the update. The reload guard now
+also recognises an unpacked install from a manifest without `update_url`
+when the management API is unavailable.
 
 Version 1.22.2 stops a lost binding from hiding behind a sold-out label. For
 every store except Target, the shared observer used to report "out of stock"
@@ -3064,7 +3071,12 @@ state remain in Chrome storage.
 `npm run release:local` performs the whole local release in one step: it
 builds the app, packages the companion, restarts the `yoink-local-api` user
 unit, waits for health, and prints the packaged versions the running app now
-expects. The health route reports those versions, and a companion loaded
+expects. When Chrome runs on another machine, or loads the companion from a
+folder outside this repository, run `scripts/companion-sync.sh` there with
+`YOINK_COMPANION_DIR` set to the unpacked folder (and the app port forwarded
+with `ssh -N -L 32991:127.0.0.1:32991 <host>` if needed): it downloads each
+newer packaged release, verifies its hash, and extracts it over the folder;
+the companion then reloads itself within a minute. The health route reports those versions, and a companion loaded
 unpacked from `apps/extension` in the local profile reloads itself once when
 they differ from its own bundle, so a pack or adapter change reaches Chrome
 within a minute of the app restart. Managed (production) installs never
