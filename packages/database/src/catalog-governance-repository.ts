@@ -195,6 +195,12 @@ export class CatalogGovernanceRepository {
     ).map(proposalFromRow);
   }
 
+  mineCount(): number {
+    this.authorization.require("user.read");
+    const scope = currentRequestScope();
+    return Number(this.db.get<{ count: number }>("SELECT COUNT(*) AS count FROM catalog_change_proposals WHERE tenant_id = ? AND proposer_user_id = ?", scope.tenantId, scope.userId)?.count || 0);
+  }
+
   /**
    * Display names for actor ids recorded on governance rows, resolved through the tenant's users
    * table (the local control-center actor maps to the local user). Unknown ids are omitted.

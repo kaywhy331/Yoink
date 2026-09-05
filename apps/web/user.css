@@ -529,6 +529,18 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 }
 
 /* Management controls stay usable when names and histories grow. */
+.plan-filters { display: flex; flex-wrap: wrap; gap: 12px; margin-block: 12px; }
+.plan-filters label { flex: 1 1 140px; min-width: 0; }
+.plan-filters select { width: 100%; }
+.impact-plan { border-top: 1px solid var(--line); padding-block: 12px; overflow-wrap: anywhere; }
+.impact-plan p { margin-block: 6px; }
+#reviewHistoryDialog { width: min(720px, calc(100% - 24px)); padding: 18px; }
+.dialog-actions { flex-wrap: wrap; }
+.dialog-actions > .inline-status { flex-basis: 100%; min-width: 0; }
+#profileImpactReview { border: 1px solid var(--line); padding: 14px; border-radius: 12px; margin-block: 12px; }
+#profileImpactList, #reviewHistoryList { max-height: 45vh; overflow-y: auto; }
+#reviewHistoryDialog .inline-actions, #profileImpactReview .inline-actions, #planBulkBar { flex-wrap: wrap; }
+#planBatchResult { margin-block: 12px; }
 #connectorList .mini-row > span, #pairedDevices .mini-row > span,
 #deliveryHistoryList .mini-row > span, #watchHistoryList .mini-row > span { min-width: 0; overflow-wrap: anywhere; }
 #connectorList .mini-row strong, #connectorList .mini-row small,

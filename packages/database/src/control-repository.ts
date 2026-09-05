@@ -1,3 +1,4 @@
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import {
   ACTIONS,
   PRICE_POLICY_KINDS,
@@ -40,6 +41,7 @@ import { AuditRepository } from "./audit-repository.js";
 import { PurchasePolicyRepository, PurchaseSafetyError } from "./purchase-policy-repository.js";
 import { SignalRepository } from "./signal-repository.js";
 import { SpendLedgerRepository } from "./spend-ledger-repository.js";
+import { planCollectionSql, type PlanCollectionFilter } from "./plan-collection-filter.js";
 
 interface StrategyRow {
   id: string;
@@ -411,16 +413,16 @@ export class ControlRepository {
   private validatePurchaseProfile(input: PurchaseProfileInput, existing: PurchaseProfile[], now: number): PurchaseProfile {
     const id = cleanText(input?.id, 120);
     const name = cleanText(input?.name, 60);
-    if (!name) throw new Error("A purchase profile needs a short name.");
+    if (!name) throw new InputValidationError("A purchase profile needs a short name.");
     if (name.toLocaleLowerCase("en-US") === "default") {
-      throw new Error("\"Default\" is reserved for the built-in quick-add configuration.");
+      throw new InputValidationError("\"Default\" is reserved for the built-in quick-add configuration.");
     }
     const duplicate = existing.find((profile) => profile.id !== id
       && profile.name.toLocaleLowerCase("en-US") === name.toLocaleLowerCase("en-US"));
-    if (duplicate) throw new Error("Another purchase profile already uses that name.");
+    if (duplicate) throw new InputValidationError("Another purchase profile already uses that name.");
     const targetQuantity = Number(input?.targetQuantity);
     if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > 99) {
-      throw new Error("Profile quantity must be 1 through 99.");
+      throw new InputValidationError("Profile quantity must be 1 through 99.");
     }
     const actionCeiling = input?.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify";
     const fulfillment = input?.fulfillment === "pickup" ? "pickup" : "shipping";
@@ -432,23 +434,23 @@ export class ControlRepository {
     if (priceMode === "fixed_cap") {
       maxUnitPriceCents = Number(input?.maxUnitPriceCents);
       if (!Number.isSafeInteger(maxUnitPriceCents) || maxUnitPriceCents < 1 || maxUnitPriceCents > 100_000_000) {
-        throw new Error("A fixed-cap profile needs a positive maximum item price.");
+        throw new InputValidationError("A fixed-cap profile needs a positive maximum item price.");
       }
     }
     if (priceMode === "msrp_offset_percent") {
       msrpOffsetPercent = Number(input?.msrpOffsetPercent);
       if (!Number.isInteger(msrpOffsetPercent) || msrpOffsetPercent < -90 || msrpOffsetPercent > 90) {
-        throw new Error("An MSRP-offset profile needs a whole-number percent from -90 through 90.");
+        throw new InputValidationError("An MSRP-offset profile needs a whole-number percent from -90 through 90.");
       }
     }
     const cooldownSeconds = Number(input?.cooldownSeconds ?? 0);
     if (!Number.isInteger(cooldownSeconds) || cooldownSeconds < 0 || cooldownSeconds > 2_592_000) {
-      throw new Error("The profile wait between attempts must be from zero through 30 days.");
+      throw new InputValidationError("The profile wait between attempts must be from zero through 30 days.");
     }
     const isDefault = input?.isDefault === true;
     const timestamp = nowIso(now);
     const current = id ? existing.find((profile) => profile.id === id) : undefined;
-    if (id && !current) throw new Error("That purchase profile no longer exists.");
+    if (id && !current) throw new InputValidationError("That purchase profile no longer exists.");
     return {
       id: current?.id ?? newId("purchase_profile"),
       name,
@@ -547,6 +549,23 @@ export class ControlRepository {
     ).map((row) => row.id);
   }
 
+  previewPurchaseProfile(input: PurchaseProfileInput, now = Date.now()) {
+    const profiles = this.listPurchaseProfiles();
+    const previous = profiles.find(profile => profile.id === input.id);
+    if (!previous) throw new PurchaseSafetyError("purchase_profile_not_found", 404, "This setup was removed. Save a separate setup instead.");
+    const profile = this.validatePurchaseProfile(input, profiles, now);
+    const changes: Array<{ missionId: string; targetQuantity: number; actionCeiling: string; cooldownSeconds: number; maxAllInCents?: number; targets: Array<{ id: string; maxUnitPriceCents: number | null; fulfillment?: string }> }> = [];
+    const propagation = this.propagatePurchaseProfile(profile, now, undefined, changes);
+    const plans = this.purchaseProfileLinkedMissionIds(profile.id).map(id => {
+      const before = this.missionDetail(id)!;
+      const after = changes.find(change => change.missionId === id) || null;
+      const reasonCode = after ? "will_update" : propagation.skipped.find(item => item.missionId === id)?.reasonCode || "plan_not_active_or_paused";
+      return { id, title: String(before.title), status: String(before.status), before, after, reasonCode };
+    });
+    return { previous, profile, plans, updatedCount: changes.length, skippedCount: plans.length - changes.length,
+      fingerprint: stableHash(JSON.stringify({ previous, profile: { ...profile, updatedAt: "" }, plans })) };
+  }
+
   private resolveProfileUnitPriceCents(
     profile: PurchaseProfile,
     listing: { msrpCents: number | null; currentPriceCents: number | null }
@@ -573,7 +592,8 @@ export class ControlRepository {
   private propagatePurchaseProfile(
     profile: PurchaseProfile,
     now: number,
-    missionIds?: readonly string[]
+    missionIds?: readonly string[],
+    previewChanges?: Array<{ missionId: string; targetQuantity: number; actionCeiling: string; cooldownSeconds: number; maxAllInCents?: number; targets: Array<{ id: string; maxUnitPriceCents: number | null; fulfillment?: string }> }>
   ): PurchaseProfilePropagationSummary {
     const scope = currentRequestScope();
     if (missionIds && !missionIds.length) {
@@ -586,7 +606,7 @@ export class ControlRepository {
       `SELECT m.id, v.title, m.target_quantity AS targetQuantity
        FROM missions m JOIN variants v ON v.id = m.variant_id
        WHERE m.tenant_id = ? AND m.user_id = ? AND m.quick_add_profile_id = ?
-         AND m.status IN ('active', 'paused')${missionFilter}`,
+         AND m.status IN ('active', 'paused')${missionFilter} ORDER BY m.id`,
       scope.tenantId,
       scope.userId,
       profile.id,
@@ -597,6 +617,15 @@ export class ControlRepository {
     const skipped: PurchaseProfilePropagationSkip[] = [];
     let updatedMissionCount = 0;
     for (const mission of missions) {
+      const currentPolicy = this.purchasePolicies.current(mission.id);
+      if (currentPolicy?.expiresAt && Date.parse(currentPolicy.expiresAt) <= now) {
+        skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "plan_expired" });
+        continue;
+      }
+      if (this.db.get("SELECT id FROM mission_targets WHERE mission_id = ? AND currency <> 'USD'", mission.id)) {
+        skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "unsupported_currency" });
+        continue;
+      }
       const targets = this.db.all<{
         id: string;
         retailerId: string;
@@ -672,6 +701,19 @@ export class ControlRepository {
         }
       } else if (resolved.every((target) => target.maxUnitPriceCents !== null)) {
         requiredAllInCents = Math.max(...resolved.map((target) => Number(target.maxUnitPriceCents) * profile.targetQuantity));
+      }
+      if (requiredAllInCents !== undefined && (!Number.isSafeInteger(requiredAllInCents) || requiredAllInCents <= 0 || requiredAllInCents > 100_000_000)
+        || resolved.some(target => target.maxUnitPriceCents !== null && target.maxUnitPriceCents > 100_000_000)) {
+        skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "limit_out_of_range" });
+        continue;
+      }
+      if (previewChanges) {
+        previewChanges.push({ missionId: mission.id, targetQuantity: profile.targetQuantity, actionCeiling,
+          cooldownSeconds: profile.cooldownSeconds, ...(requiredAllInCents === undefined ? {} : { maxAllInCents: requiredAllInCents }),
+          targets: resolved.map(target => ({ id: target.id, maxUnitPriceCents: target.maxUnitPriceCents,
+            ...(actionCeiling === "add_to_cart" ? { fulfillment: profile.fulfillment } : {}) })) });
+        updatedMissionCount += 1;
+        continue;
       }
       const timestamp = nowIso(now);
       this.db.run(
@@ -1857,7 +1899,8 @@ export class ControlRepository {
     );
   }
 
-  listMissions(limit = 500, offset = 0, search = "", includeAutomationTargets = false): Array<Record<string, unknown>> {
+  listMissions(limit = 500, offset = 0, search = "", includeAutomationTargets = false, filters: PlanCollectionFilter = {}): Array<Record<string, unknown>> {
+    const filter = planCollectionSql(filters);
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 500)));
@@ -1921,8 +1964,9 @@ export class ControlRepository {
          OR EXISTS (SELECT 1 FROM mission_targets search_mt JOIN listings search_l ON search_l.id = search_mt.listing_id
            JOIN retailers search_r ON search_r.id = search_l.retailer_id WHERE search_mt.mission_id = m.id
            AND (search_l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE OR search_r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE)))
+       ${filter.sql}
        GROUP BY m.id
-       ORDER BY m.updated_at DESC, m.id DESC
+       ORDER BY ${filter.order}
        LIMIT ? OFFSET ?`,
       currentRequestScope().userId,
       query,
@@ -1931,6 +1975,7 @@ export class ControlRepository {
       pattern,
       pattern,
       pattern,
+      ...filter.parameters,
       safeLimit,
       safeOffset
     );
@@ -1969,7 +2014,8 @@ export class ControlRepository {
     }));
   }
 
-  missionCount(search = ""): number {
+  missionCount(search = "", filters: PlanCollectionFilter = {}): number {
+    const filter = planCollectionSql(filters);
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
     return Number(this.db.get<{ count: number }>(
@@ -1981,15 +2027,69 @@ export class ControlRepository {
          OR m.status LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR EXISTS (SELECT 1 FROM mission_targets search_mt JOIN listings search_l ON search_l.id = search_mt.listing_id
            JOIN retailers search_r ON search_r.id = search_l.retailer_id WHERE search_mt.mission_id = m.id
-           AND (search_l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE OR search_r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE)))`,
+           AND (search_l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE OR search_r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE))) ${filter.sql}`,
       currentRequestScope().userId,
       query,
       pattern,
       pattern,
       pattern,
       pattern,
-      pattern
+      pattern,
+      ...filter.parameters
     )?.count ?? 0);
+  }
+
+  previewMissionStatus(ids: unknown, status: unknown) {
+    if (!["active", "paused"].includes(String(status)) || !Array.isArray(ids) || !ids.length || ids.length > 50
+      || ids.some(id => typeof id !== "string" || !/^[A-Za-z0-9_-]{3,120}$/.test(id)) || new Set(ids).size !== ids.length) {
+      throw new PurchaseSafetyError("plan_status_selection_invalid", 400, "Choose 1 through 50 distinct plans and Pause or Resume.");
+    }
+    return ids.map((id: string) => {
+      const scope = currentRequestScope();
+      const owned = this.db.get("SELECT id FROM missions WHERE id = ? AND tenant_id = ? AND user_id = ? AND status <> 'deleted'", id, scope.tenantId, scope.userId);
+      const plan = owned ? this.missionDetail(id) : null;
+      const expiresAt = (plan?.intentPolicy as PurchaseIntentPolicy | undefined)?.expiresAt;
+      const expired = status === "active" && !!expiresAt && Date.parse(expiresAt) <= Date.now();
+      const eligible = !!plan && ["active", "paused"].includes(String(plan.status)) && !expired;
+      return { id, title: String(plan?.title || "Unavailable plan"), status: String(plan?.status || "unavailable"),
+        actionCeiling: (plan?.intentPolicy as PurchaseIntentPolicy | undefined)?.actionCeiling || "notify",
+        eligible, reason: expired ? "Plan expired. Review its expiry before resuming." : "Only active or paused plans can change here.", fingerprint: plan ? stableHash(JSON.stringify(plan)) : "" };
+    });
+  }
+
+  missionStoreFacets() {
+    const scope = currentRequestScope();
+    return this.db.all<{ id: string; name: string }>(`SELECT DISTINCT retailer.id, retailer.display_name AS name
+      FROM missions mission JOIN mission_targets target ON target.mission_id = mission.id
+      JOIN listings listing ON listing.id = target.listing_id JOIN retailers retailer ON retailer.id = listing.retailer_id
+      WHERE mission.tenant_id = ? AND mission.user_id = ? AND mission.status <> 'deleted' AND target.enabled = 1
+      ORDER BY retailer.display_name, retailer.id`, scope.tenantId, scope.userId);
+  }
+
+  changeMissionStatuses(input: { status?: unknown; items?: unknown; confirmation?: unknown }, now = Date.now()) {
+    if (input.confirmation !== "CHANGE_SELECTED_PLAN_STATUSES" || !Array.isArray(input.items)) {
+      throw new PurchaseSafetyError("plan_status_confirmation_required", 400, "Review and confirm the selected plan changes.");
+    }
+    const items = input.items as Array<{ id: string; fingerprint: string }>;
+    this.previewMissionStatus(items.map(item => item?.id), input.status);
+    return items.map(item => {
+      try {
+        return this.db.transaction(() => {
+          const [review] = this.previewMissionStatus([item.id], input.status);
+          if (!review?.eligible) return { id: item.id, outcome: "skipped", message: review?.reason || "Plan unavailable." };
+          if (review.status === input.status) return { id: item.id, outcome: "unchanged", message: `Already ${input.status === "active" ? "active" : "paused"}.` };
+          if (!item.fingerprint || item.fingerprint !== review.fingerprint) return { id: item.id, outcome: "skipped", message: "Changed since review. Review this plan again." };
+          const plan = this.missionDetail(item.id)!;
+          this.updateMission(item.id, { status: input.status, targetQuantity: plan.targetQuantity, targets: plan.targets,
+            policy: { expectedRevision: (plan.intentPolicy as PurchaseIntentPolicy).revision, changeReason: "Status changed from a reviewed selection of plans." }
+          } as MissionUpdateInput, now);
+          return { id: item.id, outcome: "updated", message: input.status === "active" ? "Resumed." : "Paused." };
+        });
+      } catch (error) {
+        if (!(error instanceof PurchaseSafetyError)) throw error;
+        return { id: item.id, outcome: "skipped", message: error.message };
+      }
+    });
   }
 
   listSources(): Array<Record<string, unknown>> {

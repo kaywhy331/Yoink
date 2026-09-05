@@ -51,6 +51,17 @@ Follow-up validation: `npm run check` and `npm run build` passed. All 973 applic
 
 [Mobile notification history evidence](screenshots/saas-fixes-2026-09-05/notifications-mobile.png).
 
+## Plan management and product review completion
+
+- Setup edits use a read-only preview of the same propagation calculation as saving. It shows each linked plan's quantity, action, wait, store caps, fulfillment and total cap before/after, with 20 displayed per page. Missing price/MSRP, disabled or unsupported stores, completed plans, expired plans, unsupported currency and excessive calculated limits remain unchanged with an explanation. The fingerprint binds the draft, existing setup, plan revisions/targets and relevant price evidence; changed inputs require another review. Editing the draft invalidates its preview. The review stays inside the setup dialog, and mobile error messages wrap below the action buttons.
+- Plans filter by enabled store, active/paused/satisfied/archived/expired state and action, with global ordering by recent changes, creation or product name. Filtering precedes paging and shares its predicates with totals. URL restoration preserves these choices. Selection remains bounded to the current page; Pause and Resume show an explicit review for at most 50 plans. Per-plan fingerprints reject stale edits, expired plans cannot resume, limits remain unchanged, and a results list reports updated, unchanged and skipped plans. Repeated requests do not add revisions to already-changed plans.
+- Applying an unchanged route preserves its open detail dialog. Escape closes routed details and clears their URL immediately, so a startup refresh cannot reopen a dialog while its native close event is queued. Unsaved plans retain their discard confirmation.
+- Product reviews have complete 25-row history, submission/decision times, review notes and local retry after request failures. Rejected suggestions reopen a populated correction draft; successful resubmission creates a new independently reviewed request and preserves the earlier decision. Only the product URL and entered name are retained in session storage, scoped to the signed-in user, with a 24-hour restore limit; confirmations and preview results are never restored. Explicit discard and successful submission clear the draft. Recognized catalog links show their approved catalog name; other names are identified as user supplied, with no verified offer claim.
+
+Validation: the full `npm test` command exited 0: 976 application checks passed, followed by the isolated native PostgreSQL proof (1 proof, 0 failures). After the final dialog-routing fix, a staged snapshot excluding pre-existing release and extension edits passed `npm run check`, `npm run build`, all 32 focused API/profile/recovery/copy checks, and all 14 browser journeys. The three new API checks cover pre-page filtering and ownership, stale/idempotent bounded status changes, propagation skip reasons with no preview writes, evidence-change rejection, and 61 reachable review records. All 14 mobile browser journeys passed, including the new bulk-plan, paged setup-impact/stale-draft, and review-history/retry/correction/reload flows. Existing profile and copy/glossary checks passed.
+
+[Mobile plan management](screenshots/saas-fixes-2026-09-05/plan-management-mobile.png) · [Setup impact review](screenshots/saas-fixes-2026-09-05/setup-impact-mobile.png).
+
 ## Finding-by-finding disposition
 
 “Fixed” refers to the identified application defect or the stated mitigation, not a production-launch certification. “Partial” names both the implemented portion and the remaining acceptance work. “Open” requires additional implementation or deployment acceptance.
@@ -76,15 +87,15 @@ Follow-up validation: `npm run check` and `npm run build` passed. All 973 applic
 | YS-17 | Fixed | Older Calls/Activity retrieval and loaded-page preservation. Offset pages still require refresh to reconcile concurrent inserts. |
 | YS-18 | Fixed | Exact server-side actor-owned associations replace the truncated joins. |
 | YS-19 | Fixed | Product and call plan labels use actual status rather than existence-based readiness. |
-| YS-20 | Partial | Impact review, stale-impact rejection and a separate-setup choice for future defaults are implemented. Detailed pre-save skipped-plan preview remains. |
+| YS-20 | Fixed | Read-only paged before/after impact, exact skip reasons, stale plan/evidence rejection and separate-setup choice are implemented and verified. |
 | YS-21 | Fixed | Stable call selection survives refresh and reconciles ineligible products. |
-| YS-22 | Open | Complete proposal history, verified metadata and retained correction drafts. |
+| YS-22 | Fixed workflow | Complete history, review times/notes, scoped correction drafts and new independently reviewed submissions are implemented. Existing catalog names are labeled approved; raw links do not claim verified offers. |
 | YS-23 | Fixed | Query-aware empty state with working Clear search and filters. |
 | YS-24 | Fixed | Query/filter and product/plan detail URLs restore through reload; Back, invalid-entity recovery and late-response protection are verified. |
 | YS-25 | Partial | Product detail observation age added. Card-level source/freshness states and direct recheck remain. |
 | YS-26 | Partial | Store capability labels added. Per-user readiness in store selection remains. |
-| YS-27 | Partial | Global product/SKU/store/status search added. Dedicated store/action filters and bulk pause/resume remain. |
-| YS-28 | Partial | Explicit dialog discard, navigation protection and unload warnings added. Cross-reload draft storage remains. |
+| YS-27 | Fixed | Search plus store/status/action filters and global sorting precede paging. Reviewed bulk pause/resume is bounded to 50 selected plans with stale checks and per-item results. |
+| YS-28 | Partial | Explicit dialog discard, navigation protection and unload warnings added. Product-link correction drafts survive reload within a user-scoped tab session. Cross-reload storage for other forms remains. |
 | YS-29 | Open | Audited corrective spend/refund ledger entries and idempotent correction UI. |
 | YS-30 | Partial | Mode consequences plus terminal watch history/reasons, plan review and running-watch stop controls are implemented. Restart eligibility for cancelled watches remains. |
 | YS-31 | Open | Decide discovery-only versus user-reported drawing participation/reminders and implement that scope. |
@@ -102,7 +113,7 @@ Follow-up validation: `npm run check` and `npm run build` passed. All 973 applic
 | YS-43 | Fixed locally | Bounded plan DOM, retained expansion/focus and measured local improvement. Slower-device/production measurements remain. |
 | YS-44 | Fixed delivery | Gzip plus content-hash revalidation; private responses remain uncached. Route splitting remains measurement-driven. |
 | YS-45 | Partial | Dialog names and real keyboard focus checks added. Full assistive-technology acceptance and eliminating stacked confirmation dialogs remain. |
-| YS-46 | Partial | Eleven phone-sized browser journeys and desktop guidance added. Wider device/zoom coverage and duplicated CSS-generated status announcements remain. |
+| YS-46 | Partial | Fourteen phone-sized browser journeys and desktop guidance added. Wider device/zoom coverage and duplicated CSS-generated status announcements remain. |
 | YS-47 | Fixed disclosure | Policy and change notice now distinguish local captures from hosted diagnostics; existing controls remain authoritative. |
 | YS-48 | Partial | Install, API source and notification guides added. Searchable troubleshooting, contextual support and release-specific documentation remain. |
 | YS-49 | Partial | Real-browser acceptance and CI workflow added. CI must execute in the hosting repository; broader axe/assistive-technology and live extension coverage remain. |

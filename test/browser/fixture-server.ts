@@ -3,6 +3,7 @@ import { UserActionConnectorRepository } from "../../packages/database/src/user-
 import { join } from "node:path";
 import { createYoinkServer } from "../../apps/api/src/app.js";
 import { CatalogRepository } from "../../packages/database/src/catalog-repository.js";
+import { CatalogLinkRepository } from "../../packages/database/src/catalog-link-repository.js";
 import { ControlRepository } from "../../packages/database/src/control-repository.js";
 import { YoinkDatabase } from "../../packages/database/src/database.js";
 
@@ -17,12 +18,17 @@ db.transaction(() => {
       sourceProductId: `browser-${index}`, sourceListingId: `browser-listing-${index}`,
       title: `Browser product ${String(index).padStart(3, "0")}`, retailerId: "target",
       retailerSku: sku, canonicalUrl: `https://www.target.com/p/-/A-${sku}`,
-      listingStatus: "in_stock", executionSupported: true, observedPriceCents: 1999, currency: "USD"
+      listingStatus: "in_stock", executionSupported: true, observedPriceCents: 1999, msrpCents: index % 2 === 0 ? 2499 : null, currency: "USD"
     }).listing;
     const mission = control.ensureUserMission(listing.variantId, listing.id);
     if (index === 205) db.run("UPDATE missions SET status = 'paused' WHERE id = ?", mission.mission.id);
   }
 });
+const catalogLinks = new CatalogLinkRepository(db);
+for (let index = 0; index < 61; index++) {
+  const { proposal } = catalogLinks.propose({ url: `https://www.target.com/p/-/A-${98700000 + index}`, title: `Review fixture ${String(index).padStart(3, "0")}`, confirmation: "PROPOSE_EXACT_PRODUCT_LINK" }, Date.now() - 10000 + index);
+  db.run("UPDATE catalog_change_proposals SET status = 'rejected', review_note = 'Please correct the product name', decided_at = ? WHERE id = ?", new Date().toISOString(), proposal.id);
+}
 const devices = new DeviceRepository(db);
 devices.pair({ pairingCode: devices.createPairingCode().code, name: "Browser acceptance laptop", extensionVersion: "test" });
 const bindings = { browser_delivery: "c".repeat(64) };

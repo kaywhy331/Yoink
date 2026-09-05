@@ -249,3 +249,27 @@ test("a late plan detail response cannot open over another workspace", async () 
     assert.equal(browser.document.querySelector("#planDialog").open, false);
   } finally { browser.close(); }
 });
+
+
+test("Escape clears an entity route before a refresh can reopen the closing dialog", () => {
+  const browser = shopper();
+  try {
+    for (const [panel, kind, dialogId, parameter] of [["plans", "plan", "planDialog", "planId"], ["products", "product", "productDialog", "productId"]]) {
+      browser.audit.setTab(panel, { load: false });
+      browser.history.replaceState(null, "", `#${panel}?${parameter}=entity_escape`);
+      browser.audit.state.entity = { panel, kind, id: "entity_escape" };
+      const dialog = browser.document.getElementById(dialogId);
+      dialog.dataset.entityKey = `${panel}:${kind}:entity_escape`;
+      dialog.showModal();
+      browser.audit.applyHashRoute();
+      assert.equal(dialog.open, true, "Applying the current route must preserve its open dialog");
+      const cancel = new browser.Event("cancel", { cancelable: true });
+      dialog.dispatchEvent(cancel);
+      assert.equal(cancel.defaultPrevented, true);
+      assert.equal(browser.audit.state.entity, null);
+      assert.equal(browser.location.hash, `#${panel}`);
+      browser.audit.applyHashRoute();
+      assert.equal(dialog.open, false);
+    }
+  } finally { browser.close(); }
+});

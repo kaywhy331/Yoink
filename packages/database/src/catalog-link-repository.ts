@@ -39,6 +39,8 @@ export interface ExactProductLinkPreview {
   existingListingId?: string;
   existingVariantId?: string;
   alreadyInProducts?: true;
+  catalogTitle?: string;
+  catalogImageUrl?: string;
 }
 
 export class CatalogLinkError extends Error {
@@ -85,9 +87,10 @@ export class CatalogLinkRepository {
     }
     const guardedAddCandidate = PACKAGED_ADD_RETAILERS.has(retailer.id)
       && retailer.executionSupported === 1;
-    const existing = this.db.get<{ listingId: string; variantId: string }>(
-      `SELECT id AS listingId, variant_id AS variantId
-       FROM listings WHERE retailer_id = ? AND retailer_sku = ?`,
+    const existing = this.db.get<{ listingId: string; variantId: string; title: string; imageUrl: string }>(
+      `SELECT listing.id AS listingId, listing.variant_id AS variantId, variant.title, variant.image_url AS imageUrl
+       FROM listings listing JOIN variants variant ON variant.id = listing.variant_id
+       WHERE listing.retailer_id = ? AND listing.retailer_sku = ?`,
       retailer.id,
       exact.retailerSku
     );
@@ -106,6 +109,8 @@ export class CatalogLinkRepository {
       ...(existing ? {
         existingListingId: existing.listingId,
         existingVariantId: existing.variantId,
+        catalogTitle: existing.title,
+        catalogImageUrl: existing.imageUrl,
         alreadyInProducts: true as const
       } : {})
     };

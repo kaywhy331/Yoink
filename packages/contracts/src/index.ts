@@ -1506,6 +1506,9 @@ export interface PurchaseProfileInput {
 }
 
 export const PURCHASE_PROFILE_PROPAGATION_SKIP_REASONS = [
+  "plan_expired",
+  "unsupported_currency",
+  "limit_out_of_range",
   "msrp_unavailable",
   "price_unavailable",
   "no_enabled_target",

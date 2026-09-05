@@ -1,4 +1,5 @@
 import { actionCollectionFilter } from "../../../packages/database/src/action-collection-filter.js";
+import { planCollectionFilter } from "../../../packages/database/src/plan-collection-filter.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -1746,7 +1747,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/catalog/proposals") {
         const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
-        json(response, 200, { items: catalogGovernance.listMine(limit, offset) });
+        json(response, 200, { items: catalogGovernance.listMine(limit, offset), total: catalogGovernance.mineCount() });
         return;
       }
 
@@ -1757,7 +1758,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const safeLimit = Math.max(1, Math.min(500, Math.floor(limit) || 100));
         const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
         const readiness = String(requestUrl.searchParams.get("readiness") ?? "all");
-        let total = control.missionCount(query);
+        const filters = planCollectionFilter(requestUrl.searchParams);
+        let total = control.missionCount(query, filters);
         let items;
         if (["ready", "attention", "monitoring"].includes(readiness)) {
           // Readiness depends on current devices and qualifications, so filter before paging.
@@ -1768,7 +1770,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const matches: Array<Record<string, unknown>> = [];
           let matched = 0;
           for (let start = 0; start < total; start += 500) {
-            for (const plan of decoratePurchaseIntents(control.listMissions(500, start, query, true), context)) {
+            for (const plan of decoratePurchaseIntents(control.listMissions(500, start, query, true, filters), context)) {
               const ready = (plan.automationReadiness as { readyForGuardedAdd?: boolean })?.readyForGuardedAdd === true;
               const group = plan.status !== "active" ? "attention" : plan.actionCeiling !== "add_to_cart" ? "monitoring" : ready ? "ready" : "attention";
               if (group !== readiness) continue;
@@ -1779,9 +1781,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           items = matches;
           total = matched;
         } else {
-          items = decoratePurchaseIntents(control.listMissions(safeLimit, safeOffset, query, true));
+          items = decoratePurchaseIntents(control.listMissions(safeLimit, safeOffset, query, true, filters));
         }
-        json(response, 200, { items, total, offset: safeOffset, limit: items.length });
+        json(response, 200, { items, total, offset: safeOffset, limit: items.length, stores: control.missionStoreFacets() });
         return;
       }
 
@@ -3627,6 +3629,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/status-preview") {
+        const body = await readJson(request);
+        json(response, 200, { items: control.previewMissionStatus(body.ids, body.status) });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/status") {
+        const body = await readJson(request);
+        const items = control.changeMissionStatuses(body);
+        notifyActionJobAvailability();
+        json(response, 200, { items });
+        return;
+      }
+
       if (request.method === "PATCH" && purchaseIntentDetailMatch) {
         const body = await readJson(request);
         const purchaseIntent = control.updateMission(
@@ -4251,6 +4266,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/purchase-profiles") {
         const body = await readJson(request);
         const saved = db.transaction(() => {
+          if (body.id && body.previewFingerprint !== undefined) {
+            const preview = control.previewPurchaseProfile(body as unknown as PurchaseProfileInput);
+            if (body.previewFingerprint !== preview.fingerprint) throw new ApiError("purchase_profile_impact_changed", 409, "The setup, plans or price evidence changed. Review the updated impact before saving.");
+          }
           if (body.id && body.impactFingerprint !== undefined) {
             const profile = control.listPurchaseProfiles().find((item) => item.id === body.id);
             const expected = profile ? stableHash(JSON.stringify(profile), ...control.purchaseProfileLinkedMissionIds(profile.id).sort()) : "";
@@ -4259,6 +4278,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           return control.savePurchaseProfile(body as unknown as PurchaseProfileInput);
         });
         json(response, 200, { items: saved.profiles, propagation: saved.propagation });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/purchase-profiles/preview") {
+        const body = await readJson(request);
+        json(response, 200, { preview: control.previewPurchaseProfile(body as unknown as PurchaseProfileInput) });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/purchase-profiles/apply") {

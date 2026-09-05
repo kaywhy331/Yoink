@@ -122,8 +122,8 @@
       </div>
       </details>
       <section class="upcoming-drop-strip" id="productReviewStatus" aria-labelledby="productReviewStatusTitle" hidden>
-        <div class="upcoming-drop-heading"><h3 id="productReviewStatusTitle">In review</h3></div>
-        <div class="mini-list" id="productReviewList"></div>
+        <div class="upcoming-drop-heading"><h3 id="productReviewStatusTitle">Product reviews</h3></div>
+        <div class="mini-list" id="productReviewList"></div><button class="button quiet" id="openReviewHistory" type="button">All reviews</button>
       </section>
       <div class="card-grid" id="productList" data-product-view="grid"></div>
       <div class="load-more-row"><button class="button quiet" id="loadMoreProducts" type="button" hidden>Load more products</button></div>
@@ -180,6 +180,7 @@
 
     <section class="workspace" data-panel="plans">
       <label class="search"><span>Find a plan</span><input id="planSearch" type="search" placeholder="Product, store, SKU, or status"></label>
+      <div class="plan-filters"><label><span>Store</span><select id="planStore"><option value="">All stores</option></select></label><label><span>Status</span><select id="planStatus"><option value="">Any status</option><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option><option value="archived">Archived</option><option value="expired">Expired</option></select></label><label><span>Action</span><select id="planAction"><option value="">Any action</option><option value="notify">Notify only</option><option value="add_to_cart">Add to cart</option></select></label><label><span>Order</span><select id="planSort"><option value="updated">Recently changed</option><option value="newest">Newest</option><option value="title">Product name</option></select></label></div>
       <div class="section-heading">
         <div><p class="eyebrow">Your products</p><h2>Plans</h2><p id="planSummary" role="status">Limits by product.</p><div id="planSummaryNotices" aria-live="polite"></div></div>
         <div class="section-actions" id="planFilterControl" hidden>
@@ -192,12 +193,12 @@
           <button class="button quiet" id="togglePlanBulk" type="button" hidden>Select plans</button>
         </div>
       </div>
-      <section class="plan-bulk-bar" id="planBulkBar" aria-label="Apply a Quick add setup to purchase plans" hidden><small>Selection clears between pages/filters.</small>
+      <section class="plan-bulk-bar" id="planBulkBar" aria-label="Manage selected plans" hidden><small>Selection clears between pages/filters.</small>
         <label class="check"><input id="planBulkSelectVisible" type="checkbox"><span>Select shown</span></label>
         <label class="compact-select"><span>Quick add setup</span><select id="planBulkProfile"><option value="">Choose setup…</option></select></label>
-        <button class="button primary" id="applyPlanBulkProfile" type="button" disabled>Apply setup</button>
+        <button class="button primary" id="applyPlanBulkProfile" type="button" disabled>Apply setup</button><button class="button secondary" id="pauseSelectedPlans" type="button" disabled>Pause selected</button><button class="button secondary" id="resumeSelectedPlans" type="button" disabled>Resume selected</button>
       </section>
-      <div class="stack" id="planList"></div>
+      <div id="planBatchResult" role="status" hidden></div><div class="stack" id="planList"></div>
       <div class="load-more-row" id="planPagination" hidden><button class="button quiet" id="previousPlans" type="button">Previous plans</button><span id="planPageStatus" role="status"></span><button class="button quiet" id="nextPlans" type="button">Next plans</button></div>
     </section>
 
@@ -274,6 +275,7 @@
         <label><span>Wait (min)</span><input name="cooldownMinutes" type="number" min="0" max="43200" value="0"></label>
         <label class="check"><input name="isDefault" type="checkbox"><span>Use as default</span></label>
       </div>
+      <section id="profileImpactReview" hidden aria-label="Setup impact"><p id="profileImpactSummary" role="status" tabindex="-1"></p><div id="profileImpactList"></div><div class="inline-actions"><button class="button quiet" id="previousProfileImpact" type="button">Previous plans</button><span id="profileImpactPage"></span><button class="button quiet" id="nextProfileImpact" type="button">Next plans</button></div></section>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit" id="saveProfileButton">Save setup</button></div>
     </form>
   </dialog>
@@ -302,6 +304,7 @@
     </form>
   </dialog>
 
+  <dialog id="reviewHistoryDialog" aria-labelledby="reviewHistoryTitle"><div class="dialog-heading"><h2 id="reviewHistoryTitle">Product review history</h2><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div><p>Decisions require independent review; timing varies.</p><div id="reviewHistoryError" role="alert" hidden>History could not load. <button class="button quiet" id="retryReviewHistory" type="button">Retry history</button></div><div id="reviewHistoryList"></div><div class="inline-actions"><button class="button quiet" id="previousReviews" type="button">Previous reviews</button><span id="reviewHistoryPage" role="status"></span><button class="button quiet" id="nextReviews" type="button">Next reviews</button></div></dialog>
   <dialog id="productLinkDialog" class="product-link-dialog" aria-labelledby="productLinkDialogTitle">
     <form id="productLinkForm">
       <div class="dialog-heading">
@@ -309,7 +312,7 @@
         <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
       </div>
 
-      <p class="dialog-copy">Paste a store product page.</p>
+      <p class="dialog-copy">Paste a store product page.</p><p id="productLinkDraftStatus" role="status" hidden></p>
       <div class="link-fields">
         <label><span>Product page</span><input name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://www.example.com/product/..." required></label>
         <label><span>Product name</span><input name="title" type="text" maxlength="300" autocomplete="off" placeholder="Product name" required></label>

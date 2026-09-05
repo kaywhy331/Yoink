@@ -95,6 +95,10 @@ const state = {
   callDisplayLimit: 25,
   actionDisplayLimit: 25,
   planFilter: "all",
+  planFilters: { store: "", status: "", action: "", sort: "updated" },
+  profileImpact: null,
+  profileImpactOffset: 0,
+  reviewHistory: { items: [], total: 0, offset: 0, sequence: 0, loading: false, error: false },
   planBulkMode: false,
   planSelection: new Set(),
   planBulkProfileId: "",
@@ -682,6 +686,11 @@ function baseUserHashRoute(panel = activeUserRoute()) {
 function currentUserHashRoute(panel = activeUserRoute()) {
   const [base, raw = ""] = baseUserHashRoute(panel).split("?");
   const query = new URLSearchParams(raw);
+  if (panel === "plans") {
+    if (state.planQuery) query.set("q", state.planQuery);
+    if (state.planFilter !== "all") query.set("readiness", state.planFilter);
+    for (const [key, value] of Object.entries(state.planFilters)) if (value && !(key === "sort" && value === "updated")) query.set(key, value);
+  }
   if (state.entity?.panel === panel) query.set(`${state.entity.kind}Id`, state.entity.id);
   const filters = panel === "insights" ? state.insightFilters : panel === "activity" ? state.activityFilters : null;
   for (const [key, value] of Object.entries(filters || {})) if (value && !(panel === "insights" && key === "window" && value === "30d")) query.set(key, value);
@@ -765,6 +774,17 @@ function applyHashRoute() {
       state.loadedRoutes.delete("activity");
     }
   }
+  if (requested === "plans") {
+    const nextFilters = Object.fromEntries(["store", "status", "action", "sort"].map(key => [key, routeQuery.get(key) || (key === "sort" ? "updated" : "")]));
+    const query = routeQuery.get("q") || "";
+    const readiness = routeQuery.get("readiness") || "all";
+    if (query !== state.planQuery || readiness !== state.planFilter || JSON.stringify(nextFilters) !== JSON.stringify(state.planFilters)) {
+      state.planFilters = nextFilters; state.planQuery = query; state.planFilter = readiness; state.planOffset = 0;
+      state.planSelection.clear(); state.loadedRoutes.delete("plans"); state.planRequestSequence += 1;
+    }
+    $("#planSearch").value = query;
+    for (const [id, key] of [["planStatus", "status"], ["planAction", "action"], ["planSort", "sort"]]) $(`#${id}`).value = nextFilters[key];
+  }
   if (requested === "products") {
     const query = new URLSearchParams(rawQuery);
     state.query = query.get("q") || "";
@@ -800,10 +820,16 @@ function applyHashRoute() {
     setSettingsView(settingsView, { historyMode: "none" });
   }
   const kind = routeQuery.has("planId") && ["plans", "products", "stores", "calls"].includes(panel) ? "plan" : ["products", "stores"].includes(panel) && routeQuery.has("productId") ? "product" : "";
-  state.entityRequestSequence += 1;
-  state.entityLoading = null;
-  state.entity = null;
-  for (const id of ["productDialog", "planDialog", "entityErrorDialog"]) { const dialog = $(`#${id}`); dialog.dataset.entityKey = ""; if (dialog.open) dialog.close(); }
+  const nextKey = kind && nextEntityId ? `${panel}:${kind}:${nextEntityId}` : "";
+  const currentDetail = kind ? $(kind === "plan" ? "#planDialog" : "#productDialog") : null;
+  const keepOpenDetail = nextKey && nextKey === entityKey() && panel === activeUserRoute()
+    && currentDetail?.open && currentDetail.dataset.entityKey === nextKey;
+  if (!keepOpenDetail) {
+    state.entityRequestSequence += 1;
+    state.entityLoading = null;
+    state.entity = null;
+    for (const id of ["productDialog", "planDialog", "entityErrorDialog"]) { const dialog = $(`#${id}`); dialog.dataset.entityKey = ""; if (dialog.open) dialog.close(); }
+  }
   setTab(panel, { historyMode: "none" });
   state.entity = kind && nextEntityId ? { kind, id: nextEntityId, panel } : null;
   void restoreEntityDetail();
@@ -1366,7 +1392,7 @@ function renderProductReviewStatus() {
     .sort((first, second) => new Date(second.updatedAt || second.createdAt || 0).getTime()
       - new Date(first.updatedAt || first.createdAt || 0).getTime())
     .slice(0, 5);
-  panel.hidden = proposals.length < 1;
+  panel.hidden = (state.proposalTotal ?? state.proposals.length) < 1;
   if (!proposals.length) {
     $("#productReviewList").innerHTML = "";
     return;
@@ -1386,7 +1412,7 @@ function renderProductReviewStatus() {
       ? `<small><strong>Review note:</strong> ${escapeHtml(proposal.reviewNote)}</small>`
       : "";
     const actions = rejected
-      ? `<span class="inline-actions"><button class="button quiet" data-open-product-link type="button">Try another link</button><button class="button quiet" data-dismiss-proposal="${escapeHtml(proposal.id)}" type="button" aria-label="Dismiss rejected product suggestion">Dismiss</button></span>`
+      ? `<span class="inline-actions"><button class="button quiet" data-correct-proposal="${escapeHtml(proposal.id)}" type="button">Correct and resubmit</button><button class="button quiet" data-dismiss-proposal="${escapeHtml(proposal.id)}" type="button" aria-label="Dismiss rejected product suggestion">Dismiss</button></span>`
       : `<span class="tag ${approved ? "good" : "warn"}">${status}</span>`;
     return `<div class="mini-row" data-product-review="${escapeHtml(proposal.id)}"><span>${titleMarkup}<small>${escapeHtml(retailerDisplayName(proposal.retailerId))} · ${escapeHtml(proposal.retailerSku || proposal.payload?.retailerSku || "Item")}${approved ? " · Available in Products" : ""}</small>${note}</span>${actions}</div>`;
   }).join("");
@@ -1877,7 +1903,7 @@ function renderPlanBulkControls(visiblePlans) {
     if (!eligibleIds.has(id)) state.planSelection.delete(id);
   }
   const toggle = $("#togglePlanBulk");
-  const canBulkApply = state.profiles.length > 0 && eligiblePlans.length > 1;
+  const canBulkApply = eligiblePlans.length > 1;
   toggle.hidden = !canBulkApply;
   if (!canBulkApply) {
     state.planBulkMode = false;
@@ -1893,6 +1919,8 @@ function renderPlanBulkControls(visiblePlans) {
   if (!profileIds.has(state.planBulkProfileId)) state.planBulkProfileId = "";
   profileSelect.innerHTML = `<option value="">Choose setup…</option>${state.profiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(`${profile.name} · ${profileSummary(profile)}`)}</option>`).join("")}`;
   profileSelect.value = state.planBulkProfileId;
+  profileSelect.closest("label").hidden = state.profiles.length === 0;
+  $("#applyPlanBulkProfile").hidden = state.profiles.length === 0;
 
   const visibleEligible = visiblePlans.filter(planEligibleForBulkProfile);
   const visibleSelectedCount = visibleEligible.filter((plan) => state.planSelection.has(plan.id)).length;
@@ -1901,6 +1929,7 @@ function renderPlanBulkControls(visiblePlans) {
   selectVisible.checked = visibleEligible.length > 0 && visibleSelectedCount === visibleEligible.length;
   selectVisible.indeterminate = visibleSelectedCount > 0 && visibleSelectedCount < visibleEligible.length;
   const selectedCount = state.planSelection.size;
+  for (const id of ["pauseSelectedPlans", "resumeSelectedPlans"]) $(`#${id}`).disabled = selectedCount < 1;
   const applyButton = $("#applyPlanBulkProfile");
   applyButton.disabled = selectedCount < 1 || !state.planBulkProfileId;
   applyButton.textContent = selectedCount ? `Apply setup to ${selectedCount}` : "Apply setup";
@@ -1926,27 +1955,22 @@ function renderPlans() {
   ].filter(Boolean);
   $("#planSummary").textContent = state.plans.length
     ? summaryParts.join(" · ") + (state.planTotal > state.plans.length ? " (readiness counts on this page)" : "")
-    : state.planQuery || state.planFilter !== "all" ? "No plans match this search or filter." : "Create a plan from a product when you are ready.";
+    : hasPlanFilters() ? "No plans match this search or filter." : "Create a plan from a product when you are ready.";
   $("#planFilterControl").hidden = (state.planTotal || state.plans.length) < 2 && state.planFilter === "all";
   $("#planPagination").hidden = state.planTotal <= state.planPageSize;
   $("#previousPlans").disabled = state.planOffset === 0;
   $("#nextPlans").disabled = state.planOffset + state.plans.length >= state.planTotal;
   $("#planPageStatus").textContent = `${state.planOffset + (state.plans.length ? 1 : 0)}–${state.planOffset + state.plans.length} of ${state.planTotal}`;
   $("#planFilter").value = state.planFilter;
-  const groupOrder = { attention: 0, ready: 1, monitoring: 2 };
-  const visiblePlans = state.plans
-    .filter((plan) => state.planFilter === "all" || planReadinessGroup(plan) === state.planFilter)
-    .sort((first, second) => {
-      const groupDifference = groupOrder[planReadinessGroup(first)] - groupOrder[planReadinessGroup(second)];
-      return groupDifference || String(first.title || "").localeCompare(String(second.title || ""));
-    });
+  renderPlanFilters();
+  const visiblePlans = state.plans.filter(plan => state.planFilter === "all" || planReadinessGroup(plan) === state.planFilter);
   renderPlanBulkControls(visiblePlans);
   $("#planList").innerHTML = visiblePlans.length ? visiblePlans.map((plan) => {
     const store = plan.primaryRetailerName || "No store enabled";
     const current = plan.primaryCurrentPriceCents ? money(plan.primaryCurrentPriceCents) : "not seen yet";
     const maximum = plan.primaryMaxUnitPriceCents ? money(plan.primaryMaxUnitPriceCents) : "not set";
     const fulfillment = plan.primaryFulfillment ? labelFor(FULFILLMENT_LABELS, plan.primaryFulfillment) : "Delivery not selected";
-    const action = plan.actionCeiling === "add_to_cart" ? "Add to cart" : "Notify only";
+    const action = labelFor(ACTION_KIND_LABELS, plan.actionCeiling);
     const linkedProfile = state.profiles.find((profile) => profile.id === plan.quickAddProfileId) || null;
     const profileLine = linkedProfile
       ? linkedProfile.actionCeiling === "add_to_cart" && plan.actionCeiling !== "add_to_cart"
@@ -1986,7 +2010,7 @@ function renderPlans() {
     </article>`;
   }).join("") : state.plans.length
     ? `<div class="empty">No ${escapeHtml($("#planFilter").selectedOptions[0]?.textContent?.toLocaleLowerCase("en-US") || "matching")} plans.</div>`
-    : state.planQuery || state.planFilter !== "all" ? '<div class="empty"><p>No matching plans.</p><button type="button" class="button secondary" id="clearPlanSearch">Clear plan search and filter</button></div>'
+    : hasPlanFilters() ? '<div class="empty"><p>No matching plans.</p><button type="button" class="button secondary" id="clearPlanSearch">Clear plan search and filter</button></div>'
     : '<div class="empty"><p>Quick add a product from Products to create your first plan.</p><button class="button secondary" data-tab="products" type="button">Open Products</button></div>';
   for (const card of document.querySelectorAll("#planList [data-plan-id]")) {
     const open = expanded.get(card.dataset.planId);
@@ -2882,6 +2906,7 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     state.legacyTransition = legacyTransition.preview || null;
     state.profiles = profiles.items || [];
     state.proposals = proposals.items || [];
+    state.proposalTotal = Number(proposals.total ?? state.proposals.length);
   } else if (route === "stores") {
     const requestSequence = state.storeRequestSequence + 1;
     state.storeRequestSequence = requestSequence;
@@ -3045,11 +3070,12 @@ async function fetchLoadedPages(path, count) {
 
 async function refreshPlans() {
   const sequence = ++state.planRequestSequence;
-  const query = new URLSearchParams({ limit: String(state.planPageSize), offset: String(state.planOffset), q: state.planQuery, readiness: state.planFilter });
+  const query = new URLSearchParams({ limit: String(state.planPageSize), offset: String(state.planOffset), q: state.planQuery, readiness: state.planFilter, ...state.planFilters });
   const page = await api(`/api/v1/user/purchase-intents?${query}`);
   if (sequence !== state.planRequestSequence) return;
   state.plans = page.items || [];
   state.planTotal = Number(page.total ?? state.plans.length);
+  state.planStores = page.stores || state.planStores || [];
   if (!state.plans.length && state.planOffset > 0) {
     state.planOffset = Math.max(0, Math.floor((state.planTotal - 1) / state.planPageSize) * state.planPageSize);
     return refreshPlans();
@@ -3681,11 +3707,19 @@ function clearProductLinkPreview() {
   $("#submitProductLinkButton").disabled = true;
 }
 
-function openProductLinkDialog() {
+function openProductLinkDialog(correction = null) {
   const form = $("#productLinkForm");
   form.reset();
   clearProductLinkPreview();
+  let draft = correction ? { url: correction.payload?.canonicalUrl || "", title: correction.payload?.title || "" } : null;
+  if (!draft) {
+    try { const stored = JSON.parse(sessionStorage.getItem(linkDraftKey()) || "null"); if (stored && Date.now() - stored.savedAt < 86_400_000) draft = stored; } catch { /* Draft storage is optional. */ }
+  }
+  if (draft) { form.elements.url.value = draft.url || ""; form.elements.title.value = draft.title || ""; }
+  $("#productLinkDraftStatus").hidden = !draft;
+  $("#productLinkDraftStatus").textContent = correction ? `Correct this suggestion and check the link again. Earlier review: ${correction.reviewNote || "Rejected"}. A new submission requires independent review.` : "Draft restored for this tab. Check the link again before submitting.";
   $("#productLinkDialog").showModal();
+  if (draft) { $("#productLinkDialog").dataset.dirty = "true"; saveLinkDraft(); }
   requestAnimationFrame(() => form.elements.url.focus());
 }
 
@@ -3745,8 +3779,8 @@ async function checkProductLink() {
     state.productLinkPreview = preview;
     state.productLinkPreviewInput = url;
     $("#productLinkPreview").hidden = false;
-    $("#productLinkPreview").innerHTML = `<div class="card-top"><span class="store">${escapeHtml(preview.retailerName)}</span><span class="tag good">${preview.alreadyInProducts ? "Already in Products" : "Product found"}</span></div>
-      <h3>${escapeHtml(preview.retailerSku)}</h3>
+    $("#productLinkPreview").innerHTML = `<div class="card-top"><span class="store">${escapeHtml(preview.retailerName)}</span><span class="tag good">${preview.alreadyInProducts ? "Already in Products" : "Product link recognized"}</span></div>
+      <h3>${escapeHtml(preview.catalogTitle || form.elements.title.value.trim() || `${preview.retailerName} item ${preview.retailerSku}`)}</h3><p>${preview.catalogTitle ? "Approved catalog name" : "Name supplied by you; offer data is not verified"} · Item ${escapeHtml(preview.retailerSku)}</p>
       <p>${escapeHtml(preview.alreadyInProducts ? "This exact store item is already available in Products; no review request is needed." : preview.capabilityLabel)}</p>
       ${preview.alreadyInProducts ? `<button class="button secondary" data-product-detail="${escapeHtml(preview.existingVariantId)}" type="button">View product</button>` : "<p><strong>Not accepted from this link:</strong> stock status, price, seller, fulfillment, or permission to purchase.</p>"}
       ${retailerLinkMarkup(preview.canonicalUrl, `${preview.retailerName} product preview`, `${preview.canonicalUrl} ↗`)}`;
@@ -3899,7 +3933,10 @@ document.addEventListener("click", async (event) => {
     if (button.id === "clearPlanSearch") {
       state.planQuery = "";
       state.planFilter = "all";
+      state.planFilters = { store: "", status: "", action: "", sort: "updated" };
+      state.planSelection.clear();
       state.planOffset = 0;
+      writeUserRoute("replace", "plans");
       $("#planSearch").value = "";
       await loadUserRoute("plans", { force: true });
       return;
@@ -4312,6 +4349,7 @@ $("#productLinkForm").addEventListener("submit", async (event) => {
         confirmation: "PROPOSE_EXACT_PRODUCT_LINK"
       })
     });
+    clearLinkDraft();
     $("#productLinkDialog").close();
     clearProductLinkPreview();
     setTab("products", { load: false });
@@ -4522,6 +4560,7 @@ async function closeDraftDialog(dialog) {
     const result = await requestConfirmation({ title: "Discard this draft?", summary: "Your unsaved edits will be lost. Saved plans and limits have not changed.", confirmLabel: "Discard draft" });
     if (!result.confirmed) return;
   }
+  if (dialog.id === "productLinkDialog") clearLinkDraft();
   dialog.dataset.dirty = "false";
   closeEntityDialog(dialog);
 }
@@ -4596,6 +4635,7 @@ function beginProfileEdit(profileId) {
 }
 
 function resetProfileForm() {
+  clearProfileImpact();
   const form = $("#profileForm");
   form.reset();
   form.elements.id.value = "";
@@ -4663,51 +4703,25 @@ $("#profileForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const actionElement = event.submitter || $("#saveProfileButton");
-  let impactFingerprint;
+  const submit = $("#saveProfileButton");
+  if (submit.disabled) return;
+  submit.disabled = true;
   try {
-    const cooldownMinutes = Number(form.elements.cooldownMinutes.value || 0);
-    if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 43_200) {
-      throw new Error("The wait between attempts must be from zero through 43,200 minutes.");
-    }
-    const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent"].includes(form.elements.priceMode.value)
-      ? form.elements.priceMode.value
-      : "store_price";
-    let msrpOffsetPercent = null;
-    if (priceMode === "msrp_offset_percent") {
-      const raw = form.elements.msrpOffsetPercent.value.trim();
-      const parsed = Number(raw);
-      if (!raw || !Number.isInteger(parsed) || parsed < -90 || parsed > 90) {
-        throw new Error("The MSRP offset percent must be a whole number from -90 through 90.");
-      }
-      msrpOffsetPercent = parsed;
-    }
-    if (form.elements.id.value) {
-      const latest = await api("/api/v1/user/purchase-profiles");
-      const profile = latest.items.find((item) => item.id === form.elements.id.value);
-      if (!profile) throw new Error("This setup was removed. Save your draft as a new setup.");
-      impactFingerprint = profile.impactFingerprint;
-      const count = Number(profile.linkedMissionCount || 0);
-      if (count) {
-        const next = { ...profile, actionCeiling: form.elements.actionCeiling.value, targetQuantity: Number(form.elements.targetQuantity.value), fulfillment: form.elements.fulfillment.value, priceMode, maxUnitPriceCents: priceMode === "fixed_cap" ? centsInput(form.elements.maxUnitPrice.value, "Maximum item price") : null, msrpOffsetPercent, cooldownSeconds: cooldownMinutes * 60 };
-        const review = await requestConfirmation({ title: `Update ${count} linked plan${count === 1 ? "" : "s"}?`, summary: `Before: ${profileSummary(profile)}. After: ${profileSummary(next)}. Quantity ${next.targetQuantity}; wait ${cooldownMinutes} minutes. This setup stays linked to these plans. Plans missing store or price evidence retain their limits and retry automatically when evidence becomes available.`, confirmLabel: "Apply to linked plans" });
-        if (!review.confirmed) return;
+    const draft = profileDraft(form);
+    const signature = JSON.stringify(draft);
+    if (draft.id && (!state.profileImpact || state.profileImpactDraft !== signature)) {
+      const { preview } = await api("/api/v1/user/purchase-profiles/preview", { method: "POST", body: signature });
+      if (JSON.stringify(profileDraft(form)) !== signature) throw new Error("Your draft changed while its impact was loading. Review the current draft again.");
+      state.profileImpact = preview; state.profileImpactDraft = signature; state.profileImpactOffset = 0;
+      if (preview.plans.length) {
+        renderProfileImpact();
+        submit.textContent = "Confirm and save";
+        $("#profileImpactSummary").focus();
+        return;
       }
     }
     const result = await api("/api/v1/user/purchase-profiles", {
-      method: "POST",
-      body: JSON.stringify({
-        id: form.elements.id.value || undefined,
-        impactFingerprint,
-        name: form.elements.name.value.trim(),
-        targetQuantity: Number(form.elements.targetQuantity.value),
-        actionCeiling: form.elements.actionCeiling.value === "add_to_cart" ? "add_to_cart" : "notify",
-        fulfillment: form.elements.fulfillment.value === "pickup" ? "pickup" : "shipping",
-        priceMode,
-        maxUnitPriceCents: priceMode === "fixed_cap" ? centsInput(form.elements.maxUnitPrice.value, "The fixed maximum item price") : null,
-        msrpOffsetPercent,
-        isDefault: form.elements.isDefault.checked === true,
-        cooldownSeconds: cooldownMinutes * 60
-      })
+      method: "POST", body: JSON.stringify({ ...draft, ...(draft.id ? { previewFingerprint: state.profileImpact.fingerprint } : {}) })
     });
     state.profiles = result.items || [];
     $("#profileDialog").close();
@@ -4719,7 +4733,7 @@ $("#profileForm").addEventListener("submit", async (event) => {
     if (updatedCount || skippedCount) {
       const parts = [];
       if (updatedCount) parts.push(`${updatedCount} linked purchase plan${updatedCount === 1 ? "" : "s"} updated`);
-      if (skippedCount) parts.push(`${skippedCount} kept its prior limits (price not yet known)`);
+      if (skippedCount) parts.push(`${skippedCount} kept their prior limits; review skipped plans for details`);
       setInlineStatus($("#newProfileButton"), {
         state: "success",
         message: `Quick add setup saved. ${parts.join("; ")}.`
@@ -4728,7 +4742,10 @@ $("#profileForm").addEventListener("submit", async (event) => {
     } else {
       toast("Quick add setup saved.", false, { element: actionElement });
     }
-  } catch (error) { toast(error.message || "The setup could not be saved.", true, { element: actionElement, reference: error.reference }); }
+  } catch (error) {
+    if (error.code === "purchase_profile_impact_changed") clearProfileImpact();
+    toast(error.message || "The setup could not be saved.", true, { element: actionElement, reference: error.reference });
+  } finally { submit.disabled = false; }
 });
 
 $("#profileDialog").addEventListener("close", resetProfileForm);
@@ -4755,6 +4772,7 @@ $("#planFilter").addEventListener("change", async (event) => {
   state.planFilter = event.target.value;
   state.planOffset = 0;
   state.planSelection.clear();
+  writeUserRoute("replace", "plans");
   await loadUserRoute("plans", { force: true });
 });
 let planSearchTimer;
@@ -4765,6 +4783,7 @@ $("#planSearch").addEventListener("input", (event) => {
   planSearchTimer = setTimeout(async () => {
     state.planOffset = 0;
     state.planSelection.clear();
+    writeUserRoute("replace", "plans");
     await loadUserRoute("plans", { force: true });
   }, 250);
 });
@@ -4972,6 +4991,12 @@ async function restoreEntityDetail() {
 
 for (const id of ["productDialog", "planDialog", "entityErrorDialog"]) {
   const dialog = $(`#${id}`);
+  dialog.addEventListener("cancel", event => {
+    if (event.defaultPrevented) return;
+    event.preventDefault();
+    // Clear the route before a refresh can reopen it while the native close event is queued.
+    closeEntityDialog(dialog);
+  });
   dialog.addEventListener("close", () => {
     if (!dialog.open && state.entity && dialog.dataset.entityKey === entityKey()) {
       state.entityRequestSequence += 1;
@@ -5075,6 +5100,7 @@ function renderWatchHistory() {
 $("#watchHistoryFilter")?.addEventListener("change", () => { state.watchHistoryLimit = 25; renderWatchHistory(); });
 
 $("#separateProfile").addEventListener("click", () => {
+  clearProfileImpact();
   const form = $("#profileForm");
   form.elements.id.value = "";
   form.elements.name.value = `${form.elements.name.value.slice(0, 51)} (copy)`;
@@ -5094,4 +5120,141 @@ function closeEntityDialog(dialog) {
   }
   dialog.dataset.entityKey = "";
   dialog.close();
+}
+
+function hasPlanFilters() {
+  return !!state.planQuery || state.planFilter !== "all" || !!state.planFilters.store || !!state.planFilters.status || !!state.planFilters.action;
+}
+
+function linkDraftKey() { return state.overview?.actor?.userId ? `yoinkLinkDraft:${state.overview.actor.userId}` : ""; }
+function saveLinkDraft() {
+  const key = linkDraftKey();
+  if (!key) return;
+  const form = $("#productLinkForm");
+  try { sessionStorage.setItem(key, JSON.stringify({ url: form.elements.url.value, title: form.elements.title.value, savedAt: Date.now() })); }
+  catch { $("#productLinkDraftStatus").hidden = false; $("#productLinkDraftStatus").textContent = "This tab could not retain the draft. Keep it open until submission succeeds."; }
+}
+function clearLinkDraft() { try { if (linkDraftKey()) sessionStorage.removeItem(linkDraftKey()); } catch { /* No stored draft to remove. */ } }
+$("#productLinkForm").addEventListener("input", saveLinkDraft);
+
+async function loadReviewHistory(offset = state.reviewHistory.offset) {
+  const history = state.reviewHistory;
+  const sequence = ++history.sequence;
+  history.loading = true; history.error = false; renderReviewHistory();
+  try {
+    const page = await api(`/api/v1/user/catalog/proposals?limit=25&offset=${Math.max(0, offset)}`);
+    if (sequence !== history.sequence) return;
+    history.items = page.items || []; history.total = Number(page.total ?? history.items.length); history.offset = Math.max(0, offset);
+    if (!history.items.length && history.offset > 0) return loadReviewHistory(Math.max(0, Math.floor((history.total - 1) / 25) * 25));
+  } catch { if (sequence === history.sequence) history.error = true; }
+  finally { if (sequence === history.sequence) { history.loading = false; renderReviewHistory(); } }
+}
+
+function renderReviewHistory() {
+  const history = state.reviewHistory;
+  $("#reviewHistoryError").hidden = !history.error;
+  $("#reviewHistoryList").setAttribute("aria-busy", String(history.loading));
+  $("#reviewHistoryList").innerHTML = history.items.map(proposal => `<article class="impact-plan"><strong>${escapeHtml(proposal.payload?.title || "Product suggestion")}</strong><p>${escapeHtml(words(proposal.status))} · ${escapeHtml(retailerDisplayName(proposal.retailerId))} · ${escapeHtml(proposal.retailerSku)}</p><p>Submitted ${escapeHtml(new Date(proposal.createdAt).toLocaleString())}${proposal.decidedAt ? ` · Reviewed ${escapeHtml(new Date(proposal.decidedAt).toLocaleString())}` : ""}</p>${proposal.reviewNote ? `<p>Review note: ${escapeHtml(proposal.reviewNote)}</p>` : ""}${retailerLinkMarkup(proposal.payload?.canonicalUrl, proposal.payload?.title || "Product suggestion", "Review store page ↗")}${proposal.status === "rejected" ? `<button class="button secondary" data-correct-proposal="${escapeHtml(proposal.id)}" type="button">Correct and resubmit</button>` : ""}</article>`).join("") || (history.loading || history.error ? "" : "<p>No product suggestions yet.</p>");
+  $("#reviewHistoryPage").textContent = history.loading ? "Loading reviews…" : history.error ? "History unavailable" : `${history.items.length ? history.offset + 1 : 0}–${history.offset + history.items.length} of ${history.total}`;
+  $("#previousReviews").disabled = history.loading || history.offset === 0;
+  $("#nextReviews").disabled = history.loading || history.offset + history.items.length >= history.total;
+}
+$("#openReviewHistory").addEventListener("click", () => { $("#reviewHistoryDialog").showModal(); void loadReviewHistory(0); });
+$("#retryReviewHistory").addEventListener("click", () => { void loadReviewHistory(); });
+$("#previousReviews").addEventListener("click", () => { void loadReviewHistory(state.reviewHistory.offset - 25); });
+$("#nextReviews").addEventListener("click", () => { void loadReviewHistory(state.reviewHistory.offset + 25); });
+document.addEventListener("click", event => {
+  const button = event.target.closest?.("[data-correct-proposal]");
+  if (!button) return;
+  const proposal = [...state.proposals, ...state.reviewHistory.items].find(item => item.id === button.dataset.correctProposal);
+  if (!proposal || proposal.status !== "rejected") return;
+  if ($("#reviewHistoryDialog").open) $("#reviewHistoryDialog").close();
+  openProductLinkDialog(proposal);
+});
+
+function profileDraft(form) {
+  const cooldownMinutes = Number(form.elements.cooldownMinutes.value || 0);
+  if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 43_200) throw new Error("The wait between attempts must be from zero through 43,200 minutes.");
+  const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent"].includes(form.elements.priceMode.value) ? form.elements.priceMode.value : "store_price";
+  const percent = Number(form.elements.msrpOffsetPercent.value);
+  if (priceMode === "msrp_offset_percent" && (!form.elements.msrpOffsetPercent.value.trim() || !Number.isInteger(percent) || percent < -90 || percent > 90)) throw new Error("The MSRP offset must be a whole-number percent from -90 through 90.");
+  return { id: form.elements.id.value || undefined, name: form.elements.name.value.trim(), targetQuantity: Number(form.elements.targetQuantity.value),
+    actionCeiling: form.elements.actionCeiling.value === "add_to_cart" ? "add_to_cart" : "notify", fulfillment: form.elements.fulfillment.value === "pickup" ? "pickup" : "shipping", priceMode,
+    maxUnitPriceCents: priceMode === "fixed_cap" ? centsInput(form.elements.maxUnitPrice.value, "Maximum item price") : null,
+    msrpOffsetPercent: priceMode === "msrp_offset_percent" ? percent : null, isDefault: form.elements.isDefault.checked,
+    cooldownSeconds: cooldownMinutes * 60 };
+}
+
+function clearProfileImpact() {
+  const hadReview = !!state.profileImpact;
+  state.profileImpact = null; state.profileImpactDraft = ""; state.profileImpactOffset = 0;
+  $("#profileImpactReview").hidden = true;
+  if (hadReview) $("#saveProfileButton").textContent = $("#profileForm").elements.id.value ? "Review changes" : "Save setup";
+}
+
+function renderProfileImpact() {
+  const preview = state.profileImpact;
+  if (!preview) return;
+  $("#profileImpactReview").hidden = false;
+  $("#profileImpactSummary").textContent = `${preview.updatedCount} plans will update; ${preview.skippedCount} keep their current limits. Plans missing price or store evidence remain linked and retry automatically when evidence becomes available. Existing queued attempts with old limits are cancelled; running actions may finish.`;
+  const reasons = { plan_expired: "Plan expired; review its expiry first", unsupported_currency: "This plan uses an unsupported currency", limit_out_of_range: "Calculated limits exceed the supported amount", no_enabled_target: "No enabled store", unsupported_target: "Store does not support cart adds", msrp_unavailable: "MSRP is unavailable", price_unavailable: "Current price is unavailable", plan_not_active_or_paused: "Plan is no longer active or paused" };
+  const action = value => labelFor(ACTION_KIND_LABELS, value);
+  $("#profileImpactList").innerHTML = preview.plans.slice(state.profileImpactOffset, state.profileImpactOffset + 20).map(plan => {
+    const before = plan.before; const after = plan.after;
+    const changes = after ? `Quantity ${before.targetQuantity} → ${after.targetQuantity}; ${action(before.intentPolicy?.actionCeiling)} → ${action(after.actionCeiling)}; wait ${Number(before.intentPolicy?.cooldownSeconds || 0) / 60} → ${after.cooldownSeconds / 60} minutes; total cap ${money(before.intentPolicy?.maxAllInCents)} → ${money(after.maxAllInCents ?? before.intentPolicy?.maxAllInCents)}.` : reasons[plan.reasonCode] || "Current limits retained";
+    const targets = after ? after.targets.map(target => {
+      const previous = before.targets.find(item => item.id === target.id);
+      return `${retailerDisplayName(previous?.retailerId)}: ${money(previous?.maxUnitPriceCents)} → ${money(target.maxUnitPriceCents)}, ${words(previous?.fulfillment)} → ${words(target.fulfillment || previous?.fulfillment)}`;
+    }).join("; ") : "";
+    return `<article class="impact-plan"><strong>${escapeHtml(plan.title)} · ${after ? "Will update" : "Unchanged"}</strong><p>${escapeHtml(changes)}</p>${targets ? `<p>${escapeHtml(targets)}</p>` : ""}</article>`;
+  }).join("");
+  $("#profileImpactPage").textContent = `${state.profileImpactOffset + 1}–${Math.min(preview.plans.length, state.profileImpactOffset + 20)} of ${preview.plans.length}`;
+  $("#previousProfileImpact").disabled = state.profileImpactOffset === 0;
+  $("#nextProfileImpact").disabled = state.profileImpactOffset + 20 >= preview.plans.length;
+}
+
+for (const type of ["input", "change"]) $("#profileForm").addEventListener(type, clearProfileImpact);
+for (const [id, delta] of [["previousProfileImpact", -20], ["nextProfileImpact", 20]]) $(`#${id}`).addEventListener("click", () => {
+  state.profileImpactOffset = Math.max(0, state.profileImpactOffset + delta); renderProfileImpact();
+});
+
+function renderPlanFilters() {
+  const stores = $("#planStore");
+  stores.innerHTML = '<option value="">All stores</option>' + (state.planStores || []).map(store => `<option value="${escapeHtml(store.id)}">${escapeHtml(store.name)}</option>`).join("");
+  if (state.planFilters.store && ![...stores.options].some(option => option.value === state.planFilters.store)) stores.add(new Option(retailerDisplayName(state.planFilters.store), state.planFilters.store));
+  for (const [id, key] of [["planStore", "store"], ["planStatus", "status"], ["planAction", "action"], ["planSort", "sort"]]) $(`#${id}`).value = state.planFilters[key];
+}
+
+for (const [id, key] of [["planStore", "store"], ["planStatus", "status"], ["planAction", "action"], ["planSort", "sort"]]) {
+  $(`#${id}`).addEventListener("change", async event => {
+    state.planFilters[key] = event.target.value;
+    state.planOffset = 0; state.planSelection.clear();
+    writeUserRoute("replace", "plans");
+    await loadUserRoute("plans", { force: true });
+  });
+}
+
+for (const [id, status] of [["pauseSelectedPlans", "paused"], ["resumeSelectedPlans", "active"]]) {
+  $(`#${id}`).addEventListener("click", async event => {
+    const button = event.currentTarget;
+    const ids = [...state.planSelection];
+    if (!ids.length) return;
+    button.disabled = true;
+    try {
+      const { items } = await api("/api/v1/user/purchase-intents/status-preview", { method: "POST", body: JSON.stringify({ ids, status }) });
+      const eligible = items.filter(item => item.eligible && item.status !== status);
+      const verb = status === "active" ? "Resume" : "Pause";
+      if (!(await requestConfirmation({ title: `${verb} ${eligible.length} plans?`,
+        summary: status === "active" ? "Resumed plans use their existing limits, expiry and action choice when future offers meet their requirements. Plans that changed since this review are skipped." : "Pausing stops future attempts. Actions already running may finish. Plans that changed since this review are skipped.",
+        scope: items.map(item => `${item.title} · ${item.eligible ? item.status === status ? "Already in this state" : `${verb} · ${labelFor(ACTION_KIND_LABELS, item.actionCeiling)}` : item.reason}`),
+        confirmLabel: `${verb} selected plans` })).confirmed) return;
+      const result = await api("/api/v1/user/purchase-intents/status", { method: "POST", body: JSON.stringify({ status, items: items.map(({ id, fingerprint }) => ({ id, fingerprint })), confirmation: "CHANGE_SELECTED_PLAN_STATUSES" }) });
+      state.planSelection.clear();
+      const report = $("#planBatchResult");
+      report.hidden = false;
+      report.innerHTML = `<p>${result.items.filter(item => item.outcome === "updated").length} plans ${status === "active" ? "resumed" : "paused"}.</p><details><summary>Results for ${result.items.length} plans</summary>${result.items.map(item => `<p><strong>${escapeHtml(items.find(plan => plan.id === item.id)?.title || "Plan")}</strong> · ${escapeHtml(item.message)}</p>`).join("")}</details>`;
+      await loadUserRoute("plans", { force: true });
+    } catch (error) { toast(error.message || "The selected plans could not be changed. Refresh to check their current state.", true); }
+    finally { button.disabled = state.planSelection.size === 0; }
+  });
 }
