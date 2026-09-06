@@ -1479,6 +1479,8 @@ test("guided dashboard setup does not create a plan before review and submits ex
     (planSummary as Record<string, unknown>).automationReadiness = {
       contractVersion: 1,
       state: "guarded_add_session_blocked",
+      configuredAction: "add_to_cart",
+      targets: [{ retailerId: "target" }],
       level: "waiting",
       readyForMonitoring: true,
       readyForGuardedAdd: false,
@@ -1493,12 +1495,10 @@ test("guided dashboard setup does not create a plan before review and submits ex
       browser.document.querySelector("#planList")?.textContent ?? "",
       /Target needs attention in Chrome/
     ));
-    const sessionRecoveryLink = browser.document.querySelector("#planList a.button.primary") as HTMLAnchorElement;
-    assert.ok(sessionRecoveryLink);
-    const sessionRecoveryUrl = new URL(sessionRecoveryLink.href);
-    assert.equal(sessionRecoveryUrl.origin, "https://howl.link");
-    assert.equal(sessionRecoveryUrl.searchParams.get("url"), product.canonicalUrl);
-    assert.match(sessionRecoveryLink.textContent, /Open Target/);
+    const sessionRecovery = browser.document.querySelector('#planList [data-store-setup="target"]') as HTMLButtonElement;
+    assert.ok(sessionRecovery);
+    assert.equal(sessionRecovery.dataset.setupPlan, planSummary.id);
+    assert.match(sessionRecovery.textContent || "", /Target setup/);
     (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
     const editDialog = browser.document.querySelector("#planDialog") as HTMLDialogElement;
     await eventually(() => assert.equal(editDialog.hasAttribute("open"), true));

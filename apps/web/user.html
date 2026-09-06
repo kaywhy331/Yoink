@@ -403,6 +403,7 @@
       <p class="boundary-note good" id="planExecutionNote">Fresh matches create notifications. No store control is clicked.</p>
       <div class="plan-preparation-actions"><button class="button secondary" id="prepareGuardedPlanButton" type="button">Switch to cart mode</button></div>
       <div class="target-list" id="targetEditors"></div>
+      <div class="inline-actions" id="planStoreSetup"></div>
       <small class="select-help target-help" id="planFulfillmentHelp">Shipping is the default. Pickup is opt-in.</small>
       <details class="setup-advanced plan-advanced">
         <summary>Advanced</summary>
@@ -441,6 +442,12 @@
       <label class="review-confirm"><input name="reviewed" type="checkbox" required><span id="planBulkApplyReviewCopy">I reviewed this Quick add setup and the selected plans.</span></label>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="confirmPlanBulkApply" type="submit" disabled>Apply setup</button></div>
     </form>
+  </dialog>
+
+  <dialog id="storeSetupDialog" aria-labelledby="storeSetupTitle">
+    <div class="dialog-heading"><div><p class="eyebrow">Store setup</p><h2 id="storeSetupTitle">Store setup</h2></div><button class="icon-button" data-close-store-setup type="button" aria-label="Close store setup">×</button></div>
+    <div id="storeSetupContent" aria-live="polite"></div>
+    <div class="dialog-actions"><button class="button secondary" id="refreshStoreSetup" type="button">Refresh checks</button><button class="button primary" id="returnStoreSetupPlan" type="button" hidden>Return to plan</button><button class="button quiet" data-close-store-setup type="button">Close</button></div>
   </dialog>
 
   <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmDialogTitle" aria-describedby="confirmDialogSummary" aria-modal="true">

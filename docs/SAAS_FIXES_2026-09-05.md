@@ -79,7 +79,7 @@ Validation: the full `npm test` command exited 0: 976 application checks passed,
 | YS-09 | Fixed mitigation | Discord intake is unavailable before configuration. Shipping an ingestion client remains separate integration work. |
 | YS-10 | Partial | Administrator handoff and test instructions are explicit. A tracked connection request or self-service provisioning flow remains. |
 | YS-11 | Fixed | Editing, event choices, removal, paged/filterable history and explicit retry are implemented. Removal discloses history deletion and rejects live leases; retries preserve the original binding and attempts. |
-| YS-12 | Open | Unify per-store responsibility, permission, sign-in, rehearsal, activation and return-to-plan actions. |
+| YS-12 | Partial | [Unified per-store setup](STORE_SETUP_IMPLEMENTATION_2026-09-05.md) connects Plans, Stores and Insights with separate gates, owners, recovery and a fresh return-to-plan check. Live paired-companion handoff acceptance remains. |
 | YS-13 | Fixed | Unverified checks no longer read as healthy. |
 | YS-14 | Partial | Cadence copy matches current runtime. Shared scheduling metadata and next-eligible-check presentation remain. |
 | YS-15 | Open | Managed distribution, store review, staged rollout and installed update/recovery acceptance. |
@@ -93,7 +93,7 @@ Validation: the full `npm test` command exited 0: 976 application checks passed,
 | YS-23 | Fixed | Query-aware empty state with working Clear search and filters. |
 | YS-24 | Fixed | Query/filter and product/plan detail URLs restore through reload; Back, invalid-entity recovery and late-response protection are verified. |
 | YS-25 | Partial | Product detail observation age added. Card-level source/freshness states and direct recheck remain. |
-| YS-26 | Partial | Store capability labels added. Per-user readiness in store selection remains. |
+| YS-26 | Partial | Four guarded-store directory cards and selected-store views now show actor-specific setup and recovery. Broader plan-editor capability treatment remains. |
 | YS-27 | Fixed | Search plus store/status/action filters and global sorting precede paging. Reviewed bulk pause/resume is bounded to 50 selected plans with stale checks and per-item results. |
 | YS-28 | Partial | Explicit dialog discard, navigation protection and unload warnings added. Product-link correction drafts survive reload within a user-scoped tab session. Cross-reload storage for other forms remains. |
 | YS-29 | Open | Audited corrective spend/refund ledger entries and idempotent correction UI. |

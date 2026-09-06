@@ -1,3 +1,4 @@
+import { buildStoreSetup } from "../../../packages/domain/src/store-setup.js";
 import { actionCollectionFilter } from "../../../packages/database/src/action-collection-filter.js";
 import { planCollectionFilter } from "../../../packages/database/src/plan-collection-filter.js";
 import { createHash } from "node:crypto";
@@ -1381,11 +1382,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/action-platform") {
         const now = Date.now();
+        const lanes = retailerReadiness.lanes(now);
         json(response, 200, {
           dropWindows: dropWindows.list(now, true),
           watchQueue: dropWindows.listWatchQueue(now),
           watchQueueMode: dropWindows.watchQueueMode(),
-          readiness: retailerReadiness.lanes(now),
+          readiness: lanes,
+          storeSetup: buildStoreSetup({ lanes, devices: devices.listDevices(now), version,
+            settings: control.settings(), permissions: authorization.permissions(), now }),
           connectors: userActionConnectors.list(),
           connectorDeliveries: userActionConnectors.listDeliveries(50),
           orderConfirmations: orderConfirmations.list(50),
@@ -1511,7 +1515,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/readiness") {
-        json(response, 200, { plan: retailerReadiness.reverifyPlan() });
+        const now = Date.now();
+        const planId = requestUrl.searchParams.get("planId") || "";
+        const mission = planId ? control.missionDetail(planId) : null;
+        if (planId && !mission) throw new ApiError("purchase_intent_not_found", 404, "This plan is unavailable. Return to Plans to choose a current plan.");
+        const plan = retailerReadiness.reverifyPlan(now);
+        json(response, 200, {
+          plan,
+          stores: buildStoreSetup({ lanes: plan.lanes, devices: devices.listDevices(now), version,
+            settings: control.settings(), permissions: authorization.permissions(), now }),
+          purchaseIntent: mission ? decoratePurchaseIntents([mission], { now })[0] : null
+        });
         return;
       }
 

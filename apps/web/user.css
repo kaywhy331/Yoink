@@ -560,3 +560,18 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
   #pairedDevices .mini-row > span { flex-basis: 100%; }
   #deliveryHistoryList .mini-row, #watchHistoryList .mini-row { flex-wrap: wrap; }
 }
+
+#storeSetupDialog { width: min(720px, calc(100vw - 24px)); padding: 24px; }
+.store-setup-stores, .store-setup-next { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.store-setup-stores [aria-pressed="true"] { background: var(--color-accent-soft); color: var(--green-dark); }
+.store-setup-next { justify-content: space-between; padding: 12px; border-radius: var(--radius-md); background: var(--color-accent-soft); }
+.store-setup-checks { display: grid; gap: 12px; list-style: none; padding: 0; }
+.store-setup-checks > li { padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.store-setup-checks > li > div { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.store-setup-checks p { margin: 8px 0; line-height: 1.5; }
+.store-setup-checks small { color: var(--muted); }
+#storeSetupContent { overflow-wrap: anywhere; }
+#storeSetupHelp li { margin: 8px 0; }
+#storeSetupEntry { margin: 16px 0; }
+.store-directory-card { cursor: default; }
+.store-directory-card .inline-actions { margin-top: 8px; }

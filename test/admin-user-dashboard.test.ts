@@ -176,6 +176,7 @@ test("Access creates and supports a shopper through subject-bound pairing and us
 
     (browser.document.querySelector("[data-admin-user-role-grant]") as HTMLButtonElement).click();
     await eventually(() => assert.ok(browser.document.querySelector("[data-admin-user-role-revoke]")));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Role membership granted/i));
     const revokeRole = browser.document.querySelector("[data-admin-user-role-revoke]") as HTMLButtonElement;
     const revokedRoleId = revokeRole.dataset.adminUserRoleRevoke;
     assert.ok(revokedRoleId);
@@ -185,6 +186,9 @@ test("Access creates and supports a shopper through subject-bound pairing and us
       createdUser.id,
       revokedRoleId
     )?.status, "revoked"));
+    // The DB write precedes the async refresh. Wait for the completed UI operation
+    // before disabling the user or closing the DOM.
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Role membership revoked/i));
     assert.match(String(confirmations.at(-1)?.title || ""), /Revoke/);
 
     const disable = browser.document.querySelector('[data-admin-user-status="disabled"]') as HTMLButtonElement;

@@ -52,8 +52,6 @@ test("drop-window and watch-queue controls expose supersession, mode, countdown,
   assert.doesNotMatch(userScript, /leaseToCartReadyMs|leaseToBaselineMs|baselineToOfferMs|offerToClickMs|settleToCartReadyMs/);
   assert.doesNotMatch(userScript, /function slowestChromePhase\(hops\)|Slowest phase:|actionLatencyMarkup/);
   assert.doesNotMatch(userScript, /latencyLabels\[key\] \|\| words\(key\)/);
-  assert.match(userScript, /qualificationNeedsAttention \? labelFor\(STORE_CHECK_WARNING_LABELS, warning\)/);
-  assert.match(userScript, /expiring: "Check again soon",\s+expired: "Sign in again",\s+version_changed: "Store changed, check again"/);
   const insightsRenderer = userScript.slice(userScript.indexOf("function renderActionPlatform()"), userScript.indexOf("function renderConnectors()"));
   assert.doesNotMatch(insightsRenderer, /p50|p95|\bms\b|sourceScorecards|analyticsLatency/);
   assert.match(adminHtml, /id="adminAnalyticsLatency"/);

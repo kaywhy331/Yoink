@@ -119,6 +119,7 @@ test("a packaged Amazon mapping is reported as closed until its separate lane is
     context()
   );
   assert.equal(readiness.state, "guarded_add_lane_closed");
+  assert.equal(readiness.nextAction, "store_setup");
   assert.equal(readiness.readyForMonitoring, true);
   assert.equal(readiness.readyForGuardedAdd, false);
   assert.equal(readiness.effectiveAutomation, "none");

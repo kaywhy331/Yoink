@@ -121,6 +121,7 @@ export interface PurchaseAutomationReadiness {
   technicalReason: string;
   nextAction:
     | "review_plan"
+    | "store_setup"
     | "connect_signal"
     | "update_companion"
     | "open_chrome"
@@ -464,7 +465,7 @@ export function buildPurchaseAutomationReadiness(
     check("session", "Store session", targetReadiness.some((target) =>
       target.laneQualified && target.companionCapable && !target.sessionBlocked) ? "pass" : "waiting",
     targetReadiness.some((target) => target.laneQualified && target.companionCapable && !target.sessionBlocked)
-      ? "At least one selected store is signed in and ready."
+      ? "No fresh sign-out or challenge is recorded for at least one capable browser. Sign-in is checked again before an Add."
       : "Sign in to the store in Chrome or finish its security check."),
     check("global", "Cart adds enabled", context.executionMode === "live" && !context.actionsPaused ? "pass" : "waiting",
       context.executionMode !== "live"
@@ -494,7 +495,7 @@ export function buildPurchaseAutomationReadiness(
     return result("guarded_add_lane_closed", "attention", "add_to_cart", "none", readyForMonitoring,
       `${joinedStores(enabledTargets)} is not switched on for cart adds yet`,
       "Yoink will keep watching. Turn on cart adds for this store before expecting an item in your cart.",
-      "review_plan", "Review plan", addChecks, targetReadiness);
+      "store_setup", "Set up store", addChecks, targetReadiness);
   }
   if (!connectedSignal) {
     return result("needs_signal", "waiting", "add_to_cart", "none", false,

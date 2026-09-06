@@ -295,7 +295,7 @@ test("setup edits review changed and skipped plans without saving, page their im
   await expect(page.locator("#profileDialog")).not.toBeVisible();
   const savedPlans = await (await page.request.get("/api/v1/user/purchase-intents?limit=26&sort=title")).json();
   expect(savedPlans.items.filter((item: any) => item.actionCeiling === "add_to_cart")).toHaveLength(13);
-  await page.goto("/#plans?action=add_to_cart&q=Browser");
+  await page.goto("/#plans?action=add_to_cart&q=Browser+product+0");
   await expect(page.locator("#planList .plan-card")).toHaveCount(13);
   await expect(page.locator("#planAction")).toHaveValue("add_to_cart");
 });

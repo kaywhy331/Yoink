@@ -1,5 +1,11 @@
 const state = {
   overview: null,
+  storeSetups: [],
+  storeSetup: null,
+  storeSetupData: null,
+  storeSetupSequence: 0,
+  storeSetupLoading: false,
+  storeSetupReturnFocus: null,
   products: [],
   productGroups: [],
   productTotal: 0,
@@ -691,6 +697,10 @@ function currentUserHashRoute(panel = activeUserRoute()) {
     if (state.planFilter !== "all") query.set("readiness", state.planFilter);
     for (const [key, value] of Object.entries(state.planFilters)) if (value && !(key === "sort" && value === "updated")) query.set(key, value);
   }
+  if (state.storeSetup?.panel === panel) {
+    query.set("setupStore", state.storeSetup.retailerId);
+    if (state.storeSetup.planId) query.set("returnPlanId", state.storeSetup.planId);
+  }
   if (state.entity?.panel === panel) query.set(`${state.entity.kind}Id`, state.entity.id);
   const filters = panel === "insights" ? state.insightFilters : panel === "activity" ? state.activityFilters : null;
   for (const [key, value] of Object.entries(filters || {})) if (value && !(panel === "insights" && key === "window" && value === "30d")) query.set(key, value);
@@ -712,6 +722,7 @@ function setTab(name, { load = true, historyMode = "replace" } = {}) {
       toast("Your draft is still open. Save it or close it before leaving this workspace.");
       return;
     }
+    closeStoreSetup({ writeRoute: false });
     state.entityRequestSequence += 1;
     state.entityLoading = null;
     state.entity = null;
@@ -833,6 +844,15 @@ function applyHashRoute() {
   setTab(panel, { historyMode: "none" });
   state.entity = kind && nextEntityId ? { kind, id: nextEntityId, panel } : null;
   void restoreEntityDetail();
+  const setupStore = routeQuery.get("setupStore") || "";
+  if (!kind && isGuardedStore(setupStore)) {
+    const next = { retailerId: setupStore, planId: routeQuery.get("returnPlanId") || "", panel };
+    if (JSON.stringify(next) !== JSON.stringify(state.storeSetup)) {
+      state.storeSetup = next;
+      state.storeSetupData = null;
+      void loadStoreSetup();
+    }
+  } else closeStoreSetup({ writeRoute: false });
   if (panel === "calls") syncCallFilterView();
   const canonical = currentUserHashRoute(panel);
   if (requested !== canonical) history.replaceState(null, "", `#${canonical}`);
@@ -906,12 +926,6 @@ const DRAW_SCAN_LABELS = Object.freeze({
   partial: "Partly checked",
   failed: "Check failed",
   manual: "Checked by hand"
-});
-const STORE_CHECK_WARNING_LABELS = Object.freeze({
-  expiring: "Check again soon",
-  expired: "Sign in again",
-  version_changed: "Store changed, check again",
-  pack_unverified: "Store check pending after update"
 });
 
 function labelFor(map, value, fallback = words(value)) {
@@ -1809,7 +1823,7 @@ function qualificationCandidateFor(readiness) {
     .find((candidate) => candidate.retailerId === unresolved.retailerId) || null;
 }
 
-function automationReadinessMarkup(readiness) {
+function automationReadinessMarkup(readiness, planId = "") {
   if (!readiness || typeof readiness !== "object") return "";
   const ready = readiness.level === "ready";
   const checks = Array.isArray(readiness.checks) ? readiness.checks : [];
@@ -1828,6 +1842,7 @@ function automationReadinessMarkup(readiness) {
     <div class="automation-readiness-head"><span class="tag ${ready ? "good" : "warn"}">${ready ? "Ready" : readiness.level === "off" ? "Off" : "Needs attention"}</span><strong>${escapeHtml(readiness.headline || "Automation status unavailable")}</strong></div>
     <p>${escapeHtml(readiness.summary || "")}</p>
     ${readiness.nextActionLabel ? `<small class="automation-next"><strong>Next:</strong> ${escapeHtml(readiness.nextActionLabel)}</small>` : ""}
+    ${storeSetupButtons(readiness, planId)}
     ${candidateMarkup}
     ${checkMarkup || technicalMarkup ? `<details><summary>Details</summary>${checkMarkup ? `<ul>${checkMarkup}</ul>` : ""}${technicalMarkup}</details>` : ""}
   </section>`;
@@ -1979,14 +1994,7 @@ function renderPlans() {
       : "";
     const decision = plan.decisionMode === "purchase_intent" ? "This reviewed plan decides" : "Default rules decide";
     const readiness = plan.automationReadiness || {};
-    const storeSessionAction = readiness.state === "guarded_add_session_blocked" && plan.primaryCanonicalUrl
-      ? retailerLinkMarkup(
-          plan.primaryCanonicalUrl,
-          `${plan.title || store} store-session recovery`,
-          `Open ${store} ↗`,
-          "button primary"
-        )
-      : "";
+    const storeSessionAction = plan.actionCeiling === "add_to_cart" ? storeSetupButtons(readiness, plan.id) : "";
     const selection = state.planBulkMode && planEligibleForBulkProfile(plan)
       ? `<label class="plan-select"><input data-plan-select="${escapeHtml(plan.id)}" type="checkbox" ${state.planSelection.has(plan.id) ? "checked" : ""}><span class="sr-only">Select ${escapeHtml(plan.title)}</span></label>`
       : "";
@@ -2005,7 +2013,7 @@ function renderPlans() {
         <summary>Details</summary>
         <p>${plan.primaryRetailerSku ? `SKU ${escapeHtml(plan.primaryRetailerSku)} · ` : ""}last seen ${escapeHtml(current)} · ${escapeHtml(fulfillment)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p>
         <p>${escapeHtml(decision)} when a matching offer arrives. Cart attempts add one item and confirm the cart change.</p>
-        ${automationReadinessMarkup(readiness)}
+        ${automationReadinessMarkup(readiness, plan.id)}
       </details>
     </article>`;
   }).join("") : state.plans.length
@@ -2622,13 +2630,9 @@ function renderActionPlatform() {
   ];
   $("#analyticsMetrics").innerHTML = metrics.map(([value, label]) => `<article class="metric"><strong>${typeof value === "number" ? value.toLocaleString() : escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></article>`).join("");
   $("#retailerAnalytics").innerHTML = (analytics.retailers || []).map((item) => `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(item.retailerId))}</strong><small>${Number(item.carted || 0)} carted · ${Number(item.gotIt || 0)} got it · ${Number(item.missed || 0)} missed</small></span><strong>${escapeHtml(money(item.committedCents || 0))}</strong></div>`).join("") || '<div class="mini-row"><span>No closed outcomes yet.</span></div>';
-  $("#readinessList").innerHTML = (platform.readiness || []).map((lane) => {
-    const ready = lane.readyForGuardedAdd === true;
-    const warning = lane.qualification?.warning || "none";
-    const qualificationNeedsAttention = warning !== "none";
-    const readinessLabel = qualificationNeedsAttention ? labelFor(STORE_CHECK_WARNING_LABELS, warning) : ready ? "Ready" : "Needs setup";
-    return `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(lane.retailerId))}</strong><small>${(lane.checklist || []).map((check) => `<span aria-hidden="true">${check.ready ? "✓" : "○"}</span> ${escapeHtml(check.label)}`).join(" · ")}</small></span><span class="tag ${ready && !qualificationNeedsAttention ? "good" : "warn"}">${escapeHtml(readinessLabel)}</span></div>`;
-  }).join("") || '<div class="mini-row"><span>No supported stores are configured.</span></div>';
+  $("#readinessList").innerHTML = (platform.storeSetup || []).map((store) =>
+    `<div class="mini-row"><span><strong>${escapeHtml(store.retailerName)}</strong><small>${escapeHtml(store.summary)}</small></span><button class="button secondary" data-store-setup="${escapeHtml(store.retailerId)}" type="button">Review setup</button></div>`
+  ).join("") || '<div class="mini-row"><span>Store readiness is unavailable.</span><button class="button secondary" data-store-setup="target" type="button">Check store setup</button></div>';
   if (activeUserRoute() === "insights") {
     const count = Object.values(funnel).reduce((sum, value) => sum + Number(value || 0), 0);
     $("#insightsScope").textContent = `${count} matching actions · ${Number(analytics.reportedOutcomes || 0)} reported outcomes. Period uses action creation time; outcomes are current. Cap headroom covers your whole account.${count ? "" : " Try a wider period or clear the product and store filters."}`;
@@ -2776,12 +2780,24 @@ function renderStores() {
 
   const directorySection = $("#storeDirectorySection");
   directorySection.hidden = Boolean(state.storeBrowse.store);
-  $("#storeDirectory").innerHTML = state.storeBrowse.store ? "" : state.storeProductStores.map((store) => `
-    <button class="store-directory-card" data-shop-store="${escapeHtml(store.retailerId)}" data-store="${escapeHtml(store.retailerId)}" type="button">
+  $("#storeDirectory").innerHTML = state.storeBrowse.store ? "" : state.storeProductStores.map((store) => {
+    const setup = state.storeSetups.find(item => item.retailerId === store.retailerId);
+    return `<article class="store-directory-card" data-store="${escapeHtml(store.retailerId)}">
       <span>${escapeHtml(store.retailerName)}</span>
       <strong>${Number(store.productCount || 0).toLocaleString()} product${Number(store.productCount || 0) === 1 ? "" : "s"}</strong>
-      <small>${["target", "walmart", "amazon", "bestbuy"].includes(store.retailerId) ? "Cart adds need store setup and checks" : "Browse and notify; cart adds unavailable"}</small><small>Shop this store <span aria-hidden="true">→</span></small>
-    </button>`).join("") || '<div class="empty">No supported stores have products yet.</div>';
+      <small>${isGuardedStore(store.retailerId) ? "Browse · Notify · Inspect · Cart adds after setup" : "Browse and notify; cart adds unavailable"}</small>
+      ${isGuardedStore(store.retailerId) ? `<small>${escapeHtml(setup?.summary || "Your store readiness has not loaded.")}</small>` : ""}
+      <div class="inline-actions"><button class="button secondary" data-shop-store="${escapeHtml(store.retailerId)}" type="button">Shop this store</button>${isGuardedStore(store.retailerId) ? `<button class="button quiet" data-store-setup="${escapeHtml(store.retailerId)}" type="button">Review setup</button>` : ""}</div>
+    </article>`;
+  }).join("") || '<div class="empty">No supported stores have products yet.</div>';
+  $("#storeSetupEntry")?.remove();
+  if (isGuardedStore(state.storeBrowse.store)) {
+    const entry = document.createElement("div");
+    entry.id = "storeSetupEntry";
+    const setup = state.storeSetups.find(item => item.retailerId === state.storeBrowse.store);
+    entry.innerHTML = `<p>${escapeHtml(setup?.summary || "Review your store setup before expecting cart adds.")}</p><button class="button secondary" data-store-setup="${escapeHtml(state.storeBrowse.store)}" type="button">Review ${escapeHtml(storeName)} setup</button>`;
+    directorySection.after(entry);
+  }
 
   const resultHeading = $("#storeResultHeading");
   resultHeading.hidden = !browsing;
@@ -2910,13 +2926,15 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
   } else if (route === "stores") {
     const requestSequence = state.storeRequestSequence + 1;
     state.storeRequestSequence = requestSequence;
-    const [products, profiles] = await Promise.all([
+    const [products, profiles, readiness] = await Promise.all([
       fetchLoadedPages((offset) => storeLibraryPath(offset), preservePagination ? loadedStoreProductLimit() : state.productPageSize),
-      routeRequest("/api/v1/user/purchase-profiles", { items: [] })
+      routeRequest("/api/v1/user/purchase-profiles", { items: [] }),
+      routeRequest("/api/v1/user/readiness", { stores: [] })
     ]);
     if (requestSequence !== state.storeRequestSequence) return false;
     applyStoreProductPage(products);
     state.profiles = profiles.items || [];
+    state.storeSetups = readiness.stores || [];
   } else if (route === "calls") {
     const [dropWindows, actionPlatform, profiles] = await Promise.all([
       routeRequest("/api/v1/user/drop-windows", { items: [] }),
@@ -3509,6 +3527,7 @@ async function openPlan(id, { routed = false } = {}) {
     ? "These limits can authorize cart actions after current store checks."
     : "Saving makes this a direct notify-only plan unless you choose cart actions.";
   $("#planDialogTitle").textContent = mission.title;
+  $("#planStoreSetup").innerHTML = storeSetupButtons(mission.automationReadiness, mission.id);
   $("#targetEditors").innerHTML = mission.targets.map((target) => {
     const legacyFulfillmentMapped = target.legacyFulfillmentMapped === true || target.fulfillment === "manual";
     const fulfillment = shopperFulfillment(target.fulfillment);
@@ -3805,6 +3824,34 @@ document.addEventListener("click", async (event) => {
   if (!quickMenu.hidden && !quickMenu.contains(event.target) && !(button && button.dataset.quickMenu)) closeQuickMenu();
   if (!button) return;
   try {
+    if (button.dataset.storeSetup) { await openStoreSetup(button.dataset.storeSetup, button.dataset.setupPlan || "", button); return; }
+    if (button.hasAttribute("data-close-store-setup")) { closeStoreSetup(); return; }
+    if (button.id === "refreshStoreSetup") { await loadStoreSetup(); return; }
+    if (button.id === "returnStoreSetupPlan") {
+      const planId = state.storeSetup?.planId;
+      if (!planId) return;
+      closeStoreSetup();
+      setTab("plans", { historyMode: "push" });
+      await openPlan(planId);
+      if (state.editingPlan?.id === planId && $("#planDialog").open) toast(`Plan rechecked: ${state.editingPlan.automationReadiness?.headline || "Review the current plan status."}`);
+      return;
+    }
+    if (button.dataset.storeSetupHelp) {
+      const help = $("#storeSetupHelp");
+      help.hidden = false;
+      help.focus();
+      return;
+    }
+    if (button.id === "resumeStoreSetupActions") {
+      button.disabled = true;
+      try {
+        const result = await api("/api/v1/user/settings/actions", { method: "PATCH", body: JSON.stringify({ paused: false, reason: "Resumed from store setup." }) });
+        await loadStoreSetup();
+        await refresh({ preservePagination: true });
+        toast(result.disposition === "pending_approval" ? "Resume requested for independent approval. Actions remain paused." : "Purchase actions resumed. Each plan keeps its own status.");
+      } finally { if (button.isConnected) button.disabled = false; }
+      return;
+    }
     if (button.dataset.retryRoute) {
       button.disabled = true;
       await resumeVisibleDashboard();
@@ -5258,3 +5305,152 @@ for (const [id, status] of [["pauseSelectedPlans", "paused"], ["resumeSelectedPl
     finally { button.disabled = state.planSelection.size === 0; }
   });
 }
+
+function isGuardedStore(retailerId) {
+  return ["target", "walmart", "amazon", "bestbuy"].includes(retailerId);
+}
+
+function storeSetupButtons(readiness, planId = "") {
+  if (readiness?.configuredAction !== "add_to_cart") return "";
+  const stores = [...new Set((readiness.targets || []).map(target => target.retailerId))].filter(isGuardedStore);
+  return stores.map(retailerId => `<button class="button quiet" data-store-setup="${escapeHtml(retailerId)}" data-setup-plan="${escapeHtml(planId)}" type="button">${escapeHtml(retailerDisplayName(retailerId))} setup</button>`).join("");
+}
+
+async function openStoreSetup(retailerId, planId, trigger) {
+  if (!isGuardedStore(retailerId)) return;
+  if (document.querySelector('dialog[open][data-dirty="true"]')) {
+    toast("Save or close your plan draft before opening store setup.");
+    return;
+  }
+  for (const id of ["productDialog", "planDialog", "entityErrorDialog"]) {
+    const dialog = $(`#${id}`);
+    dialog.dataset.entityKey = "";
+    if (dialog.open) dialog.close();
+  }
+  state.entity = null;
+  state.entityRequestSequence += 1;
+  state.storeSetup = { retailerId, planId, panel: activeUserRoute() };
+  state.storeSetupData = null;
+  state.storeSetupReturnFocus = trigger;
+  writeUserRoute("push", activeUserRoute());
+  await loadStoreSetup();
+}
+
+function closeStoreSetup({ writeRoute = true } = {}) {
+  if (!state.storeSetup) return;
+  state.storeSetupSequence += 1;
+  state.storeSetup = null;
+  state.storeSetupData = null;
+  state.storeSetupLoading = false;
+  const dialog = $("#storeSetupDialog");
+  if (dialog.open) dialog.close();
+  if (writeRoute) writeUserRoute("replace", activeUserRoute());
+  const trigger = state.storeSetupReturnFocus;
+  state.storeSetupReturnFocus = null;
+  if (writeRoute) {
+    const replacement = trigger && $$('[data-store-setup]').find(button => !button.closest("dialog")
+      && button.dataset.storeSetup === trigger.dataset.storeSetup
+      && (button.dataset.setupPlan || "") === (trigger.dataset.setupPlan || "")
+      && button.closest('[data-panel]')?.classList.contains("active"));
+    (trigger?.isConnected && !trigger.closest("dialog") ? trigger : replacement)?.focus();
+  }
+}
+
+function storeSetupActionMarkup(store, action, { primary = false } = {}) {
+  const style = `button ${primary ? "primary" : "quiet"}`;
+  const external = (href, label) => `<a class="${style}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)} ↗</a>`;
+  if (action === "chrome") return external("/#settings/chrome", "Open Chrome setup");
+  if (action === "activation" && store.canActivate) return external(`/admin#stores/qualification/${store.retailerId}`, `Review ${store.retailerName} activation`);
+  if (action === "mode" && store.canManageExecution) return external("/admin#settings/guardrails", "Review execution settings");
+  if (action === "actions" && store.canManageActions && !store.canResumeActions) return '<small>Activate at least one store before resuming purchase actions.</small>';
+  if (action === "actions" && store.canManageActions) return `<button class="${style}" id="resumeStoreSetupActions" type="button">Resume purchase actions</button>`;
+  if (action === "sign_in") {
+    const target = state.storeSetupData?.purchaseIntent?.targets?.find(item => item.enabled && item.retailerId === store.retailerId);
+    const home = { target: "https://www.target.com/", walmart: "https://www.walmart.com/", amazon: "https://www.amazon.com/", bestbuy: "https://www.bestbuy.com/" }[store.retailerId];
+    return retailerLinkMarkup(target?.canonicalUrl || store.candidate?.canonicalUrl || home, `${store.retailerName} store setup`, `Open ${store.retailerName} in Chrome ↗`, style);
+  }
+  const label = action === "permission" ? "How to check permission" : action === "checks" ? "How to run store checks" : "Administrator handoff";
+  return `<button class="${style}" data-store-setup-help="${escapeHtml(action)}" type="button">${label}</button>`;
+}
+
+function renderStoreSetup() {
+  const data = state.storeSetupData;
+  const store = data?.stores?.find(item => item.retailerId === state.storeSetup?.retailerId);
+  if (!store) throw new Error("This store’s setup could not be loaded. Refresh checks to try again.");
+  const plan = data.purchaseIntent;
+  const statusNames = { passed: "Passed", attention: "Needs attention", unknown: "Not verified here" };
+  const focused = document.activeElement?.closest("[data-store-setup-help]")?.dataset.storeSetupHelp;
+  const helpOpen = $("#storeSetupHelp")?.hidden === false;
+  const stores = plan
+    ? [...new Set((plan.targets || []).filter(target => target.enabled).map(target => target.retailerId))].filter(isGuardedStore)
+    : data.stores.map(item => item.retailerId);
+  $("#storeSetupContent").innerHTML = `
+    <div class="store-setup-stores" aria-label="Store setup selection">${stores.map(id => `<button class="button quiet" data-store-setup="${escapeHtml(id)}" data-setup-plan="${escapeHtml(plan?.id || "")}" aria-pressed="${id === store.retailerId}" type="button">${escapeHtml(retailerDisplayName(id))}</button>`).join("")}</div>
+    <p><strong>${escapeHtml(store.summary)}</strong></p>
+    ${store.qualificationNotice && store.qualificationNotice !== store.summary ? `<p class="boundary-note">${escapeHtml(store.qualificationNotice)}</p>` : ""}
+    <p class="field-help">Checked ${escapeHtml(new Date(data.plan.createdAt).toLocaleTimeString())}. Browse, notification and inspection support is available. Cart adds require setup and a reviewed plan.</p>
+    ${plan ? `<div class="boundary-note"><strong>${escapeHtml(plan.title)} · ${escapeHtml(planStatusLabel(plan.status))}</strong><p>${escapeHtml(plan.automationReadiness?.headline || "Readiness unavailable")}</p><small>Store setup does not change this plan’s status or limits. Return to the plan to recheck it.</small></div>` : ""}
+    <div class="store-setup-next"><strong>Next · ${escapeHtml(store.nextOwner)}</strong>${storeSetupActionMarkup(store, store.nextAction, { primary: true })}</div>
+    <ol class="store-setup-checks">${store.steps.map(step => `<li data-setup-step="${escapeHtml(step.id)}"><div><strong>${escapeHtml(step.label)}</strong><span class="tag ${step.state === "passed" ? "good" : "warn"}">${escapeHtml(statusNames[step.state] || "Not verified here")}</span></div><small>${escapeHtml(step.owner)}</small><p>${escapeHtml(step.detail)}</p>${step.action && step.action !== store.nextAction ? storeSetupActionMarkup(store, step.action) : ""}</li>`).join("")}</ol>
+    <section id="storeSetupHelp" class="boundary-note" tabindex="-1" ${helpOpen ? "" : "hidden"}>
+      <h3>Finish in your paired Chrome browser</h3>
+      <ol><li>Open Chrome’s Extensions menu, choose Yoink, then open its Settings.</li><li>Under Store access, allow ${escapeHtml(store.retailerName)}. Complete any store sign-in or security check yourself.</li><li>Under Store checks, choose Check again for ${escapeHtml(store.retailerName)}. This runs without adding anything.</li><li>Return here and choose Refresh checks.</li></ol>
+      ${store.candidateNote ? `<p>${escapeHtml(store.candidateNote)}</p>` : ""}
+      ${store.candidate ? retailerLinkMarkup(store.candidate.canonicalUrl, `${store.retailerName} setup candidate`, `Open check product: ${store.candidate.title || store.retailerName} ↗`) : ""}
+      <h3>Administrator handoff</h3><p>Ask your administrator to review ${escapeHtml(store.retailerName)} in the store checks page for your account. They must review the current evidence and explicitly activate this store${plan ? ` for the setup used by “${escapeHtml(plan.title)}”` : ""}. Execution mode may also need review. No request has been sent.</p>
+    </section>
+    <p class="field-help">Each Add verifies the exact SKU, first-party seller, saved Shipping or Pickup, price and quantity one, then confirms the cart change. Checkout remains manual.</p>`;
+  $("#returnStoreSetupPlan").hidden = !plan;
+  if (focused) [...$$("#storeSetupContent [data-store-setup-help]")].find(button => button.dataset.storeSetupHelp === focused)?.focus();
+}
+
+async function loadStoreSetup() {
+  const setup = state.storeSetup;
+  if (!setup) return;
+  const sequence = ++state.storeSetupSequence;
+  state.storeSetupLoading = true;
+  $("#storeSetupTitle").textContent = `${retailerDisplayName(setup.retailerId)} setup`;
+  $("#returnStoreSetupPlan").hidden = true;
+  $("#refreshStoreSetup").disabled = true;
+  $("#refreshStoreSetup").textContent = "Refreshing…";
+  $("#storeSetupContent").setAttribute("aria-busy", "true");
+  $("#storeSetupError")?.remove();
+  if (!state.storeSetupData) $("#storeSetupContent").innerHTML = '<p role="status">Loading store checks…</p>';
+  if (!$("#storeSetupDialog").open) $("#storeSetupDialog").showModal();
+  try {
+    const [data, routing] = await Promise.all([
+      api(`/api/v1/user/readiness${setup.planId ? `?planId=${encodeURIComponent(setup.planId)}` : ""}`),
+      state.affiliateRouting ? Promise.resolve(null) : api("/api/v1/affiliate-routing").catch(() => null)
+    ]);
+    if (sequence !== state.storeSetupSequence || state.storeSetup !== setup) return;
+    state.affiliateRouting = routing?.affiliateRouting || state.affiliateRouting;
+    state.storeSetupData = data;
+    state.storeSetups = data.stores || [];
+    renderStoreSetup();
+    if (activeUserRoute() === "stores") renderStores();
+  } catch (error) {
+    if (sequence !== state.storeSetupSequence || state.storeSetup !== setup) return;
+    if (!state.storeSetupData) $("#storeSetupContent").replaceChildren();
+    const message = document.createElement("p");
+    message.id = "storeSetupError";
+    message.className = "boundary-note";
+    message.setAttribute("role", "alert");
+    message.textContent = `${state.storeSetupData ? "These checks may be out of date. " : ""}${error.message || "Store checks could not load."} Use Refresh checks to retry, or close setup.`;
+    $("#storeSetupContent").prepend(message);
+  } finally {
+    if (sequence === state.storeSetupSequence) {
+      state.storeSetupLoading = false;
+      $("#storeSetupContent").removeAttribute("aria-busy");
+      $("#refreshStoreSetup").disabled = false;
+      $("#refreshStoreSetup").textContent = "Refresh checks";
+    }
+  }
+}
+
+$("#storeSetupDialog").addEventListener("cancel", event => {
+  event.preventDefault();
+  closeStoreSetup();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.storeSetup && !state.storeSetupLoading) void loadStoreSetup();
+});

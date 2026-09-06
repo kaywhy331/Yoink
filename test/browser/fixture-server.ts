@@ -21,6 +21,14 @@ db.transaction(() => {
       listingStatus: "in_stock", executionSupported: true, observedPriceCents: 1999, msrpCents: index % 2 === 0 ? 2499 : null, currency: "USD"
     }).listing;
     const mission = control.ensureUserMission(listing.variantId, listing.id);
+    if (index === 203) {
+      const detail = control.missionDetail(mission.mission.id) as { targets: Array<{ id: string }> };
+      control.updateMission(mission.mission.id, {
+        status: "active", targetQuantity: 1,
+        targets: detail.targets.map(target => ({ id: target.id, enabled: true, maxUnitPriceCents: 2500, sellerPolicy: "first_party_only", fulfillment: "shipping" })),
+        policy: { actionCeiling: "add_to_cart", decisionMode: "purchase_intent", maxAllInCents: 6000 }
+      });
+    }
     if (index === 205) db.run("UPDATE missions SET status = 'paused' WHERE id = ?", mission.mission.id);
   }
 });

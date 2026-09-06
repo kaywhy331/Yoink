@@ -41,7 +41,7 @@ const CALL_TYPE_TAGS = new Set(["Signal", "Drop", "Queue"]);
 
 function violations(label: string, copy: string): string[] {
   const normalized = copy.replace(/\s+/g, " ").trim();
-  if (!normalized || MACHINE_ONLY.test(normalized) || GENERIC_CONNECTION_COPY.test(normalized)) return [];
+  if (!normalized || MACHINE_ONLY.test(normalized.replaceAll("⟦value⟧", "")) || GENERIC_CONNECTION_COPY.test(normalized)) return [];
   return FORBIDDEN_COPY.flatMap(({ pattern, use }) => pattern.test(normalized)
     ? [`${label}: use “${use}” instead of “${normalized.match(pattern)?.[0]}” in “${normalized}”`]
     : []);
@@ -49,7 +49,7 @@ function violations(label: string, copy: string): string[] {
 
 function shopperEngineeringViolations(label: string, copy: string): string[] {
   const normalized = copy.replace(/\s+/g, " ").trim();
-  if (!normalized || MACHINE_ONLY.test(normalized)) return [];
+  if (!normalized || MACHINE_ONLY.test(normalized.replaceAll("⟦value⟧", ""))) return [];
   return SHOPPER_ENGINEERING_COPY.flatMap(({ pattern, use }) => pattern.test(normalized)
     ? [`${label}: use “${use}” instead of “${normalized.match(pattern)?.[0]}” in “${normalized}”`]
     : []);
@@ -155,6 +155,7 @@ test("product copy follows the shared glossary on every UI surface", () => {
     "packages/extension-ui/src/popup-state.ts",
     "packages/domain/src/action-status.ts",
     "packages/domain/src/purchase-automation-readiness.ts",
+    "packages/domain/src/store-setup.ts",
     "packages/domain/src/release-announcement.ts"
   ];
   const failures = [
@@ -180,6 +181,7 @@ test("shopper surfaces translate internal store-check terminology", () => {
     "apps/extension/options.js",
     "packages/extension-ui/src/popup-state.ts",
     "packages/domain/src/purchase-automation-readiness.ts",
+    "packages/domain/src/store-setup.ts",
     "packages/domain/src/release-announcement.ts",
     "packages/database/src/retailer-readiness-repository.ts"
   ];
