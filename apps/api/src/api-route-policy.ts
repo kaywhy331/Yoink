@@ -97,6 +97,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 
   if (pathname === "/api/v1/user/overview" || pathname === "/api/v1/user/authorization"
     || pathname === "/api/v1/user/action-handoff") return "user.read";
+  if (pathname.startsWith("/api/v1/user/checkout-reports/")) return method === "GET" ? "user.read" : "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/purchase-intents")) return "user.intent.manage";
   if (pathname === "/api/v1/user/spend" || pathname === "/api/v1/user/spend-ledger") return "user.read";
   if (pathname === "/api/v1/user/spend-policy") return "user.settings.manage";
@@ -141,6 +142,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname === "/api/v1/user/action-handoff"
     || pathname.startsWith("/api/v1/user/privacy")
     || pathname.startsWith("/api/v1/user/catalog/")
+    || pathname.startsWith("/api/v1/user/checkout-reports/")
     || pathname.startsWith("/api/v1/user/purchase-intents")
     || pathname.startsWith("/api/v1/user/spend")
     || pathname.startsWith("/api/v1/user/action-platform")
@@ -246,6 +248,7 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     "watch-queue": "signals",
     "source-feedback": "signals",
     "purchase-handoffs": "actions",
+    "checkout-reports": "actions",
     "store-link-clicks": "actions"
   }),
   admin: Object.freeze({

@@ -1,3 +1,4 @@
+import { CHECKOUT_REPORT_REASONS_SQL, checkoutOriginalReportedAtSql, checkoutOutcomeSql, checkoutReportJoinSql } from "./checkout-report-projection.js";
 import { nowIso } from "../../domain/src/ids.js";
 import { AuthorizationRepository } from "./authorization-repository.js";
 import type { YoinkDatabase } from "./database.js";
@@ -124,7 +125,7 @@ export class AdminAnalyticsRepository {
                ORDER BY event.created_at, event.id LIMIT 1) AS leasedAt,
               (SELECT event.created_at FROM action_events event
                WHERE event.job_id = job.id AND event.state = 'confirmed'
-                 AND event.reason_code NOT IN ('user_reported_order', 'user_reported_missed_it')
+                 AND event.reason_code NOT IN (${CHECKOUT_REPORT_REASONS_SQL})
                ORDER BY event.created_at, event.id LIMIT 1) AS cartReadyAt,
               (SELECT json_extract(event.evidence_json, '$.latency.leaseToCartReadyMs')
                FROM action_events event WHERE event.job_id = job.id
@@ -210,20 +211,18 @@ export class AdminAnalyticsRepository {
          JOIN action_jobs job ON job.id = event.job_id
          JOIN listings listing ON listing.id = job.listing_id
          WHERE job.tenant_id = ? AND event.created_at >= ? AND event.state = 'confirmed'
-           AND event.reason_code NOT IN ('user_reported_order', 'user_reported_missed_it')
+           AND event.reason_code NOT IN (${CHECKOUT_REPORT_REASONS_SQL})
          GROUP BY event.job_id, listing.retailer_id
          UNION ALL
-         SELECT substr(event.created_at, 1, 10), listing.retailer_id, 'gotIt', event.job_id
-         FROM action_events event
-         JOIN action_jobs job ON job.id = event.job_id
+         SELECT substr(${checkoutOriginalReportedAtSql("job")}, 1, 10), listing.retailer_id, 'gotIt', event.job_id
+         FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
          JOIN listings listing ON listing.id = job.listing_id
-         WHERE job.tenant_id = ? AND event.created_at >= ? AND event.reason_code = 'user_reported_order'
+         WHERE job.tenant_id = ? AND ${checkoutOriginalReportedAtSql("job")} >= ? AND ${checkoutOutcomeSql("event")} = 'got_it'
          UNION ALL
-         SELECT substr(event.created_at, 1, 10), listing.retailer_id, 'missed', event.job_id
-         FROM action_events event
-         JOIN action_jobs job ON job.id = event.job_id
+         SELECT substr(${checkoutOriginalReportedAtSql("job")}, 1, 10), listing.retailer_id, 'missed', event.job_id
+         FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
          JOIN listings listing ON listing.id = job.listing_id
-         WHERE job.tenant_id = ? AND event.created_at >= ? AND event.reason_code = 'user_reported_missed_it'
+         WHERE job.tenant_id = ? AND ${checkoutOriginalReportedAtSql("job")} >= ? AND ${checkoutOutcomeSql("event")} = 'missed_it'
          UNION ALL
          SELECT substr(receipt.created_at, 1, 10), receipt.retailer_id, 'routesIssued', receipt.id
          FROM attribution_receipts receipt
@@ -244,17 +243,16 @@ export class AdminAnalyticsRepository {
            AND audit.event_type IN ('store_link_clicked', 'walmart_purchase_handoff_clicked')
            AND json_extract(audit.data_json, '$.routeKind') IN ('affiliate', 'howl')
          UNION ALL
-         SELECT substr(event.created_at, 1, 10), listing.retailer_id, 'conversions', event.job_id
-         FROM action_events event
-         JOIN action_jobs job ON job.id = event.job_id
+         SELECT substr(${checkoutOriginalReportedAtSql("job")}, 1, 10), listing.retailer_id, 'conversions', event.job_id
+         FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
          JOIN listings listing ON listing.id = job.listing_id
-         WHERE job.tenant_id = ? AND event.created_at >= ? AND event.reason_code = 'user_reported_order'
+         WHERE job.tenant_id = ? AND ${checkoutOriginalReportedAtSql("job")} >= ? AND ${checkoutOutcomeSql("event")} = 'got_it'
            AND EXISTS (
              SELECT 1 FROM audit_events click
              WHERE click.tenant_id = job.tenant_id AND click.correlation_id = job.id
                AND click.event_type IN ('store_link_clicked', 'walmart_purchase_handoff_clicked')
                AND json_extract(click.data_json, '$.routeKind') IN ('affiliate', 'howl')
-               AND click.created_at <= event.created_at
+               AND click.created_at <= ${checkoutOriginalReportedAtSql("job")}
            )
        ) event_metrics
        WHERE retailerId <> ''
@@ -275,9 +273,9 @@ export class AdminAnalyticsRepository {
     const overCap = this.db.get<{ count: number; amountCents: number }>(
       `SELECT COUNT(*) AS count,
               COALESCE(SUM(CAST(json_extract(event.evidence_json, '$.overCapAmountCents') AS INTEGER)), 0) AS amountCents
-       FROM action_events event JOIN action_jobs job ON job.id = event.job_id
-       WHERE job.tenant_id = ? AND event.created_at >= ?
-         AND event.reason_code = 'user_reported_order'
+       FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
+       WHERE job.tenant_id = ? AND ${checkoutOriginalReportedAtSql("job")} >= ?
+         AND ${checkoutOutcomeSql("event")} = 'got_it'
          AND json_extract(event.evidence_json, '$.overCap') = 1`,
       tenantId,
       since

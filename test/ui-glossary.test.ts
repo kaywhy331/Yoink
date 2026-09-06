@@ -149,6 +149,7 @@ test("product copy follows the shared glossary on every UI surface", () => {
   ];
   const scriptFiles = [
     "apps/web/user.js",
+    "apps/web/checkout-reports.js",
     "apps/web/app.js",
     "apps/extension/popup.js",
     "apps/extension/options.js",
@@ -177,6 +178,7 @@ test("shopper surfaces translate internal store-check terminology", () => {
   ];
   const scriptFiles = [
     "apps/web/user.js",
+    "apps/web/checkout-reports.js",
     "apps/extension/popup.js",
     "apps/extension/options.js",
     "packages/extension-ui/src/popup-state.ts",

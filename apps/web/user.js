@@ -2296,6 +2296,15 @@ async function reportCartOutcome(action, outcome, actualTotalCents, { dialogForm
   }
 }
 
+let checkoutReports = null;
+function openCheckoutReport(id, kind, trigger) {
+  checkoutReports ??= globalThis.YoinkCheckoutReports.install({ api, money, escapeHtml, requestConfirmation, toast, onSaved: async () => {
+  for (const route of ["home", "plans", "insights", "activity"]) state.loadedRoutes.delete(route);
+    await refresh(); scheduleAdaptivePoll();
+  } });
+  return checkoutReports.open(id, kind, trigger);
+}
+
 function renderActions() {
   const filtered = Object.values(state.activityFilters).some(Boolean);
   $("#activityFilterSummary").hidden = !filtered;
@@ -2392,6 +2401,7 @@ function renderActions() {
         : ""}
       ${retailerLinkMarkup(action.canonicalUrl, action.title, "Store page ↗", "canonical", "", { jobId: action.id, destinationKind: "store" })}
     </div>
+    ${action.userReportOutcome ? `<div class="checkout-report-actions"><button class="button secondary" data-checkout-report="${escapeHtml(action.id)}" type="button">Correct report / History</button>${action.userReportOutcome === "got_it" && Number(action.userReportedNetCents) > 0 ? `<button class="button secondary" data-checkout-refund="${escapeHtml(action.id)}" type="button">Record refund</button>` : ""}${Number(action.userReportedRefundedCents) > 0 ? `<small>Charged ${escapeHtml(money(action.userReportedTotalCents))} · Refunded ${escapeHtml(money(action.userReportedRefundedCents))} · Net ${escapeHtml(money(action.userReportedNetCents))}</small>` : ""}</div>` : ""}
     ${canClose ? `<div class="cart-closeout"><span>Checkout result</span><div class="inline-actions"><button class="button secondary" data-cart-got-it="${escapeHtml(action.id)}" type="button">Got it</button><button class="button secondary" data-cart-missed-it="${escapeHtml(action.id)}" type="button">Missed it</button></div><small class="outcome-status" data-outcome-status role="status" aria-live="polite" hidden></small></div>` : ""}
     </div>
   </article>`;
@@ -2619,7 +2629,9 @@ function renderActionPlatform() {
     [funnel.ready_to_checkout || 0, "Ready to check out"],
     [funnel.needs_you || 0, "Needs you"],
     [analytics.hitRateBps === null || analytics.hitRateBps === undefined ? "—" : `${(Number(analytics.hitRateBps) / 100).toFixed(1)}%`, "Closed hit rate"],
-    [money(spend.committedCents || 0), "User-reported spend"],
+    [money(spend.committedCents || 0), "Net reported spend"],
+    [money(spend.chargedCents || 0), "Reported charges"],
+    [money(spend.refundedCents || 0), "Reported refunds"],
     [Number(spend.overCapCount || 0), "Over-cap purchases"],
     [money(spend.overCapAmountCents || 0), "Above reviewed maximum"],
     [dailyHeadroom, "Daily cap headroom"],
@@ -4043,6 +4055,8 @@ document.addEventListener("click", async (event) => {
       openLegacyPlanTransition();
       return;
     }
+    if (button.dataset.checkoutReport) { await openCheckoutReport(button.dataset.checkoutReport, "correction", button); return; }
+    if (button.dataset.checkoutRefund) { await openCheckoutReport(button.dataset.checkoutRefund, "refund", button); return; }
     if (button.dataset.cartGotIt) {
       openCartOutcomeDialog(button.dataset.cartGotIt, button);
       return;

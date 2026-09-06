@@ -1,3 +1,4 @@
+import { verifyCheckoutAccounting } from "./helpers/checkout-accounting-postgres.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
@@ -428,4 +429,10 @@ test("the action/spend fingerprint is deterministic for strategy-sourced payload
     postgresSignalActionSpendPlanFingerprint(principal, { ...strategyPlan, quantity: 4 }),
     strategyFingerprint
   );
+});
+
+test("PostgreSQL spending periods apply corrected charges and refunds to the original charge date", async () => {
+  const db = new PGlite();
+  try { await verifyCheckoutAccounting((sql, params) => db.query(sql, params)); }
+  finally { await db.close(); }
 });

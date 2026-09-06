@@ -1,3 +1,4 @@
+import { CHECKOUT_CORRECTION_REASON, spendAccountingTimeSql } from "./checkout-report-projection.js";
 import type {
   Action,
   PurchaseIntentPolicy,
@@ -372,8 +373,9 @@ export class SpendLedgerRepository {
               committed_amount_cents AS committedAmountCents, currency, status,
               release_reason AS releaseReason, expires_at AS expiresAt,
               created_at AS createdAt, updated_at AS updatedAt
-       FROM spend_reservations WHERE action_job_id = ? AND user_id = ?`,
+       FROM spend_reservations WHERE action_job_id = ? AND tenant_id = ? AND user_id = ?`,
       cleanText(actionJobId, 120),
+      currentRequestScope().tenantId,
       currentRequestScope().userId
     );
     return row ? this.normalizedReservation(row) : null;
@@ -548,6 +550,48 @@ export class SpendLedgerRepository {
     });
   }
 
+  adjustUserReportedSpend(input: {
+    actionJobId: string; expectedNetCents: number; netCents: number; purchased: boolean;
+    entryType: "adjusted" | "refunded"; accountingAt: string; correctionId: string;
+    requestId: string; reason: string;
+  }, now = Date.now()): void {
+    if (![input.expectedNetCents, input.netCents].every(amount => Number.isSafeInteger(amount) && amount >= 0 && amount <= 100_000_000)
+      || !["adjusted", "refunded"].includes(input.entryType)
+      || !Number.isFinite(new Date(input.accountingAt).getTime())) {
+      throw new PurchaseSafetyError("checkout_correction_invalid", 400, "The revised report amounts are invalid.");
+    }
+    this.db.transaction(() => {
+      const scope = currentRequestScope();
+      const reservation = this.reservationForJob(input.actionJobId);
+      if (!reservation || reservation.action !== "add_to_cart" || reservation.status === "active") {
+        throw new PurchaseSafetyError("checkout_correction_unavailable", 409, "Only a closed cart report can be corrected.");
+      }
+      const current = this.db.get<{ amount: number }>(
+        `SELECT COALESCE(SUM(spent_delta_cents), 0) AS amount FROM spend_ledger_entries
+         WHERE tenant_id = ? AND user_id = ? AND reservation_id = ? AND action_job_id = ?`,
+        scope.tenantId, scope.userId, reservation.id, input.actionJobId
+      );
+      if (Number(current?.amount) !== input.expectedNetCents || reservation.committedAmountCents !== input.expectedNetCents) {
+        throw new PurchaseSafetyError("checkout_report_inconsistent", 409, "The report and spending record differ. Ask an administrator to review them before correcting this report.");
+      }
+      this.db.run(
+        `INSERT INTO spend_ledger_entries(id, tenant_id, user_id, reservation_id, action_job_id, entry_type,
+          reserved_delta_cents, spent_delta_cents, quantity_delta, currency, reason_code, correlation_id, metadata_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?)`,
+        newId("spend_ledger"), scope.tenantId, scope.userId, reservation.id, input.actionJobId, input.entryType,
+        input.netCents - input.expectedNetCents, reservation.currency, CHECKOUT_CORRECTION_REASON, input.requestId,
+        JSON.stringify({ correctionId: input.correctionId, accountingAt: input.accountingAt,
+          previousNetCents: input.expectedNetCents, revisedNetCents: input.netCents, reason: input.reason }), nowIso(now)
+      );
+      this.db.run(
+        `UPDATE spend_reservations SET committed_amount_cents = ?, status = ?, release_reason = ?, updated_at = ?
+         WHERE id = ? AND tenant_id = ? AND user_id = ?`,
+        input.netCents, input.purchased ? "committed" : "released", input.purchased ? "" : CHECKOUT_CORRECTION_REASON,
+        nowIso(now), reservation.id, scope.tenantId, scope.userId
+      );
+    });
+  }
+
   releaseExpired(now = Date.now()): number {
     const expired = this.db.all<{ actionJobId: string }>(
       `SELECT action_job_id AS actionJobId FROM spend_reservations
@@ -575,13 +619,15 @@ export class SpendLedgerRepository {
     );
     const spentTodayCents = Number(this.db.get<{ amount: number }>(
       `SELECT COALESCE(SUM(spent_delta_cents), 0) AS amount FROM spend_ledger_entries
-       WHERE user_id = ? AND created_at >= ?`,
+       WHERE tenant_id = ? AND user_id = ? AND ${spendAccountingTimeSql("sqlite")} >= ?`,
+      currentRequestScope().tenantId,
       currentRequestScope().userId,
       starts.day
     )?.amount ?? 0);
     const spentThisMonthCents = Number(this.db.get<{ amount: number }>(
       `SELECT COALESCE(SUM(spent_delta_cents), 0) AS amount FROM spend_ledger_entries
-       WHERE user_id = ? AND created_at >= ?`,
+       WHERE tenant_id = ? AND user_id = ? AND ${spendAccountingTimeSql("sqlite")} >= ?`,
+      currentRequestScope().tenantId,
       currentRequestScope().userId,
       starts.month
     )?.amount ?? 0);
@@ -611,7 +657,8 @@ export class SpendLedgerRepository {
               sl.spent_delta_cents AS spentDeltaCents,
               sl.quantity_delta AS quantityDelta, sl.currency,
               sl.reason_code AS reasonCode, sl.correlation_id AS correlationId,
-              sl.created_at AS createdAt, sr.mission_id AS missionId,
+              sl.created_at AS createdAt, sl.metadata_json AS metadataJson,
+              ${spendAccountingTimeSql("sqlite", "sl")} AS accountingAt, sr.mission_id AS missionId,
               sr.action, sr.status AS reservationStatus
        FROM spend_ledger_entries sl
        JOIN spend_reservations sr ON sr.id = sl.reservation_id

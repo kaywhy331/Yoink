@@ -96,7 +96,7 @@ Validation: the full `npm test` command exited 0: 976 application checks passed,
 | YS-26 | Partial | Four guarded-store directory cards and selected-store views now show actor-specific setup and recovery. Broader plan-editor capability treatment remains. |
 | YS-27 | Fixed | Search plus store/status/action filters and global sorting precede paging. Reviewed bulk pause/resume is bounded to 50 selected plans with stale checks and per-item results. |
 | YS-28 | Partial | Explicit dialog discard, navigation protection and unload warnings added. Product-link correction drafts survive reload within a user-scoped tab session. Cross-reload storage for other forms remains. |
-| YS-29 | Open | Audited corrective spend/refund ledger entries and idempotent correction UI. |
+| YS-29 | Fixed | Reviewed, actor-owned checkout corrections and refunds preserve original history, update spending and Insights, and require explicit plan-progress review for outcome changes. Retry-safe API and Activity history/refund dialog are implemented. See [receipt](CHECKOUT_CORRECTIONS_IMPLEMENTATION_2026-09-05.md). |
 | YS-30 | Partial | Mode consequences plus terminal watch history/reasons, plan review and running-watch stop controls are implemented. Restart eligibility for cancelled watches remains. |
 | YS-31 | Open | Decide discovery-only versus user-reported drawing participation/reminders and implement that scope. |
 | YS-32 | Open | Authorized installed-extension release acceptance for each store; fixtures never perform real adds. |

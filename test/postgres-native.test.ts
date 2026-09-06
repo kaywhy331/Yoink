@@ -1,3 +1,4 @@
+import { verifyCheckoutAccounting } from "./helpers/checkout-accounting-postgres.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
@@ -1553,6 +1554,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     await postgres.initialise();
     await postgres.start();
     const connectionString = `postgresql://postgres:${password}@127.0.0.1:${port}/postgres`;
+    const checkoutAccountingProbe = new Client({ connectionString });
+    await checkoutAccountingProbe.connect();
+    try { await verifyCheckoutAccounting((sql, params) => checkoutAccountingProbe.query(sql, params)); }
+    finally { await checkoutAccountingProbe.end(); }
     importer = new NodePostgresCutoverDatabase({
       connectionString,
       tlsMode: "local-insecure",

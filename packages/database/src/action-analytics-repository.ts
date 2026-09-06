@@ -1,3 +1,4 @@
+import { checkoutOutcomeSql, checkoutReportJoinSql } from "./checkout-report-projection.js";
 import { actionCollectionSql, type ActionCollectionFilter } from "./action-collection-filter.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -13,6 +14,8 @@ export interface UserActionAnalytics {
   hitRateBps: number | null;
   spend: {
     committedCents: number;
+    chargedCents: number;
+    refundedCents: number;
     reservedCents: number;
     perOrderCapCents: number | null;
     dailyCapCents: number | null;
@@ -59,11 +62,10 @@ export class ActionAnalyticsRepository {
     const funnel = insights.stages as Record<string, number>;
     const outcomes = this.db.get<{ gotIt: number; missed: number }>(
       `SELECT
-         SUM(CASE WHEN event.reason_code = 'user_reported_order' THEN 1 ELSE 0 END) AS gotIt,
-         SUM(CASE WHEN event.reason_code = 'user_reported_missed_it' THEN 1 ELSE 0 END) AS missed
-       FROM action_events event JOIN action_jobs job ON job.id = event.job_id
-       WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}
-         AND event.reason_code IN ('user_reported_order', 'user_reported_missed_it')`,
+         SUM(CASE WHEN ${checkoutOutcomeSql("event")} = 'got_it'  THEN 1 ELSE 0 END) AS gotIt,
+         SUM(CASE WHEN ${checkoutOutcomeSql("event")} = 'missed_it'  THEN 1 ELSE 0 END) AS missed
+       FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
+       WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}`,
       scope.tenantId,
       scope.userId,
       ...filter.parameters
@@ -74,24 +76,25 @@ export class ActionAnalyticsRepository {
     const committedCents = Number(this.db.get<{ amount: number }>(
       `SELECT COALESCE(SUM(entry.spent_delta_cents), 0) AS amount FROM spend_ledger_entries entry
        JOIN action_jobs job ON job.id = entry.action_job_id AND job.tenant_id = entry.tenant_id AND job.user_id = entry.user_id
-       WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql} AND entry.entry_type = 'committed'`,
+       WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}`,
       scope.tenantId,
       scope.userId,
       ...filter.parameters
     )?.amount ?? 0);
-    const savings = this.db.get<{ amount: number; covered: number; reported: number }>(
+    const savings = this.db.get<{ amount: number; covered: number; reported: number; charged: number; refunded: number }>(
       `SELECT
          COALESCE(SUM(CASE WHEN listing.msrp_cents IS NOT NULL
            THEN listing.msrp_cents * job.quantity
              - CAST(json_extract(event.evidence_json, '$.actualTotalCents') AS INTEGER)
            ELSE 0 END), 0) AS amount,
          SUM(CASE WHEN listing.msrp_cents IS NOT NULL THEN 1 ELSE 0 END) AS covered,
-         COUNT(*) AS reported
-       FROM action_events event
-       JOIN action_jobs job ON job.id = event.job_id
+         COUNT(*) AS reported,
+         COALESCE(SUM(CAST(json_extract(event.evidence_json, '$.actualTotalCents') AS INTEGER)), 0) AS charged,
+         COALESCE(SUM(CAST(json_extract(event.evidence_json, '$.refundedCents') AS INTEGER)), 0) AS refunded
+       FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
        JOIN listings listing ON listing.id = job.listing_id
        WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}
-         AND event.reason_code = 'user_reported_order'
+         AND ${checkoutOutcomeSql("event")} = 'got_it'
          AND json_type(event.evidence_json, '$.actualTotalCents') = 'integer'`,
       scope.tenantId,
       scope.userId,
@@ -102,9 +105,9 @@ export class ActionAnalyticsRepository {
     const overCap = this.db.get<{ count: number; amount: number }>(
       `SELECT COUNT(*) AS count,
               COALESCE(SUM(CAST(json_extract(event.evidence_json, '$.overCapAmountCents') AS INTEGER)), 0) AS amount
-       FROM action_events event JOIN action_jobs job ON job.id = event.job_id
+       FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
        WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}
-         AND event.reason_code = 'user_reported_order'
+         AND ${checkoutOutcomeSql("event")} = 'got_it'
          AND json_extract(event.evidence_json, '$.overCap') = 1`,
       scope.tenantId,
       scope.userId,
@@ -120,17 +123,11 @@ export class ActionAnalyticsRepository {
     }>(
       `SELECT listing.retailer_id AS retailerId, COUNT(*) AS actions,
               SUM(CASE WHEN job.state = 'confirmed' THEN 1 ELSE 0 END) AS carted,
-              SUM(CASE WHEN EXISTS (
-                SELECT 1 FROM action_events event WHERE event.job_id = job.id
-                  AND event.reason_code = 'user_reported_order'
-              ) THEN 1 ELSE 0 END) AS gotIt,
-              SUM(CASE WHEN EXISTS (
-                SELECT 1 FROM action_events event WHERE event.job_id = job.id
-                  AND event.reason_code = 'user_reported_missed_it'
-              ) THEN 1 ELSE 0 END) AS missed,
+              SUM(CASE WHEN ${checkoutOutcomeSql("event")} = 'got_it' THEN 1 ELSE 0 END) AS gotIt,
+              SUM(CASE WHEN ${checkoutOutcomeSql("event")} = 'missed_it' THEN 1 ELSE 0 END) AS missed,
               COALESCE(SUM(CASE WHEN reservation.status = 'committed'
                 THEN reservation.committed_amount_cents ELSE 0 END), 0) AS committedCents
-       FROM action_jobs job
+       FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
        JOIN listings listing ON listing.id = job.listing_id
        LEFT JOIN spend_reservations reservation ON reservation.id = job.spend_reservation_id
        WHERE job.tenant_id = ? AND job.user_id = ? ${filter.sql}
@@ -155,6 +152,8 @@ export class ActionAnalyticsRepository {
       hitRateBps: closedOutcomes ? Math.round(gotIt * 10_000 / closedOutcomes) : null,
       spend: {
         committedCents,
+        chargedCents: Number(savings?.charged ?? 0),
+        refundedCents: Number(savings?.refunded ?? 0),
         reservedCents: spendSummary.activeReservedCents,
         perOrderCapCents: spendSummary.policy.perOrderCapCents,
         dailyCapCents: spendSummary.policy.dailyCapCents,
@@ -190,6 +189,9 @@ export class ActionAnalyticsRepository {
       ["outcome", "hit_rate_bps", "", snapshot.hitRateBps ?? "", "basis_points",
         snapshot.hitRateBps === null ? "no_closed_outcomes" : "complete"],
       ["spend", "committed_cents", "", snapshot.spend.committedCents, "cents", "USD"],
+      ["spend", "charged_cents", "", snapshot.spend.chargedCents, "cents", "USD"],
+      ["spend", "refunded_cents", "", snapshot.spend.refundedCents, "cents", "USD"],
+      ["spend", "net_cents", "", snapshot.spend.committedCents, "cents", "USD"],
       ["spend", "reserved_cents", "", snapshot.spend.reservedCents, "cents", "USD"],
       ["spend", "per_order_cap_cents", "", snapshot.spend.perOrderCapCents ?? "", "cents", "USD"],
       ["spend", "daily_cap_cents", "", snapshot.spend.dailyCapCents ?? "", "cents", "USD"],

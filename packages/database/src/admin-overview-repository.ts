@@ -1,3 +1,4 @@
+import { CHECKOUT_REPORT_REASONS_SQL, checkoutOriginalReportedAtSql, checkoutOutcomeSql, checkoutReportJoinSql } from "./checkout-report-projection.js";
 import { nowIso } from "../../domain/src/ids.js";
 import { AuthorizationRepository } from "./authorization-repository.js";
 import type { YoinkDatabase } from "./database.js";
@@ -124,16 +125,16 @@ export class AdminOverviewRepository {
          (SELECT COUNT(DISTINCT event.job_id)
             FROM action_events event JOIN action_jobs job ON job.id = event.job_id
            WHERE job.tenant_id = ? AND event.state = 'confirmed'
-             AND event.reason_code NOT IN ('user_reported_order', 'user_reported_missed_it')
+             AND event.reason_code NOT IN (${CHECKOUT_REPORT_REASONS_SQL})
              AND event.created_at >= ?) AS carted,
          (SELECT COUNT(DISTINCT event.job_id)
-            FROM action_events event JOIN action_jobs job ON job.id = event.job_id
-           WHERE job.tenant_id = ? AND event.reason_code = 'user_reported_order'
-             AND event.created_at >= ?) AS gotIt,
+            FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
+           WHERE job.tenant_id = ? AND ${checkoutOutcomeSql("event")} = 'got_it'
+             AND ${checkoutOriginalReportedAtSql("job")} >= ?) AS gotIt,
          (SELECT COUNT(DISTINCT event.job_id)
-            FROM action_events event JOIN action_jobs job ON job.id = event.job_id
-           WHERE job.tenant_id = ? AND event.reason_code = 'user_reported_missed_it'
-             AND event.created_at >= ?) AS missed,
+            FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
+           WHERE job.tenant_id = ? AND ${checkoutOutcomeSql("event")} = 'missed_it'
+             AND ${checkoutOriginalReportedAtSql("job")} >= ?) AS missed,
          ((SELECT COUNT(*) FROM hosted_delivery_receipts
              WHERE tenant_id = ? AND disposition = 'dead_letter' AND created_at >= ?)
           + (SELECT COUNT(*) FROM background_task_events
@@ -148,15 +149,15 @@ export class AdminOverviewRepository {
            WHERE tenant_id = ? AND created_at >= ?
              AND event_type IN ('store_link_clicked', 'walmart_purchase_handoff_clicked')) AS clicks,
          (SELECT COUNT(DISTINCT event.job_id)
-            FROM action_events event JOIN action_jobs job ON job.id = event.job_id
-           WHERE job.tenant_id = ? AND event.reason_code = 'user_reported_order'
-             AND event.created_at >= ?
+            FROM action_jobs job ${checkoutReportJoinSql("job", "event")}
+           WHERE job.tenant_id = ? AND ${checkoutOutcomeSql("event")} = 'got_it'
+             AND ${checkoutOriginalReportedAtSql("job")} >= ?
              AND EXISTS (
                SELECT 1 FROM audit_events click
                WHERE click.tenant_id = job.tenant_id AND click.correlation_id = job.id
                  AND click.event_type IN ('store_link_clicked', 'walmart_purchase_handoff_clicked')
                  AND json_extract(click.data_json, '$.routeKind') IN ('affiliate', 'howl')
-                 AND click.created_at <= event.created_at
+                 AND click.created_at <= ${checkoutOriginalReportedAtSql("job")}
              )) AS conversions`,
       tenantId, sinceAt,
       tenantId, sinceAt,

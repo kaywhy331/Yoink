@@ -417,6 +417,36 @@
     </form>
   </dialog>
 
+  <dialog id="checkoutReportDialog" class="compact-dialog checkout-report-dialog" aria-labelledby="checkoutReportTitle">
+    <form id="checkoutReportForm">
+      <div class="dialog-heading"><h2 id="checkoutReportTitle">Correct checkout report</h2><button type="button" class="icon-button" data-close-checkout-report aria-label="Close checkout report">×</button></div>
+      <p id="checkoutReportSummary" class="dialog-copy"></p>
+      <p id="checkoutReportCurrent"></p><p id="checkoutReportAccounting" class="dialog-copy"></p>
+      <fieldset id="checkoutReportFields">
+        <legend>Report change</legend>
+        <label id="checkoutOutcomeField">Checkout result<select name="outcome"><option value="got_it">Got it</option><option value="missed_it">Missed it</option></select></label>
+        <div id="checkoutChargeFields" class="form-grid">
+          <label>Amount charged ($)<input name="actualTotal" type="number" step="0.01" min="0.01" max="1000000" inputmode="decimal"></label>
+          <label>Total refunds received ($)<input name="refundedTotal" type="number" step="0.01" min="0" max="1000000" inputmode="decimal"></label>
+        </div>
+        <label id="checkoutRefundField" hidden>Refund amount ($)<input name="refundAmount" type="number" step="0.01" min="0.01" inputmode="decimal"></label>
+        <label id="checkoutProgressField" hidden>Total quantity received for this plan<input name="fulfilledQuantity" type="number" step="1" min="0" aria-describedby="checkoutProgressHelp"><small id="checkoutProgressHelp"></small></label>
+        <label>Reason for change<textarea name="reason" required minlength="3" maxlength="300" rows="2"></textarea></label>
+      </fieldset>
+      <div id="checkoutReportReview" hidden>
+        <table id="checkoutReportComparison" aria-label="Report before and after"></table>
+        <p id="checkoutReportPlanEffect"></p><p id="checkoutReportReviewReason"></p><p id="checkoutReportOverCap" class="warn"></p>
+        <label class="checkbox"><input type="checkbox" name="reviewed">I reviewed the amounts and plan progress.</label>
+        <button id="editCheckoutReport" type="button" class="button secondary">Edit change</button>
+      </div>
+      <p id="checkoutReportStatus" role="status" aria-live="polite"></p>
+      <div class="dialog-actions"><button type="button" class="button quiet" data-close-checkout-report>Close</button><button id="reloadCheckoutReport" type="button" class="button secondary" hidden>Reload report</button><button id="saveCheckoutReport" type="submit" class="button primary">Review change</button></div>
+    </form>
+    <details><summary>Report history</summary><ol id="checkoutReportHistory"></ol>
+      <div class="inline-actions"><button id="checkoutHistoryPrevious" type="button" class="button secondary" hidden>Newer reports</button><span id="checkoutHistoryPage"></span><button id="checkoutHistoryNext" type="button" class="button secondary" hidden>Older reports</button></div>
+    </details>
+  </dialog>
+
   <dialog id="cartOutcomeDialog" class="compact-dialog cart-outcome-dialog" aria-labelledby="cartOutcomeDialogTitle">
     <form id="cartOutcomeForm">
       <div class="dialog-heading">
@@ -463,6 +493,7 @@
 
   <div class="toast" id="toast" aria-label="Notifications" aria-live="polite"></div>
   <script src="/dialogs.js"></script>
+  <script src="/checkout-reports.js"></script>
   <script src="/status.js"></script>
   <script type="module" src="/user.js"></script>
 </body>

@@ -1,3 +1,4 @@
+import { CHECKOUT_REPORT_REASONS_SQL, checkoutReportScalarSql } from "./checkout-report-projection.js";
 import { actionCollectionSql, type ActionCollectionFilter } from "./action-collection-filter.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
@@ -1279,22 +1280,12 @@ export class SignalRepository {
               (SELECT delivery.state FROM user_action_connector_deliveries delivery
                WHERE delivery.action_job_id = aj.id AND delivery.event_type = 'notify'
                ORDER BY delivery.created_at DESC, delivery.id DESC LIMIT 1) AS notificationConnectorState,
-              (SELECT CASE ae.reason_code
-                 WHEN 'user_reported_order' THEN 'got_it'
-                 WHEN 'user_reported_missed_it' THEN 'missed_it'
-                 ELSE '' END
-               FROM action_events ae
-               WHERE ae.job_id = aj.id
-                 AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
-               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS userReportOutcome,
-              (SELECT json_extract(ae.evidence_json, '$.actualTotalCents')
-               FROM action_events ae
-               WHERE ae.job_id = aj.id AND ae.reason_code = 'user_reported_order'
-               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS userReportedTotalCents,
-              (SELECT ae.created_at FROM action_events ae
-               WHERE ae.job_id = aj.id
-                 AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
-               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS userReportedAt,
+              ${checkoutReportScalarSql("aj", "outcome")} AS userReportOutcome,
+              ${checkoutReportScalarSql("aj", "total")} AS userReportedTotalCents,
+              ${checkoutReportScalarSql("aj", "refund")} AS userReportedRefundedCents,
+              ${checkoutReportScalarSql("aj", "net")} AS userReportedNetCents,
+              ${checkoutReportScalarSql("aj", "id")} AS userReportId,
+              ${checkoutReportScalarSql("aj", "reportedAt")} AS userReportedAt,
               (SELECT se.observed_at
                FROM signal_occurrences so JOIN signal_events se ON se.id = so.event_id
                WHERE so.incident_id = aj.incident_id AND se.user_id = aj.user_id
@@ -1308,7 +1299,7 @@ export class SignalRepository {
                ORDER BY ae.created_at, ae.id LIMIT 1) AS leasedAt,
               (SELECT ae.created_at FROM action_events ae
                WHERE ae.job_id = aj.id AND ae.state = 'confirmed'
-                 AND ae.reason_code NOT IN ('user_reported_order', 'user_reported_missed_it')
+                 AND ae.reason_code NOT IN (${CHECKOUT_REPORT_REASONS_SQL})
                ORDER BY ae.created_at, ae.id LIMIT 1) AS cartReadyAt,
               (SELECT json_extract(ae.evidence_json, '$.latency.leaseToCartReadyMs')
                FROM action_events ae
@@ -1513,14 +1504,7 @@ export class SignalRepository {
     const states = this.db.all<{ state: JobState; action: string; userReportOutcome: string; count: number }>(
       `WITH classified AS (
          SELECT aj.state, aj.action,
-                COALESCE((SELECT CASE ae.reason_code
-                   WHEN 'user_reported_order' THEN 'got_it'
-                   WHEN 'user_reported_missed_it' THEN 'missed_it'
-                   ELSE '' END
-                 FROM action_events ae
-                 WHERE ae.job_id = aj.id
-                   AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
-                 ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1), '') AS userReportOutcome
+                COALESCE(${checkoutReportScalarSql("aj", "outcome")}, '') AS userReportOutcome
          FROM action_jobs aj WHERE aj.tenant_id = ? AND aj.user_id = ? ${filter.sql}
        )
        SELECT state, action, userReportOutcome, COUNT(*) AS count
@@ -1550,7 +1534,7 @@ export class SignalRepository {
                ORDER BY ae.created_at, ae.id LIMIT 1) AS leasedAt,
               (SELECT ae.created_at FROM action_events ae
                WHERE ae.job_id = aj.id AND ae.state = 'confirmed'
-                 AND ae.reason_code NOT IN ('user_reported_order', 'user_reported_missed_it')
+                 AND ae.reason_code NOT IN (${CHECKOUT_REPORT_REASONS_SQL})
                ORDER BY ae.created_at, ae.id LIMIT 1) AS cartReadyAt,
               (SELECT json_extract(ae.evidence_json, '$.latency.leaseToCartReadyMs')
                FROM action_events ae

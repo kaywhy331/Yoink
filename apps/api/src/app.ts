@@ -1,3 +1,4 @@
+import { CheckoutReportRepository } from "../../../packages/database/src/checkout-report-repository.js";
 import { buildStoreSetup } from "../../../packages/domain/src/store-setup.js";
 import { actionCollectionFilter } from "../../../packages/database/src/action-collection-filter.js";
 import { planCollectionFilter } from "../../../packages/database/src/plan-collection-filter.js";
@@ -284,6 +285,7 @@ const STATIC_FILES = new Map([
   ["/tokens.css", "tokens.css"],
   ["/components.css", "components.css"],
   ["/dialogs.js", "dialogs.js"],
+  ["/checkout-reports.js", "checkout-reports.js"],
   ["/dialogs.css", "dialogs.css"],
   ["/status.js", "status.js"],
   ["/status.css", "status.css"],
@@ -4231,6 +4233,25 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         notifyActionJobAvailability();
         json(response, 200, { job });
         return;
+      }
+      const checkoutReportMatch = /^\/api\/v1\/user\/checkout-reports\/([A-Za-z0-9_-]{3,120})(?:\/(preview|corrections))?$/.exec(requestUrl.pathname);
+      if (checkoutReportMatch) {
+        const reports = new CheckoutReportRepository(db);
+        const jobId = checkoutReportMatch[1]!;
+        if (request.method === "GET" && !checkoutReportMatch[2]) {
+          json(response, 200, reports.get(jobId, Number(requestUrl.searchParams.get("offset") ?? 0)));
+          return;
+        }
+        if (request.method === "POST" && checkoutReportMatch[2] === "preview") {
+          json(response, 200, { preview: reports.preview(jobId, await readJson(request)) });
+          return;
+        }
+        if (request.method === "POST" && checkoutReportMatch[2] === "corrections") {
+          const result = reports.correct(jobId, await readJson(request));
+          notifyActionJobAvailability();
+          json(response, 200, result);
+          return;
+        }
       }
       const cartOutcomeMatch = /^\/api\/v1\/jobs\/([A-Za-z0-9_-]{3,120})\/outcome$/.exec(requestUrl.pathname);
       if (request.method === "POST" && cartOutcomeMatch) {

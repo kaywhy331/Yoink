@@ -1,3 +1,4 @@
+import { spendAccountingTimeSql } from "./checkout-report-projection.js";
 import { createHash } from "node:crypto";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import {
@@ -1812,11 +1813,11 @@ BEGIN
       SELECT COALESCE(SUM(ledger.spent_delta_cents), 0) INTO spent_today_cents_value
       FROM ${relation(manifest.schemaName, "spend_ledger_entries")} AS ledger
       WHERE ledger.tenant_id = resolved_tenant_id AND ledger.user_id = resolved_user_id
-        AND ledger.created_at::timestamptz >= pg_catalog.date_trunc('day', authorization_clock AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+        AND ${spendAccountingTimeSql("postgres", "ledger")}::timestamptz >= pg_catalog.date_trunc('day', authorization_clock AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
       SELECT COALESCE(SUM(ledger.spent_delta_cents), 0) INTO spent_month_cents_value
       FROM ${relation(manifest.schemaName, "spend_ledger_entries")} AS ledger
       WHERE ledger.tenant_id = resolved_tenant_id AND ledger.user_id = resolved_user_id
-        AND ledger.created_at::timestamptz >= pg_catalog.date_trunc('month', authorization_clock AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+        AND ${spendAccountingTimeSql("postgres", "ledger")}::timestamptz >= pg_catalog.date_trunc('month', authorization_clock AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
       SELECT COALESCE(SUM(reservation.reserved_amount_cents), 0) INTO active_reserved_cents_value
       FROM ${relation(manifest.schemaName, "spend_reservations")} AS reservation
       WHERE reservation.tenant_id = resolved_tenant_id AND reservation.user_id = resolved_user_id

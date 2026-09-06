@@ -163,7 +163,8 @@ test("saving a separate setup keeps the original limits for existing plans", asy
   expect(created.ok()).toBe(true);
   const original = (await created.json()).items.find((item: any) => item.name === "Existing browser setup");
   const plans = await (await page.request.get("/api/v1/user/purchase-intents?limit=10")).json();
-  const planId = plans.items.find((item: any) => item.status === "active").id;
+  // Keep the store-setup fixture intact when report corrections change plan ordering.
+  const planId = plans.items.find((item: any) => item.status === "active" && item.actionCeiling === "notify").id;
   const applied = await page.request.post("/api/v1/user/purchase-profiles/apply", { headers: { Origin: "http://127.0.0.1:33993" }, data: { profileId: original.id, missionIds: [planId], confirmation: "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS" } });
   expect(applied.ok()).toBe(true);
   const beforePlan = await (await page.request.get(`/api/v1/user/purchase-intents/${planId}`)).json();

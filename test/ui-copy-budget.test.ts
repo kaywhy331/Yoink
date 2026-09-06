@@ -23,13 +23,16 @@ test("dashboard static copy stays within the reviewed budgets", () => {
   const shopper = pageCopy("user.html");
   const admin = pageCopy("index.html");
   try {
-    // Includes the new browser/detail dialogs, notification history and Insights filter controls.
+    // Includes browser/detail dialogs, notification history and Insights filter controls.
+    // The checkout correction/refund dialog adds 45 static words in its own modal.
+    const correctionWords = (shopper.document.querySelector("#checkoutReportDialog")?.textContent || "").trim().split(/\s+/).length;
+    assert.ok(correctionWords <= 50, `checkout correction dialog copy is ${correctionWords} words`);
     // Each workspace still has a separate cap; users see one workspace at a time.
     for (const panel of shopper.document.querySelectorAll(".workspace")) {
       const words = (panel.textContent || "").trim().split(/\s+/).length;
       assert.ok(words < 200, `${panel.getAttribute("data-panel")} copy is ${words} words`);
     }
-    assert.ok(shopper.words < 600, `shopper static copy is ${shopper.words} words`);
+    assert.ok(shopper.words < 650, `shopper static copy is ${shopper.words} words`);
     assert.ok(admin.words < 1_200, `admin static copy is ${admin.words} words`);
   } finally {
     shopper.dom.window.close();
