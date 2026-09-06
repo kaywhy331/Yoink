@@ -1202,7 +1202,8 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.equal(browser.document.querySelector("#legacyPlanTransitionDialog"), null,
       "the document reserves no migration dialog for accounts without eligible plans");
     browser.eval(`${script}\n//# sourceURL=user-dashboard-test.js`);
-    await eventually(() => assert.ok(browser.document.querySelector("[data-quick-menu]")));
+    await eventually(() => assert.ok(browser.document.querySelector("[data-track-listing]")));
+    assert.equal(browser.document.querySelector("[data-quick-menu]"), null, "a first plan requires review even with saved profiles");
     (browser.document.querySelector('.tabs [data-tab="plans"]') as HTMLButtonElement).click();
     let transitionPanel: HTMLElement | null = null;
     await eventually(() => {
@@ -2111,7 +2112,7 @@ test("quick add requires an explicit store and creates only that selected store 
       }
       if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => ({
         settings: { actionsPaused: false, executionMode: "shadow", taxBps: 0, storeAllowancesCents: {} },
-        counts: { products: 1, purchaseIntents: 0, actions: 0, pendingCatalogProposals: 0 },
+        counts: { products: 1, purchaseIntents: 1, actions: 0, pendingCatalogProposals: 0 },
         sources: [],
         permissions: [],
         spend: {
@@ -2400,7 +2401,7 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and p
   }];
   const overview = {
     settings: { actionsPaused: false, executionMode: "live", taxBps: 0, storeAllowancesCents: {} },
-    counts: { products: 3, purchaseIntents: createdListingIds.size, actions: 0, pendingCatalogProposals: 0 },
+    counts: { products: 3, purchaseIntents: 1 + createdListingIds.size, actions: 0, pendingCatalogProposals: 0 },
     sources: [],
     permissions: ["worker.manage"],
     spend: {
@@ -2938,7 +2939,7 @@ test("the Quick add menu is a keyboard menu that closes on Escape and returns fo
       if (path === "/api/v1/affiliate-routing") {
         return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
       }
-      if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => shopperOverviewFixture() };
+      if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => shopperOverviewFixture({ counts: { products: 1, purchaseIntents: 1, actions: 0, pendingCatalogProposals: 0 } }) };
       if (path.startsWith("/api/v1/user/library/products?")) {
         return { ok: true, status: 200, json: async () => ({ items: [group], total: 1 }) };
       }

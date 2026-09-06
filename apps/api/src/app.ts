@@ -954,12 +954,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     });
     const { readinessPlan: _readinessPlan, ...publicPreview } = preview;
     const scope = currentRequestScope();
+    // Bind every reviewed amount and live gate. autoRaised only describes how
+    // the draft was presented; resubmitting its reviewed total makes it false.
+    const { autoRaised: _autoRaised, ...boundCost } = publicPreview.cost;
     const fingerprint = stableHash(
-      "yoink_purchase_intent_preflight_v1",
+      "yoink_purchase_intent_preflight_v2",
       scope.tenantId,
       scope.userId,
       issuedAt,
-      JSON.stringify(publicPreview),
+      JSON.stringify({ ...publicPreview, cost: boundCost }),
       JSON.stringify(readiness)
     );
     const issuedAtTime = new Date(issuedAt).getTime();
@@ -1654,6 +1657,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/overview") {
         const now = Date.now();
         const missions = control.listMissions(20, 0, "", true);
+        const savedPlanCount = control.missionCount();
         const settings = control.settings();
         const sourceList = control.listSources();
         const proposalCounts = catalogGovernance.mineCounts();
@@ -1674,7 +1678,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           settings,
           counts: {
             products: catalog.libraryCount(),
-            purchaseIntents: control.missionCount(),
+            purchaseIntents: savedPlanCount,
             signals: signals.signalCount(),
             actions: signals.jobCount(),
             notifications: notifications.counts().totalNotifications,
@@ -1697,6 +1701,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             products: catalog.libraryCount(),
             pendingProductProposals: proposalCounts.pendingCatalogProposals,
             plans: purchaseIntents,
+            savedPlanCount,
             actionsPaused: settings.actionsPaused === true,
             executionMode: String(settings.executionMode ?? "shadow")
           }),

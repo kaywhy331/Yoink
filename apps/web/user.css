@@ -589,3 +589,17 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .checkout-report-dialog .checkbox { display: flex; align-items: flex-start; gap: var(--space-2); margin-block: var(--space-3); }
 .checkout-report-dialog .checkbox input { width: auto; flex-shrink: 0; }
 .checkout-report-dialog > details { padding: 0 var(--space-4) var(--space-4); }
+
+.first-plan-intent { margin-bottom: 20px; }
+.first-plan-intent p, .desktop-handoff p { font-size: 13px; line-height: 1.5; }
+.setup-progress { display: grid; gap: 8px; padding: 16px 0 0; list-style: none; font-size: 13px; border-top: 1px solid currentColor; }
+.desktop-handoff { margin-top: 16px; }
+.desktop-handoff label { display: block; margin-top: 12px; }
+.desktop-handoff label[hidden] { display: none; }
+.desktop-handoff input { width: 100%; min-width: 0; margin-top: 6px; }
+
+.home-next-action:has(.desktop-handoff) > .inline-actions { margin-top: 16px; }
+@media (max-width: 600px) {
+  .hero-state.contextual .desktop-handoff .button { color: var(--green-dark); background: var(--paper); }
+  .hero-state.contextual .home-next-action:has(.desktop-handoff) > .inline-actions .button { color: var(--color-on-accent); border: 1px solid currentColor; background: transparent; box-shadow: none; }
+}

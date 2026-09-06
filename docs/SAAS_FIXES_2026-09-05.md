@@ -73,7 +73,7 @@ Validation: the full `npm test` command exited 0: 976 application checks passed,
 | YS-03 | Open | Implement governed global catalog curation and tenant-safe propagation; retain the existing guard. |
 | YS-04 | Open | Implement durable account cleanup, identity revocation and receipts; user data export remains available. |
 | YS-05 | Fixed locally | Inventory, naming, revoke and Pair again controls added; credential preservation and re-pair isolation verified. Installed-extension release acceptance remains under YS-15/YS-32. |
-| YS-06 | Partial | Desktop handoff and product-first guidance added to setup docs. A new intent-choice onboarding flow and first-value timing study remain. |
+| YS-06 | Partial | Product-first Home now offers notify/cart intent, reviewed first-plan creation, saved/monitoring/cart progress, and a credential-free desktop handoff. Full saved-plan counts preserve inactive plans. Real-browser scripted acceptance covers first use; a human first-value timing study remains. See [implementation receipt](FIRST_PLAN_ONBOARDING_2026-09-05.md). |
 | YS-07 | Fixed | Copy/countdown/expiry/regeneration and new-browser success transition implemented. |
 | YS-08 | Partial | Removed the nonexistent Operations credential path. Provision a real authenticated sender and verify a received event through the target deployment. |
 | YS-09 | Fixed mitigation | Discord intake is unavailable before configuration. Shipping an ingestion client remains separate integration work. |

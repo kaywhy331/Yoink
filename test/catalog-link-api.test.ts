@@ -68,7 +68,7 @@ test("exact product-link API previews identity and queues review without catalog
     };
     assert.equal(overview.counts.products, 0);
     assert.equal(overview.counts.pendingCatalogProposals, 1);
-    assert.equal(overview.setup.level, "needs_companion");
+    assert.equal(overview.setup.level, "product_in_review");
     assert.equal(overview.setup.companion.downloadUrl, "/api/v1/extension/release/download");
     assert.match(overview.setup.steps.find((step) => step.id === "product")?.summary ?? "", /waiting for independent catalog review/);
 

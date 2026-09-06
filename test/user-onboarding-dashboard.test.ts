@@ -274,9 +274,9 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
     await browser.eval("refresh()");
     await eventually(() => assert.match(browser.document.querySelector("#heroState")?.textContent ?? "", /Step 4 of 5/));
     (browser.document.querySelector('[data-setup-action="choose_product"]') as HTMLButtonElement).click();
-    await eventually(() => assert.equal(browser.document.activeElement?.textContent?.trim(), "Quick add"));
+    await eventually(() => assert.equal(browser.document.activeElement?.textContent?.trim(), "Review first plan"));
     assert.equal(browser.document.querySelector('[data-panel="products"]')?.classList.contains("active"), true);
-    assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Choose “Quick add” to create your first plan/);
+    assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Choose “Review first plan” to create your first plan/);
 
     (browser.document.querySelector("#pauseButton") as HTMLButtonElement).click();
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Resume request sent for independent approval/));

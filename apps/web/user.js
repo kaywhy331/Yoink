@@ -974,6 +974,57 @@ function setupActionMarkup(action, label, quiet = false) {
   return `<button class="button ${quiet ? "quiet" : "primary"}" data-setup-action="${escapeHtml(action)}" type="button">${escapeHtml(label)}</button>`;
 }
 
+// This hint only prefills a fresh reviewed form. It never restores consent or changes a saved plan.
+function firstPlanJourney() {
+  return state.overview?.counts?.purchaseIntents === 0;
+}
+
+function firstPlanIntentKey() {
+  const actor = state.overview?.actor?.userId;
+  return actor ? `yoinkFirstPlanIntent:${actor}` : "";
+}
+
+function firstPlanIntent() {
+  const key = firstPlanIntentKey();
+  if (!firstPlanJourney() || !key) return "";
+  try {
+    const hint = JSON.parse(sessionStorage.getItem(key) || "null");
+    if (hint && ["notify", "add_to_cart"].includes(hint.intent)
+      && Number.isFinite(hint.savedAt) && hint.savedAt <= Date.now()
+      && Date.now() - hint.savedAt < 24 * 60 * 60 * 1000) return hint.intent;
+  } catch { /* A missing or invalid hint leaves the reviewed form at notify only. */ }
+  return "";
+}
+
+function firstPlanMarkup() {
+  const intent = firstPlanIntent();
+  return `<div class="first-plan-intent" role="group" aria-label="What should Yoink do?">
+    <p>What should Yoink do?</p>
+    <div class="inline-actions">
+      <button class="button ${intent === "notify" ? "primary" : "quiet"}" data-first-plan-intent="notify" aria-pressed="${intent === "notify"}" type="button">Notify only</button>
+      <button class="button ${intent === "add_to_cart" ? "primary" : "quiet"}" data-first-plan-intent="add_to_cart" aria-pressed="${intent === "add_to_cart"}" type="button">Add to cart</button>
+    </div>
+    <p>${intent === "add_to_cart" ? "One item, within your limits, when the store is ready. You handle checkout."
+      : "Follow exact offers. Review your product and limits before saving."}</p>
+  </div>`;
+}
+
+function setupProgressMarkup(setup) {
+  if (typeof setup?.savedPlanCount !== "number") return "";
+  return `<ol class="setup-progress" aria-label="Setup progress">
+    <li>Plan: <strong>${setup.savedPlanCount ? "Saved" : "Not saved"}</strong></li>
+    <li>Monitoring: <strong>${setup.readyForMonitoring ? "Configured" : "Not ready"}</strong></li>
+    <li>Cart actions: <strong>${setup.readyForGuardedAdds ? "Ready for offer checks" : setup.guardedCartPlanCount ? "Not ready" : "Off"}</strong></li>
+  </ol>`;
+}
+
+function desktopHandoffMarkup(setup) {
+  if (!setup?.savedPlanCount || setup.companion?.onlineCurrentCount > 0) return "";
+  return `<div class="desktop-handoff"><p>On a phone? Your plan is saved to your account. Continue in desktop Chrome, sign in to the same account, then finish setup.</p>
+    <button class="button quiet" data-setup-action="desktop_handoff" type="button">Copy desktop setup link</button>
+    <label data-desktop-link hidden>Desktop setup link<input readonly aria-label="Desktop setup link"></label></div>`;
+}
+
 function deriveUserHome(overview) {
   const paused = overview?.settings?.actionsPaused === true;
   const spend = overview?.spend || {};
@@ -985,7 +1036,8 @@ function deriveUserHome(overview) {
   const purchaseReady = primary?.stage === "purchase_ready";
   const nextSetupStep = primary
     ? null
-    : (setup?.steps || []).find((item) => item.state !== "complete") || null;
+    : (setup?.level === "review_saved_plans" ? setup.steps?.find((item) => item.id === "action")
+      : (setup?.steps || []).find((item) => item.state !== "complete")) || null;
   const status = needsYou ? "needs_you"
     : cartReady ? "cart_ready"
       : purchaseReady ? "purchase_ready"
@@ -1101,13 +1153,15 @@ function renderHomePriority() {
   const heroState = $("#heroState");
   const completedSetupSteps = Math.max(0, Number(overview.setup?.completedSteps) || 0);
   const totalSetupSteps = Math.max(1, Number(overview.setup?.totalSteps) || 5);
-  const currentSetupStep = Math.min(totalSetupSteps, completedSetupSteps + 1);
+  const currentSetupStep = Math.max(1, (overview.setup?.steps || []).indexOf(nextSetupStep) + 1);
   heroState.classList.toggle("contextual", Boolean(nextSetupStep));
   heroState.innerHTML = nextSetupStep
     ? `<section class="home-next-action" data-home-setup aria-labelledby="homeNextActionTitle">
-      <p class="eyebrow">Step ${currentSetupStep.toLocaleString("en-US")} of ${totalSetupSteps.toLocaleString("en-US")}</p>
+      <p class="eyebrow">Step ${currentSetupStep.toLocaleString("en-US")} of ${totalSetupSteps.toLocaleString("en-US")} · ${completedSetupSteps} complete</p>
+      ${firstPlanJourney() ? firstPlanMarkup() : ""}
       <h2 id="homeNextActionTitle">${escapeHtml(nextSetupStep.title)}</h2>
       <p>${escapeHtml(nextSetupStep.summary)}</p>
+      ${setupProgressMarkup(overview.setup)}${desktopHandoffMarkup(overview.setup)}
       <div class="inline-actions">${setupActionMarkup(nextSetupStep.primaryAction, nextSetupStep.primaryActionLabel)}${setupActionMarkup(nextSetupStep.secondaryAction, nextSetupStep.secondaryActionLabel, true)}</div>
     </section>`
     : `<div class="state-row"><span><i class="dot ${needsYou || paused ? "warn" : "good"}" role="img" aria-label="${needsYou || paused ? "Attention" : "OK"}"></i>Actions</span><strong>${actionLabel}</strong></div>
@@ -1442,6 +1496,7 @@ function mediaMarkup(group, { eager = false } = {}) {
 
 function quickAddMarkup(listing, group) {
   if (!listing) return "";
+  if (firstPlanJourney()) return `<button class="button primary" data-track-listing="${escapeHtml(listing.listingId)}" type="button">Review first plan</button>`;
   const defaultProfile = state.profiles.find((profile) => profile.isDefault === true) || null;
   if (state.profiles.length && !defaultProfile) {
     return `<button class="button primary" data-quick-menu="${escapeHtml(listing.listingId)}" type="button" title="Choose a Quick add setup for ${escapeHtml(group.title)}">Choose setup</button>`;
@@ -1736,7 +1791,7 @@ function renderProductDetail(variantId) {
   const primaryActions = plan
     ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit plan</button>`
     : selected
-      ? `${quickAddMarkup(selected, group)}<button class="button quiet" data-track-listing="${escapeHtml(selected.listingId)}" type="button">Custom setup</button>`
+      ? `${quickAddMarkup(selected, group)}${firstPlanJourney() ? "" : `<button class="button quiet" data-track-listing="${escapeHtml(selected.listingId)}" type="button">Custom setup</button>`}`
       : "";
   const detailSummary = [
     exactVariant ? escapeHtml(exactVariant) : "",
@@ -3387,7 +3442,12 @@ async function requestSetupPreflight(revision, signature) {
       throw new Error("The price check did not finish. Try again.");
     }
     state.setupPreflight = preflight;
-    state.setupPreflightSignature = signature;
+    if (preflight.cost?.autoRaised && Number.isSafeInteger(preflight.draft.maxAllInCents)) {
+      $("#setupForm").elements.maxAllIn.value = moneyInput(preflight.draft.maxAllInCents);
+    }
+    state.setupPreflightSignature = setupPreflightInputSignature();
+    syncSetupAction();
+    renderSetupReview();
     const readiness = preflight.automationReadiness || {};
     const spendingBlocked = preflight.cost?.spendingLimit?.allowed === false;
     renderSetupPreflight(
@@ -3423,7 +3483,9 @@ function syncSetupAction() {
   form.elements.maxAllIn.setAttribute("aria-invalid", totalTooLow ? "true" : "false");
   note.className = `setup-boundary-line ${state.setupProduct?.executionSupported && (!adding || laneReady) && !totalTooLow ? "good" : "warn"}`;
   note.textContent = state.setupProduct?.executionSupported !== true
-    ? "Notification mode only for this store."
+    ? firstPlanIntent() === "add_to_cart"
+      ? "This product supports notifications only. Review that action before saving."
+      : "Notification mode only for this store."
     : adding && !laneReady
       ? "Cart mode stays closed until this store's checks are ready."
       : adding && totalTooLow
@@ -3482,7 +3544,8 @@ function openSetup(listingId) {
   }
   const addRadio = form.querySelector('input[value="add_to_cart"]');
   addRadio.disabled = product.executionSupported !== true;
-  if (addRadio.disabled) form.elements.actionCeiling.value = "notify";
+  const intent = firstPlanIntent();
+  form.elements.actionCeiling.value = intent === "add_to_cart" && !addRadio.disabled ? "add_to_cart" : "notify";
   const exactVariant = variantSummary(product.variantAttributes);
   const storeOffers = group?.listings?.length ? group.listings : [product];
   $("#setupProductSummary").innerHTML = `<div><span class="store">${escapeHtml(product.retailerName)}</span><h3>${escapeHtml(product.title)}</h3><p>SKU ${escapeHtml(product.retailerSku)}${exactVariant ? ` · ${escapeHtml(exactVariant)}` : ""}</p></div><strong class="exact-price">${escapeHtml(hasCurrentPrice ? money(knownPrice, product.currency) : money(product.msrpCents, product.currency))}</strong>`;
@@ -3783,7 +3846,7 @@ async function recheckSignalConnection() {
 async function focusFirstQuickAdd() {
   setTab("products");
   await state.routeLoadPromise;
-  const control = $("#productList [data-quick-add], #productList [data-quick-menu]");
+  const control = $("#productList [data-track-listing], #productList [data-quick-add], #productList [data-quick-menu]");
   if (!control) {
     $("#addProductButton").focus();
     toast("Choose “Add product link” to add an approved product first.");
@@ -4323,6 +4386,25 @@ document.addEventListener("click", async (event) => {
     if (button.id === "pairButton") {
       await createPairingCode();
     }
+    if (button.dataset.firstPlanIntent && firstPlanJourney()) {
+      const intent = button.dataset.firstPlanIntent;
+      if (["notify", "add_to_cart"].includes(intent) && firstPlanIntentKey()) {
+        try { sessionStorage.setItem(firstPlanIntentKey(), JSON.stringify({ intent, savedAt: Date.now() })); }
+        catch { toast("Your browser could not keep this choice. Select the action in the plan review."); }
+      }
+      renderHomePriority();
+      $(`[data-first-plan-intent="${intent}"]`)?.focus();
+    }
+    if (button.dataset.setupAction === "desktop_handoff") {
+      // Reconstruct from the origin: never copy pairing codes, auth queries, or entity drafts.
+      const link = `${location.origin}/#home`;
+      const label = $("[data-desktop-link]");
+      label.hidden = false;
+      label.querySelector("input").value = link;
+      try { await navigator.clipboard.writeText(link); toast("Desktop setup link copied. Sign in to the same account."); }
+      catch { label.querySelector("input").focus(); label.querySelector("input").select(); }
+    }
+    if (button.dataset.setupAction === "view_plans") setTab("plans");
     if (button.dataset.setupAction === "pair_companion") await createPairingCode(true);
     if (button.dataset.setupAction === "connect_signal") openSignalConnectDialog();
     if (button.dataset.setupAction === "add_product") openProductLinkDialog();
@@ -4487,6 +4569,7 @@ $("#setupForm").addEventListener("submit", async (event) => {
     const draft = { ...state.setupPreflight.draft, contractVersion: 2, confirmation: "CREATE_EXACT_PURCHASE_PLAN" };
     button.disabled = true;
     button.textContent = "Creating safely…";
+    const firstPlan = firstPlanJourney();
     await api("/api/v1/user/purchase-intents", {
       method: "POST",
       body: JSON.stringify({
@@ -4497,8 +4580,9 @@ $("#setupForm").addEventListener("submit", async (event) => {
     });
     $("#setupDialog").close();
     state.setupProduct = null;
+    try { sessionStorage.removeItem(firstPlanIntentKey()); } catch { /* Best effort hint cleanup. */ }
     await refresh();
-    setTab("plans");
+    setTab(firstPlan ? "home" : "plans");
     toast(draft.actionCeiling === "add_to_cart"
       ? "Plan created. Review its store readiness."
       : "Purchase plan created in notification-only mode.");
@@ -4511,6 +4595,8 @@ $("#setupForm").addEventListener("submit", async (event) => {
       toast("That product already has a plan. Review its limits before changing it.");
     } else {
       if (["purchase_intent_preflight_required", "purchase_intent_preflight_stale"].includes(error.code)) {
+        state.setupPreflight = null;
+        state.setupPreflightSignature = "";
         scheduleSetupPreflight(0);
       }
       toast(error.message || "The purchase plan could not be created.", true);

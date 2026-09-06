@@ -7,6 +7,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("all plan pages and global search work on a phone-sized screen", async ({ page }, testInfo) => {
+  const overview = await (await page.request.get("/api/v1/user/overview")).json();
+  expect(overview.purchaseIntents.length).toBe(20);
+  expect(overview.setup.savedPlanCount).toBe(206);
   await page.goto("/#plans");
   await expect(page.locator("#planList .plan-card")).toHaveCount(50);
   await expect(page.locator("#planPageStatus")).toHaveText("1–50 of 206");

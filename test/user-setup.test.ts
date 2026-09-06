@@ -15,12 +15,12 @@ const BASE = {
 
 test("setup readiness guides a new user without implying purchase authority", () => {
   const setup = buildUserSetupReadiness(BASE);
-  assert.equal(setup.level, "needs_companion");
+  assert.equal(setup.level, "needs_product");
   assert.equal(setup.completedSteps, 0);
   assert.equal(setup.readyForMonitoring, false);
   assert.equal(setup.readyForGuardedAdds, false);
-  assert.deepEqual(setup.steps[0]?.primaryAction, "download_companion");
-  assert.deepEqual(setup.steps[0]?.secondaryAction, "pair_companion");
+  assert.deepEqual(setup.steps[0]?.primaryAction, "add_product");
+  assert.deepEqual(setup.steps[2]?.secondaryAction, "pair_companion");
   assert.equal(setup.companion.downloadUrl, "/api/v1/extension/release/download");
   assert.equal(buildUserSetupReadiness({ ...BASE, companionDownloadUrl: "" }).companion.downloadUrl, "");
   assert.match(setup.steps[4]?.summary ?? "", /Checkout, payment, raffle entry, and order submission always remain manual/);
@@ -32,8 +32,8 @@ test("setup readiness guides a new user without implying purchase authority", ()
     pendingProductProposals: 1
   });
   assert.equal(pending.level, "product_in_review");
-  assert.equal(pending.steps[2]?.state, "waiting");
-  assert.match(pending.steps[2]?.summary ?? "", /No stock claim or purchase plan was created/);
+  assert.equal(pending.steps[0]?.state, "waiting");
+  assert.match(pending.steps[0]?.summary ?? "", /No stock claim or purchase plan was created/);
 });
 
 test("setup readiness distinguishes configured monitoring, guarded actions, and offline Chrome", () => {
@@ -63,7 +63,7 @@ test("setup readiness distinguishes configured monitoring, guarded actions, and 
   assert.equal(offline.level, "temporarily_offline");
   assert.equal(offline.readyForMonitoring, true);
   assert.equal(offline.readyForGuardedAdds, false);
-  assert.equal(offline.steps[0]?.state, "attention");
+  assert.equal(offline.steps[2]?.state, "attention");
   assert.equal(offline.steps[4]?.state, "attention");
 });
 
@@ -113,4 +113,28 @@ test("setup readiness uses authoritative plan readiness instead of treating ever
   });
   assert.equal(armed.level, "guarded_cart_ready");
   assert.equal(armed.readyForGuardedAdds, true);
+});
+
+
+test("a plan can be saved before Chrome and full saved counts retain inactive plans", () => {
+  const first = buildUserSetupReadiness({ ...BASE, products: 1 });
+  assert.equal(first.level, "needs_plan");
+  assert.equal(first.steps[1]?.state, "current");
+  assert.equal(first.readyForMonitoring, false);
+  for (const status of ["paused", "archived", "satisfied"]) {
+    const saved = buildUserSetupReadiness({ ...BASE, products: 1, plans: [{ status }] });
+    assert.equal(saved.level, "review_saved_plans");
+    assert.equal(saved.savedPlanCount, 1);
+    assert.equal(saved.readyForMonitoring, false);
+    assert.equal(saved.steps[1]?.state, "complete");
+    assert.equal(saved.steps[4]?.primaryAction, "view_plans");
+  }
+  const outsideSample = buildUserSetupReadiness({ ...BASE, savedPlanCount: 21 });
+  assert.equal(outsideSample.level, "review_saved_plans");
+  assert.equal(outsideSample.savedPlanCount, 21);
+  const notify = buildUserSetupReadiness({ ...BASE, products: 1, plans: [{ status: "active", actionCeiling: "notify" }] });
+  assert.equal(notify.level, "needs_companion");
+  assert.equal(notify.savedPlanCount, 1);
+  assert.equal(notify.readyForMonitoring, false);
+  assert.equal(notify.readyForGuardedAdds, false);
 });

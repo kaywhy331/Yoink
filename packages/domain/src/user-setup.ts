@@ -5,7 +5,8 @@ export type UserSetupAction =
   | "connect_signal"
   | "add_product"
   | "choose_product"
-  | "resume_actions";
+  | "resume_actions"
+  | "view_plans";
 
 export interface UserSetupStep {
   id: "companion" | "signal" | "product" | "plan" | "action";
@@ -26,6 +27,7 @@ export interface UserSetupInput {
   products: number;
   pendingProductProposals: number;
   plans: Array<Record<string, unknown>>;
+  savedPlanCount?: number;
   actionsPaused: boolean;
   executionMode: string;
 }
@@ -33,6 +35,7 @@ export interface UserSetupInput {
 export interface UserSetupReadiness {
   level:
     | "needs_companion"
+    | "review_saved_plans"
     | "needs_signal"
     | "needs_product"
     | "product_in_review"
@@ -55,6 +58,7 @@ export interface UserSetupReadiness {
     downloadUrl: string;
   };
   connectedSignalCount: number;
+  savedPlanCount: number;
   activePlanCount: number;
   guardedCartPlanCount: number;
   steps: UserSetupStep[];
@@ -78,6 +82,7 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
   const currentDevices = activeDevices.filter((device) => device.extensionVersion === input.version);
   const onlineCurrentDevices = currentDevices.filter((device) => device.online === true);
   const connectedSignals = input.sources.filter((source) => source.source !== "user_link" && source.status === "connected");
+  const savedPlanCount = Math.max(0, Number(input.savedPlanCount ?? input.plans.filter((plan) => plan.status !== "deleted").length) || 0);
   const activePlans = input.plans.filter((plan) => plan.status === "active");
   const guardedCartPlans = activePlans.filter((plan) => plan.actionCeiling === "add_to_cart");
   const notificationPlans = activePlans.filter((plan) => plan.actionCeiling !== "add_to_cart");
@@ -155,14 +160,14 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
       : step(
         "product",
         "Choose an exact product",
-        currentDevices.length && connectedSignals.length ? "current" : "waiting",
+        "current",
         "Paste a supported store product page. Yoink extracts the exact store and item ID, then holds it for independent review.",
         "add_product",
         "Add product link"
       );
 
-  const planStep = activePlans.length
-    ? step("plan", "Set your price and action", "complete", `${activePlans.length} active purchase plan${activePlans.length === 1 ? " is" : "s are"} bounded by your saved preferences.`)
+  const planStep = savedPlanCount
+    ? step("plan", "Save your plan", "complete", `${savedPlanCount} saved plan${savedPlanCount === 1 ? "" : "s"}. Saving does not mean monitoring or cart actions are ready.`)
     : step(
       "plan",
       "Set your price and action",
@@ -174,7 +179,9 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
 
   let actionStep: UserSetupStep;
   if (!activePlans.length) {
-    actionStep = step("action", "Review the safety boundary", "waiting", "Checkout, payment, raffle entry, and order submission always remain manual.");
+    actionStep = savedPlanCount
+      ? step("action", "Review your saved plans", "current", "Open Plans to check each plan’s status and readiness. Inactive plans stay inactive.", "view_plans", "Review plans")
+      : step("action", "Review the safety boundary", "waiting", "Checkout, payment, raffle entry, and order submission always remain manual.");
   } else if (!guardedCartPlans.length && notificationPlans.length) {
     actionStep = step("action", "Review the safety boundary", "complete", "Your active plans notify only. No store control is clicked; checkout and ordering remain manual.");
   } else if (plansWithReadiness.length && !guardedCartReadyPlans.length && blockedGuardedReadiness) {
@@ -203,28 +210,32 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
     actionStep = step("action", "Review the safety boundary", "complete", "Guarded add-only actions are ready within your exact plan. Checkout, payment, and order submission remain manual.");
   }
 
-  const steps = [companionStep, signalStep, productStep, planStep, actionStep];
+  const steps = [productStep, planStep, companionStep, signalStep, actionStep];
   let level: UserSetupReadiness["level"];
   let headline: string;
   let summary: string;
-  if (!currentDevices.length) {
+  if (!savedPlanCount && !productCount) {
+    level = pendingCount ? "product_in_review" : "needs_product";
+    headline = pendingCount ? "Your product link is in review" : "What do you want to follow?";
+    summary = pendingCount
+      ? "Independent review must approve the exact product before you can save a plan."
+      : "Choose a product and save your limits. You can finish browser setup afterward.";
+  } else if (!savedPlanCount) {
+    level = "needs_plan";
+    headline = "Make your first plan";
+    summary = "Choose an exact product, set your limits, and review what Yoink may do.";
+  } else if (!activePlans.length) {
+    level = "review_saved_plans";
+    headline = "Review your saved plans";
+    summary = "Your plans are saved. Check each plan’s status and readiness in Plans.";
+  } else if (!currentDevices.length) {
     level = "needs_companion";
-    headline = activeDevices.length ? "Update your Chrome companion" : "Start with the Chrome companion";
-    summary = "This keeps store-page observation and every qualified click inside your own browser.";
+    headline = activeDevices.length ? "Update your Chrome companion" : "Plan saved. Connect Chrome next";
+    summary = "Use desktop Chrome to observe store pages. Saving a plan alone does not start tracking or authorize a cart action.";
   } else if (!connectedSignals.length) {
     level = "needs_signal";
-    headline = "Connect your product tracking";
-    summary = "Yoink needs one tracking connection to learn when an exact product offer changes.";
-  } else if (!productCount) {
-    level = pendingCount ? "product_in_review" : "needs_product";
-    headline = pendingCount ? "Your product link is in review" : "Add the exact product you want";
-    summary = pendingCount
-      ? "Independent review must bind the store item before it can appear in your catalog."
-      : "Paste a product page and Yoink will verify the store and exact item ID before review.";
-  } else if (!activePlans.length) {
-    level = "needs_plan";
-    headline = "Set your purchase preferences";
-    summary = "Choose one exact listing, a maximum price, quantity, fulfillment, and the highest action Yoink may take.";
+    headline = "Plan saved. Connect product tracking";
+    summary = "Yoink needs a tracking connection to learn when an exact product offer changes.";
   } else if (guardedCartPlans.length && plansWithReadiness.length && !guardedCartReadyPlans.length && blockedGuardedReadiness) {
     if (blockedGuardedReadiness.state === "companion_offline") {
       level = "temporarily_offline";
@@ -269,6 +280,7 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
         : input.companionDownloadUrl
     },
     connectedSignalCount: connectedSignals.length,
+    savedPlanCount,
     activePlanCount: activePlans.length,
     guardedCartPlanCount: guardedCartPlans.length,
     steps
